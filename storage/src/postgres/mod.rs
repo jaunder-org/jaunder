@@ -4,9 +4,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use log::LevelFilter;
-use sqlx::postgres::PgConnectOptions;
 use sqlx::ConnectOptions;
 use sqlx::PgPool;
+use sqlx::postgres::PgConnectOptions;
 
 mod site_config;
 pub use site_config::PostgresSiteConfigStorage;
@@ -48,7 +48,7 @@ mod audiences;
 pub use audiences::PostgresAudienceStorage;
 
 mod bootstrap;
-pub use bootstrap::{create_postgres_database_and_role, PgBootstrapError};
+pub use bootstrap::{PgBootstrapError, create_postgres_database_and_role};
 
 pub(crate) mod backup;
 
@@ -320,74 +320,73 @@ pub(crate) async fn database_is_empty(options: &PgConnectOptions) -> sqlx::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    use common::test_support::with_env;
 
     #[test]
     fn postgres_password_prefers_file_over_env() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("JAUNDER_DB_PASSWORD", "from-env");
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("db-password");
-        std::fs::write(&path, "from-file\n").unwrap();
-        std::env::set_var("JAUNDER_DB_PASSWORD_FILE", &path);
+        with_env(|env| {
+            env.set("JAUNDER_DB_PASSWORD", "from-env");
+            let dir = tempfile::TempDir::new().unwrap();
+            let path = dir.path().join("db-password");
+            std::fs::write(&path, "from-file\n").unwrap();
+            env.set("JAUNDER_DB_PASSWORD_FILE", &path);
 
-        let password = postgres_password_from_env().unwrap();
+            let password = postgres_password_from_env().unwrap();
 
-        std::env::remove_var("JAUNDER_DB_PASSWORD");
-        std::env::remove_var("JAUNDER_DB_PASSWORD_FILE");
-        assert_eq!(password.as_deref(), Some("from-file"));
+            assert_eq!(password.as_deref(), Some("from-file"));
+        });
     }
 
     #[test]
     fn postgres_password_uses_env_when_file_unset() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("JAUNDER_DB_PASSWORD_FILE");
-        std::env::set_var("JAUNDER_DB_PASSWORD", "from-env");
+        with_env(|env| {
+            env.remove("JAUNDER_DB_PASSWORD_FILE");
+            env.set("JAUNDER_DB_PASSWORD", "from-env");
 
-        let password = postgres_password_from_env().unwrap();
+            let password = postgres_password_from_env().unwrap();
 
-        std::env::remove_var("JAUNDER_DB_PASSWORD");
-        assert_eq!(password.as_deref(), Some("from-env"));
+            assert_eq!(password.as_deref(), Some("from-env"));
+        });
     }
 
     #[test]
     fn postgres_password_returns_none_when_unset() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("JAUNDER_DB_PASSWORD");
-        std::env::remove_var("JAUNDER_DB_PASSWORD_FILE");
+        with_env(|env| {
+            env.remove("JAUNDER_DB_PASSWORD");
+            env.remove("JAUNDER_DB_PASSWORD_FILE");
 
-        let password = postgres_password_from_env().unwrap();
+            let password = postgres_password_from_env().unwrap();
 
-        assert_eq!(password, None);
+            assert_eq!(password, None);
+        });
     }
 
     #[test]
     fn resolved_postgres_options_applies_password_override_when_env_set() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("JAUNDER_DB_PASSWORD", "secret");
-        std::env::remove_var("JAUNDER_DB_PASSWORD_FILE");
+        with_env(|env| {
+            env.set("JAUNDER_DB_PASSWORD", "secret");
+            env.remove("JAUNDER_DB_PASSWORD_FILE");
 
-        let base: PgConnectOptions = "postgres://user@localhost/db".parse().unwrap();
-        let resolved = resolved_postgres_options(&base);
+            let base: PgConnectOptions = "postgres://user@localhost/db".parse().unwrap();
+            let resolved = resolved_postgres_options(&base);
 
-        std::env::remove_var("JAUNDER_DB_PASSWORD");
-        assert!(resolved.is_ok());
+            assert!(resolved.is_ok());
+        });
     }
 
     #[test]
     fn resolved_postgres_options_returns_io_error_when_password_file_unreadable() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("JAUNDER_DB_PASSWORD");
-        std::env::set_var(
-            "JAUNDER_DB_PASSWORD_FILE",
-            "/nonexistent/path/to/db-password",
-        );
+        with_env(|env| {
+            env.remove("JAUNDER_DB_PASSWORD");
+            env.set(
+                "JAUNDER_DB_PASSWORD_FILE",
+                "/nonexistent/path/to/db-password",
+            );
 
-        let base: PgConnectOptions = "postgres://user@localhost/db".parse().unwrap();
-        let result = resolved_postgres_options(&base);
+            let base: PgConnectOptions = "postgres://user@localhost/db".parse().unwrap();
+            let result = resolved_postgres_options(&base);
 
-        std::env::remove_var("JAUNDER_DB_PASSWORD_FILE");
-        assert!(matches!(result, Err(sqlx::Error::Io(_))));
+            assert!(matches!(result, Err(sqlx::Error::Io(_))));
+        });
     }
 }

@@ -153,7 +153,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, fp, Backend};
+    use crate::test_support::{Backend, backends, fp};
     use common::test_support::{parse_content_type, parse_etag};
     use rstest::*;
     use rstest_reuse::*;
@@ -277,13 +277,14 @@ mod tests {
     #[tokio::test]
     async fn get_missing_returns_none(#[case] backend: Backend) {
         let env = backend.setup().await;
-        assert!(env
-            .state
-            .feed_cache
-            .get(&fp("/tags/absent/feed.rss"))
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            env.state
+                .feed_cache
+                .get(&fp("/tags/absent/feed.rss"))
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[apply(backends)]
@@ -296,12 +297,13 @@ mod tests {
             .await
             .unwrap();
         env.state.feed_cache.delete(&fp("/feed.rss")).await.unwrap();
-        assert!(env
-            .state
-            .feed_cache
-            .get(&fp("/feed.rss"))
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            env.state
+                .feed_cache
+                .get(&fp("/feed.rss"))
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 }

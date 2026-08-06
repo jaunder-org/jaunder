@@ -98,7 +98,7 @@ impl CockpitState {
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
-    use std::future::{ready, Ready};
+    use std::future::{Ready, ready};
 
     use super::*;
     use crate::error::WebError;

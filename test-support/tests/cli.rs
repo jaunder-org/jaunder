@@ -8,8 +8,9 @@
 //! longer need a `cov:ignore`. The three database-backed arms stay marked (a
 //! subprocess can't reach them without a live DB).
 //!
-//! These set `JAUNDER_CAPTURE_DIR` on the spawned child's env (not the parent
-//! process), so there is no process-global `set_var` and nothing to serialize.
+//! These pass `JAUNDER_CAPTURE_DIR` to the spawned child through `Command::env`,
+//! never mutating this process's own environment — so they need no serialization
+//! and stay outside `common::test_support::with_env` (#826).
 
 use std::process::Command;
 

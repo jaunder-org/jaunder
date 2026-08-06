@@ -10,12 +10,12 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use flate2::{read::GzDecoder, write::GzEncoder, Compression};
+use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::{resolved_postgres_options, DbConnectOptions};
+use crate::{DbConnectOptions, resolved_postgres_options};
 pub use common::backup::BackupMode;
 
 // Tables deliberately excluded from backup: `_sqlx_migrations` is schema state
@@ -82,9 +82,7 @@ pub enum BackupError {
     DestinationExists(PathBuf),
     #[error("invalid backup: {0}")]
     InvalidBackup(String),
-    #[error(
-        "backup was created by jaunder {backup_version}, but this binary is {current_version}"
-    )]
+    #[error("backup was created by jaunder {backup_version}, but this binary is {current_version}")]
     VersionMismatch {
         backup_version: String,
         current_version: &'static str,
@@ -536,12 +534,10 @@ fn copy_or_link_media_file(
     if let Some(previous_file) = previous_backup
         .map(|backup| backup.join("media").join(relative_path))
         .filter(|path| path.is_file())
+        && files_have_same_content(source_path, &previous_file)?
+        && fs::hard_link(&previous_file, destination_path).is_ok()
     {
-        if files_have_same_content(source_path, &previous_file)?
-            && fs::hard_link(&previous_file, destination_path).is_ok()
-        {
-            return Ok(());
-        }
+        return Ok(());
     }
 
     fs::copy(source_path, destination_path)?;
@@ -598,7 +594,7 @@ mod tests {
     #![expect(clippy::similar_names)]
     use super::*;
     use crate::test_support::{
-        backends, recorded_postgres_url, sqlite_url, Backend, CloseablePool, SeedUser,
+        Backend, CloseablePool, SeedUser, backends, recorded_postgres_url, sqlite_url,
     };
     use rstest::*;
     use rstest_reuse::*;
@@ -884,11 +880,13 @@ mod tests {
         mirror_media_directory(&source, &destination, Some(&previous))?;
 
         assert_eq!(fs::read_to_string(destination.join("image.txt"))?, "new");
-        assert!(!files_have_same_content(
-            &source.join("image.txt"),
-            &previous.join("media").join("image.txt")
-        )
-        .expect("compare source and previous media files"));
+        assert!(
+            !files_have_same_content(
+                &source.join("image.txt"),
+                &previous.join("media").join("image.txt")
+            )
+            .expect("compare source and previous media files")
+        );
         Ok(())
     }
 

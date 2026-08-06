@@ -177,7 +177,7 @@ pub trait FeedEventDialect: Backend {
 
     /// Stamp `regenerated_at = now` on all rows whose id is in `ids`.
     async fn mark_regenerated(pool: &Pool<Self>, ids: &[FeedEventId])
-        -> Result<(), FeedEventError>;
+    -> Result<(), FeedEventError>;
 
     /// Transition rows to `done` and stamp `pinged_at = now`.
     async fn mark_pinged(pool: &Pool<Self>, ids: &[FeedEventId]) -> Result<(), FeedEventError>;
@@ -350,7 +350,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, fp, Backend};
+    use crate::test_support::{Backend, backends, fp};
     use rstest::*;
     use rstest_reuse::*;
 

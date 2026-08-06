@@ -1,4 +1,4 @@
-use crate::backup::{get_settings, is_warning_visible, UpdateSettings};
+use crate::backup::{UpdateSettings, get_settings, is_warning_visible};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::topbar::Topbar;

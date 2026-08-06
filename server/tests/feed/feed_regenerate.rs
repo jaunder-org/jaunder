@@ -4,7 +4,7 @@ use jaunder::feed::regenerate::regenerate_feed;
 use rstest::*;
 use rstest_reuse::*;
 
-use storage::test_support::{backends, fp, Backend, SeedRawPost, SeedUser, TestEnv};
+use storage::test_support::{Backend, SeedRawPost, SeedUser, TestEnv, backends, fp};
 
 use crate::helpers::setup_with_base_url;
 

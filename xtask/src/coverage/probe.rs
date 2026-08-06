@@ -193,11 +193,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("jaunder-probe-gitrun-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        assert!(git::at(&dir)
-            .args(["init", "-q"])
-            .status()
-            .unwrap()
-            .success());
+        assert!(
+            git::at(&dir)
+                .args(["init", "-q"])
+                .status()
+                .unwrap()
+                .success()
+        );
         assert!(git_run(&dir, &["status", "--porcelain"]).is_ok());
         assert!(git_run(&dir, &["mv", "nope", "nowhere"]).is_err());
         let _ = std::fs::remove_dir_all(&dir);

@@ -4,7 +4,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::result::{CommandResult, StepResult};
 
@@ -580,7 +580,7 @@ mod tests {
         assert!(d.contains("web_posts::case_3"));
     }
 
-    use super::{failure_detail, failure_excerpt, write_failure_excerpt, MultiWriter};
+    use super::{MultiWriter, failure_detail, failure_excerpt, write_failure_excerpt};
 
     const SAMPLE_LOG: &str = "\
 fail-probe> build-output-line-1

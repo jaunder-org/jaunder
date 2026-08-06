@@ -43,7 +43,9 @@ fn vertical_of(file: &str, ident: &syn::Ident) -> Result<String, syn::Error> {
     let Some((_, relative)) = file.split_once(WEB_SRC) else {
         return Err(syn::Error::new(
             ident.span(),
-            format!("#[macros::server] is only for `{WEB_SRC}<vertical>/{API_FILE}`; this file ({file}) is not under `{WEB_SRC}`"),
+            format!(
+                "#[macros::server] is only for `{WEB_SRC}<vertical>/{API_FILE}`; this file ({file}) is not under `{WEB_SRC}`"
+            ),
         ));
     };
     let segments: Vec<&str> = relative.split('/').collect();
@@ -53,7 +55,9 @@ fn vertical_of(file: &str, ident: &syn::Ident) -> Result<String, syn::Error> {
         // to derive — the same hard error ADR-0082 already requires of the gates.
         [_] => Err(syn::Error::new(
             ident.span(),
-            format!("#[macros::server] fn directly under `{WEB_SRC}` has no vertical directory; move it to `{WEB_SRC}<vertical>/{API_FILE}`"),
+            format!(
+                "#[macros::server] fn directly under `{WEB_SRC}` has no vertical directory; move it to `{WEB_SRC}<vertical>/{API_FILE}`"
+            ),
         )),
         // The case that would make `(vertical, ident)` lossy: two same-named fns in
         // one vertical's submodules derive one endpoint and one span name, and the
@@ -61,7 +65,9 @@ fn vertical_of(file: &str, ident: &syn::Ident) -> Result<String, syn::Error> {
         // the pair compiles and the loser 404s — #358).
         _ => Err(syn::Error::new(
             ident.span(),
-            format!("#[macros::server] fns live in `{WEB_SRC}<vertical>/{API_FILE}`, never a submodule; `{file}` would make the derived endpoint ambiguous with another vertical member"),
+            format!(
+                "#[macros::server] fns live in `{WEB_SRC}<vertical>/{API_FILE}`, never a submodule; `{file}` would make the derived endpoint ambiguous with another vertical member"
+            ),
         )),
     }
 }
@@ -175,7 +181,7 @@ pub(crate) fn expand(
 
 #[cfg(test)]
 mod tests {
-    use super::{derive, expand, Derived};
+    use super::{Derived, derive, expand};
     use syn::parse_quote;
 
     fn ident(s: &str) -> syn::Ident {

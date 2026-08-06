@@ -54,9 +54,11 @@ mod tests {
 
     #[test]
     fn accepts_a_hash() {
-        assert!("$argon2id$v=19$m=19456,t=2,p=1$abc$def"
-            .parse::<StoredPasswordHash>()
-            .is_ok());
+        assert!(
+            "$argon2id$v=19$m=19456,t=2,p=1$abc$def"
+                .parse::<StoredPasswordHash>()
+                .is_ok()
+        );
     }
 
     #[test]

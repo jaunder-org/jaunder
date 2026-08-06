@@ -24,8 +24,8 @@ pub use format::format_bytes;
 pub use upload_state::{UploadCallbacks, UploadOutcome, UploadState};
 
 pub use api::{
-    delete, get_usage, list_mine, upload, Delete, DeleteResult, GetUsage, Item, ListMine, Upload,
-    UsageData,
+    Delete, DeleteResult, GetUsage, Item, ListMine, Upload, UsageData, delete, get_usage,
+    list_mine, upload,
 };
 
 #[cfg(target_arch = "wasm32")]

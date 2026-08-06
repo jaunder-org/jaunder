@@ -1,4 +1,4 @@
-use super::{get_identity, UpdateIdentity};
+use super::{UpdateIdentity, get_identity};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::topbar::Topbar;

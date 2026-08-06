@@ -4,8 +4,8 @@
 //! for entries in a collection. This module provides [`render_categories_document`]
 //! to serialize a flat list of category terms to a standalone `app:categories` document.
 
-use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::Writer;
+use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 
 use super::xml::write_empty_element;
 use super::{APP_NS, ATOM_NS};

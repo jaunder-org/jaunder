@@ -6,7 +6,7 @@ use common::display_name::DisplayName;
 use common::render::PostFormat;
 use leptos::prelude::*;
 
-use super::api::{get, get_default_post_format, SetDefaultPostFormat, Update};
+use super::api::{SetDefaultPostFormat, Update, get, get_default_post_format};
 
 /// Profile page — shows username, display name, bio; allows updating.
 #[component]

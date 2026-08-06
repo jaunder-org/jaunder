@@ -9,8 +9,8 @@ use sha2::{Digest, Sha256};
 use sqlx::{PgConnection, PgPool, Row};
 
 use crate::backup::{
-    backup_table_set, build_manifest, ensure_schema_version, json_value_as_restore_text,
-    order_by_clause, read_table_rows, BackupError, BackupManifest, BackupMode, ColumnInfo,
+    BackupError, BackupManifest, BackupMode, ColumnInfo, backup_table_set, build_manifest,
+    ensure_schema_version, json_value_as_restore_text, order_by_clause, read_table_rows,
 };
 use crate::sql::quote_identifier;
 
@@ -358,7 +358,7 @@ async fn schema_checksum(connection: &mut PgConnection) -> Result<String, Backup
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{postgres_only, Backend, CloseablePool, SeedUser};
+    use crate::test_support::{Backend, CloseablePool, SeedUser, postgres_only};
     use rstest::*;
     use rstest_reuse::*;
 

@@ -14,7 +14,7 @@ use jaunder::commands::{
     cmd_app_password_create, cmd_backup, cmd_init, cmd_restore, cmd_serve, cmd_smtp_test,
     cmd_user_create, cmd_user_invite, prepare_server,
 };
-use storage::{open_database, open_existing_database, BackupMode};
+use storage::{BackupMode, open_database, open_existing_database};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -25,8 +25,8 @@ use crate::misc::backup_fixture::{
     assert_backup_fixture_restored, assert_target_unmodified, populate_backup_fixture,
 };
 use storage::test_support::{
-    backends, nonexistent_postgres_url, noop_mailer, sqlite_url, unique_postgres_url, Backend,
-    PostgresDbGuard,
+    Backend, PostgresDbGuard, backends, nonexistent_postgres_url, noop_mailer, sqlite_url,
+    unique_postgres_url,
 };
 
 async fn storage_args(backend: Backend, base: &TempDir) -> (StorageArgs, Option<PostgresDbGuard>) {
@@ -240,9 +240,11 @@ async fn cmd_app_password_create_errors_for_unknown_user(#[case] backend: Backen
     cmd_init(&args, false).await.unwrap();
     let username: Username = "ghost".parse().unwrap();
 
-    assert!(cmd_app_password_create(&args, &username, "ert")
-        .await
-        .is_err());
+    assert!(
+        cmd_app_password_create(&args, &username, "ert")
+            .await
+            .is_err()
+    );
 }
 
 #[apply(backends)]

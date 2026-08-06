@@ -7,7 +7,7 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{create_operator_and_session, create_user_and_session, post_form};
-use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
+use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
 
 #[apply(backends)]
 #[tokio::test]

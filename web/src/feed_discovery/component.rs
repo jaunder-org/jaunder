@@ -1,4 +1,4 @@
-use common::feed::{canonicalize, FeedFormat, FeedSurface};
+use common::feed::{FeedFormat, FeedSurface, canonicalize};
 use common::username::Username;
 use leptos::prelude::*;
 use leptos_meta::Link;

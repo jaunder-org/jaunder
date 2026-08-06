@@ -17,7 +17,7 @@
 
 use std::path::Path;
 
-use doctests::check::{problems, ScannedFile};
+use doctests::check::{ScannedFile, problems};
 use doctests::roots;
 
 use crate::result::{CommandResult, StepResult};

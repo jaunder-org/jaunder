@@ -1,4 +1,4 @@
-use super::markup::{render_sidebar, NAV_ITEMS, SIDEBAR_SOURCES};
+use super::markup::{NAV_ITEMS, SIDEBAR_SOURCES, render_sidebar};
 use crate::avatar::Avatar;
 use crate::icon::{Icon, Icons};
 use common::username::Username;

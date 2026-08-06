@@ -596,7 +596,7 @@ mod tests {
 /// the line ABOVE a site exempts it, and nothing else does.
 #[cfg(test)]
 mod marker_tests {
-    use super::{classify, scan, Classified, Why};
+    use super::{Classified, Why, classify, scan};
 
     const TOKEN: &str = "guard:allow";
 
@@ -774,8 +774,7 @@ mod marker_tests {
 
     #[test]
     fn the_census_comes_back_in_line_order() {
-        let src =
-            "// guard:allow first\nfn a() { GUARDED; }\n// guard:allow second\nfn b() { GUARDED; }\n";
+        let src = "// guard:allow first\nfn a() { GUARDED; }\n// guard:allow second\nfn b() { GUARDED; }\n";
         let c = classified(src);
         assert_eq!(
             c.marked.iter().map(|m| m.line).collect::<Vec<_>>(),

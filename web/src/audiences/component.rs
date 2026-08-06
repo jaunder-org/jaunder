@@ -2,15 +2,15 @@
 //! its child components, plus the keyed reactive store backing the list. Wasm-only.
 
 use super::api::{
-    list_members, list_mine, list_my_subscribers, AddSubscriber, Create, Delete, RemoveSubscriber,
-    Rename, SubscriberSummary, Summary, SummaryStoreFields,
+    AddSubscriber, Create, Delete, RemoveSubscriber, Rename, SubscriberSummary, Summary,
+    SummaryStoreFields, list_members, list_mine, list_my_subscribers,
 };
 use crate::error::WebResult;
 // `crate::forms::Field` (the validated-input field) is aliased to avoid colliding with
 // `reactive_stores::Field` (the keyed-store field used by `AudienceRow`).
 use crate::forms::Field as ValidatedField;
 use crate::icon::Icons;
-use crate::reactive::{invalidator_scope, Invalidator};
+use crate::reactive::{Invalidator, invalidator_scope};
 use crate::topbar::Topbar;
 use common::audience::AudienceName;
 use common::ids::{AudienceId, SubscriptionId};

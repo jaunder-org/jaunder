@@ -14,8 +14,8 @@ use anyhow::Result;
 use serde_json::Value;
 
 use super::parse::{
-    get_attr, interval_union_ms, parse_json_attr, read_spans, span_interval_ms, to_url_path,
-    Filters, Span,
+    Filters, Span, get_attr, interval_union_ms, parse_json_attr, read_spans, span_interval_ms,
+    to_url_path,
 };
 use super::report::{AttemptKey, ReportedDurations};
 
@@ -84,11 +84,7 @@ fn project_label(project: &str) -> String {
 /// The `e2e.test` name for a span, or `-` when unset (Node `getAttr(...) || "-"`).
 fn e2e_test_name(s: &Span) -> String {
     let t = get_attr(&s.raw, "e2e.test");
-    if t.is_empty() {
-        "-".to_string()
-    } else {
-        t
-    }
+    if t.is_empty() { "-".to_string() } else { t }
 }
 
 /// Every report section, as typed rows. Grown additively across the port; unbuilt
@@ -324,20 +320,20 @@ fn navigation_sections(spans: &[Span]) -> (Vec<HotspotRow>, Vec<TargetRow>) {
         };
         for nav in arr {
             for (label, field) in NAV_PHASES {
-                if let Some(v) = field_f64(nav, field) {
-                    if v >= 0.0 {
-                        entry(&mut phase_groups, label, Agg::default).add(v);
-                    }
+                if let Some(v) = field_f64(nav, field)
+                    && v >= 0.0
+                {
+                    entry(&mut phase_groups, label, Agg::default).add(v);
                 }
             }
             let path = to_url_path(nav.get("url").and_then(Value::as_str).unwrap_or(""));
             if path.is_empty() {
                 continue;
             }
-            if let Some(total) = field_f64(nav, "totalMs") {
-                if total >= 0.0 {
-                    entry(&mut url_groups, &path, Agg::default).add(total);
-                }
+            if let Some(total) = field_f64(nav, "totalMs")
+                && total >= 0.0
+            {
+                entry(&mut url_groups, &path, Agg::default).add(total);
             }
         }
     }
@@ -920,18 +916,22 @@ mod tests {
     fn coverage_note_distinguishes_no_report_from_no_lifecycle_spans() {
         // An empty section and a missing report must not look alike.
         let no_report = analyze_spans(lifecycle_tree(), None, &ReportedDurations::default());
-        assert!(no_report
-            .span_coverage_note
-            .as_deref()
-            .unwrap()
-            .contains("playwright-report"));
+        assert!(
+            no_report
+                .span_coverage_note
+                .as_deref()
+                .unwrap()
+                .contains("playwright-report")
+        );
 
         let no_lifecycle = analyze_spans(fixture_spans(), None, &reported(500.0));
-        assert!(no_lifecycle
-            .span_coverage_note
-            .as_deref()
-            .unwrap()
-            .contains("lifecycle"));
+        assert!(
+            no_lifecycle
+                .span_coverage_note
+                .as_deref()
+                .unwrap()
+                .contains("lifecycle")
+        );
     }
 
     #[test]

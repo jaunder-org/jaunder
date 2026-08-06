@@ -58,7 +58,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 use macros::{NumNewtype, StrNewtype};
-use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -1030,7 +1030,7 @@ pub struct UploadResponse {
 
 #[cfg(test)]
 mod tests {
-    use crate::test_support::{parse_content_hash, MEDIA_TEST_SHA256};
+    use crate::test_support::{MEDIA_TEST_SHA256, parse_content_hash};
     use sha2::{Digest, Sha256};
 
     use super::*;
@@ -1064,10 +1064,11 @@ mod tests {
             assert!(bad.parse::<T>().is_err(), "{bad} should reject");
         }
         // ...with the domain message
-        assert!("0"
-            .parse::<T>()
-            .err()
-            .is_some_and(|e| e.to_string().starts_with(err_prefix)));
+        assert!(
+            "0".parse::<T>()
+                .err()
+                .is_some_and(|e| e.to_string().starts_with(err_prefix))
+        );
         // Default, and From<Self> for i64
         let d = T::default();
         assert_eq!(i64::from(d), default);
@@ -1106,10 +1107,11 @@ mod tests {
         for bad in ["-1", "abc", "1.5"] {
             assert!(bad.parse::<ByteSize>().is_err(), "{bad} should reject");
         }
-        assert!("-1"
-            .parse::<ByteSize>()
-            .err()
-            .is_some_and(|e| e.to_string().starts_with("byte size")));
+        assert!(
+            "-1".parse::<ByteSize>()
+                .err()
+                .is_some_and(|e| e.to_string().starts_with("byte size"))
+        );
         // Display round-trips through FromStr
         let b = "4096".parse::<ByteSize>().unwrap();
         assert_eq!(b.to_string().parse::<ByteSize>().ok(), Some(b));
@@ -1347,10 +1349,12 @@ mod tests {
             "a.pdf",
             "a.unknownext",
         ] {
-            assert!(detect_content_type(f)
-                .as_ref()
-                .parse::<ContentType>()
-                .is_ok());
+            assert!(
+                detect_content_type(f)
+                    .as_ref()
+                    .parse::<ContentType>()
+                    .is_ok()
+            );
         }
     }
 
@@ -1414,12 +1418,16 @@ mod tests {
         assert!("a".repeat(63).parse::<ContentHash>().is_err());
         assert!("a".repeat(65).parse::<ContentHash>().is_err());
         assert!("A".repeat(64).parse::<ContentHash>().is_err());
-        assert!(format!("g{}", "a".repeat(63))
-            .parse::<ContentHash>()
-            .is_err());
-        assert!(format!("é{}", "a".repeat(62))
-            .parse::<ContentHash>()
-            .is_err());
+        assert!(
+            format!("g{}", "a".repeat(63))
+                .parse::<ContentHash>()
+                .is_err()
+        );
+        assert!(
+            format!("é{}", "a".repeat(62))
+                .parse::<ContentHash>()
+                .is_err()
+        );
     }
 
     #[test]

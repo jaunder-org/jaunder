@@ -16,7 +16,7 @@ use rstest_reuse::*;
 
 use crate::helpers::{create_session_for, create_user_and_session, post_form, post_json};
 use storage::test_support::{
-    backends, backends_matrix, Backend, SeedRawPost, SeedUser, SeededPost, TestBase, TestEnv,
+    Backend, SeedRawPost, SeedUser, SeededPost, TestBase, TestEnv, backends, backends_matrix,
 };
 
 async fn unpublish_post_form(
@@ -380,10 +380,12 @@ Body text",
     // Body is stored verbatim including the heading
     assert_eq!(record.body, "# Extracted Title\n\nBody text");
     // Rendered HTML contains the heading because body is rendered verbatim
-    assert!(record
-        .rendered_html
-        .as_ref()
-        .contains("<h1>Extracted Title</h1>"));
+    assert!(
+        record
+            .rendered_html
+            .as_ref()
+            .contains("<h1>Extracted Title</h1>")
+    );
 }
 
 // Shape B — create_post rejection cluster. Identical setup (author + session)
@@ -806,10 +808,12 @@ async fn update_post_updates_draft_content_and_slug(#[case] backend: Backend) {
         .expect("post should exist");
     assert_eq!(record.title.as_deref(), Some("Updated Title"));
     assert_eq!(record.slug.to_string(), "updated-slug");
-    assert!(record
-        .rendered_html
-        .as_ref()
-        .contains("<strong>new body</strong>"));
+    assert!(
+        record
+            .rendered_html
+            .as_ref()
+            .contains("<strong>new body</strong>")
+    );
 }
 
 #[apply(backends)]
@@ -1249,9 +1253,11 @@ async fn publish_post_publishes_draft_and_returns_permalink(#[case] backend: Bac
     assert_eq!(status, StatusCode::OK, "publish body: {body}");
     let published: SavedPost = serde_json::from_str(&body).unwrap();
     assert_eq!(published.post_id, created.post_id);
-    assert!(published
-        .permalink
-        .contains(&format!("/~{}/", session.username)));
+    assert!(
+        published
+            .permalink
+            .contains(&format!("/~{}/", session.username))
+    );
 
     let record = state
         .posts

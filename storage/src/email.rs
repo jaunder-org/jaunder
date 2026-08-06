@@ -208,7 +208,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, Backend, CloseablePool, SeedUser, TestEnv};
+    use crate::test_support::{Backend, CloseablePool, SeedUser, TestEnv, backends};
     use common::test_support::{parse_email, parse_raw_token};
     use rstest::*;
     use rstest_reuse::*;

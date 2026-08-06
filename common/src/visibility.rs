@@ -514,11 +514,13 @@ mod tests {
     #[test]
     fn private_selection_is_empty_and_ignores_named() {
         // Private cannot combine with anything; named ids are dropped.
-        assert!(audience_selection_to_targets(&selection(
-            AudienceBase::Private,
-            &[AudienceId::from(5)]
-        ))
-        .is_empty());
+        assert!(
+            audience_selection_to_targets(&selection(
+                AudienceBase::Private,
+                &[AudienceId::from(5)]
+            ))
+            .is_empty()
+        );
     }
 
     #[test]

@@ -32,7 +32,7 @@ fn run_crate(name: &str, entry: &str, source: &str) -> (tempfile::TempDir, Strin
              [package]\n\
              name = \"{name}\"\n\
              version = \"0.0.0\"\n\
-             edition = \"2021\"\n\n\
+             edition = \"2024\"\n\n\
              [features]\n\
              off = []\n"
         ),
@@ -63,7 +63,7 @@ pub fn run_bin_fixture(name: &str, source: &str) -> (tempfile::TempDir, String) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::check::{problems, Kind, ScannedFile};
+    use crate::check::{Kind, ScannedFile, problems};
     use crate::libtest::run_entries;
 
     // `.rs.txt`, not `.rs`: these are test DATA, not any crate's source. Under a

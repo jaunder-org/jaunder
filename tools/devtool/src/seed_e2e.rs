@@ -11,7 +11,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 
 /// Which fixture binary a seed step runs against.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -98,7 +98,7 @@ pub fn run(db: &str, test_support_bin: &Path, jaunder_bin: &Path) -> anyhow::Res
 
 #[cfg(test)]
 mod tests {
-    use super::{seed_invocations, SeedBin};
+    use super::{SeedBin, seed_invocations};
 
     #[test]
     fn canonical_fixture_invocations() {

@@ -25,7 +25,7 @@ use std::borrow::Cow;
 
 use axum::body::Bytes;
 use axum::extract::Request;
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use common::etag::ETag;
 use rust_embed::RustEmbed;
@@ -384,7 +384,7 @@ mod tests {
         );
     }
 
-    use axum::body::{to_bytes, Body};
+    use axum::body::{Body, to_bytes};
 
     #[tokio::test]
     async fn build_response_identity_sets_type_body_and_no_encoding() {

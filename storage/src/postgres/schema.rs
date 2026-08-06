@@ -3,7 +3,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::test_support::{postgres_only, Backend};
+    use crate::test_support::{Backend, postgres_only};
 
     use rstest::*;
     use rstest_reuse::*;

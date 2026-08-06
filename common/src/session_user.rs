@@ -51,7 +51,7 @@ pub fn decode_marker(raw: &str) -> Option<SessionUser> {
 mod tests {
     use crate::test_support::parse_username;
 
-    use super::{decode_marker, encode_marker, SessionUser};
+    use super::{SessionUser, decode_marker, encode_marker};
 
     #[test]
     fn round_trips_session_info() {

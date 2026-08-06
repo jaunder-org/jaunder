@@ -7,14 +7,14 @@ use std::time::Duration;
 use crate::websub::WebSubClient;
 use chrono::{DateTime, Utc};
 use common::absolute_url::compose;
-use common::feed::{affected_feed_urls, FeedPath};
+use common::feed::{FeedPath, affected_feed_urls};
 use common::ids::FeedEventId;
 use storage::{
     FeedCacheStorage, FeedEventRecord, FeedEventStorage, PostStorage, SiteConfigStorage,
 };
 use tokio::sync::Mutex;
 
-use super::regenerate::{regenerate_feed, RegenerateError};
+use super::regenerate::{RegenerateError, regenerate_feed};
 
 const BATCH_LIMIT: usize = 200;
 const LEASE_TIMEOUT: Duration = Duration::from_mins(5);

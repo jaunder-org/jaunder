@@ -10,7 +10,7 @@
 //! propagated to callers that could not act on it — the policy choice this advisory
 //! layer is entitled to make on the primitive's truthful `Result`.
 
-use super::marker::{decode_marker, encode_marker, SessionUser, MARKER_KEY};
+use super::marker::{MARKER_KEY, SessionUser, decode_marker, encode_marker};
 
 /// Get + decode the marker. `None` when absent, malformed, **or** the store could
 /// not be read — an unreadable marker is treated as "no marker" (anonymous chrome),

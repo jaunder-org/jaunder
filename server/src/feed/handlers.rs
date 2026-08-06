@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::Path,
-    http::{header, HeaderMap, HeaderValue, StatusCode},
-    response::{IntoResponse, Response},
     Extension,
+    extract::Path,
+    http::{HeaderMap, HeaderValue, StatusCode, header},
+    response::{IntoResponse, Response},
 };
 use common::feed::{FeedFormat, FeedPath, FeedSurface};
 use common::{tag::Tag, username::Username};
@@ -58,22 +58,20 @@ async fn serve(
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
 
-    if let Some(etag) = headers.get(header::IF_NONE_MATCH) {
-        if etag.to_str().ok() == Some(row.etag.as_ref()) {
-            return StatusCode::NOT_MODIFIED.into_response();
-        }
+    if let Some(etag) = headers.get(header::IF_NONE_MATCH)
+        && etag.to_str().ok() == Some(row.etag.as_ref())
+    {
+        return StatusCode::NOT_MODIFIED.into_response();
     }
-    if let Some(ims) = headers.get(header::IF_MODIFIED_SINCE) {
-        if let Some(t) = ims
+    if let Some(ims) = headers.get(header::IF_MODIFIED_SINCE)
+        && let Some(t) = ims
             .to_str()
             .ok()
             .and_then(|s| chrono::DateTime::parse_from_rfc2822(s).ok())
-        {
-            if row.updated_at <= t.with_timezone(&chrono::Utc) {
-                return StatusCode::NOT_MODIFIED.into_response();
-            }
-        } // cov:ignore fall-through brace; llvm-cov leaves it unmarked though the row-newer (200, not 304) path is tested
-    }
+        && row.updated_at <= t.with_timezone(&chrono::Utc)
+    {
+        return StatusCode::NOT_MODIFIED.into_response();
+    } // cov:ignore fall-through brace; llvm-cov leaves it unmarked though the row-newer (200, not 304) path is tested
 
     let mut resp_headers = HeaderMap::new();
     if let Ok(ct) = HeaderValue::from_str(&row.content_type) {

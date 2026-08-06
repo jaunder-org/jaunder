@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
-use axum::http::HeaderName;
 use axum::Router;
+use axum::http::HeaderName;
 use host::capture;
 use opentelemetry::propagation::Extractor;
 use opentelemetry::trace::TracerProvider as _;
@@ -13,7 +13,7 @@ use tracing::Level;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 fn default_filter(verbose: bool) -> EnvFilter {
     if verbose {
@@ -443,15 +443,15 @@ impl Drop for TelemetryGuard {
         // never change the command's outcome, so errors are logged, not
         // propagated — mirroring the non-fatal exporter-setup handling in
         // `init_tracing_impl`.
-        if let Some(meter) = self.meter.take() {
-            if let Err(error) = meter.shutdown() {
-                eprintln!("OTel meter provider shutdown failed during flush: {error}");
-            }
+        if let Some(meter) = self.meter.take()
+            && let Err(error) = meter.shutdown()
+        {
+            eprintln!("OTel meter provider shutdown failed during flush: {error}");
         }
-        if let Some(tracer) = self.tracer.take() {
-            if let Err(error) = tracer.shutdown() {
-                eprintln!("OTel tracer provider shutdown failed during flush: {error}");
-            }
+        if let Some(tracer) = self.tracer.take()
+            && let Err(error) = tracer.shutdown()
+        {
+            eprintln!("OTel tracer provider shutdown failed during flush: {error}");
         }
     }
 }
@@ -532,19 +532,11 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{HeaderMap, Request, StatusCode};
+    use common::test_support::with_env;
     use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
     use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
-    use std::sync::{Arc, Mutex, MutexGuard};
+    use std::sync::{Arc, Mutex};
     use tower::ServiceExt;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    fn lock_env() -> MutexGuard<'static, ()> {
-        match ENV_LOCK.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        }
-    }
 
     /// An in-memory `MakeWriter` capturing every write into a shared buffer, so a
     /// layer's output can be asserted on. `Arc<Mutex<Vec<u8>>>` is not itself a
@@ -588,44 +580,48 @@ mod tests {
         // The load-bearing AND-gate check: the diag layer's per-layer WARN filter must
         // narrow only its own sink, under the same global `info` filter e2e uses — INFO
         // stays out of the diag file but still reaches the other layers.
-        let _lock = lock_env();
-        let diag_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
-        let other_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
-        let subscriber = tracing_subscriber::registry()
-            .with(EnvFilter::new("info"))
-            .with(
-                fmt::layer()
-                    .with_ansi(false)
-                    .with_writer(Shared(other_buf.clone())),
-            )
-            .with(diag_layer(Shared(diag_buf.clone())));
-        tracing::subscriber::with_default(subscriber, || {
-            tracing::info!("info-line");
-            tracing::warn!("warn-line");
-            tracing::error!("error-line");
+        with_env(|_env| {
+            let diag_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+            let other_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+            let subscriber = tracing_subscriber::registry()
+                .with(EnvFilter::new("info"))
+                .with(
+                    fmt::layer()
+                        .with_ansi(false)
+                        .with_writer(Shared(other_buf.clone())),
+                )
+                .with(diag_layer(Shared(diag_buf.clone())));
+            tracing::subscriber::with_default(subscriber, || {
+                tracing::info!("info-line");
+                tracing::warn!("warn-line");
+                tracing::error!("error-line");
+            });
+
+            let diag =
+                String::from_utf8(diag_buf.lock().expect("diag lock").clone()).expect("utf8");
+            let other =
+                String::from_utf8(other_buf.lock().expect("other lock").clone()).expect("utf8");
+
+            assert!(!diag.contains("info-line"), "diag sink must drop INFO");
+            assert!(diag.contains("warn-line"), "diag sink must keep WARN");
+            assert!(diag.contains("error-line"), "diag sink must keep ERROR");
+            for line in diag.lines() {
+                serde_json::from_str::<serde_json::Value>(line).expect("diag line is valid JSONL");
+            }
+            // The other sink still sees INFO: we narrowed only the diag layer, not the registry.
+            assert!(
+                other.contains("info-line"),
+                "global filter must not be clamped to WARN"
+            );
         });
-
-        let diag = String::from_utf8(diag_buf.lock().expect("diag lock").clone()).expect("utf8");
-        let other = String::from_utf8(other_buf.lock().expect("other lock").clone()).expect("utf8");
-
-        assert!(!diag.contains("info-line"), "diag sink must drop INFO");
-        assert!(diag.contains("warn-line"), "diag sink must keep WARN");
-        assert!(diag.contains("error-line"), "diag sink must keep ERROR");
-        for line in diag.lines() {
-            serde_json::from_str::<serde_json::Value>(line).expect("diag line is valid JSONL");
-        }
-        // The other sink still sees INFO: we narrowed only the diag layer, not the registry.
-        assert!(
-            other.contains("info-line"),
-            "global filter must not be clamped to WARN"
-        );
     }
 
     #[test]
     fn diag_log_file_is_none_when_env_unset() {
-        let _lock = lock_env();
-        std::env::remove_var(host::capture::DIR_ENV);
-        assert!(diag_log_file().is_none());
+        with_env(|env| {
+            env.remove(host::capture::DIR_ENV);
+            assert!(diag_log_file().is_none());
+        });
     }
 
     #[test]
@@ -654,45 +650,50 @@ mod tests {
         assert_eq!(parsed["level"], "ERROR");
         assert_eq!(parsed["target"], "panic");
         assert_eq!(parsed["location"], "server/src/foo.rs:42:5");
-        assert!(parsed["message"]
-            .as_str()
-            .expect("message string")
-            .contains("panicked at"));
+        assert!(
+            parsed["message"]
+                .as_str()
+                .expect("message string")
+                .contains("panicked at")
+        );
     }
 
     #[test]
     fn installed_diag_panic_hook_appends_record_and_restores() {
-        let _lock = lock_env();
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        let path = dir.path().join("diag.log");
-        // Save/restore the process-global hook so it can't fire on a later test
-        // writing to this now-deleted TempDir.
-        let previous = std::panic::take_hook();
-        install_diag_panic_hook(Some(path.clone()));
-        // Exercise every payload branch: `&str`, `String`, and a non-string payload.
-        let dynamic = String::from("formatted-payload");
-        let _ = std::panic::catch_unwind(|| panic!("boom-under-test"));
-        let _ = std::panic::catch_unwind(|| panic!("{dynamic}"));
-        let _ = std::panic::catch_unwind(|| std::panic::panic_any(42u32));
-        std::panic::set_hook(previous);
+        with_env(|_env| {
+            let dir = tempfile::TempDir::new().expect("tempdir");
+            let path = dir.path().join("diag.log");
+            // Save/restore the process-global hook so it can't fire on a later test
+            // writing to this now-deleted TempDir.
+            let previous = std::panic::take_hook();
+            install_diag_panic_hook(Some(path.clone()));
+            // Exercise every payload branch: `&str`, `String`, and a non-string payload.
+            let dynamic = String::from("formatted-payload");
+            let _ = std::panic::catch_unwind(|| panic!("boom-under-test"));
+            let _ = std::panic::catch_unwind(|| panic!("{dynamic}"));
+            let _ = std::panic::catch_unwind(|| std::panic::panic_any(42u32));
+            std::panic::set_hook(previous);
 
-        let content = std::fs::read_to_string(&path).expect("read diag");
-        let records: Vec<serde_json::Value> = content
-            .lines()
-            .map(|line| serde_json::from_str(line).expect("valid JSON"))
-            .collect();
-        assert_eq!(records.len(), 3, "one record per panic");
-        assert!(records.iter().all(|record| record["kind"] == "panic"));
-        let messages: Vec<&str> = records
-            .iter()
-            .map(|record| record["message"].as_str().expect("message string"))
-            .collect();
-        assert!(messages
-            .iter()
-            .all(|message| message.contains("panicked at")));
-        assert!(messages[0].contains("boom-under-test"));
-        assert!(messages[1].contains("formatted-payload"));
-        assert!(messages[2].contains("<non-string panic payload>"));
+            let content = std::fs::read_to_string(&path).expect("read diag");
+            let records: Vec<serde_json::Value> = content
+                .lines()
+                .map(|line| serde_json::from_str(line).expect("valid JSON"))
+                .collect();
+            assert_eq!(records.len(), 3, "one record per panic");
+            assert!(records.iter().all(|record| record["kind"] == "panic"));
+            let messages: Vec<&str> = records
+                .iter()
+                .map(|record| record["message"].as_str().expect("message string"))
+                .collect();
+            assert!(
+                messages
+                    .iter()
+                    .all(|message| message.contains("panicked at"))
+            );
+            assert!(messages[0].contains("boom-under-test"));
+            assert!(messages[1].contains("formatted-payload"));
+            assert!(messages[2].contains("<non-string panic payload>"));
+        });
     }
 
     #[test]
@@ -700,13 +701,14 @@ mod tests {
         // A directory can't be opened as a file, so the hook's append fails — it must
         // swallow that and let the panic propagate cleanly (covers the open-failure
         // arm inside the hook, which the writable-path test never reaches).
-        let _lock = lock_env();
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        let previous = std::panic::take_hook();
-        install_diag_panic_hook(Some(dir.path().to_path_buf()));
-        let result = std::panic::catch_unwind(|| panic!("boom-into-directory"));
-        std::panic::set_hook(previous);
-        assert!(result.is_err(), "panic still propagates when capture fails");
+        with_env(|_env| {
+            let dir = tempfile::TempDir::new().expect("tempdir");
+            let previous = std::panic::take_hook();
+            install_diag_panic_hook(Some(dir.path().to_path_buf()));
+            let result = std::panic::catch_unwind(|| panic!("boom-into-directory"));
+            std::panic::set_hook(previous);
+            assert!(result.is_err(), "panic still propagates when capture fails");
+        });
     }
 
     #[test]
@@ -743,64 +745,63 @@ mod tests {
 
     #[test]
     fn slow_op_threshold_defaults_to_five_seconds() {
-        let _guard = lock_env();
-        std::env::remove_var("JAUNDER_SLOW_OP_MS");
-        assert_eq!(slow_op_threshold(), Duration::from_secs(5));
+        with_env(|env| {
+            env.remove("JAUNDER_SLOW_OP_MS");
+            assert_eq!(slow_op_threshold(), Duration::from_secs(5));
+        });
     }
 
     #[test]
     fn slow_op_threshold_reads_environment_override() {
-        let _guard = lock_env();
-        std::env::set_var("JAUNDER_SLOW_OP_MS", "1234");
-        assert_eq!(slow_op_threshold(), Duration::from_millis(1234));
-        std::env::remove_var("JAUNDER_SLOW_OP_MS");
+        with_env(|env| {
+            env.set("JAUNDER_SLOW_OP_MS", "1234");
+            assert_eq!(slow_op_threshold(), Duration::from_millis(1234));
+        });
     }
 
     #[test]
     fn otlp_endpoint_prefers_jaunder_specific_setting() {
-        let _guard = lock_env();
-        std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", "http://fallback:4317");
-        std::env::set_var(
-            "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
-            "http://preferred:4317",
-        );
+        with_env(|env| {
+            env.set("OTEL_EXPORTER_OTLP_ENDPOINT", "http://fallback:4317");
+            env.set(
+                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
+                "http://preferred:4317",
+            );
 
-        assert_eq!(
-            otel_exporter_otlp_endpoint().as_deref(),
-            Some("http://preferred:4317")
-        );
-
-        std::env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
-        std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
+            assert_eq!(
+                otel_exporter_otlp_endpoint().as_deref(),
+                Some("http://preferred:4317")
+            );
+        });
     }
 
     #[test]
     fn otlp_endpoint_falls_back_to_standard_env_var() {
-        let _guard = lock_env();
-        std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
-        std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", "http://fallback:4317");
+        with_env(|env| {
+            env.remove("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
+            env.set("OTEL_EXPORTER_OTLP_ENDPOINT", "http://fallback:4317");
 
-        assert_eq!(
-            otel_exporter_otlp_endpoint().as_deref(),
-            Some("http://fallback:4317")
-        );
-
-        std::env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
+            assert_eq!(
+                otel_exporter_otlp_endpoint().as_deref(),
+                Some("http://fallback:4317")
+            );
+        });
     }
 
     #[test]
     fn use_json_format_defaults_to_pretty() {
-        let _guard = lock_env();
-        std::env::remove_var("JAUNDER_LOG_FORMAT");
-        assert!(!use_json_format());
+        with_env(|env| {
+            env.remove("JAUNDER_LOG_FORMAT");
+            assert!(!use_json_format());
+        });
     }
 
     #[test]
     fn use_json_format_accepts_json() {
-        let _guard = lock_env();
-        std::env::set_var("JAUNDER_LOG_FORMAT", "json");
-        assert!(use_json_format());
-        std::env::remove_var("JAUNDER_LOG_FORMAT");
+        with_env(|env| {
+            env.set("JAUNDER_LOG_FORMAT", "json");
+            assert!(use_json_format());
+        });
     }
 
     #[tokio::test]
@@ -816,123 +817,123 @@ mod tests {
 
     #[tokio::test]
     async fn build_otel_meter_with_endpoint_is_wired_by_init() {
-        let _guard = lock_env();
-        std::env::set_var(
-            "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
-            "http://127.0.0.1:4317",
-        );
-        // The returned TelemetryGuard is an unbound temporary that drops here,
-        // so this (and the other valid-endpoint init_tracing_impl tests below)
-        // performs a real shutdown()/force-flush against 127.0.0.1:4317. It
-        // returns promptly because the connection is refused — if one of these
-        // ever hangs in CI, an unreachable-but-not-refused endpoint is the place
-        // to look.
-        init_tracing_impl(false);
-        std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
+        with_env(|env| {
+            env.set(
+                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
+                "http://127.0.0.1:4317",
+            );
+            // The returned TelemetryGuard is an unbound temporary that drops here,
+            // so this (and the other valid-endpoint init_tracing_impl tests below)
+            // performs a real shutdown()/force-flush against 127.0.0.1:4317. It
+            // returns promptly because the connection is refused — if one of these
+            // ever hangs in CI, an unreachable-but-not-refused endpoint is the place
+            // to look.
+            init_tracing_impl(false);
+        });
     }
 
     #[test]
     fn init_tracing_impl_handles_invalid_otel_endpoint() {
-        let _guard = lock_env();
-        std::env::set_var(
-            "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
-            "not a valid endpoint",
-        );
-        init_tracing_impl(false);
-        std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
+        with_env(|env| {
+            env.set(
+                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
+                "not a valid endpoint",
+            );
+            init_tracing_impl(false);
+        });
     }
 
     #[test]
     fn init_tracing_impl_creates_diag_file_when_env_set() {
-        let _guard = lock_env();
-        let dir = tempfile::TempDir::new().expect("tempdir");
-        std::env::set_var(host::capture::DIR_ENV, dir.path());
-        let path = dir.path().join("diag.log");
-        // `init_tracing_impl` installs the global panic hook when the env is set;
-        // save/restore it so it can't fire on a later test writing to this TempDir.
-        let previous = std::panic::take_hook();
-        // `OpenOptions::create` makes the file on open — independent of whether this
-        // process's `try_init` wins the global-subscriber slot — so the sink's file
-        // exists even when a prior test already installed the subscriber.
-        init_tracing_impl(false);
-        std::panic::set_hook(previous);
-        std::env::remove_var(host::capture::DIR_ENV);
-        assert!(path.exists(), "diag file should be created when env is set");
+        with_env(|env| {
+            let dir = tempfile::TempDir::new().expect("tempdir");
+            env.set(host::capture::DIR_ENV, dir.path());
+            let path = dir.path().join("diag.log");
+            // `init_tracing_impl` installs the global panic hook when the env is set;
+            // save/restore it so it can't fire on a later test writing to this TempDir.
+            let previous = std::panic::take_hook();
+            // `OpenOptions::create` makes the file on open — independent of whether this
+            // process's `try_init` wins the global-subscriber slot — so the sink's file
+            // exists even when a prior test already installed the subscriber.
+            init_tracing_impl(false);
+            std::panic::set_hook(previous);
+            assert!(path.exists(), "diag file should be created when env is set");
+        });
     }
 
     #[test]
     fn init_tracing_impl_survives_unopenable_diag_path() {
-        let _guard = lock_env();
-        // Point JAUNDER_CAPTURE_DIR at a regular FILE: `capture::file` can't create the
-        // dir and opening `<file>/diag.log` fails, exercising the non-fatal
-        // `Err`/`eprintln` arm without taking down startup. (Pointing at a directory
-        // would now succeed — `capture::file` create_dir_all's it and joins `diag.log`.)
-        let file = tempfile::NamedTempFile::new().expect("temp file");
-        std::env::set_var(host::capture::DIR_ENV, file.path());
-        let previous = std::panic::take_hook();
-        init_tracing_impl(false);
-        std::panic::set_hook(previous);
-        std::env::remove_var(host::capture::DIR_ENV);
+        with_env(|env| {
+            // Point JAUNDER_CAPTURE_DIR at a regular FILE: `capture::file` can't create
+            // the dir and opening `<file>/diag.log` fails, exercising the non-fatal
+            // `Err`/`eprintln` arm without taking down startup. (Pointing at a directory
+            // would now succeed — `capture::file` create_dir_all's it and joins
+            // `diag.log`.)
+            let file = tempfile::NamedTempFile::new().expect("temp file");
+            env.set(host::capture::DIR_ENV, file.path());
+            let previous = std::panic::take_hook();
+            init_tracing_impl(false);
+            std::panic::set_hook(previous);
+        });
     }
 
     #[test]
     fn init_tracing_impl_handles_invalid_otel_endpoint_with_json_output() {
-        let _guard = lock_env();
-        std::env::set_var(
-            "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
-            "still not a valid endpoint",
-        );
-        std::env::set_var("JAUNDER_LOG_FORMAT", "json");
-        init_tracing_impl(false);
-        std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
-        std::env::remove_var("JAUNDER_LOG_FORMAT");
+        with_env(|env| {
+            env.set(
+                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
+                "still not a valid endpoint",
+            );
+            env.set("JAUNDER_LOG_FORMAT", "json");
+            init_tracing_impl(false);
+        });
     }
 
     #[test]
     fn init_tracing_impl_handles_no_otel_endpoint_with_json_output() {
-        let _guard = lock_env();
-        std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
-        std::env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
-        std::env::set_var("JAUNDER_LOG_FORMAT", "json");
-        init_tracing_impl(false);
-        std::env::remove_var("JAUNDER_LOG_FORMAT");
+        with_env(|env| {
+            env.remove("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
+            env.remove("OTEL_EXPORTER_OTLP_ENDPOINT");
+            env.set("JAUNDER_LOG_FORMAT", "json");
+            init_tracing_impl(false);
+        });
     }
 
     #[tokio::test]
     async fn init_tracing_impl_handles_valid_otel_endpoint_with_pretty_output() {
-        let _guard = lock_env();
-        std::env::set_var(
-            "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
-            "http://127.0.0.1:4317",
-        );
-        std::env::remove_var("JAUNDER_LOG_FORMAT");
-        init_tracing_impl(false);
-        std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
+        with_env(|env| {
+            env.set(
+                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
+                "http://127.0.0.1:4317",
+            );
+            env.remove("JAUNDER_LOG_FORMAT");
+            init_tracing_impl(false);
+        });
     }
 
     #[tokio::test]
     async fn init_tracing_impl_handles_valid_otel_endpoint_with_json_output() {
-        let _guard = lock_env();
-        std::env::set_var(
-            "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
-            "http://127.0.0.1:4317",
-        );
-        std::env::set_var("JAUNDER_LOG_FORMAT", "json");
-        init_tracing_impl(false);
-        std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
-        std::env::remove_var("JAUNDER_LOG_FORMAT");
+        with_env(|env| {
+            env.set(
+                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
+                "http://127.0.0.1:4317",
+            );
+            env.set("JAUNDER_LOG_FORMAT", "json");
+            init_tracing_impl(false);
+        });
     }
 
     #[test]
     fn init_tracing_impl_reports_failure_when_already_initialized() {
-        let _guard = lock_env();
-        std::env::remove_var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
-        std::env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
-        // First call installs the global subscriber and log bridge; the second
-        // finds both already set and exercises the non-fatal error branches
-        // (reported to stderr rather than silently dropped).
-        init_tracing_impl(false);
-        init_tracing_impl(false);
+        with_env(|env| {
+            env.remove("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
+            env.remove("OTEL_EXPORTER_OTLP_ENDPOINT");
+            // First call installs the global subscriber and log bridge; the second
+            // finds both already set and exercises the non-fatal error branches
+            // (reported to stderr rather than silently dropped).
+            init_tracing_impl(false);
+            init_tracing_impl(false);
+        });
     }
 
     #[test]
@@ -976,19 +977,6 @@ mod tests {
 
         let span = tracing::info_span!("fast_test_span");
         drop(span);
-    }
-
-    #[test]
-    fn lock_env_recovers_from_poisoned_mutex() {
-        // Poison ENV_LOCK by panicking while holding it inside catch_unwind.
-        let _ = std::panic::catch_unwind(|| {
-            let _guard = ENV_LOCK
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            panic!("poison the mutex");
-        });
-        // lock_env() must recover gracefully from the poisoned mutex.
-        let _guard = lock_env();
     }
 
     #[test]

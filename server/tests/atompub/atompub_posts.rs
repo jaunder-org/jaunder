@@ -1,9 +1,9 @@
 use axum::{
     body::Body,
-    http::{header, Request, StatusCode},
+    http::{Request, StatusCode, header},
 };
 use common::ids::PostId;
-use common::tag::{TagLabel, MAX_TAGS_PER_POST};
+use common::tag::{MAX_TAGS_PER_POST, TagLabel};
 use common::test_support::permalink_date;
 use tower::ServiceExt;
 
@@ -11,11 +11,11 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    atompub, atompub_at, atompub_get, atompub_post_xml, atompub_put_xml, body_string,
-    create_user_and_session, make_app, setup_with_base_url, SeededSession,
+    SeededSession, atompub, atompub_at, atompub_get, atompub_post_xml, atompub_put_xml,
+    body_string, create_user_and_session, make_app, setup_with_base_url,
 };
 use storage::test_support::{
-    backends, backends_matrix, fetch_post_media, media_ref_for, media_url_for, Backend, TestEnv,
+    Backend, TestEnv, backends, backends_matrix, fetch_post_media, media_ref_for, media_url_for,
 };
 
 // #560: the AtomPub surface composes absolute URLs, so it *requires* `site.base_url`.
@@ -1316,9 +1316,10 @@ async fn etag_is_content_hash_format(#[case] backend: Backend) {
         .and_then(|s| s.strip_suffix('"'))
         .expect("ETag is a quoted sha256- token");
     assert_eq!(hex.len(), 64);
-    assert!(hex
-        .chars()
-        .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)));
+    assert!(
+        hex.chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+    );
 }
 
 #[apply(backends)]

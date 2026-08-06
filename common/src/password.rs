@@ -96,8 +96,8 @@ impl Password {
     /// Returns `Err` if Argon2 hashing fails.
     pub fn hash(&self) -> Result<String, PasswordError> {
         use argon2::{
-            password_hash::{rand_core::OsRng, SaltString},
             PasswordHasher,
+            password_hash::{SaltString, rand_core::OsRng},
         };
 
         let salt = SaltString::generate(&mut OsRng);
@@ -223,8 +223,8 @@ mod tests {
         // Guards prod-strength Argon2 even when the workspace test build turns on
         // cheap-kdf: hash with explicit production params and verify.
         use argon2::{
-            password_hash::{rand_core::OsRng, SaltString},
             Argon2, PasswordHasher,
+            password_hash::{SaltString, rand_core::OsRng},
         };
         let p: Password = "a".repeat(10).parse().unwrap();
         let salt = SaltString::generate(&mut OsRng);
@@ -246,9 +246,10 @@ mod tests {
         let p1: Password = v1.parse().unwrap();
         let p2: Password = v2.parse().unwrap();
         let hash = p1.hash().unwrap();
-        assert!(!p2
-            .verify(&hash)
-            .expect("verification should return false, not error"));
+        assert!(
+            !p2.verify(&hash)
+                .expect("verification should return false, not error")
+        );
     }
 
     #[test]

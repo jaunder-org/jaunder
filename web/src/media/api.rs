@@ -228,7 +228,7 @@ pub async fn upload(data: MultipartData) -> WebResult<UploadResponse> {
 
 #[cfg(all(test, feature = "server"))]
 mod tests {
-    use super::{map_media_error, MediaError};
+    use super::{MediaError, map_media_error};
     use crate::error::ErrorKind;
 
     #[test]

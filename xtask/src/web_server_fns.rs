@@ -334,9 +334,11 @@ mod tests {
     fn a_differently_qualified_server_attribute_does_not_enumerate() {
         // The predicate matches the whole `macros::server` path, so neither the bare
         // retired spelling nor some other crate's `#[foo::server]` counts.
-        assert!(server_fns_in("#[foo::server]\npub async fn x() -> R {}\n")
-            .unwrap()
-            .is_empty());
+        assert!(
+            server_fns_in("#[foo::server]\npub async fn x() -> R {}\n")
+                .unwrap()
+                .is_empty()
+        );
         let bare = retired_server_fn("", "pub async fn x() -> R {}");
         assert!(server_fns_in(&bare).unwrap().is_empty());
     }

@@ -3,7 +3,7 @@
 //! [`marker_storage`](super::marker_storage) binding) directly, no `cfg` gates
 //! inside this file.
 
-use super::{clear_session, set_session, Login, LoginResponse, Logout, SessionUser};
+use super::{Login, LoginResponse, Logout, SessionUser, clear_session, set_session};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::topbar::Topbar;
@@ -25,13 +25,13 @@ pub fn LoginPage() -> impl IntoView {
     // which the user could have edited between submit and response. `is_operator`
     // comes from the login response, so operator chrome is flash-free on first login.
     Effect::new(move |_| {
-        if let Some(Ok(resp)) = login_action.value().get() {
-            if let Some(input) = login_action.input().get() {
-                set_session(SessionUser {
-                    username: input.username,
-                    is_operator: resp.is_operator,
-                });
-            }
+        if let Some(Ok(resp)) = login_action.value().get()
+            && let Some(input) = login_action.input().get()
+        {
+            set_session(SessionUser {
+                username: input.username,
+                is_operator: resp.is_operator,
+            });
         }
     });
 

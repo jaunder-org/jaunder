@@ -130,39 +130,58 @@ pub async fn server_boundary<T>(
 mod tests {
     use super::WebError;
     #[cfg(feature = "server")]
-    use super::{project, server_boundary, ErrorClass, ErrorKind, InternalError, WebResult};
+    use super::{ErrorClass, ErrorKind, InternalError, WebResult, project, server_boundary};
     use leptos::prelude::FromServerFnError;
-    use leptos::server_fn::{codec::JsonEncoding, error::ServerFnErrorErr, Decodes, Encodes};
-    use std::error::Error;
-    use std::fmt;
+    use leptos::server_fn::{Decodes, Encodes, codec::JsonEncoding, error::ServerFnErrorErr};
 
-    #[derive(Debug)]
-    struct SourceError;
+    /// The error-chain fixtures, gated once for the whole group rather than
+    /// per item.
+    ///
+    /// Every user is a `server`-feature test below, so in a no-`server` build the
+    /// definitions were live while all their uses were compiled out — which reads
+    /// as `dead_code` (#826). Their exclusive imports (`std::error::Error`,
+    /// `std::fmt`) live in here too, for the same reason; leaving those ungated
+    /// just moves the same warning onto them.
+    ///
+    /// Note no build in the gate compiles this crate's tests *without* `server`
+    /// (`wasm-clippy` omits `--all-targets`), so a mis-gate here is invisible to
+    /// CI — hence stating the rule in one place.
+    #[cfg(feature = "server")]
+    mod fixtures {
+        use std::error::Error;
+        use std::fmt;
 
-    impl fmt::Display for SourceError {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("source context")
+        #[derive(Debug)]
+        pub(super) struct SourceError;
+
+        impl fmt::Display for SourceError {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("source context")
+            }
+        }
+
+        impl Error for SourceError {}
+
+        #[derive(Debug)]
+        pub(super) struct OuterError {
+            pub(super) source: SourceError,
+        }
+
+        impl fmt::Display for OuterError {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("outer failure")
+            }
+        }
+
+        impl Error for OuterError {
+            fn source(&self) -> Option<&(dyn Error + 'static)> {
+                Some(&self.source)
+            }
         }
     }
 
-    impl Error for SourceError {}
-
-    #[derive(Debug)]
-    struct OuterError {
-        source: SourceError,
-    }
-
-    impl fmt::Display for OuterError {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("outer failure")
-        }
-    }
-
-    impl Error for OuterError {
-        fn source(&self) -> Option<&(dyn Error + 'static)> {
-            Some(&self.source)
-        }
-    }
+    #[cfg(feature = "server")]
+    use fixtures::{OuterError, SourceError};
 
     #[test]
     fn server_function_errors_map_to_web_error() {

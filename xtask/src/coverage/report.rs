@@ -1,6 +1,6 @@
 use crate::coverage::{FileCoverage, LineCov};
 use crate::markers::{comment_marker_is, line_comment};
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 /// Parse `cargo llvm-cov report --text` output. A line is executable iff its
 /// second pipe-delimited column is non-blank; covered iff that column is a
@@ -83,10 +83,10 @@ pub fn parse_text_report(report: &str, repo_root: &str) -> Result<Vec<FileCovera
         if count.is_empty() {
             continue; // non-executable
         }
-        if let Some(c) = comment {
-            if comment_marker_is(c, "cov:ignore") {
-                continue; // line-form exclusion marker — drop from the executable set
-            }
+        if let Some(c) = comment
+            && comment_marker_is(c, "cov:ignore")
+        {
+            continue; // line-form exclusion marker — drop from the executable set
         }
         let covered = !is_zero_count(count);
         file.lines.push(LineCov {

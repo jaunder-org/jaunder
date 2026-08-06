@@ -442,8 +442,10 @@ mod tests {
 
     #[test]
     fn invalid_tag_label_error_display() {
-        assert!(InvalidTagLabel
-            .to_string()
-            .contains("tag must be non-empty"));
+        assert!(
+            InvalidTagLabel
+                .to_string()
+                .contains("tag must be non-empty")
+        );
     }
 }

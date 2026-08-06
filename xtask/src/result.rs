@@ -98,11 +98,7 @@ impl CommandResult {
     }
 
     pub fn exit_code(&self) -> i32 {
-        if self.ok {
-            0
-        } else {
-            1
-        }
+        if self.ok { 0 } else { 1 }
     }
 
     pub fn report(&self, json: bool) {

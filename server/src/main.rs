@@ -14,7 +14,7 @@ async fn main() -> anyhow::Result<()> {
         );
         std::process::exit(1);
     } // cov:ignore process::exit(1) above diverges, so this closing brace is unreachable
-      // cov:ignore-start
+    // cov:ignore-start
     let cli = Cli::parse();
     run(cli).await
     // cov:ignore-stop
@@ -393,9 +393,10 @@ mod tests {
             verbose: false,
         };
         let err = run(cli).await.unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("password must be at least 8 characters"));
+        assert!(
+            err.to_string()
+                .contains("password must be at least 8 characters")
+        );
     }
 
     #[tokio::test]

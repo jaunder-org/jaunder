@@ -64,7 +64,7 @@ impl WebSubClient for HttpWebSubClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{extract::Form, http::StatusCode, routing::post, Router};
+    use axum::{Router, extract::Form, http::StatusCode, routing::post};
     use serde::Deserialize;
     use std::net::SocketAddr;
     use std::sync::Arc;

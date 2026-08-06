@@ -20,11 +20,11 @@
 //! static-SPA fallback.
 
 use axum::{
+    Router,
     extract::{Extension, Path},
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::get,
-    Router,
 };
 use common::etag::ETag;
 use common::pagination::PageSize;
@@ -37,8 +37,8 @@ use common::visibility::ViewerIdentity;
 
 use crate::soft_path::SoftPath;
 use std::sync::Arc;
-use storage::{fetch_post_record, PostStorage, UserStorage};
-use web::app::{render_head, render_shell, PREPAINT_SCRIPT};
+use storage::{PostStorage, UserStorage, fetch_post_record};
+use web::app::{PREPAINT_SCRIPT, render_head, render_shell};
 use web::posts::authored_post;
 use web::timeline::{
     fetch_local_timeline, fetch_posts_by_tag, fetch_user_posts, fetch_user_posts_by_tag,
@@ -107,10 +107,10 @@ fn cacheable(headers: &HeaderMap, seed: &PageSeed) -> Response {
     let body = document(seed);
     let etag = ETag::sha256_of(body.as_bytes());
 
-    if let Some(inm) = headers.get(header::IF_NONE_MATCH) {
-        if inm.to_str().ok() == Some(etag.as_ref()) {
-            return StatusCode::NOT_MODIFIED.into_response();
-        }
+    if let Some(inm) = headers.get(header::IF_NONE_MATCH)
+        && inm.to_str().ok() == Some(etag.as_ref())
+    {
+        return StatusCode::NOT_MODIFIED.into_response();
     }
 
     let mut resp_headers = HeaderMap::new();
@@ -342,7 +342,7 @@ async fn user_tag(
 
 #[cfg(test)]
 mod tests {
-    use super::{permalink_response, Shell};
+    use super::{Shell, permalink_response};
     use axum::http::{HeaderMap, StatusCode};
 
     #[test]
@@ -365,7 +365,7 @@ mod tests {
 
     #[test]
     fn tag_storage_error_serves_shell() {
-        use super::{tag_response, PageSeed};
+        use super::{PageSeed, tag_response};
         let shell = Shell("shell".into());
         let resp = tag_response(
             Err(web::error::InternalError::validation("boom")),
@@ -381,7 +381,7 @@ mod tests {
 
     #[test]
     fn timeline_storage_error_maps_to_500() {
-        use super::{timeline_response, PageSeed};
+        use super::{PageSeed, timeline_response};
         let resp = timeline_response(
             Err(web::error::InternalError::validation("boom")),
             &HeaderMap::new(),

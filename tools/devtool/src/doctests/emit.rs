@@ -9,7 +9,7 @@ use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result};
-use doctests::check::{problems, Kind, ScannedFile, Violation};
+use doctests::check::{Kind, ScannedFile, Violation, problems};
 use doctests::status::DoctestStatus;
 
 /// The roots this producer scans — the shared workspace list, not a local copy, so

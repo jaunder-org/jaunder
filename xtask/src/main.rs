@@ -1,5 +1,5 @@
 use clap::Parser;
-use xtask::{run, Cli};
+use xtask::{Cli, run};
 
 fn main() {
     let cli = Cli::parse();

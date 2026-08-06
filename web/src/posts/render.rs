@@ -544,9 +544,11 @@ mod tests {
             tags: &[],
             tag_ctx: &ctx,
         };
-        assert!(render_post_content(&view)
-            .as_str()
-            .contains("<span class=\"j-post-time\">2026-01-01 00:00</span>"));
+        assert!(
+            render_post_content(&view)
+                .as_str()
+                .contains("<span class=\"j-post-time\">2026-01-01 00:00</span>")
+        );
     }
 
     #[test]

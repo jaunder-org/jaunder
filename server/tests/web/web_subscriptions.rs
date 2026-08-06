@@ -6,7 +6,7 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{create_user_and_session, post_form};
-use storage::test_support::{backends, Backend, SeedUser, TestEnv};
+use storage::test_support::{Backend, SeedUser, TestEnv, backends};
 
 // Authed subscribe makes `is_subscriber` true; unsubscribe reverses it.
 #[apply(backends)]

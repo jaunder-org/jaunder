@@ -30,10 +30,10 @@ use crate::sessions::SessionsPage;
 use crate::sidebar::Sidebar;
 use crate::site::{SiteBaseUrlBanner, SiteSettingsPage};
 use leptos::prelude::*;
-use leptos_meta::{provide_meta_context, Title};
+use leptos_meta::{Title, provide_meta_context};
 use leptos_router::{
-    components::{Outlet, ParentRoute, Route, Router, Routes},
     ParamSegment, StaticSegment,
+    components::{Outlet, ParentRoute, Route, Router, Routes},
 };
 
 #[component]
@@ -81,10 +81,10 @@ pub fn App() -> impl IntoView {
 
     // On WASM: restore theme from localStorage on startup. A read failure (storage
     // unavailable) falls back to the default theme — cosmetic, nothing to recover.
-    if let Ok(Some(val)) = client::storage::get(THEME_KEY) {
-        if !val.is_empty() {
-            theme.set(val);
-        }
+    if let Ok(Some(val)) = client::storage::get(THEME_KEY)
+        && !val.is_empty()
+    {
+        theme.set(val);
     }
 
     provide_context(theme);

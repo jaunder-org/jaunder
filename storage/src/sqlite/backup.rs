@@ -9,8 +9,8 @@ use sha2::{Digest, Sha256};
 use sqlx::{Row, SqliteConnection, SqlitePool};
 
 use crate::backup::{
-    backup_table_set, build_manifest, ensure_schema_version, order_by_clause, read_table_rows,
-    BackupError, BackupManifest, BackupMode, ColumnInfo,
+    BackupError, BackupManifest, BackupMode, ColumnInfo, backup_table_set, build_manifest,
+    ensure_schema_version, order_by_clause, read_table_rows,
 };
 use crate::sql::{quote_identifier, quote_literal};
 
@@ -323,7 +323,7 @@ async fn schema_checksum(connection: &mut SqliteConnection) -> Result<String, Ba
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{sqlite_only, Backend, CloseablePool};
+    use crate::test_support::{Backend, CloseablePool, sqlite_only};
     use rstest::*;
     use rstest_reuse::*;
 

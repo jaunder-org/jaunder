@@ -89,8 +89,7 @@ const GATE: Gate = Gate {
     report: Report {
         subject: "an unescaped-HTML sink",
         verdict: "is not marked — whatever string reaches it is parsed as markup (XSS) (#333)",
-        recovery:
-            "  recovery: an unescaped sink is only safe when the string was built by our own \
+        recovery: "  recovery: an unescaped sink is only safe when the string was built by our own \
                    render layer — a `Markup`, or a `RenderedHtml` that `RenderedHtml::sanitize` \
                    scrubbed. If the value came from anywhere else, do not inject it: render it as \
                    text, where maud escapes it. If this is a genuine coincidence sink (the \
@@ -202,8 +201,7 @@ mod tests {
     /// line, so the marker above that line is correct and the sink passes.
     #[test]
     fn a_wrapped_call_is_marked_above_its_ident_line() {
-        let src =
-            "fn f() {\n    // html-sink:allow pure render output\n    el.set_inner_html(\n        h,\n    );\n}\n";
+        let src = "fn f() {\n    // html-sink:allow pure render output\n    el.set_inner_html(\n        h,\n    );\n}\n";
         assert_eq!(violations(src).unwrap(), vec![]);
     }
 
@@ -212,8 +210,7 @@ mod tests {
     /// orphan marker plus an unmarked sink.
     #[test]
     fn marking_the_statement_instead_of_the_ident_line_exempts_nothing() {
-        let src =
-            "fn f() {\n    // html-sink:allow wrong line\n    wrap(\n        el.set_inner_html(h),\n    );\n}\n";
+        let src = "fn f() {\n    // html-sink:allow wrong line\n    wrap(\n        el.set_inner_html(h),\n    );\n}\n";
         assert_eq!(violations(src).unwrap().len(), 2);
     }
 

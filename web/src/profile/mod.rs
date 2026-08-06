@@ -16,8 +16,8 @@ mod api;
 mod component;
 
 pub use api::{
-    get, get_default_post_format, set_default_post_format, update, Data, Get, GetDefaultPostFormat,
-    SetDefaultPostFormat, Update,
+    Data, Get, GetDefaultPostFormat, SetDefaultPostFormat, Update, get, get_default_post_format,
+    set_default_post_format, update,
 };
 #[cfg(target_arch = "wasm32")]
 pub use component::ProfilePage;

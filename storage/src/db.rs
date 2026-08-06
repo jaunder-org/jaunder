@@ -10,9 +10,9 @@ use std::{fmt, str::FromStr, sync::Arc};
 use sqlx::postgres::PgConnectOptions;
 use sqlx::sqlite::SqliteConnectOptions;
 
+use crate::AppState;
 use crate::postgres::open_postgres_database;
 use crate::sqlite::open_sqlite_database;
-use crate::AppState;
 
 // ---------------------------------------------------------------------------
 // DbConnectOptions
@@ -295,11 +295,9 @@ pub async fn database_is_empty(options: &DbConnectOptions) -> sqlx::Result<bool>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
+    use common::test_support::with_env;
     use std::time::Duration;
     use tempfile::TempDir;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn new_path_created_with_subdirs() {
@@ -336,17 +334,18 @@ mod tests {
 
     #[test]
     fn sql_slow_query_threshold_defaults_to_100ms() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("JAUNDER_SQL_SLOW_MS");
-        assert_eq!(sql_slow_query_threshold(), Duration::from_millis(100));
+        with_env(|env| {
+            env.remove("JAUNDER_SQL_SLOW_MS");
+            assert_eq!(sql_slow_query_threshold(), Duration::from_millis(100));
+        });
     }
 
     #[test]
     fn sql_slow_query_threshold_uses_env_override() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::set_var("JAUNDER_SQL_SLOW_MS", "250");
-        assert_eq!(sql_slow_query_threshold(), Duration::from_millis(250));
-        std::env::remove_var("JAUNDER_SQL_SLOW_MS");
+        with_env(|env| {
+            env.set("JAUNDER_SQL_SLOW_MS", "250");
+            assert_eq!(sql_slow_query_threshold(), Duration::from_millis(250));
+        });
     }
 
     #[test]

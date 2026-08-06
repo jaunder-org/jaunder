@@ -134,9 +134,11 @@ mod tests {
             "(endpoint = \"/list_my_media\")",
             "pub async fn list_my_media() {}",
         );
-        assert!(server_fns_in(&declared, "media::api")
-            .expect("enumerates")
-            .is_empty());
+        assert!(
+            server_fns_in(&declared, "media::api")
+                .expect("enumerates")
+                .is_empty()
+        );
         let bare = retired_server_fn("", "pub async fn thing() {}");
         assert!(server_fns_in(&bare, "x").expect("enumerates").is_empty());
     }

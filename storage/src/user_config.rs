@@ -147,7 +147,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, Backend, SeedUser};
+    use crate::test_support::{Backend, SeedUser, backends};
     use rstest::*;
     use rstest_reuse::*;
 

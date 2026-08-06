@@ -2,16 +2,16 @@
 
 use std::sync::Arc;
 
+use axum::Extension;
 use axum::extract::rejection::ExtensionRejection;
 use axum::extract::{FromRequestParts, Path, Query};
 use axum::http::request::Parts;
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::Extension;
 use serde::{Deserialize, Serialize};
 
-use common::absolute_url::{compose, AbsoluteUrl};
-use common::atompub::{entry_to_xml, render_feed, Entry, FeedMeta};
+use common::absolute_url::{AbsoluteUrl, compose};
+use common::atompub::{Entry, FeedMeta, entry_to_xml, render_feed};
 use common::etag::ETag;
 use common::ids::PostId;
 use common::pagination::PageSize;
@@ -23,7 +23,7 @@ use storage::{CollectionCursor, PostRecord, PostStorage, SiteConfigStorage, User
 use web::auth::AuthUser;
 
 use super::mapping::{entry_to_post_fields, post_to_entry};
-use super::{required_base_url, HandlerError};
+use super::{HandlerError, required_base_url};
 
 const FEED_CONTENT_TYPE: &str = "application/atom+xml;type=feed;charset=utf-8";
 const ENTRY_CONTENT_TYPE: &str = "application/atom+xml;type=entry;charset=utf-8";
@@ -544,9 +544,10 @@ mod etag_tests {
             .and_then(|s| s.strip_suffix('"'))
             .expect("etag is a quoted sha256- token");
         assert_eq!(hex.len(), 64);
-        assert!(hex
-            .chars()
-            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)));
+        assert!(
+            hex.chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
+        );
     }
 
     #[test]

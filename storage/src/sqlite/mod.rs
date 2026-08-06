@@ -3,8 +3,8 @@ use std::{sync::Arc, time::Duration};
 use chrono::{DateTime, Utc};
 use log::LevelFilter;
 use sqlx::{
-    sqlite::{SqliteConnectOptions, SqliteJournalMode},
     ConnectOptions, SqlitePool,
+    sqlite::{SqliteConnectOptions, SqliteJournalMode},
 };
 
 use async_trait::async_trait;

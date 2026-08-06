@@ -14,7 +14,7 @@ use crate::helpers::{
     create_operator_and_session, create_session_for, create_user_and_session, post_form,
     post_form_with_mailer, session_cookie,
 };
-use storage::test_support::{backends, Backend, SeedUser, TestEnv};
+use storage::test_support::{Backend, SeedUser, TestEnv, backends};
 
 // ── Profile tests (M2.10.5, M2.10.6) ─────────────────────────────────────
 

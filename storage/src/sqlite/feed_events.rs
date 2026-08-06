@@ -4,8 +4,8 @@ use common::ids::FeedEventId;
 use sqlx::{Pool, Sqlite};
 
 use crate::feed_events::{
-    partition_claimed, ClaimedRow, FeedEventDialect, FeedEventError, FeedEventRecord,
-    FeedEventStore,
+    ClaimedRow, FeedEventDialect, FeedEventError, FeedEventRecord, FeedEventStore,
+    partition_claimed,
 };
 
 /// SQLite-backed feed-event storage.
@@ -155,8 +155,8 @@ impl FeedEventDialect for Sqlite {
 mod tests {
     use std::sync::Arc;
 
-    use crate::test_support::{fp, sqlite_only, Backend};
     use crate::FeedEventError;
+    use crate::test_support::{Backend, fp, sqlite_only};
     use chrono::Duration;
 
     use rstest::*;

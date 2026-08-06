@@ -3,11 +3,11 @@
 //! Every rule this command exists to get right lives here and nowhere else, which is
 //! what makes them all testable from hand-built values.
 
+use super::Outcome;
 use super::snapshot::{
     CheckEntry, CheckState, MergeStateStatus, Mergeable, PrSnapshot, PrState, RequiredChecks,
     RunRef,
 };
-use super::Outcome;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {

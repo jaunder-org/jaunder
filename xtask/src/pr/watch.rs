@@ -376,10 +376,10 @@ pub fn watch<S: PrSource, C: Clock>(
                 }
             }
         }
-        if let Some(text) = current.warn.as_ref().filter(|_| !terminal) {
-            if prev.as_ref().and_then(|p| p.warn.as_ref()) != Some(text) {
-                em.emit(at.clone(), now, EventKind::Warning, text.clone());
-            }
+        if let Some(text) = current.warn.as_ref().filter(|_| !terminal)
+            && prev.as_ref().and_then(|p| p.warn.as_ref()) != Some(text)
+        {
+            em.emit(at.clone(), now, EventKind::Warning, text.clone());
         }
         prev = Some(current);
 
@@ -556,10 +556,12 @@ mod tests {
         let report = watch(&src, &c, &subject(), cfg(), &mut |_| {});
         assert_eq!(report.outcome, Outcome::Merged);
         assert!(c.now_unix() >= 600, "must have waited for the reset");
-        assert!(report
-            .events
-            .iter()
-            .any(|e| e.detail.contains("rate limited")));
+        assert!(
+            report
+                .events
+                .iter()
+                .any(|e| e.detail.contains("rate limited"))
+        );
     }
 
     #[test]
@@ -691,10 +693,12 @@ mod tests {
             .with_ejection_error(ApiError::Transport("probe down".into()));
         let report = watch(&src, &clock(), &subject(), cfg(), &mut |_| {});
         assert_eq!(report.outcome, Outcome::WatcherError);
-        assert!(report
-            .events
-            .iter()
-            .any(|e| e.kind == EventKind::PollError && e.detail.contains("probe down")));
+        assert!(
+            report
+                .events
+                .iter()
+                .any(|e| e.kind == EventKind::PollError && e.detail.contains("probe down"))
+        );
     }
 
     #[test]

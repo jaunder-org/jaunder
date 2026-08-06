@@ -108,15 +108,17 @@ fn violations(source: &str, type_name: &str) -> Vec<usize> {
             pending_server = false;
             in_server_params = true;
         }
-        if let Some(type_at) = type_index(raw, type_name) {
-            if !t.starts_with("//") && !t.starts_with("use ") && !t.starts_with("pub use ") {
-                // A return position — the type appears after this line's `->` — is
-                // always a violation; otherwise a mention is a violation only outside
-                // a server parameter region.
-                let is_return = raw.find("->").is_some_and(|arrow| type_at > arrow);
-                if is_return || !in_server_params {
-                    out.push(i + 1);
-                }
+        if let Some(type_at) = type_index(raw, type_name)
+            && !t.starts_with("//")
+            && !t.starts_with("use ")
+            && !t.starts_with("pub use ")
+        {
+            // A return position — the type appears after this line's `->` — is
+            // always a violation; otherwise a mention is a violation only outside
+            // a server parameter region.
+            let is_return = raw.find("->").is_some_and(|arrow| type_at > arrow);
+            if is_return || !in_server_params {
+                out.push(i + 1);
             }
         }
         if in_server_params && (t.contains(')') || t.contains("->") || t.ends_with('{')) {

@@ -169,7 +169,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, parse_invite_code, Backend, CloseablePool, TestEnv};
+    use crate::test_support::{Backend, CloseablePool, TestEnv, backends, parse_invite_code};
     use rstest::*;
     use rstest_reuse::*;
 

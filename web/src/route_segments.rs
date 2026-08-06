@@ -64,9 +64,11 @@ mod tests {
     #[test]
     fn rejects_non_tilde_first_segment() {
         assert!(TildeUsername("username").test("/media").is_none());
-        assert!(TildeUsername("username")
-            .test("/media/2026/01/01/x")
-            .is_none());
+        assert!(
+            TildeUsername("username")
+                .test("/media/2026/01/01/x")
+                .is_none()
+        );
         assert!(TildeUsername("username").test("/app").is_none());
     }
 

@@ -47,7 +47,7 @@ pub fn format_bytes(bytes: u64) -> String {
 /// uses `miniz_oxide`); the compression *parameters* — what governs the trend
 /// this tool tracks — are identical.
 pub fn gzip_size(bytes: &[u8]) -> u64 {
-    use flate2::{write::GzEncoder, Compression};
+    use flate2::{Compression, write::GzEncoder};
     let mut enc = GzEncoder::new(Vec::new(), Compression::best());
     enc.write_all(bytes)
         .expect("gzip write to Vec is infallible");

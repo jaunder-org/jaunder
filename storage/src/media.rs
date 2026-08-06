@@ -438,8 +438,8 @@ where
 mod tests {
     use super::*;
     use crate::test_support::{
-        backends, create_post_via_service, media_ref_for, media_row_exists, media_url_for,
-        seed_media, seed_users, Backend, SeedUser, TestEnv, MEDIA_TEST_SHA256,
+        Backend, MEDIA_TEST_SHA256, SeedUser, TestEnv, backends, create_post_via_service,
+        media_ref_for, media_row_exists, media_url_for, seed_media, seed_users,
     };
     use common::test_support::{
         parse_byte_size, parse_content_hash, parse_content_type, parse_filename, parse_page_offset,

@@ -98,13 +98,12 @@ fn heading_title(content: &str) -> String {
     let line = content.lines().find(|l| l.starts_with("# ")).unwrap_or("");
     let after = line.trim_start_matches("# ").trim();
     for (prefix, sep) in [("ADR-", ": "), ("", ". ")] {
-        if let Some((lhs, title)) = after.split_once(sep) {
-            if lhs.starts_with(prefix)
-                && !lhs.is_empty()
-                && lhs[prefix.len()..].chars().all(|c| c.is_ascii_digit())
-            {
-                return title.trim().to_string();
-            }
+        if let Some((lhs, title)) = after.split_once(sep)
+            && lhs.starts_with(prefix)
+            && !lhs.is_empty()
+            && lhs[prefix.len()..].chars().all(|c| c.is_ascii_digit())
+        {
+            return title.trim().to_string();
         }
     }
     after.to_string()
@@ -726,13 +725,15 @@ mod tests {
                 .any(|p| p.contains("missing a `- Status:"))
         );
         // Trailing prose after the token.
-        assert!(file_format_problems(
-            "0007-a.md",
-            7,
-            "# ADR-0007: Auth\n\n- Status: accepted (superseded)\n"
-        )
-        .iter()
-        .any(|p| p.contains("single token")));
+        assert!(
+            file_format_problems(
+                "0007-a.md",
+                7,
+                "# ADR-0007: Auth\n\n- Status: accepted (superseded)\n"
+            )
+            .iter()
+            .any(|p| p.contains("single token"))
+        );
         // Out-of-vocabulary token.
         assert!(
             file_format_problems("0007-a.md", 7, "# ADR-0007: Auth\n\n- Status: accpeted\n")

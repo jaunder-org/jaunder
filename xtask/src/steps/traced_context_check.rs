@@ -166,7 +166,7 @@ pub fn run(result: &mut CommandResult) {
 
 #[cfg(test)]
 mod tests {
-    use super::{imports_upstream_test, problems, violations, Violation};
+    use super::{Violation, imports_upstream_test, problems, violations};
 
     /// The line numbers flagged for `kind`, so a test can assert one rule without
     /// restating the other's absence.

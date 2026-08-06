@@ -5,8 +5,8 @@
 //! [`CollectionDecl`] types, plus [`render_service_document`] to serialize them
 //! to XML using `quick-xml`.
 
-use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::Writer;
+use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 
 use super::xml::{write_empty_element, write_text_element};
 use super::{APP_NS, ATOM_NS, J_NS};

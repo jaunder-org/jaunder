@@ -101,7 +101,7 @@ pub const DISCOVERY_MARKER_ATTR: &str = "data-jaunder-discovery";
 /// permalink page renders none. Post-boot the reactive components re-add
 /// identical links; the duplicates are invisible.
 fn render_discovery(seed: &PageSeed) -> Markup {
-    use common::feed::{canonicalize, FeedFormat, FeedSurface};
+    use common::feed::{FeedFormat, FeedSurface, canonicalize};
 
     let surface = match seed {
         PageSeed::SiteTimeline(_) => Some(FeedSurface::Site),

@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 
 /// Identity of one test *attempt*, matching the `e2e.test.lifecycle` span's

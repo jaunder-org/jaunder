@@ -181,15 +181,16 @@ pub fn to_url_path(value: &str) -> String {
 /// Project filter: drop **only** an `e2e.`-named span whose `e2e.project` differs
 /// — HTTP/server spans always pass (Node `readSpans` :131-142).
 fn passes(span: &Value, name: &str, project: &str, filters: &Filters) -> bool {
-    if let Some(trace) = &filters.trace {
-        if span.get("traceId").and_then(Value::as_str).unwrap_or("") != trace {
-            return false;
-        }
+    if let Some(trace) = &filters.trace
+        && span.get("traceId").and_then(Value::as_str).unwrap_or("") != trace
+    {
+        return false;
     }
-    if let Some(want) = &filters.project {
-        if name.starts_with("e2e.") && project != want {
-            return false;
-        }
+    if let Some(want) = &filters.project
+        && name.starts_with("e2e.")
+        && project != want
+    {
+        return false;
     }
     true
 }
@@ -426,12 +427,16 @@ mod tests {
 
     #[test]
     fn parse_spans_empty_content_is_empty_vec() {
-        assert!(parse_spans("", &Filters::default(), "t")
-            .unwrap()
-            .is_empty());
-        assert!(parse_spans("\n  \n", &Filters::default(), "t")
-            .unwrap()
-            .is_empty());
+        assert!(
+            parse_spans("", &Filters::default(), "t")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            parse_spans("\n  \n", &Filters::default(), "t")
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

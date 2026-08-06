@@ -13,7 +13,7 @@ pub mod snapshot;
 pub(crate) mod test_support;
 pub mod watch;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde::{Serialize, Serializer};
 
 use crate::git;
@@ -270,18 +270,18 @@ pub fn execute_with<S: PrSource, A: land::PrArmer, C: watch::Clock>(
         clock.sleep_secs(wait.max(1));
         established = source.snapshot(&subject);
     }
-    if let Err(e) = &established {
-        if matches!(
+    if let Err(e) = &established
+        && matches!(
             snapshot::resolution_failure(e),
             snapshot::ResolutionFailure::Bail(_)
-        ) {
-            return Err(anyhow!(
-                "no such pull request: #{} in {}/{}",
-                subject.number,
-                subject.owner,
-                subject.repo
-            ));
-        }
+        )
+    {
+        return Err(anyhow!(
+            "no such pull request: #{} in {}/{}",
+            subject.number,
+            subject.owner,
+            subject.repo
+        ));
     }
 
     if landing {
@@ -304,7 +304,7 @@ pub fn execute_with<S: PrSource, A: land::PrArmer, C: watch::Clock>(
                     )),
                     pointer: None,
                     events: Vec::new(),
-                })
+                });
             }
         };
         if let land::GuardVerdict::Diverged { local, remote } = land::divergence_guard(

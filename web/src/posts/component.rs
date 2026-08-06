@@ -8,8 +8,8 @@
 //! is the host-tested [`common::time::utc_instant_from_local`].
 
 use leptos::prelude::*;
-use leptos_router::hooks::{use_navigate, use_params_map};
 use leptos_router::NavigateOptions;
+use leptos_router::hooks::{use_navigate, use_params_map};
 
 // `Summary` is module-qualified at its use site: this file already has
 // `PostSummary` and `TagSummary` in scope, and a bare `Summary` among them says
@@ -26,18 +26,18 @@ use crate::media::MediaUpload;
 // `super::Update` at its use sites; `Get` is not needed in this file at all, and
 // is named here only so a future author does not add it to the list.
 use crate::posts::{
-    draft_row_display, get, get_audience_selection, get_default_audience_selection, get_preview,
-    list_drafts, notify, notify_with_fallback, parse_permalink_route, publish_redirect,
-    seeded_page, tag_query, user_query, user_tag_query, with_post_id, Create, Delete,
-    DraftRowDisplay, ListingRoute, PermalinkRoute, PostInputs, Publish, SavedPost, Unpublish,
-    UnpublishedPage, UnpublishedPost,
+    Create, Delete, DraftRowDisplay, ListingRoute, PermalinkRoute, PostInputs, Publish, SavedPost,
+    Unpublish, UnpublishedPage, UnpublishedPost, draft_row_display, get, get_audience_selection,
+    get_default_audience_selection, get_preview, list_drafts, notify, notify_with_fallback,
+    parse_permalink_route, publish_redirect, seeded_page, tag_query, user_query, user_tag_query,
+    with_post_id,
 };
 use crate::subscriptions::SubscribeButton;
 use crate::taglist::TagCtx as TagContext;
 use crate::tags::TagInput;
 use crate::timeline::{
-    list_by_tag, list_by_user, list_by_user_and_tag, spawn_load_more, wire_timeline_resolve,
-    TimelineGate, TimelineState,
+    TimelineGate, TimelineState, list_by_tag, list_by_user, list_by_user_and_tag, spawn_load_more,
+    wire_timeline_resolve,
 };
 use crate::topbar::Topbar;
 use common::feed::FeedSurface;

@@ -15,7 +15,7 @@ use common::password::Password;
 use common::stored_password_hash::StoredPasswordHash;
 use common::username::Username;
 
-use crate::helpers::{user_record_from_row, UserRow};
+use crate::helpers::{UserRow, user_record_from_row};
 
 /// A user account record returned by [`UserStorage`] queries.
 ///
@@ -468,7 +468,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, Backend, CloseablePool, SeedUser};
+    use crate::test_support::{Backend, CloseablePool, SeedUser, backends};
     use common::test_support::{
         parse_bio, parse_display_name, parse_email, parse_password, parse_username,
     };

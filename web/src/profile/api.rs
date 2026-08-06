@@ -21,9 +21,9 @@ use {
     leptos::prelude::*,
     std::sync::Arc,
     storage::{
+        ProfileUpdate, UserConfigStorage, UserStorage,
         get_default_post_format as storage_get_default_post_format,
-        set_default_post_format as storage_set_default_post_format, ProfileUpdate,
-        UserConfigStorage, UserStorage,
+        set_default_post_format as storage_set_default_post_format,
     },
 };
 

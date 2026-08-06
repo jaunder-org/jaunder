@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    http::{header, Request, StatusCode},
+    http::{Request, StatusCode, header},
 };
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -12,9 +12,9 @@ use common::etag::ETag;
 use common::ids::UserId;
 use common::test_support::parse_content_hash;
 use server_fn::ServerFn;
-use storage::test_support::{backends, backends_matrix, Backend, TestEnv};
+use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
 
-use crate::helpers::{create_user_and_session, make_app, post_multipart, MultipartFile};
+use crate::helpers::{MultipartFile, create_user_and_session, make_app, post_multipart};
 
 // ---------------------------------------------------------------------------
 // Serve tests

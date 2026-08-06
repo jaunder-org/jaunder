@@ -1,1 +1,14 @@
+# `style_edition` is pinned explicitly rather than left to track `edition`.
+#
+# `cargo fmt` passes each crate's *manifest* edition to rustfmt, which overrides
+# the `edition` line below — and `style_edition` then defaults to whatever edition
+# is in force. So formatting style silently followed the crate edition, and moving
+# the workspace to edition 2024 (#826) reformatted 209 files: `use` declarations
+# resorted, and `assert!` bodies rewrapped by the 2024 macro-argument overflow
+# rules.
+#
+# That reformat is real and was taken deliberately, as its own commit. Pinning the
+# value here keeps the two decisions separate from now on: a future edition move
+# changes the language, not the formatting, unless someone edits this line.
 edition = "2024"
+style_edition = "2024"

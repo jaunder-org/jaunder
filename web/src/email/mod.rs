@@ -6,7 +6,7 @@ mod api;
 mod component;
 mod status;
 
-pub use api::{request_verification, verify, RequestVerification, Verify};
+pub use api::{RequestVerification, Verify, request_verification, verify};
 #[cfg(target_arch = "wasm32")]
 pub use component::{EmailPage, VerifyEmailPage};
 pub use status::{email_status_line, parse_verification_token};

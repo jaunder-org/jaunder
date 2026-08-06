@@ -3,23 +3,23 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use axum::Extension;
 use axum::body::Bytes;
 use axum::extract::Path;
-use axum::http::{header, HeaderMap, StatusCode};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::Extension;
 use sha2::{Digest, Sha256};
 
-use common::absolute_url::{compose, AbsoluteUrl};
-use common::atompub::{render_media_link_entry, MediaLinkEntry};
-use common::media::{media_url, ContentHash, Filename, MediaRef, MediaSource, ProfferedFilename};
+use common::absolute_url::{AbsoluteUrl, compose};
+use common::atompub::{MediaLinkEntry, render_media_link_entry};
+use common::media::{ContentHash, Filename, MediaRef, MediaSource, ProfferedFilename, media_url};
 use common::root_relative_url::RootRelativeUrl;
 use common::time::UtcInstant;
 use common::username::Username;
 use storage::{MediaRecord, MediaStorage, SiteConfigStorage};
 use web::auth::AuthUser;
 
-use super::{required_base_url, HandlerError};
+use super::{HandlerError, required_base_url};
 
 const ENTRY_CONTENT_TYPE: &str = "application/atom+xml;type=entry;charset=utf-8";
 

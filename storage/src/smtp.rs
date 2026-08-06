@@ -124,7 +124,7 @@ fn classify(error: sqlx::Error) -> SmtpConfigError {
 mod tests {
     use super::*;
 
-    use crate::test_support::{backends, Backend};
+    use crate::test_support::{Backend, backends};
     use common::test_support::{parse_smtp_password, parse_smtp_username};
     use rstest::*;
     use rstest_reuse::*;

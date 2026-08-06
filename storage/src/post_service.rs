@@ -15,8 +15,8 @@ use common::ids::{PostId, UserId};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
-use common::render::{derive_post_title, RenderOutput};
-use common::slug::{slugify_title, InvalidSlug, Slug};
+use common::render::{RenderOutput, derive_post_title};
+use common::slug::{InvalidSlug, Slug, slugify_title};
 use common::visibility::AudienceTarget;
 
 // ---------------------------------------------------------------------------
@@ -552,7 +552,7 @@ pub async fn perform_post_creation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{backends, Backend, SeedUser};
+    use crate::test_support::{Backend, SeedUser, backends};
     use common::test_support::{parse_row_limit, parse_slug};
     use rstest::*;
     use rstest_reuse::*;
@@ -623,14 +623,16 @@ mod tests {
 
         // Guards the premise: if targeting ever started defaulting to public,
         // the assertion above would keep passing while proving nothing.
-        assert!(storage
-            .get_post_by_id(
-                record.post_id,
-                &common::visibility::ViewerIdentity::Anonymous
-            )
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            storage
+                .get_post_by_id(
+                    record.post_id,
+                    &common::visibility::ViewerIdentity::Anonymous
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[apply(backends)]
@@ -815,7 +817,7 @@ mod tests {
 
     #[test]
     fn candidate_slug_keeps_suffix_within_cap() {
-        use common::slug::{Slug, MAX_SLUG_CHARS};
+        use common::slug::{MAX_SLUG_CHARS, Slug};
         // A seed already at the cap: the naive "{seed}-2" would be 82 chars and
         // be rejected by from_str; candidate_slug truncates the base to fit. The
         // seed is a valid Slug, so it is by construction ≤ MAX_SLUG_CHARS.
@@ -1432,9 +1434,11 @@ mod tests {
             common::slug::InvalidSlug.to_string()
         );
         // The typed slug error is preserved on the operator side, not flattened.
-        assert!(invalid_slug
-            .operator_message()
-            .contains(&common::slug::InvalidSlug.to_string()));
+        assert!(
+            invalid_slug
+                .operator_message()
+                .contains(&common::slug::InvalidSlug.to_string())
+        );
 
         let exhausted: InternalError = PerformCreationError::Exhausted(5).into();
         assert_eq!(exhausted.kind(), ErrorKind::Internal);

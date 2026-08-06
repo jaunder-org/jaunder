@@ -15,9 +15,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{bail, Context};
-use flate2::write::GzEncoder;
+use anyhow::{Context, bail};
 use flate2::Compression;
+use flate2::write::GzEncoder;
 
 /// wasm-bindgen names its outputs after the input stem; our input is `csr.wasm`.
 const IN_JS: &str = "csr.js";

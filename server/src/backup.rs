@@ -10,7 +10,7 @@ use tokio_cron_scheduler::{Job, JobScheduler};
 
 use common::backup::BackupConfig;
 use storage::{
-    export_backup, BackupExportOptions, BackupMode, DbConnectOptions, SiteConfigStorage,
+    BackupExportOptions, BackupMode, DbConnectOptions, SiteConfigStorage, export_backup,
 };
 
 /// Starts the background backup worker if configured.

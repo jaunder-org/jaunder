@@ -12,7 +12,7 @@ use std::str::FromStr;
 
 use macros::{NumNewtype, StrNewtype};
 
-use crate::token::{validate_shape, InvalidTokenShape};
+use crate::token::{InvalidTokenShape, validate_shape};
 
 /// A raw invite code as **submitted by a client** during registration.
 ///
@@ -110,10 +110,11 @@ mod tests {
             );
         }
         // ...with the domain message.
-        assert!("0"
-            .parse::<InviteTtlHours>()
-            .err()
-            .is_some_and(|e| e.to_string().starts_with("invite expiry")));
+        assert!(
+            "0".parse::<InviteTtlHours>()
+                .err()
+                .is_some_and(|e| e.to_string().starts_with("invite expiry"))
+        );
         // Default is 168 and Display round-trips.
         let d = InviteTtlHours::default();
         assert_eq!(d.value(), 168);

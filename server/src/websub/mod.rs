@@ -57,10 +57,11 @@ mod tests {
     async fn default_client_selects_file_capture_when_path_given(capture_dir: tempfile::TempDir) {
         // None ⇒ the live HTTP client rejects an unroutable host.
         let http = default_client(None);
-        assert!(http
-            .send_publish("not-a-valid-url", "https://example.com/feed.rss")
-            .await
-            .is_err());
+        assert!(
+            http.send_publish("not-a-valid-url", "https://example.com/feed.rss")
+                .await
+                .is_err()
+        );
 
         // Some ⇒ the file-capture client records the ping to <dir>/websub.jsonl.
         let path = capture_dir.path().join("websub.jsonl");

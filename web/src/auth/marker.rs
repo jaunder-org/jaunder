@@ -8,4 +8,4 @@
 //! re-exported here unchanged; the wasm-only `localStorage` binding lives in
 //! [`super::marker_storage`] (#514).
 
-pub use common::session_user::{decode_marker, encode_marker, SessionUser, MARKER_KEY};
+pub use common::session_user::{MARKER_KEY, SessionUser, decode_marker, encode_marker};

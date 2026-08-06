@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 use atom_syndication::extension::Extension;
 use atom_syndication::{Content, Entry, Feed, Link, Text};
 
-use super::{AtomPubError, APP_NS, J_NS};
+use super::{APP_NS, AtomPubError, J_NS};
 use crate::absolute_url::AbsoluteUrl;
 use crate::media::{ContentType, Filename};
 use crate::time::UtcInstant;
@@ -777,9 +777,11 @@ mod tests {
         assert!(is_draft(&entry));
         set_draft(&mut entry, false);
         assert!(!is_draft(&entry));
-        assert!(!entry_to_xml(&entry)
-            .expect("serialize")
-            .contains("app:draft"));
+        assert!(
+            !entry_to_xml(&entry)
+                .expect("serialize")
+                .contains("app:draft")
+        );
     }
 
     #[test]

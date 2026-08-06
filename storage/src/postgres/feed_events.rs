@@ -4,8 +4,8 @@ use common::ids::FeedEventId;
 use sqlx::{Pool, Postgres};
 
 use crate::feed_events::{
-    partition_claimed, ClaimedRow, FeedEventDialect, FeedEventError, FeedEventRecord,
-    FeedEventStore,
+    ClaimedRow, FeedEventDialect, FeedEventError, FeedEventRecord, FeedEventStore,
+    partition_claimed,
 };
 
 /// Postgres-backed feed-event storage.

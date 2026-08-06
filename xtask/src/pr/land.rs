@@ -137,7 +137,7 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
                 Some(format!("could not read the branch ruleset: {}", e.detail())),
                 None,
                 events,
-            )
+            );
         }
     };
 
@@ -153,7 +153,7 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
                 Some(format!("could not read the PR: {}", e.detail())),
                 None,
                 events,
-            )
+            );
         }
     };
     // Including the ejection probe. Without it an already-ejected PR — open, green,
@@ -173,7 +173,7 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
                 )),
                 None,
                 events,
-            )
+            );
         }
     };
     if let Step::Terminal {
@@ -244,7 +244,7 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
                     Some(format!("could not verify the arm: {}", e.detail())),
                     None,
                     events,
-                )
+                );
             }
         };
         head_sha = after.head_sha.clone();
@@ -272,7 +272,7 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
                     )),
                     None,
                     events,
-                )
+                );
             }
         };
         if let Step::Terminal {

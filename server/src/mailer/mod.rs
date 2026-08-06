@@ -22,7 +22,7 @@ mod smtp;
 use std::sync::Arc;
 
 use common::mailer::{MailSender, NoopMailSender};
-use storage::{load_smtp_config, SiteConfigStorage};
+use storage::{SiteConfigStorage, load_smtp_config};
 
 pub use file::FileMailSender;
 pub use smtp::{BuildMailerError, LettreMailSender};
@@ -60,8 +60,8 @@ mod tests {
     use rstest_reuse::*;
 
     use super::*;
-    use storage::test_support::{backends, Backend};
     use storage::SiteConfigKey;
+    use storage::test_support::{Backend, backends};
 
     // guard:no-backend — builds a mailer over a mockall SiteConfigStorage whose reads
     // are all absent; no live database backend

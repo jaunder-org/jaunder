@@ -25,7 +25,7 @@ use std::process::{Child, Command};
 use std::thread::sleep;
 use std::time::Duration;
 
-use xshell::{cmd, Shell};
+use xshell::{Shell, cmd};
 
 use crate::git;
 use crate::result::{CommandResult, StepResult};
@@ -123,13 +123,12 @@ pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
     // server to answer (~15s: 30 × 0.5s).
     let mut discovered = None;
     for _ in 0..30 {
-        if let Ok(contents) = std::fs::read_to_string(&runtime) {
-            if let Some(url) = base_url_from_runtime(&contents) {
-                if cmd!(sh, "curl -sf {url}/").quiet().run().is_ok() {
-                    discovered = Some(url);
-                    break;
-                }
-            }
+        if let Ok(contents) = std::fs::read_to_string(&runtime)
+            && let Some(url) = base_url_from_runtime(&contents)
+            && cmd!(sh, "curl -sf {url}/").quiet().run().is_ok()
+        {
+            discovered = Some(url);
+            break;
         }
         sleep(Duration::from_millis(500));
     }
@@ -241,8 +240,8 @@ mod tests {
         let guard = ServerChild(child);
         assert!(proc.exists(), "child should be alive before drop");
         drop(guard); // Drop kills AND waits (reaps the zombie so /proc/<pid> clears)
-                     // Linux-only (xtask is host-only Linux): once killed + reaped, /proc/<pid>
-                     // is gone. Zero-dependency liveness check — no external `kill` binary.
+        // Linux-only (xtask is host-only Linux): once killed + reaped, /proc/<pid>
+        // is gone. Zero-dependency liveness check — no external `kill` binary.
         assert!(!proc.exists(), "child must be reaped after drop");
     }
 }

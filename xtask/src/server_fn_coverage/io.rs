@@ -8,12 +8,12 @@
 
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
-use super::{extract, render, AllowlistEntry, Coverage};
+use super::{AllowlistEntry, Coverage, extract, render};
 use crate::files;
-use crate::server_fns::{module_path_of, server_fns_in, ServerFn};
-use crate::traces::parse::{parse_spans, Filters};
+use crate::server_fns::{ServerFn, module_path_of, server_fns_in};
+use crate::traces::parse::{Filters, parse_spans};
 
 /// The `web` crate source root, scanned for the `#[macros::server]` inventory.
 pub const WEB_SRC: &str = "web/src";
