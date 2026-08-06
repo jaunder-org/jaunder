@@ -1,66 +1,36 @@
-use std::{fmt, str::FromStr};
-
-use common::mailbox::Mailbox;
+use common::config_key::SiteConfigKey;
+use common::smtp_host::SmtpHost;
 use common::smtp_password::SmtpPassword;
+use common::smtp_port::SmtpPort;
+use common::smtp_sender::SmtpSender;
 use common::smtp_username::SmtpUsername;
 use thiserror::Error;
 
 use crate::SiteConfigStorage;
 
-// ---------------------------------------------------------------------------
-// SmtpTlsMode
-// ---------------------------------------------------------------------------
-
-/// The TLS mode to use when connecting to the SMTP relay.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SmtpTlsMode {
-    /// Unencrypted plain SMTP connection.
-    Plain,
-    /// Upgrade to TLS using STARTTLS after connecting.
-    StartTls,
-    /// Connect using TLS from the start (implicit TLS / SMTPS).
-    Tls,
-}
-
-impl fmt::Display for SmtpTlsMode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SmtpTlsMode::Plain => write!(f, "plain"),
-            SmtpTlsMode::StartTls => write!(f, "starttls"),
-            SmtpTlsMode::Tls => write!(f, "tls"),
-        }
-    }
-}
-
-/// Error returned when a string does not name a valid [`SmtpTlsMode`].
-#[derive(Debug, Error)]
-#[error("invalid SMTP TLS mode: {0:?}")]
-pub struct InvalidSmtpTlsMode(String);
-
-impl FromStr for SmtpTlsMode {
-    type Err = InvalidSmtpTlsMode;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "plain" => Ok(SmtpTlsMode::Plain),
-            "starttls" => Ok(SmtpTlsMode::StartTls),
-            "tls" => Ok(SmtpTlsMode::Tls),
-            other => Err(InvalidSmtpTlsMode(other.to_owned())),
-        }
-    }
-}
+// The TLS mode now lives in `common` beside the other SMTP value types, where the
+// `#[text_enum]` convention is reachable (`storage` depends on neither `strum` nor
+// `macros`, and the sqlx bridge is `#[cfg(feature = "sqlx")]` evaluated in the
+// *consuming* crate — see #687 D1a). Re-exported so `storage::smtp::SmtpTlsMode` keeps
+// resolving for call sites.
+pub use common::smtp_tls_mode::{InvalidSmtpTlsMode, SmtpTlsMode};
 
 // ---------------------------------------------------------------------------
 // SmtpConfig
 // ---------------------------------------------------------------------------
 
 /// Configuration for the outbound SMTP relay.
+///
+/// Every field is the value's own type, and every one of them arrives decoded through that
+/// type's sqlx bridge by
+/// [`SiteConfigStorage::get_smtp_config`](crate::SiteConfigStorage::get_smtp_config) — so an
+/// `SmtpConfig` in hand is a configuration that parsed, not one that still might not.
 #[derive(Clone, Debug)]
 pub struct SmtpConfig {
     /// Relay hostname.
-    pub host: String,
+    pub host: SmtpHost,
     /// Port number (default: 587).
-    pub port: u16,
+    pub port: SmtpPort,
     /// TLS mode (default: [`SmtpTlsMode::StartTls`]).
     pub tls_mode: SmtpTlsMode,
     /// Optional SMTP auth username (a validated non-empty identifier).
@@ -69,23 +39,7 @@ pub struct SmtpConfig {
     /// or logged; read once at the mailer `Credentials` boundary).
     pub password: Option<SmtpPassword>,
     /// Sender address (e.g. `"Jaunder <noreply@example.com>"`).
-    pub sender: Mailbox,
-}
-
-/// The optional SMTP auth credentials, read together as a typed pair by
-/// [`SiteConfigStorage::get_smtp_credentials`](crate::SiteConfigStorage::get_smtp_credentials).
-///
-/// Both fields decode from the `site_config` value column through their validating
-/// sqlx bridges, so an empty/garbage stored value is rejected at the query boundary
-/// rather than reaching here. `username` is a validated identifier ([`SmtpUsername`],
-/// non-secret); `password` is the secret [`SmtpPassword`], whose redacting `Debug`
-/// the derived `Debug` inherits.
-#[derive(Clone, Debug)]
-pub struct SmtpCredentials {
-    /// Optional SMTP auth username.
-    pub username: Option<SmtpUsername>,
-    /// Optional SMTP auth password.
-    pub password: Option<SmtpPassword>,
+    pub sender: SmtpSender,
 }
 
 // ---------------------------------------------------------------------------
@@ -93,22 +47,23 @@ pub struct SmtpCredentials {
 // ---------------------------------------------------------------------------
 
 /// Errors returned when SMTP configuration is present but invalid.
+///
+/// The per-field `InvalidPort`/`InvalidTlsMode`/`InvalidSender` variants are gone with the
+/// hand-rolled parsing that constructed them (#687 D5): the values now decode inside the
+/// query, so a bad one arrives as one kind of thing — a `ColumnDecode` naming its key and
+/// echoing the stored text. What the variants carried is carried by the message.
 #[derive(Debug, Error)]
 pub enum SmtpConfigError {
-    /// `smtp.port` is set to a value that is not a valid port number.
-    #[error("smtp.port {0:?} is not a valid port number")]
-    InvalidPort(String),
-    /// `smtp.tls_mode` is set to an unrecognised value.
-    #[error("smtp.tls_mode {0:?} is not valid; expected \"plain\", \"starttls\", or \"tls\"")]
-    InvalidTlsMode(String),
-    /// `smtp.sender` is set to a value that cannot be parsed as an email address.
-    #[error("smtp.sender {0:?} is not a valid email address")]
-    InvalidSender(String),
     /// `smtp.username` or `smtp.password` holds an invalid (e.g. empty) value.
-    /// Deliberately **valueless** — a credential is never embedded in an error
-    /// (unlike the sibling variants, which echo the offending string).
+    /// Deliberately **valueless**, and kept distinct for exactly that reason: a credential
+    /// is never embedded in an error, so it cannot ride out inside [`Self::Read`].
     #[error("smtp.username or smtp.password holds an invalid value")]
     InvalidCredential,
+    /// The SMTP block could not be read: a stored value does not parse as its type, or the
+    /// read itself failed. The source's message names the key and echoes the offending
+    /// value — the property `load_smtp_config_returns_err_for_*` pins.
+    #[error("SMTP configuration could not be read: {0}")]
+    Read(#[source] sqlx::Error),
 }
 
 // ---------------------------------------------------------------------------
@@ -128,60 +83,37 @@ pub enum SmtpConfigError {
 /// - `smtp.tls_mode` defaults to `"starttls"`.
 /// - `smtp.sender` defaults to `"Jaunder <noreply@localhost>"`.
 ///
+/// The whole read is one call to
+/// [`SiteConfigStorage::get_smtp_config`](crate::SiteConfigStorage::get_smtp_config): the
+/// parsing lives in the value types' sqlx bridges, so this function has no grammar of its
+/// own to drift from theirs. All it adds is the classification below.
+///
 /// # Errors
 ///
 /// Returns `Err(SmtpConfigError)` if the site config cannot be retrieved from storage.
 pub async fn load_smtp_config(
     store: &dyn SiteConfigStorage,
 ) -> Result<Option<SmtpConfig>, SmtpConfigError> {
-    let Some(host) = store.get("smtp.host").await.ok().flatten() else {
-        return Ok(None);
-    };
+    store.get_smtp_config().await.map_err(classify)
+}
 
-    let port = match store.get("smtp.port").await.ok().flatten() {
-        None => 587,
-        Some(v) => v
-            .parse::<u16>()
-            .map_err(|_| SmtpConfigError::InvalidPort(v))?,
-    };
-
-    let tls_mode = match store.get("smtp.tls_mode").await.ok().flatten() {
-        None => SmtpTlsMode::StartTls,
-        Some(v) => v
-            .parse::<SmtpTlsMode>()
-            .map_err(|_| SmtpConfigError::InvalidTlsMode(v))?,
-    };
-
-    // Username + password are read together as a typed pair; both decode through
-    // their sqlx bridges, so an empty/garbage stored value surfaces as a decode
-    // error here (rejected, per the non-empty invariant). `smtp.host` was already
-    // read above, so a non-decode storage error can't realistically reach this
-    // point; either way the caller (`build_mailer`) maps an `Err` to the safe no-op
-    // mailer, so folding both into `InvalidCredential` is sound.
-    let SmtpCredentials { username, password } = store
-        .get_smtp_credentials()
-        .await
-        .map_err(|_| SmtpConfigError::InvalidCredential)?;
-
-    let sender_str = store
-        .get("smtp.sender")
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "Jaunder <noreply@localhost>".to_owned());
-
-    let sender = sender_str
-        .parse::<Mailbox>()
-        .map_err(|_| SmtpConfigError::InvalidSender(sender_str))?;
-
-    Ok(Some(SmtpConfig {
-        host,
-        port,
-        tls_mode,
-        username,
-        password,
-        sender,
-    }))
+/// Sorts a failed SMTP read into "a credential is bad" (say so, say nothing more) and
+/// everything else (report it in full).
+///
+/// The split is a disclosure boundary, not a taxonomy: [`SmtpConfigError::Read`] renders
+/// its source, and the source of a credential decode failure is the one message in this
+/// family that could be built from a secret. `read_value` labels the `ColumnDecode` with
+/// the key, which is what makes the two separable here.
+fn classify(error: sqlx::Error) -> SmtpConfigError {
+    match &error {
+        sqlx::Error::ColumnDecode { index, .. }
+            if index == SiteConfigKey::SmtpUsername.as_ref()
+                || index == SiteConfigKey::SmtpPassword.as_ref() =>
+        {
+            SmtpConfigError::InvalidCredential
+        }
+        _ => SmtpConfigError::Read(error),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -192,8 +124,10 @@ pub async fn load_smtp_config(
 mod tests {
     use super::*;
 
-    use crate::test_support::InMemorySiteConfig;
+    use crate::test_support::{backends, Backend};
     use common::test_support::{parse_smtp_password, parse_smtp_username};
+    use rstest::*;
+    use rstest_reuse::*;
 
     // -- SmtpTlsMode parsing tests --
 
@@ -231,32 +165,37 @@ mod tests {
 
     // -- load_smtp_config tests --
 
-    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
+    #[apply(backends)]
     #[tokio::test]
-    async fn load_smtp_config_returns_none_when_host_absent() {
-        let store = InMemorySiteConfig::new();
-        assert!(load_smtp_config(&store).await.unwrap().is_none());
+    async fn load_smtp_config_returns_none_when_host_absent(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let store = &*env.state.site_config;
+        assert!(load_smtp_config(store).await.unwrap().is_none());
     }
 
-    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
+    #[apply(backends)]
     #[tokio::test]
-    async fn load_smtp_config_returns_some_with_all_keys_present() {
-        let store = InMemorySiteConfig::from_pairs([
-            ("smtp.host", "mail.example.com"),
-            ("smtp.port", "465"),
-            ("smtp.tls_mode", "tls"),
-            ("smtp.username", "user@example.com"),
-            ("smtp.password", "s3cr3t"),
-            ("smtp.sender", "Jaunder <noreply@example.com>"),
-        ]);
+    async fn load_smtp_config_returns_some_with_all_keys_present(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let store = &*env.state.site_config;
+        for (key, value) in [
+            (SiteConfigKey::SmtpHost, "mail.example.com"),
+            (SiteConfigKey::SmtpPort, "465"),
+            (SiteConfigKey::SmtpTlsMode, "tls"),
+            (SiteConfigKey::SmtpUsername, "user@example.com"),
+            (SiteConfigKey::SmtpPassword, "s3cr3t"),
+            (SiteConfigKey::SmtpSender, "Jaunder <noreply@example.com>"),
+        ] {
+            store.set(key, value).await.unwrap();
+        }
 
-        let config = load_smtp_config(&store)
+        let config = load_smtp_config(store)
             .await
             .unwrap()
             .expect("expected Some");
 
         assert_eq!(config.host, "mail.example.com");
-        assert_eq!(config.port, 465);
+        assert_eq!(config.port.value(), 465);
         assert_eq!(config.tls_mode, SmtpTlsMode::Tls);
         assert_eq!(
             config.username,
@@ -266,102 +205,139 @@ mod tests {
             config.password.expect("password present").as_ref(),
             "s3cr3t"
         );
-        assert_eq!(
-            config.sender,
-            "Jaunder <noreply@example.com>".parse::<Mailbox>().unwrap()
-        );
+        assert_eq!(config.sender, "Jaunder <noreply@example.com>");
     }
 
-    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
+    #[apply(backends)]
     #[tokio::test]
-    async fn load_smtp_config_uses_defaults_for_missing_optional_fields() {
-        let store = InMemorySiteConfig::from_pairs([("smtp.host", "relay.example.com")]);
+    async fn load_smtp_config_uses_defaults_for_missing_optional_fields(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let store = &*env.state.site_config;
+        store
+            .set(SiteConfigKey::SmtpHost, "relay.example.com")
+            .await
+            .unwrap();
 
-        let config = load_smtp_config(&store)
+        let config = load_smtp_config(store)
             .await
             .unwrap()
             .expect("expected Some");
 
         assert_eq!(config.host, "relay.example.com");
-        assert_eq!(config.port, 587);
+        assert_eq!(config.port, SmtpPort::default());
         assert_eq!(config.tls_mode, SmtpTlsMode::StartTls);
         assert_eq!(config.username, None);
         assert!(config.password.is_none());
-        assert_eq!(
-            config.sender,
-            "Jaunder <noreply@localhost>".parse::<Mailbox>().unwrap()
+        assert_eq!(config.sender, "Jaunder <noreply@localhost>");
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn load_smtp_config_returns_err_for_invalid_sender(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let store = &*env.state.site_config;
+        store
+            .set(SiteConfigKey::SmtpHost, "mail.example.com")
+            .await
+            .unwrap();
+        store
+            .set(SiteConfigKey::SmtpSender, "not-a-valid-email")
+            .await
+            .unwrap();
+
+        let err = load_smtp_config(store).await.unwrap_err();
+        // Asserts the offending value reaches the *message*, deliberately not the error's
+        // variant (#687). There is no longer a variant to name: parsing moved into the
+        // sqlx bridges, so a bad value arrives as a `ColumnDecode` and
+        // `SmtpConfigError::InvalidSender` is gone. The value echo is the property worth
+        // protecting — a `matches!` assertion here would have pinned the implementation
+        // and blocked that change.
+        assert!(
+            err.to_string().contains("not-a-valid-email"),
+            "the error must echo the offending value; got: {err}"
         );
     }
 
-    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
+    #[apply(backends)]
     #[tokio::test]
-    async fn load_smtp_config_returns_err_for_invalid_sender() {
-        let store = InMemorySiteConfig::from_pairs([
-            ("smtp.host", "mail.example.com"),
-            ("smtp.sender", "not-a-valid-email"),
-        ]);
+    async fn load_smtp_config_returns_err_for_invalid_port(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let store = &*env.state.site_config;
+        store
+            .set(SiteConfigKey::SmtpHost, "mail.example.com")
+            .await
+            .unwrap();
+        store
+            .set(SiteConfigKey::SmtpPort, "not-a-port")
+            .await
+            .unwrap();
 
-        let err = load_smtp_config(&store).await.unwrap_err();
-        assert!(matches!(err, SmtpConfigError::InvalidSender(_)));
+        let err = load_smtp_config(store).await.unwrap_err();
+        // Message, not variant — see the note on `..._invalid_sender`.
+        assert!(
+            err.to_string().contains("not-a-port"),
+            "the error must echo the offending value; got: {err}"
+        );
     }
 
-    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
+    #[apply(backends)]
     #[tokio::test]
-    async fn load_smtp_config_returns_err_for_invalid_port() {
-        let store = InMemorySiteConfig::from_pairs([
-            ("smtp.host", "mail.example.com"),
-            ("smtp.port", "not-a-port"),
-        ]);
+    async fn load_smtp_config_returns_err_for_invalid_tls_mode(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let store = &*env.state.site_config;
+        store
+            .set(SiteConfigKey::SmtpHost, "mail.example.com")
+            .await
+            .unwrap();
+        store.set(SiteConfigKey::SmtpTlsMode, "ssl").await.unwrap();
 
-        let err = load_smtp_config(&store).await.unwrap_err();
-        assert!(matches!(err, SmtpConfigError::InvalidPort(_)));
+        let err = load_smtp_config(store).await.unwrap_err();
+        // Message, not variant — see the note on `..._invalid_sender`.
+        assert!(
+            err.to_string().contains("ssl"),
+            "the error must echo the offending value; got: {err}"
+        );
     }
 
-    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
+    #[apply(backends)]
     #[tokio::test]
-    async fn load_smtp_config_returns_err_for_invalid_tls_mode() {
-        let store = InMemorySiteConfig::from_pairs([
-            ("smtp.host", "mail.example.com"),
-            ("smtp.tls_mode", "ssl"),
-        ]);
+    async fn load_smtp_config_returns_err_for_empty_password(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let store = &*env.state.site_config;
+        store
+            .set(SiteConfigKey::SmtpHost, "mail.example.com")
+            .await
+            .unwrap();
+        store.set(SiteConfigKey::SmtpPassword, "").await.unwrap();
 
-        let err = load_smtp_config(&store).await.unwrap_err();
-        assert!(matches!(err, SmtpConfigError::InvalidTlsMode(_)));
-    }
-
-    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
-    #[tokio::test]
-    async fn load_smtp_config_returns_err_for_empty_password() {
-        let store = InMemorySiteConfig::from_pairs([
-            ("smtp.host", "mail.example.com"),
-            ("smtp.password", ""),
-        ]);
-
-        let err = load_smtp_config(&store).await.unwrap_err();
+        let err = load_smtp_config(store).await.unwrap_err();
         assert!(matches!(err, SmtpConfigError::InvalidCredential));
     }
 
-    // guard:no-backend — reads SMTP config from an injected mock SiteConfigStorage; no live database backend
+    #[apply(backends)]
     #[tokio::test]
-    async fn load_smtp_config_returns_err_for_empty_username() {
-        let store = InMemorySiteConfig::from_pairs([
-            ("smtp.host", "mail.example.com"),
-            ("smtp.username", ""),
-        ]);
+    async fn load_smtp_config_returns_err_for_empty_username(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let store = &*env.state.site_config;
+        store
+            .set(SiteConfigKey::SmtpHost, "mail.example.com")
+            .await
+            .unwrap();
+        store.set(SiteConfigKey::SmtpUsername, "").await.unwrap();
 
-        let err = load_smtp_config(&store).await.unwrap_err();
+        let err = load_smtp_config(store).await.unwrap_err();
         assert!(matches!(err, SmtpConfigError::InvalidCredential));
     }
 
     #[test]
     fn smtp_config_debug_redacts_password() {
         let config = SmtpConfig {
-            host: "mail.example.com".to_owned(),
-            port: 587,
+            host: "mail.example.com".parse::<SmtpHost>().unwrap(),
+            port: SmtpPort::default(),
             tls_mode: SmtpTlsMode::StartTls,
             username: Some(parse_smtp_username("user@example.com")),
             password: Some(parse_smtp_password("s3cr3t")),
-            sender: "Jaunder <noreply@example.com>".parse::<Mailbox>().unwrap(),
+            sender: SmtpSender::default(),
         };
 
         let out = format!("{config:?}");

@@ -9,6 +9,7 @@ use crate::mailer::LettreMailSender;
 use crate::runtime_file;
 use common::absolute_url::compose;
 use common::backup::BackupMode;
+use common::config_key::SiteConfigKey;
 use common::display_name::DisplayName;
 use common::email::Email;
 use common::invite::InviteTtlHours;
@@ -108,10 +109,10 @@ impl SiteConfigAction {
                 storage,
                 key,
                 value,
-            } => cmd_site_config_set(&storage, &key, &value).await,
-            SiteConfigAction::Get { storage, key } => cmd_site_config_get(&storage, &key).await,
+            } => cmd_site_config_set(&storage, key, &value).await,
+            SiteConfigAction::Get { storage, key } => cmd_site_config_get(&storage, key).await,
             SiteConfigAction::List { storage } => cmd_site_config_list(&storage).await,
-            SiteConfigAction::Unset { storage, key } => cmd_site_config_unset(&storage, &key).await,
+            SiteConfigAction::Unset { storage, key } => cmd_site_config_unset(&storage, key).await,
         }
     }
 }
@@ -700,7 +701,15 @@ pub async fn cmd_serve(
 }
 
 /// Upsert a `site_config` key/value through the real storage path.
-async fn cmd_site_config_set(storage: &StorageArgs, key: &str, value: &str) -> anyhow::Result<()> {
+///
+/// The value is checked against the key's own validator *before* the database is
+/// opened, so a rejected value never reaches a row.
+async fn cmd_site_config_set(
+    storage: &StorageArgs,
+    key: SiteConfigKey,
+    value: &str,
+) -> anyhow::Result<()> {
+    key.validate(value)?;
     let state = open_existing_database(&storage.db).await?;
     state.site_config.set(key, value).await?;
     eprintln!("set site_config {key} = {value}");
@@ -709,7 +718,7 @@ async fn cmd_site_config_set(storage: &StorageArgs, key: &str, value: &str) -> a
 
 /// Print the value for `key` to stdout; error (→ non-zero exit) if it is unset,
 /// so a caller can distinguish an unset key from an empty value.
-async fn cmd_site_config_get(storage: &StorageArgs, key: &str) -> anyhow::Result<()> {
+async fn cmd_site_config_get(storage: &StorageArgs, key: SiteConfigKey) -> anyhow::Result<()> {
     let state = open_existing_database(&storage.db).await?;
     match state.site_config.get(key).await? {
         Some(value) => {
@@ -730,7 +739,7 @@ async fn cmd_site_config_list(storage: &StorageArgs) -> anyhow::Result<()> {
 
 /// Delete a `site_config` key. Idempotent (exit 0 whether or not a row existed);
 /// stderr notes which happened.
-async fn cmd_site_config_unset(storage: &StorageArgs, key: &str) -> anyhow::Result<()> {
+async fn cmd_site_config_unset(storage: &StorageArgs, key: SiteConfigKey) -> anyhow::Result<()> {
     let state = open_existing_database(&storage.db).await?;
     if state.site_config.delete(key).await? {
         eprintln!("unset site_config {key}");
@@ -742,11 +751,27 @@ async fn cmd_site_config_unset(storage: &StorageArgs, key: &str) -> anyhow::Resu
 
 /// Render `site_config` entries as `key=value\n` lines (a human/discovery view;
 /// `site-config get` is the lossless scriptable accessor). Pure, unit-tested directly.
+///
+/// Every stored row is printed — this is a faithful dump of what is physically
+/// stored — but rows the registry judges are annotated (spec D4):
+///
+/// - a key outside [`SiteConfigKey`] is marked `UNKNOWN KEY` (a legacy or
+///   hand-written row the typed seam can no longer read or write);
+/// - a known key whose value fails its validator is marked `INVALID (<reason>)`.
+///
+/// An empty value on an optional key is *not* invalid: empty means unset (spec
+/// D1b), which `SiteConfigKey::validate` already honours.
 fn format_entries(entries: &[(String, String)]) -> String {
     use std::fmt::Write as _;
     entries.iter().fold(String::new(), |mut out, (k, v)| {
         // writeln! to a String is infallible; the newline gives one entry per line.
-        let _ = writeln!(out, "{k}={v}");
+        let _ = match k.parse::<SiteConfigKey>() {
+            Err(_) => writeln!(out, "{:<40}  UNKNOWN KEY", format!("{k}={v}")),
+            Ok(key) => match key.validate(v) {
+                Ok(()) => writeln!(out, "{k}={v}"),
+                Err(err) => writeln!(out, "{:<40}  INVALID ({err})", format!("{k}={v}")),
+            },
+        };
         out
     })
 }
@@ -755,8 +780,36 @@ fn format_entries(entries: &[(String, String)]) -> String {
 mod tests {
     use super::*;
     use common::test_support::parse_invite_ttl_hours;
+    use rstest::*;
+    use rstest_reuse::*;
+    use storage::test_support::{
+        backends, sqlite_url, unique_postgres_url, Backend, PostgresDbGuard, TestEnv,
+    };
     use storage::DbConnectOptions;
     use tempfile::TempDir;
+
+    /// A `StorageArgs` for `backend` whose database already exists, since the
+    /// `site-config` handlers all go through `open_existing_database`.
+    async fn site_config_args(
+        backend: Backend,
+        base: &TempDir,
+    ) -> (StorageArgs, Option<PostgresDbGuard>) {
+        let (db, guard) = match backend {
+            Backend::Sqlite => (sqlite_url(base), None),
+            Backend::Postgres => {
+                let (db, guard) = unique_postgres_url().await;
+                (db, Some(guard))
+            }
+        };
+        storage::open_database(&db).await.expect("open db");
+        (
+            StorageArgs {
+                storage_path: base.path().to_path_buf(),
+                db,
+            },
+            guard,
+        )
+    }
 
     #[test]
     fn parse_password_none_is_ok_none() {
@@ -851,11 +904,102 @@ mod tests {
     #[test]
     fn format_entries_renders_sorted_key_value_lines() {
         let entries = vec![
-            ("a.b".to_string(), "1".to_string()),
-            ("c.d".to_string(), "2".to_string()),
+            (
+                "site.base_url".to_string(),
+                "https://example.com/".to_string(),
+            ),
+            ("site.title".to_string(), "My Site".to_string()),
         ];
-        assert_eq!(format_entries(&entries), "a.b=1\nc.d=2\n");
+        assert_eq!(
+            format_entries(&entries),
+            "site.base_url=https://example.com/\nsite.title=My Site\n"
+        );
         assert_eq!(format_entries(&[]), "");
+    }
+
+    /// A7: a known key with an invalid value is rejected before the write.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn site_config_set_rejects_an_invalid_value(#[case] backend: Backend) {
+        let base = TempDir::new().expect("temp dir");
+        let (args, _pg) = site_config_args(backend, &base).await;
+        let state = open_existing_database(&args.db).await.expect("reopen");
+        let before = state.site_config.list().await.unwrap().len();
+
+        cmd_site_config_set(&args, SiteConfigKey::SiteBaseUrl, "nonsense://x")
+            .await
+            .expect_err("an unparseable base URL is refused");
+
+        assert_eq!(
+            state.site_config.list().await.unwrap().len(),
+            before,
+            "no row written",
+        );
+    }
+
+    /// A8: empty-means-unset survives at the CLI door.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn site_config_set_accepts_empty_for_an_optional_key(#[case] backend: Backend) {
+        let base = TempDir::new().expect("temp dir");
+        let (args, _pg) = site_config_args(backend, &base).await;
+
+        cmd_site_config_set(&args, SiteConfigKey::SiteBaseUrl, "")
+            .await
+            .expect("empty means unset on an optional key");
+
+        let state = open_existing_database(&args.db).await.expect("reopen");
+        assert_eq!(
+            state
+                .site_config
+                .get(SiteConfigKey::SiteBaseUrl)
+                .await
+                .unwrap(),
+            Some(String::new()),
+        );
+    }
+
+    /// A9: list is a faithful dump that judges without hiding.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn site_config_list_flags_unknown_keys_and_invalid_values(#[case] backend: Backend) {
+        let TestEnv { state, base } = backend.setup().await;
+        // A row the registry does not know. `set` cannot express it any more, which is
+        // exactly the legacy case `list` exists to surface -- so write it as raw SQL
+        // through the harness pool.
+        base.pool()
+            .execute("INSERT INTO site_config (key, value) VALUES ('legacy.orphan', 'x')")
+            .await
+            .unwrap();
+        let cfg = &state.site_config;
+        // set() is the typed seam and does not validate; the CLI does. Storing junk
+        // here is how a pre-#687 row would look to `list`.
+        cfg.set(SiteConfigKey::SiteBaseUrl, "nonsense://x")
+            .await
+            .unwrap();
+        cfg.set(SiteConfigKey::SiteTitle, "My Site").await.unwrap();
+        // An empty value on an optional key means unset, not invalid (spec D1b).
+        cfg.set(SiteConfigKey::BackupDestinationPath, "")
+            .await
+            .unwrap();
+
+        let rendered = format_entries(&cfg.list().await.unwrap());
+
+        let line = |prefix: &str| {
+            rendered
+                .lines()
+                .find(|l| l.starts_with(prefix))
+                .unwrap_or_else(|| panic!("no line for {prefix} in:\n{rendered}"))
+                .to_owned()
+        };
+        assert!(line("legacy.orphan=x").contains("UNKNOWN KEY"));
+        assert!(line("site.base_url=nonsense://x").contains("INVALID"));
+        assert_eq!(line("site.title="), "site.title=My Site");
+        assert_eq!(
+            line("backup.destination_path="),
+            "backup.destination_path=",
+            "empty on an optional key is unset, not invalid",
+        );
     }
 
     #[tokio::test]
@@ -871,30 +1015,44 @@ mod tests {
             db: opts,
         };
 
-        cmd_site_config_set(&storage_args, "feeds.websub_hub_url", "https://x/")
-            .await
-            .expect("set ok");
+        cmd_site_config_set(
+            &storage_args,
+            SiteConfigKey::FeedsWebsubHubUrl,
+            "https://x/",
+        )
+        .await
+        .expect("set ok");
         // set() is an upsert: a second write on the same key overwrites.
-        cmd_site_config_set(&storage_args, "feeds.websub_hub_url", "https://y/")
-            .await
-            .expect("upsert ok");
+        cmd_site_config_set(
+            &storage_args,
+            SiteConfigKey::FeedsWebsubHubUrl,
+            "https://y/",
+        )
+        .await
+        .expect("upsert ok");
 
         let state = open_existing_database(&storage_args.db)
             .await
             .expect("reopen");
         assert_eq!(
-            state.site_config.get("feeds.websub_hub_url").await.unwrap(),
+            state
+                .site_config
+                .get(SiteConfigKey::FeedsWebsubHubUrl)
+                .await
+                .unwrap(),
             Some("https://y/".to_string()),
             "second set overwrites",
         );
 
-        // get: present key returns Ok (exercises the println! path); absent key errors.
-        cmd_site_config_get(&storage_args, "feeds.websub_hub_url")
+        // get: present key returns Ok (exercises the println! path); an unwritten key
+        // errors. A key outside the registry can no longer be named here at all — clap
+        // rejects it at parse time (see `cli`'s `site_config_rejects_an_unknown_key`).
+        cmd_site_config_get(&storage_args, SiteConfigKey::FeedsWebsubHubUrl)
             .await
             .expect("get present key ok");
-        cmd_site_config_get(&storage_args, "does.not.exist")
+        cmd_site_config_get(&storage_args, SiteConfigKey::SiteTitle)
             .await
-            .expect_err("get absent key errors (→ non-zero exit)");
+            .expect_err("get unwritten key errors (→ non-zero exit)");
 
         // list runs against a populated store (exercises the print path).
         cmd_site_config_list(&storage_args).await.expect("list ok");
@@ -940,7 +1098,7 @@ mod tests {
         let state = storage::open_database(&opts).await.expect("open db");
         state
             .site_config
-            .set("site.base_url", "https://example.com")
+            .set(SiteConfigKey::SiteBaseUrl, "https://example.com")
             .await
             .expect("set base_url");
 

@@ -359,7 +359,7 @@ pub fn make_app(state: &Arc<storage::AppState>, storage: &TempDir) -> axum::Rout
 pub async fn seed_base_url(state: &Arc<storage::AppState>) {
     state
         .site_config
-        .set(storage::SITE_BASE_URL_KEY, "https://example.com/")
+        .set(storage::SiteConfigKey::SiteBaseUrl, "https://example.com/")
         .await
         .unwrap();
 }

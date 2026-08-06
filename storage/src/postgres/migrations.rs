@@ -11,7 +11,14 @@ mod tests {
     async fn open_database_migrates_a_from_scratch_database() {
         let (url, _pg) = unique_postgres_url().await;
         let state = open_database(&url).await.unwrap();
-        // A migrated-but-empty database resolves a missing config key to None.
-        assert_eq!(state.site_config.get("missing").await.unwrap(), None);
+        // A migrated-but-empty database resolves an unwritten config key to None.
+        assert_eq!(
+            state
+                .site_config
+                .get(crate::SiteConfigKey::SiteTitle)
+                .await
+                .unwrap(),
+            None
+        );
     }
 }

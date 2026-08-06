@@ -6,6 +6,7 @@ use clap::{Args, Parser, Subcommand};
 use sqlx::postgres::PgConnectOptions;
 
 use common::backup::BackupMode;
+use common::config_key::SiteConfigKey;
 use common::display_name::DisplayName;
 use common::invite::InviteTtlHours;
 use common::pg_identifier::{InvalidPgDatabaseName, InvalidPgRoleName, PgDatabaseName, PgRoleName};
@@ -376,10 +377,17 @@ pub enum Commands {
     },
 }
 
-/// `site-config` leaf actions. `site_config` is a free-form key/value store;
-/// values are not validated. Known keys include `site.registration_policy`,
-/// `site.title`, `site.base_url`, `feeds.websub_hub_url`, `feeds.min_items`,
-/// `feeds.min_days`, `posts.default_audience`, and the `backup.*` keys.
+/// `site-config` leaf actions. The key space is closed: `SiteConfigKey` is the
+/// registry of every recognised key, so an unknown key is rejected at argument
+/// parsing (which also lists the accepted keys). Values are validated too — each
+/// key carries its value type's parser, and `set` refuses a value that key cannot
+/// hold, before any row is written. Keys that treat the empty string as "unset"
+/// accept `""`.
+///
+/// `list` is the exception, and deliberately so: it dumps every row physically
+/// stored, annotating a key outside the registry as `UNKNOWN KEY` and a
+/// recognised key holding an unparseable value as `INVALID`, so a legacy or
+/// hand-written row stays visible rather than silently disappearing.
 #[derive(Subcommand, Clone)]
 pub enum SiteConfigAction {
     /// Set (upsert) a key to a value.
@@ -388,7 +396,7 @@ pub enum SiteConfigAction {
         storage: StorageArgs,
 
         /// The `site_config` key (e.g. `feeds.websub_hub_url`).
-        key: String,
+        key: SiteConfigKey,
 
         /// The value to store (free-form; a leading `-` is allowed).
         #[arg(allow_hyphen_values = true)]
@@ -401,7 +409,7 @@ pub enum SiteConfigAction {
         storage: StorageArgs,
 
         /// The `site_config` key to read.
-        key: String,
+        key: SiteConfigKey,
     },
 
     /// Print every entry as `key=value`, one per line, ordered by key.
@@ -416,7 +424,7 @@ pub enum SiteConfigAction {
         storage: StorageArgs,
 
         /// The `site_config` key to delete.
-        key: String,
+        key: SiteConfigKey,
     },
 }
 
@@ -908,13 +916,13 @@ mod tests {
         let SiteConfigAction::Set { key, value, .. } = action else {
             unreachable!("parse yields set")
         };
-        assert_eq!(key, "feeds.websub_hub_url");
+        assert_eq!(key, SiteConfigKey::FeedsWebsubHubUrl);
         assert_eq!(value, "https://h/");
     }
 
     #[test]
     fn site_config_set_allows_hyphen_leading_value() {
-        let cli = parse(&["site-config", "set", "some.key", "-dashy"]);
+        let cli = parse(&["site-config", "set", "site.title", "-dashy"]);
         let Commands::SiteConfig { action } = cli.command.expect("subcommand") else {
             unreachable!("parse yields site-config")
         };
@@ -931,7 +939,7 @@ mod tests {
         let cli = parse(&[
             "site-config",
             "set",
-            "some.key",
+            "site.title",
             "val",
             "--db",
             "sqlite:./x.db",
@@ -942,7 +950,7 @@ mod tests {
         let SiteConfigAction::Set { key, value, .. } = action else {
             unreachable!("parse yields set")
         };
-        assert_eq!((key.as_str(), value.as_str()), ("some.key", "val"));
+        assert_eq!((key, value.as_str()), (SiteConfigKey::SiteTitle, "val"));
     }
 
     #[test]
@@ -954,7 +962,7 @@ mod tests {
         let SiteConfigAction::Get { key, .. } = action else {
             unreachable!("parse yields get")
         };
-        assert_eq!(key, "site.title");
+        assert_eq!(key, SiteConfigKey::SiteTitle);
     }
 
     #[test]
@@ -977,13 +985,37 @@ mod tests {
         let SiteConfigAction::Unset { key, .. } = action else {
             unreachable!("parse yields unset")
         };
-        assert_eq!(key, "site.title");
+        assert_eq!(key, SiteConfigKey::SiteTitle);
     }
 
     #[test]
     fn site_config_set_missing_value_is_clap_error() {
         let _guard = ENV_LOCK.lock().expect("env lock");
-        assert!(Cli::try_parse_from(["jaunder", "site-config", "set", "only.key"]).is_err());
+        assert!(Cli::try_parse_from(["jaunder", "site-config", "set", "site.title"]).is_err());
+    }
+
+    /// The registry is closed at the CLI door (#687): a key it does not know is a clap
+    /// parse failure, so an unknown key never reaches storage at all — and the message
+    /// names the offending key so the operator can see which one it was.
+    #[test]
+    fn site_config_rejects_an_unknown_key() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        for argv in [
+            vec!["jaunder", "site-config", "set", "site.nope", "v"],
+            vec!["jaunder", "site-config", "get", "site.nope"],
+            vec!["jaunder", "site-config", "unset", "site.nope"],
+        ] {
+            // `.err()` rather than `unwrap_err()`: `Cli` is not `Debug`, so the `Ok`
+            // side cannot be formatted for a panic message.
+            let rendered = Cli::try_parse_from(&argv)
+                .err()
+                .expect("an unknown key must not parse")
+                .to_string();
+            assert!(
+                rendered.contains("site.nope"),
+                "the parse error must name the offending key: {rendered}"
+            );
+        }
     }
 
     #[test]

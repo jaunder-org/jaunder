@@ -432,7 +432,7 @@ impl MediaManager {
 mod tests {
     use super::*;
     use crate::test_support::{backends, Backend, SeedUser};
-    use crate::MEDIA_MAX_FILE_SIZE_BYTES_KEY;
+    use crate::SiteConfigKey;
     use common::test_support::{parse_content_hash, parse_content_type, parse_filename};
     use rstest::*;
     use rstest_reuse::*;
@@ -665,7 +665,7 @@ mod tests {
         // Cap the per-file limit well below the payload size.
         env.state
             .site_config
-            .set(MEDIA_MAX_FILE_SIZE_BYTES_KEY, "5")
+            .set(SiteConfigKey::MediaMaxFileSizeBytes, "5")
             .await
             .unwrap();
         let manager = MediaManager::new(

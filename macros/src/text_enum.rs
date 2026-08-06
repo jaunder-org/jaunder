@@ -210,6 +210,13 @@ fn serde_impls(name: &syn::Ident) -> TokenStream {
 /// `Type` reports `String` — **not** `str` — because the generic storage impls bind on
 /// `String: Type<DB>` and sqlx's blanket `Type for &T` runs the wrong way to bridge the
 /// difference. `Encode` and `Decode` both borrow, so neither side allocates.
+///
+/// **The decode error echoes the offending token.** The generated parse error is a unit
+/// struct that can only name the valid tokens, and a `ColumnDecode` labels the column, not
+/// the value — so without this the report of a corrupt row is "must be one of …" with no
+/// way to learn what the row actually holds. A `text_enum`'s domain is a closed set of
+/// operator-facing tokens, never a secret, which is why the echo is safe here and is
+/// deliberately *not* done in the `StrNewtype` bridge (that one also carries secrets).
 fn sqlx_bridge(name: &syn::Ident) -> TokenStream {
     crate::sqlx_bridge::bridge(&crate::sqlx_bridge::BridgeSpec {
         name,
@@ -220,7 +227,11 @@ fn sqlx_bridge(name: &syn::Ident) -> TokenStream {
         to_inner: quote! { &<&#name as ::core::convert::Into<&'static str>>::into(self) },
         decode_inner: quote! { &'r str },
         convert: quote! {
-            ::core::result::Result::Ok(<#name as ::core::str::FromStr>::from_str(v)?)
+            <#name as ::core::str::FromStr>::from_str(v).map_err(
+                |e| -> ::sqlx::error::BoxDynError {
+                    ::std::format!("{e}; stored value: {v:?}").into()
+                },
+            )
         },
     })
 }
@@ -572,7 +583,20 @@ mod tests {
         assert!(!out.contains("to_owned"));
         // Decode borrows.
         assert!(out.contains("<&'rstras::sqlx::Decode<'r,DB>>::decode(value)?"));
-        assert!(out.contains("::from_str(v)?"));
+        assert!(out.contains("::from_str(v).map_err"));
+    }
+
+    #[test]
+    fn the_decode_error_echoes_the_offending_token() {
+        let out = norm(&expand_str(
+            r#"sqlx, error = InvalidX, message = "b""#,
+            "pub enum X { A }",
+        ));
+        // `norm` strips spaces inside literals too, so match the stripped form.
+        assert!(
+            out.contains(norm_s(r#"::std::format!("{e}; stored value: {v:?}")"#).as_str()),
+            "a corrupt row must report what it holds, not just the valid tokens"
+        );
     }
 
     #[test]

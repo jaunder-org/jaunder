@@ -5,6 +5,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
+use common::config_key::SiteConfigKey;
 use common::password::Password;
 use common::test_support::parse_invite_ttl_hours;
 use common::username::Username;
@@ -678,32 +679,32 @@ async fn cmd_smtp_test_succeeds_with_mock_server(#[case] backend: Backend) {
     let state = open_existing_database(&args.db).await.expect("open db");
     state
         .site_config
-        .set("smtp.host", &server.host().to_string())
+        .set(SiteConfigKey::SmtpHost, &server.host().to_string())
         .await
         .expect("set host");
     state
         .site_config
-        .set("smtp.port", &server.port().to_string())
+        .set(SiteConfigKey::SmtpPort, &server.port().to_string())
         .await
         .expect("set port");
     state
         .site_config
-        .set("smtp.tls_mode", "plain")
+        .set(SiteConfigKey::SmtpTlsMode, "plain")
         .await
         .expect("set tls_mode");
     state
         .site_config
-        .set("smtp.sender", "noreply@example.com")
+        .set(SiteConfigKey::SmtpSender, "noreply@example.com")
         .await
         .expect("set sender");
     state
         .site_config
-        .set("smtp.username", "user")
+        .set(SiteConfigKey::SmtpUsername, "user")
         .await
         .expect("set username");
     state
         .site_config
-        .set("smtp.password", "password")
+        .set(SiteConfigKey::SmtpPassword, "password")
         .await
         .expect("set password");
 
@@ -726,22 +727,22 @@ async fn cmd_smtp_test_fails_on_invalid_to_address(#[case] backend: Backend) {
     let state = open_existing_database(&args.db).await.expect("open db");
     state
         .site_config
-        .set("smtp.host", "mail.example.com")
+        .set(SiteConfigKey::SmtpHost, "mail.example.com")
         .await
         .expect("set smtp.host");
     state
         .site_config
-        .set("smtp.port", "587")
+        .set(SiteConfigKey::SmtpPort, "587")
         .await
         .expect("set smtp.port");
     state
         .site_config
-        .set("smtp.tls_mode", "plain")
+        .set(SiteConfigKey::SmtpTlsMode, "plain")
         .await
         .expect("set smtp.tls_mode");
     state
         .site_config
-        .set("smtp.sender", "noreply@example.com")
+        .set(SiteConfigKey::SmtpSender, "noreply@example.com")
         .await
         .expect("set smtp.sender");
 

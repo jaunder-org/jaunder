@@ -129,6 +129,8 @@ convention). See the Status column below for each ADR's current status.
 | [0099](adr/0099-e2e-does-not-pre-warm.md)                          | The e2e suite does not pre-warm                                                                              | accepted   |
 | [0100](adr/0100-measurement-frames-are-not-mixed.md)               | Browser measurements are decomposed only in the document frame                                               | accepted   |
 | [0101](adr/0101-infallible-kind-is-invariant-first.md)             | The infallible newtype kind is invariant-first, and a trusted door can be typed away                         | accepted   |
+| [0102](adr/0102-config-key-closed-registry.md)                     | Config keys are a closed registry carrying validators                                                        | accepted   |
+| [0103](adr/0103-prefer-real-harness-over-mirroring-fake.md)        | Prefer the real harness over a fake that mirrors backend behaviour                                           | accepted   |
 
 <!-- adr-table:end -->
 

@@ -13,7 +13,7 @@ use common::visibility::{AudienceTarget, ViewerIdentity};
 use jaunder::cli::StorageArgs;
 use std::sync::Arc;
 use storage::test_support::{fp, SeedRawPost};
-use storage::{open_existing_database, AppState, MediaRecord};
+use storage::{open_existing_database, AppState, MediaRecord, UserConfigKey};
 
 /// SHA-256 the media-table fixture row is keyed by; any stable value works, since
 /// the media *files* are mirrored separately from the media *table*.
@@ -140,7 +140,7 @@ async fn seed_named_audience_post(
 async fn seed_side_tables(state: &AppState, author: UserId) {
     state
         .user_config
-        .set(author, "editor.theme", "dark")
+        .set(author, UserConfigKey::DefaultPostFormat, "org")
         .await
         .expect("set user config");
     state
@@ -222,11 +222,11 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
     assert_eq!(
         state
             .user_config
-            .get(ids.author, "editor.theme")
+            .get(ids.author, UserConfigKey::DefaultPostFormat)
             .await
             .expect("get user config")
             .as_deref(),
-        Some("dark")
+        Some("org")
     );
     assert!(
         state

@@ -16,8 +16,7 @@
 use crate::media::MediaRecord;
 use crate::posts::{CreatePostError, CreatePostInput, UpdatePostInput};
 use crate::sql::quote_identifier;
-use crate::{AppState, DbConnectOptions, PostFormat, PostRecord, SiteConfigStorage};
-use async_trait::async_trait;
+use crate::{AppState, DbConnectOptions, PostFormat, PostRecord};
 use chrono::{DateTime, Utc};
 use common::feed::FeedPath;
 use common::ids::{PostId, UserId};
@@ -37,10 +36,9 @@ use common::username::Username;
 use common::visibility::AudienceTarget;
 use host::invite::InviteCode;
 use sqlx::{Connection, PgPool, SqlitePool};
-use std::collections::BTreeMap;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
-    Arc, Mutex,
+    Arc,
 };
 use tempfile::TempDir;
 
@@ -1400,82 +1398,6 @@ pub async fn update_post_body_via_service(
     )
     .await
     .expect("post update via the service path should succeed");
-}
-
-/// An in-memory [`SiteConfigStorage`] for tests that need a facade over site
-/// config without a database. A real key/value store: `set`/`delete` mutate a
-/// `BTreeMap` (so `list` is naturally key-ordered) and `get` reads it. Shared by
-/// every module that stubs `SiteConfigStorage` (SMTP loading, mailer building).
-#[derive(Default)]
-pub struct InMemorySiteConfig(Mutex<BTreeMap<String, String>>);
-
-impl InMemorySiteConfig {
-    /// An empty store.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// A store preloaded with `pairs`.
-    pub fn from_pairs<K, V>(pairs: impl IntoIterator<Item = (K, V)>) -> Self
-    where
-        K: Into<String>,
-        V: Into<String>,
-    {
-        Self(Mutex::new(
-            pairs
-                .into_iter()
-                .map(|(k, v)| (k.into(), v.into()))
-                .collect(),
-        ))
-    }
-}
-
-#[async_trait]
-impl SiteConfigStorage for InMemorySiteConfig {
-    async fn get(&self, key: &str) -> sqlx::Result<Option<String>> {
-        Ok(self.0.lock().unwrap().get(key).cloned())
-    }
-
-    async fn set(&self, key: &str, value: &str) -> sqlx::Result<()> {
-        self.0
-            .lock()
-            .unwrap()
-            .insert(key.to_owned(), value.to_owned());
-        Ok(())
-    }
-
-    async fn list(&self) -> sqlx::Result<Vec<(String, String)>> {
-        Ok(self
-            .0
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect())
-    }
-
-    async fn delete(&self, key: &str) -> sqlx::Result<bool> {
-        Ok(self.0.lock().unwrap().remove(key).is_some())
-    }
-
-    async fn get_smtp_credentials(&self) -> sqlx::Result<crate::smtp::SmtpCredentials> {
-        // Mirror the real backend's bridge decode: parse each stored value and
-        // surface a reject (empty) as a decode error.
-        let username = self
-            .get("smtp.username")
-            .await?
-            .map(|v| v.parse::<common::smtp_username::SmtpUsername>())
-            .transpose()
-            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-        let password = self
-            .get("smtp.password")
-            .await?
-            .map(|v| v.parse::<common::smtp_password::SmtpPassword>())
-            .transpose()
-            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-        Ok(crate::smtp::SmtpCredentials { username, password })
-    }
 }
 
 #[cfg(test)]

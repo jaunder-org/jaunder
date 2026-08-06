@@ -89,7 +89,10 @@ async fn worker_pings_hub_when_configured(#[case] backend: Backend) {
 
     state
         .site_config
-        .set("feeds.websub_hub_url", "https://hub.example.com/")
+        .set(
+            storage::SiteConfigKey::FeedsWebsubHubUrl,
+            "https://hub.example.com/",
+        )
         .await
         .expect("set hub url");
 
@@ -127,7 +130,10 @@ async fn worker_groups_duplicate_events_into_single_regen(#[case] backend: Backe
 
     state
         .site_config
-        .set("feeds.websub_hub_url", "https://hub.example.com/")
+        .set(
+            storage::SiteConfigKey::FeedsWebsubHubUrl,
+            "https://hub.example.com/",
+        )
         .await
         .expect("set hub url");
 
@@ -176,7 +182,10 @@ async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
 
     state
         .site_config
-        .set("feeds.websub_hub_url", "https://hub.example.com/")
+        .set(
+            storage::SiteConfigKey::FeedsWebsubHubUrl,
+            "https://hub.example.com/",
+        )
         .await
         .expect("set hub url");
 
@@ -317,7 +326,10 @@ async fn worker_marks_exhausted_after_backoff_attempts_are_used_up(#[case] backe
 
     state
         .site_config
-        .set("feeds.websub_hub_url", "https://hub.example.com/")
+        .set(
+            storage::SiteConfigKey::FeedsWebsubHubUrl,
+            "https://hub.example.com/",
+        )
         .await
         .expect("set hub url");
 

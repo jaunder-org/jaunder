@@ -406,7 +406,7 @@ pub fn server(args: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// `RenderedHtml` (`common/src/render.rs`) is the motivating case, and its module documents
 /// exactly why a sanitizing decode was rejected there and when to revisit that.
-#[proc_macro_derive(SqlxBridge)]
+#[proc_macro_derive(SqlxBridge, attributes(sqlx_bridge))]
 pub fn sqlx_bridge_derive(item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as DeriveInput);
     sqlx_bridge_derive::expand(&input).into()

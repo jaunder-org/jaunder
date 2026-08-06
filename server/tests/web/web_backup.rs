@@ -1,9 +1,7 @@
 use axum::http::StatusCode;
 use common::backup::{BackupConfig, BackupMode};
 use server_fn::ServerFn;
-use storage::{
-    BACKUP_DESTINATION_PATH_KEY, BACKUP_MODE_KEY, BACKUP_RETENTION_COUNT_KEY, BACKUP_SCHEDULE_KEY,
-};
+use storage::SiteConfigKey;
 
 use rstest::*;
 use rstest_reuse::*;
@@ -40,22 +38,22 @@ async fn operator_gets_configured_backup_settings(#[case] backend: Backend) {
     let cookie = create_operator_and_session(&state).await.cookie();
     state
         .site_config
-        .set(BACKUP_DESTINATION_PATH_KEY, "/srv/backups")
+        .set(SiteConfigKey::BackupDestinationPath, "/srv/backups")
         .await
         .unwrap();
     state
         .site_config
-        .set(BACKUP_SCHEDULE_KEY, "0 30 2 * * *")
+        .set(SiteConfigKey::BackupSchedule, "0 30 2 * * *")
         .await
         .unwrap();
     state
         .site_config
-        .set(BACKUP_RETENTION_COUNT_KEY, "4")
+        .set(SiteConfigKey::BackupRetentionCount, "4")
         .await
         .unwrap();
     state
         .site_config
-        .set(BACKUP_MODE_KEY, "archive")
+        .set(SiteConfigKey::BackupMode, "archive")
         .await
         .unwrap();
 
@@ -82,22 +80,22 @@ async fn operator_gets_defaults_for_invalid_backup_settings(#[case] backend: Bac
     let cookie = create_operator_and_session(&state).await.cookie();
     state
         .site_config
-        .set(BACKUP_DESTINATION_PATH_KEY, "/srv/backups")
+        .set(SiteConfigKey::BackupDestinationPath, "/srv/backups")
         .await
         .unwrap();
     state
         .site_config
-        .set(BACKUP_SCHEDULE_KEY, "not-a-schedule")
+        .set(SiteConfigKey::BackupSchedule, "not-a-schedule")
         .await
         .unwrap();
     state
         .site_config
-        .set(BACKUP_RETENTION_COUNT_KEY, "daily")
+        .set(SiteConfigKey::BackupRetentionCount, "daily")
         .await
         .unwrap();
     state
         .site_config
-        .set(BACKUP_MODE_KEY, "surprise")
+        .set(SiteConfigKey::BackupMode, "surprise")
         .await
         .unwrap();
 
@@ -135,7 +133,7 @@ async fn operator_can_update_backup_settings(#[case] backend: Backend) {
     assert_eq!(
         state
             .site_config
-            .get(BACKUP_DESTINATION_PATH_KEY)
+            .get(SiteConfigKey::BackupDestinationPath)
             .await
             .unwrap()
             .as_deref(),
@@ -144,7 +142,7 @@ async fn operator_can_update_backup_settings(#[case] backend: Backend) {
     assert_eq!(
         state
             .site_config
-            .get(BACKUP_SCHEDULE_KEY)
+            .get(SiteConfigKey::BackupSchedule)
             .await
             .unwrap()
             .as_deref(),
@@ -153,7 +151,7 @@ async fn operator_can_update_backup_settings(#[case] backend: Backend) {
     assert_eq!(
         state
             .site_config
-            .get(BACKUP_RETENTION_COUNT_KEY)
+            .get(SiteConfigKey::BackupRetentionCount)
             .await
             .unwrap()
             .as_deref(),
@@ -162,7 +160,7 @@ async fn operator_can_update_backup_settings(#[case] backend: Backend) {
     assert_eq!(
         state
             .site_config
-            .get(BACKUP_MODE_KEY)
+            .get(SiteConfigKey::BackupMode)
             .await
             .unwrap()
             .as_deref(),
@@ -188,7 +186,7 @@ async fn operator_can_update_backup_settings_to_archive_mode(#[case] backend: Ba
     assert_eq!(
         state
             .site_config
-            .get(BACKUP_MODE_KEY)
+            .get(SiteConfigKey::BackupMode)
             .await
             .unwrap()
             .as_deref(),
@@ -282,7 +280,7 @@ async fn backup_warning_hidden_when_destination_configured(#[case] backend: Back
     let cookie = create_operator_and_session(&state).await.cookie();
     state
         .site_config
-        .set(BACKUP_DESTINATION_PATH_KEY, "/srv/backups")
+        .set(SiteConfigKey::BackupDestinationPath, "/srv/backups")
         .await
         .unwrap();
 
@@ -305,12 +303,12 @@ async fn backup_warning_visible_when_configured_schedule_is_invalid(#[case] back
     let cookie = create_operator_and_session(&state).await.cookie();
     state
         .site_config
-        .set(BACKUP_DESTINATION_PATH_KEY, "/srv/backups")
+        .set(SiteConfigKey::BackupDestinationPath, "/srv/backups")
         .await
         .unwrap();
     state
         .site_config
-        .set(BACKUP_SCHEDULE_KEY, "not-a-schedule")
+        .set(SiteConfigKey::BackupSchedule, "not-a-schedule")
         .await
         .unwrap();
 

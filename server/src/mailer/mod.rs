@@ -57,14 +57,19 @@ pub async fn build_mailer(
 #[cfg(test)]
 mod tests {
     use rstest::*;
+    use rstest_reuse::*;
 
     use super::*;
-    use storage::test_support::InMemorySiteConfig;
+    use storage::test_support::{backends, Backend};
+    use storage::SiteConfigKey;
 
+    // guard:no-backend — builds a mailer over a mockall SiteConfigStorage whose reads
+    // are all absent; no live database backend
     #[tokio::test]
     async fn build_mailer_returns_sender_when_no_smtp_config() {
         // No smtp.host → load_smtp_config returns Ok(None) → NoopMailSender arm
-        let store = InMemorySiteConfig::new();
+        let mut store = storage::MockSiteConfigStorage::new();
+        store.expect_get_smtp_config().returning(|| Ok(None));
         let sender = build_mailer(&store, None).await;
         // NoopMailSender always returns NotConfigured; verify send_email is callable
         let msg = common::mailer::EmailMessage {
@@ -79,11 +84,17 @@ mod tests {
         ));
     }
 
+    #[apply(backends)]
     #[tokio::test]
-    async fn build_mailer_returns_sender_when_smtp_config_present() {
+    async fn build_mailer_returns_sender_when_smtp_config_present(#[case] backend: Backend) {
         // smtp.host set → load_smtp_config returns Ok(Some(cfg)) → LettreMailSender arm
-        let store = InMemorySiteConfig::from_pairs([("smtp.host", "localhost")]);
-        let _sender = build_mailer(&store, None).await;
+        let env = backend.setup().await;
+        let store = &*env.state.site_config;
+        store
+            .set(SiteConfigKey::SmtpHost, "localhost")
+            .await
+            .unwrap();
+        let _sender = build_mailer(store, None).await;
         // Just verify build_mailer runs without panic; actual SMTP send requires a server.
     }
 
@@ -94,11 +105,13 @@ mod tests {
 
     // A `Some` capture path selects the file transport and writes to `<dir>/mail.jsonl`.
     // Injected as a value — no env, no lock (spec Decision 5).
+    // guard:no-backend — a capture path short-circuits build_mailer before any store
+    // read; no live database backend
     #[rstest]
     #[tokio::test]
     async fn build_mailer_selects_file_sender_when_path_given(capture_dir: tempfile::TempDir) {
         let path = capture_dir.path().join("mail.jsonl");
-        let store = InMemorySiteConfig::new();
+        let store = storage::MockSiteConfigStorage::new();
         let sender = build_mailer(&store, Some(path.clone())).await;
         let msg = common::mailer::EmailMessage {
             from: None,

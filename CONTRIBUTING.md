@@ -179,9 +179,17 @@ Every HTTP endpoint must have both an integration test and an end-to-end test.
 Unit tests belong in the same file as the code being tested. End-to-end tests
 belong in `end2end/` and use Playwright.
 
-For tests requiring a database, use `sqlite::memory:` and run migrations with
-`sqlx::migrate!("./migrations").run(&pool).await?` before creating the
-`AppState`.
+For tests requiring a database, use the shared harness: `#[apply(backends)]`
+with `backend.setup().await`, which returns a `TestEnv { state, base }` carrying
+a fully migrated `AppState` (ADR-0033). Do **not** hand-roll a pool.
+
+**Not `sqlite::memory:`.** This instruction used to say so, and it was wrong
+twice over. Each _connection_ to `sqlite::memory:` gets its own separate
+database, so a multi-connection `SqlitePool` over it is not a coherent shared
+store; and WAL — which both production and the harness set — is unavailable for
+it. The harness therefore uses a temp-file SQLite database. ADR-0033 exists
+precisely to retire the hardcoded `sqlite::memory:` pools that ran SQLite-only
+and left Postgres unexercised.
 
 **Tests that spawn `git` must scrub the repo-redirecting `GIT_*` env.** When git
 runs a hook it exports `GIT_DIR`/`GIT_INDEX_FILE` (and

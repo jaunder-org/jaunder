@@ -50,6 +50,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::config_key::SiteConfigKey;
     use jaunder::cli::{
         Cli, CliBackupMode, Commands, PgBootstrapArgs, SiteConfigAction, StorageArgs,
     };
@@ -147,7 +148,7 @@ mod tests {
             command: Some(Commands::SiteConfig {
                 action: SiteConfigAction::Set {
                     storage: storage.clone(),
-                    key: "site.registration_policy".to_string(),
+                    key: SiteConfigKey::SiteRegistrationPolicy,
                     value: "open".to_string(),
                 },
             }),
@@ -161,7 +162,7 @@ mod tests {
             command: Some(Commands::SiteConfig {
                 action: SiteConfigAction::Get {
                     storage: storage.clone(),
-                    key: "site.registration_policy".to_string(),
+                    key: SiteConfigKey::SiteRegistrationPolicy,
                 },
             }),
             verbose: false,
@@ -169,12 +170,13 @@ mod tests {
         .await
         .expect("get of a set key succeeds");
 
-        // get of an unset key dispatches and errors (→ non-zero exit).
+        // get of an unset key dispatches and errors (→ non-zero exit). Every key is a
+        // registry variant now, so "unset" means "no row written", not "not a key".
         let missing = run(Cli {
             command: Some(Commands::SiteConfig {
                 action: SiteConfigAction::Get {
                     storage: storage.clone(),
-                    key: "does.not.exist".to_string(),
+                    key: SiteConfigKey::SiteTitle,
                 },
             }),
             verbose: false,
@@ -199,7 +201,7 @@ mod tests {
             command: Some(Commands::SiteConfig {
                 action: SiteConfigAction::Unset {
                     storage: storage.clone(),
-                    key: "site.registration_policy".to_string(),
+                    key: SiteConfigKey::SiteRegistrationPolicy,
                 },
             }),
             verbose: false,
@@ -212,7 +214,7 @@ mod tests {
             command: Some(Commands::SiteConfig {
                 action: SiteConfigAction::Get {
                     storage: storage.clone(),
-                    key: "site.registration_policy".to_string(),
+                    key: SiteConfigKey::SiteRegistrationPolicy,
                 },
             }),
             verbose: false,
@@ -225,7 +227,7 @@ mod tests {
             command: Some(Commands::SiteConfig {
                 action: SiteConfigAction::Unset {
                     storage,
-                    key: "site.registration_policy".to_string(),
+                    key: SiteConfigKey::SiteRegistrationPolicy,
                 },
             }),
             verbose: false,

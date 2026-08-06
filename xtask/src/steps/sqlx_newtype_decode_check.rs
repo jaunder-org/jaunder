@@ -118,7 +118,7 @@
 //! unascribed `.get(…)` on something that is *not* a row — a `HashMap`, a
 //! `SiteConfigStorage` — inside a function whose return type is unapproved is recorded,
 //! because rule 3 supplies the target. Widening the population under #728 made this live:
-//! `smtp.rs`'s four `load_smtp_config` reads and three in `test_support.rs` are config-store
+//! `smtp.rs`'s four `load_smtp_config` reads are config-store
 //! lookups, not row reads, and they carry `not-a-decode-target` entries. Telling them apart
 //! by receiver name would be exactly the pattern search this gate forbids.
 //!
@@ -759,8 +759,13 @@ const ALLOWLIST: &[Allowed] = &[
         count: 1,
         category: Category::DeferredNewtype,
         reason: "two adjacent Strings — a real transposition hazard, and the only one in this \
-                 file. #687's SiteConfigKey types the first element and removes it; the \
-                 second stays String per the entry above",
+                 file. It survives #687 permanently, by design: `list` is a faithful dump of \
+                 what is physically stored, so it must be able to return a row whose key is \
+                 NOT in the registry — a legacy or hand-written orphan. Typing the first \
+                 element would make those rows undecodable, i.e. invisible, which is the one \
+                 thing an operator debugging a stale value cannot afford (#687 D4). The CLI \
+                 parses and judges them instead. The second element stays String per the \
+                 entry above",
     },
     Allowed {
         file: "site_config.rs",
@@ -779,44 +784,6 @@ const ALLOWLIST: &[Allowed] = &[
         count: 1,
         category: Category::OpaquePayload,
         reason: "a per-user config value, polymorphic text like its site-config sibling",
-    },
-    Allowed {
-        file: "smtp.rs",
-        function: "load_smtp_config",
-        target: "Result<Option<SmtpConfig>,SmtpConfigError>",
-        what: "\"smtp.host\"",
-        count: 1,
-        category: Category::NotADecodeTarget,
-        reason: "SiteConfigStorage::get, not a row read — the gate takes the target from the \
-                 enclosing fn return because the call writes no type, and cannot tell this \
-                 receiver from an sqlx row",
-    },
-    Allowed {
-        file: "smtp.rs",
-        function: "load_smtp_config",
-        target: "Result<Option<SmtpConfig>,SmtpConfigError>",
-        what: "\"smtp.port\"",
-        count: 1,
-        category: Category::NotADecodeTarget,
-        reason: "SiteConfigStorage::get, not a row read",
-    },
-    Allowed {
-        file: "smtp.rs",
-        function: "load_smtp_config",
-        target: "Result<Option<SmtpConfig>,SmtpConfigError>",
-        what: "\"smtp.tls_mode\"",
-        count: 1,
-        category: Category::NotADecodeTarget,
-        reason: "SiteConfigStorage::get, not a row read",
-    },
-    Allowed {
-        file: "smtp.rs",
-        function: "load_smtp_config",
-        target: "Result<Option<SmtpConfig>,SmtpConfigError>",
-        what: "\"smtp.sender\"",
-        count: 1,
-        category: Category::NotADecodeTarget,
-        reason: "SiteConfigStorage::get, not a row read",
     },
     // ---- subscriptions ----
     Allowed {
@@ -870,34 +837,6 @@ const ALLOWLIST: &[Allowed] = &[
         count: 1,
         category: Category::CountOrExists,
         reason: "database-exists probe in the Postgres test harness",
-    },
-    Allowed {
-        file: "test_support.rs",
-        function: "get",
-        target: "sqlx::Result<Option<String>>",
-        what: "key",
-        count: 1,
-        category: Category::NotADecodeTarget,
-        reason: "a HashMap::get in the in-memory SiteConfigStorage fake — not a row read; the \
-                 gate takes the target from the fn return and cannot tell the receiver apart",
-    },
-    Allowed {
-        file: "test_support.rs",
-        function: "get_smtp_credentials",
-        target: "sqlx::Result<crate::smtp::SmtpCredentials>",
-        what: "\"smtp.username\"",
-        count: 1,
-        category: Category::NotADecodeTarget,
-        reason: "SiteConfigStorage::get in the test harness, not a row read",
-    },
-    Allowed {
-        file: "test_support.rs",
-        function: "get_smtp_credentials",
-        target: "sqlx::Result<crate::smtp::SmtpCredentials>",
-        what: "\"smtp.password\"",
-        count: 1,
-        category: Category::NotADecodeTarget,
-        reason: "SiteConfigStorage::get in the test harness, not a row read",
     },
     // ---- surviving i64-family entries from #715 ----
     Allowed {

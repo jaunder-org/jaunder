@@ -1,5 +1,6 @@
 use axum::http::StatusCode;
 use chrono::Utc;
+use common::config_key::SiteConfigKey;
 use common::session_label::MAX_SESSION_LABEL_CHARS;
 use common::token::RawToken;
 use common::username::Username;
@@ -48,7 +49,7 @@ async fn register_open_creates_user_sets_cookie_returns_token(#[case] backend: B
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
-        .set("site.registration_policy", "open")
+        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
 
@@ -82,7 +83,7 @@ async fn register_duplicate_username_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
-        .set("site.registration_policy", "open")
+        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
 
@@ -116,7 +117,7 @@ async fn register_invite_only_valid_code_creates_user_marks_invite_used(#[case] 
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
-        .set("site.registration_policy", "invite_only")
+        .set(SiteConfigKey::SiteRegistrationPolicy, "invite_only")
         .await
         .unwrap();
     let expires_at = Utc::now() + chrono::Duration::hours(24);
@@ -163,7 +164,7 @@ async fn register_invite_only_missing_code_returns_error(#[case] backend: Backen
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
-        .set("site.registration_policy", "invite_only")
+        .set(SiteConfigKey::SiteRegistrationPolicy, "invite_only")
         .await
         .unwrap();
 
@@ -196,7 +197,7 @@ async fn register_invite_only_invalid_code_returns_error(#[case] backend: Backen
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
-        .set("site.registration_policy", "invite_only")
+        .set(SiteConfigKey::SiteRegistrationPolicy, "invite_only")
         .await
         .unwrap();
 
@@ -219,7 +220,7 @@ async fn register_invite_only_expired_code_returns_error(#[case] backend: Backen
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
-        .set("site.registration_policy", "invite_only")
+        .set(SiteConfigKey::SiteRegistrationPolicy, "invite_only")
         .await
         .unwrap();
 
@@ -278,7 +279,7 @@ async fn login_correct_password_sets_cookie_and_returns_token(#[case] backend: B
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
-        .set("site.registration_policy", "open")
+        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
     post_form_with_secure_flag(
@@ -314,7 +315,7 @@ async fn login_returns_is_operator_flag(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
-        .set("site.registration_policy", "open")
+        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
     post_form_with_secure_flag(
@@ -369,7 +370,7 @@ async fn login_with_label_creates_session_with_label(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
-        .set("site.registration_policy", "open")
+        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
     post_form_with_secure_flag(
@@ -402,7 +403,7 @@ async fn login_with_empty_label_falls_back_to_user_agent_default(#[case] backend
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
-        .set("site.registration_policy", "open")
+        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
     post_form_with_secure_flag(
@@ -438,7 +439,7 @@ async fn login_rejects_whitespace_only_label(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
-        .set("site.registration_policy", "open")
+        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
     post_form_with_secure_flag(
@@ -473,7 +474,7 @@ async fn login_rejects_overlong_label(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
-        .set("site.registration_policy", "open")
+        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
     post_form_with_secure_flag(
@@ -509,7 +510,7 @@ async fn login_bounds_long_user_agent_at_session_label_cap(#[case] backend: Back
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
-        .set("site.registration_policy", "open")
+        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
     post_form_with_secure_flag(
@@ -548,7 +549,7 @@ async fn login_truncates_user_agent_past_session_label_cap(#[case] backend: Back
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
-        .set("site.registration_policy", "open")
+        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
     post_form_with_secure_flag(
@@ -585,7 +586,7 @@ async fn login_wrong_password_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
-        .set("site.registration_policy", "open")
+        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
     post_form_with_secure_flag(
@@ -657,7 +658,7 @@ async fn register_invalid_username_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
-        .set("site.registration_policy", "open")
+        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .expect("failed to set registration policy");
 
@@ -686,7 +687,7 @@ async fn register_short_password_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
-        .set("site.registration_policy", "open")
+        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .expect("failed to set registration policy");
 
@@ -841,7 +842,7 @@ async fn get_registration_policy_returns_correct_value(#[case] backend: Backend)
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
-        .set("site.registration_policy", "invite_only")
+        .set(SiteConfigKey::SiteRegistrationPolicy, "invite_only")
         .await
         .unwrap();
 
@@ -911,7 +912,7 @@ async fn register_sets_cookie_without_secure_attribute_when_disabled(#[case] bac
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
-        .set("site.registration_policy", "open")
+        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
 

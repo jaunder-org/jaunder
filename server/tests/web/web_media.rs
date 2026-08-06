@@ -527,7 +527,7 @@ async fn upload_media_rejects_oversized_file(#[case] backend: Backend) {
     // exercising `map_media_error`'s PayloadTooLarge arm.
     state
         .site_config
-        .set(storage::MEDIA_MAX_FILE_SIZE_BYTES_KEY, "5")
+        .set(storage::SiteConfigKey::MediaMaxFileSizeBytes, "5")
         .await
         .unwrap();
     let cookie = create_user_and_session(&state).await.cookie();
@@ -561,7 +561,7 @@ async fn upload_media_rejects_over_quota_file(#[case] backend: Backend) {
     // `map_media_error`'s InsufficientStorage arm.
     state
         .site_config
-        .set(storage::MEDIA_USER_QUOTA_BYTES_KEY, "5")
+        .set(storage::SiteConfigKey::MediaUserQuotaBytes, "5")
         .await
         .unwrap();
     let cookie = create_user_and_session(&state).await.cookie();
