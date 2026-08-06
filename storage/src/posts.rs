@@ -3607,7 +3607,7 @@ mod tests {
     #[apply(backends)]
     #[tokio::test]
     async fn reading_post_with_blank_body_in_db_errors(#[case] backend: Backend) {
-        // ADR-0102 §1 claims a blank body is "unrepresentable" partly because a blank
+        // ADR-0105 §1 claims a blank body is "unrepresentable" partly because a blank
         // one already in the database fails to *decode*. The serde half of that claim
         // is pinned by `post_body_deserialize_rejects_blank`; this is the sqlx half.
         // The body column is plain TEXT with no CHECK, so the row is representable at

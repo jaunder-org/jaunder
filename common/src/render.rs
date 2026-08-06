@@ -7,7 +7,7 @@ use std::fmt;
 
 use crate::post_body::{InvalidPostBody, PostBody};
 use crate::post_title::PostTitle;
-use crate::slug::{slugify_title, Slug};
+use crate::slug::{Slug, slugify_title};
 
 /// The format/markup language used to author a post body.
 ///
@@ -761,7 +761,7 @@ fn extract_org_title(body: &str) -> Option<(String, String)> {
 /// title-only post, whose sole content was the title source. See #811 decision 2.
 ///
 /// Private on purpose: [`canonicalize_body`] is the crate's only door to body
-/// canonicalization (ADR-0102), so a new format extends that one match instead of
+/// canonicalization (ADR-0105), so a new format extends that one match instead of
 /// giving callers a second per-format entry point.
 fn canonicalize_org_body(body: &PostBody) -> Result<PostBody, InvalidPostBody> {
     let mut kept: Vec<&str> = Vec::new();

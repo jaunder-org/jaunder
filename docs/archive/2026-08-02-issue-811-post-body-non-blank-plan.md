@@ -183,7 +183,7 @@ Uses **`jaunder-adr`** (numberless draft in `docs/adr/drafts/`;
 
 **Files:**
 
-- Create: `docs/adr/0102-post-body-non-blank-invariant.md`
+- Create: `docs/adr/0105-post-body-non-blank-invariant.md`
 - Modify: `docs/adr/0063-domain-value-newtype-convention.md` — supersede note on
   the infallible-kind definition (§3, around 344-351)
 
@@ -222,7 +222,7 @@ that blank _titles_ demonstrably did accumulate (migration
 **Verify:** `cargo xtask check` — `adr-format` passes. Do **not** run
 `adr promote` yet.
 
-- [x] 1. ADR draft written (`docs/adr/0102-post-body-non-blank-invariant.md`,
+- [x] 1. ADR draft written (`docs/adr/0105-post-body-non-blank-invariant.md`,
      gitignored until `promote` at ship) and ADR-0063 §3 amended
 
 ---

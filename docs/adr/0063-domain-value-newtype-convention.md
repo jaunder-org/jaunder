@@ -349,29 +349,27 @@ the wire). No inherent `as_str()` is generated — the `str` traits replace it. 
 new domain newtype is then a struct, a derive, and a `FromStr` — not 40 lines of
 boilerplate that drift apart over time.
 
-For a value that has no rejecting invariant — one that only normalizes, or wraps
-verbatim — `#[str_newtype(infallible)]` supplies the trailer's
-`From<String>`-when-infallible half (§2): the author hand-writes `From<String>`
-instead of `FromStr`, the derive omits `TryFrom<String>` (which would collide
-with it via the std blanket `impl<T, U: Into<T>> TryFrom<U>`) and routes
-`Deserialize` through that `From<String>`.
+For a value with **no rule that can fail** — one that only normalizes, or wraps
+verbatim, and for which no input is invalid — `#[str_newtype(infallible)]`
+supplies the trailer's `From<String>`-when-infallible half (§2): the author
+hand-writes `From<String>` instead of `FromStr`, the derive omits
+`TryFrom<String>` (which would collide with it via the std blanket
+`impl<T, U: Into<T>> TryFrom<U>`) and routes `Deserialize` through that
+`From<String>`.
 
-**Choose it on the invariant, not on the signature.** The test is §2's — _does
-this value have an invariant?_ — and the constructor's fallibility is the
-consequence, not the criterion. Phrasing it the other way round ("its invariant
-never rejects") invites reading the current signature as evidence about the
-value, and that inversion has misclassified real types twice. `PostBody` was
-declared infallible on the claim that any body is valid, until a body of nothing
-but blank lines proved to be nonsense that the rest of the system was routing
-around rather than rejecting (#811, which moves it to a validating `FromStr`).
-`PostTitle` was the same shape, reached from the opposite direction and
-corrected in #830.
+**Choose it on the invariant, not on the signature** —
+[ADR-0101](0101-infallible-kind-is-invariant-first.md) decides this and
+supersedes the wording this paragraph used to carry ("for a value whose
+invariant never rejects"). The reviewer's question is _is there a string this
+type should refuse?_, not _does the constructor reject?_ — the latter is a
+property of the code already written, and reading it as evidence about the value
+is what mislabelled both of this section's original first users.
 
 The diagnostic: **if a type declared `infallible` needs a downstream gate to
 reject some of its values, it was mis-declared.** The gate is the invariant,
-displaced. First users: `PostBody`/`PostTitle` (#402) — both since found to have
-invariants, which is why this paragraph now leads with the value rather than the
-constructor.
+displaced. The first-users list is **gone rather than updated**: `PostTitle` was
+corrected in #830 and `PostBody` in #811, so neither is an infallible newtype
+any more, and no production type takes the flag today (ADR-0101 decision 2).
 
 ### 4. Boundary rule
 

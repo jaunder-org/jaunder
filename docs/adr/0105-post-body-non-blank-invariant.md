@@ -1,4 +1,4 @@
-# ADR-0102: A post body has a non-blank invariant, and normalization is format-aware
+# ADR-0105: A post body has a non-blank invariant, and normalization is format-aware
 
 - Status: accepted
 - Date: 2026-08-05
@@ -139,13 +139,21 @@ body; it is now a 400. This is a deliberate, user-visible behaviour change.
   derived from CommonMark and Org rendering behaviour specifically; it is not a
   general "tidy the input" precedent.
 
-## Amendment to ADR-0063
+## Relationship to ADR-0101
 
-`0063-domain-value-newtype-convention.md` §3 lists `PostBody` as a first user of
-`#[str_newtype(infallible)]`. That entry is corrected there, along with the
-framing defect #830 identified: §3 discriminates on the constructor's signature
-("an invariant that never rejects") where §2 frames the choice invariant-first
-("fallible when the value has an invariant"). The signature is a consequence of
-the invariant, not the test for it — a type declared `infallible` that turns out
-to have a rejecting invariant was mis-declared, which is exactly what happened
-to `PostBody` here and to `PostTitle` in #830.
+The infallible-kind framing defect is **not decided here**.
+[ADR-0101](0101-infallible-kind-is-invariant-first.md) (#830) owns it, and says
+so explicitly: "`PostTitle` and `PostBody` are removed from §3's first-users
+list … this amendment covers both so the correction is written once rather than
+re-derived", and "#811 inherits this amendment and does not need its own."
+
+This ADR therefore claims none of that reasoning. What it does is **carry out
+ADR-0101's stated consequence** — "ADR-0063 §3's definition and first-users list
+change" — which #830 recorded but did not edit into `0063`, because `PostBody`
+was still infallible in code until this issue landed. §3 now reads
+invariant-first and its first-users list is gone, since with `PostBody`
+corrected here no production type takes the flag at all.
+
+This ADR is scoped to what is genuinely body-specific: the non-blank invariant
+itself, the no-trusted-bypass read policy (which deliberately does **not**
+transfer to `PostTitle`), the two-layer split, and the whitespace rule.
