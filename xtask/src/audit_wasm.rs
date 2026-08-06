@@ -27,6 +27,22 @@ pub struct ArtifactMetrics {
     pub brotli_bytes: u64,
 }
 
+/// Per-section and per-crate attribution of a wasm artifact (#836).
+///
+/// Deliberately a separate report from [`AuditReport`], because it describes a
+/// **different artifact**: attribution needs the name section, and the shipped
+/// bundle has none once `wasm-opt` has run. `total_bytes` here is therefore not
+/// the download weight, and the rendered output says so.
+#[derive(Debug, Serialize)]
+pub struct BreakdownReport {
+    pub artifact: String,
+    pub total_bytes: u64,
+    pub sections: Vec<crate::wasm_sections::SectionSize>,
+    /// The code section's span — the denominator for the per-crate percentages.
+    pub code_bytes: u64,
+    pub crates: Vec<crate::wasm_symbols::CrateBytes>,
+}
+
 /// Human-readable byte size. Mirrors the old Node script's rounding exactly:
 /// whole numbers for bytes and for any value ≥ 10 in its unit, one decimal
 /// otherwise — so the rendered size table stays comparable with the old script.
@@ -168,6 +184,94 @@ pub fn run(site_path: Option<&str>) -> Result<AuditReport> {
     })
 }
 
+/// Resolve the wasm to attribute: `explicit` verbatim when set, otherwise the
+/// `lib/csr.wasm` inside a fresh `nix build .#csrWasm`.
+///
+/// `.#csrWasm` rather than `.#site` on purpose — it is the pre-wasm-bindgen,
+/// unstripped artifact, so it still carries the name section that attribution
+/// reads. The shipped bundle cannot answer this question at all.
+fn resolve_breakdown_path(explicit: Option<&str>) -> Result<String> {
+    match explicit {
+        Some(p) => Ok(p.to_string()),
+        None => Ok(Path::new(&nix_build::build_out_path("csrWasm")?)
+            .join("lib/csr.wasm")
+            .to_string_lossy()
+            .into_owned()),
+    }
+}
+
+/// Attribute a wasm artifact's bytes to sections and crates.
+pub fn breakdown(wasm_path: Option<&str>) -> Result<BreakdownReport> {
+    let artifact = resolve_breakdown_path(wasm_path)?;
+    let bytes =
+        std::fs::read(&artifact).with_context(|| format!("reading wasm artifact {artifact}"))?;
+    let sections = crate::wasm_sections::section_sizes(&bytes)
+        .with_context(|| format!("parsing sections of {artifact}"))?;
+    let code_bytes = sections
+        .iter()
+        .find(|s| s.name == "code")
+        .map(|s| s.bytes)
+        .unwrap_or(0);
+    let crates = crate::wasm_symbols::rollup(&crate::wasm_symbols::function_sizes(&bytes)?);
+    Ok(BreakdownReport {
+        artifact,
+        total_bytes: bytes.len() as u64,
+        sections,
+        code_bytes,
+        crates,
+    })
+}
+
+/// The breakdown tables: sections denominated on the file, then crates
+/// denominated on the code section — each denominator named where it is used, so
+/// a percentage cannot be read against the wrong whole.
+pub fn render_breakdown(report: &BreakdownReport) -> String {
+    let mut s = String::new();
+    s.push_str("WASM bundle breakdown\n");
+    s.push_str(&format!("artifact: {}\n", report.artifact));
+    s.push_str(&format!(
+        "total: {} — this is the unstripped pre-wasm-bindgen artifact, \
+         NOT the shipped bundle size (see `cargo xtask audit-wasm` for that)\n",
+        format_bytes(report.total_bytes)
+    ));
+    s.push('\n');
+
+    s.push_str("section               bytes     share of file\n");
+    for sec in &report.sections {
+        s.push_str(&format!(
+            "{:<18}  {:>9}  {:>12}\n",
+            sec.name,
+            format_bytes(sec.bytes),
+            percent(sec.bytes, report.total_bytes),
+        ));
+    }
+
+    s.push('\n');
+    s.push_str(&format!(
+        "crate attribution, share of the code section ({})\n",
+        format_bytes(report.code_bytes)
+    ));
+    s.push_str("crate                 bytes     share of code section\n");
+    for c in &report.crates {
+        s.push_str(&format!(
+            "{:<18}  {:>9}  {:>12}\n",
+            c.krate,
+            format_bytes(c.bytes),
+            percent(c.bytes, report.code_bytes),
+        ));
+    }
+    s
+}
+
+/// `part` as a percentage of `whole`, to one decimal. A zero denominator renders
+/// as `n/a` rather than a division result.
+fn percent(part: u64, whole: u64) -> String {
+    if whole == 0 {
+        return "n/a".to_string();
+    }
+    format!("{:.1}%", (part as f64 / whole as f64) * 100.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,6 +358,88 @@ mod tests {
             err.contains("234"),
             "error explains the #234 regression: {err}"
         );
+    }
+
+    fn breakdown_fixture() -> BreakdownReport {
+        use crate::wasm_sections::SectionSize;
+        use crate::wasm_symbols::{CrateBytes, UNATTRIBUTED};
+        BreakdownReport {
+            artifact: "/nix/store/x-csr-wasm/lib/csr.wasm".into(),
+            total_bytes: 5_350_591,
+            sections: vec![
+                SectionSize {
+                    name: "code".into(),
+                    bytes: 4_000_000,
+                },
+                SectionSize {
+                    name: "data".into(),
+                    bytes: 1_000_000,
+                },
+                SectionSize {
+                    name: "custom:name".into(),
+                    bytes: 350_591,
+                },
+            ],
+            code_bytes: 4_000_000,
+            crates: vec![
+                CrateBytes {
+                    krate: "orgize".into(),
+                    bytes: 2_000_000,
+                },
+                CrateBytes {
+                    krate: UNATTRIBUTED.into(),
+                    bytes: 1_500_000,
+                },
+                CrateBytes {
+                    krate: "core".into(),
+                    bytes: 500_000,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn render_breakdown_names_the_artifact_and_disclaims_shipped_size() {
+        let t = render_breakdown(&breakdown_fixture());
+        assert!(t.contains("/nix/store/x-csr-wasm/lib/csr.wasm"), "{t}");
+        assert!(
+            t.to_lowercase().contains("not the shipped"),
+            "must state its total is not the shipped bundle size: {t}"
+        );
+    }
+
+    #[test]
+    fn render_breakdown_states_percentages_against_a_named_denominator() {
+        let t = render_breakdown(&breakdown_fixture());
+        // orgize is 2 MiB of the 4 MiB code section => 50%, denominated on the
+        // code section, NOT on the 5.1 MiB file.
+        assert!(t.contains("50.0%"), "{t}");
+        assert!(
+            t.contains("code section"),
+            "the denominator must be named in the output: {t}"
+        );
+    }
+
+    #[test]
+    fn render_breakdown_shows_every_section_and_the_unattributed_bucket() {
+        let t = render_breakdown(&breakdown_fixture());
+        for s in ["code", "data", "custom:name"] {
+            assert!(t.contains(s), "missing section {s}: {t}");
+        }
+        assert!(t.contains(crate::wasm_symbols::UNATTRIBUTED), "{t}");
+    }
+
+    #[test]
+    fn percent_of_a_zero_denominator_is_not_a_division() {
+        assert_eq!(percent(0, 0), "n/a");
+        assert_eq!(percent(1, 4), "25.0%");
+    }
+
+    #[test]
+    fn breakdown_errors_when_the_artifact_is_missing() {
+        let missing = "/nonexistent/csr.wasm";
+        let err = breakdown(Some(missing)).unwrap_err().to_string();
+        assert!(err.contains("csr.wasm"), "error names the artifact: {err}");
     }
 
     #[test]

@@ -20,6 +20,8 @@ mod sh;
 #[cfg(test)]
 mod test_support;
 mod traces;
+mod wasm_sections;
+mod wasm_symbols;
 mod web_server_fns;
 mod steps {
     pub mod adr_check;
@@ -128,11 +130,23 @@ pub enum Command {
     #[command(after_help = "EXAMPLES:\n  \
         cargo xtask audit-wasm\n  \
         cargo xtask audit-wasm --site-path /nix/store/...-jaunder-site\n  \
+        cargo xtask audit-wasm --breakdown\n  \
         cargo xtask --json audit-wasm")]
     AuditWasm {
         /// Audit a prebuilt `.#site` store path instead of running `nix build`.
         #[arg(long)]
         site_path: Option<String>,
+        /// Report per-section and per-crate byte attribution instead of totals.
+        ///
+        /// Measured on the pre-wasm-bindgen, unstripped `.#csrWasm` artifact,
+        /// which still carries a name section — `wasm-opt` strips names from the
+        /// shipped bundle, so the shipped file cannot be attributed (#836). Its
+        /// total is NOT the shipped bundle size.
+        #[arg(long)]
+        breakdown: bool,
+        /// Break down this wasm file instead of building `.#csrWasm`.
+        #[arg(long, requires = "breakdown")]
+        wasm: Option<String>,
     },
     /// Build ONE e2e VM check (a {backend}×{browser} combo) through the same
     /// diagnostic-preserving wrapper `validate` uses. For CI matrix fan-out;
@@ -508,17 +522,40 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             finalize(&mut result, start);
             Ok(result)
         }
-        Command::AuditWasm { site_path } => {
+        Command::AuditWasm {
+            site_path,
+            breakdown,
+            wasm,
+        } => {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("audit-wasm");
-            match audit_wasm::run(site_path.as_deref()) {
-                Ok(report) => {
-                    let n = report.artifacts.len();
-                    result.audit = Some(report);
-                    result.push(StepResult::ok("audit-wasm").detail(format!("{n} artifact(s)")));
+            if breakdown {
+                match audit_wasm::breakdown(wasm.as_deref()) {
+                    Ok(report) => {
+                        let n = report.crates.len();
+                        result.breakdown = Some(report);
+                        result.push(
+                            StepResult::ok("audit-wasm-breakdown")
+                                .detail(format!("{n} crate(s) attributed")),
+                        );
+                    }
+                    Err(e) => {
+                        result.push(
+                            StepResult::fail("audit-wasm-breakdown").detail(format!("{e:#}")),
+                        );
+                    }
                 }
-                Err(e) => {
-                    result.push(StepResult::fail("audit-wasm").detail(format!("{e:#}")));
+            } else {
+                match audit_wasm::run(site_path.as_deref()) {
+                    Ok(report) => {
+                        let n = report.artifacts.len();
+                        result.audit = Some(report);
+                        result
+                            .push(StepResult::ok("audit-wasm").detail(format!("{n} artifact(s)")));
+                    }
+                    Err(e) => {
+                        result.push(StepResult::fail("audit-wasm").detail(format!("{e:#}")));
+                    }
                 }
             }
             finalize(&mut result, start);
