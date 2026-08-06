@@ -76,20 +76,36 @@ these illegal: once the lifetime is captured, Leptos's requirement that a
 `avatar_parts(name)` produced an owned `String` and the reference never entered
 the view.
 
-So a `&'a T` prop is usable only when the prop is fully consumed into owned data
-**before** the view — precisely the case where taking it by value and consuming
-it already satisfies the lint. Reference props do not let ownership be pushed
-above the component: **the view must own.** Edition 2024 therefore unlocks
-nothing for these seven params.
+An earlier draft concluded from those five errors that "edition 2024 unlocks
+nothing for these seven params". **That was wrong**, and the error is worth
+naming: it generalized from five failures that are all one shape — _a view
+borrowing a parameter_ — to props that never reach the view at all. The five are
+about a **stored** view needing `'static`; a prop read into derived owned data
+is the opposite case and borrows cleanly.
 
-The migration is filed with its measured cost as
-[#826](https://github.com/jaunder-org/jaunder/issues/826) and is out of scope
-here.
+**#826 landed mid-branch and settled it.** The migration was filed from this
+spec's measurements, and while tasks 1–4 were being committed it shipped —
+moving the **whole workspace** to edition 2024 (not just `web`), fixing those
+five errors, and recording ADR-0104, whose decision 2 establishes the idiom: a
+view that borrows a parameter returns `impl IntoView + use<>`, precise-capturing
+nothing (RFC 3617).
 
-**Consequence for this branch:** any surviving reason must be site-specific and
-must not assert the blanket claim. Where the edition-2021 limit is the operative
-fact, the reason must say so explicitly rather than implying a permanent
-language constraint.
+This branch rebased onto it and took clippy's own suggestion at every site. **No
+`needless_pass_by_value` suppression survives** — see D2's outcome table and D3.
+
+Two facts learned by doing it:
+
+- **`#[component]` handles a lifetime prop.** The macro puts the lifetime on the
+  generated props struct; only call sites need `&`.
+- **An inline-constructed prop must be bound to a local first.**
+  `prop=&Expr { … }` fails E0716 — the temporary is dropped inside the `view!`
+  expansion. Five sites bind first, each with a comment.
+
+**Consequence for this branch:** the "props must be owned" claim is gone from
+the crate, along with every suppression that rested on it. The requirement that
+a surviving reason be site-specific and name its real mechanism stands for any
+future one — it is what exposed these as a single contingent reason in three
+disguises.
 
 ### D2 — Genuine fixes preferred; two named anti-patterns barred
 
@@ -107,28 +123,59 @@ gets a real attempt, but an _earned_ suppression beats a contortion:
   second, likely `Copy`, prop, so it is not perfectly analogous — but the
   inference holds.)
 
-**Expected per-site outcome** (the implementer may beat this; they may not
-silently fall short of it):
+**Outcome per site** — every one fixed in code, none re-justified:
 
-| Site                                       | Expected                                                                                                   |
-| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
-| `TagList::context`                         | Removed with the component (D4)                                                                            |
-| `RsdDiscovery::username`                   | **Fix** — single use; a consuming form is reachable without harming `rsd_href`                             |
-| `FeedDiscovery::surface`                   | Fix if reachable; else re-justified (4 borrows across `Link` attrs, no closure)                            |
-| `Avatar::name`                             | Attempt a genuine consuming use (an accessible `title`/`aria-label` is a real markup gap); else re-justify |
-| `PostDisplay::{post, banner, tag_context}` | **Re-justified** per D3                                                                                    |
+| Site                                       | Outcome                                                                   |
+| ------------------------------------------ | ------------------------------------------------------------------------- |
+| `TagList::context`                         | Removed with the component (D4)                                           |
+| `RsdDiscovery::username`                   | Takes `&Username`                                                         |
+| `FeedDiscovery::surface`                   | Takes `&FeedSurface`                                                      |
+| `Avatar::name`                             | Takes `&Username`; drops a clone at two call sites                        |
+| `PostDisplay::{post, banner, tag_context}` | Borrowed, and the chain through `PostCard` to `TimelineRows` with it (D3) |
 
-### D3 — `PostDisplay` keeps a suppression, with a corrected reason
+**The barred anti-patterns above never had to be weighed**, because once #826
+landed the edition, clippy's own suggestion — take the reference — became
+available and is simply correct at every site. Both bars stand as guidance for a
+future site where it is not; neither was exercised here.
 
-`PostDisplay` is the **terminal owner**: its sole caller `PostCard`
-(`posts/component.rs:361`) moves all three values in, and `PostView<'a>`
-(`posts/render.rs:140-150`) borrows from them at `component.rs:169-179` across
-`render_post_content`. They must be owned _here_ to outlive the borrow-view.
-Clippy cannot see "owns in order to lend."
+An earlier draft of this table predicted "re-justified" for `Avatar`,
+`FeedDiscovery` and `PostDisplay`. That prediction was made under edition 2021
+and is recorded rather than quietly overwritten, because the pattern is worth
+noticing: **three of the four "structural" reasons were really one contingent
+reason wearing three site-specific disguises.**
 
-The governing principle is **ADR-0041 §2** ("share the pure fn, not the
-component"). §4 is the anonymous-view/explicit-viewer seam and is _not_ the
-citation for this claim — the code comment at `posts/component.rs:185` cites §4
+### D3 — `PostDisplay` is fixed too, by borrowing through the whole render chain
+
+**Superseded twice, and the second correction is the instructive one.** This
+decision originally said `PostDisplay` keeps a suppression because it is the
+**terminal owner**: `PostView<'a>` (`posts/render.rs:140-150`) borrows all three
+props across `render_post_content`, so they must be owned there to outlive the
+borrow-view — "owns in order to lend", which clippy cannot see.
+
+That argument is only valid if something _below_ the owner needs the value
+moved. Nothing did. Converting `PostDisplay` alone relocates the identical lint
+to `PostCard`; converting `PostCard` relocates it again to `TimelineRows`, which
+genuinely owns the rows it iterates. **Following the chain to that terminus
+resolves it; stopping halfway is what made it look structural.** The relocation
+was measured at each step, not predicted.
+
+So all three components borrow, and the `needless_pass_by_value` suppression
+count for this crate is **zero** — no re-justified keepers, which is what the
+issue asked for.
+
+What made it safe: `PostDisplay` and `PostCard` return `impl IntoView + use<>`
+(ADR-0104 decision 2), so the view captures no lifetime. That matters most at
+`posts/component.rs`'s permalink call site, which sits inside
+`Suspend::new(async move { … })` — a **stored** view, where a captured lifetime
+would hit the `'static` requirement and produce exactly the E0521 class #826 had
+to fix. Verified by compiling, not assumed.
+
+Incidental win: `timeline/component.rs` no longer clones a `TagCtx` per row per
+render, and iterates `.iter()` rather than `.into_iter()`.
+
+The governing principle remains **ADR-0041 §2** ("share the pure fn, not the
+component"); §4 is the anonymous-view/explicit-viewer seam and is _not_ the
+citation for this claim — the code comment at `posts/component.rs` cites §4
 correctly for a different point.
 
 ### D4 — `TagList` is deleted; the rest of the `taglist` leaf **must survive**
@@ -295,13 +342,14 @@ any rendered-markup change beyond what D2/D6/D9 require.
    returns **nothing**. (The suppressions are multi-line `#[expect(` with the
    lint on the following line, so a bare `rg 'expect\('` would match
    `.expect("…")` calls and never the lint names — it cannot test this.)
-2. **(a) Mechanical:** the D1 blanket string ("props are stored by the framework
-   and must be owned") appears nowhere in `web/src/`. **(b) Editorial:** every
-   surviving `#[expect(clippy::needless_pass_by_value)]` names a concrete
-   site-specific mechanism in the shape of D3's "owns in order to lend", and
-   each is listed with its justification and **explicitly approved before
-   landing** per `CONTRIBUTING.md:112-116` — a reworded reason counts as new
-   text.
+2. **No `needless_pass_by_value` suppression survives at all.**
+   `rg -n 'needless_pass_by_value' web/src/` returns nothing, and the wasm pass
+   with `-- --force-warn clippy::needless_pass_by_value` reports zero warnings.
+   (Both halves matter: the first proves no suppression, the second proves
+   nothing is merely hidden by one.) Strengthened from an earlier draft that
+   only required surviving suppressions to carry site-specific reasons — #826's
+   edition move made the stronger form reachable, so the weaker one would now
+   under-ask.
 3. With both `#[expect(clippy::too_many_lines)]` deleted, the **wasm** clippy
    pass
    (`cargo clippy -p web -p client -p csr --features csr --target wasm32-unknown-unknown`)
