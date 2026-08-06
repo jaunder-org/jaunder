@@ -80,6 +80,19 @@ impl WebError {
 /// The failing fn is identified by the enclosing request span's `uri`
 /// (`server/src/observability.rs`), not by a span name — ADR-0011's "identity comes free
 /// from span context" argument does not hold this early.
+///
+/// **PII: this puts a deserializer's message into `error.source`, which is exported to
+/// trace backends.** It is safe only because a wire-arg newtype's `FromStr::Err`
+/// message never quotes the offending value — the `str_newtype` bridge is
+/// `FromStr(..).map_err(de::Error::custom)`, and those errors interpolate constants
+/// only (e.g. `"password must be at least {MIN_LENGTH} characters"`). ADR-0011 §PII
+/// states that guarantee conditionally: "PII-free **as long as** constructors keep raw
+/// user input out of error messages". Nothing enforces it yet — #846 proposes the gate.
+/// If you add a wire-arg newtype whose error echoes its input, it lands here.
+///
+/// Note the level: `ErrorClass::Client` logs at DEBUG, so under a production INFO
+/// filter only the `jaunder.errors` counter survives — the event itself is a
+/// debug-time signal, not an always-on audit trail.
 #[cfg(feature = "server")]
 fn emit_arg_decode_failure(value: &ServerFnErrorErr) {
     if !matches!(
@@ -538,30 +551,19 @@ mod tests {
         );
     }
 
-    /// The ADR-0011 span must be in scope when the boundary logs a failure.
-    ///
-    /// This was the premise of #714, which deleted the `boundary!` label: it was
-    /// redundant *because* the enclosing `#[tracing::instrument]` span already names
-    /// the failing fn on the very same event — and more precisely, since a bare
-    /// ident like `create` is ambiguous across verticals. If this ever fails, that
-    /// premise is gone and the deletion cost observability.
-    ///
-    /// Deliberately uses a hand-written `#[tracing::instrument]` rather than
-    /// `#[macros::server]`: the property under test is `tracing`'s, not the macro's,
-    /// and this fixture must remain valid wherever it lives.
+    /// The recorded events, one `Vec<(field, value)>` each, shared with the test that
+    /// installed the layer.
+    #[cfg(feature = "server")]
+    type RecordedEvents = std::sync::Arc<std::sync::Mutex<Vec<Vec<(String, String)>>>>;
+
     /// Records `(field, value)` pairs for every event, so a test can assert on the
     /// boundary event's structured fields rather than its rendered text.
     ///
     /// Distinct from `ScopeRecorder` below, which captures span *scopes*: the decode
     /// path has no enclosing `web.<vertical>.<ident>` span to capture (#822), so what
     /// matters there is the fields.
-    /// One `Vec<(field, value)>` per recorded event, shared with the test that
-    /// installed the layer.
     #[cfg(feature = "server")]
-    type RecordedFields = std::sync::Arc<std::sync::Mutex<Vec<Vec<(String, String)>>>>;
-
-    #[cfg(feature = "server")]
-    struct FieldRecorder(RecordedFields);
+    struct FieldRecorder(RecordedEvents);
 
     #[cfg(feature = "server")]
     impl<S: tracing::Subscriber> tracing_subscriber::layer::Layer<S> for FieldRecorder {
@@ -594,7 +596,7 @@ mod tests {
     fn arg_decode_failure_emits_a_boundary_event() {
         use tracing_subscriber::prelude::*;
 
-        let events: RecordedFields = std::sync::Arc::default();
+        let events: RecordedEvents = std::sync::Arc::default();
         let subscriber =
             tracing_subscriber::registry().with(FieldRecorder(std::sync::Arc::clone(&events)));
         let _guard = tracing::subscriber::set_default(subscriber);
@@ -607,7 +609,24 @@ mod tests {
         assert!(matches!(error, WebError::ServerFunction { .. }));
 
         let recorded = events.lock().expect("field recorder mutex").clone();
-        let fields: Vec<(String, String)> = recorded.into_iter().flatten().collect();
+        // Select the boundary event by name rather than flattening every recorded
+        // event together: a flattened union could satisfy one field from an unrelated
+        // event and still pass. (There *is* another event here — the metrics layer
+        // emits a `NoopMeterProvider` warning under test, which is incidental
+        // confirmation that the `metrics::error` counter path really is reached.)
+        let mut boundary = recorded.iter().filter(|fields| {
+            fields
+                .iter()
+                .any(|(f, v)| f == "message" && v.contains("server function failed"))
+        });
+        let fields = boundary
+            .next()
+            .unwrap_or_else(|| panic!("no boundary event recorded; got {recorded:?}"))
+            .clone();
+        assert!(
+            boundary.next().is_none(),
+            "expected exactly one boundary event; got {recorded:?}"
+        );
         let get = |name: &str| {
             fields
                 .iter()
@@ -649,7 +668,7 @@ mod tests {
     fn non_decode_server_fn_errors_emit_nothing() {
         use tracing_subscriber::prelude::*;
 
-        let events: RecordedFields = std::sync::Arc::default();
+        let events: RecordedEvents = std::sync::Arc::default();
         let subscriber =
             tracing_subscriber::registry().with(FieldRecorder(std::sync::Arc::clone(&events)));
         let _guard = tracing::subscriber::set_default(subscriber);
@@ -663,6 +682,20 @@ mod tests {
         );
     }
 
+    /// The ADR-0011 span must be in scope when the boundary logs a failure.
+    ///
+    /// This was the premise of #714, which deleted the `boundary!` label: it was
+    /// redundant *because* the enclosing `#[tracing::instrument]` span already names
+    /// the failing fn on the very same event — and more precisely, since a bare
+    /// ident like `create` is ambiguous across verticals. If this ever fails, that
+    /// premise is gone and the deletion cost observability.
+    ///
+    /// Deliberately uses a hand-written `#[tracing::instrument]` rather than
+    /// `#[macros::server]`: the property under test is `tracing`'s, not the macro's,
+    /// and this fixture must remain valid wherever it lives.
+    ///
+    /// Note the decode path (#822) deliberately has no such span — see
+    /// `emit_arg_decode_failure`.
     #[cfg(feature = "server")]
     #[tokio::test]
     async fn boundary_failure_event_carries_the_enclosing_instrument_span() {
