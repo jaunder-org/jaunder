@@ -1,7 +1,7 @@
 # Plan — #301: eliminate the web view-component lint suppressions
 
 Spec:
-[`docs/superpowers/specs/2026-08-04-issue-301-web-lint-suppressions.md`](../specs/2026-08-04-issue-301-web-lint-suppressions.md)
+[`docs/archive/2026-08-06-issue-301-web-lint-suppressions-spec.md`](2026-08-06-issue-301-web-lint-suppressions-spec.md)
 Issue: [#301](https://github.com/jaunder-org/jaunder/issues/301) Branch:
 `worktree-issue-301-web-lint-suppressions` Fork-point tag: `wt-base-issue-301`
 
