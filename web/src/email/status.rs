@@ -6,6 +6,7 @@ use common::email::Email;
 use common::token::RawToken;
 
 /// Formats the account's current email-verification status for display.
+#[must_use]
 pub fn email_status_line(email: Option<&Email>, verified: bool) -> String {
     match (email, verified) {
         (Some(e), true) => format!("{e} (verified)"),

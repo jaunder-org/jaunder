@@ -35,6 +35,7 @@ pub struct PermalinkRoute {
 /// guard instead of one per segment (#306). The modes are: a segment that is not a
 /// `~username`, or one whose username won't parse; an absent, non-numeric, or
 /// impossible date (e.g. month 13); and a slug that won't parse.
+#[must_use]
 pub fn parse_permalink_route(
     username: Option<&str>,
     year: Option<&str>,

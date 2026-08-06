@@ -59,7 +59,7 @@ pub fn HomePage() -> impl IntoView {
     let masthead = super::render::render_masthead().into_string();
 
     view! {
-        <FeedDiscovery surface=FeedSurface::Site />
+        <FeedDiscovery surface=&FeedSurface::Site />
         // The masthead goes in the gate's `children` slot, which renders in the
         // loading and rows arms but not over an error — preserving today's shape,
         // where the error branch replaced masthead + rows together. The gate keeps

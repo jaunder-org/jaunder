@@ -9,6 +9,7 @@ use storage::{PostRecord, PostTag};
 /// Build the listing row for a **published** post. `RenderedPost::published_at` is
 /// optional, so the bail below — not the type — is what keeps a draft out of a public
 /// timeline; `listing::page_from_rows` drops the `None` (see the guard test).
+#[must_use]
 pub fn rendered_post(post: PostRecord, viewer_user_id: Option<UserId>) -> Option<RenderedPost> {
     let published_at = post.published_at?;
     let permalink = post.permalink();

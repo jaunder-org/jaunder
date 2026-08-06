@@ -65,6 +65,7 @@ impl TagInputState {
     /// Apply a text-field change: mirror the value and reset the error/selection.
     /// Returns `Some((prefix, tick))` when a debounced suggestion fetch should be
     /// scheduled for a non-empty prefix, or `None` when the field is now empty.
+    #[must_use]
     pub fn begin_input(self, value: &str) -> Option<(String, u64)> {
         self.input_text.set(value.to_owned());
         self.error.set(None);
@@ -89,6 +90,7 @@ impl TagInputState {
     /// (Tab passes through — no `prevent_default` — when the field is empty);
     /// `Backspace` on an empty field removes the last chip; `ArrowUp`/`ArrowDown`
     /// move the selection; `Escape` closes the dropdown.
+    #[must_use]
     pub fn handle_key(self, key: &str) -> bool {
         match key {
             "Enter" | "Tab" => {
@@ -164,15 +166,24 @@ mod tests {
                 .suggestions
                 .set(vec![summary("rust"), summary("leptos")]);
 
+            // Every arrow keydown prevents default, including at both clamp
+            // boundaries — asserted at each step rather than discarded, so the
+            // return value is pinned wherever it is produced.
             assert!(state.handle_key("ArrowDown"), "ArrowDown prevents default");
             assert_eq!(state.selected_idx.get(), Some(0));
-            state.handle_key("ArrowDown");
+            assert!(state.handle_key("ArrowDown"), "ArrowDown prevents default");
             assert_eq!(state.selected_idx.get(), Some(1));
-            state.handle_key("ArrowDown");
+            assert!(
+                state.handle_key("ArrowDown"),
+                "a clamped ArrowDown still prevents default"
+            );
             assert_eq!(state.selected_idx.get(), Some(1), "clamps at the last row");
-            state.handle_key("ArrowUp");
+            assert!(state.handle_key("ArrowUp"), "ArrowUp prevents default");
             assert_eq!(state.selected_idx.get(), Some(0));
-            state.handle_key("ArrowUp");
+            assert!(
+                state.handle_key("ArrowUp"),
+                "ArrowUp past the first row still prevents default"
+            );
             assert_eq!(state.selected_idx.get(), None, "clears past the first row");
         });
     }

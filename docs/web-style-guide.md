@@ -121,8 +121,8 @@ button).
 
 Always reach for an existing shared helper before writing a new layout primitive
 — leaf primitives live in their own **top-level modules**
-(`web/src/{avatar,icon,taglist,topbar}/`, exposing `Avatar`, `Icon`, `TagList`,
-`Topbar`); the rest are co-located in their owning verticals (ADR-0070):
+(`web/src/{avatar,icon,topbar}/`, exposing `Avatar`, `Icon`, `Topbar`); the rest
+are co-located in their owning verticals (ADR-0070):
 
 | Helper                            | Purpose                                           |
 | --------------------------------- | ------------------------------------------------- |
@@ -146,9 +146,50 @@ For list views, the available CSS primitives are:
 
 If you find yourself copying a layout block (e.g. a draft row, a toolbar) into a
 second place, lift it into a shared leaf module — a top-level
-`web/src/<widget>/` directory following the `avatar`/`icon`/`taglist`/`topbar`
-shape: `markup.rs` for any pure (host-tested) `render()` twin, wasm-only
-`component.rs` for the `#[component]`.
+`web/src/<widget>/` directory following the `avatar`/`icon`/`topbar` shape:
+`markup.rs` for any pure (host-tested) `render()` twin, wasm-only `component.rs`
+for the `#[component]`.
+
+A leaf need not have both halves. `taglist/` is pure `markup.rs` only — its
+chips are injected via `inner_html` by the projector and the CSR client alike,
+so there is one renderer and no twin to keep coincident.
+
+### Read-only props take a reference
+
+A prop the component only **reads** — one that never reaches the view itself,
+only derived owned data does — takes a reference:
+
+```rust
+#[component]
+pub fn Avatar<'a>(name: &'a Username, #[prop(default = 38)] size: u32)
+    -> impl IntoView + use<>
+```
+
+`use<>` is precise capturing (ADR-0104 §2): the returned view captures no
+lifetime, which is what lets a borrowing component be used inside a **stored**
+view such as a `Suspend` body, where a captured lifetime would hit the `'static`
+requirement. It is not optional here — without it the prop's lifetime is
+captured and those call sites stop compiling.
+
+This is worth doing rather than taking the value: it drops a `.clone()` at every
+call site that already owns its data. Worked examples: `Avatar`,
+`FeedDiscovery`, `RsdDiscovery`, `PostDisplay`, `PostCard` (#301).
+
+Three things that bite:
+
+- **Ownership has to terminate somewhere.** Converting one component pushes the
+  same `needless_pass_by_value` to its caller. Follow the chain to whoever
+  genuinely owns the data — for posts that is `TimelineRows`, which owns the
+  rows it iterates — or stop and take the value.
+- **An inline-constructed prop must be bound to a local first.**
+  `surface=&FeedSurface::Site` compiles; `surface=&FeedSurface::User { … }` does
+  not (E0716) — the temporary is dropped inside the `view!` expansion. Bind it,
+  then pass `&local`.
+- **A reference default needs a promotable constant.**
+  `#[prop(default = &TagContext::SiteWide)]` works because that expression is
+  static-promotable; an arbitrary constructor call is not.
+
+A prop whose value **does** reach the view stays owned — the view must own it.
 
 ## 7. CSS conventions
 
@@ -376,9 +417,12 @@ let state = list.patched(fetch_rows, move |rows| store.rows().patch(rows)); // S
   rows are matched _by_ that key, so its comparison never fires. It is there to
   compile.) See `docs/adr/0078-reactive-store-domain-newtype-fields.md`; the
   audiences vertical is the worked example. A newtype is not `IntoRender`, so
-  read it out at view sites — `.to_string()` when the row is borrowed,
-  `String::from(…)` to move it out of an owned row — as
-  `web/src/taglist/component.rs` already does for `TagLabel`.
+  read it out at view sites — `.to_string()` when the row is borrowed (as
+  `web/src/subscriptions/component.rs` does for `Username`), `String::from(…)`
+  to move it out of an owned row (as `uploaded_url_view` in
+  `web/src/media/component.rs` does for `RootRelativeUrl`, whose comment spells
+  out why the unwrap happens at the view site rather than the value being
+  carried around stringly).
 
 **Do not** reach for `Store` for a flat, read-only, or stateless list — one with
 no per-row identity that mutates and no nested state to keep (the audiences
