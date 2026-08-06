@@ -246,9 +246,8 @@ pub async fn app_password_create(
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?
         .ok_or_else(|| anyhow::anyhow!("no such user '{username}'"))?;
-    // No validation here: `label` arrives already validated from the clap boundary
-    // (#690). The `#325` chokepoint that used to re-parse it is gone, not relocated —
-    // the rule is now carried by the signature, so there is no step to keep.
+    // No validation here: the signature carries it. `SessionLabel` cannot be built from
+    // an invalid string, so there is nothing left to check and no step to remember.
     let token = state
         .sessions
         .create_session(user.user_id, label)
