@@ -24,3 +24,8 @@ Append-only. Newest last. One line per event.
   unviable, baseline green. Re-running the three.
 - 2026-08-06 — dropped `client` from discovery. All 42 mutants survived with 0
   caught: WASM-only crate, no host test reaches it. Noise, like postgres.
+- 2026-08-06 — the gate failed `tools-test` while discovery was running, then
+  passed the same check in 25s once discovery stopped. Cause: cargo-mutants
+  copies the tree per job into /tmp, a 16 GB tmpfs, ~2.4 GB each, beside a Nix
+  build. Fixed by pointing TMPDIR at the big disk and dropping to 2 jobs. Added
+  a rule: check `pgrep -af cargo-mutants` before believing a red gate.

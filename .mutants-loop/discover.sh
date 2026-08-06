@@ -14,6 +14,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$ROOT/.mutants-loop/out"
 LOG="$ROOT/.mutants-loop/discover.log"
 
+# cargo-mutants copies the whole source tree per job and builds it there. On the
+# default TMPDIR that is /tmp, a 16 GB tmpfs — four jobs at ~2.4 GB of build
+# artifacts each, running beside a Nix build, exhausted it and made the repo's
+# own gate fail a test that passes fine on its own. A red gate the loop cannot
+# explain is worse than a slow run: the rules tell it to revert and skip, so it
+# would throw away good work. Put the scratch trees on the big disk instead.
+export TMPDIR="${TMPDIR_MUTANTS:-$HOME/.cache/cargo-mutants-tmp}"
+mkdir -p "$TMPDIR"
+
 mkdir -p "$OUT"
 
 # Order: pure-logic crates first (best signal), UI crates last (most noise).
@@ -44,7 +53,7 @@ for pkg in $PACKAGES; do
   # their baseline and contribute nothing.
   cargo mutants \
     --package "$pkg" \
-    --jobs 4 \
+    --jobs 2 \
     --no-shuffle \
     --test-tool nextest \
     --output "$OUT/$pkg" \

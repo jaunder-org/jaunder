@@ -96,6 +96,13 @@ and all 42 of its mutants survived with nothing caught. Pure noise.
 - **Never leave the tree broken.** If the gate goes red and you cannot fix it in
   one try, undo your change (`git checkout -- <files>`), mark the item
   `skipped`, and move on. A clean tree matters more than a killed mutant.
+- **A red gate is not always your fault — check for contention first.** If the
+  gate fails a check you never touched (`tools-test`, `xtask-tests`, anything
+  outside the file you edited), see whether discovery is still running:
+  `pgrep -af cargo-mutants`. Discovery and the gate compete for disk and CPU,
+  and that has already produced one false failure. Wait for discovery to finish
+  and run the gate again **before** reverting anything. Reverting good work on a
+  spurious failure is the most expensive mistake available to you.
 - **Three strikes.** If a mutant resists three attempts, mark it `skipped` with
   a one-line reason. Do not keep going.
 - **Only add tests.** Do not change production code to make a mutant die. If the
