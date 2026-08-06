@@ -227,6 +227,20 @@ mod tests {
     }
 
     #[test]
+    fn backup_mode_labels_are_the_authored_ui_text() {
+        // `label` is the only hand-authored string on this enum — every other form
+        // derives from the variant name — so the exact admin `<select>` text is
+        // pinned. The non-empty assertion above admits any placeholder.
+        assert_eq!(BackupMode::Directory.label(), "Directory");
+        assert_eq!(BackupMode::Archive.label(), "Archive");
+        // The label is title-cased UI text, deliberately distinct from the
+        // snake_case wire token it sits beside in the `<option>`.
+        for m in [BackupMode::Directory, BackupMode::Archive] {
+            assert_ne!(m.label(), m.as_ref());
+        }
+    }
+
+    #[test]
     fn backup_mode_json_bytes_are_unchanged() {
         // This is the one enum whose serde `rename_all` was swapped for strum's
         // `serialize_all` (#746), and it crosses a `#[server]` boundary via
