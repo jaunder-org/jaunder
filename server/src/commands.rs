@@ -238,7 +238,7 @@ pub async fn cmd_user_create(
 pub async fn app_password_create(
     state: &storage::AppState,
     username: &Username,
-    label: &str,
+    label: &SessionLabel,
 ) -> anyhow::Result<RawToken> {
     let user = state
         .users
@@ -246,14 +246,12 @@ pub async fn app_password_create(
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?
         .ok_or_else(|| anyhow::anyhow!("no such user '{username}'"))?;
-    // Validate the CLI-supplied label at the `SessionLabel` chokepoint (#325) —
-    // the same non-empty/≤255 rule the web wire enforces.
-    let label: SessionLabel = label
-        .parse()
-        .map_err(|e| anyhow::anyhow!("invalid label: {e}"))?;
+    // No validation here: `label` arrives already validated from the clap boundary
+    // (#690). The `#325` chokepoint that used to re-parse it is gone, not relocated —
+    // the rule is now carried by the signature, so there is no step to keep.
     let token = state
         .sessions
-        .create_session(user.user_id, &label)
+        .create_session(user.user_id, label)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(token)
@@ -267,7 +265,7 @@ pub async fn app_password_create(
 pub async fn cmd_app_password_create(
     storage: &StorageArgs,
     username: &Username,
-    label: &str,
+    label: &SessionLabel,
 ) -> anyhow::Result<()> {
     let state = open_existing_database(&storage.db)
         .await

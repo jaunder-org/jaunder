@@ -5,11 +5,12 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
+use clap::Parser as _;
 use common::config_key::SiteConfigKey;
 use common::password::Password;
-use common::test_support::parse_invite_ttl_hours;
+use common::test_support::{parse_invite_ttl_hours, parse_session_label};
 use common::username::Username;
-use jaunder::cli::StorageArgs;
+use jaunder::cli::{Cli, Commands, StorageArgs};
 use jaunder::commands::{
     cmd_app_password_create, cmd_backup, cmd_init, cmd_restore, cmd_serve, cmd_smtp_test,
     cmd_user_create, cmd_user_invite, prepare_server,
@@ -227,9 +228,49 @@ async fn cmd_app_password_create_succeeds_for_existing_user(#[case] backend: Bac
         .await
         .unwrap();
 
-    cmd_app_password_create(&args, &username, "ert")
+    cmd_app_password_create(&args, &username, &parse_session_label("ert"))
         .await
         .expect("minting an app password for an existing user should succeed");
+}
+
+/// The `--label` default is applied by **clap**, so nothing below
+/// `cmd_app_password_create` can observe it — the function only ever sees a label that
+/// someone already chose. Drive argv through the parser, hand the parsed label to the
+/// command, and read the session back: that is what pins the default end to end, as
+/// opposed to merely asserting the literal parses (`cli.rs`' test does that).
+#[apply(backends)]
+#[tokio::test]
+async fn app_password_create_records_the_default_label(#[case] backend: Backend) {
+    let base = TempDir::new().unwrap();
+    let (args, _pg) = storage_args(backend, &base).await;
+    cmd_init(&args, false).await.unwrap();
+    let username: Username = "alice".parse().unwrap();
+    let password: Password = "password123".parse().unwrap();
+    cmd_user_create(&args, &username, Some(password), None, false)
+        .await
+        .unwrap();
+
+    // No `--label`: clap supplies the default.
+    let cli = Cli::try_parse_from(["jaunder", "app-password-create", "--username", "alice"])
+        .expect("app-password-create must parse without --label");
+    let Commands::AppPasswordCreate { label, .. } = cli.command.expect("subcommand") else {
+        unreachable!("parse yields Commands::AppPasswordCreate")
+    };
+
+    cmd_app_password_create(&args, &username, &label)
+        .await
+        .expect("minting with the default label should succeed");
+
+    let state = open_existing_database(&args.db).await.expect("reopen");
+    let user = state
+        .users
+        .get_user_by_username(&username)
+        .await
+        .unwrap()
+        .expect("alice exists");
+    let sessions = state.sessions.list_sessions(user.user_id).await.unwrap();
+    assert_eq!(sessions.len(), 1, "one app password was minted");
+    assert_eq!(sessions[0].label, "app-password");
 }
 
 #[apply(backends)]
@@ -241,7 +282,7 @@ async fn cmd_app_password_create_errors_for_unknown_user(#[case] backend: Backen
     let username: Username = "ghost".parse().unwrap();
 
     assert!(
-        cmd_app_password_create(&args, &username, "ert")
+        cmd_app_password_create(&args, &username, &parse_session_label("ert"))
             .await
             .is_err()
     );

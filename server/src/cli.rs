@@ -11,6 +11,7 @@ use common::display_name::DisplayName;
 use common::invite::InviteTtlHours;
 use common::pg_identifier::{InvalidPgDatabaseName, InvalidPgRoleName, PgDatabaseName, PgRoleName};
 use common::pg_role_password::PgRolePassword;
+use common::session_label::SessionLabel;
 use common::username::Username;
 use storage::DbConnectOptions;
 
@@ -314,8 +315,11 @@ pub enum Commands {
         username: Username,
 
         /// Label recorded with the session (shown in the sessions UI).
+        // Typed so the rule is enforced here, at parse time, rather than after the
+        // database is opened (#690). `default_value` goes through the same value parser,
+        // so the default is validated by the rule it defaults into.
         #[arg(long, default_value = "app-password")]
-        label: String,
+        label: SessionLabel,
     },
 
     /// Generate an invite code.
@@ -431,6 +435,7 @@ pub enum SiteConfigAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::session_label::MAX_SESSION_LABEL_CHARS;
     use common::test_support::{parse_display_name, parse_invite_ttl_hours, with_env};
 
     fn parse(args: &[&str]) -> Cli {
@@ -814,6 +819,52 @@ mod tests {
             // any handler runs, rather than surfacing it as a later runtime error.
             let result = Cli::try_parse_from(["jaunder", "user-create", "--username", "bad name"]);
             assert!(result.is_err());
+        });
+    }
+
+    // --- app-password-create ---
+
+    #[test]
+    fn app_password_create_malformed_label_is_clap_error() {
+        with_env(|_env| {
+            // The `SessionLabel` value parser rejects at parse time, before any handler
+            // opens the database. Until #690 this was a `String` and the rejection lived
+            // in `app_password_create`, one call *after* `open_existing_database` — so a
+            // typo'd label paid a database connection before being told it was invalid.
+            let over = "a".repeat(MAX_SESSION_LABEL_CHARS + 1);
+            for bad in ["", over.as_str()] {
+                let result = Cli::try_parse_from([
+                    "jaunder",
+                    "app-password-create",
+                    "--username",
+                    "alice",
+                    "--label",
+                    bad,
+                ]);
+                let Err(err) = result else {
+                    unreachable!("an invalid label is rejected at parse")
+                };
+                // The error must *name the constraint*: "invalid value" alone leaves an
+                // operator with no idea what the rule is.
+                assert!(
+                    err.to_string().contains("non-empty and at most"),
+                    "the clap error must name the constraint; got: {err}"
+                );
+            }
+        });
+    }
+
+    /// The `default_value` literal is itself parsed by `SessionLabel`, so a typo in it
+    /// would otherwise fail only at runtime, on every invocation that omits `--label`.
+    #[test]
+    fn app_password_create_label_defaults_to_app_password() {
+        with_env(|_env| {
+            let cli = parse(&["app-password-create", "--username", "alice"]);
+            let Commands::AppPasswordCreate { label, .. } = cli.command.expect("subcommand")
+            else {
+                unreachable!("parse yields Commands::AppPasswordCreate")
+            };
+            assert_eq!(label, "app-password");
         });
     }
 
