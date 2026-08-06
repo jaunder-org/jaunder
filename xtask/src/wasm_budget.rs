@@ -11,6 +11,12 @@ use serde::Serialize;
 
 /// Raw bytes of `pkg/jaunder.wasm` achieved by #836, via `wasm-opt -Oz`.
 /// Down from 5 350 591 before the optimisation pass existed.
+///
+/// `validate` reports observed size as a drift against this. **A drift of a few
+/// bytes is build noise, not erosion**: the artifact is not bit-reproducible
+/// across builds — a docs-only commit was observed to move it by 13 bytes. Read
+/// the drift for its order of magnitude, not its sign; kilobytes mean something
+/// changed, single bytes do not.
 pub const WASM_RAW_ACHIEVED_BYTES: u64 = 2_267_063;
 
 /// The ceiling `cargo xtask validate` enforces.
