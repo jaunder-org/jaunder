@@ -64,10 +64,47 @@ impl WebError {
     }
 }
 
+/// Emits the boundary telemetry for a failed `#[server]` **argument decode**.
+///
+/// Arg deserialization happens in leptos's `from_req`, *before* the generated
+/// `__server_<ident>` fn runs — so neither the `web.<vertical>.<ident>` span nor
+/// [`server_boundary`] is reached, and a malformed request would otherwise leave no
+/// trace at all (#822). This restores the standard boundary event and error metric for
+/// that path, reusing the existing vocabulary: `Validation`/`Client`, plus a
+/// `stage = decode` context entry distinguishing it from an in-body validation failure.
+///
+/// Only arg-decode variants emit. `ServerError`/`MiddlewareError`/`Response` are
+/// server-side too, but they arise *downstream* of decode and are already covered by the
+/// in-body boundary; the predicate here is "this request's arguments were malformed".
+///
+/// The failing fn is identified by the enclosing request span's `uri`
+/// (`server/src/observability.rs`), not by a span name — ADR-0011's "identity comes free
+/// from span context" argument does not hold this early.
+#[cfg(feature = "server")]
+fn emit_arg_decode_failure(value: &ServerFnErrorErr) {
+    if !matches!(
+        value,
+        ServerFnErrorErr::Args(_)
+            | ServerFnErrorErr::MissingArg(_)
+            | ServerFnErrorErr::Deserialization(_)
+    ) {
+        return;
+    }
+    // `validation_source`, not `validation`: the latter carries no source and would emit
+    // an empty `error.source`, which is the whole diagnostic payload. `ServerFnErrorErr`
+    // is `Clone + thiserror::Error`, so it satisfies the source bound directly.
+    InternalError::validation_source("invalid request arguments", value.clone())
+        .with_context("stage", "decode")
+        .emit_boundary_failure();
+}
+
 impl FromServerFnError for WebError {
     type Encoder = JsonEncoding;
 
     fn from_server_fn_error(value: ServerFnErrorErr) -> Self {
+        // Telemetry only — the returned wire error is unchanged.
+        #[cfg(feature = "server")]
+        emit_arg_decode_failure(&value);
         Self::server_function(value.to_string())
     }
 }
@@ -512,6 +549,120 @@ mod tests {
     /// Deliberately uses a hand-written `#[tracing::instrument]` rather than
     /// `#[macros::server]`: the property under test is `tracing`'s, not the macro's,
     /// and this fixture must remain valid wherever it lives.
+    /// Records `(field, value)` pairs for every event, so a test can assert on the
+    /// boundary event's structured fields rather than its rendered text.
+    ///
+    /// Distinct from `ScopeRecorder` below, which captures span *scopes*: the decode
+    /// path has no enclosing `web.<vertical>.<ident>` span to capture (#822), so what
+    /// matters there is the fields.
+    /// One `Vec<(field, value)>` per recorded event, shared with the test that
+    /// installed the layer.
+    #[cfg(feature = "server")]
+    type RecordedFields = std::sync::Arc<std::sync::Mutex<Vec<Vec<(String, String)>>>>;
+
+    #[cfg(feature = "server")]
+    struct FieldRecorder(RecordedFields);
+
+    #[cfg(feature = "server")]
+    impl<S: tracing::Subscriber> tracing_subscriber::layer::Layer<S> for FieldRecorder {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            struct Visitor(Vec<(String, String)>);
+            impl tracing::field::Visit for Visitor {
+                fn record_debug(
+                    &mut self,
+                    field: &tracing::field::Field,
+                    value: &dyn std::fmt::Debug,
+                ) {
+                    self.0
+                        .push((field.name().to_string(), format!("{value:?}")));
+                }
+            }
+            let mut visitor = Visitor(Vec::new());
+            event.record(&mut visitor);
+            self.0.lock().expect("field recorder mutex").push(visitor.0);
+        }
+    }
+
+    /// Arg decode happens in leptos's `from_req`, before the instrumented body — so
+    /// without an explicit emit a malformed request leaves no trace at all (#822).
+    #[cfg(feature = "server")]
+    #[test]
+    fn arg_decode_failure_emits_a_boundary_event() {
+        use tracing_subscriber::prelude::*;
+
+        let events: RecordedFields = std::sync::Arc::default();
+        let subscriber =
+            tracing_subscriber::registry().with(FieldRecorder(std::sync::Arc::clone(&events)));
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let error = WebError::from_server_fn_error(ServerFnErrorErr::Args(
+            "invalid value for `password`: password must be at least 8 characters".into(),
+        ));
+
+        // The response is unchanged: the telemetry is purely additive.
+        assert!(matches!(error, WebError::ServerFunction { .. }));
+
+        let recorded = events.lock().expect("field recorder mutex").clone();
+        let fields: Vec<(String, String)> = recorded.into_iter().flatten().collect();
+        let get = |name: &str| {
+            fields
+                .iter()
+                .find(|(f, _)| f == name)
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default()
+        };
+
+        assert!(
+            get("error.kind").contains("Validation"),
+            "expected a Validation-kind boundary event; got {fields:?}"
+        );
+        assert!(get("error.class").contains("Client"), "fields: {fields:?}");
+        // `stage = decode` is what separates this from an in-body validation failure.
+        assert!(
+            get("error.context").contains("decode"),
+            "fields: {fields:?}"
+        );
+        // The deserializer's message reaches `error.source` — the diagnostic payload.
+        assert!(
+            get("error.source").contains("at least 8 characters"),
+            "fields: {fields:?}"
+        );
+        // Pin the event's identity so a refactor cannot quietly emit a different one.
+        assert!(
+            get("message").contains("server function failed"),
+            "fields: {fields:?}"
+        );
+        assert!(
+            get("error.public").contains("invalid request arguments"),
+            "fields: {fields:?}"
+        );
+    }
+
+    /// The predicate is "this request's arguments were malformed" — not "this variant
+    /// happens on the server". A transport failure must stay silent (#822).
+    #[cfg(feature = "server")]
+    #[test]
+    fn non_decode_server_fn_errors_emit_nothing() {
+        use tracing_subscriber::prelude::*;
+
+        let events: RecordedFields = std::sync::Arc::default();
+        let subscriber =
+            tracing_subscriber::registry().with(FieldRecorder(std::sync::Arc::clone(&events)));
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let _ =
+            WebError::from_server_fn_error(ServerFnErrorErr::Request("connection reset".into()));
+
+        assert!(
+            events.lock().expect("field recorder mutex").is_empty(),
+            "a non-decode variant must not emit a boundary event"
+        );
+    }
+
     #[cfg(feature = "server")]
     #[tokio::test]
     async fn boundary_failure_event_carries_the_enclosing_instrument_span() {
