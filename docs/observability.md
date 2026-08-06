@@ -638,8 +638,16 @@ agreeing across cold and warm and across both settings sets.
 
 **Disposition — actionable, not intrinsic.** SpiderMonkey's compile _throughput_
 is not ours; the **volume** it must compile is: 5.1 MiB raw
-(`cargo xtask audit-wasm`), ~88 ms of firefox compile per MiB. Levers and the
-unverified streaming question are #836.
+(`cargo xtask audit-wasm`), ~88 ms of firefox compile per MiB.
+
+Both follow-ups have now been taken up. The streaming question was **answered
+and the claim withdrawn** — see
+[`site.serve`](#siteserve--what-the-server-actually-served-818) and #840; three
+candidate explanations were tested and all three failed, so the
+fetch/instantiate split is recorded as unexplained. The volume lever was
+exercised in #836 — see [#836](#836--shrinking-the-wasm-bundle-2026-08-06)
+below, which cut the bundle 57.6% and, in doing so, found that most of the
+removed bytes were never compiler input at all.
 
 **This redirects #801.** #801 attacks CSR mount cost generally; the Rust mount
 path is 1.7–12.7 ms. Sizing that work from `commit_to_mount` without the
@@ -707,6 +715,138 @@ cargo xtask traces boot-phases <files…>  # per-(source,project,warmth) medians
 `traces boot-phases` reports medians; the mean-based signed shares above were
 aggregated over the same JSONL. Corpus:
 `~/measurements/jaunder/issue-818-firefox-boot-phases/`.
+
+## #836 — shrinking the wasm bundle (2026-08-06)
+
+Acting on #818's lever: firefox's wasm compile+instantiate is 80.5–87.6% of the
+boot gap, at ~88 ms per MiB of raw wasm, so raw bundle size is a direct handle
+on the e2e gate's long pole.
+
+**Raw bytes are the target, not compressed.** Brotli governs transfer; the wasm
+compiler's input is the decompressed artifact. This is the whole reason the
+budget below measures raw — see the size-budget ADR.
+
+### Attribution first, and why it mattered
+
+`cargo xtask audit-wasm --breakdown` was built before anything was changed. It
+reports every wasm section's on-disk span — asserted to sum exactly to the file
+size — then a per-crate rollup within the code section with an explicit
+`<unattributed>` bucket.
+
+It measures `.#csrWasm` (pre-wasm-bindgen, unstripped), **not** the shipped
+bundle, because attribution reads the name section and `wasm-opt` strips that
+from what ships. Its total is therefore not the download weight, and the tool
+says so in its own output.
+
+Measuring first overturned the plan. Four `common` dependency clusters had been
+scheduled for a move to `host` on the theory that they were bulking up the
+bundle:
+
+| cluster     | deps                                               | code bytes |
+| ----------- | -------------------------------------------------- | ---------- |
+| syndication | `rss`, `atom_syndication`, `quick-xml`             | **0**      |
+| markup      | `orgize`, `pulldown-cmark`, `ammonia`, `html5ever` | **0**      |
+| etag        | `sha2`                                             | **0**      |
+| kdf         | `argon2`                                           | **0**      |
+
+**All four were already gone.** LTO plus `opt-level = 'z'` had eliminated every
+one; `common` itself contributes 27 KiB of a 2.6 MiB code section. The largest
+and riskiest part of the plan would have bought nothing. Filed as #855 on
+layering grounds, which stand independently of bytes; the structural version is
+#847.
+
+Where the code actually is (code section, 2.6 MiB):
+
+| crate            | bytes   | share |
+| ---------------- | ------- | ----- |
+| `reactive_graph` | 683 KiB | 25.7% |
+| `tachys`         | 419 KiB | 15.8% |
+| `core`           | 349 KiB | 13.1% |
+| `alloc`          | 157 KiB | 5.9%  |
+| `serde_json`     | 145 KiB | 5.5%  |
+| `<unattributed>` | 120 KiB | 4.5%  |
+| `web`            | 111 KiB | 4.2%  |
+
+The Leptos reactive runtime is the payload. `serde_json` is the only
+application-level entry in the top ten — filed as #856.
+
+**One caveat on the tool itself.** `<unattributed>` first measured 1.0 MiB
+(40%). That was a defect in the attribution, not a property of the bundle:
+trait-impl methods demangle to `<Self as Trait>::method`, which carries no crate
+in leading position, and they are among the commonest symbols in any Rust
+binary. Attributing them to the self type's crate (falling back to the trait's
+for primitive self types) dropped the bucket to 120 KiB. The figures above are
+post-fix.
+
+### What actually worked: `wasm-opt`
+
+The build had **never** run an optimisation pass. Adding one to
+`devtool csr-bundle` — the single implementation shared by the host build and
+the Nix derivation — cut the shipped `pkg/jaunder.wasm`:
+
+| build     | raw bytes     | vs none    | brotli  |
+| --------- | ------------- | ---------- | ------- |
+| none      | 5 350 591     | —          | 860 KiB |
+| `-O2`     | 2 390 164     | −55.3%     | 606 KiB |
+| `-Os`     | 2 357 119     | −55.9%     | 599 KiB |
+| **`-Oz`** | **2 267 063** | **−57.6%** | 603 KiB |
+
+`-Oz` is pinned. Verified the optimised bundle still runs: e2e sqlite/firefox,
+137 passed, 0 flaky.
+
+Target features are passed explicitly as `(rustc cfg, binaryen flag)` pairs
+because **the two vocabularies diverge** — rustc reports `nontrapping-fptoint`,
+binaryen calls it `nontrapping-float-to-int` and rejects the rustc spelling with
+`Unknown option`, failing the build outright rather than under-optimising
+quietly.
+
+### The saving is mostly metadata, and that matters
+
+Splitting the two effects, by building `-Oz -g` (optimised, name section kept):
+
+| arm | build    | raw bytes | saved vs previous |
+| --- | -------- | --------- | ----------------- |
+| A   | none     | 5 350 591 | —                 |
+| B   | `-Oz -g` | 3 614 222 | 1 736 369 (code)  |
+| C   | `-Oz`    | 2 267 063 | 1 347 159 (names) |
+
+So **1.28 MiB of the 3.08 MiB saved is the wasm name section** — a custom
+section engines skip rather than compile. Applying #818's 88 ms/MiB to the whole
+delta would predict ~259 ms of firefox compile saved, but that figure assumes
+every removed byte was compiler input, and 44% of them were not.
+
+**Pre-registered prediction, written before any capture is run** (the #840
+lesson: a claim inferred from shape is not a tested claim):
+
+| contrast | bytes removed | naive 88 ms/MiB prediction | what we expect                                          |
+| -------- | ------------- | -------------------------- | ------------------------------------------------------- |
+| A→B      | 1 736 369     | ~146 ms                    | roughly holds — this is real code                       |
+| B→C      | 1 347 159     | ~113 ms                    | **near zero** — engines do not compile the name section |
+| A→C      | 3 083 528     | ~259 ms                    | ~146 ms, i.e. the A→B figure                            |
+
+If B→C comes in near zero, the honest headline is that #836 cut **download
+weight** by 57.6% and **compile time** by rather less. That would also mean the
+88 ms/MiB constant from #818 is only valid over compiled bytes, and should be
+restated that way for whoever uses it next.
+
+Capture protocol is #818's, unchanged: single-worker sqlite × both browsers,
+three runs per arm, distinct `e2eSalt` per run, quiesced host, arms interleaved
+rather than run in blocks.
+
+### The size budget
+
+`cargo xtask validate` now fails when raw `pkg/jaunder.wasm` exceeds
+`WASM_RAW_CEILING_BYTES` (2 340 000 — 3.2% over the achieved size). The headroom
+is bounded on both sides: it absorbs an innocent dependency bump, but sits
+_below_ what `-Os` and `-O2` produce, so a downgrade of the optimisation level
+fails the gate. `audit-wasm` also now errors outright if the shipped wasm
+carries a name section, guarding the 1.28 MiB strip.
+
+Rejected: `panic = "abort"`. `rustc --print cfg --target wasm32-unknown-unknown`
+already reports `panic="abort"`, so it buys zero bytes — and profiles are
+workspace-wide, so setting it would flip the _server's_ release build to abort,
+where a panicking tokio task would kill the process. Recorded in the root
+`Cargo.toml` at the profile someone would add it to.
 
 ## #792 — the per-test warmup A/B (findings, 2026-08-04)
 
