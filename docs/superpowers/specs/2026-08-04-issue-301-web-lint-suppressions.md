@@ -382,11 +382,21 @@ any rendered-markup change beyond what D2/D6/D9 require.
    in criterion 3 — since each compiles a different subset of the crate and a
    site can hide in any of them. No `#[must_use]` return is discarded with
    `let _ =`; call sites either assert the value or use it.
-6. `-A unfulfilled_lint_expectations` is gone from
-   `xtask/src/steps/static_checks.rs:96-97`, its comment at `:68-75`, the unit
-   test `wasm_clippy_lints_web_client_and_csr` (`:220-250`), `flake.nix:1096`
-   and its comment at `:1080`. `cargo nextest run` for xtask passes, and the
-   wasm pass is green without the flag.
+6. The `-A unfulfilled_lint_expectations` **flag** is gone from all five places:
+   the `static_checks.rs` arg vector, its explanatory comment, the
+   `wasm_clippy_lints_web_client_and_csr` unit test's expected vector, the
+   `flake.nix` arg, and that file's comment.
+   `cargo nextest run --manifest-path xtask/Cargo.toml wasm_clippy` passes
+   against the new vector, and the wasm pass is green under `-D warnings`
+   without the allow.
+
+   The lint's **name** may still appear in prose: both files keep a short note
+   recording that the allow was removed and why, so nobody re-adds it. The check
+   is therefore "no `-A unfulfilled_lint_expectations` in any arg vector", not
+   "the string is absent" — the same distinction criterion 4 draws for
+   `TagList`, but resolved the other way, because unlike a deleted type this
+   lint still exists and naming it is what makes the note useful.
+
 7. The four casts are resolved by integer formatting or checked conversion, not
    a wider suppression: `web/src/media/format.rs` (`format_bytes`), the
    storage-usage percentage (moved per D9), and both casts at
