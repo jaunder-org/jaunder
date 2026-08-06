@@ -664,13 +664,10 @@ pub fn derive_post_naming(
 /// Total on a [`PostBody`]: the type's invariant is *exactly* this search's
 /// predicate — at least one line is non-empty after trimming (#811).
 fn first_meaningful_line(body: &PostBody) -> String {
-    body.lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map_or_else(
-            || unreachable!("a PostBody always has a non-blank line"),
-            |line| line.chars().take(100).collect::<String>(),
-        )
+    let Some(line) = body.lines().map(str::trim).find(|line| !line.is_empty()) else {
+        unreachable!("a PostBody always has a non-blank line")
+    };
+    line.chars().take(100).collect()
 }
 
 fn extract_markdown_title(body: &str) -> Option<(String, String)> {
@@ -762,7 +759,11 @@ fn extract_org_title(body: &str) -> Option<(String, String)> {
 ///
 /// Returns [`InvalidPostBody`] when canonicalization consumes the whole body — a
 /// title-only post, whose sole content was the title source. See #811 decision 2.
-pub fn canonicalize_org_body(body: &PostBody) -> Result<PostBody, InvalidPostBody> {
+///
+/// Private on purpose: [`canonicalize_body`] is the crate's only door to body
+/// canonicalization (ADR-0102), so a new format extends that one match instead of
+/// giving callers a second per-format entry point.
+fn canonicalize_org_body(body: &PostBody) -> Result<PostBody, InvalidPostBody> {
     let mut kept: Vec<&str> = Vec::new();
     let mut in_header = true; // still scanning the leading blank/#+/title region
     let mut saw_title = false;

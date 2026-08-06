@@ -114,9 +114,17 @@ body; it is now a 400. This is a deliberate, user-visible behaviour change.
 
 ## Consequences
 
-- `derive_post_title` becomes total — no outer `Option` — because there is no
-  nothing-to-store case left to report. `PerformCreationError::EmptyPost` and
-  `PerformUpdateError::EmptyPost` retire from the service layer.
+- `derive_post_naming` (renamed — it has never derived only a title) becomes
+  total, losing its outer `Option`, because there is no nothing-to-store case
+  left for it to report.
+- **`PerformCreationError::EmptyPost` and `PerformUpdateError::EmptyPost`
+  survive, retargeted.** The emptiness gate leaves the _derive_ path, but
+  decision 5 gives both variants a new and live job: a title-only Org post whose
+  canonicalization consumes the body. Their messages changed accordingly — "post
+  body or title is required" became false the moment the type required a body —
+  and they are now reachable only through `canonicalize_body`. Do not read the
+  paragraph above as retiring them; an earlier draft of this ADR did, and was
+  wrong.
 - **Markdown bodies are normalized on write for the first time.** Stored bytes
   may differ from submitted bytes, so a body with leading blank lines or
   trailing whitespace gets a different content ETag and stops round-tripping

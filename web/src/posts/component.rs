@@ -532,9 +532,10 @@ pub fn PostCreateForm(
 
     // The one submit path, shared by both layouts, which differ only in whether the
     // author chose a slug and which button was pressed. It re-reads the body through
-    // `PostBody` rather than trusting the button's disabled state: the submit gate and
-    // the newtype apply the same rule (ADR-0065's one validation source), so a rejected
-    // parse means the button was reached without the gate and there is nothing to post.
+    // `PostBody` rather than trusting the button's disabled state: the buttons gate on
+    // the very same `parse::<PostBody>()` (ADR-0065's one validation source — the rule
+    // lives in the newtype and is never respelled here), so a rejected parse means the
+    // button was reached without the gate and there is nothing to post.
     let dispatch = move |publish: bool, slug_override: Option<Slug>| {
         let Ok(body) = body.get().parse::<PostBody>() else {
             return;
@@ -590,7 +591,7 @@ pub fn PostCreateForm(
                             name="publish"
                             value="false"
                             disabled=move || {
-                                body.get().trim().is_empty() || !summary_field.is_valid()
+                                body.get().parse::<PostBody>().is_err() || !summary_field.is_valid()
                             }
                             on:click=dispatch_save
                         >
@@ -602,7 +603,7 @@ pub fn PostCreateForm(
                             name="publish"
                             value="true"
                             disabled=move || {
-                                body.get().trim().is_empty() || !summary_field.is_valid()
+                                body.get().parse::<PostBody>().is_err() || !summary_field.is_valid()
                             }
                             on:click=dispatch_publish
                         >
@@ -710,7 +711,7 @@ pub fn PostCreateForm(
                             name="publish"
                             value="false"
                             prop:disabled=move || {
-                                body.get().trim().is_empty() || !slug_field.is_valid()
+                                body.get().parse::<PostBody>().is_err() || !slug_field.is_valid()
                                     || !summary_field.is_valid()
                             }
                             on:click=move |_| dispatch_create(false)
@@ -723,7 +724,7 @@ pub fn PostCreateForm(
                             name="publish"
                             value="true"
                             prop:disabled=move || {
-                                body.get().trim().is_empty() || !slug_field.is_valid()
+                                body.get().parse::<PostBody>().is_err() || !slug_field.is_valid()
                                     || !summary_field.is_valid()
                             }
                             on:click=move |_| dispatch_create(true)
@@ -1248,8 +1249,8 @@ pub fn EditPostPage() -> impl IntoView {
                                         <EditSaveActions
                                             is_published=is_published
                                             disabled=Signal::derive(move || {
-                                                body.get().trim().is_empty() || !slug_field.is_valid()
-                                                    || !summary_field.is_valid()
+                                                body.get().parse::<PostBody>().is_err()
+                                                    || !slug_field.is_valid() || !summary_field.is_valid()
                                             })
                                             on_save=Callback::new(dispatch_update)
                                         />

@@ -3606,6 +3606,37 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn reading_post_with_blank_body_in_db_errors(#[case] backend: Backend) {
+        // ADR-0102 §1 claims a blank body is "unrepresentable" partly because a blank
+        // one already in the database fails to *decode*. The serde half of that claim
+        // is pinned by `post_body_deserialize_rejects_blank`; this is the sqlx half.
+        // The body column is plain TEXT with no CHECK, so the row is representable at
+        // the database level — it is forced past `PostBody` with raw SQL, exactly as
+        // the blank-title test above does. Whitespace (not "") is used deliberately:
+        // it pins the newtype's *blank* rule rather than a mere emptiness check.
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let posts = &*env.state.posts;
+        let post_id = SeedRawPost::new(user_id)
+            .draft()
+            .seed(&env.state)
+            .await
+            .post_id;
+
+        let sql = format!(
+            "UPDATE posts SET body='   ' WHERE post_id={}",
+            i64::from(post_id)
+        );
+        env.base.pool().execute(sql.as_str()).await.unwrap();
+
+        let result = posts
+            .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn create_post_with_closed_pool_returns_error(#[case] backend: Backend) {
         let env = backend.setup().await;
         env.base.close_pool().await;
