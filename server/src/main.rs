@@ -51,6 +51,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use common::config_key::SiteConfigKey;
+    use common::test_support::parse_session_label;
     use jaunder::cli::{
         Cli, CliBackupMode, Commands, PgBootstrapArgs, SiteConfigAction, StorageArgs,
     };
@@ -296,7 +297,7 @@ mod tests {
             command: Some(Commands::AppPasswordCreate {
                 storage,
                 username: "alice".parse().unwrap(),
-                label: "ert".to_string(),
+                label: parse_session_label("ert"),
             }),
             verbose: false,
         })

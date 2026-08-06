@@ -238,7 +238,7 @@ pub async fn cmd_user_create(
 pub async fn app_password_create(
     state: &storage::AppState,
     username: &Username,
-    label: &str,
+    label: &SessionLabel,
 ) -> anyhow::Result<RawToken> {
     let user = state
         .users
@@ -246,14 +246,11 @@ pub async fn app_password_create(
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?
         .ok_or_else(|| anyhow::anyhow!("no such user '{username}'"))?;
-    // Validate the CLI-supplied label at the `SessionLabel` chokepoint (#325) —
-    // the same non-empty/≤255 rule the web wire enforces.
-    let label: SessionLabel = label
-        .parse()
-        .map_err(|e| anyhow::anyhow!("invalid label: {e}"))?;
+    // No validation here: the signature carries it. `SessionLabel` cannot be built from
+    // an invalid string, so there is nothing left to check and no step to remember.
     let token = state
         .sessions
-        .create_session(user.user_id, &label)
+        .create_session(user.user_id, label)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(token)
@@ -267,7 +264,7 @@ pub async fn app_password_create(
 pub async fn cmd_app_password_create(
     storage: &StorageArgs,
     username: &Username,
-    label: &str,
+    label: &SessionLabel,
 ) -> anyhow::Result<()> {
     let state = open_existing_database(&storage.db)
         .await
