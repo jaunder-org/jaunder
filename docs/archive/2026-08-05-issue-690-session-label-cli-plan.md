@@ -5,7 +5,7 @@
 > useful). Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Spec:**
-[`../specs/2026-08-05-issue-690-session-label-cli.md`](../specs/2026-08-05-issue-690-session-label-cli.md)
+[`docs/archive/2026-08-05-issue-690-session-label-cli-spec.md`](2026-08-05-issue-690-session-label-cli-spec.md)
 **Issue:** [#690](https://github.com/jaunder-org/jaunder/issues/690) ·
 **Milestone** #13
 
