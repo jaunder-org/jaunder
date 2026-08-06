@@ -7,7 +7,7 @@
 //! not sum to the whole invites reading its percentages as shares of the file
 //! when they are not, so the invariant is checked rather than assumed.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use serde::Serialize;
 
 /// The 8-byte `\0asm` magic plus version that precedes the first section.
