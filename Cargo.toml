@@ -107,6 +107,25 @@ syn = "2"
 quote = "1"
 proc-macro2 = "1"
 
+# lettre's RFC 2822 mailbox grammar omits `domain-literal` and decodes a
+# quoted `local-part`, so `Mailbox`'s `Display` does not round-trip through its
+# `FromStr`. `Headers` stores each header as a string and re-parses it on `get`,
+# so `MessageBuilder::build` fails with `MissingFrom`/`MissingTo` for an address
+# lettre's own `Address` accepts — every RFC-legal quoted local part or
+# address-literal is stored but unsendable (#297).
+#
+# Points at our fork until this lands upstream; drop the patch when it does.
+#
+# Pinned by rev, not branch: this is a build input, so it should change only
+# when someone changes it here. A branch would re-resolve silently as the PR is
+# revised. To move it, push the fork, update the rev, and re-resolve with
+# `cargo update -p lettre` — the lockfile pins the commit either way, so editing
+# this line alone does nothing.
+#
+# rev cb9e574 = fix/mailbox-quoted-local-part-and-domain-literal
+[patch.crates-io]
+lettre = { git = "https://github.com/jaunder-org/lettre", rev = "cb9e5747e5ed4012d41b5ff4bba8dd503fc148e2" }
+
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 # Production code must not panic via unwrap()/expect(). Permitted in tests via

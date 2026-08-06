@@ -4,238 +4,244 @@
 validate addresses are SMTP-sendable at the boundary (unify the two parsers)_.
 Milestone: Correctness & data integrity. Type: Task.
 
-> **This spec deliberately does not implement the fix #297 proposes.** The issue
-> is right that a real defect exists and right about its symptom; its diagnosis
-> is wrong, and following it would narrow the domain to fit a parser we do not
-> have to satisfy. The evidence is in "Why not the issue's fix" below. #297 is
-> re-scoped in place, with a comment recording why.
+> **Revised 2026-08-05, twice.** The first version accepted #297's diagnosis and
+> proposed narrowing `Email`'s grammar; that was wrong. The second located the
+> defect at our transport seam and proposed building lettre's `Mailbox` from
+> structured parts; **that was also wrong** — it cannot work, for the reason in
+> "Why no local change can fix this". The defect is a bug in lettre, now fixed
+> upstream. This version describes that. The wrong turns are kept below because
+> each is a plausible-looking dead end the next reader might otherwise re-walk.
 
 ## The defect
 
-Mail to a legal, accepted, stored email address can fail at send time.
+Mail to a legal, accepted, stored email address fails at send time.
 
-`server/src/mailer/smtp.rs` converts our address types into `lettre`'s by
-round-tripping them through a **string**: `.to_string().parse()`, at three sites
-— the sender (`:37-44`), the message `from` (`:86-92`), and every recipient
-(`:96-102`). That `parse()` targets `lettre::message::Mailbox`, whose `FromStr`
-parses the RFC 5322 **display form** (`Name <addr>`, a nom grammar at
-`lettre-0.11.22/src/message/mailbox/types.rs:112-125`). It chokes on any address
-whose own text contains the characters that grammar uses as structure.
+The cause is in **lettre**, not in jaunder:
 
-Measured, by running a corpus through both parsers:
+1. `lettre::message::Mailbox`'s `Display` does not round-trip through its
+   `FromStr`. Its RFC 2822 grammar omitted the `domain-literal` production (with
+   a note that it "may never be used") and _decoded_ a quoted `local-part`, so
+   lettre rendered addresses its own parser then rejected.
+2. `Headers` stores every header as a **string** and re-parses it on
+   `Headers::get` (`header/mod.rs:72-81`).
+3. `MessageBuilder::build` therefore re-parses the `From` header
+   (`message/mod.rs:424`) and, absent an explicit envelope, the `To`
+   (`address/envelope.rs:170`).
 
-| Address (all RFC-legal)   | `Mailbox::from_str`  | `Address::from_str` |
-| ------------------------- | -------------------- | ------------------- |
-| `user@[127.0.0.1]`        | ✗ Invalid input      | ✓                   |
-| `user@[192.0.2.1]`        | ✗ Invalid input      | ✓                   |
-| `user@[IPv6:2001:db8::1]` | ✗ Invalid input      | ✓                   |
-| `"has space"@example.com` | ✗ Invalid email user | ✓                   |
-| `"a<b"@example.com`       | ✗ Invalid email user | ✓                   |
-| `"has@at"@example.com`    | ✗ Invalid email user | ✓                   |
+So for an address lettre's own `Address` accepts, building a `Message` failed
+with `MissingFrom` / `MissingTo` — errors naming the wrong problem entirely.
 
-Every one is accepted by `common::email::Email`, persists happily, and then
-fails only when mail is attempted — the "store-but-can't-send correctness gap"
-#297 names.
+Measured, before the fix — all RFC-legal, all accepted by `common::email::Email`
+and by `lettre::Address`:
 
-## Why not the issue's fix
+| Address                   | `Mailbox::from_str`  | `Message::builder()…build()` |
+| ------------------------- | -------------------- | ---------------------------- |
+| `user@[192.0.2.1]`        | ✗ Invalid input      | ✗ MissingFrom / MissingTo    |
+| `user@[127.0.0.1]`        | ✗ Invalid input      | ✗                            |
+| `user@[IPv6:2001:db8::1]` | ✗ Invalid input      | ✗                            |
+| `"has space"@example.com` | ✗ Invalid email user | ✗                            |
+| `"has@at"@example.com`    | ✗ Invalid email user | ✗                            |
+| `"a<b"@example.com`       | ✗ Invalid email user | ✗                            |
+
+These reach the send path from real user input: the verification dialog, invites
+and password resets all mail an address a user typed and we stored.
+
+A note on the second column, since the two failure modes are easy to conflate:
+in jaunder's _current_ code these addresses never reach `build()` — the
+`.to_string().parse::<Mailbox>()` at `server/src/mailer/smtp.rs:92,102` fails
+first and surfaces as `MailError::Send(AddressError: Invalid input)`.
+`MissingFrom`/`MissingTo` is what you get once that round-trip is removed, and
+is the deeper failure the patch actually fixes.
+
+## Why #297's proposed fix is wrong
 
 #297 proposes tightening input validation "so an accepted address is guaranteed
-to be `lettre`-sendable." Three findings say otherwise.
+to be `lettre`-sendable."
 
 1. **The addresses it would reject are legal.** RFC 5321 §4.1.2 gives
-   `Local-part = Dot-string / Quoted-string` and provides `address-literal` for
-   the bracketed-IP domain form. Rejecting them refuses valid mail at the dialog
-   instead of delivering it.
-2. **There are not two grammars.** `lettre::Address::check_user` calls
-   `email_address::EmailAddress::is_valid_local_part`
-   (`lettre-0.11.22/src/address/types.rs:152-158`) — the same crate
-   `common::Email` parses with — and `check_domain` accepts bracketed IP
-   literals via that same crate's `is_valid_domain` → `parse_literal_domain`
-   (`types.rs:170`; `email_address-0.2.9/src/lib.rs:1063-1068`). The premise
-   "different grammars with different strictness" holds only for
-   `lettre::Mailbox`'s **display-form string parser**, which is not a grammar we
-   have to satisfy at all.
-3. **Nothing is asymmetric in the other direction.** Across the corpus there
-   were **zero** addresses lettre accepts that `Email` rejects.
+   `Local-part = Dot-string / Quoted-string`, and `address-literal` for the
+   bracketed-IP domain form. Rejecting them refuses valid mail at the dialog to
+   accommodate a parser bug.
+2. **There were never two grammars.** `lettre::Address::check_user` calls
+   `email_address::EmailAddress::is_valid_local_part` — the same crate
+   `common::Email` uses. The divergence was confined to lettre's _display-form_
+   parser, a separate hand-rolled nom grammar.
+3. **Nothing is asymmetric the other way.** Across the corpus, zero addresses
+   lettre accepts that `Email` rejects.
 
-The issue's stated payoff — retiring the re-parse error arms — is preserved
-here, earned by construction rather than by narrowing what we accept.
+## Why no local change can fix this
 
-## Why the types stay as they are
+The second draft proposed building `lettre::Mailbox` from structured parts
+instead of `.to_string().parse()`. **This does not work, and the reason is worth
+recording:** how the `Mailbox` is _constructed_ is irrelevant, because
+`Headers::set` immediately renders it back to a string and `build()` re-parses
+that string. The round-trip is inside lettre, past any API we call. Supplying an
+explicit `Envelope` bypasses the check for `To` but not for `From`.
 
-Considered and rejected: making `lettre`'s type the domain type, or a thin
-newtype over `lettre::Address`.
+There is no workaround at our seam. Only fixing the parser fixes this.
 
-`common` is compiled to **wasm32** (`common/Cargo.toml:33` carries a
-`cfg(target_arch = "wasm32")` dependency block). `Email` must live there because
-the browser validates the field before submit (`web/src/email/component.rs:17`,
-`Field::<Email>::new()`, per ADR-0065). `lettre` is a native SMTP stack and
-cannot follow; `common/src/mailer.rs:1-10` already records this as the reason
-the concrete senders live in `server::mailer` (ADR-0016). Wrapping
-`lettre::Address` in `common` would drag the transport crate into the browser
-bundle and cost client-side validation.
+## The fix
 
-The split is correct. Only the conversion between the halves is wrong.
+**Upstream, in lettre.** Two productions in
+`src/message/mailbox/parsers/rfc2822.rs`:
 
-## Where display names actually come from
+- `domain = dot-atom / domain-literal / obs-domain` — `domain-literal` added
+  (`dtext`, `dcontent`), keeping the brackets, since they are part of the domain
+  `Address` stores and validates.
+- `local-part = dot-atom / quoted-string / obs-local-part` — the quoted form now
+  keeps its quoting (`quoted_string_raw`), because that is what makes the local
+  part legal and what `Address` validates. `display-name` still decodes.
 
-**`common::mailbox::Mailbox` has exactly one consumer** — `SmtpConfig::sender`
-(`storage/src/smtp.rs:72`, parsed at `:174`), from the `smtp.sender` site-config
-key, default `Jaunder <noreply@localhost>`.
+Developed test-first in `jaunder-org/lettre`, branch
+`fix/mailbox-quoted-local-part-and-domain-literal`: a red commit adding the
+tests (including a `Message`-level one that reproduces the misleading
+`MissingFrom`), then a green commit with the parser fix. 156 lettre tests pass.
+A PR is open upstream.
 
-Every human-facing input takes a bare `Email`, which **already rejects** the
-`Name <addr>` form (`common/src/email.rs:36-39`, test at `:74-77`): the
-verification dialog, the invite dialog, and `jaunder smtp-test --to`. That
-behaviour is correct and this spec does not change it.
+**Considered and reverted: extending `dtext` to non-ASCII UTF-8.** Review noted
+that `Address` accepts `user@[ª]` while `Mailbox` rejects it, and `atext` /
+`qcontent` both admit non-ASCII — so `dtext` looked inconsistent. It is not. The
+module implements RFC 5336 §3.3, which internationalizes the _local part_ and
+domain _names_; it deliberately leaves `address-literal` ASCII, because a
+literal is an IP address or a standardized tag, not text. `[ª]` is not a
+routable address, and RFC 5321's `dcontent` is printable US-ASCII by definition.
+The residual `Address`/`Mailbox` asymmetry is leniency in `email_address`'s
+domain validation, and points the safe way: the stricter side is the one
+following the RFC. Nothing in jaunder can reach it — `Email` rejects all such
+inputs.
 
-## Decisions
+**In jaunder,** carried via `[patch.crates-io]` in the workspace `Cargo.toml`
+until the fix is released, **pinned by rev** so a build input changes only when
+someone changes it here, with a comment recording why, which rev, and when to
+drop it.
 
-1. **The transport converts via structured parts, never via a string.**
-   `smtp.rs` stops calling `.to_string().parse::<lettre::Mailbox>()` at all
-   three sites and builds
-   `lettre::Mailbox::new(name, lettre::Address::from_str(…))` instead.
-   `Address`'s `FromStr` is the addr-spec parser (`address/types.rs:200-210`),
-   not the display-form one, and accepts everything `Email` does. `name` is
-   `None` for `from`/recipients (an `EmailMessage` carries bare `Email`s) and
-   `Some(…)` only for the sender.
+Two consequences of the patch to state plainly rather than discover later:
 
-2. **The sender's display name is unquoted at the seam.** `email_address`'s
-   `display_part()` returns the display name **with its RFC quotes intact**, so
-   a stored `DisplayName` may be `"Smith, John"` — quote characters included.
-   lettre quotes the name itself when rendering
-   (`message/mailbox/types.rs:361-374`, `Mailbox::encode` at `:71-85`), so
-   passing the stored form through would double-quote it. `smtp.rs` therefore
-   strips the surrounding quotes and unescapes `\"` and `\\` before handing the
-   name to `lettre::Mailbox::new`.
+- **It carries a minor bump, not just the fix.** The lock moves lettre 0.11.22 →
+  0.11.23, so everything else in that release rides along (e.g. multiline SMTP
+  error replies). The fork branches from `v0.11.23`, not from the version we
+  were on.
+- **`cargo-deny` tolerates the git source only by warning.** `deny.toml` sets
+  `unknown-git = "warn"` with an empty `allow-git`/`allow-org`, so the gate does
+  not fail — but the exception is implicit. `jaunder-org` is added to
+  `[sources.allow-org] github` so carrying the patch is a deliberate, visible
+  entry whose removal is the signal that the patch went away.
 
-   **Rejected: refusing quoted display names at the config boundary.** It looked
-   tidier, but `"Smith, John" <j@example.com>` is accepted _today_ and lettre
-   sends it correctly, and `build_mailer` collapses a config error into
-   `NoopMailSender` (`server/src/mailer/mod.rs:48-54`) — so rejecting it would
-   silently stop all outgoing mail for that admin. A fix for a send bug must not
-   introduce a send outage.
+## Local changes
 
-3. **`common::Mailbox` and `DisplayName` are not modified.** Their only
-   production coupling to the transport is the string round-trip decision 1
-   deletes: `Mailbox::to_string()`'s sole call site is `smtp.rs:40`, and
-   `Mailbox::new` has no production caller at all. Changing their parsing,
-   `Display`, or character rules would be churn against the defect, not a fix
-   for it.
+Small, and none of them are the fix:
 
-4. **A `build_message` seam makes the conversion observable.** `send_email`
-   currently builds and sends in one function (`smtp.rs:85-121`), so no test can
-   watch a message being built without a live SMTP server — and the Nix check
-   derivations are network-sandboxed. Extracting
-   `fn build_message(&self, &EmailMessage) -> Message` lets the conversion be
-   asserted directly, with `send_email` reduced to `build_message` + transport.
-   This is what makes AC2/AC3 checkable at all.
+1. **The corpus guard asserts what the code actually depends on.** The guard
+   added earlier checks `Email` → `lettre::Address`. That is not the invariant
+   the send path rests on; the send path goes through the _display-form_ parser
+   via `Headers`. The guard is widened to assert `Email` → `Mailbox::from_str`
+   and that a `Message` builds. **This is the tripwire for the patch**: if
+   someone drops the `[patch.crates-io]` entry before upstream releases, the
+   build re-resolves to crates.io lettre 0.11.23, which compiles unchanged — so
+   nothing fails earlier, and this test is the first thing that does.
 
-5. **The conversion arms become `unreachable!`, guarded by a corpus test.**
-   Decision 1 makes "anything `Email` accepts, `lettre::Address` accepts" the
-   load-bearing invariant. It holds for a structural reason, not a coincidence:
-   both call the _same_ `email_address` functions (`parse_local_part` /
-   `parse_domain`), `Email` uses `Options::default().without_display_text()`
-   against lettre's `Options::default()` — a strictly **narrowing** option — and
-   `Cargo.lock` unifies both on a single `email_address 0.2.9`. A corpus test in
-   **`server`** (the only crate that sees both types) asserts it over legal and
-   adversarial addresses. With that guard the arms are justified
-   `unreachable!`s, matching the existing one at `smtp.rs:104-113` and the
-   message-required structural exemption in `CONTRIBUTING.md:555-565`.
+   Two honest limits on it: it samples a fixed corpus while the `unreachable!`s
+   below assert totality over everything `Email` accepts (a 6,939-input sweep
+   found no counterexample, but that sweep is not what the committed test
+   proves); and it lives in the same file as the code it protects, so a single
+   careless edit can remove both.
 
-   Rejected: leaving a live `MailError::Send` arm — undrivable in practice, so
-   it becomes exactly the uncovered line #297 set out to remove, needing a
-   `cov:ignore`.
+2. **The three tests that encode the bug are inverted.** They currently assert
+   that a divergent address is _rejected_.
+3. **`build_message` stays.** Already extracted; it is what lets the conversion
+   be asserted without a live SMTP server, since the Nix checks are
+   network-sandboxed.
+4. **The `.body()` `unreachable!` comment is corrected, and one of its failure
+   modes is made genuinely impossible.** The comment claims `.body()` only fails
+   when no transfer-encoding fits; it also fails for `MissingFrom` /
+   `MissingTo`, which is what disguised this bug as an encoding concern.
 
-6. **`EmailMessage.from`'s doc comment is corrected.** `common/src/mailer.rs:24`
-   advertises `"Jaunder <noreply@example.com>"` as the field's form, but the
-   field is `Option<Email>` and `Email` rejects that form.
+   `MissingTo` is not hypothetical: `build_message` loops over `message.to`, and
+   `EmailMessage.to` is a public `Vec<Email>` whose non-emptiness is documented
+   but unenforced (`common/src/mailer.rs:27-28`). An empty vec would panic. All
+   eight construction sites pass exactly one recipient today, so it is
+   unreachable by accident, not by construction. `build_message` therefore
+   returns a real `MailError` for an empty `to` **before** building, so the
+   remaining arm covers only the genuinely impossible, and the corrected comment
+   states its preconditions rather than merely naming more ways to fail.
 
-### Separable concern — filed, not fixed here
-
-`common::Mailbox` stores the display name in its **wire-encoded** form (quotes
-included), because that is what `display_part()` returns. Decision 2 copes with
-it at the one seam that cares. Whether the domain type should hold the literal
-label and encode on render is a real modelling question — but note the blast
-radius: `DisplayName` is also the **user profile display name**
-(`storage/src/users.rs`, `web/src/profile/`, `common/src/site.rs`,
-`end2end/tests/profile.spec.ts`), so any character rule added to it is a
-user-facing validation change. The filed issue must scope itself to `Mailbox`'s
-use of `display_part`, not to `DisplayName` globally.
+5. **The conversion arms become `unreachable!`**, justified by (1) — safe
+   precisely because the guard trips if the invariant lapses.
+6. **`EmailMessage.from`'s doc comment** no longer advertises a display-name
+   form the field cannot hold.
 
 ## Acceptance criteria
 
-**AC1 — no string round-trip remains in the transport.**
-`server/src/mailer/smtp.rs` contains no `.to_string().parse()` producing a
-`lettre::message::Mailbox`, at any of the three sites.
+**AC1 — the patch is wired and pinned by rev.** The workspace `Cargo.toml`
+carries a `[patch.crates-io]` entry for lettre pinned to an explicit `rev`, with
+a comment stating why it exists, that the lockfile must be re-resolved to move
+it, and that it should be dropped when the fix is released. `Cargo.lock`
+resolves lettre to that rev, and to exactly one entry. `deny.toml` lists
+`jaunder-org` under `[sources.allow-org] github`.
 
-**AC2 — conversion no longer fails for any address `Email` accepts.** A test
-drives `build_message` with recipients `user@[192.0.2.1]`,
-`"has space"@example.com` and `"has@at"@example.com` and asserts it returns a
-`Message` carrying those recipients. (Today each fails at conversion.) Scope
-note: this is about _conversion_, not end-to-end deliverability — see out of
-scope on EAI.
+**AC2 — divergent addresses now send.** A test drives `build_message` with
+recipients `user@[192.0.2.1]`, `"has space"@example.com` and
+`"has@at"@example.com` and asserts a `Message` is returned whose envelope
+carries them. Each fails before the patch.
 
-**AC3 — the same holds for the sender and for `from`.** `from_config` succeeds
-for an `smtp.sender` whose address is a domain-literal or has a quoted local
-part; `build_message` succeeds for an `EmailMessage.from` of the same shapes.
+**AC3 — the same for the sender and `from`.** `from_config` succeeds for an
+`smtp.sender` whose address is a domain-literal or has a quoted local part, and
+`build_message` succeeds for an `EmailMessage.from` of the same shapes.
 
-**AC4 — a quoted sender display name is neither doubled nor lost.** For
-`smtp.sender = "\"Smith, John\" <j@example.com>"`, the built `Message`'s `From`
-header renders the name quoted exactly once — `"Smith, John" <j@example.com>` —
-and for `Acme Inc <a@example.com>` renders it unquoted. Both configs still build
-a working mailer, as they do today.
+**AC4 — the guard covers the real invariant.** A test asserts, over the corpus,
+that every address `Email` accepts round-trips through
+`lettre::Mailbox::from_str` and yields a buildable `Message`. Its failure
+message says the patch may have been dropped.
 
-**AC5 — the subset invariant is asserted.** A test in `server` runs a corpus of
-at least the addresses tabulated above, plus ordinary ones, through
-`Email::from_str`; for every address `Email` accepts,
-`lettre::Address::from_str` accepts it too. The test names the invariant and
-fails with the offending address.
+**AC5 — the conversions that take an `Email` are `unreachable!`, not error
+returns**, and no `cov:ignore` is added anywhere.
 
-**AC6 — the conversion arms are `unreachable!`, not error returns.** No
-conversion site in `smtp.rs` returns `MailError`/`BuildMailerError` for a parse
-failure, and no `cov:ignore` is added.
+**The sender conversion is deliberately excluded and stays fallible.** It takes
+a `common::mailbox::Mailbox`, not an `Email`: `DisplayName` admits any character
+and `Mailbox`'s `Display` emits it unquoted, so an ordinary
+`smtp.sender = "Acme, Inc <noreply@example.com>"` renders as something lettre
+cannot read back as an RFC 5322 `phrase`. `BuildMailerError::InvalidSender`
+therefore survives, with a test driving it. Making that arm `unreachable!` on
+the strength of the `Email` guard would turn an admin's typo into a startup
+panic — the root cause is #837, and until it is fixed this reports rather than
+crashes.
 
-**AC7 — the tests that encoded the bug are replaced.** Of the three at
-`server/src/mailer/smtp.rs:222-280`:
-`from_config_rejects_sender_lettre_cannot_parse` is inverted to assert success;
-the two `send_email_rejects_*` tests are re-pointed at `build_message` and
-assert success there, since against `mail.example.com:587` with no server
-`send_email` can only ever return `Err`. `divergent_address()` and its comment
-go — the divergence it names no longer exists.
+**AC6 — the bug-encoding tests are inverted.** The three tests at
+`server/src/mailer/smtp.rs` asserting rejection now assert success;
+`divergent_address()` and its comment go. The two that call `send_email` are
+re-pointed at `build_message` — against a dead endpoint `send_email` only ever
+errors, so left as-is they would pass for the wrong reason.
+
+**AC7 — the misleading comment is fixed, and `MissingTo` is made impossible.**
+`build_message` returns a `MailError` for an empty `EmailMessage.to` before
+building, and a test drives that path. `.body()`'s `unreachable!` no longer
+claims encoding is its only failure mode; it states the preconditions that make
+it unreachable — a `From` that round-trips (AC4's guard) and a non-empty `to`
+(this criterion) — rather than merely listing more ways to fail.
 
 **AC8 — human-facing boundaries are unchanged.** `Email` still rejects the
-`Name <addr>` form; `common/src/email.rs:74-77` (the display-form rejection) is
-untouched and still passes, as do the generic-malformed rejection tests at
-`server/tests/web/web_email.rs:188-205`, `server/tests/web/web_account.rs:314`
-and `server/tests/misc/commands.rs:748-752`.
+`Name <addr>` form; `common/src/email.rs:74-77` and the malformed-input
+rejection tests are untouched and pass.
 
-**AC9 — `send_email` still sends.** `send_email_maps_transport_error`
-(`smtp.rs:181-211`) still passes, proving the transport path survives the
-`build_message` extraction.
+**AC9 — the stale doc is fixed** (`common/src/mailer.rs:24`).
 
-**AC10 — the stale doc is fixed.** `common/src/mailer.rs:24` no longer
-advertises a display-name form for a field that cannot hold one.
+**AC10 — the separable concern is filed** — done, #837. (A process step, not
+code-observable; verified in the tracker rather than in a diff.)
 
-**AC11 — the separable concern is filed**, scoped to `Mailbox`'s use of
-`display_part` and explicitly noting `DisplayName`'s profile-side blast radius.
-Linked from #297.
-
-**AC12 — the gate is green.** `cargo xtask validate` passes, including coverage
-and all four `{sqlite,postgres}×{chromium,firefox}` e2e combos.
+**AC11 — the gate is green.** `cargo xtask validate` passes, including coverage
+and all four `{sqlite,postgres}×{chromium,firefox}` e2e combos, **with the git
+dependency vendored by the Nix build**. If crane cannot vendor it, that is a
+blocking finding to report, not to work around.
 
 ## Out of scope
 
-- Changing `Email`'s grammar. It is not the defect, and narrowing it was the
+- Changing `Email`'s grammar — not the defect, and narrowing it was the first
   rejected fix.
-- Replacing `lettre`. It delegates validation to the same crate we use.
-- `common::Mailbox`'s wire-encoded display name (filed separately).
-- **EAI / SMTPUTF8.** `Email` accepts internationalized addresses
-  (`common/src/email.rs:131-139` asserts `user@İ.com` parses), and lettre will
-  refuse to send one unless the server advertises `SMTPUTF8`/`8BITMIME`
-  (`transport/smtp/client/async_connection.rs:164-182`). That is a genuine
-  remaining accepted-but-maybe-unsendable class, but it is a _server capability_
-  negotiation, not a parser divergence, and no boundary validation can decide
-  it.
+- Replacing lettre. It validates with the same crate we do; one parser was wrong
+  and is now fixed.
+- `common::Mailbox`'s wire-encoded display name — #837.
+- **EAI / SMTPUTF8.** `Email` accepts internationalized addresses; sending one
+  additionally requires the server to advertise `SMTPUTF8`. That is capability
+  negotiation, not parsing, and no boundary validation can decide it.
 - Backup/restore, which copies `email` columns at table granularity and can
-  restore a value no boundary approved — a pre-existing gap unrelated to
-  sendability.
+  restore a value no boundary approved.

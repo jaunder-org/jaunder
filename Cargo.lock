@@ -249,7 +249,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90"
 dependencies = [
  "axum-core 0.5.6",
- "base64",
+ "base64 0.22.1",
  "bytes",
  "form_urlencoded",
  "futures-util",
@@ -343,6 +343,12 @@ name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "base64ct"
@@ -550,7 +556,7 @@ dependencies = [
  "async-trait",
  "atom_syndication",
  "axum",
- "base64",
+ "base64 0.22.1",
  "chrono",
  "croner",
  "email_address",
@@ -960,7 +966,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1032,7 +1038,7 @@ version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9298e6504d9b9e780ed3f7dfd43a61be8cd0e09eb07f7706a945b0072b6670b6"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "memchr",
 ]
 
@@ -1073,7 +1079,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1515,7 +1521,7 @@ name = "host"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64",
+ "base64 0.22.1",
  "common",
  "http",
  "macros",
@@ -1673,7 +1679,7 @@ version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bytes",
  "futures-channel",
  "futures-util",
@@ -1892,7 +1898,7 @@ dependencies = [
  "async-trait",
  "axum",
  "axum-embed",
- "base64",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "common",
@@ -2004,7 +2010,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "efa3982e7fe36c1de68f91f3c9083124f389a975523881f3d7e3363362feda41"
 dependencies = [
  "any_spawner",
- "base64",
+ "base64 0.22.1",
  "cfg-if",
  "either_of",
  "futures",
@@ -2206,7 +2212,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da974775c5ccbb6bd64be7f53f75e8321542e28f21563a416574dbe4d5447eae"
 dependencies = [
  "any_spawner",
- "base64",
+ "base64 0.22.1",
  "codee",
  "futures",
  "hydration_context",
@@ -2221,12 +2227,11 @@ dependencies = [
 
 [[package]]
 name = "lettre"
-version = "0.11.22"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0da65617f6cb926332d039cb578aad56178da86e128db6a1b09f4c94fa5b3349"
+version = "0.11.23"
+source = "git+https://github.com/jaunder-org/lettre?rev=cb9e5747e5ed4012d41b5ff4bba8dd503fc148e2#cb9e5747e5ed4012d41b5ff4bba8dd503fc148e2"
 dependencies = [
  "async-trait",
- "base64",
+ "base64 0.23.1",
  "email-encoding",
  "email_address",
  "fastrand",
@@ -2332,7 +2337,7 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba8f0b47dc7cc74760332828e060ec705339b5e863894f575d81691546bbc836"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "lazy_static",
  "native-tls",
  "rcgen",
@@ -2594,7 +2599,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2885,7 +2890,7 @@ version = "3.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "serde_core",
 ]
 
@@ -3499,7 +3504,7 @@ version = "0.12.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bytes",
  "futures-channel",
  "futures-core",
@@ -3734,7 +3739,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3940,7 +3945,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d60e4c1dfccd91fe0990141f69f1d5cf5679797ad53aa1b45e5bd658eb119f0"
 dependencies = [
  "axum",
- "base64",
+ "base64 0.22.1",
  "bytes",
  "const-str",
  "const_format",
@@ -4149,7 +4154,7 @@ version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee6798b1838b6a0f69c007c133b8df5866302197e404e8b6ee8ed3e3a5e68dc6"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "crc",
@@ -4223,7 +4228,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aa003f0038df784eb8fecbbac13affe3da23b45194bd57dba231c8f48199c526"
 dependencies = [
  "atoi",
- "base64",
+ "base64 0.22.1",
  "bitflags",
  "byteorder",
  "bytes",
@@ -4266,7 +4271,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db58fcd5a53cf07c184b154801ff91347e4c30d17a3562a635ff028ad5deda46"
 dependencies = [
  "atoi",
- "base64",
+ "base64 0.22.1",
  "bitflags",
  "byteorder",
  "chrono",
@@ -4334,7 +4339,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "base64",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "clap",
@@ -4524,7 +4529,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4805,7 +4810,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7e581ba15a835f4d9ea06c55ab1bd4dce26fc53752c69a04aac00703bfb49ba9"
 dependencies = [
  "async-trait",
- "base64",
+ "base64 0.22.1",
  "bytes",
  "http",
  "http-body",
@@ -4851,7 +4856,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4cfcf7e2740e6fc6d4d688b4ef00650406bb94adf4731e43c096c3a19fe40840"
 dependencies = [
  "async-compression",
- "base64",
+ "base64 0.22.1",
  "bitflags",
  "bytes",
  "futures-core",
@@ -5436,7 +5441,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
