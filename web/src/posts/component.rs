@@ -1115,10 +1115,12 @@ pub fn EditPostPage() -> impl IntoView {
             {move || Suspend::new(async move {
                 match post.await {
                     Ok(fetched) => {
-                        state.seed_from(&fetched, slug_field);
+                        state.seed_from(&fetched);
+                        slug_field.value.set(fetched.post.slug.to_string());
                         if let Ok(selection) = current_audience.await {
                             state.audience.set(selection);
                         }
+                        // The slug is not part of the bundle — see `seed_from`.
                         view! {
                             <EditPostForm
                                 state=state

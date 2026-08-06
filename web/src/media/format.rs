@@ -20,13 +20,25 @@ fn one_decimal(numerator: i64, denominator: i64) -> String {
     debug_assert!(denominator > 0, "callers divide by a positive unit size");
     debug_assert!(numerator >= 0, "negative byte counts take the `B` arm");
 
-    let num = i128::from(numerator) * 10;
-    let den = i128::from(denominator);
+    let tenths = round_tenths(i128::from(numerator) * 10, i128::from(denominator));
+    format_tenths(tenths)
+}
+
+/// `num / den` rounded **half-to-even** — the rule Rust's `{:.1}` applies to an
+/// `f64`, and the one thing in this module that must not drift between its two
+/// callers. Each of them pre-scales `num` for the precision it wants (`×10` for a
+/// unit quotient, `×1000` for a percentage), so only the rounding lives here.
+fn round_tenths(num: i128, den: i128) -> i128 {
     let mut tenths = num / den;
     let doubled_remainder = (num % den) * 2;
     if doubled_remainder > den || (doubled_remainder == den && tenths % 2 != 0) {
         tenths += 1;
     }
+    tenths
+}
+
+/// A tenths count as a one-decimal string: `125` → `"12.5"`.
+fn format_tenths(tenths: i128) -> String {
     format!("{}.{}", tenths / 10, tenths % 10)
 }
 
@@ -69,21 +81,19 @@ pub fn format_bytes(bytes: impl Into<i64>) -> String {
 /// algorithm reproduces it. This rounds the true ratio once, half-to-even, and can
 /// differ from the old output by one unit in the last place: at most 0.1pp, or about
 /// 0.3px on the 300px bar it feeds (#301).
+///
+/// It also clamps at **both** ends, where the float version clamped only the top.
+/// A negative `used` is not reachable from a byte count today, but the type permits
+/// one and the old expression would have produced a negative width; `0.0` is the
+/// honest floor for a usage bar.
 #[must_use]
 pub fn storage_usage_percent(used: i64, quota: i64) -> String {
     if quota <= 0 || used <= 0 {
         return "0.0".to_string();
     }
     // pct * 10 == used * 1000 / quota.
-    let num = i128::from(used) * 1000;
-    let den = i128::from(quota);
-    let mut tenths = num / den;
-    let doubled_remainder = (num % den) * 2;
-    if doubled_remainder > den || (doubled_remainder == den && tenths % 2 != 0) {
-        tenths += 1;
-    }
-    let tenths = tenths.min(1000);
-    format!("{}.{}", tenths / 10, tenths % 10)
+    let tenths = round_tenths(i128::from(used) * 1000, i128::from(quota)).min(1000);
+    format_tenths(tenths)
 }
 
 #[cfg(test)]
@@ -175,6 +185,12 @@ mod tests {
         assert_eq!(storage_usage_percent(5, 0), "0.0", "no quota, some usage");
         assert_eq!(storage_usage_percent(0, 100), "0.0", "no usage");
         assert_eq!(storage_usage_percent(100, 100), "100.0", "exactly full");
+        assert_eq!(
+            storage_usage_percent(-5, 100),
+            "0.0",
+            "clamped under zero — the float version clamped only the top, and would \
+             have produced a negative bar width"
+        );
         assert_eq!(
             storage_usage_percent(250, 100),
             "100.0",

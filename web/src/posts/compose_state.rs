@@ -89,16 +89,17 @@ impl ComposeState {
         })
     }
 
-    /// Load an existing post's contents into the editor's fields.
+    /// Load an existing post's contents into the fields this bundle owns.
     ///
-    /// The editor reuses this bundle because it edits the same seven things and
-    /// dispatches the same [`PostInputs`] payload; only the surrounding action
-    /// (`Update` vs `Create`) differs. `slug_field` is passed rather than held
-    /// because the composer's full shape owns its own, local to that shape.
-    pub fn seed_from(&self, fetched: &AuthoredPost, slug_field: Field<Slug>) {
+    /// The editor reuses the bundle because it edits the same things and dispatches
+    /// the same [`PostInputs`] payload; only the surrounding action (`Update` vs
+    /// `Create`) differs. The slug is deliberately **not** seeded here: this type
+    /// does not hold that field — the composer's full shape owns its own, local to
+    /// that shape — so the editor sets it at the call site rather than handing the
+    /// field in to be written once.
+    pub fn seed_from(&self, fetched: &AuthoredPost) {
         self.body.set(String::from(fetched.body.clone()));
         self.format.set(fetched.format);
-        slug_field.value.set(fetched.post.slug.to_string());
         self.summary_field.value.set(
             fetched
                 .post
@@ -132,9 +133,7 @@ impl Default for ComposeState {
 #[cfg(test)]
 mod tests {
     use super::ComposeState;
-    use crate::forms::Field;
     use common::render::PostFormat;
-    use common::slug::Slug;
     use common::visibility::AudienceBase;
     use leptos::prelude::*;
 
@@ -197,21 +196,19 @@ mod tests {
         });
     }
 
-    /// The editor's entry point: an existing post's fields land in the bundle, and
-    /// its slug in the caller-owned field. Uses the render layer's own sample so the
-    /// fixture cannot drift from the one the projector tests paint.
+    /// The editor's entry point: an existing post's fields land in the bundle. Uses
+    /// the render layer's own sample so the fixture cannot drift from the one the
+    /// projector tests paint.
     #[test]
     fn seed_from_loads_an_existing_post_into_the_editor_fields() {
         with_owner(|| {
             let state = ComposeState::new();
-            let slug_field = Field::<Slug>::optional();
             let fetched = crate::posts::render::test_fixtures::sample_post();
 
-            state.seed_from(&fetched, slug_field);
+            state.seed_from(&fetched);
 
             assert_eq!(state.body.get(), "raw");
             assert_eq!(state.format.get(), PostFormat::Markdown);
-            assert_eq!(slug_field.value.get(), "hello");
             assert_eq!(state.tags.get().len(), 1);
             assert_eq!(
                 state.summary_field.value.get(),

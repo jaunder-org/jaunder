@@ -154,6 +154,43 @@ A leaf need not have both halves. `taglist/` is pure `markup.rs` only — its
 chips are injected via `inner_html` by the projector and the CSR client alike,
 so there is one renderer and no twin to keep coincident.
 
+### Read-only props take a reference
+
+A prop the component only **reads** — one that never reaches the view itself,
+only derived owned data does — takes a reference:
+
+```rust
+#[component]
+pub fn Avatar<'a>(name: &'a Username, #[prop(default = 38)] size: u32)
+    -> impl IntoView + use<>
+```
+
+`use<>` is precise capturing (ADR-0104 §2): the returned view captures no
+lifetime, which is what lets a borrowing component be used inside a **stored**
+view such as a `Suspend` body, where a captured lifetime would hit the `'static`
+requirement. It is not optional here — without it the prop's lifetime is
+captured and those call sites stop compiling.
+
+This is worth doing rather than taking the value: it drops a `.clone()` at every
+call site that already owns its data. Worked examples: `Avatar`,
+`FeedDiscovery`, `RsdDiscovery`, `PostDisplay`, `PostCard` (#301).
+
+Three things that bite:
+
+- **Ownership has to terminate somewhere.** Converting one component pushes the
+  same `needless_pass_by_value` to its caller. Follow the chain to whoever
+  genuinely owns the data — for posts that is `TimelineRows`, which owns the
+  rows it iterates — or stop and take the value.
+- **An inline-constructed prop must be bound to a local first.**
+  `surface=&FeedSurface::Site` compiles; `surface=&FeedSurface::User { … }` does
+  not (E0716) — the temporary is dropped inside the `view!` expansion. Bind it,
+  then pass `&local`.
+- **A reference default needs a promotable constant.**
+  `#[prop(default = &TagContext::SiteWide)]` works because that expression is
+  static-promotable; an arbitrary constructor call is not.
+
+A prop whose value **does** reach the view stays owned — the view must own it.
+
 ## 7. CSS conventions
 
 - All bespoke classes are prefixed `j-` and live in `server/assets/jaunder.css`.
