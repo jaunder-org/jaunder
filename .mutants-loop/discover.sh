@@ -25,6 +25,23 @@ mkdir -p "$TMPDIR"
 
 mkdir -p "$OUT"
 
+# The nextest filter that keeps the unmutated baseline green. Defined once here
+# and printed into the log, because the loop must use the SAME expression when
+# it verifies a kill — a filter that drifts gives a different answer.
+#
+# Everything it excludes needs a live PostgreSQL that is not running:
+#   postgres       — the case_2_postgres / Backend__Postgres twins. Case-
+#                    insensitive on purpose: plain `postgres` misses
+#                    `backend_2_Backend__Postgres`, and one surviving test fails
+#                    the baseline and loses the entire package.
+#   backup_interop — backup_round_trips_full_cycle_across_backends drives
+#                    unique_postgres_url() directly, so its NAME never says
+#                    postgres. Named exclusions are needed for those.
+#
+# Every excluded test has a sqlite twin covering the same code, so no mutant
+# goes unexamined because of this.
+FILTER='not test(/(?i)postgres|backup_interop/)'
+
 # Order: pure-logic crates first (best signal), UI crates last (most noise).
 #
 # `client` is left out on purpose. Its 42 mutants all survived with nothing
@@ -47,17 +64,15 @@ for pkg in $PACKAGES; do
   # the unmutated baseline fails and the whole package is skipped. nextest gives
   # each test its own process, which is what the repo's own gate uses.
   #
-  # -E 'not test(postgres)' drops the case_2_postgres variants, which need a
-  # live PostgreSQL that is not running here. Their case_1_sqlite twins cover
-  # the same code, so nothing is lost. Without this, storage and jaunder fail
-  # their baseline and contribute nothing.
+  # $FILTER is defined and explained at the top of this file.
+  echo "[$pkg] filter: $FILTER" >>"$LOG"
   cargo mutants \
     --package "$pkg" \
     --jobs 2 \
     --no-shuffle \
     --test-tool nextest \
     --output "$OUT/$pkg" \
-    -- -E 'not test(postgres)' \
+    -- -E "$FILTER" \
     >>"$LOG" 2>&1
   status=$?
   echo "[$pkg] finished status=$status $(date -Is)" >>"$LOG"

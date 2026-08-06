@@ -59,7 +59,7 @@ batch and commit it. A partial batch is fine; a broken tree is not.
 
         devtool run -- cargo mutants -p <pkg> --file <file> \
           --test-tool nextest --output /tmp/mutverify-<name> \
-          -- -E 'not test(postgres)'
+          -- -E 'not test(/(?i)postgres|backup_interop/)'
 
     Then read `/tmp/mutverify-<name>/mutants.out/missed.txt`. It must be empty,
     or hold only the ones you deliberately skipped.
@@ -76,9 +76,19 @@ run lost three whole packages to them.
   tests share one process and a global recorder, so the **unmutated baseline
   fails** and cargo-mutants skips the entire package. nextest runs each test in
   its own process, which is what the repo's own gate uses.
-- `-- -E 'not test(postgres)'`. The suite carries `case_2_postgres` twins of
-  many tests, and they need a live PostgreSQL that is not running. Their
-  `case_1_sqlite` twins cover the same code, so nothing is lost.
+- `-- -E 'not test(/(?i)postgres|backup_interop/)'`. Everything it excludes
+  needs a live PostgreSQL that is not running. Every excluded test has a sqlite
+  twin covering the same code, so no mutant goes unexamined.
+  - **Keep the `(?i)`.** A plain `test(postgres)` matches `case_2_postgres` but
+    not `backend_2_Backend__Postgres`.
+  - **Keep `backup_interop`.** `backup_round_trips_full_cycle_across_backends`
+    calls `unique_postgres_url()` directly, so its name never says postgres.
+  - The canonical copy of this expression is `$FILTER` at the top of
+    `discover.sh`. If you change one, change both — a filter that drifts between
+    discovery and verification gives two different answers.
+
+  One surviving postgres test out of 898 is enough to fail the baseline and lose
+  a whole 315-mutant package. That has now happened twice.
 
 **A baseline failure is silent-looking.** cargo-mutants prints
 `ERROR cargo test failed in an unmutated tree` and exits 4, having tested

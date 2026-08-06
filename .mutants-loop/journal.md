@@ -29,3 +29,20 @@ Append-only. Newest last. One line per event.
   copies the tree per job into /tmp, a 16 GB tmpfs, ~2.4 GB each, beside a Nix
   build. Fixed by pointing TMPDIR at the big disk and dropping to 2 jobs. Added
   a rule: check `pgrep -af cargo-mutants` before believing a red gate.
+- 2026-08-06 — storage and host now yield results (storage 247 caught / 85
+  missed / 237 unviable; host 35 / 24 / 28). jaunder still failed baseline: the
+  filter `test(postgres)` is case-sensitive and missed
+  `backend_2_Backend__Postgres`. One test out of 898 lost the whole package.
+  Fixed with `test(/(?i)postgres/)`, verified by `nextest list` — 0 postgres
+  tests remain. Re-running jaunder.
+- 2026-08-06 — jaunder failed a third time, on one different test:
+  `misc::backup_interop::backup_round_trips_full_cycle_across_backends` calls
+  `unique_postgres_url()` directly, so its name never says postgres and no
+  name-based postgres filter can catch it. Filter extended to
+  `not test(/(?i)postgres|backup_interop/)`; `cargo nextest run -p jaunder`
+  under it is green. The filter now lives in one variable (`$FILTER` in
+  discover.sh) so discovery and verification cannot drift apart.
+- 2026-08-06 — DISCOVERY COMPLETE for all six scanned packages. jaunder came in
+  at 231 caught / 6 missed / 72 unviable / 6 timeout. 551 surviving mutants in
+  total: web 361, storage 85, common 66, host 24, macros 9, jaunder 6. Discovery
+  no longer needs to run, so the loop has the machine to itself.
