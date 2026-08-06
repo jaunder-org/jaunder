@@ -183,7 +183,7 @@ Uses **`jaunder-adr`** (numberless draft in `docs/adr/drafts/`;
 
 **Files:**
 
-- Create: `docs/adr/drafts/post-body-non-blank-invariant.md`
+- Create: `docs/adr/0102-post-body-non-blank-invariant.md`
 - Modify: `docs/adr/0063-domain-value-newtype-convention.md` — supersede note on
   the infallible-kind definition (§3, around 344-351)
 
@@ -222,7 +222,7 @@ that blank _titles_ demonstrably did accumulate (migration
 **Verify:** `cargo xtask check` — `adr-format` passes. Do **not** run
 `adr promote` yet.
 
-- [x] 1. ADR draft written (`docs/adr/drafts/post-body-non-blank-invariant.md`,
+- [x] 1. ADR draft written (`docs/adr/0102-post-body-non-blank-invariant.md`,
      gitignored until `promote` at ship) and ADR-0063 §3 amended
 
 ---
@@ -769,4 +769,30 @@ cargo xtask validate
 
 Expected: PASS, including the four-combo e2e matrix.
 
-- [ ] 10. Follow-ups closed, ADR promoted, `validate` green
+- [x] 10. Follow-ups resolved, ADR promoted, `validate` green
+
+> - **`slug_seed` sweep passes.** Five survivors, all `Slug`-typed
+>   (`candidate_slug(slug_seed: &Slug, …)`, `let slug_seed: Slug`). No
+>   bare-`String` seed remains, which is what #785 asked for.
+> - **#785 is closed by the PR body (`Closes #785`), not by hand.** Closing it
+>   before the branch merges would be wrong if the PR never lands; letting
+>   GitHub close it on merge ties the closure to the thing that actually
+>   satisfies it.
+> - **ADR promoted to 0102** after the final rebase, `proposed → accepted`,
+>   README table synced by the tool.
+> - **#797 untouched and still accurate** — `parse_post_cursor` is unrelated to
+>   this branch.
+>
+> **The base moved by 32 commits mid-cycle**, which is routine here. Notably
+> **#830 merged**, so three things changed under this branch: `PostTitle` became
+> fallible (its `From<String>` is gone), it introduced a `SummarySeed` type, and
+> its `fallback_summary_label` doc _explicitly anticipated this issue_ — "when
+> #811 lands … collapse this to the body line then". The rebase kept main's
+> `SummarySeed` abstraction and applied this issue's collapse to it. The stale
+> "`PostTitle` … is still open (#830)" line in the ADR-0063 amendment was
+> corrected.
+>
+> The e2e lane was re-run per `jaunder-ship/base-moved.md` because the rebase
+> pulled in three changed e2e files; `server-fn-coverage-verify` reported
+> **"snapshot current"** and zero flaky tests, so no artifact regeneration was
+> needed.

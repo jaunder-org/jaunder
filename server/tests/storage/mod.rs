@@ -8,8 +8,7 @@ use common::test_support::{
     parse_absolute_url, parse_audience_name, parse_bio, parse_byte_size, parse_content_hash,
     parse_content_type, parse_display_name, parse_email, parse_etag, parse_filename,
     parse_page_offset, parse_post_body, parse_post_title, parse_raw_token, parse_row_limit,
-    parse_session_label,
-    parse_slug, permalink_date,
+    parse_session_label, parse_slug, permalink_date,
 };
 use common::username::Username;
 use common::visibility::{

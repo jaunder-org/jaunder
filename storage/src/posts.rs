@@ -2609,8 +2609,7 @@ mod tests {
     };
     use common::test_support::{
         parse_content_type, parse_etag, parse_post_body, parse_post_summary, parse_post_title,
-        parse_row_limit,
-        parse_slug, parse_tag, parse_tag_label, parse_username, permalink_date,
+        parse_row_limit, parse_slug, parse_tag, parse_tag_label, parse_username, permalink_date,
     };
     use rstest::*;
     use rstest_reuse::*;

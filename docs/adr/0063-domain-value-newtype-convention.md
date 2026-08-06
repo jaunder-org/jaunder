@@ -364,7 +364,8 @@ value, and that inversion has misclassified real types twice. `PostBody` was
 declared infallible on the claim that any body is valid, until a body of nothing
 but blank lines proved to be nonsense that the rest of the system was routing
 around rather than rejecting (#811, which moves it to a validating `FromStr`).
-`PostTitle` is the same shape and is still open (#830).
+`PostTitle` was the same shape, reached from the opposite direction and
+corrected in #830.
 
 The diagnostic: **if a type declared `infallible` needs a downstream gate to
 reject some of its values, it was mis-declared.** The gate is the invariant,
