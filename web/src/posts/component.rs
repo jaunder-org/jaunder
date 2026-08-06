@@ -149,8 +149,18 @@ pub fn ComposerFields(
 
 #[expect(
     clippy::needless_pass_by_value,
-    reason = "Leptos #[component] props are stored by the framework and must be owned; \
-              the borrow clippy suggests isn't expressible in a component signature"
+    reason = "`PostDisplay` is the terminal owner of these three: its only caller \
+              `PostCard` moves them in, and `PostView<'a>` borrows all three across \
+              `render_post_content`, the pure fn shared with the projector (ADR-0041 §2). \
+              They must be owned here so they outlive that borrow-view; clippy sees the \
+              borrows but not the ownership-for-lending. Unlike the read-only props this \
+              crate converted to references under edition 2024, taking `&T` here does not \
+              fix anything — measured (#301): it compiles, but relocates the identical \
+              lint to `PostCard`, and thence to `TimelineRows`, which owns the rows it \
+              iterates. Borrowing posts through the whole render chain is the real fix — \
+              it also drops a per-row `tag_context.clone()` — and lands in the very next \
+              commit on this branch, which deletes this attribute. It is separated only \
+              because it changes three components rather than one."
 )]
 #[component]
 pub fn PostDisplay(
@@ -201,7 +211,7 @@ pub fn PostDisplay(
             let inner_content = crate::posts::render::render_post_content(&view).into_string();
             view! {
                 <article class="j-post">
-                    <Avatar name=post.username.clone() size=38 />
+                    <Avatar name=&post.username size=38 />
                     <div style="min-width:0;display:flex;gap:8px;align-items:flex-start">
                         // html-sink:allow posts::render::render_post_content output — the projector's own paint (#181)
                         <div style="flex:1;min-width:0" inner_html=inner_content></div>
@@ -559,7 +569,7 @@ pub fn PostCreateForm(
         let dispatch_publish = move |_| dispatch(true, None);
         view! {
             <div class="j-composer-row">
-                {username.map(|u| view! { <Avatar name=u size=36 /> })}
+                {username.map(|u| view! { <Avatar name=&u size=36 /> })}
                 <div class="j-composer-body">
                     <ComposerFields
                         body=body
@@ -1041,11 +1051,15 @@ pub fn UserTimelinePage() -> impl IntoView {
             username
                 .get()
                 .map(|username| {
+                    let surface = FeedSurface::User {
+                        username: username.clone(),
+                    };
+                    // Bound rather than passed as a temporary: the prop is a borrow, so
+                    // the surface must outlive the `view!` expansion. The view itself
+                    // captures no lifetime (`use<>`, ADR-0104), so a local suffices.
                     view! {
-                        <FeedDiscovery surface=FeedSurface::User {
-                            username: username.clone(),
-                        } />
-                        <RsdDiscovery username=username />
+                        <FeedDiscovery surface=&surface />
+                        <RsdDiscovery username=&username />
                     }
                 })
         }}
@@ -1556,7 +1570,11 @@ pub fn SiteTagPage() -> impl IntoView {
 
     view! {
         {move || {
-            tag.get().map(|tag| view! { <FeedDiscovery surface=FeedSurface::SiteTag { tag } /> })
+            tag.get()
+                .map(|tag| {
+                    let surface = FeedSurface::SiteTag { tag };
+                    view! { <FeedDiscovery surface=&surface /> }
+                })
         }}
         <Topbar title=move || format!("#{}", read_tag()) sub="Posts on this instance" />
         <TimelineGate
@@ -1633,12 +1651,11 @@ pub fn UserTagPage() -> impl IntoView {
                 .get()
                 .zip(tag.get())
                 .map(|(username, tag)| {
-                    view! {
-                        <FeedDiscovery surface=FeedSurface::UserTag {
-                            username,
-                            tag,
-                        } />
-                    }
+                    let surface = FeedSurface::UserTag {
+                        username,
+                        tag,
+                    };
+                    view! { <FeedDiscovery surface=&surface /> }
                 })
         }}
         <Topbar

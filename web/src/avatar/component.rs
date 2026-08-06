@@ -5,14 +5,9 @@ use super::markup::avatar_parts;
 
 /// The reactive half of the twin: an initials chip derived from `name`.
 /// Twins [`render`] — keep their markup coincident.
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Leptos #[component] props are stored by the framework and must be owned; \
-              the borrow clippy suggests isn't expressible in a component signature"
-)]
 #[component]
-pub fn Avatar(name: Username, #[prop(default = 38)] size: u32) -> impl IntoView {
-    let (initials, hue) = avatar_parts(&name);
+pub fn Avatar<'a>(name: &'a Username, #[prop(default = 38)] size: u32) -> impl IntoView + use<> {
+    let (initials, hue) = avatar_parts(name);
     // Integer equivalent of `(size as f32 * 0.36).round()`; must match the pure
     // `render` twin so the projector paint and this reactive component coincide.
     let font_size = (size * 36 + 50) / 100;

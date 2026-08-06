@@ -145,7 +145,7 @@ fn authed_sidebar(active_key: &str, username: &Username, is_operator: bool) -> i
                     .collect::<Vec<_>>()}
             </div>
             <div class="j-sb-foot">
-                <Avatar name=username.clone() size=28 />
+                <Avatar name=&username size=28 />
                 <div style="font-size:13px;flex:1;min-width:0">
                     <div style="font-weight:500">{username.to_string()}</div>
                 </div>
