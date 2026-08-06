@@ -860,8 +860,7 @@ mod tests {
     fn app_password_create_label_defaults_to_app_password() {
         with_env(|_env| {
             let cli = parse(&["app-password-create", "--username", "alice"]);
-            let Commands::AppPasswordCreate { label, .. } = cli.command.expect("subcommand")
-            else {
+            let Commands::AppPasswordCreate { label, .. } = cli.command.expect("subcommand") else {
                 unreachable!("parse yields Commands::AppPasswordCreate")
             };
             assert_eq!(label, "app-password");
