@@ -325,6 +325,8 @@ fn MediaDeleteOutcome(
 /// posts that embed it keep serving the file (which stays on disk).
 ///
 /// The button's accessible name contains "Force delete" — the e2e selects on it.
+/// `+ use<>` — precise capturing, ADR-0100; see [`media_key_fields`], which this
+/// calls and whose captured lifetime would otherwise propagate in here.
 fn force_delete_form(item: &Item, delete_action: ServerAction<Delete>) -> impl IntoView + use<> {
     // The label decodes to the name the user typed; the key the form submits is
     // `media_key_fields`'s canonical spelling (#720).
@@ -359,6 +361,9 @@ fn force_delete_form(item: &Item, delete_action: ServerAction<Delete>) -> impl I
 /// whose cosmetic half is each caller's `display_name` (#720). Decoding the key would
 /// make every delete of an encoding-needing name fail at the wire door — loudly, since
 /// `Filename`'s `FromStr` rejects a raw value, but fail all the same.
+/// `+ use<>` — precise capturing, ADR-0100. The three values are stringified before
+/// the `view!`, so nothing is lent across it; saying so explicitly is what lets this
+/// keep `&Item` under edition 2024. Both callers below inherit the same requirement.
 fn media_key_fields(item: &Item) -> impl IntoView + use<> {
     let sha256 = item.sha256.to_string();
     let filename_key = item.filename.to_string();
@@ -371,6 +376,10 @@ fn media_key_fields(item: &Item) -> impl IntoView + use<> {
     }
 }
 
+/// One row of the media table: the link, the metadata cells, and the delete form.
+///
+/// `+ use<>` — precise capturing, ADR-0100; see [`media_key_fields`], which this
+/// calls and whose captured lifetime would otherwise propagate in here.
 fn render_media_row(
     item: &Item,
     delete_action: ServerAction<Delete>,

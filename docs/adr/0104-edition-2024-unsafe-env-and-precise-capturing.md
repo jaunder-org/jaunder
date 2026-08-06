@@ -1,4 +1,4 @@
-# ADR-0104: Edition 2024 — One `unsafe` Env Boundary, and Precise Capturing for Borrowing View Helpers
+# ADR-0104: Edition 2024 has one audited `unsafe` env seam, and borrowing views capture precisely
 
 - Status: accepted
 - Date: 2026-08-05
@@ -131,6 +131,21 @@ this codebase defeat it:
 
 The handle also removes the `None::<&str>` turbofish that an `Option`-valued
 delta array forces at remove-only call sites.
+
+**What the rule does _not_ cover.** The lock exists to serialize against
+**in-process mutation**. A read of a variable that nothing in the process ever
+writes has no writer to race, and needs no lock. The live example is
+`storage::test_support`'s reads of `JAUNDER_PG_TEST_URL` and
+`JAUNDER_PG_BOOTSTRAP_TEST_URL`: those are set by `devtool` on the _child_
+process via `Command::env` before the test binary starts
+(`tools/devtool/src/pg.rs`, `coverage/emit.rs`), exactly as
+`test-support/tests/cli.rs` passes `JAUNDER_CAPTURE_DIR`. Wrapping them would
+buy nothing and would cost real throughput — `postgres_url_string()` runs during
+per-test database provisioning, so taking a process-global lock there would
+serialize the entire Postgres suite.
+
+The test to apply, then, is _"does any in-process code write this variable?"_ —
+not _"is this an env read?"_.
 
 Accepted limitation: the closure is synchronous, so an env delta cannot span an
 `.await`. Verified to constrain nothing at the time of writing — the three

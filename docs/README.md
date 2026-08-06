@@ -131,7 +131,7 @@ convention). See the Status column below for each ADR's current status.
 | [0101](adr/0101-infallible-kind-is-invariant-first.md)             | The infallible newtype kind is invariant-first, and a trusted door can be typed away                         | accepted   |
 | [0102](adr/0102-config-key-closed-registry.md)                     | Config keys are a closed registry carrying validators                                                        | accepted   |
 | [0103](adr/0103-prefer-real-harness-over-mirroring-fake.md)        | Prefer the real harness over a fake that mirrors backend behaviour                                           | accepted   |
-| [0104](adr/0104-edition-2024-unsafe-env-and-precise-capturing.md)  | ADR-XXXX: Edition 2024 — One `unsafe` Env Boundary, and Precise Capturing for Borrowing View Helpers         | accepted   |
+| [0104](adr/0104-edition-2024-unsafe-env-and-precise-capturing.md)  | Edition 2024 has one audited `unsafe` env seam, and borrowing views capture precisely                        | accepted   |
 
 <!-- adr-table:end -->
 

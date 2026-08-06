@@ -117,6 +117,12 @@ fn InviteCreateOutcome(action: ServerAction<Create>) -> impl IntoView {
 }
 
 /// Renders a single invite row: its expiry and, if used, when.
+///
+/// `+ use<>` is precise capturing (ADR-0100): under edition 2024 a return-position
+/// `impl Trait` captures every in-scope lifetime, and Leptos requires a stored view
+/// to be `'static`. This body derives owned values before the `view!` and lends
+/// nothing across it, so capturing nothing is the truth — and it keeps `&Info` in
+/// the signature rather than forcing the caller to hand over ownership.
 fn render_invite_row(i: &Info) -> impl IntoView + use<> {
     view! {
         <li>
