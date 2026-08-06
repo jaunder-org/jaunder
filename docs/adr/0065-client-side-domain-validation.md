@@ -6,6 +6,11 @@
 - Note: amended 2026-07-30 (#568) — the coverage boundary is re-pointed at
   ADR-0070 (the widgets are wasm-only and never host-compile), and
   `<ValidatedTextarea<T>>` joins `<ValidatedInput<T>>` as a default renderer
+- Note: amended 2026-08-05 (#822) — the secret exception is restated around the
+  inbound-twin split (a secret **is** a typed wire arg; the old
+  stringly-typed-arg claim was already false), and the decode-stage consequence
+  now records that an arg-decode failure emits boundary telemetry rather than
+  vanishing
 
 ## Context
 
@@ -73,10 +78,18 @@ pre-validation using the same newtype `FromStr` — never a re-implemented rule.
 - **Defense-in-depth.** The typed-arg `Deserialize` still validates server-side;
   because legitimate clients pre-validate, the generic-`ServerFunction`-error
   path is only reachable by a malformed/malicious request.
-- **Secret exception.** A secret newtype (`Password`) has no serde bridge
-  (ADR-0063), so it **cannot** be a typed wire arg; its arg stays `String`
-  (parsed on entry) but it still gets client-side pre-validation via its
-  `FromStr`.
+- **Secret exception.** _Amended by #822._ This bullet previously claimed a
+  secret "cannot be a typed wire arg" and that its arg remains stringly-typed —
+  untrue since #315 typed all three password-taking fns, and
+  `server/tests/web/web_password_reset.rs` asserts the wire rejection directly.
+  The real distinction is the **twin split**: a secret's _domain_ type
+  (`Password`) has no serde bridge (ADR-0063) and cannot itself cross the wire,
+  but its _inbound twin_ (`ProfferedPassword`; ADR-0063's `Proffered`,
+  generalized by ADR-0084) does have one and carries the wire role. So a secret
+  **is** a typed wire arg like any other — validated at decode through the
+  shared shape rule, and client-pre-validated through that same rule. What stays
+  special is the twin split (the domain type is reachable only by converting
+  inward from the twin) plus keeping the value out of tracing via `skip`.
 - **Coverage boundary (ADR-0070 — web verticals split host/wasm at the file
   level).** _Amended by #568._ This bullet previously cited ADR-0056 and claimed
   `<ValidatedInput<T>>` host-compiles as dead-but-exempt; ADR-0056 is superseded
@@ -106,11 +119,22 @@ pre-validation using the same newtype `FromStr` — never a re-implemented rule.
   future ergonomic addition (no redesign required).
 - Typing a `#[server]` arg moves that value's validation into arg-**decode**: a
   malformed value (only reachable by a non-browser client, since the disabled
-  button gates the browser) now fails _before_ the fn body — surfacing as a
-  generic transport/decode error and skipping the body's error-boundary
-  telemetry and rejection metrics. Accepted: that's the defense-in-depth path,
-  not the user path. Args that stay `String` (secrets like `password`) still
-  parse in the body, so their rejection telemetry is unchanged.
+  button gates the browser) now fails _before_ the fn body, surfacing as a
+  generic transport/decode error rather than the controlled public message.
+  Accepted: that's the defense-in-depth path, not the user path. _Amended by
+  #822._ This applies to **every** typed wire arg, secrets included — there is
+  no stringly-typed carve-out, so nothing "still parses in the body". The decode
+  path also used to skip the body's error-boundary telemetry entirely, leaving a
+  malformed request with no trace at all; `web::error`'s `FromServerFnError`
+  impl now emits the standard boundary event and error metric for arg-decode
+  failures (`Validation`/`Client`, with a `stage = decode` context entry) —
+  though note `ErrorClass::Client` logs at DEBUG, so under a production INFO
+  filter only the counter survives. The rejection _metrics_ named below —
+  `metrics::login`, `metrics::registration`, `metrics::password_reset` — sit
+  downstream of the parse and never covered this path in any version. One
+  consequence remains: at decode time the `web.<vertical>.<ident>` span has not
+  been entered, so the failing endpoint is identified by the enclosing request
+  span's `uri`, not by span name.
 - What this rules out: re-implementing a newtype's validation in the client;
   typing a wire arg **without** client pre-validation (which would expose the
   generic-error UX); and treating "localized" as i18n (out of scope).

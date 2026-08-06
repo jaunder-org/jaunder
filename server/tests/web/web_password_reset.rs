@@ -321,7 +321,7 @@ async fn confirm_password_reset_with_short_password_returns_error(#[case] backen
         .unwrap();
 
     let body = format!("token={raw_token}&new_password=short");
-    let (status, _body) = post_form_with_mailer(
+    let (status, response_body) = post_form_with_mailer(
         &state,
         &mailer,
         <web::password_reset::Confirm as ServerFn>::PATH,
@@ -330,7 +330,15 @@ async fn confirm_password_reset_with_short_password_returns_error(#[case] backen
     )
     .await;
 
-    assert_ne!(status, StatusCode::OK);
+    // A decode rejection is HTTP 500 with a body tagged `server_function` — distinct
+    // from an in-body failure, which projects to `validation`/`unauthorized`/etc.
+    // (`WebError` is externally tagged, snake_case.) This is the wire contract the
+    // decode-telemetry path in `web::error` sits behind (#822).
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        response_body.contains("server_function"),
+        "expected a server-fn decode rejection; body: {response_body}"
+    );
 
     // The reset must not have been applied: the original password still authenticates.
     let auth = state
