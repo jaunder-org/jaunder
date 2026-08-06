@@ -15,8 +15,8 @@ use common::ids::{PostId, UserId};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
-use common::render::{RenderOutput, derive_post_title};
-use common::slug::{InvalidSlug, Slug, slugify_title};
+use common::render::{RenderOutput, derive_post_naming};
+use common::slug::{InvalidSlug, Slug};
 use common::visibility::AudienceTarget;
 
 // ---------------------------------------------------------------------------
@@ -122,66 +122,6 @@ pub fn seed_post_input(
     })
 }
 
-/// The raw, unrendered fields of a post edit. Bundles the update inputs so
-/// [`update_rendered_post`] stays under the argument limit and names its shape
-/// at every call site.
-pub struct RenderedPostUpdate {
-    /// Post being edited.
-    pub post_id: PostId,
-    /// User performing the edit (ownership is checked in storage).
-    pub editor_user_id: UserId,
-    /// Explicit title, or `None`.
-    pub title: Option<PostTitle>,
-    /// New slug for the post.
-    pub slug: Slug,
-    /// Raw post body in `format`.
-    pub body: PostBody,
-    /// Markup format of `body`.
-    pub format: PostFormat,
-    /// What this update does to the post's publication state.
-    pub publish: PublishUpdate,
-    /// Optional summary/excerpt.
-    pub summary: Option<PostSummary>,
-    /// Audience targeting for the post (replaces its existing rows).
-    pub audiences: Vec<AudienceTarget>,
-}
-
-/// Renders `body` according to `format` and updates the post via storage.
-///
-/// # Errors
-///
-/// Returns `Err(UpdatePostError)` if the storage layer returns an error.
-pub async fn update_rendered_post(
-    storage: &dyn PostStorage,
-    update: RenderedPostUpdate,
-) -> Result<PostRecord, UpdatePostError> {
-    let RenderedPostUpdate {
-        post_id,
-        editor_user_id,
-        title,
-        slug,
-        body,
-        format,
-        publish,
-        summary,
-        audiences,
-    } = update;
-    let rendered = RenderOutput::render(&body, &format);
-    let (unpublish, explicit_published_at) = publish.into_inputs();
-    let input = UpdatePostInput {
-        title,
-        slug,
-        body,
-        format,
-        rendered,
-        unpublish,
-        explicit_published_at,
-        summary,
-        audiences,
-    };
-    storage.update_post(post_id, editor_user_id, &input).await
-}
-
 // ---------------------------------------------------------------------------
 // High-level post-update orchestration
 // ---------------------------------------------------------------------------
@@ -189,10 +129,11 @@ pub async fn update_rendered_post(
 /// Errors that can occur during a high-level post update.
 #[derive(Debug, Error)]
 pub enum PerformUpdateError {
-    #[error("post body or title is required")]
+    /// Reachable only through canonicalization (#811): a blank body cannot be
+    /// built at all any more, so the sole way to arrive here is a body that
+    /// *becomes* blank — an Org post whose title source is its entire content.
+    #[error("post body is only its title, leaving nothing to store")]
     EmptyPost,
-    #[error("invalid slug")]
-    InvalidSlug,
     #[error("post not found")]
     NotFound,
     #[error("not authorized")]
@@ -213,14 +154,14 @@ impl From<UpdatePostError> for PerformUpdateError {
 
 impl From<PerformUpdateError> for host::error::InternalError {
     /// Reproduces the former `web::posts::server::perform_update_error`
-    /// `(kind, class, public_message)`: empty/invalid-slug are client validation
-    /// errors, not-found/unauthorized mask as a 404, storage is a masked storage
-    /// failure. The validation arms carry the typed `PerformUpdateError` as the
+    /// `(kind, class, public_message)`: the empty-post arm is a client validation
+    /// error, not-found/unauthorized mask as a 404, storage is a masked storage
+    /// failure. The validation arm carries the typed `PerformUpdateError` as the
     /// operator-side source instead of flattening it (A19).
     fn from(error: PerformUpdateError) -> Self {
         use host::error::InternalError;
         match error {
-            PerformUpdateError::EmptyPost | PerformUpdateError::InvalidSlug => {
+            PerformUpdateError::EmptyPost => {
                 InternalError::validation_source(error.to_string(), error)
             }
             PerformUpdateError::NotFound | PerformUpdateError::Unauthorized => {
@@ -307,25 +248,20 @@ pub async fn perform_post_update(
         summary,
         audiences,
     } = input;
-    let (title, slug_seed) =
-        derive_post_title(title, &body, &format).ok_or(PerformUpdateError::EmptyPost)?;
+    let (title, derived_slug) = derive_post_naming(title, &body, &format);
 
-    // Derive the title from the *original* body above, then canonicalize the stored
-    // Org body (ADR-0024): strip the title-source line, keep everything else. Web and
-    // AtomPub thus converge on one stored body. Non-Org bodies are stored verbatim.
-    let body: PostBody = if matches!(format, PostFormat::Org) {
-        common::render::canonicalize_org_body(&body).into()
-    } else {
-        body
-    };
+    // Derive the naming from the *original* body above, then canonicalize what gets
+    // stored. Web and AtomPub thus converge on one stored body. A title-only Org post
+    // canonicalizes to nothing, which no longer names a body (#811): there is nothing
+    // left to store, so it is the same rejection an empty post has always earned.
+    let body = common::render::canonicalize_body(&body, &format)
+        .map_err(|_| PerformUpdateError::EmptyPost)?;
 
     let slug = match slug_override {
         // Pre-validated at the boundary (wire/CLI); updates keep the slug as-is,
         // no collision dedup.
         Some(slug) => slug.clone(),
-        None => slugify_title(&slug_seed)
-            .parse::<Slug>()
-            .map_err(|_| PerformUpdateError::InvalidSlug)?,
+        None => derived_slug,
     };
 
     let rendered = RenderOutput::render(&body, &format);
@@ -354,7 +290,10 @@ pub async fn perform_post_update(
 /// Errors that can occur during high-level post creation.
 #[derive(Debug, Error)]
 pub enum PerformCreationError {
-    #[error("post body is required")]
+    /// Reachable only through canonicalization (#811): a blank body cannot be
+    /// built at all any more, so the sole way to arrive here is a body that
+    /// *becomes* blank — an Org post whose title source is its entire content.
+    #[error("post body is only its title, leaving nothing to store")]
     EmptyPost,
     #[error(transparent)]
     InvalidSlug(#[from] InvalidSlug),
@@ -377,7 +316,9 @@ impl From<PerformCreationError> for host::error::InternalError {
     fn from(error: PerformCreationError) -> Self {
         use host::error::InternalError;
         match error {
-            PerformCreationError::EmptyPost => InternalError::validation("post body is required"),
+            // Single-sourced from the variant's `#[error]` so the public message
+            // cannot drift from the cause the variant documents.
+            PerformCreationError::EmptyPost => InternalError::validation(error.to_string()),
             PerformCreationError::InvalidSlug(_) => {
                 InternalError::validation_source(error.to_string(), error)
             }
@@ -473,28 +414,20 @@ pub async fn perform_post_creation(
         audiences,
         idempotency_key,
     } = input;
-    // The raw text a slug is generated from, before slugification and validation.
-    let (title, derived_slug_seed) =
-        derive_post_title(title, &body, &format).ok_or(PerformCreationError::EmptyPost)?;
+    let (title, derived_slug) = derive_post_naming(title, &body, &format);
 
-    // Derive the title from the *original* body above, then canonicalize the stored
-    // Org body (ADR-0024): strip the title-source line, keep everything else. Web and
-    // AtomPub thus converge on one stored body. Non-Org bodies are stored verbatim.
-    let body: PostBody = if matches!(format, PostFormat::Org) {
-        common::render::canonicalize_org_body(&body).into()
-    } else {
-        body
-    };
+    // Derive the naming from the *original* body above, then canonicalize what gets
+    // stored. Web and AtomPub thus converge on one stored body. A title-only Org post
+    // canonicalizes to nothing, which no longer names a body (#811): there is nothing
+    // left to store, so it is the same rejection an empty post has always earned.
+    let body = common::render::canonicalize_body(&body, &format)
+        .map_err(|_| PerformCreationError::EmptyPost)?;
 
     let slug_seed: Slug = match slug_override {
         // Pre-validated at the boundary (wire/CLI); a valid override is still fed
         // through the collision-suffix generator below for uniqueness.
         Some(slug) => slug.clone(),
-        // slugify_title never fails, but funnel it through from_str (the single
-        // chokepoint) rather than bypass-constructing a Slug.
-        None => slugify_title(&derived_slug_seed)
-            .parse()
-            .map_err(PerformCreationError::InvalidSlug)?,
+        None => derived_slug,
     };
 
     for attempt in 0..max_attempts {
@@ -553,7 +486,7 @@ pub async fn perform_post_creation(
 mod tests {
     use super::*;
     use crate::test_support::{Backend, SeedUser, backends};
-    use common::test_support::{parse_row_limit, parse_slug};
+    use common::test_support::{parse_post_body, parse_row_limit, parse_slug};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -569,7 +502,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".into(),
+                body: parse_post_body("Hello, world!"),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -585,7 +518,8 @@ mod tests {
 
         assert_eq!(record.user_id, user_id);
         assert_eq!(record.slug, "hello-world");
-        assert_eq!(record.body, "Hello, world!");
+        // Canonicalized on write (#811): the stored body carries a terminating newline.
+        assert_eq!(record.body, "Hello, world!\n");
         assert_eq!(record.format, PostFormat::Markdown);
         assert!(record.rendered_html.contains("<p>Hello, world!</p>"));
     }
@@ -604,7 +538,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Private note.".into(),
+                body: parse_post_body("Private note."),
                 title: Some("Private Note"),
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -647,7 +581,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Body without a heading.".into(),
+                body: parse_post_body("Body without a heading."),
                 title: Some("Explicit Title"),
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -679,7 +613,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".into(),
+                body: parse_post_body("Hello, world!"),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: Some(&slug),
@@ -696,32 +630,10 @@ mod tests {
         assert_eq!(record.slug, "my-custom-slug");
     }
 
-    #[apply(backends)]
-    #[tokio::test]
-    async fn test_perform_post_creation_empty_body(#[case] backend: Backend) {
-        let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let storage = &*env.state.posts;
-        let err = perform_post_creation(
-            storage,
-            PostCreation {
-                user_id,
-                body: "   ".into(),
-                title: None,
-                format: PostFormat::Markdown,
-                slug_override: None,
-                published_at: None,
-                max_attempts: 100,
-                summary: None,
-                audiences: vec![AudienceTarget::Public],
-                idempotency_key: None,
-            },
-        )
-        .await
-        .unwrap_err();
-
-        assert!(matches!(err, PerformCreationError::EmptyPost));
-    }
+    // `test_perform_post_creation_empty_body` retired here: a whitespace-only body is
+    // no longer a `PostCreation` the type system will build, so the rejection is
+    // asserted where it now happens — `common::post_body`'s
+    // `post_body_rejects_whitespace_only` (#811).
 
     // guard:no-backend — injects a MockPostStorage whose create_post returns an
     // Internal error; no live database backend
@@ -740,7 +652,7 @@ mod tests {
             &storage,
             PostCreation {
                 user_id: UserId::from(1),
-                body: "Hello, world!".into(),
+                body: parse_post_body("Hello, world!"),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -769,7 +681,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "!!!".into(),
+                body: parse_post_body("!!!"),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -798,7 +710,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "# 日本語\n\nbody".into(),
+                body: parse_post_body("# 日本語\n\nbody"),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -851,7 +763,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".into(),
+                body: parse_post_body("Hello, world!"),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -869,7 +781,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".into(),
+                body: parse_post_body("Hello, world!"),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -887,7 +799,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".into(),
+                body: parse_post_body("Hello, world!"),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -917,7 +829,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".into(),
+                body: parse_post_body("Hello, world!"),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -935,7 +847,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".into(),
+                body: parse_post_body("Hello, world!"),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -956,7 +868,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "Hello, world!".into(),
+                body: parse_post_body("Hello, world!"),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -985,7 +897,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "#+TITLE: Hi\n#+FOO: x\n\nHello".into(),
+                body: parse_post_body("#+TITLE: Hi\n#+FOO: x\n\nHello"),
                 title: None,
                 format: PostFormat::Org,
                 slug_override: None,
@@ -1021,7 +933,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "#+TITLE: First\n\noriginal".into(),
+                body: parse_post_body("#+TITLE: First\n\noriginal"),
                 title: None,
                 format: PostFormat::Org,
                 slug_override: None,
@@ -1040,7 +952,7 @@ mod tests {
             PostUpdate {
                 post_id: created.post_id,
                 editor_user_id: user_id,
-                body: "#+TITLE: Second\n#+FOO: keep\n\nupdated".into(),
+                body: parse_post_body("#+TITLE: Second\n#+FOO: keep\n\nupdated"),
                 title: None,
                 format: PostFormat::Org,
                 slug_override: None,
@@ -1068,19 +980,100 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn test_perform_post_creation_markdown_body_is_not_canonicalized(
-        #[case] backend: Backend,
-    ) {
+    async fn perform_post_creation_rejects_title_only_org_body(#[case] backend: Backend) {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let storage = &*env.state.posts;
-        // Canonicalization is Org-only: a Markdown body with a leading `# H1` is
-        // stored verbatim (the `# H1` is not stripped).
+
+        // BEHAVIOUR CHANGE (#811 decision 2). ADR-0024 canonicalization treats a leading
+        // `* heading` as the title *source* and strips it, so this body leaves nothing to
+        // store. It used to succeed and store an empty body.
+        let creation = |body: &str, format: PostFormat| PostCreation {
+            user_id,
+            body: parse_post_body(body),
+            title: None,
+            format,
+            slug_override: None,
+            published_at: None,
+            max_attempts: 100,
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
+        };
+
+        let err = perform_post_creation(storage, creation("* My Title\n", PostFormat::Org))
+            .await
+            .expect_err("a title-only Org post has nothing left to store");
+        assert!(matches!(err, PerformCreationError::EmptyPost), "{err:?}");
+
+        // The discriminator: the same bytes are ordinary content in Markdown, so the
+        // rejection is Org's title-stripping and not the `PostBody` parse.
+        perform_post_creation(storage, creation("* My Title\n", PostFormat::Markdown))
+            .await
+            .expect("the same bytes are content, not a title source, in Markdown");
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn perform_post_update_rejects_title_only_org_body(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let storage = &*env.state.posts;
+
+        // The update path rejects it too — editing a post down to nothing but its title
+        // is the same nonsense as creating one that way.
+        let created = perform_post_creation(
+            storage,
+            PostCreation {
+                user_id,
+                body: parse_post_body("* My Title\n\nreal content"),
+                title: None,
+                format: PostFormat::Org,
+                slug_override: None,
+                published_at: None,
+                max_attempts: 100,
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                idempotency_key: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let err = perform_post_update(
+            storage,
+            PostUpdate {
+                post_id: created.post_id,
+                editor_user_id: user_id,
+                body: parse_post_body("* My Title\n"),
+                title: None,
+                format: PostFormat::Org,
+                slug_override: None,
+                publish: PublishUpdate::Publish { at: None },
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+            },
+        )
+        .await
+        .expect_err("a title-only Org post has nothing left to store");
+        assert!(matches!(err, PerformUpdateError::EmptyPost), "{err:?}");
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn test_perform_post_creation_markdown_body_keeps_its_heading(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let storage = &*env.state.posts;
+        // Since #811 every format canonicalizes, so this no longer pins "Markdown is not
+        // canonicalized" — it pins the part that still distinguishes the formats: only Org
+        // treats its title source as a *header* and strips it. A Markdown `# H1` is
+        // content and survives. Whitespace is canonicalized for both, hence the newline.
         let record = perform_post_creation(
             storage,
             PostCreation {
                 user_id,
-                body: "# H1\n\nBody text".into(),
+                body: parse_post_body("# H1\n\nBody text"),
                 title: None,
                 format: PostFormat::Markdown,
                 slug_override: None,
@@ -1094,7 +1087,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(record.body, "# H1\n\nBody text");
+        assert_eq!(record.body, "# H1\n\nBody text\n");
     }
 
     #[apply(backends)]
@@ -1110,7 +1103,7 @@ mod tests {
             storage,
             PostCreation {
                 user_id,
-                body: "#+TITLE: Distinct Headline\n\nParagraph body".into(),
+                body: parse_post_body("#+TITLE: Distinct Headline\n\nParagraph body"),
                 title: None,
                 format: PostFormat::Org,
                 slug_override: None,
@@ -1148,7 +1141,7 @@ mod tests {
     ) -> PostCreation<'a> {
         PostCreation {
             user_id,
-            body: body.into(),
+            body: parse_post_body(body),
             title: None,
             format: PostFormat::Markdown,
             slug_override: None,
@@ -1304,7 +1297,10 @@ mod tests {
     #[test]
     fn test_perform_creation_error_display_and_debug() {
         let err = PerformCreationError::EmptyPost;
-        assert_eq!(err.to_string(), "post body is required");
+        assert_eq!(
+            err.to_string(),
+            "post body is only its title, leaving nothing to store"
+        );
         let debug = format!("{err:?}");
         assert!(debug.contains("EmptyPost"));
 
@@ -1337,15 +1333,12 @@ mod tests {
     // -- PerformUpdateError tests --
 
     #[test]
-    fn perform_update_error_empty_title_display() {
+    fn perform_update_error_empty_post_display() {
         let err = PerformUpdateError::EmptyPost;
-        assert_eq!(err.to_string(), "post body or title is required");
-    }
-
-    #[test]
-    fn perform_update_error_invalid_slug_display() {
-        let err = PerformUpdateError::InvalidSlug;
-        assert_eq!(err.to_string(), "invalid slug");
+        assert_eq!(
+            err.to_string(),
+            "post body is only its title, leaving nothing to store"
+        );
     }
 
     #[test]
@@ -1396,11 +1389,10 @@ mod tests {
 
         let empty: InternalError = PerformUpdateError::EmptyPost.into();
         assert_eq!(empty.kind(), ErrorKind::Validation);
-        assert_eq!(empty.public_message(), "post body or title is required");
-
-        let invalid_slug: InternalError = PerformUpdateError::InvalidSlug.into();
-        assert_eq!(invalid_slug.kind(), ErrorKind::Validation);
-        assert_eq!(invalid_slug.public_message(), "invalid slug");
+        assert_eq!(
+            empty.public_message(),
+            "post body is only its title, leaving nothing to store"
+        );
 
         let not_found: InternalError = PerformUpdateError::NotFound.into();
         assert_eq!(not_found.kind(), ErrorKind::NotFound);
@@ -1424,7 +1416,10 @@ mod tests {
 
         let empty: InternalError = PerformCreationError::EmptyPost.into();
         assert_eq!(empty.kind(), ErrorKind::Validation);
-        assert_eq!(empty.public_message(), "post body is required");
+        assert_eq!(
+            empty.public_message(),
+            "post body is only its title, leaving nothing to store"
+        );
 
         let invalid_slug: InternalError =
             PerformCreationError::InvalidSlug(common::slug::InvalidSlug).into();

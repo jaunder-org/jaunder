@@ -540,8 +540,10 @@ mod tests {
 
     #[test]
     fn infallible_bridge_is_untouched_on_all_three_inners() {
-        // `PostBody`'s `From<String>` MOVES the value, so borrowing here would ADD an
-        // allocation rather than remove one. Standing guard for the #758 boundary.
+        // The infallible bridge's `From<String>` MOVES the value, so borrowing here
+        // would ADD an allocation rather than remove one. Standing guard for the #758
+        // boundary. (The identifier is arbitrary — it named `PostBody` until #811 gave
+        // that type an invariant; no production type takes `infallible` today.)
         let n = quote::format_ident!("PostBody");
         let out = norm(&sqlx_impls_infallible(&n));
         assert!(out.contains("<::std::string::Stringas::sqlx::Type<DB>>::type_info()"));

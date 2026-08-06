@@ -8,7 +8,7 @@
 use chrono::{DateTime, Utc};
 use common::absolute_url::{AbsoluteUrl, compose};
 use common::atompub::{Category, Content, Entry, Link, Text, is_draft, set_draft, set_j_slug};
-use common::post_body::PostBody;
+use common::post_body::{InvalidPostBody, PostBody};
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
 use common::tag::TagLabel;
@@ -71,10 +71,21 @@ fn wire_to_format(content_type: Option<&str>, default: PostFormat) -> PostFormat
 /// Per ADR-0023, the entry's content `type` carries the storage format as a media
 /// type, parsed leniently by [`wire_to_format`]: `text/org`→Org,
 /// `text/markdown`→Markdown, `html`/`xhtml`/`text/html`→Html, and bare `text`
-/// (or absent/unknown) falls back to the user's `default_format`. Body is the
-/// content value (empty string when the entry carries no content).
-#[must_use]
-pub fn entry_to_post_fields(entry: &Entry, default_format: PostFormat) -> PostFields {
+/// (or absent/unknown) falls back to the user's `default_format`.
+///
+/// The body is the **one** field lenient ingest cannot apply to: an unusable
+/// summary or category is dropped and the entry still names a post, but an entry
+/// with no usable content names nothing. So this is the mapping's sole failure
+/// mode, and the handlers turn it into a `400`.
+///
+/// # Errors
+///
+/// Returns [`InvalidPostBody`] when the entry's content has no non-blank line —
+/// including an entry that carries no content element at all (#811).
+pub fn entry_to_post_fields(
+    entry: &Entry,
+    default_format: PostFormat,
+) -> Result<PostFields, InvalidPostBody> {
     let (ctype, value) = entry
         .content()
         .and_then(|c| c.value().map(|v| (c.content_type(), v)))
@@ -82,7 +93,7 @@ pub fn entry_to_post_fields(entry: &Entry, default_format: PostFormat) -> PostFi
 
     let format = wire_to_format(ctype, default_format);
 
-    let body = PostBody::from(value);
+    let body: PostBody = value.parse()?;
     // A blank `<title>` means the client supplied no title: `PostTitle`'s `FromStr`
     // rejects it and `ok()` turns that into absence, so the presence policy is the
     // type's rule rather than a hand-rolled emptiness check beside it (#830).
@@ -115,7 +126,7 @@ pub fn entry_to_post_fields(entry: &Entry, default_format: PostFormat) -> PostFi
     // read the entry's `<published>` (a fixed-offset datetime) back to UTC.
     let published = entry.published().map(|d| d.with_timezone(&Utc));
 
-    PostFields {
+    Ok(PostFields {
         title,
         body,
         format,
@@ -123,7 +134,7 @@ pub fn entry_to_post_fields(entry: &Entry, default_format: PostFormat) -> PostFi
         categories,
         is_draft,
         published,
-    }
+    })
 }
 
 /// Builds the `AtomPub` member `Entry` for a post.
@@ -204,7 +215,7 @@ mod tests {
     use super::*;
     use chrono::{DateTime, Utc};
     use common::ids::{PostId, TagId, UserId};
-    use common::test_support::{parse_absolute_url, parse_post_summary};
+    use common::test_support::{parse_absolute_url, parse_post_body, parse_post_summary};
 
     // -----------------------------------------------------------------------
     // format_wire seam tests
@@ -266,7 +277,7 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
 
         assert_eq!(fields.format, PostFormat::Html);
         assert_eq!(fields.body, "<p>HTML content</p>");
@@ -284,7 +295,7 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
 
         assert_eq!(fields.format, PostFormat::Html);
     }
@@ -300,7 +311,7 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
 
         assert_eq!(fields.format, PostFormat::Markdown);
         assert_eq!(fields.body, "# Markdown");
@@ -318,7 +329,7 @@ mod tests {
 
         let entry = xml.parse::<Entry>().expect("parse entry");
         // Default is Markdown, but the explicit media type selects Org.
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
 
         assert_eq!(fields.format, PostFormat::Org);
         assert_eq!(fields.body, "* Org body");
@@ -336,7 +347,7 @@ mod tests {
 
         let entry = xml.parse::<Entry>().expect("parse entry");
         // Default is Org, but the explicit media type selects Markdown.
-        let fields = entry_to_post_fields(&entry, PostFormat::Org);
+        let fields = entry_to_post_fields(&entry, PostFormat::Org).expect("valid body");
 
         assert_eq!(fields.format, PostFormat::Markdown);
         assert_eq!(fields.body, "# Markdown body");
@@ -353,14 +364,16 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Org);
+        let fields = entry_to_post_fields(&entry, PostFormat::Org).expect("valid body");
 
         assert_eq!(fields.format, PostFormat::Org);
         assert_eq!(fields.body, "some text");
     }
 
     #[test]
-    fn entry_to_post_fields_no_content_element_yields_empty_body() {
+    fn entry_to_post_fields_no_content_element_is_rejected() {
+        // The absent-content entry used to map to an empty body; a body is now a
+        // non-blank value, so the entry has nothing to describe a post with (#811).
         let xml = r#"<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom">
   <title>Test</title>
@@ -369,10 +382,8 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
 
-        assert_eq!(fields.body, "");
-        assert_eq!(fields.format, PostFormat::Markdown);
+        assert!(entry_to_post_fields(&entry, PostFormat::Markdown).is_err());
     }
 
     #[test]
@@ -382,11 +393,12 @@ mod tests {
   <title>Test</title>
   <id>id</id>
   <updated>2026-05-31T00:00:00Z</updated>
+  <content>body</content>
   <summary>This is a summary</summary>
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
 
         assert_eq!(
             fields.summary,
@@ -401,10 +413,11 @@ mod tests {
   <title>Test</title>
   <id>id</id>
   <updated>2026-05-31T00:00:00Z</updated>
+  <content>body</content>
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
 
         assert_eq!(fields.summary, None);
     }
@@ -416,12 +429,13 @@ mod tests {
   <title>Test</title>
   <id>id</id>
   <updated>2026-05-31T00:00:00Z</updated>
+  <content>body</content>
   <category term="rust"/>
   <category term="programming"/>
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
 
         assert_eq!(fields.categories, vec!["rust", "programming"]);
     }
@@ -433,10 +447,11 @@ mod tests {
   <title>Test</title>
   <id>id</id>
   <updated>2026-05-31T00:00:00Z</updated>
+  <content>body</content>
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
 
         assert_eq!(fields.categories, Vec::<TagLabel>::new());
     }
@@ -451,12 +466,13 @@ mod tests {
   <title>Test</title>
   <id>id</id>
   <updated>2026-05-31T00:00:00Z</updated>
+  <content>body</content>
   <category term="rust"/>
   <category term="not a tag"/>
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
 
         assert_eq!(fields.categories, vec!["rust".parse::<TagLabel>().unwrap()]);
     }
@@ -468,13 +484,14 @@ mod tests {
   <title>Test</title>
   <id>id</id>
   <updated>2026-05-31T00:00:00Z</updated>
+  <content>body</content>
   <app:control>
     <app:draft>yes</app:draft>
   </app:control>
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
 
         assert!(fields.is_draft);
     }
@@ -486,10 +503,11 @@ mod tests {
   <title>Test</title>
   <id>id</id>
   <updated>2026-05-31T00:00:00Z</updated>
+  <content>body</content>
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
 
         assert!(!fields.is_draft);
     }
@@ -505,7 +523,7 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
 
         assert_eq!(fields.title.as_deref(), Some("My Post Title"));
     }
@@ -520,7 +538,7 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown);
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
 
         assert_eq!(fields.title, None);
     }
@@ -570,7 +588,7 @@ mod tests {
             author_username: "alice".parse().expect("parse username"),
             title: title.map(common::test_support::parse_post_title),
             slug: slug.parse().expect("parse slug"),
-            body: body.into(),
+            body: parse_post_body(body),
             format,
             rendered_html: storage::RenderedHtml::from_trusted("<p>html</p>"),
             created_at: Utc::now(),

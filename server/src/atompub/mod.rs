@@ -242,6 +242,15 @@ impl From<common::tag::TagValidationError> for HandlerError {
     }
 }
 
+impl From<common::post_body::InvalidPostBody> for HandlerError {
+    /// An entry whose content is nothing but blank lines describes no post, so it is
+    /// the client's error — the same `400` the service layer's `EmptyPost` earns
+    /// below, just detected a layer earlier now that the body is typed (#811).
+    fn from(_: common::post_body::InvalidPostBody) -> Self {
+        HandlerError::BadRequest
+    }
+}
+
 impl From<storage::PerformCreationError> for HandlerError {
     fn from(err: storage::PerformCreationError) -> Self {
         use storage::PerformCreationError as E;
@@ -260,7 +269,7 @@ impl From<storage::PerformUpdateError> for HandlerError {
     fn from(err: storage::PerformUpdateError) -> Self {
         use storage::PerformUpdateError as E;
         match &err {
-            E::EmptyPost | E::InvalidSlug => HandlerError::BadRequest,
+            E::EmptyPost => HandlerError::BadRequest,
             E::NotFound | E::Unauthorized => HandlerError::NotFound,
             E::Storage(_) => {
                 log_internal(&err);
@@ -459,10 +468,6 @@ mod tests {
     fn update_error_maps_each_class() {
         assert_eq!(
             status(PerformUpdateError::EmptyPost.into()),
-            StatusCode::BAD_REQUEST
-        );
-        assert_eq!(
-            status(PerformUpdateError::InvalidSlug.into()),
             StatusCode::BAD_REQUEST
         );
         assert_eq!(

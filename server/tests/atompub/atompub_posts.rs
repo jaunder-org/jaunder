@@ -4,7 +4,7 @@ use axum::{
 };
 use common::ids::PostId;
 use common::tag::{MAX_TAGS_PER_POST, TagLabel};
-use common::test_support::permalink_date;
+use common::test_support::{parse_post_body, permalink_date};
 use tower::ServiceExt;
 
 use rstest::*;
@@ -91,7 +91,7 @@ async fn member_returns_native_source_with_etag(#[case] backend: Backend) {
 
     let post = session
         .seed_post()
-        .body("# Markdown body")
+        .body(parse_post_body("# Markdown body"))
         .seed(&state)
         .await;
 
@@ -714,6 +714,43 @@ async fn empty_entry_returns_400(backend: Backend, #[case] op: EmptyEntryOp) {
     let response = app.oneshot(request).await.unwrap();
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+// The boundary twin of `perform_post_creation_rejects_title_only_org_body`.
+//
+// BEHAVIOUR CHANGE (#811 decision 2): an Org entry whose whole content is a title
+// source canonicalizes to nothing (ADR-0024) and is now rejected. It used to be
+// accepted and stored with an empty body. Asserting 400 and not 500 is the point —
+// this is the client's input being wrong, not the server falling over.
+#[apply(backends)]
+#[tokio::test]
+async fn create_title_only_org_entry_returns_400(#[case] backend: Backend) {
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+
+    let response = make_app(&state, &base)
+        .oneshot(atompub_post_xml(
+            &session,
+            "posts",
+            &entry_xml("Some Title", "text/org", "* My Title"),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    // The discriminator: identical bytes as Markdown are ordinary content, so the
+    // rejection is Org's title-stripping rather than anything about the request.
+    let ok = make_app(&state, &base)
+        .oneshot(atompub_post_xml(
+            &session,
+            "posts",
+            &entry_xml("Some Title", "text/markdown", "* My Title"),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(ok.status(), StatusCode::CREATED);
 }
 
 #[apply(backends)]
@@ -1439,7 +1476,7 @@ async fn member_get_serves_owner_non_public_post(#[case] backend: Backend) {
     // be able to GET it via AtomPub (handler loads as the authenticated owner).
     let post = session
         .seed_post()
-        .body("Secret body")
+        .body(parse_post_body("Secret body"))
         .audiences(vec![common::visibility::AudienceTarget::Subscribers])
         .seed(&state)
         .await;

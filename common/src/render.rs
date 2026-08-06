@@ -1,11 +1,13 @@
 //! Pure post-body rendering and title derivation.
 //!
 //! Format-driven transformation of post bodies to HTML plus extraction of
-//! titles and slug seeds. No storage or database concerns.
+//! titles and slugs. No storage or database concerns.
 
 use std::fmt;
 
+use crate::post_body::{InvalidPostBody, PostBody};
 use crate::post_title::PostTitle;
+use crate::slug::{Slug, slugify_title};
 
 /// The format/markup language used to author a post body.
 ///
@@ -521,23 +523,32 @@ mod sanitized {
     /// two negatives below hide — including the free `render`, which they both call — so
     /// each fails for the private field rather than for an unresolved path:
     /// ```
+    /// # use common::post_body::PostBody;
     /// # use common::render::{render, PostFormat, RenderOutput};
-    /// let out = RenderOutput::render(&"hello".to_owned().into(), &PostFormat::Markdown);
+    /// # let body: PostBody = "hello".parse().unwrap();
+    /// let other: PostBody = "different".parse().unwrap();
+    /// let out = RenderOutput::render(&body, &PostFormat::Markdown);
     /// assert!(out.media().is_empty());
-    /// let _direct = render(&"hello".to_owned().into(), &PostFormat::Markdown); // `render` resolves
+    /// let _direct = render(&body, &PostFormat::Markdown); // `render` resolves
+    /// let _other = render(&other, &PostFormat::Markdown); // the last negative's fixture
     /// ```
     /// and a struct literal cannot smuggle one in:
     /// ```compile_fail
+    /// # use common::post_body::PostBody;
     /// # use common::render::{render, PostFormat, RenderOutput};
-    /// let html = render(&"hello".to_owned().into(), &PostFormat::Markdown);
+    /// # let body: PostBody = "hello".parse().unwrap();
+    /// let html = render(&body, &PostFormat::Markdown);
     /// let _ = RenderOutput { html, media: vec![] }; // private field
     /// ```
     /// nor can the HTML be swapped out from under the set that describes it — the same
     /// desynchronisation reached from the other side, which a `pub html` would have left open:
     /// ```compile_fail
+    /// # use common::post_body::PostBody;
     /// # use common::render::{render, PostFormat, RenderOutput};
-    /// let mut out = RenderOutput::render(&"hello".to_owned().into(), &PostFormat::Markdown);
-    /// out.html = render(&"different".to_owned().into(), &PostFormat::Markdown); // private field
+    /// # let body: PostBody = "hello".parse().unwrap();
+    /// # let other: PostBody = "different".parse().unwrap();
+    /// let mut out = RenderOutput::render(&body, &PostFormat::Markdown);
+    /// out.html = render(&other, &PostFormat::Markdown); // private field
     /// ```
     #[derive(Clone, Debug, PartialEq, Eq)]
     pub struct RenderOutput {
@@ -594,52 +605,69 @@ mod sanitized {
 #[cfg(feature = "sanitize")]
 pub use sanitized::{INERT_ATTRS, MEDIA_URL_ATTRS, RenderOutput, extract_media_refs, render};
 
-/// Derives a post's public title and the seed its slug is seeded from.
+/// Derives a post's public title and its slug.
 ///
-/// The body is stored verbatim by the caller — this function never mutates it.
-/// `None` means the post is empty: there is no title and no non-blank line to
-/// seed a slug from, so there is nothing to store.
-pub fn derive_post_title(
+/// Total: a body with no non-blank line is unrepresentable ([`PostBody`], #811),
+/// so the slug source can always be found and there is no nothing-to-store case
+/// left to report. Named for what it does — it has never derived only a title.
+///
+/// The body is stored by the caller — this function never mutates it, and the
+/// caller derives naming from the *original* body before canonicalizing, because
+/// Org's title source is stripped by canonicalization.
+#[must_use]
+pub fn derive_post_naming(
     explicit_title: Option<&str>,
-    body: &str,
+    body: &PostBody,
     format: &PostFormat,
-) -> Option<(Option<PostTitle>, String)> {
+) -> (Option<PostTitle>, Slug) {
     // This filter decides *presence*, not validity: a blank explicit title means the
     // client supplied none, so the body is consulted for one below. (`PostTitle`'s
     // `FromStr` enforces non-blankness itself — #830.)
     let explicit_title = explicit_title
         .map(str::trim)
         .filter(|title| !title.is_empty());
-    let body = body.trim();
+    let trimmed = body.trim();
 
     // An explicit title wins outright, so the body is only parsed for one when
     // there is none — hence `or_else`, not `or`.
     let title = explicit_title.map(str::to_owned).or_else(|| match format {
-        PostFormat::Markdown => extract_markdown_title(body).map(|(title, _)| title),
-        PostFormat::Org => extract_org_title(body).map(|(title, _)| title),
+        PostFormat::Markdown => extract_markdown_title(trimmed).map(|(title, _)| title),
+        PostFormat::Org => extract_org_title(trimmed).map(|(title, _)| title),
         PostFormat::Html => None,
     });
 
     // `title` is non-blank by construction — the explicit branch is filtered above,
     // and both extractors reject empty-after-trim — but the compiler cannot see that.
     // So a failed parse falls through to the untitled path rather than panicking on an
-    // invariant we believe but cannot prove here.
-    if let Some((Ok(parsed), seed)) = title.map(|t| (t.parse::<PostTitle>(), t)) {
-        return Some((Some(parsed), seed));
-    }
+    // invariant we believe but cannot prove here (#830).
+    //
+    // A titled post seeds its slug from the title; an untitled one — including one
+    // whose title failed that parse — from the body's first non-blank line.
+    let (title, seed) = match title.and_then(|t| t.parse::<PostTitle>().ok().map(|p| (p, t))) {
+        Some((parsed, seed)) => (Some(parsed), seed),
+        None => (None, first_meaningful_line(body)),
+    };
 
-    // An untitled post seeds its slug from the first non-blank line, so this call
-    // is also the empty-post gate: no such line means there is nothing to store.
-    let seed = first_meaningful_line(body)?;
-    Some((None, seed))
+    // `slugify_title` never fails (it falls back to "post") and emits an
+    // already-normalized value, so feeding it back through `Slug::from_str` is
+    // idempotent — see its rustdoc. Deriving the slug here rather than at each call
+    // site is what makes that guarantee usable (#785).
+    let Ok(slug) = slugify_title(&seed).parse::<Slug>() else {
+        unreachable!("slugify_title's output always re-parses as a Slug")
+    };
+
+    (title, slug)
 }
 
-fn first_meaningful_line(body: &str) -> Option<String> {
-    body.lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(|line| line.chars().take(100).collect::<String>())
-        .filter(|line| !line.is_empty())
+/// The body's first non-blank line, trimmed and capped at 100 characters.
+///
+/// Total on a [`PostBody`]: the type's invariant is *exactly* this search's
+/// predicate — at least one line is non-empty after trimming (#811).
+fn first_meaningful_line(body: &PostBody) -> String {
+    let Some(line) = body.lines().map(str::trim).find(|line| !line.is_empty()) else {
+        unreachable!("a PostBody always has a non-blank line")
+    };
+    line.chars().take(100).collect()
 }
 
 fn extract_markdown_title(body: &str) -> Option<(String, String)> {
@@ -726,8 +754,16 @@ fn extract_org_title(body: &str) -> Option<(String, String)> {
 /// later `* heading` left behind sits after kept header lines and so is content, not
 /// a new title source on the next pass. (This is a deliberate, test-pinned refinement
 /// of `extract_org_title`'s precedence; see the `canon_*` unit tests.)
-#[must_use]
-pub fn canonicalize_org_body(body: &str) -> String {
+///
+/// # Errors
+///
+/// Returns [`InvalidPostBody`] when canonicalization consumes the whole body — a
+/// title-only post, whose sole content was the title source. See #811 decision 2.
+///
+/// Private on purpose: [`canonicalize_body`] is the crate's only door to body
+/// canonicalization (ADR-0105), so a new format extends that one match instead of
+/// giving callers a second per-format entry point.
+fn canonicalize_org_body(body: &PostBody) -> Result<PostBody, InvalidPostBody> {
     let mut kept: Vec<&str> = Vec::new();
     let mut in_header = true; // still scanning the leading blank/#+/title region
     let mut saw_title = false;
@@ -770,7 +806,63 @@ pub fn canonicalize_org_body(body: &str) -> String {
         kept.push(line);
     }
 
-    kept.join("\n").trim_end().to_string()
+    normalize_body_whitespace(&kept.join("\n")).parse()
+}
+
+/// The whitespace half of body canonicalization, shared by Markdown and Org: drop leading
+/// all-whitespace lines, trim the tail, and restore the single terminating newline.
+///
+/// Every clause was established by measuring real rendered output (#811), and each one is
+/// load-bearing:
+///
+/// - **Leading _horizontal_ whitespace on a content line is never touched.** Four leading
+///   spaces is a `CommonMark` indented code block; stripping them renders a `<p>` where the
+///   author wrote a `<pre><code>`.
+/// - **Interior blank lines are never touched.** They decide `CommonMark` loose-vs-tight
+///   lists — `"- a\n\n- b\n"` renders `<li><p>a</p></li>`, `"- a\n- b\n"` renders `<li>a</li>`.
+/// - **The terminating newline is restored**, because a bare `trim_end` eats it and it is
+///   significant inside `<pre><code>` and inside Org paragraphs.
+///
+/// One case is knowingly lossy: a body ending *inside an unclosed code region* has trailing
+/// blank lines that are content, and trimming drops them. Detecting that needs a format
+/// parser rather than a whitespace rule, so it is accepted — the input is malformed and the
+/// loss is confined to trailing blanks inside it. Pinned by
+/// `canonicalize_truncates_trailing_blanks_in_unclosed_fence`.
+fn normalize_body_whitespace(body: &str) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut started = false;
+    for line in body.trim_end().lines() {
+        if !started && line.trim().is_empty() {
+            continue;
+        }
+        started = true;
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// The stored form of an authored body: one seam over every [`PostFormat`], so a format is
+/// added by extending this match rather than by editing call sites in `storage`.
+///
+/// Markdown and Org share [`normalize_body_whitespace`]; Org additionally has its
+/// title-source line stripped (ADR-0024). **HTML is exempt** — it is verbatim passthrough,
+/// so any whitespace edit is a byte change, and a body ending inside an unclosed `<pre>`
+/// would lose content outright.
+///
+/// # Errors
+///
+/// Returns [`InvalidPostBody`] when canonicalization consumes the whole body — a title-only
+/// Org post. See #811 decision 2.
+pub fn canonicalize_body(
+    body: &PostBody,
+    format: &PostFormat,
+) -> Result<PostBody, InvalidPostBody> {
+    match format {
+        PostFormat::Html => Ok(body.clone()),
+        PostFormat::Markdown => normalize_body_whitespace(body).parse(),
+        PostFormat::Org => canonicalize_org_body(body),
+    }
 }
 
 #[cfg(test)]
@@ -898,76 +990,79 @@ mod tests {
         assert_eq!(PostFormat::Html.get_message(), None); // renderer-internal → not offered
     }
 
+    /// A naming fixture. The bodies below are all valid `PostBody` values —
+    /// there is no empty case to test, because #811 made it unrepresentable.
+    fn naming(
+        explicit_title: Option<&str>,
+        body: &str,
+        format: PostFormat,
+    ) -> (Option<PostTitle>, Slug) {
+        derive_post_naming(
+            explicit_title,
+            &crate::test_support::parse_post_body(body),
+            &format,
+        )
+    }
+
     #[test]
-    fn derive_post_title_prefers_explicit_title() {
-        let (title, slug_seed) = derive_post_title(
+    fn derive_post_naming_prefers_explicit_title() {
+        let (title, slug) = naming(
             Some(" Explicit "),
             "# Body Heading\ntext",
-            &PostFormat::Markdown,
-        )
-        .unwrap();
-        assert_eq!(title.as_deref(), Some("Explicit"));
-        assert_eq!(slug_seed, "Explicit");
-    }
-
-    #[test]
-    fn derive_post_title_extracts_markdown_h1() {
-        let (title, slug_seed) = derive_post_title(
-            None,
-            "\n# Article Title\n\nBody text",
-            &PostFormat::Markdown,
-        )
-        .unwrap();
-        assert_eq!(title.as_deref(), Some("Article Title"));
-        assert_eq!(slug_seed, "Article Title");
-        // the body is not returned — the caller retains the original
-    }
-
-    #[test]
-    fn derive_post_title_extracts_org_title() {
-        let (title, slug_seed) =
-            derive_post_title(None, "#+title: Org Title\n\nBody text", &PostFormat::Org).unwrap();
-        assert_eq!(title.as_deref(), Some("Org Title"));
-        assert_eq!(slug_seed, "Org Title");
-        // the body is not returned — the caller retains the original
-    }
-
-    #[test]
-    fn derive_post_title_for_html_extracts_no_title_and_seeds_slug_from_the_body() {
-        let (title, slug_seed) =
-            derive_post_title(None, "<p>Hello world</p>", &PostFormat::Html).unwrap();
-        assert_eq!(title, None);
-        assert_eq!(slug_seed, "<p>Hello world</p>");
-    }
-
-    #[test]
-    fn derive_post_title_allows_titleless_notes() {
-        let (title, slug_seed) = derive_post_title(
-            None,
-            "A compact note\nwith more text",
-            &PostFormat::Markdown,
-        )
-        .unwrap();
-        assert_eq!(title, None);
-        assert_eq!(slug_seed, "A compact note");
-    }
-
-    #[test]
-    fn derive_post_title_treats_blank_explicit_title_as_absent() {
-        // A blank explicit title means "no title supplied", not an error (#830): the
-        // body is consulted instead, exactly as if the field had been omitted.
-        let (title, slug_seed) =
-            derive_post_title(Some("   "), "body line", &PostFormat::Markdown).unwrap();
-        assert_eq!(title, None);
-        assert_eq!(slug_seed, "body line");
-    }
-
-    #[test]
-    fn derive_post_title_rejects_empty_posts() {
-        assert_eq!(
-            derive_post_title(None, "   \n\t", &PostFormat::Markdown),
-            None
+            PostFormat::Markdown,
         );
+        assert_eq!(title.as_deref(), Some("Explicit"));
+        assert_eq!(slug, "explicit");
+    }
+
+    #[test]
+    fn derive_post_naming_extracts_markdown_h1() {
+        let (title, slug) = naming(None, "\n# Article Title\n\nBody text", PostFormat::Markdown);
+        assert_eq!(title.as_deref(), Some("Article Title"));
+        assert_eq!(slug, "article-title");
+        // the body is not returned — the caller retains the original
+    }
+
+    #[test]
+    fn derive_post_naming_extracts_org_title() {
+        let (title, slug) = naming(None, "#+title: Org Title\n\nBody text", PostFormat::Org);
+        assert_eq!(title.as_deref(), Some("Org Title"));
+        assert_eq!(slug, "org-title");
+        // the body is not returned — the caller retains the original
+    }
+
+    #[test]
+    fn derive_post_naming_for_html_extracts_no_title_and_slugs_the_body() {
+        let (title, slug) = naming(None, "<p>Hello world</p>", PostFormat::Html);
+        assert_eq!(title, None);
+        assert_eq!(slug, "p-hello-world-p");
+    }
+
+    #[test]
+    fn derive_post_naming_allows_titleless_notes() {
+        let (title, slug) = naming(None, "A compact note\nwith more text", PostFormat::Markdown);
+        assert_eq!(title, None);
+        assert_eq!(slug, "a-compact-note");
+    }
+
+    #[test]
+    fn derive_post_naming_treats_blank_explicit_title_as_absent() {
+        // A blank explicit title means "no title supplied", not an error (#830): the
+        // body is consulted instead, exactly as if the field had been omitted. Carried
+        // over from #830 and retargeted at the total signature.
+        let (title, slug) = naming(Some("   "), "body line", PostFormat::Markdown);
+        assert_eq!(title, None);
+        assert_eq!(slug, "body-line");
+    }
+
+    #[test]
+    fn derive_post_naming_falls_back_to_post_when_nothing_slugifies() {
+        // `slugify_title`'s fallback reached through the derivation: a body of
+        // symbols is a valid `PostBody` but yields no slug characters. The pair is
+        // still total — the caller's collision retry disambiguates the fallback.
+        let (title, slug) = naming(None, "🚀🎉\n", PostFormat::Markdown);
+        assert_eq!(title, None);
+        assert_eq!(slug, "post");
     }
 
     #[test]
@@ -982,7 +1077,7 @@ mod tests {
     #[test]
     fn extract_markdown_title_skips_leading_blanks_then_finds_heading() {
         // Leading blank lines before the heading exercise the blank-skip branch.
-        // (`derive_post_title` trims the body first, so this branch is only
+        // (`derive_post_naming` trims the body first, so this branch is only
         // reachable by calling the helper directly.)
         let result = extract_markdown_title("\n\n# Title\n\nBody");
         assert_eq!(result, Some(("Title".to_string(), "Body".to_string())));
@@ -1037,11 +1132,10 @@ mod tests {
     }
 
     #[test]
-    fn derive_post_title_extracts_org_level1_heading() {
-        let (title, slug_seed) =
-            derive_post_title(None, "* Org Heading\n\nBody text", &PostFormat::Org).unwrap();
+    fn derive_post_naming_extracts_org_level1_heading() {
+        let (title, slug) = naming(None, "* Org Heading\n\nBody text", PostFormat::Org);
         assert_eq!(title.as_deref(), Some("Org Heading"));
-        assert_eq!(slug_seed, "Org Heading");
+        assert_eq!(slug, "org-heading");
     }
 
     #[test]
@@ -1069,44 +1163,55 @@ mod tests {
     }
 
     // -- canonicalize_org_body tests (ADR-0024; load-bearing, user-flagged) --
+    //
+    // Every expectation below gained a terminating "\n" in #811. That is the fix, not
+    // drift: the old `trim_end()` ate the body's final newline, which is significant
+    // inside <pre><code> and inside Org paragraphs.
+
+    /// Canonicalize a fixture that is expected to survive — the inputs below all keep
+    /// some content, so a failure here is a bug rather than the title-only rejection.
+    fn canon(body: &str) -> PostBody {
+        canonicalize_org_body(&crate::test_support::parse_post_body(body))
+            .expect("fixture retains content after canonicalization")
+    }
 
     #[test]
     fn canon_strips_title_header_keeps_unknown_and_later_heading() {
         // #+TITLE: present → strip it; keep #+FOO:; a LATER * heading is content → keep.
-        let out = canonicalize_org_body("#+TITLE: My Post\n#+FOO: keepme\n\n* Section\nBody\n");
-        assert_eq!(out, "#+FOO: keepme\n\n* Section\nBody");
+        let out = canon("#+TITLE: My Post\n#+FOO: keepme\n\n* Section\nBody\n");
+        assert_eq!(out, "#+FOO: keepme\n\n* Section\nBody\n");
     }
 
     #[test]
     fn canon_strips_leading_heading_when_no_title_header() {
         // No #+TITLE: → the leading * heading IS the title source → strip it.
-        let out = canonicalize_org_body("* My Title\n\nBody line\n");
-        assert_eq!(out, "Body line");
+        let out = canon("* My Title\n\nBody line\n");
+        assert_eq!(out, "Body line\n");
     }
 
     #[test]
     fn canon_strips_title_amidst_other_headers_and_leading_blanks() {
-        let out = canonicalize_org_body("\n\n#+FOO: x\n#+title: T\n#+BAR: y\n\nbody\n");
-        assert_eq!(out, "#+FOO: x\n#+BAR: y\n\nbody");
+        let out = canon("\n\n#+FOO: x\n#+title: T\n#+BAR: y\n\nbody\n");
+        assert_eq!(out, "#+FOO: x\n#+BAR: y\n\nbody\n");
     }
 
     #[test]
     fn canon_no_title_source_preserves_headers_and_content() {
-        let out = canonicalize_org_body("#+FOO: x\n\njust content\n");
-        assert_eq!(out, "#+FOO: x\n\njust content");
+        let out = canon("#+FOO: x\n\njust content\n");
+        assert_eq!(out, "#+FOO: x\n\njust content\n");
     }
 
     #[test]
     fn canon_non_top_level_heading_is_not_a_title_source() {
         // "** Sub" is not a top-level heading → not the title → keep.
-        let out = canonicalize_org_body("** Sub\n\nBody\n");
-        assert_eq!(out, "** Sub\n\nBody");
+        let out = canon("** Sub\n\nBody\n");
+        assert_eq!(out, "** Sub\n\nBody\n");
     }
 
     #[test]
     fn canon_heading_after_body_text_is_content_not_title() {
-        let out = canonicalize_org_body("intro\n* Later\nmore\n");
-        assert_eq!(out, "intro\n* Later\nmore");
+        let out = canon("intro\n* Later\nmore\n");
+        assert_eq!(out, "intro\n* Later\nmore\n");
     }
 
     #[test]
@@ -1116,13 +1221,110 @@ mod tests {
             "* My Title\n\nBody\n",
             "#+FOO: x\n\ncontent\n",
         ] {
-            let once = canonicalize_org_body(body);
-            assert_eq!(
-                canonicalize_org_body(&once),
-                once,
-                "idempotent for {body:?}"
-            );
+            let once = canon(body);
+            // Now also proves the second pass is `Ok` — a canonical body is still a body.
+            let twice = canonicalize_org_body(&once).expect("canonical body stays a body");
+            assert_eq!(twice, once, "idempotent for {body:?}");
         }
+    }
+
+    #[test]
+    fn canon_rejects_title_only_body() {
+        // The whole body was the title source, so nothing is left to store (#811).
+        let body = crate::test_support::parse_post_body("* My Title\n");
+        assert!(canonicalize_org_body(&body).is_err());
+    }
+
+    // -- canonicalize_body: the one seam over every format (#811) --
+
+    fn canonicalized(body: &str, format: PostFormat) -> PostBody {
+        canonicalize_body(&crate::test_support::parse_post_body(body), &format)
+            .expect("fixture retains content after canonicalization")
+    }
+
+    #[test]
+    fn canonicalize_leaves_html_verbatim() {
+        // Verbatim passthrough, so normalization would be a byte change for no gain —
+        // and would eat content from a body ending inside an unclosed <pre>.
+        let raw = "\n\n  <pre>a\n\n\n";
+        assert_eq!(canonicalized(raw, PostFormat::Html), raw);
+    }
+
+    #[test]
+    fn canonicalize_drops_leading_blank_lines_but_not_leading_indent() {
+        // The indent on the first content line is a CommonMark code block; the blank
+        // lines above it are not content.
+        assert_eq!(
+            canonicalized("\n\n    fn main() {}\n", PostFormat::Markdown),
+            "    fn main() {}\n"
+        );
+    }
+
+    #[test]
+    fn canonicalize_restores_the_terminating_newline() {
+        // A bare trim_end eats it, and it is significant inside <pre><code>.
+        assert_eq!(
+            canonicalized("    code\n\n  \n", PostFormat::Markdown),
+            "    code\n"
+        );
+    }
+
+    #[test]
+    fn canonicalize_preserves_interior_blank_lines() {
+        // Interior blanks decide CommonMark loose-vs-tight lists, so "tidying" them
+        // would change rendered output. Only the leading and trailing runs go.
+        assert_eq!(
+            canonicalized("\n- a\n\n- b\n\n", PostFormat::Markdown),
+            "- a\n\n- b\n"
+        );
+    }
+
+    #[test]
+    fn canonicalize_preserves_interior_hard_line_break() {
+        // Two trailing spaces mid-body are a hard break; only the body's tail is trimmed.
+        assert_eq!(
+            canonicalized("foo  \nbar  \n", PostFormat::Markdown),
+            "foo  \nbar\n"
+        );
+    }
+
+    #[test]
+    fn canonicalize_truncates_trailing_blanks_in_unclosed_fence() {
+        // ACCEPTED LOSS, not a bug: these trailing blanks are inside an unclosed fence,
+        // so they are content, but seeing that needs a format parser rather than a
+        // whitespace rule. The input is malformed and the loss is confined to it (#811).
+        assert_eq!(
+            canonicalized("```\ncode\n\n\n", PostFormat::Markdown),
+            "```\ncode\n"
+        );
+    }
+
+    #[test]
+    fn canonicalize_is_idempotent_for_every_format() {
+        // This is what lets the sqlx decode door re-check a stored body without a second
+        // normalization pass.
+        for format in [PostFormat::Markdown, PostFormat::Org, PostFormat::Html] {
+            for body in [
+                "\n\n    indented\n\n",
+                "#+TITLE: T\n\nbody\n",
+                "* My Title\n\nBody\n",
+                "- a\n\n- b\n",
+                "  <pre>x</pre>  ",
+            ] {
+                let once = canonicalized(body, format);
+                let twice = canonicalize_body(&once, &format).expect("canonical stays a body");
+                assert_eq!(twice, once, "idempotent for {format:?} {body:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn canonicalize_rejects_title_only_org_through_the_seam() {
+        let body = crate::test_support::parse_post_body("* My Title\n");
+        assert!(canonicalize_body(&body, &PostFormat::Org).is_err());
+        // The same bytes are ordinary content in the other formats.
+        assert!(canonicalize_body(&body, &PostFormat::Markdown).is_ok());
+        assert!(canonicalize_body(&body, &PostFormat::Html).is_ok());
     }
 
     /// Tests for the `sanitize`-gated half — grouped so the gate is written once here
@@ -1133,10 +1335,44 @@ mod tests {
     #[cfg(feature = "sanitize")]
     mod sanitized {
         use super::*;
-        use crate::post_body::PostBody;
         use crate::render::sanitized::{
             SANITIZER, extract_media_refs_with, render_markdown, render_org,
         };
+        use crate::test_support::parse_post_body;
+
+        // The load-bearing guard for the no-trim half of the whitespace rule (#811).
+        // Every test in `post_body.rs` still passes if a "tidy-up" trim is added to the
+        // constructor; this one does not, because it asserts on what the reader sees.
+        #[test]
+        fn markdown_body_with_leading_indent_still_renders_as_code_block() {
+            let body = parse_post_body("    fn main() {}\n");
+            let canonical = canonicalize_body(&body, &PostFormat::Markdown).expect("body survives");
+            let html = render(&canonical, &PostFormat::Markdown);
+            assert!(html.contains("<pre><code>"), "{html}");
+            assert!(!html.contains("<p>fn main()"), "{html}");
+        }
+
+        // The other half: canonicalization must not perturb what the reader sees. A bare
+        // trim_end would drop the newline inside the code block, and stripping leading
+        // blank lines must not disturb the indent that makes it a code block at all.
+        #[test]
+        fn canonicalizing_markdown_does_not_change_rendered_output() {
+            for raw in [
+                "\n\n    fn main() {}\n",
+                "- a\n\n- b\n\n",
+                "foo  \nbar\n",
+                "# Heading\n\ntext\n\n\n",
+            ] {
+                let body = parse_post_body(raw);
+                let canonical =
+                    canonicalize_body(&body, &PostFormat::Markdown).expect("body survives");
+                assert_eq!(
+                    render(&canonical, &PostFormat::Markdown),
+                    render(&body, &PostFormat::Markdown),
+                    "canonicalization changed rendered output for {raw:?}"
+                );
+            }
+        }
 
         // `sanitize` is the establishing door (#445): it is what makes the type's
         // invariant — "contains no active markup" — true rather than asserted. These
@@ -1397,7 +1633,7 @@ mod tests {
         #[test]
         fn render_preserves_real_renderer_output() {
             let md = render(
-                &PostBody::from(
+                &parse_post_body(
                     "# Heading\n\n\
                      Some **bold** and *emphasis* and a [link](https://example.com).\n\n\
                      ```rust\nfn main() {}\n```\n\n\
@@ -1420,7 +1656,7 @@ mod tests {
             }
 
             let org = render(
-                &PostBody::from(
+                &parse_post_body(
                     "* Heading\n\nSome *bold* text and [[https://example.com][a link]].\n",
                 ),
                 &PostFormat::Org,
@@ -1451,13 +1687,13 @@ mod tests {
 
         #[test]
         fn render_dispatches_markdown() {
-            let result = render(&PostBody::from("**bold**"), &PostFormat::Markdown);
+            let result = render(&parse_post_body("**bold**"), &PostFormat::Markdown);
             assert!(result.contains("<strong>bold</strong>"));
         }
 
         #[test]
         fn render_dispatches_org() {
-            let result = render(&PostBody::from("*bold*"), &PostFormat::Org);
+            let result = render(&parse_post_body("*bold*"), &PostFormat::Org);
             assert!(result.contains("<b>bold</b>"));
         }
 
@@ -1489,7 +1725,7 @@ mod tests {
         #[test]
         fn render_markdown_strips_embedded_script() {
             let result = render(
-                &PostBody::from(format!("Hello\n\n{ACTIVE_MARKUP}").as_str()),
+                &parse_post_body(format!("Hello\n\n{ACTIVE_MARKUP}").as_str()),
                 &PostFormat::Markdown,
             );
             assert_no_active_markup(&result);
@@ -1504,7 +1740,7 @@ mod tests {
             // by orgize itself, so it never needed us.) Assert on the executable form:
             // the literal text `alert(1)` surviving *escaped* is harmless.
             let result = render(
-                &PostBody::from(format!("Hello\n\n@@html:{ACTIVE_MARKUP}@@").as_str()),
+                &parse_post_body(format!("Hello\n\n@@html:{ACTIVE_MARKUP}@@").as_str()),
                 &PostFormat::Org,
             );
             assert_no_active_markup(&result);
@@ -1514,7 +1750,7 @@ mod tests {
         #[test]
         fn render_html_strips_embedded_script() {
             let result = render(
-                &PostBody::from(format!("<p>hi</p>{ACTIVE_MARKUP}").as_str()),
+                &parse_post_body(format!("<p>hi</p>{ACTIVE_MARKUP}").as_str()),
                 &PostFormat::Html,
             );
             assert_no_active_markup(&result);
@@ -1529,7 +1765,7 @@ mod tests {
         fn render_html_format_preserves_safe_markup() {
             let body = "<p>hi <b>there</b></p>";
             assert_eq!(
-                render(&PostBody::from(body), &PostFormat::Html).as_ref(),
+                render(&parse_post_body(body), &PostFormat::Html).as_ref(),
                 body
             );
         }
@@ -1549,7 +1785,7 @@ mod tests {
         fn extract_finds_a_markdown_image() {
             // Rendered via the real renderer, so this pins end-to-end behaviour rather than a
             // hand-written fragment.
-            let body: PostBody = format!("![alt]({})", media_url_for("photo.jpg")).into();
+            let body = parse_post_body(&format!("![alt]({})", media_url_for("photo.jpg")));
             let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
             assert_eq!(refs.len(), 1);
             assert_eq!(refs[0].filename.as_ref(), "photo.jpg");
@@ -1558,7 +1794,7 @@ mod tests {
         #[test]
         fn extract_finds_a_raw_img_embedded_in_a_markdown_body() {
             // The rendered-HTML choice (spec D2): raw HTML passes through the Markdown parser.
-            let body: PostBody = format!("<img src=\"{}\">", media_url_for("photo.jpg")).into();
+            let body = parse_post_body(&format!("<img src=\"{}\">", media_url_for("photo.jpg")));
             let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
             assert_eq!(refs.len(), 1);
             assert_eq!(refs[0].filename.as_ref(), "photo.jpg");
@@ -1568,7 +1804,7 @@ mod tests {
         fn extract_finds_a_raw_filename_spelling() {
             // The #675 regression, at the extractor level: a post addressing the file by the
             // name a person types must resolve to the stored, encoded spelling.
-            let body: PostBody = format!("<img src=\"{}\">", media_url_for("my photo.jpg")).into();
+            let body = parse_post_body(&format!("<img src=\"{}\">", media_url_for("my photo.jpg")));
             let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
             assert_eq!(refs.len(), 1);
             assert_eq!(refs[0].filename.as_ref(), "my%20photo.jpg");
@@ -1576,9 +1812,9 @@ mod tests {
 
         #[test]
         fn extract_finds_an_atompub_member_url_in_a_link() {
-            let body: PostBody =
-                format!("<a href=\"/atompub/alice/media/{MEDIA_TEST_SHA256}/photo.jpg\">doc</a>")
-                    .into();
+            let body = parse_post_body(&format!(
+                "<a href=\"/atompub/alice/media/{MEDIA_TEST_SHA256}/photo.jpg\">doc</a>"
+            ));
             let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
             assert_eq!(refs.len(), 1);
             assert_eq!(refs[0].source, MediaSource::Upload);
@@ -1587,13 +1823,15 @@ mod tests {
         #[test]
         fn extract_ignores_media_in_stripped_elements_and_code_blocks() {
             // Sanitisation removes <video>, so it can never load and is not a reference.
-            let video: PostBody =
-                format!("<video src=\"{}\"></video>", media_url_for("clip.mp4")).into();
+            let video = parse_post_body(&format!(
+                "<video src=\"{}\"></video>",
+                media_url_for("clip.mp4")
+            ));
             assert!(extract_media_refs(render(&video, &PostFormat::Markdown).as_ref()).is_empty());
 
             // A URL displayed as literal text points nobody at anything (spec D2's deliberate
             // narrowing away from the old substring search over the source body).
-            let fenced: PostBody = format!("```\n{}\n```", media_url_for("photo.jpg")).into();
+            let fenced = parse_post_body(&format!("```\n{}\n```", media_url_for("photo.jpg")));
             assert!(extract_media_refs(render(&fenced, &PostFormat::Markdown).as_ref()).is_empty());
         }
 
@@ -1601,8 +1839,9 @@ mod tests {
         fn extract_deduplicates_and_sorts() {
             let one = media_url_for("a.jpg");
             let two = media_url_for("b.jpg");
-            let body: PostBody =
-                format!("<img src=\"{two}\"><img src=\"{one}\"><img src=\"{one}\">").into();
+            let body = parse_post_body(&format!(
+                "<img src=\"{two}\"><img src=\"{one}\"><img src=\"{one}\">"
+            ));
             let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
             assert_eq!(refs.len(), 2, "duplicate references collapse to one row");
             assert!(
@@ -1613,9 +1852,7 @@ mod tests {
 
         #[test]
         fn extract_ignores_non_media_links() {
-            let body: PostBody = "<a href=\"https://example.com/page\">x</a>"
-                .to_owned()
-                .into();
+            let body = parse_post_body("<a href=\"https://example.com/page\">x</a>");
             assert!(extract_media_refs(render(&body, &PostFormat::Markdown).as_ref()).is_empty());
         }
 
@@ -1652,7 +1889,7 @@ mod tests {
 
         #[test]
         fn render_output_derives_its_media_from_its_html() {
-            let body: PostBody = format!("<img src=\"{}\">", media_url_for("photo.jpg")).into();
+            let body = parse_post_body(&format!("<img src=\"{}\">", media_url_for("photo.jpg")));
             let out = RenderOutput::render(&body, &PostFormat::Markdown);
             assert_eq!(
                 out.media(),
@@ -1663,7 +1900,7 @@ mod tests {
 
         #[test]
         fn render_output_media_is_empty_for_a_body_referencing_nothing() {
-            let out = RenderOutput::render(&"plain text".to_owned().into(), &PostFormat::Markdown);
+            let out = RenderOutput::render(&parse_post_body("plain text"), &PostFormat::Markdown);
             assert!(out.media().is_empty());
         }
 

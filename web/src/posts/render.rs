@@ -254,7 +254,8 @@ pub(crate) mod test_fixtures {
     use common::render::PostFormat;
     use common::seed::{AuthoredPost, TimelinePage};
     use common::test_support::{
-        parse_post_summary, parse_root_relative_url, parse_username, parse_utc_instant,
+        parse_post_body, parse_post_summary, parse_root_relative_url, parse_username,
+        parse_utc_instant,
     };
 
     pub(crate) fn sample_post() -> AuthoredPost {
@@ -276,7 +277,7 @@ pub(crate) mod test_fixtures {
                     display: "Rust".parse().unwrap(),
                 }],
             },
-            body: "raw".into(),
+            body: parse_post_body("raw"),
             format: PostFormat::Markdown,
         }
     }

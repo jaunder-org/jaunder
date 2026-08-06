@@ -132,7 +132,7 @@ mod tests {
     fn authored_post_carries_summary_and_source() {
         use crate::posts::server::authored_post;
         use chrono::{TimeZone, Utc};
-        use common::test_support::{parse_post_summary, parse_username};
+        use common::test_support::{parse_post_body, parse_post_summary, parse_username};
         use common::{
             ids::{PostId, UserId},
             slug::Slug,
@@ -150,7 +150,7 @@ mod tests {
                 author_username,
                 title: Some(common::test_support::parse_post_title("Title")),
                 slug,
-                body: "body".into(),
+                body: parse_post_body("body"),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
                 created_at: base_time,
@@ -183,7 +183,7 @@ mod tests {
     fn authored_post_leaves_a_draft_published_at_none() {
         use crate::posts::server::authored_post;
         use chrono::{TimeZone, Utc};
-        use common::test_support::parse_username;
+        use common::test_support::{parse_post_body, parse_username};
         use common::{
             ids::{PostId, UserId},
             slug::Slug,
@@ -201,7 +201,7 @@ mod tests {
                 author_username,
                 title: Some(common::test_support::parse_post_title("Title")),
                 slug,
-                body: "body".into(),
+                body: parse_post_body("body"),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
                 created_at: base_time,
@@ -237,7 +237,7 @@ mod tests {
     fn rendered_post_refuses_a_draft() {
         use crate::posts::server::rendered_post;
         use chrono::{TimeZone, Utc};
-        use common::test_support::parse_username;
+        use common::test_support::{parse_post_body, parse_username};
         use common::{
             ids::{PostId, UserId},
             slug::Slug,
@@ -255,7 +255,7 @@ mod tests {
                 author_username,
                 title: Some(common::test_support::parse_post_title("Title")),
                 slug,
-                body: "body".into(),
+                body: parse_post_body("body"),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
                 created_at: base_time,

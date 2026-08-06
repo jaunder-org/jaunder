@@ -482,8 +482,8 @@ mod tests {
     use chrono::Utc;
     use common::test_support::{
         parse_bio, parse_byte_size, parse_content_hash, parse_content_type, parse_display_name,
-        parse_email, parse_filename, parse_password, parse_post_title, parse_session_label,
-        parse_slug, parse_token_hash, parse_username,
+        parse_email, parse_filename, parse_password, parse_post_body, parse_post_title,
+        parse_session_label, parse_slug, parse_token_hash, parse_username,
     };
 
     #[test]
@@ -550,7 +550,7 @@ mod tests {
             username: parse_username("alice"),
             title: Some(parse_post_title("Hello")),
             slug: parse_slug("hello-world"),
-            body: "Body".into(),
+            body: parse_post_body("Body"),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Body</p>"),
             created_at: now,
@@ -632,7 +632,7 @@ mod tests {
             username: parse_username("alice"),
             title: None,
             slug: parse_slug("hello-world"),
-            body: "Body".into(),
+            body: parse_post_body("Body"),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Body</p>"),
             created_at: now,
@@ -658,7 +658,7 @@ mod tests {
             username: parse_username("alice"),
             title: None,
             slug: parse_slug("hello-world"),
-            body: "Body".into(),
+            body: parse_post_body("Body"),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Body</p>"),
             created_at: now,
@@ -683,7 +683,7 @@ mod tests {
             username: parse_username("alice"),
             title: None,
             slug: parse_slug("hello-world"),
-            body: "Body".into(),
+            body: parse_post_body("Body"),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Body</p>"),
             created_at: now,
@@ -772,7 +772,7 @@ mod tests {
             username: parse_username("alice"),
             title: None,
             slug: parse_slug("hello-world"),
-            body: "Body".into(),
+            body: parse_post_body("Body"),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>Body</p>"),
             created_at: now,

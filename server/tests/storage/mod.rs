@@ -7,8 +7,8 @@ use common::tag::{Tag, TagLabel};
 use common::test_support::{
     parse_absolute_url, parse_audience_name, parse_bio, parse_byte_size, parse_content_hash,
     parse_content_type, parse_display_name, parse_email, parse_etag, parse_filename,
-    parse_page_offset, parse_post_title, parse_raw_token, parse_row_limit, parse_session_label,
-    parse_slug, permalink_date,
+    parse_page_offset, parse_post_body, parse_post_title, parse_raw_token, parse_row_limit,
+    parse_session_label, parse_slug, permalink_date,
 };
 use common::username::Username;
 use common::visibility::{
@@ -21,10 +21,10 @@ use storage::{
     AppState, AudienceError, ConfirmPasswordResetError, CreatePostError, CreateUserError,
     DbConnectOptions, FeedCacheRow, GoLivePost, ListByTagError, PostCursor, PostFormat, PostRecord,
     PostTag, PostUpdate, PostgresSubscriptionStorage, ProfileUpdate, PublishUpdate,
-    RegisterWithInviteError, RenderedPostContent, RenderedPostUpdate, SessionAuthError,
-    SqliteSubscriptionStorage, SubscriptionStorage, UpdatePostError, UseEmailVerificationError,
-    UseInviteError, UsePasswordResetError, UserAuthError, UserConfigKey, create_rendered_post,
-    open_database, perform_post_update, update_rendered_post,
+    RegisterWithInviteError, RenderedPostContent, SessionAuthError, SqliteSubscriptionStorage,
+    SubscriptionStorage, UpdatePostError, UseEmailVerificationError, UseInviteError,
+    UsePasswordResetError, UserAuthError, UserConfigKey, create_rendered_post, open_database,
+    perform_post_update,
 };
 use tempfile::TempDir;
 
@@ -2053,7 +2053,7 @@ async fn seed_post_published_at(
             user_id,
             title: None,
             slug: slug.parse().expect("valid slug"),
-            body: format!("# {slug}\n\nbody").into(),
+            body: parse_post_body(&format!("# {slug}\n\nbody")),
             format: PostFormat::Markdown,
             published_at: Some(published_at),
             summary: None,
@@ -2443,7 +2443,7 @@ async fn post_update_by_non_owner_returns_unauthorized(#[case] backend: Backend)
             other,
             &UpdateRawPost::new("hijacked")
                 .title("Hijacked")
-                .body("Nope")
+                .body(parse_post_body("Nope"))
                 .unpublish()
                 .build(),
         )
@@ -2465,7 +2465,7 @@ fn update_input(
     PostUpdate {
         post_id,
         editor_user_id,
-        body: "updated body".into(),
+        body: parse_post_body("updated body"),
         title: Some("Updated Title"),
         format: PostFormat::Markdown,
         slug_override: Some(slug),
@@ -2643,7 +2643,7 @@ async fn post_audiences_are_persisted_and_replaced(#[case] backend: Backend) {
     // and vary only `audiences`.
     let edit = UpdateRawPost::new("audience-post")
         .title("Post audience-post")
-        .body("body text")
+        .body(parse_post_body("body text"))
         .unpublish();
 
     // Update to [Private] → zero rows.
@@ -2731,7 +2731,7 @@ async fn get_post_audiences_round_trips(#[case] backend: Backend) {
     // One edit, two targetings.
     let edit = UpdateRawPost::new("round-trip")
         .title("Post round-trip")
-        .body("body text")
+        .body(parse_post_body("body text"))
         .unpublish();
 
     // Subscribers-only.
@@ -4096,7 +4096,7 @@ async fn post_update_invalid_slug(#[case] backend: Backend) {
             user,
             &UpdateRawPost::new("second-slug")
                 .title("Updated")
-                .body("Updated content")
+                .body(parse_post_body("Updated content"))
                 .unpublish()
                 .build(),
         )
@@ -4404,7 +4404,7 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
             user,
             &UpdateRawPost::new("updated-slug")
                 .title("Updated")
-                .body("New content")
+                .body(parse_post_body("New content"))
                 .build(),
         )
         .await;
@@ -4518,7 +4518,7 @@ async fn post_revisions_created(#[case] backend: Backend) {
             user,
             &UpdateRawPost::new("revision-test")
                 .title("Updated")
-                .body("Updated content")
+                .body(parse_post_body("Updated content"))
                 .build(),
         )
         .await
@@ -4765,7 +4765,7 @@ async fn invite_list_operations(#[case] backend: Backend) {
 }
 
 // =============================================================================
-// create_rendered_post / update_rendered_post integration tests
+// create_rendered_post / perform_post_update integration tests
 // =============================================================================
 
 #[apply(backends)]
@@ -4781,7 +4781,7 @@ async fn create_rendered_post_markdown_renders_and_stores(#[case] backend: Backe
             user_id,
             title: Some(parse_post_title("Rendered Markdown")),
             slug: "rendered-markdown".parse().unwrap(),
-            body: "**bold**".into(),
+            body: parse_post_body("**bold**"),
             format: PostFormat::Markdown,
             published_at: None,
             summary: None,
@@ -4822,7 +4822,7 @@ async fn create_rendered_post_org_renders_and_stores(#[case] backend: Backend) {
             user_id,
             title: Some(parse_post_title("Rendered Org")),
             slug: "rendered-org".parse().unwrap(),
-            body: "*bold*".into(),
+            body: parse_post_body("*bold*"),
             format: PostFormat::Org,
             published_at: None,
             summary: None,
@@ -4871,7 +4871,7 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
             user_id,
             title: Some(parse_post_title("Second Post")),
             slug: occ.slug.clone(),
-            body: "body".into(),
+            body: parse_post_body("body"),
             format: PostFormat::Markdown,
             published_at: Some(now),
             summary: None,
@@ -4986,21 +4986,21 @@ async fn create_posts_conflict_rolls_back_whole_batch(#[case] backend: Backend) 
 
 #[apply(backends)]
 #[tokio::test]
-async fn update_rendered_post_markdown_renders_and_updates(#[case] backend: Backend) {
+async fn perform_post_update_markdown_renders_and_updates(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user_id = SeedUser::new().seed(state).await.user_id;
 
     let post = SeedRawPost::new(user_id).draft().seed(state).await;
 
-    let record = update_rendered_post(
+    let record = perform_post_update(
         state.posts.as_ref(),
-        RenderedPostUpdate {
+        PostUpdate {
             post_id: post.post_id,
             editor_user_id: user_id,
-            title: Some(parse_post_title("Updated Title")),
-            slug: post.slug.clone(),
-            body: "**updated**".into(),
+            title: Some("Updated Title"),
+            slug_override: Some(&post.slug),
+            body: parse_post_body("**updated**"),
             format: PostFormat::Markdown,
             publish: PublishUpdate::Unpublish,
             summary: None,
@@ -5023,21 +5023,23 @@ async fn update_rendered_post_markdown_renders_and_updates(#[case] backend: Back
 
 #[apply(backends)]
 #[tokio::test]
-async fn update_rendered_post_org_renders_and_updates(#[case] backend: Backend) {
+async fn perform_post_update_org_renders_and_updates(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user_id = SeedUser::new().seed(state).await.user_id;
 
     let post = SeedRawPost::new(user_id).draft().seed(state).await;
 
-    let record = update_rendered_post(
+    // `*bold org*` is emphasis, not a heading — `* ` (with the space) is what marks a
+    // title source — so canonicalization leaves it alone and it must still render.
+    let record = perform_post_update(
         state.posts.as_ref(),
-        RenderedPostUpdate {
+        PostUpdate {
             post_id: post.post_id,
             editor_user_id: user_id,
-            title: Some(parse_post_title("Updated Org Title")),
-            slug: post.slug.clone(),
-            body: "*bold org*".into(),
+            title: Some("Updated Org Title"),
+            slug_override: Some(&post.slug),
+            body: parse_post_body("*bold org*"),
             format: PostFormat::Org,
             publish: PublishUpdate::Unpublish,
             summary: None,
@@ -5055,40 +5057,11 @@ async fn update_rendered_post_org_renders_and_updates(#[case] backend: Backend) 
     );
 }
 
-#[apply(backends)]
-#[tokio::test]
-async fn update_rendered_post_not_found_returns_storage_error(#[case] backend: Backend) {
-    use storage::UpdatePostError;
-
-    let env = backend.setup().await;
-    let state = &env.state;
-
-    let err = update_rendered_post(
-        state.posts.as_ref(),
-        RenderedPostUpdate {
-            post_id: PostId::from(99999),
-            editor_user_id: UserId::from(1),
-            title: Some(parse_post_title("No Post")),
-            slug: "no-post".parse().unwrap(),
-            body: "body".into(),
-            format: PostFormat::Markdown,
-            publish: PublishUpdate::Unpublish,
-            summary: None,
-            audiences: vec![AudienceTarget::Public],
-        },
-    )
-    .await
-    .unwrap_err();
-
-    assert!(
-        matches!(err, UpdatePostError::NotFound),
-        "expected Storage error, got {err:?}"
-    );
-    assert!(
-        err.to_string().contains("not found"),
-        "expected 'not found' message, got: {err}"
-    );
-}
+// `update_rendered_post_not_found_returns_storage_error` was deleted with
+// `update_rendered_post` itself (#811). Its assertion is reproduced exactly by
+// `post_update_not_found_returns_error` above, which calls the same
+// `PostStorage::update_post` with a nonexistent id and matches the same
+// `UpdatePostError::NotFound`.
 
 // ── MediaStorage tests ────────────────────────────────────────────────────────
 

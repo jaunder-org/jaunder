@@ -312,7 +312,7 @@ pub async fn collection_post(
     let entry: Entry = body.parse()?;
     let default_format =
         storage::get_default_post_format(user_config.as_ref(), auth_user.user_id).await?;
-    let fields = entry_to_post_fields(&entry, default_format);
+    let fields = entry_to_post_fields(&entry, default_format)?;
     // Bound the tag set before anything is written: an over-cap entry must be
     // rejected, not created-then-rejected (#771 D9/D12, ADR-0092).
     let categories = common::tag::parse_and_validate_tags(fields.categories)?;
@@ -439,7 +439,7 @@ pub async fn member_put(
     let entry: Entry = body.parse()?;
     let default_format =
         storage::get_default_post_format(user_config.as_ref(), auth_user.user_id).await?;
-    let fields = entry_to_post_fields(&entry, default_format);
+    let fields = entry_to_post_fields(&entry, default_format)?;
     // Bound the tag set before anything is written: an over-cap entry must be
     // rejected, not updated-then-rejected (#771 D9/D12, ADR-0092).
     let categories = common::tag::parse_and_validate_tags(fields.categories)?;
@@ -501,7 +501,7 @@ mod etag_tests {
     use super::*;
     use chrono::{TimeZone, Utc};
     use common::ids::{PostId, TagId, UserId};
-    use common::test_support::parse_post_summary;
+    use common::test_support::{parse_post_body, parse_post_summary};
     use storage::{PostFormat, PostTag, RenderedHtml};
 
     fn mk_tag(post_id: i64, tag_id: i64, slug: &str, display: &str) -> PostTag {
@@ -524,7 +524,7 @@ mod etag_tests {
             author_username: "alice".parse().expect("parse username"),
             title: Some(common::test_support::parse_post_title("Title")),
             slug: "my-post".parse().expect("parse slug"),
-            body: "Body text.".into(),
+            body: parse_post_body("Body text."),
             format: PostFormat::Org,
             rendered_html: RenderedHtml::from_trusted("<p>Body text.</p>"),
             created_at: t,
@@ -592,7 +592,7 @@ mod etag_tests {
             e
         ); // title value
         assert_ne!(flip(&|p| p.title = None), e); // title present->absent
-        assert_ne!(flip(&|p| p.body = "Different body.".into()), e); // body
+        assert_ne!(flip(&|p| p.body = parse_post_body("Different body.")), e); // body
         assert_ne!(flip(&|p| p.summary = Some(parse_post_summary("Other"))), e); // summary value
         assert_ne!(flip(&|p| p.summary = None), e); // summary present->absent
         assert_ne!(flip(&|p| p.format = PostFormat::Markdown), e); // format

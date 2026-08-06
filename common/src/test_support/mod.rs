@@ -24,6 +24,7 @@ use crate::invite::InviteTtlHours;
 use crate::media::{ByteSize, ContentHash, ContentType, Filename, MaxFileSize, UserQuota};
 use crate::pagination::{PageOffset, PageSize, RowLimit};
 use crate::password::Password;
+use crate::post_body::PostBody;
 use crate::post_summary::PostSummary;
 use crate::post_title::PostTitle;
 use crate::root_relative_url::RootRelativeUrl;
@@ -277,6 +278,19 @@ pub fn parse_site_title(s: &str) -> SiteTitle {
 #[must_use]
 pub fn parse_post_summary(s: &str) -> PostSummary {
     s.parse().expect("valid test post summary")
+}
+
+/// Parse `s` into a valid [`PostBody`] for tests — the single place a test post-body
+/// literal is parsed, so a fixture that is nothing but blank lines fails loudly and the
+/// validating `FromStr` isn't re-spelled at every post/render fixture across the
+/// workspace.
+///
+/// # Panics
+///
+/// Panics if `s` has no non-blank line.
+#[must_use]
+pub fn parse_post_body(s: &str) -> PostBody {
+    s.parse().expect("valid test post body")
 }
 
 /// The content hash every media fixture is stored under: a realistic lowercase
