@@ -895,6 +895,29 @@ strong. Bundle volume is a genuine but weak lever — at ~14–20 ms/MiB margina
 halving the bundle again would buy ~30 ms against a ~380 ms floor. The floor,
 not the volume, is where firefox's boot cost lives — see #864.
 
+### Measured and deliberately not acted on
+
+Two candidates were measured against the same 25 KiB materiality threshold and
+both came in under it, so neither got a follow-up issue.
+
+**`croner` — 9.7 KiB, and it stays.** It is the only application-level crate in
+the wasm graph that could plausibly have been cut, but ADR-0065 requires the
+client to validate `BackupSchedule` through the server's own `FromStr`. Removing
+it would mean a second, divergent parser — the exact failure ADR-0065 exists to
+prevent. Below threshold and load-bearing.
+
+**Client log strings — ~0 bytes, and the premise was wrong.** `csr/src/lib.rs`
+initialises `console_log` at `Level::Debug`, which was expected to compile every
+`debug!`/`trace!` format string into the bundle. Building with
+`log/release_max_level_info` moved the shipped wasm by **11 bytes** (2 267 076 →
+2 267 065) — below the 13-byte reproducibility noise floor.
+
+The reason: there are **zero** `debug!`/`trace!` call sites in `csr`, `web` or
+`common`. There are no strings to strip. Muting client logs would have bought
+nothing, which is a good thing, because #839 is trying to _start_ capturing
+browser console output and muting it in the same cycle would have worked against
+that.
+
 ### The size budget
 
 `cargo xtask validate` now fails when raw `pkg/jaunder.wasm` exceeds

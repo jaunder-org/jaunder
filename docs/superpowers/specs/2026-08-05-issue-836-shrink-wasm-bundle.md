@@ -391,15 +391,28 @@ Each is checkable from the repository and the PR.
 
 ## Deferred — filed as issues, not solved here
 
+Resolved at ship — every bullet below now names its disposition.
+
 - Any D6 cluster below D0's threshold; the ADR-0058 layering argument stands
-  independently of bytes.
+  independently of bytes. **All four clusters measured at 0 bytes**, so all four
+  are below threshold and none moved — filed on layering grounds alone as
+  [#855](https://github.com/jaunder-org/jaunder/issues/855).
 - `croner`'s bundle weight, if material — a smaller cron validator or a
-  syntactic/full validation split (D7).
+  syntactic/full validation split (D7). **9.7 KiB, below threshold; no issue
+  filed** — and ADR-0065 requires the client to validate through the server's
+  own `FromStr`, so it stays.
 - Client log-string weight, if material — `release_max_level_*` (D9), sequenced
-  against #839.
+  against #839. **~0 bytes (11, under the noise floor); no issue filed** — there
+  are no `debug!`/`trace!` call sites in the wasm crates to strip.
 - Splitting `common` into separate crates so the wasm graph cannot structurally
   reach host-only code. Raised and set aside as a much larger refactor with its
   own ADR — filed as [#847](https://github.com/jaunder-org/jaunder/issues/847).
+- `serde_json` is 145 KiB of the code section, the only application-level entry
+  in the top ten — found by the attribution built here, outside the original
+  scope. Filed as [#856](https://github.com/jaunder-org/jaunder/issues/856).
+- Firefox's wasm instantiate has a ~377 ms **size-independent** floor, uncovered
+  by the three-arm capture and deliberately left unexplained — filed as
+  [#864](https://github.com/jaunder-org/jaunder/issues/864).
 
 ## Out of scope
 
