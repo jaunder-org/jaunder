@@ -9,3 +9,8 @@ Append-only. Newest last. One line per event.
 - 2026-08-06 — killed common/src/backup.rs:48 `BackupMode::label -> "xyzzy"`.
   The existing test asserted only `!label().is_empty()`; pinned the authored
   labels instead. backup.rs now 0 missed / 3 caught.
+- 2026-08-06 — measured the real cost: the pre-commit gate takes ~8 min on a
+  source change (Nix cache miss), ~30s on a docs-only change. Changed the unit
+  of work from one mutant to one file so the gate is not the bottleneck.
+- 2026-08-06 — common discovery complete: 580 mutants, 373 caught, 139 unviable,
+  2 timeout, 66 surviving across 10 files. storage now running.

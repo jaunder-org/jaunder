@@ -25,27 +25,41 @@ Everything lives in `.mutants-loop/`. Nothing lives in your head.
 ## Each wake-up
 
 1. Read `queue.md`. Do not read anything else first.
-2. If the queue has fewer than 10 `todo` items, refill it from the newest
-   `missed.txt` files. Add each mutant as one `todo` line.
-3. Take the first `todo` item. Mark it `wip`.
+2. If the queue has no `todo` files left, refill it from the newest `missed.txt`
+   files. Group the mutants by file, biggest file first — one `todo` line per
+   file.
+3. Take the first `todo` file. Mark it `wip`.
 4. Do the work (below).
 5. Update `queue.md` and append one line to `journal.md`.
 6. Go to step 3 until you are low on context, then stop. The next wake-up starts
    again at step 1.
 
-## Working one mutant
+## The unit of work is one FILE, not one mutant
 
-1. Read the code around the mutant. Understand what behavior it breaks.
-2. Write a test that fails with the mutant and passes without it. Put it with
+The pre-commit gate takes about **8 minutes** whenever source changes (a Nix
+cache miss), and about 30 seconds when only docs change. So one commit per
+mutant would spend nearly all four days waiting on the gate.
+
+Take **all surviving mutants in one file** as a batch. Write all the tests, run
+the gate once, verify once, commit once. Ten files cost ten gate runs, not
+sixty-six.
+
+If a file holds more mutants than you can handle in one wake-up, do a partial
+batch and commit it. A partial batch is fine; a broken tree is not.
+
+## Working one file
+
+1. Read the code around each mutant. Understand what behavior it breaks.
+2. Write tests that fail with the mutants and pass without them. Put them with
    the other tests for that module.
-3. Run the gate: `devtool run -- cargo xtask check --no-test`, then the
-   package's tests. Both must pass.
-4. Confirm the kill:
-   `devtool run -- cargo mutants --package <pkg> --file <file> --line <line>`
-   (or re-run the single mutant however is cheapest). It must report caught.
-5. Commit. One mutant per commit.
-   `test(<pkg>): kill mutant <file>:<line> — <what it was>`
-6. Mark the item `done` in `queue.md`.
+3. Run the package's tests first — they are fast, and they catch your mistakes
+   before the 8-minute gate does. Only then let the commit run the full gate.
+4. Confirm the kills, into a scratch dir so discovery's own output survives:
+   `devtool run -- cargo mutants -p <pkg> --file <file> --output /tmp/mutverify-<name>`
+   Then read `/tmp/mutverify-<name>/mutants.out/missed.txt`. It must be empty,
+   or hold only the ones you deliberately skipped.
+5. Commit. One file per commit. `test(<pkg>): kill N mutants in <file>`
+6. Mark the items `done` or `skipped` in `queue.md`.
 
 ## Hard rules
 
