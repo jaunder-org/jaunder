@@ -91,8 +91,9 @@ used as a `#[server]` wire arg, asserts its `FromStr::Err` `Display` contains no
 runtime-formatted value other than a constant.
 
 - [x] **Step 2: Record the number.** Filed as
-      [#846](https://github.com/jaunder-org/jaunder/issues/846) — type `Task`, labels
-      `tooling`/`type-safety`, milestone "Observability & diagnostics", P3.
+      [#846](https://github.com/jaunder-org/jaunder/issues/846) — type `Task`,
+      labels `tooling`/`type-safety`, milestone "Observability & diagnostics",
+      P3.
 
 No commit — the tracker is the deliverable.
 
@@ -445,12 +446,18 @@ git commit -m "docs(adr): amend ADR-0065 — secrets are typed wire args via the
 - [ ] `devtool run --cwd <worktree> -- cargo xtask validate` green (static +
       clippy + coverage + all four `{sqlite,postgres}×{chromium,firefox}` e2e
       combos).
-- [ ] AC8 — this pattern returns nothing (fenced, because it contains
-      backticks):
+- [x] AC8 — **the AC's literal pattern was too blunt; corrected during execution.**
+      `rg 'stays?\s+`String`'` still matches twice, but both hits are the amendment
+      _quoting_ the old wording in order to mark it wrong — the same style #568 used
+      ("this bullet previously cited ADR-0056"). What AC8 means is that the ADR no
+      longer **asserts** it, so the check is for the original claims:
 
       ```bash
-      rg 'stays?\s+`String`' docs/adr/0065-*.md
+      rg 'its arg stays `String`|Args that stay `String`' docs/adr/0065-*.md
       ```
+
+      That returns nothing. Keeping the quotations is deliberate: an amendment that
+      silently rewrites text leaves a future reader unable to tell what changed.
 
 - [ ] `rg 'InternalError::validation\(' web/src/error.rs` returns nothing — the
       decode path must use `validation_source` (the major finding from the spec
