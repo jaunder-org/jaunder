@@ -21,10 +21,14 @@ use crate::email::Email;
 /// the sender will build a `MultiPart::alternative()` when it is `Some`.
 #[derive(Debug, Clone)]
 pub struct EmailMessage {
-    /// Sender address (e.g. `"Jaunder <noreply@example.com>"`).
-    /// When `None`, the sender address from `SmtpConfig` is used.
+    /// Sender address — a bare addr-spec (e.g. `noreply@example.com`), never
+    /// the `Name <addr>` display form, which [`Email`] does not accept.
+    /// When `None`, the sender from `SmtpConfig` is used, and that one *may*
+    /// carry a display name.
     pub from: Option<Email>,
-    /// Recipient addresses. Must contain at least one entry.
+    /// Recipient addresses. Must contain at least one entry — a `Vec` cannot
+    /// say so, and the transport rejects an empty one rather than letting it
+    /// surface as an obscure error from inside the mail library.
     pub to: Vec<Email>,
     /// The message subject line.
     pub subject: String,

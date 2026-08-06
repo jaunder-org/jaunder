@@ -12,13 +12,27 @@ use thiserror::Error;
 /// Errors that can occur when constructing a [`LettreMailSender`].
 #[derive(Debug, Error)]
 pub enum BuildMailerError {
-    /// Failed to parse the sender address.
+    /// The configured sender could not be rendered as an address lettre
+    /// accepts. Not the address itself — that is an
+    /// [`Email`](common::email::Email) and always parses — but the display
+    /// name: [`common::mailbox::Mailbox`] emits it unquoted, and a name
+    /// containing a comma, colon or parenthesis is then unreadable as an RFC
+    /// 5322 `phrase`. See #837.
     #[error("invalid sender address: {0}")]
     InvalidSender(String),
     /// Failed to build the SMTP transport.
     #[error("failed to build SMTP transport: {0}")]
     Transport(String),
 }
+
+/// An [`EmailMessage`] reached the transport with no recipients.
+///
+/// [`EmailMessage::to`] is a plain `Vec`, so this is a caller error rather than
+/// an impossible state; lettre would otherwise report it as `MissingTo` from
+/// deep inside `build()`, naming the symptom rather than the cause.
+#[derive(Debug, Error)]
+#[error("an email message must have at least one recipient")]
+struct NoRecipients;
 
 /// A [`MailSender`] backed by lettre's async SMTP transport.
 pub struct LettreMailSender {
@@ -31,9 +45,18 @@ impl LettreMailSender {
     ///
     /// # Errors
     ///
-    /// Returns an error if the sender address is invalid, or if the SMTP
-    /// transport cannot be built.
+    /// Returns an error if the SMTP transport cannot be built, or if the
+    /// configured sender's *display name* cannot be rendered as an RFC 5322
+    /// `phrase` — see [`BuildMailerError::InvalidSender`]. The sender's
+    /// address half cannot fail.
     pub fn from_config(config: &SmtpConfig) -> Result<Self, BuildMailerError> {
+        // Fallible, unlike the conversions in `build_message`. Those take an
+        // `Email`, which always survives lettre's parser (#297). This takes a
+        // `common::mailbox::Mailbox`, whose *display name* `DisplayName` admits
+        // any characters and whose `Display` emits unquoted — so an ordinary
+        // `Acme, Inc <noreply@example.com>` renders as something lettre cannot
+        // read back as a `phrase`. The address half is fine; the name is not.
+        // Root cause is #837; until then this reports rather than panics.
         let sender: Mailbox =
             config
                 .sender
@@ -78,26 +101,40 @@ impl LettreMailSender {
             sender,
         })
     }
-}
 
-#[async_trait]
-impl MailSender for LettreMailSender {
-    async fn send_email(&self, message: &EmailMessage) -> Result<(), MailError> {
-        let from: Mailbox = message
-            .from
-            .as_ref()
-            .map(|a| a.to_string().parse())
-            .transpose()
-            .map_err(|e: lettre::address::AddressError| MailError::Send(Box::new(e)))?
-            .unwrap_or_else(|| self.sender.clone());
+    /// Build the lettre [`Message`] for an [`EmailMessage`].
+    ///
+    /// Split out of `send_email` so the address conversion can be asserted
+    /// without a live SMTP server — the Nix check derivations are
+    /// network-sandboxed, so a test that goes through `send_email` can only
+    /// ever observe a transport failure (#297).
+    fn build_message(&self, message: &EmailMessage) -> Result<Message, MailError> {
+        // Checked here rather than left to lettre: `to` is a plain `Vec`, so an
+        // empty one is a caller error, and `build()` would report it as
+        // `MissingTo` from the far side of the message builder.
+        if message.to.is_empty() {
+            return Err(MailError::Send(Box::new(NoRecipients)));
+        }
+
+        // Every `Email` survives lettre's display-form parser (see
+        // `every_email_survives_lettres_display_form_parser`), so neither of
+        // these conversions can fail (#297).
+        let from: Mailbox = match message.from.as_ref() {
+            Some(addr) => {
+                let Ok(mailbox) = addr.to_string().parse::<Mailbox>() else {
+                    unreachable!("an Email always parses as a lettre Mailbox")
+                };
+                mailbox
+            }
+            None => self.sender.clone(),
+        };
 
         let mut builder = Message::builder().from(from);
 
         for to_addr in &message.to {
-            let mailbox: Mailbox = to_addr
-                .to_string()
-                .parse()
-                .map_err(|e: lettre::address::AddressError| MailError::Send(Box::new(e)))?;
+            let Ok(mailbox) = to_addr.to_string().parse::<Mailbox>() else {
+                unreachable!("an Email always parses as a lettre Mailbox")
+            };
             builder = builder.to(mailbox);
         }
 
@@ -105,12 +142,26 @@ impl MailSender for LettreMailSender {
             .subject(&message.subject)
             .body(message.body_text.clone())
         else {
-            // lettre's `.body()` only errors when no transfer-encoding fits the
-            // bytes; a Rust `String` is guaranteed-valid UTF-8 and always encodes
-            // (7bit/8bit/quoted-printable/base64), so this arm is unreachable with
-            // our `String` body — no valid input can drive it.
-            unreachable!("a String body always encodes; lettre picks a CTE")
+            // `.body()` fails for three reasons: no transfer-encoding fits the
+            // bytes, `MissingFrom`, or `MissingTo`. None can happen here. The
+            // body is a Rust `String` — guaranteed-valid UTF-8, so it always
+            // encodes. `from` is always set just above, and survives the header
+            // round-trip lettre performs in `build()` (the guard again). `to` is
+            // non-empty, checked at the top of this function.
+            //
+            // The encoding claim alone used to be this comment, which is how a
+            // parser bug spent a while looking like an encoding concern (#297).
+            unreachable!("from is set, to is non-empty, and a String body always encodes")
         };
+
+        Ok(email)
+    }
+}
+
+#[async_trait]
+impl MailSender for LettreMailSender {
+    async fn send_email(&self, message: &EmailMessage) -> Result<(), MailError> {
+        let email = self.build_message(message)?;
 
         self.mailer
             .send(email)
@@ -126,9 +177,99 @@ mod tests {
     use common::email::Email;
     use common::smtp_port::SmtpPort;
     use common::test_support::{parse_smtp_password, parse_smtp_username};
+    use std::str::FromStr;
     use storage::{SmtpConfig, SmtpTlsMode};
 
     use super::*;
+
+    /// Addresses spanning both grammars: ordinary forms, the two families the
+    /// RFC 5322 *display-form* parser chokes on (domain-literals and quoted
+    /// local parts), and an internationalized address.
+    const ADDRESS_CORPUS: &[&str] = &[
+        "user@example.com",
+        "USER@Example.COM",
+        "user+tag@example.com",
+        "first.last@sub.example.co.uk",
+        "!#$%&'*+-/=?^_`{|}~@example.com",
+        // Domain-literals — RFC 5321 `address-literal`.
+        "user@[127.0.0.1]",
+        "user@[192.0.2.1]",
+        "user@[IPv6:2001:db8::1]",
+        // Quoted local parts — RFC 5321 `Quoted-string`.
+        "\"quoted\"@example.com",
+        "\"has space\"@example.com",
+        "\"has@at\"@example.com",
+        "\"a<b\"@example.com",
+        "\"a,b\"@example.com",
+        // Internationalized (EAI). Sending one additionally needs the server to
+        // advertise SMTPUTF8, which is a capability question, not a parsing one.
+        "user@İ.com",
+        "user@münchen.de",
+    ];
+
+    /// The invariant the `unreachable!`s in this module rest on: every address
+    /// `Email` accepts survives lettre's **display-form** parser and yields a
+    /// buildable `Message`.
+    ///
+    /// `Address` alone is not the invariant. `Headers` stores each header as a
+    /// string and re-parses it on `get`, so `MessageBuilder::build` puts every
+    /// address back through `Mailbox::from_str` — which is where lettre used to
+    /// reject legal addresses it had just rendered (#297).
+    ///
+    /// **This is the tripwire for the `[patch.crates-io]` entry.** The fix is
+    /// carried as a patch until it is released upstream; drop the patch and the
+    /// build re-resolves to a lettre that compiles perfectly and mis-parses
+    /// quietly, so nothing else fails first. This test is the thing that fails.
+    ///
+    /// Two limits, stated so they are not mistaken for more than they are: the
+    /// corpus is a sample, while the `unreachable!`s claim totality; and this
+    /// guard lives beside the code it protects, so one careless edit removes
+    /// both.
+    #[test]
+    fn every_email_survives_lettres_display_form_parser() {
+        for raw in ADDRESS_CORPUS {
+            // Every corpus entry is a valid `Email` by construction — the point
+            // of the corpus is what lettre then makes of it.
+            let email = raw
+                .parse::<Email>()
+                .expect("every ADDRESS_CORPUS entry must be a valid Email");
+
+            let parsed = lettre::message::Mailbox::from_str(email.as_ref());
+            assert!(
+                parsed.is_ok(),
+                "Email accepted {raw:?} but lettre's display-form parser \
+                 rejected it — has the lettre [patch.crates-io] entry been \
+                 dropped? See #297",
+            );
+            let Ok(mailbox) = parsed else {
+                unreachable!("just asserted ok")
+            };
+
+            assert!(
+                Message::builder()
+                    .from(mailbox.clone())
+                    .to(mailbox)
+                    .body("body".to_owned())
+                    .is_ok(),
+                "Email accepted {raw:?} and lettre parsed it, but no Message \
+                 could be built — the header round-trip has broken. See #297",
+            );
+        }
+    }
+
+    #[test]
+    fn build_message_rejects_an_empty_recipient_list() {
+        // `EmailMessage::to` is a plain `Vec`, so this is reachable from a
+        // caller. Without the explicit check lettre reports it as `MissingTo`
+        // from inside `build()`, which the surrounding `unreachable!` would
+        // then turn into a panic.
+        let sender =
+            LettreMailSender::from_config(&base_config(SmtpTlsMode::Plain)).expect("build mailer");
+        let error = sender
+            .build_message(&message_to(vec![], None))
+            .expect_err("a message with no recipients must be rejected");
+        assert!(matches!(error, MailError::Send(_)));
+    }
 
     fn base_config(tls_mode: SmtpTlsMode) -> SmtpConfig {
         SmtpConfig {
@@ -212,73 +353,106 @@ mod tests {
         assert!(matches!(error, MailError::Send(_)));
     }
 
-    /// A domain-literal address (`user@[127.0.0.1]`) that `Email` accepts but
-    /// lettre's stricter `Mailbox` parser rejects. Used to drive the re-parse
-    /// `map_err` arms, which are unreachable through equal parsers.
-    fn divergent_address() -> Email {
-        "user@[127.0.0.1]"
-            .parse()
-            .expect("a domain-literal is a valid Email")
-    }
+    /// Addresses that are RFC-legal, that `Email` accepts, and that lettre's
+    /// display-form parser rejected before the patch: a domain-literal and two
+    /// quoted local parts (one containing the `@` that the naive split trips
+    /// over).
+    const DIVERGENT: &[&str] = &[
+        "user@[192.0.2.1]",
+        "\"has space\"@example.com",
+        "\"has@at\"@example.com",
+    ];
 
-    #[tokio::test]
-    async fn from_config_rejects_sender_lettre_cannot_parse() {
-        // guard:no-backend — no DB
-        // `SmtpConfig::sender` (an `SmtpSender`, validated against
-        // `common::mailbox::Mailbox`) accepts the
-        // domain-literal, but lettre's Mailbox parser rejects it, so `from_config`
-        // maps it to InvalidSender.
-        let config = SmtpConfig {
-            sender: "user@[127.0.0.1]"
-                .parse()
-                .expect("Mailbox accepts a domain-literal"),
-            ..base_config(SmtpTlsMode::Plain)
-        };
-        // `LettreMailSender` is not `Debug`, so match on the result rather than
-        // using `expect_err`.
-        assert!(matches!(
-            LettreMailSender::from_config(&config),
-            Err(BuildMailerError::InvalidSender(_))
-        ));
-    }
-
-    #[tokio::test]
-    async fn send_email_rejects_from_lettre_cannot_parse() {
-        // guard:no-backend — no DB
-        // A valid sender builds the mailer; the message's `from` is the divergent
-        // address, so the `from` re-parse fails before any network use.
-        let sender =
-            LettreMailSender::from_config(&base_config(SmtpTlsMode::Plain)).expect("build mailer");
-        let msg = EmailMessage {
-            from: Some(divergent_address()),
-            to: vec!["bob@example.com".parse().expect("valid email")],
+    fn message_to(to: Vec<Email>, from: Option<Email>) -> EmailMessage {
+        EmailMessage {
+            from,
+            to,
             subject: "Hello".to_owned(),
             body_text: "World".to_owned(),
-        };
-        let error = sender
-            .send_email(&msg)
-            .await
-            .expect_err("an unparseable from must fail");
-        assert!(matches!(error, MailError::Send(_)));
+        }
     }
 
-    #[tokio::test]
-    async fn send_email_rejects_recipient_lettre_cannot_parse() {
-        // guard:no-backend — no DB
-        // Valid from (defaulted from config), but a recipient is the divergent
-        // address, so the `to` re-parse fails before any network use.
+    #[test]
+    fn build_message_accepts_recipients_the_display_parser_rejected() {
+        // Was `send_email_rejects_recipient_lettre_cannot_parse`, which asserted
+        // the failure. Driving `build_message` rather than `send_email` matters:
+        // against a dead endpoint `send_email` errors regardless, so the old
+        // shape would pass for the wrong reason.
         let sender =
             LettreMailSender::from_config(&base_config(SmtpTlsMode::Plain)).expect("build mailer");
-        let msg = EmailMessage {
-            from: None,
-            to: vec![divergent_address()],
-            subject: "Hello".to_owned(),
-            body_text: "World".to_owned(),
-        };
-        let error = sender
-            .send_email(&msg)
-            .await
-            .expect_err("an unparseable recipient must fail");
-        assert!(matches!(error, MailError::Send(_)));
+        for raw in DIVERGENT {
+            let to: Email = raw.parse().expect("a valid Email");
+            let built = sender
+                .build_message(&message_to(vec![to.clone()], None))
+                .unwrap_or_else(|e| panic!("could not build a message to {raw}: {e:?}"));
+            let recipients = built.envelope().to();
+            assert_eq!(recipients.len(), 1, "{raw}");
+            assert_eq!(recipients[0].to_string(), to.to_string(), "{raw}");
+        }
+    }
+
+    #[test]
+    fn build_message_accepts_a_from_the_display_parser_rejected() {
+        // Was `send_email_rejects_from_lettre_cannot_parse`.
+        let sender =
+            LettreMailSender::from_config(&base_config(SmtpTlsMode::Plain)).expect("build mailer");
+        for raw in DIVERGENT {
+            let from: Email = raw.parse().expect("a valid Email");
+            let to: Email = "bob@example.com".parse().expect("valid email");
+            let built = sender
+                .build_message(&message_to(vec![to], Some(from.clone())))
+                .unwrap_or_else(|e| panic!("could not build a message from {raw}: {e:?}"));
+            assert_eq!(
+                built.envelope().from().map(ToString::to_string),
+                Some(from.to_string()),
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn from_config_accepts_a_sender_the_display_parser_rejected() {
+        // Was `from_config_rejects_sender_lettre_cannot_parse`. `SmtpConfig`'s
+        // sender is a `common::mailbox::Mailbox`, so this covers the named form
+        // too — the display name must not disturb the address.
+        for raw in ["user@[192.0.2.1]", "Jaunder <\"has space\"@example.com>"] {
+            let config = SmtpConfig {
+                sender: raw.parse().expect("Mailbox accepts it"),
+                ..base_config(SmtpTlsMode::Plain)
+            };
+            // `LettreMailSender` is not `Debug`, so match rather than `expect`.
+            assert!(
+                LettreMailSender::from_config(&config).is_ok(),
+                "could not build a mailer for sender {raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn from_config_reports_a_display_name_lettre_cannot_read() {
+        // The sender's *name*, not its address, is the fallible half.
+        // `DisplayName` admits any character and `common::mailbox::Mailbox`
+        // renders it unquoted, so these ordinary configurations produce a
+        // string lettre cannot parse back as a `phrase`. Reported, not panicked
+        // — an admin typo must not take the server down. Root cause is #837.
+        for raw in [
+            "Acme, Inc <noreply@example.com>",
+            "Support: Jaunder <noreply@example.com>",
+            "Jaunder (Team) <noreply@example.com>",
+        ] {
+            let config = SmtpConfig {
+                sender: raw.parse().expect("common::Mailbox accepts it"),
+                ..base_config(SmtpTlsMode::Plain)
+            };
+            // `LettreMailSender` is not `Debug`, so reduce to a bool rather
+            // than `expect_err`.
+            let reported = LettreMailSender::from_config(&config)
+                .err()
+                .is_some_and(|e| matches!(e, BuildMailerError::InvalidSender(_)));
+            assert!(
+                reported,
+                "expected {raw} to be reported, not accepted or panicked",
+            );
+        }
     }
 }

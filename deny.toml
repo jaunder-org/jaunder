@@ -244,7 +244,14 @@ allow-git = []
 
 [sources.allow-org]
 # github.com organizations to allow git sources for
-github = []
+#
+# `jaunder-org` carries the `[patch.crates-io]` entry for lettre (#297): its
+# RFC 2822 mailbox parser omits `domain-literal` and decodes a quoted
+# `local-part`, so legal addresses are stored but unsendable. `unknown-git` is
+# only "warn" above, so this entry is not what makes the gate pass — it is what
+# makes the exception deliberate, and its removal the signal that the patch is
+# gone. Drop both together once the fix is released upstream.
+github = ["jaunder-org"]
 # gitlab.com organizations to allow git sources for
 gitlab = []
 # bitbucket.org organizations to allow git sources for
