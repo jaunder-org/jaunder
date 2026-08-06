@@ -147,31 +147,16 @@ pub fn ComposerFields(
     }
 }
 
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "`PostDisplay` is the terminal owner of these three: its only caller \
-              `PostCard` moves them in, and `PostView<'a>` borrows all three across \
-              `render_post_content`, the pure fn shared with the projector (ADR-0041 §2). \
-              They must be owned here so they outlive that borrow-view; clippy sees the \
-              borrows but not the ownership-for-lending. Unlike the read-only props this \
-              crate converted to references under edition 2024, taking `&T` here does not \
-              fix anything — measured (#301): it compiles, but relocates the identical \
-              lint to `PostCard`, and thence to `TimelineRows`, which owns the rows it \
-              iterates. Borrowing posts through the whole render chain is the real fix — \
-              it also drops a per-row `tag_context.clone()` — and lands in the very next \
-              commit on this branch, which deletes this attribute. It is separated only \
-              because it changes three components rather than one."
-)]
 #[component]
-pub fn PostDisplay(
-    post: RenderedPost,
-    banner: Option<String>,
+pub fn PostDisplay<'a>(
+    post: &'a RenderedPost,
+    banner: Option<&'a str>,
     /// Linking context for the tag chips in the footer; defaults to
     /// site-wide.
-    #[prop(default = TagContext::SiteWide)]
-    tag_context: TagContext,
+    #[prop(default = &TagContext::SiteWide)]
+    tag_context: &'a TagContext,
     #[prop(optional)] children: Option<Children>,
-) -> impl IntoView {
+) -> impl IntoView + use<> {
     let time_label = crate::posts::render::format_post_time(post.display_time());
     // Built once and shared by both arms so the authored content column is the SAME
     // pure, viewer-independent render the projector paints (#181, ADR-0044 D4) — no
@@ -180,13 +165,13 @@ pub fn PostDisplay(
     let view = crate::posts::render::PostView {
         username: &post.username,
         title: post.title.as_deref(),
-        banner: banner.as_deref(),
+        banner,
         summary: post.summary.as_deref(),
         rendered_html: &post.rendered_html,
         time: &time_label,
         permalink: post.permalink.as_deref().unwrap_or_default(),
         tags: &post.tags,
-        tag_ctx: &tag_context,
+        tag_ctx: tag_context,
     };
     match children {
         // Anonymous / no-action layout: the WHOLE article inner is produced by the
@@ -239,12 +224,12 @@ fn marker_matches(author: &Username) -> bool {
 }
 
 #[component]
-pub fn PostCard(
-    post: RenderedPost,
-    banner: Option<String>,
+pub fn PostCard<'a>(
+    post: &'a RenderedPost,
+    banner: Option<&'a str>,
     /// Linking context for the footer tag chips; defaults to site-wide.
-    #[prop(default = TagContext::SiteWide)]
-    tag_context: TagContext,
+    #[prop(default = &TagContext::SiteWide)]
+    tag_context: &'a TagContext,
     #[prop(optional)] on_mutate: Option<Callback<()>>,
     #[prop(optional)] on_unpublish: Option<Callback<()>>,
     /// Fired only after a successful *publish* (distinct from `on_mutate`, which delete
@@ -253,7 +238,7 @@ pub fn PostCard(
     /// refetching into a not-found (#592).
     #[prop(optional)]
     on_publish: Option<Callback<()>>,
-) -> impl IntoView {
+) -> impl IntoView + use<> {
     // The seed/anonymous data has `is_author = false` (the projector paints
     // anonymous-only), so on the Local timeline the owner's own posts would show no
     // action column. Decide it client-side from the auth marker (#181, ADR-0044 D4)
@@ -975,12 +960,17 @@ pub fn PostPage() -> impl IntoView {
                                     .post
                                     .is_draft
                                     .then_some("Draft - visible only to you".to_string());
-                                let username_for_tags = fetched.post.username.clone();
+                                let tag_context = TagContext::ForUser(
+                                    fetched.post.username.clone(),
+                                );
+                                // Both bound before the `view!`: the props are borrows
+                                // now, so an inline temporary would be dropped inside
+                                // the macro expansion (E0716).
                                 view! {
                                     <PostCard
-                                        post=fetched.post
-                                        banner=banner
-                                        tag_context=TagContext::ForUser(username_for_tags)
+                                        post=&fetched.post
+                                        banner=banner.as_deref()
+                                        tag_context=&tag_context
                                         on_unpublish=on_unpublish
                                         on_publish=on_publish
                                     />

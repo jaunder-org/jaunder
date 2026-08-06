@@ -153,13 +153,13 @@ pub fn TimelineRows(
                 if rows.is_empty() {
                     view! { <p>{empty_text}</p> }.into_any()
                 } else {
-                    rows.into_iter()
+                    rows.iter()
                         .map(|p| {
                             view! {
                                 <PostCard
                                     post=p
                                     banner=None
-                                    tag_context=tag_context.clone()
+                                    tag_context=&tag_context
                                     on_mutate=on_mutate
                                 />
                             }
