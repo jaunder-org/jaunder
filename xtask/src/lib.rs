@@ -20,6 +20,7 @@ mod sh;
 #[cfg(test)]
 mod test_support;
 mod traces;
+mod wasm_budget;
 mod wasm_sections;
 mod wasm_symbols;
 mod web_server_fns;
@@ -51,6 +52,7 @@ mod steps {
     pub mod test_pattern_check;
     pub mod thin_components;
     pub mod traced_context_check;
+    pub mod wasm_budget;
 }
 pub use result::{CommandResult, Mode, StepResult};
 
@@ -126,7 +128,12 @@ pub enum Command {
     /// bundle-size bloat before it ships and compare a change's effect on what
     /// users download. Run it after a change you expect to move the bundle (a new
     /// dependency, a feature touching the client), or periodically to watch the
-    /// trend. This is a manual tool — it is not part of `check`/`validate`.
+    /// trend.
+    ///
+    /// The totals also back `validate`'s `wasm-budget` step, which fails when raw
+    /// `pkg/jaunder.wasm` exceeds a committed ceiling (#836) — so the gate and
+    /// this tool can never disagree about what the bundle weighs. `--breakdown`
+    /// remains manual; it is not part of `check`/`validate`.
     #[command(after_help = "EXAMPLES:\n  \
         cargo xtask audit-wasm\n  \
         cargo xtask audit-wasm --site-path /nix/store/...-jaunder-site\n  \
@@ -510,6 +517,9 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::raw_html_door_check::run(&mut result);
             steps::html_sink_check::run(&mut result);
             steps::e2e_scaffold_check::run(&mut result);
+            // Deliberately in `validate` and not `check`: it costs a
+            // `nix build .#site`, which the pre-commit gate should not pay (#836).
+            steps::wasm_budget::run(&mut result);
             steps::host_tests::run(&sh, &mut result);
             steps::nix::coverage(&mut result);
             steps::nix::doctests(&mut result);

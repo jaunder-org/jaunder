@@ -171,6 +171,17 @@ pub fn run(site_path: Option<&str>) -> Result<AuditReport> {
                 path.display()
             )
         })?;
+        // Guard the strip (#836). `wasm-opt` drops the name section unless `-g` is
+        // passed, so its reappearance means the optimisation pass was weakened or
+        // lost — a 1.28 MiB regression that is otherwise invisible until someone
+        // reads the size table and wonders.
+        if name.ends_with(".wasm") && has_name_section(&bytes)? {
+            anyhow::bail!(
+                "{} carries a wasm name section: `wasm-opt` should have stripped it. \
+                 Did the optimisation pass get `-g`, or get dropped? (#836)",
+                path.display()
+            );
+        }
         artifacts.push(ArtifactMetrics {
             path: path.to_string_lossy().into_owned(),
             raw_bytes: bytes.len() as u64,
@@ -261,6 +272,17 @@ pub fn render_breakdown(report: &BreakdownReport) -> String {
         ));
     }
     s
+}
+
+/// Whether a wasm carries a `name` custom section.
+///
+/// The shipped bundle must not: at 1.28 MiB it is the single largest thing
+/// `wasm-opt` removes (#836). Attribution reads names from `.#csrWasm` instead,
+/// so nothing needs them here.
+pub fn has_name_section(wasm: &[u8]) -> Result<bool> {
+    Ok(crate::wasm_sections::section_sizes(wasm)?
+        .iter()
+        .any(|s| s.name == "custom:name"))
 }
 
 /// `part` as a percentage of `whole`, to one decimal. A zero denominator renders
@@ -427,6 +449,18 @@ mod tests {
             assert!(t.contains(s), "missing section {s}: {t}");
         }
         assert!(t.contains(crate::wasm_symbols::UNATTRIBUTED), "{t}");
+    }
+
+    #[test]
+    fn detects_a_present_name_section() {
+        let wasm = crate::wasm_symbols::tests_support::named_module();
+        assert!(has_name_section(&wasm).unwrap());
+    }
+
+    #[test]
+    fn detects_an_absent_name_section() {
+        let wasm = crate::wasm_symbols::tests_support::unnamed_module();
+        assert!(!has_name_section(&wasm).unwrap());
     }
 
     #[test]
