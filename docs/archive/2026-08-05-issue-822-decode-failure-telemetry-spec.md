@@ -66,17 +66,18 @@ and requiring the body to be buffered. A repo-local `FromReq` codec newtype
 would isolate decode perfectly but would change every `input = …` site and force
 the default codec everywhere — disproportionate.
 
-**The `FromServerFnError` impl is compiled for the wasm client too** — `web` compiles to
-wasm, and while `error.rs` already carries `#[cfg(feature = "server")]` in several places
-(`:11-12`, `:82`, `:114`), the `from_server_fn_error` impl itself is not gated. So the
-emit must be `#[cfg(feature = "server")]`-gated: that feature is what pulls `dep:host`,
-and `host::metrics` is native-only. Without the gate the wasm build fails to compile —
-which `cargo xtask check`'s wasm clippy step catches (AC4).
+**The `FromServerFnError` impl is compiled for the wasm client too** — `web`
+compiles to wasm, and while `error.rs` already carries
+`#[cfg(feature = "server")]` in several places (`:11-12`, `:82`, `:114`), the
+`from_server_fn_error` impl itself is not gated. So the emit must be
+`#[cfg(feature = "server")]`-gated: that feature is what pulls `dep:host`, and
+`host::metrics` is native-only. Without the gate the wasm build fails to compile
+— which `cargo xtask check`'s wasm clippy step catches (AC4).
 
 ### D2 — Fire on decode variants only
 
-Emit for `ServerFnErrorErr::{Args, MissingArg, Deserialization}`; stay silent for the
-rest.
+Emit for `ServerFnErrorErr::{Args, MissingArg, Deserialization}`; stay silent
+for the rest.
 
 - `Args` — every fn on the default `PostUrl` codec.
 - `Deserialization` — the fns with `input = Json`.
@@ -84,18 +85,19 @@ rest.
   is covered.
 
 **Why silence for the rest — not because they're unreachable.** `Request`,
-`UnsupportedRequestMethod`, and `Serialization` are client-side, but `ServerError`,
-`MiddlewareError`, and `Response` *are* constructed on the server
-(`response/http.rs:22,33,49`; `middleware/mod.rs:80,161,184`). They are excluded because
-they are **not arg-decode failures** — they arise downstream of decode and are already
-covered by the in-body boundary or are transport-level. The predicate is "this request's
-arguments were malformed", not "this variant can only happen on the client".
+`UnsupportedRequestMethod`, and `Serialization` are client-side, but
+`ServerError`, `MiddlewareError`, and `Response` _are_ constructed on the server
+(`response/http.rs:22,33,49`; `middleware/mod.rs:80,161,184`). They are excluded
+because they are **not arg-decode failures** — they arise downstream of decode
+and are already covered by the in-body boundary or are transport-level. The
+predicate is "this request's arguments were malformed", not "this variant can
+only happen on the client".
 
 **`input = MultipartFormData` is not an arg-decode path.** `MultipartFormData`'s
-`from_req` (`server_fn/src/codec/multipart.rs:84-90`) hands the body to the fn as a
-`multer::Multipart` stream rather than deserializing typed args, so the media-upload fn
-(`web/src/media/api.rs:191`) has no decode step to instrument. Out of scope by
-construction, not by omission.
+`from_req` (`server_fn/src/codec/multipart.rs:84-90`) hands the body to the fn
+as a `multer::Multipart` stream rather than deserializing typed args, so the
+media-upload fn (`web/src/media/api.rs:191`) has no decode step to instrument.
+Out of scope by construction, not by omission.
 
 **Known impurity, accepted:** a truncated/non-UTF-8 request body also yields
 `Deserialization` (`server_fn/src/request/axum.rs:48-61`), so a genuine
@@ -106,7 +108,8 @@ which is the worse trade.
 
 ### D3 — Reuse the existing error vocabulary; record the message
 
-Construct the `InternalError` with **`validation_source`** (`host/src/error.rs:241`):
+Construct the `InternalError` with **`validation_source`**
+(`host/src/error.rs:241`):
 
 ```rust
 pub fn validation_source(
@@ -115,21 +118,25 @@ pub fn validation_source(
 ) -> Self
 ```
 
-It yields `ErrorKind::Validation` + `ErrorClass::Client` **and carries the source** —
-which is the point. The sibling `InternalError::validation(msg)` (`:141-149`) sets
-`source: None` and would emit `error.source = ""`, defeating the whole purpose;
-`validation_source` is the one to use. `ServerFnErrorErr` is a `thiserror` type, so it
-satisfies the `Error + Send + Sync + 'static` bound and can be passed directly.
+It yields `ErrorKind::Validation` + `ErrorClass::Client` **and carries the
+source** — which is the point. The sibling `InternalError::validation(msg)`
+(`:141-149`) sets `source: None` and would emit `error.source = ""`, defeating
+the whole purpose; `validation_source` is the one to use. `ServerFnErrorErr` is
+a `thiserror` type, so it satisfies the `Error + Send + Sync + 'static` bound
+and can be passed directly.
 
-Then `.with_context("stage", "decode")` (`:256`) and `.emit_boundary_failure()` (`:313`,
-`pub`). No new metric, no new enum variant, no new event name, no new constructor.
+Then `.with_context("stage", "decode")` (`:256`) and `.emit_boundary_failure()`
+(`:313`, `pub`). No new metric, no new enum variant, no new event name, no new
+constructor.
 
 The `public_message` is operator-facing only here — it lands in the event's
-`error.public` field. Use a fixed, input-free string: **`"invalid request arguments"`**.
+`error.public` field. Use a fixed, input-free string:
+**`"invalid request arguments"`**.
 
-**This emits telemetry only; it does not change the response.** `from_server_fn_error`
-still returns `WebError::server_function(value.to_string())`, so the wire shape a client
-sees is untouched — which is what AC6 pins.
+**This emits telemetry only; it does not change the response.**
+`from_server_fn_error` still returns
+`WebError::server_function(value.to_string())`, so the wire shape a client sees
+is untouched — which is what AC6 pins.
 
 This satisfies ADR-0011's cardinality rule (`:96-100`) by construction — the
 bounded enums are unchanged, and `stage=decode` rides in `error.context`, which
@@ -170,15 +177,16 @@ identity at decode time would require one of the rejected D1 alternatives.
 
 ### D5 — ADR-0065 is amended **in place**
 
-In-place amendment is the house convention for a local correction, and ADR-0065 has been
-edited in place twice without spawning a new ADR (#408 added the Optional-fields bullet;
-#568 rewrote the Rendering and Coverage-boundary bullets). Only **#568** used the full
-markup, so treat it as the single template to follow: a header
-`- Note: amended <date> (#NNN) — <summary>` plus an inline `_Amended by #NNN._` on each
-changed bullet. (#408 left no marker at all — not a precedent worth copying.)
+In-place amendment is the house convention for a local correction, and ADR-0065
+has been edited in place twice without spawning a new ADR (#408 added the
+Optional-fields bullet; #568 rewrote the Rendering and Coverage-boundary
+bullets). Only **#568** used the full markup, so treat it as the single template
+to follow: a header `- Note: amended <date> (#NNN) — <summary>` plus an inline
+`_Amended by #NNN._` on each changed bullet. (#408 left no marker at all — not a
+precedent worth copying.)
 
-The `adr-format` gate constrains only the `# ADR-NNNN:` heading and the bare `- Status:`
-token, so additional header lines are unconstrained.
+The `adr-format` gate constrains only the `# ADR-NNNN:` heading and the bare
+`- Status:` token, so additional header lines are unconstrained.
 
 Two passages change:
 
@@ -217,27 +225,28 @@ issue has already grown once from a docs fix. The plan's first task files it.
   validation failure.
 - **AC3** Only `Args`, `MissingArg`, and `Deserialization` emit. A test asserts
   a non-decode variant (e.g. `ServerFnErrorErr::Request`) emits **nothing**.
-- **AC4** The emit is `#[cfg(feature = "server")]`-gated and the wasm build of `web`
-  still compiles. Enforced by `cargo xtask check`'s **wasm clippy** step
+- **AC4** The emit is `#[cfg(feature = "server")]`-gated and the wasm build of
+  `web` still compiles. Enforced by `cargo xtask check`'s **wasm clippy** step
   (`-p web --features csr --target wasm32-unknown-unknown`,
-  `xtask/src/steps/static_checks.rs:59-90`). Note `check` does **not** run `build-csr`
-  (that is e2e-only), but wasm clippy is enough to catch a cfg mistake here.
+  `xtask/src/steps/static_checks.rs:59-90`). Note `check` does **not** run
+  `build-csr` (that is e2e-only), but wasm clippy is enough to catch a cfg
+  mistake here.
 - **AC5** No new `ErrorKind`/`ErrorClass` variant, no new metric name, no new
   event name — the existing bounded vocabulary is reused (ADR-0011 `:96-100`).
 - **AC6** An integration test pins the wire shape of a decode failure: HTTP 500
   and a body tagged `server_function`, distinguishing it from a
   `server_boundary` failure (which is tagged `validation`/`unauthorized`/…). The
-  helpers already return the body, so no helper change is needed. Natural home: the
-  too-short-password case in `server/tests/web/web_password_reset.rs` — the comment
-  naming the decode path is at `:305`, and the assertion to strengthen is the
-  `assert_ne!(status, StatusCode::OK)` at `:333`.
+  helpers already return the body, so no helper change is needed. Natural home:
+  the too-short-password case in `server/tests/web/web_password_reset.rs` — the
+  comment naming the decode path is at `:305`, and the assertion to strengthen
+  is the `assert_ne!(status, StatusCode::OK)` at `:333`.
 - **AC7** ADR-0065's secret exception describes the twin split, not "stays
   `String`", and its Consequences sentence describes decode-stage rejection —
   both amended **in place** with the established markup (header
   `- Note: amended …` + inline `_Amended by #822._`).
-- **AC8** `rg 'stays?\s+`String`' docs/adr/0065-*.md` returns nothing — the pattern must
-  match both offending phrasings: "its arg **stays** `String`" (`:77`) and "Args that
-  **stay** `String`" (`:112`).
+- **AC8** `rg 'stays?\s+`String`' docs/adr/0065-*.md` returns nothing — the
+  pattern must match both offending phrasings: "its arg **stays** `String`"
+  (`:77`) and "Args that **stay** `String`" (`:112`).
 - **AC9** `cargo xtask validate` green.
 
 ## Out of scope
