@@ -111,21 +111,21 @@ Copied from the spec; every task's requirements implicitly include these.
 
 ## File Structure
 
-| File                                                   | Responsibility                                                                                                                                                    |
-| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `xtask/src/wasm_sections.rs` **(create)**              | Pure: parse a wasm binary into per-section byte spans; assert they sum to file size.                                                                              |
-| `xtask/src/wasm_symbols.rs` **(create)**               | Pure: read the name section into `(function name, body bytes)` pairs; demangle and roll up by crate, with `<unattributed>`.                                       |
-| `xtask/src/audit_wasm.rs` **(modify)**                 | Existing totals/budget path untouched; gains `breakdown()` + `render_breakdown()` composing the two modules above, and the artifact-provenance line.              |
-| `xtask/src/wasm_budget.rs` **(create)**                | The ceiling constant and the pure over/under check.                                                                                                               |
-| `xtask/src/steps/wasm_budget.rs` **(create)**          | The `validate` step: measure the shipped artifact, apply the check, produce a `StepResult`.                                                                       |
-| `xtask/src/lib.rs` **(modify)**                        | CLI flags (`--breakdown`, `--wasm`), `validate` step wiring, doc-comment correction at `:127`.                                                                    |
-| `xtask/src/result.rs` **(modify)**                     | Carry the breakdown report for `--json`/render.                                                                                                                   |
-| `tools/devtool/src/csr_bundle.rs` **(modify)**         | Build the `wasm-opt` argument vector (pure, tested) and run the pass after `wasm-bindgen`.                                                                        |
-| `flake.nix` **(modify)**                               | Expose `csrWasm` as a package; add `binaryen` to `csrWasmBundle` `nativeBuildInputs` and to the devShell.                                                         |
-| `common/src/**` → `host/src/**` **(move)**             | The four D6 clusters, data-gated.                                                                                                                                 |
-| `docs/adr/drafts/wasm-raw-size-budget.md` **(create)** | D8/D10.                                                                                                                                                           |
-| `docs/observability.md` **(modify)**                   | The #836 section: pre-cut breakdown and cluster verdicts, the pre-registered prediction, before/after bytes, predicted-vs-observed, and the dangling `:642` line. |
-| `Cargo.toml` **(modify)**                              | A comment at `[profile.release]` recording why `panic = "abort"` is not set (A30).                                                                                |
+| File                                                 | Responsibility                                                                                                                                                    |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `xtask/src/wasm_sections.rs` **(create)**            | Pure: parse a wasm binary into per-section byte spans; assert they sum to file size.                                                                              |
+| `xtask/src/wasm_symbols.rs` **(create)**             | Pure: read the name section into `(function name, body bytes)` pairs; demangle and roll up by crate, with `<unattributed>`.                                       |
+| `xtask/src/audit_wasm.rs` **(modify)**               | Existing totals/budget path untouched; gains `breakdown()` + `render_breakdown()` composing the two modules above, and the artifact-provenance line.              |
+| `xtask/src/wasm_budget.rs` **(create)**              | The ceiling constant and the pure over/under check.                                                                                                               |
+| `xtask/src/steps/wasm_budget.rs` **(create)**        | The `validate` step: measure the shipped artifact, apply the check, produce a `StepResult`.                                                                       |
+| `xtask/src/lib.rs` **(modify)**                      | CLI flags (`--breakdown`, `--wasm`), `validate` step wiring, doc-comment correction at `:127`.                                                                    |
+| `xtask/src/result.rs` **(modify)**                   | Carry the breakdown report for `--json`/render.                                                                                                                   |
+| `tools/devtool/src/csr_bundle.rs` **(modify)**       | Build the `wasm-opt` argument vector (pure, tested) and run the pass after `wasm-bindgen`.                                                                        |
+| `flake.nix` **(modify)**                             | Expose `csrWasm` as a package; add `binaryen` to `csrWasmBundle` `nativeBuildInputs` and to the devShell.                                                         |
+| `common/src/**` → `host/src/**` **(move)**           | The four D6 clusters, data-gated.                                                                                                                                 |
+| `docs/adr/0102-wasm-raw-size-budget.md` **(create)** | D8/D10.                                                                                                                                                           |
+| `docs/observability.md` **(modify)**                 | The #836 section: pre-cut breakdown and cluster verdicts, the pre-registered prediction, before/after bytes, predicted-vs-observed, and the dangling `:642` line. |
+| `Cargo.toml` **(modify)**                            | A comment at `[profile.release]` recording why `panic = "abort"` is not set (A30).                                                                                |
 
 ---
 
@@ -1449,7 +1449,7 @@ D8/D10, A29. Uses `jaunder-adr`'s draft-out-of-git flow — numberless in
 
 **Files:**
 
-- Create: `docs/adr/drafts/wasm-raw-size-budget.md`
+- Create: `docs/adr/0102-wasm-raw-size-budget.md`
 
 - [ ] **Step 1: Write the draft**
 
@@ -1485,7 +1485,7 @@ Run: `cargo xtask check` Expected: PASS — `adr_check` accepts the draft.
 - [ ] **Step 3: Commit**
 
 ```bash
-git add docs/adr/drafts/wasm-raw-size-budget.md
+git add docs/adr/0102-wasm-raw-size-budget.md
 git commit -m "docs(adr): draft the raw wasm size budget (#836)"
 ```
 

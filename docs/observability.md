@@ -640,6 +640,13 @@ agreeing across cold and warm and across both settings sets.
 is not ours; the **volume** it must compile is: 5.1 MiB raw
 (`cargo xtask audit-wasm`), ~88 ms of firefox compile per MiB.
 
+> **Superseded by #836 — do not reuse the 88 ms/MiB figure.** It is an _average_
+> (449 ms ÷ 5.10 MiB), and treating it as a _marginal_ rate overpredicts by ~3×.
+> Measured directly against three build arms, firefox instantiate is
+> `≈ 377 ms + 13.9 ms/MiB` — at the shipped size, 92% size-independent. The
+> disposition above is therefore too strong: volume is a real but weak lever.
+> See [#836](#836--shrinking-the-wasm-bundle-2026-08-06), "Observed".
+
 Both follow-ups have now been taken up. The streaming question was **answered
 and the claim withdrawn** — see
 [`site.serve`](#siteserve--what-the-server-actually-served-818) and #840; three
@@ -724,7 +731,7 @@ on the e2e gate's long pole.
 
 **Raw bytes are the target, not compressed.** Brotli governs transfer; the wasm
 compiler's input is the decompressed artifact. This is the whole reason the
-budget below measures raw — see the size-budget ADR.
+budget below measures raw — see ADR-0106.
 
 ### Attribution first, and why it mattered
 
@@ -832,6 +839,61 @@ restated that way for whoever uses it next.
 Capture protocol is #818's, unchanged: single-worker sqlite × both browsers,
 three runs per arm, distinct `e2eSalt` per run, quiesced host, arms interleaved
 rather than run in blocks.
+
+### Observed — the name-section half held, the code half did not
+
+Captured 2026-08-06, 18 runs, corpus at
+`~/measurements/jaunder/issue-836-wasm-shrink/` (README carries the
+certification and the limits). Coverage: full mark set on 100% of 3744 mounted
+navigations, `dropped = 0`, 0 closure violations in 72 populations. Arms
+verified in-trace — `wasmDecodedBytes` takes exactly one value per arm.
+
+Firefox, combined `wasmFetchMs + wasmInstantiateMs`, mean of three run-means:
+
+| contrast | predicted (naive) | pre-registered  | observed cold        | observed warm        |
+| -------- | ----------------- | --------------- | -------------------- | -------------------- |
+| A→B      | ~146 ms           | "roughly holds" | **43.5 ms** (SE 8.1) | **54.8 ms** (SE 5.6) |
+| B→C      | ~113 ms           | "near zero"     | **14.5 ms** (SE 4.1) | **8.4 ms** (SE 5.4)  |
+| A→C      | ~259 ms           | ~146 ms         | **58.0 ms** (SE 7.0) | **63.2 ms** (SE 2.5) |
+
+**B→C: prediction confirmed.** Removing 1.285 MiB of name section bought 8–15
+ms. The warm figure is not distinguishable from run-to-run noise (|d|/SE 1.6).
+Name section costs 6.5–11.3 ms/MiB against code's 26–33 ms/MiB — engines largely
+do skip it, as expected.
+
+**A→B: prediction refuted.** Removing 1.656 MiB of real code bought 43–55 ms,
+not ~146 ms. Restricting the 88 ms/MiB constant to compiled bytes is **necessary
+but not sufficient**: it still overpredicts by about 3× over bytes that are
+unambiguously compiler input.
+
+**Why the constant was wrong is arithmetic, not engine behaviour.** #818 derived
+88 ms/MiB as an _average_ — 449 ms of firefox instantiate ÷ 5.10 MiB, which
+reproduces to 88.0 exactly — and #836 applied it as a _marginal_ rate. Those are
+the same number only if the cost is proportional to size. It is not. Fitting
+firefox cold instantiate across the three arms:
+
+```
+instantiate ≈ 377 ms + 13.9 ms/MiB
+```
+
+At the shipped size, **92% of firefox's wasm instantiate is size-independent**.
+The average rate is not a constant at all — it reads 88 ms/MiB at arm A and 189
+ms/MiB at arm C, purely because the fixed term is divided by a smaller number.
+
+**The 377 ms is left unexplained.** This capture was designed to test a size
+contrast and can only bound the fixed term, not attribute it. Naming a cause
+here would repeat exactly the error #840 had to withdraw a claim for. It is the
+single largest item in CSR boot and is filed as its own question — **#864**.
+
+**What #836 actually bought.** Download weight fell 57.6% (5.35 MB → 2.27 MB
+raw; brotli 860 → 603 KiB), which is real and is the result the size budget
+guards. Firefox boot fell ~58–63 ms per navigation, chromium ~45–55 ms. That is
+worth having and is roughly a quarter of what the lever was thought to be worth.
+
+**Consequence for #818's disposition.** "Actionable, not intrinsic" was too
+strong. Bundle volume is a genuine but weak lever — at ~14–20 ms/MiB marginal,
+halving the bundle again would buy ~30 ms against a ~380 ms floor. The floor,
+not the volume, is where firefox's boot cost lives — see #864.
 
 ### The size budget
 
