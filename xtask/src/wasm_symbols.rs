@@ -121,19 +121,72 @@ fn crate_of(symbol: &str) -> Option<String> {
     // `try_demangle` rejects non-Rust symbols, which is the discrimination we
     // want; `demangle` alone passes them through unchanged and looks successful.
     let demangled = rustc_demangle::try_demangle(symbol).ok()?.to_string();
-    let first = demangled.split("::").next()?;
-    // A leading `<impl …>` or `<T as Trait>` carries no crate at this position.
-    if first.is_empty() || first.starts_with('<') {
+    crate_of_demangled(&demangled)
+}
+
+/// The crate a *demangled* Rust path belongs to.
+///
+/// Split from [`crate_of`] so the attribution rule is testable on readable paths
+/// rather than on hand-built mangled symbols.
+///
+/// Trait-impl methods demangle to `<Self as Trait>::method`, which has no crate
+/// in leading position. Treating those as unattributable would be a large and
+/// entirely self-inflicted blind spot — they are among the most common symbols
+/// in any Rust binary — so the self type's crate is used, falling back to the
+/// trait's when the self type is a primitive (`<u32 as Display>::fmt` is code
+/// that `core` emitted).
+fn crate_of_demangled(path: &str) -> Option<String> {
+    let path = path.trim();
+    if let Some(inner) = path.strip_prefix('<') {
+        let inner = inner.split_once(">::").map_or(inner, |(i, _)| i);
+        let (self_ty, trait_ty) = match inner.split_once(" as ") {
+            Some((s, t)) => (s, Some(t)),
+            None => (inner, None),
+        };
+        return first_segment(self_ty).or_else(|| trait_ty.and_then(first_segment));
+    }
+    first_segment(path)
+}
+
+/// The crate name leading a type or path expression, or `None` if it does not
+/// start with one (a primitive, a reference to one, a bare generic parameter).
+fn first_segment(text: &str) -> Option<String> {
+    // Peel the type syntax that can precede a path.
+    let mut t = text.trim();
+    loop {
+        let stripped = t
+            .strip_prefix('&')
+            .or_else(|| t.strip_prefix("*const "))
+            .or_else(|| t.strip_prefix("*mut "))
+            .or_else(|| t.strip_prefix("mut "))
+            .or_else(|| t.strip_prefix("dyn "))
+            .or_else(|| t.strip_prefix("impl "))
+            .or_else(|| t.strip_prefix('('))
+            .or_else(|| t.strip_prefix('['));
+        match stripped {
+            Some(s) => t = s.trim_start(),
+            None => break,
+        }
+    }
+    // The crate is the first `::` segment, cut before any generic arguments.
+    let seg = t
+        .split("::")
+        .next()?
+        .split('<')
+        .next()?
+        // v0 mangling renders the crate with its disambiguator, `croner[3c1c0]`.
+        // Left in, one crate would split across as many buckets as it has
+        // disambiguators, understating every one of them.
+        .split('[')
+        .next()?
+        .trim();
+    // A path that never had a `::` is a primitive or a generic parameter, not a
+    // crate: `u32`, `T`. Requiring the separator is what keeps `<u32 as Display>`
+    // from inventing a crate named `u32`.
+    if seg.is_empty() || !t.contains("::") {
         return None;
     }
-    // v0 mangling renders the crate with its disambiguator, `croner[3c1c0]`.
-    // Left in, one crate would split across as many buckets as it has
-    // disambiguators, understating every one of them.
-    let first = first.split_once('[').map_or(first, |(name, _)| name);
-    if first.is_empty() {
-        return None;
-    }
-    Some(first.to_string())
+    Some(seg.to_string())
 }
 
 #[cfg(test)]
@@ -250,6 +303,57 @@ mod tests {
     #[test]
     fn rollup_of_nothing_is_empty() {
         assert!(rollup(&[]).is_empty());
+    }
+
+    #[test]
+    fn trait_impl_methods_attribute_to_the_self_type_crate() {
+        // The commonest symbol shape in any Rust binary. Charging these to
+        // `<unattributed>` would hide a large share of the code section behind a
+        // gap in this function rather than a fact about the bundle.
+        assert_eq!(
+            crate_of_demangled("<reactive_graph::Signal as core::fmt::Debug>::fmt"),
+            Some("reactive_graph".to_string())
+        );
+        assert_eq!(
+            crate_of_demangled("<&orgize::Ast as core::clone::Clone>::clone"),
+            Some("orgize".to_string())
+        );
+        assert_eq!(
+            crate_of_demangled("<alloc::vec::Vec<T> as core::ops::Drop>::drop"),
+            Some("alloc".to_string())
+        );
+    }
+
+    #[test]
+    fn primitive_self_types_fall_back_to_the_trait_crate() {
+        // `<u32 as Display>::fmt` is code `core` emitted; `u32` is not a crate.
+        assert_eq!(
+            crate_of_demangled("<u32 as core::fmt::Display>::fmt"),
+            Some("core".to_string())
+        );
+    }
+
+    #[test]
+    fn inherent_impls_without_a_trait_still_attribute() {
+        assert_eq!(
+            crate_of_demangled("<tachys::View>::build"),
+            Some("tachys".to_string())
+        );
+    }
+
+    #[test]
+    fn bare_generics_and_primitives_attribute_to_nothing() {
+        assert_eq!(crate_of_demangled("T"), None);
+        assert_eq!(crate_of_demangled("u32"), None);
+        assert_eq!(crate_of_demangled(""), None);
+    }
+
+    #[test]
+    fn plain_paths_still_take_their_first_segment() {
+        assert_eq!(
+            crate_of_demangled("orgize::parse::inner"),
+            Some("orgize".to_string())
+        );
     }
 
     #[test]
