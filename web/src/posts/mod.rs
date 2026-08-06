@@ -34,6 +34,11 @@ mod parse;
 // coverage-measured.
 mod page_state;
 
+// The new-post composer's shared signal bundle and its dispatch payload, extracted
+// so the payload is host-tested and so each composer shape can be its own
+// `#[component]` over one prop rather than seven (#301, ADR-0070 §6).
+mod compose_state;
+
 // Re-exported at the (public) `crate::posts::…` path so the pure `parse` fns are
 // reachable exported items on the host build too — consumed only by the wasm-only
 // `component`, an unexported `parse` fn would fail the host build as `dead_code`.
@@ -45,6 +50,9 @@ pub use page_state::{
     ListingRoute, notify, notify_with_fallback, publish_redirect, seeded_page, tag_query,
     user_query, user_tag_query, with_post_id,
 };
+
+// Same reason again: the composer bundle's only caller is the wasm-only `component`.
+pub use compose_state::ComposeState;
 
 // The API surface — re-exported so external call sites and the server-fn
 // registrar keep the stable `crate::posts::…` paths despite living in `api.rs`.

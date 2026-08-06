@@ -26,11 +26,11 @@ use crate::media::MediaUpload;
 // `super::Update` at its use sites; `Get` is not needed in this file at all, and
 // is named here only so a future author does not add it to the list.
 use crate::posts::{
-    Create, Delete, DraftRowDisplay, ListingRoute, PermalinkRoute, PostInputs, Publish, SavedPost,
-    Unpublish, UnpublishedPage, UnpublishedPost, draft_row_display, get, get_audience_selection,
-    get_default_audience_selection, get_preview, list_drafts, notify, notify_with_fallback,
-    parse_permalink_route, publish_redirect, seeded_page, tag_query, user_query, user_tag_query,
-    with_post_id,
+    ComposeState, Create, Delete, DraftRowDisplay, ListingRoute, PermalinkRoute, Publish,
+    SavedPost, Unpublish, UnpublishedPage, UnpublishedPost, draft_row_display, get,
+    get_audience_selection, get_default_audience_selection, get_preview, list_drafts, notify,
+    notify_with_fallback, parse_permalink_route, publish_redirect, seeded_page, tag_query,
+    user_query, user_tag_query, with_post_id,
 };
 use crate::subscriptions::SubscribeButton;
 use crate::taglist::TagCtx as TagContext;
@@ -43,14 +43,12 @@ use crate::topbar::Topbar;
 use common::feed::FeedSurface;
 use common::ids::PostId;
 use common::pagination::PageSize;
-use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::render::PostFormat;
 use common::root_relative_url::RootRelativeUrl;
-use common::seed::{AuthoredPost, PageSeed, RenderedPost, TagSummary};
+use common::seed::{AuthoredPost, PageSeed, RenderedPost};
 use common::slug::Slug;
 use common::tag::Tag;
-use common::time::utc_instant_from_local;
 use common::username::Username;
 use common::visibility::{AudienceBase, AudienceSelection};
 
@@ -468,11 +466,12 @@ fn audience_checkbox(
     }
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "Leptos view fn; length is inherent to the view! markup — splitting into \
-              sub-components would fragment the page without real benefit"
-)]
+/// The new-post composer. Renders in one of two shapes over a single
+/// [`ComposeState`]: a compact inline row, or the full compose page.
+///
+/// This component owns only what both shapes share — the state bundle, the
+/// async default-audience seed, and the post-create hand-off — so the shape
+/// choice is the one branch it carries.
 #[component]
 pub fn PostCreateForm(
     compact: bool,
@@ -485,31 +484,16 @@ pub fn PostCreateForm(
     on_input: Option<Callback<()>>,
 ) -> impl IntoView {
     let create_action = ServerAction::<Create>::new();
-    let body = RwSignal::new(String::new());
-    let format = RwSignal::new(PostFormat::Markdown);
-    // Optional summary: a parent-owned validated field (ADR-0065 direct-bind), so an
-    // invalid excerpt disables submit and shows an error rather than erroring on POST.
-    let summary_field = Field::<PostSummary>::optional();
-    // Optional scheduled-publish time (naive local wall-clock from a
-    // `datetime-local` control); empty = publish now / draft. Only the
-    // non-compact form renders the control; the compact composer leaves it
-    // empty (publish-now).
-    let publish_at = RwSignal::new(String::new());
-    let tags: RwSignal<Vec<TagSummary>> = RwSignal::new(Vec::new());
-    // A new post starts at the site-wide default audience; default to Public
-    // until that resolves.
-    let audience = RwSignal::new(AudienceSelection {
-        base: AudienceBase::Public,
-        named: Vec::new(),
-    });
+    let state = ComposeState::new();
+
     let default_audience = Resource::new(|| (), |()| get_default_audience_selection());
     // The site-wide default audience resolves asynchronously; the composer must
     // render immediately (no Suspense), so seed the editable `audience` signal
-    // once the Resource resolves, over the Public placeholder above. The author
-    // can then edit the selection via `AudiencePicker`.
+    // once the Resource resolves, over the Public placeholder `ComposeState::new`
+    // sets. The author can then edit the selection via `AudiencePicker`.
     on_settled_ok(
         move || default_audience.get(),
-        move |default| audience.set(default),
+        move |default| state.audience.set(default),
     );
 
     // A successful create hands the result to the parent and empties the composer for
@@ -518,226 +502,245 @@ pub fn PostCreateForm(
         move || create_action.value().get(),
         move |created| {
             on_success.run(created);
-            body.set(String::new());
-            summary_field.reset();
-            publish_at.set(String::new());
-            tags.set(Vec::new());
+            state.reset();
         },
     );
 
-    // The one submit path, shared by both layouts, which differ only in whether the
-    // author chose a slug and which button was pressed. It re-reads the body through
-    // `PostBody` rather than trusting the button's disabled state: the buttons gate on
-    // the very same `parse::<PostBody>()` (ADR-0065's one validation source — the rule
-    // lives in the newtype and is never respelled here), so a rejected parse means the
-    // button was reached without the gate and there is nothing to post.
-    let dispatch = move |publish: bool, slug_override: Option<Slug>| {
-        let Ok(body) = body.get().parse::<PostBody>() else {
-            return;
-        };
-        create_action.dispatch(Create {
-            post: PostInputs {
-                body,
-                format: format.get(),
-                slug_override,
-                publish,
-                publish_at: utc_instant_from_local(&publish_at.get()),
-                tags: Some(tags.get().into_iter().map(|t| t.display).collect()),
-                summary: summary_field.parsed(),
-                audience: Some(audience.get()),
-            },
-        });
-    };
-
     if compact {
-        let dispatch_save = move |_| dispatch(false, None);
-        let dispatch_publish = move |_| dispatch(true, None);
         view! {
-            <div class="j-composer-row">
-                {username.map(|u| view! { <Avatar name=&u size=36 /> })}
-                <div class="j-composer-body">
-                    <ComposerFields
-                        body=body
-                        format=format
-                        rows=rows
-                        placeholder=placeholder
-                        textarea_class=""
-                        show_seg=false
-                        on_input=on_input.unwrap_or_else(|| Callback::new(move |()| {}))
+            <CompactComposer
+                state=state
+                create_action=create_action
+                username=username
+                rows=rows
+                placeholder=placeholder
+                on_input=on_input
+            />
+        }
+        .into_any()
+    } else {
+        view! { <FullComposer state=state create_action=create_action rows=rows placeholder=placeholder /> }
+        .into_any()
+    }
+}
+
+/// The inline composer row: avatar, body, summary, tags, and the two dispatch
+/// buttons. Split out of [`PostCreateForm`] (#301); no slug or schedule control,
+/// so it dispatches with `slug_override: None` and an empty `publish_at`.
+#[component]
+fn CompactComposer(
+    state: ComposeState,
+    create_action: ServerAction<Create>,
+    /// Passed through from `PostCreateForm`, which is the only caller — so these two
+    /// are plain `Option` props rather than `#[prop(optional)]` ones, which would
+    /// take the inner value and re-wrap it.
+    username: Option<Username>,
+    rows: u32,
+    placeholder: &'static str,
+    on_input: Option<Callback<()>>,
+) -> impl IntoView {
+    // A blank body is unrepresentable as a `PostBody` (#811, ADR-0102), so a
+    // non-parsing body drops the dispatch rather than posting: the disabled state
+    // below is an affordance, not a guarantee.
+    let dispatch = move |publish: bool| {
+        if let Some(post) = state.inputs(publish, None) {
+            create_action.dispatch(Create { post });
+        }
+    };
+    let submit_disabled =
+        move || state.body.get().trim().is_empty() || !state.summary_field.is_valid();
+    view! {
+        <div class="j-composer-row">
+            {username.map(|u| view! { <Avatar name=&u size=36 /> })} <div class="j-composer-body">
+                <ComposerFields
+                    body=state.body
+                    format=state.format
+                    rows=rows
+                    placeholder=placeholder
+                    textarea_class=""
+                    show_seg=false
+                    on_input=on_input.unwrap_or_else(|| Callback::new(move |()| {}))
+                />
+                <MediaUpload show_result=true />
+                <div style="margin-top:10px">
+                    <ValidatedTextarea<
+                    PostSummary,
+                >
+                        label="Summary"
+                        name="summary"
+                        field=state.summary_field
+                        placeholder="Optional summary or excerpt"
                     />
-                    <MediaUpload show_result=true />
+                </div>
+                <TagInput tags=state.tags />
+                <div class="j-composer-toolbar">
+                    <FormatToggle format=state.format />
+                    <span class="j-spacer"></span>
+                    <button
+                        class="j-btn"
+                        type="button"
+                        name="publish"
+                        value="false"
+                        disabled=submit_disabled
+                        on:click=move |_| dispatch(false)
+                    >
+                        "Save draft"
+                    </button>
+                    <button
+                        class="j-btn is-primary"
+                        type="button"
+                        name="publish"
+                        value="true"
+                        disabled=submit_disabled
+                        on:click=move |_| dispatch(true)
+                    >
+                        "Publish"
+                    </button>
+                </div>
+            </div>
+        </div>
+        <CreateErrorFlash action=create_action />
+    }
+}
+
+/// The full compose page: body column plus the options aside (slug, summary, tags,
+/// audience, schedule, format, media) and the dispatch buttons. Split out of
+/// [`PostCreateForm`] (#301); the slug field is local to this shape.
+#[component]
+fn FullComposer(
+    state: ComposeState,
+    create_action: ServerAction<Create>,
+    rows: u32,
+    placeholder: &'static str,
+) -> impl IntoView {
+    let slug_field = Field::<Slug>::optional();
+    // Same non-blank-body guard as the compact shape; see `ComposeState::inputs`.
+    let dispatch = move |publish: bool| {
+        if let Some(post) = state.inputs(publish, slug_field.parsed()) {
+            create_action.dispatch(Create { post });
+        }
+    };
+    let submit_disabled = move || !slug_field.is_valid() || !state.summary_field.is_valid();
+    view! {
+        <div class="j-compose-grid">
+            <div class="j-compose-body">
+                <ComposerFields
+                    body=state.body
+                    format=state.format
+                    rows=rows
+                    placeholder=placeholder
+                    show_seg=false
+                />
+            </div>
+            <aside class="j-compose-aside">
+                <div>
+                    <div class="j-sb-head" style="padding:0 0 10px">
+                        "Options"
+                    </div>
+                    <div class="j-field-row" style="grid-template-columns:auto 1fr">
+                        <label class="j-field-label" for="compose-slug">
+                            "Slug"
+                        </label>
+                        <input
+                            id="compose-slug"
+                            type="text"
+                            name="slug_override"
+                            placeholder="auto"
+                            class="j-field-val"
+                            prop:value=slug_field.value
+                            on:input=move |ev| {
+                                let v = event_target_value(&ev);
+                                slug_field.value.set(v.clone());
+                                slug_field.error.set(slug_field.error_for(&v));
+                            }
+                            on:blur=move |_| slug_field.touch()
+                        />
+                        {move || {
+                            slug_field
+                                .is_touched()
+                                .then(|| slug_field.error.get())
+                                .flatten()
+                                .map(|msg| view! { <p class="error">{msg}</p> })
+                        }}
+                    </div>
                     <div style="margin-top:10px">
                         <ValidatedTextarea<
                         PostSummary,
                     >
                             label="Summary"
                             name="summary"
-                            field=summary_field
+                            field=state.summary_field
                             placeholder="Optional summary or excerpt"
                         />
                     </div>
-                    <TagInput tags=tags />
-                    <div class="j-composer-toolbar">
-                        <FormatToggle format=format />
-                        <span class="j-spacer"></span>
-                        <button
-                            class="j-btn"
-                            type="button"
-                            name="publish"
-                            value="false"
-                            disabled=move || {
-                                body.get().parse::<PostBody>().is_err() || !summary_field.is_valid()
-                            }
-                            on:click=dispatch_save
-                        >
-                            "Save draft"
-                        </button>
-                        <button
-                            class="j-btn is-primary"
-                            type="button"
-                            name="publish"
-                            value="true"
-                            disabled=move || {
-                                body.get().parse::<PostBody>().is_err() || !summary_field.is_valid()
-                            }
-                            on:click=dispatch_publish
-                        >
-                            "Publish"
-                        </button>
+                    <div style="margin-top:10px">
+                        <TagInput tags=state.tags />
                     </div>
+                    <div style="margin-top:10px">
+                        <AudiencePicker selection=state.audience />
+                    </div>
+                    // Optional schedule: a future time schedules the post;
+                    // a past time backdates it; empty publishes immediately.
+                    <div style="margin-top:10px">
+                        <label class="j-field-label" for="compose-publish-at">
+                            "Publish at (optional)"
+                        </label>
+                        <input
+                            id="compose-publish-at"
+                            type="datetime-local"
+                            class="j-field-val"
+                            prop:value=state.publish_at
+                            on:input=move |ev| state.publish_at.set(event_target_value(&ev))
+                        />
+                    </div>
+                    <FormatToggle format=state.format style="margin-top:10px" />
                 </div>
-            </div>
-            {move || {
-                create_action
-                    .value()
-                    .get()
-                    .and_then(Result::err)
-                    .map(|e| view! { <p class="error">{e.to_string()}</p> })
-            }}
-        }
-        .into_any()
-    } else {
-        let slug_field = Field::<Slug>::optional();
-        let dispatch_create = move |publish: bool| dispatch(publish, slug_field.parsed());
-        view! {
-            <div class="j-compose-grid">
-                <div class="j-compose-body">
-                    <ComposerFields
-                        body=body
-                        format=format
-                        rows=rows
-                        placeholder=placeholder
-                        show_seg=false
-                    />
+                <div style="margin-top:16px">
+                    <div class="j-sb-head" style="padding:0 0 10px">
+                        "Media"
+                    </div>
+                    <MediaUpload show_result=true />
                 </div>
-                <aside class="j-compose-aside">
-                    <div>
-                        <div class="j-sb-head" style="padding:0 0 10px">
-                            "Options"
-                        </div>
-                        <div class="j-field-row" style="grid-template-columns:auto 1fr">
-                            <label class="j-field-label" for="compose-slug">
-                                "Slug"
-                            </label>
-                            <input
-                                id="compose-slug"
-                                type="text"
-                                name="slug_override"
-                                placeholder="auto"
-                                class="j-field-val"
-                                prop:value=slug_field.value
-                                on:input=move |ev| {
-                                    let v = event_target_value(&ev);
-                                    slug_field.value.set(v.clone());
-                                    slug_field.error.set(slug_field.error_for(&v));
-                                }
-                                on:blur=move |_| slug_field.touch()
-                            />
-                            {move || {
-                                slug_field
-                                    .is_touched()
-                                    .then(|| slug_field.error.get())
-                                    .flatten()
-                                    .map(|msg| view! { <p class="error">{msg}</p> })
-                            }}
-                        </div>
-                        <div style="margin-top:10px">
-                            <ValidatedTextarea<
-                            PostSummary,
-                        >
-                                label="Summary"
-                                name="summary"
-                                field=summary_field
-                                placeholder="Optional summary or excerpt"
-                            />
-                        </div>
-                        <div style="margin-top:10px">
-                            <TagInput tags=tags />
-                        </div>
-                        <div style="margin-top:10px">
-                            <AudiencePicker selection=audience />
-                        </div>
-                        // Optional schedule: a future time schedules the post;
-                        // a past time backdates it; empty publishes immediately.
-                        <div style="margin-top:10px">
-                            <label class="j-field-label" for="compose-publish-at">
-                                "Publish at (optional)"
-                            </label>
-                            <input
-                                id="compose-publish-at"
-                                type="datetime-local"
-                                class="j-field-val"
-                                prop:value=publish_at
-                                on:input=move |ev| publish_at.set(event_target_value(&ev))
-                            />
-                        </div>
-                        <FormatToggle format=format style="margin-top:10px" />
-                    </div>
-                    <div style="margin-top:16px">
-                        <div class="j-sb-head" style="padding:0 0 10px">
-                            "Media"
-                        </div>
-                        <MediaUpload show_result=true />
-                    </div>
-                    <div style="margin-top:auto;display:flex;align-items:center;gap:8px">
-                        <button
-                            class="j-btn"
-                            type="button"
-                            name="publish"
-                            value="false"
-                            prop:disabled=move || {
-                                body.get().parse::<PostBody>().is_err() || !slug_field.is_valid()
-                                    || !summary_field.is_valid()
-                            }
-                            on:click=move |_| dispatch_create(false)
-                        >
-                            "Save draft"
-                        </button>
-                        <button
-                            class="j-btn is-primary"
-                            type="button"
-                            name="publish"
-                            value="true"
-                            prop:disabled=move || {
-                                body.get().parse::<PostBody>().is_err() || !slug_field.is_valid()
-                                    || !summary_field.is_valid()
-                            }
-                            on:click=move |_| dispatch_create(true)
-                        >
-                            "Publish"
-                        </button>
-                    </div>
-                </aside>
-            </div>
-            {move || {
-                create_action
-                    .value()
-                    .get()
-                    .and_then(Result::err)
-                    .map(|e| view! { <p class="error">{e.to_string()}</p> })
-            }}
-        }
-        .into_any()
+                <div style="margin-top:auto;display:flex;align-items:center;gap:8px">
+                    <button
+                        class="j-btn"
+                        type="button"
+                        name="publish"
+                        value="false"
+                        prop:disabled=submit_disabled
+                        on:click=move |_| dispatch(false)
+                    >
+                        "Save draft"
+                    </button>
+                    <button
+                        class="j-btn is-primary"
+                        type="button"
+                        name="publish"
+                        value="true"
+                        prop:disabled=submit_disabled
+                        on:click=move |_| dispatch(true)
+                    >
+                        "Publish"
+                    </button>
+                </div>
+            </aside>
+        </div>
+        <CreateErrorFlash action=create_action />
+    }
+}
+
+/// The create action's error flash. Both composer shapes ended with the identical
+/// block; extracting it means a change to how a failed create reads happens once.
+#[component]
+fn CreateErrorFlash(action: ServerAction<Create>) -> impl IntoView {
+    view! {
+        {move || {
+            action
+                .value()
+                .get()
+                .and_then(Result::err)
+                .map(|e| view! { <p class="error">{e.to_string()}</p> })
+        }}
     }
 }
 
@@ -1064,31 +1067,15 @@ pub fn UserTimelinePage() -> impl IntoView {
     }
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "Leptos view fn; length is inherent to the view! markup — splitting into \
-              sub-components would fragment the page without real benefit"
-)]
 #[component]
 pub fn EditPostPage() -> impl IntoView {
     let params = use_params_map();
     let update_post_action = ServerAction::<super::Update>::new();
-    let body = RwSignal::new(String::new());
-    let format = RwSignal::new(PostFormat::Markdown);
+    // The editor edits the same seven fields the composer does and dispatches the
+    // same `PostInputs` payload, so it reuses that bundle (#301). The slug field is
+    // page-level here — unlike the composer, where only the full shape has one.
+    let state = ComposeState::new();
     let slug_field = Field::<Slug>::optional();
-    // Optional summary: parent-owned validated field (ADR-0065 direct-bind), so an
-    // over-cap entry disables save and an empty field submits `None` (omit → clear).
-    let summary_field = Field::<PostSummary>::optional();
-    // Optional scheduled-publish time for an unpublished/draft post (naive
-    // local wall-clock from a `datetime-local` control); empty publishes now.
-    let publish_at = RwSignal::new(String::new());
-    let post_tags: RwSignal<Vec<TagSummary>> = RwSignal::new(Vec::new());
-    // Pre-selected with the post's current targeting (defaults to Public until
-    // it resolves).
-    let audience = RwSignal::new(AudienceSelection {
-        base: AudienceBase::Public,
-        named: Vec::new(),
-    });
     // The redirect-on-publish effect reacts to the client-only ServerAction
     // dispatch. Whether a settled update redirects at all, and to where, is the
     // host-tested `publish_redirect` (#306), leaving this the bare `Effect`
@@ -1128,139 +1115,18 @@ pub fn EditPostPage() -> impl IntoView {
             {move || Suspend::new(async move {
                 match post.await {
                     Ok(fetched) => {
-                        body.set(String::from(fetched.body.clone()));
-                        format.set(fetched.format);
-                        slug_field.value.set(fetched.post.slug.to_string());
-                        summary_field
-                            .value
-                            .set(fetched.post.summary.as_deref().unwrap_or_default().to_owned());
-                        post_tags.set(fetched.post.tags.clone());
+                        state.seed_from(&fetched, slug_field);
                         if let Ok(selection) = current_audience.await {
-                            audience.set(selection);
+                            state.audience.set(selection);
                         }
-                        let post_id = fetched.post.post_id;
-                        let is_published = fetched.post.published_at.is_some();
-                        let dispatch_update = move |publish: bool| {
-                            let Ok(body) = body.get().parse::<PostBody>() else {
-                                return;
-                            };
-                            update_post_action
-                                .dispatch(super::Update {
-                                    post_id,
-                                    post: PostInputs {
-                                        body,
-                                        format: format.get(),
-                                        slug_override: slug_field.parsed(),
-                                        publish,
-                                        publish_at: utc_instant_from_local(&publish_at.get()),
-                                        tags: Some(
-                                            post_tags.get().into_iter().map(|t| t.display).collect(),
-                                        ),
-                                        summary: summary_field.parsed(),
-                                        audience: Some(audience.get()),
-                                    },
-                                });
-                        };
                         view! {
-                            <div class="j-edit-form-grid">
-                                <div class="j-edit-form-body">
-                                    <ComposerFields
-                                        body=body
-                                        format=format
-                                        rows=20
-                                        show_seg=false
-                                    />
-                                </div>
-                                <aside class="j-edit-form-aside">
-                                    <div>
-                                        <div class="j-sb-head" style="padding:0 0 10px">
-                                            "Options"
-                                        </div>
-                                        {(!is_published)
-                                            .then(|| {
-                                                view! {
-                                                    <div
-                                                        class="j-field-row"
-                                                        style="grid-template-columns:auto 1fr"
-                                                    >
-                                                        <label class="j-field-label" for="edit-slug">
-                                                            "Slug"
-                                                        </label>
-                                                        <input
-                                                            id="edit-slug"
-                                                            type="text"
-                                                            name="slug_override"
-                                                            class="j-field-val"
-                                                            prop:value=slug_field.value
-                                                            on:input=move |ev| {
-                                                                let v = event_target_value(&ev);
-                                                                slug_field.value.set(v.clone());
-                                                                slug_field.error.set(slug_field.error_for(&v));
-                                                            }
-                                                            on:blur=move |_| slug_field.touch()
-                                                        />
-                                                        {move || {
-                                                            slug_field
-                                                                .is_touched()
-                                                                .then(|| slug_field.error.get())
-                                                                .flatten()
-                                                                .map(|msg| view! { <p class="error">{msg}</p> })
-                                                        }}
-                                                    </div>
-                                                    // Optional schedule for a draft: a future
-                                                    // time schedules it; empty publishes now.
-                                                    <div style="margin-top:10px">
-                                                        <label class="j-field-label" for="edit-publish-at">
-                                                            "Publish at (optional)"
-                                                        </label>
-                                                        <input
-                                                            id="edit-publish-at"
-                                                            type="datetime-local"
-                                                            class="j-field-val"
-                                                            prop:value=publish_at
-                                                            on:input=move |ev| {
-                                                                publish_at.set(event_target_value(&ev));
-                                                            }
-                                                        />
-                                                    </div>
-                                                }
-                                            })}
-                                        <div style="margin-top:10px">
-                                            <ValidatedTextarea<
-                                            PostSummary,
-                                        >
-                                                label="Summary"
-                                                name="summary"
-                                                field=summary_field
-                                                placeholder="Optional summary or excerpt"
-                                            />
-                                        </div>
-                                        <div style="margin-top:10px">
-                                            <TagInput tags=post_tags />
-                                        </div>
-                                        <div style="margin-top:10px">
-                                            <AudiencePicker selection=audience />
-                                        </div>
-                                        <FormatToggle format=format style="margin-top:10px" />
-                                    </div>
-                                    <div style="margin-top:16px">
-                                        <div class="j-sb-head" style="padding:0 0 10px">
-                                            "Media"
-                                        </div>
-                                        <MediaUpload show_result=true />
-                                    </div>
-                                    <div class="j-edit-form-actions">
-                                        <EditSaveActions
-                                            is_published=is_published
-                                            disabled=Signal::derive(move || {
-                                                body.get().parse::<PostBody>().is_err()
-                                                    || !slug_field.is_valid() || !summary_field.is_valid()
-                                            })
-                                            on_save=Callback::new(dispatch_update)
-                                        />
-                                    </div>
-                                </aside>
-                            </div>
+                            <EditPostForm
+                                state=state
+                                slug_field=slug_field
+                                post_id=fetched.post.post_id
+                                is_published=fetched.post.published_at.is_some()
+                                action=update_post_action
+                            />
                         }
                             .into_any()
                     }
@@ -1269,6 +1135,121 @@ pub fn EditPostPage() -> impl IntoView {
             })}
         </Suspense>
         <EditSaveOutcome action=update_post_action />
+    }
+}
+
+/// The editor's form: body column plus the options aside (slug and schedule while
+/// still a draft, summary, tags, audience, format, media) and the save controls.
+/// Split out of [`EditPostPage`] (#301), which keeps only the fetch and its branch.
+#[component]
+fn EditPostForm(
+    state: ComposeState,
+    /// Page-level rather than held by [`ComposeState`], because the composer's full
+    /// shape owns its own — see that type's `seed_from`.
+    slug_field: Field<Slug>,
+    post_id: PostId,
+    /// A published post shows neither the slug nor the schedule control: its URL is
+    /// already public, and it has no publish time left to choose.
+    is_published: bool,
+    action: ServerAction<super::Update>,
+) -> impl IntoView {
+    // Same non-blank-body guard as the composer; see `ComposeState::inputs`.
+    let dispatch_update = move |publish: bool| {
+        if let Some(post) = state.inputs(publish, slug_field.parsed()) {
+            action.dispatch(super::Update { post_id, post });
+        }
+    };
+    view! {
+        <div class="j-edit-form-grid">
+            <div class="j-edit-form-body">
+                <ComposerFields body=state.body format=state.format rows=20 show_seg=false />
+            </div>
+            <aside class="j-edit-form-aside">
+                <div>
+                    <div class="j-sb-head" style="padding:0 0 10px">
+                        "Options"
+                    </div>
+                    {(!is_published)
+                        .then(|| {
+                            view! {
+                                <div class="j-field-row" style="grid-template-columns:auto 1fr">
+                                    <label class="j-field-label" for="edit-slug">
+                                        "Slug"
+                                    </label>
+                                    <input
+                                        id="edit-slug"
+                                        type="text"
+                                        name="slug_override"
+                                        class="j-field-val"
+                                        prop:value=slug_field.value
+                                        on:input=move |ev| {
+                                            let v = event_target_value(&ev);
+                                            slug_field.value.set(v.clone());
+                                            slug_field.error.set(slug_field.error_for(&v));
+                                        }
+                                        on:blur=move |_| slug_field.touch()
+                                    />
+                                    {move || {
+                                        slug_field
+                                            .is_touched()
+                                            .then(|| slug_field.error.get())
+                                            .flatten()
+                                            .map(|msg| view! { <p class="error">{msg}</p> })
+                                    }}
+                                </div>
+                                // Optional schedule for a draft: a future
+                                // time schedules it; empty publishes now.
+                                <div style="margin-top:10px">
+                                    <label class="j-field-label" for="edit-publish-at">
+                                        "Publish at (optional)"
+                                    </label>
+                                    <input
+                                        id="edit-publish-at"
+                                        type="datetime-local"
+                                        class="j-field-val"
+                                        prop:value=state.publish_at
+                                        on:input=move |ev| {
+                                            state.publish_at.set(event_target_value(&ev));
+                                        }
+                                    />
+                                </div>
+                            }
+                        })}
+                    <div style="margin-top:10px">
+                        <ValidatedTextarea<
+                        PostSummary,
+                    >
+                            label="Summary"
+                            name="summary"
+                            field=state.summary_field
+                            placeholder="Optional summary or excerpt"
+                        />
+                    </div>
+                    <div style="margin-top:10px">
+                        <TagInput tags=state.tags />
+                    </div>
+                    <div style="margin-top:10px">
+                        <AudiencePicker selection=state.audience />
+                    </div>
+                    <FormatToggle format=state.format style="margin-top:10px" />
+                </div>
+                <div style="margin-top:16px">
+                    <div class="j-sb-head" style="padding:0 0 10px">
+                        "Media"
+                    </div>
+                    <MediaUpload show_result=true />
+                </div>
+                <div class="j-edit-form-actions">
+                    <EditSaveActions
+                        is_published=is_published
+                        disabled=Signal::derive(move || {
+                            !slug_field.is_valid() || !state.summary_field.is_valid()
+                        })
+                        on_save=Callback::new(dispatch_update)
+                    />
+                </div>
+            </aside>
+        </div>
     }
 }
 
