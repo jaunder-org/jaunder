@@ -18,6 +18,14 @@ exclude = ["xtask"]
 codegen-units = 1
 lto = true
 opt-level = 'z'
+# Deliberately no `panic = "abort"`, though it is the classic next wasm-size
+# lever. It buys nothing and costs something (#836):
+#   - zero bytes — `rustc --print cfg --target wasm32-unknown-unknown` already
+#     reports `panic="abort"`, so it is the target default;
+#   - real risk — profiles are workspace-wide, so setting it here would also flip
+#     the *server's* release build from unwind to abort, and a panicking tokio
+#     task would kill the process instead of being isolated.
+# The bundle-size lever that does work is `wasm-opt` in `devtool csr-bundle`.
 
 # Force web crate to a single CGU in test builds so inventory::submit! statics
 # are always linked when any web symbol is referenced.

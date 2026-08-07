@@ -60,6 +60,12 @@ pub struct CommandResult {
     pub coverage: Option<crate::coverage::CoverageReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audit: Option<crate::audit_wasm::AuditReport>,
+    /// Per-section and per-crate attribution from `audit-wasm --breakdown`
+    /// (#836). Separate from `audit` because the two describe *different
+    /// artifacts* — the shipped bundle versus the unstripped pre-wasm-bindgen
+    /// wasm — and merging them would invite comparing their totals.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub breakdown: Option<crate::audit_wasm::BreakdownReport>,
     /// Playwright flaky tests (retried-then-passed) surfaced by `steps::flaky`
     /// from an `e2e` combo report. Empty for every other command; skipped in the
     /// sidecar when empty.
@@ -86,6 +92,7 @@ impl CommandResult {
             steps: Vec::new(),
             coverage: None,
             audit: None,
+            breakdown: None,
             flaky: Vec::new(),
             traces: None,
             pr: None,
@@ -139,6 +146,10 @@ impl CommandResult {
         // not the pass/fail line, so render it inline when present.
         if let Some(audit) = &self.audit {
             print!("{}", crate::audit_wasm::render_table(audit));
+        }
+        // `--breakdown`'s tables, same reasoning.
+        if let Some(breakdown) = &self.breakdown {
+            print!("{}", crate::audit_wasm::render_breakdown(breakdown));
         }
         // Same informational-payload treatment for `traces analyze`: the report
         // tables are the point, not the pass/fail line.

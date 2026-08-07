@@ -451,6 +451,7 @@
             {
               nativeBuildInputs = [
                 devtoolBin
+                pkgs.binaryen
                 wasm-bindgen-cli
               ];
             }
@@ -1008,6 +1009,11 @@
           {
             jaunder = jaunderBin;
             site = site;
+            # The pre-wasm-bindgen, unstripped wasm. Exposed so
+            # `cargo xtask audit-wasm --breakdown` has an artifact that still
+            # carries a name section: `wasm-opt` strips names from the shipped
+            # bundle, so the shipped file cannot be attributed to crates (#836).
+            inherit csrWasm;
             devtool = devtoolBin;
             # The out-of-process e2e seed helper (ADR-0046). Exposed so it is
             # directly buildable/verifiable; it is placed only on the e2e VM PATH,
@@ -1361,6 +1367,10 @@
               pkgs.prettier
               pkgs.sqlite
               pkgs.typescript
+              # `wasm-opt`, run by `devtool csr-bundle` after `wasm-bindgen` (#836).
+              # In `ciInputs` rather than `devOnly` because `cargo xtask build-csr`
+              # invokes it on the host, so the CI shell needs it too.
+              pkgs.binaryen
               wasm-bindgen-cli
             ]
             ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [

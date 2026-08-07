@@ -26,6 +26,44 @@ const IN_WASM: &str = "csr_bg.wasm";
 const OUT_JS: &str = "jaunder.js";
 const OUT_WASM: &str = "jaunder.wasm";
 
+/// The `wasm-opt` optimisation level, pinned by measurement on the real bundle
+/// (#836) — raw bytes of the shipped `pkg/jaunder.wasm`:
+///
+/// | level        | raw bytes | vs none |
+/// | ------------ | --------- | ------- |
+/// | none         | 5 350 591 | —       |
+/// | `-O2`        | 2 390 164 | −55.3%  |
+/// | `-Os`        | 2 357 119 | −55.9%  |
+/// | **`-Oz`**    | **2 267 063** | **−57.6%** |
+///
+/// Size is the objective, not speed: firefox spends ~88 ms compiling each MiB of
+/// this file (#818), while the Rust-side mount path it produces measures
+/// 1.7–12.7 ms. A slower-but-smaller artifact is the right trade here.
+const WASM_OPT_LEVEL: &str = "-Oz";
+
+/// Target features `rustc` enables by default for `wasm32-unknown-unknown`,
+/// paired with the flag binaryen knows them by: `(rustc cfg, binaryen flag)`.
+///
+/// **The two vocabularies are not the same**, which is the reason this is a table
+/// of pairs rather than one list. `rustc --print cfg` reports
+/// `nontrapping-fptoint`; binaryen calls that feature
+/// `nontrapping-float-to-int` and rejects the rustc spelling outright. The
+/// mismatch surfaces as a hard build failure, not as silent under-optimisation,
+/// so keeping the rustc name alongside is what lets the next person re-derive
+/// this list from `rustc --print cfg` without rediscovering the divergence.
+///
+/// Listed explicitly rather than passing `-all`, which would track whatever the
+/// installed binaryen considers "all" and let an upgrade change the accepted
+/// input set with no diff to review.
+const WASM_TARGET_FEATURES: [(&str, &str); 6] = [
+    ("bulk-memory", "bulk-memory"),
+    ("multivalue", "multivalue"),
+    ("mutable-globals", "mutable-globals"),
+    ("nontrapping-fptoint", "nontrapping-float-to-int"),
+    ("reference-types", "reference-types"),
+    ("sign-ext", "sign-ext"),
+];
+
 /// Rewrite the wasm-bindgen JS glue's reference to its wasm file from the
 /// `csr_bg.wasm` default to the renamed `jaunder.wasm`. Matches the flake's
 /// `sed 's/csr_bg\.wasm/jaunder.wasm/g'` (literal, all occurrences). Pure —
@@ -50,6 +88,42 @@ fn gzip_compress(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
     let mut e = GzEncoder::new(Vec::new(), Compression::best());
     e.write_all(bytes).context("gzip write")?;
     e.finish().context("gzip finish")
+}
+
+/// The `wasm-opt` argument vector: optimisation level, an explicit enable for
+/// every target feature rustc emits, then input and output.
+///
+/// Note there is no `-g`: the wasm name section is ~3.3 MiB of the unstripped
+/// artifact and pure weight in production, so it is deliberately discarded.
+/// Attribution reads it from `.#csrWasm` instead — see `cargo xtask audit-wasm
+/// --breakdown`.
+fn wasm_opt_args(level: &str, input: &Path, output: &Path) -> Vec<String> {
+    let mut args = vec![level.to_string()];
+    for (_rustc_cfg, binaryen_flag) in WASM_TARGET_FEATURES {
+        args.push(format!("--enable-{binaryen_flag}"));
+    }
+    args.push(input.to_string_lossy().into_owned());
+    args.push("-o".to_string());
+    args.push(output.to_string_lossy().into_owned());
+    args
+}
+
+/// Run `wasm-opt` over `wasm` in place, via a sibling temp file.
+///
+/// In-place is what the caller wants, but binaryen reads and writes streaming, so
+/// naming the same path for both would truncate the input out from under it.
+fn run_wasm_opt(wasm: &Path) -> anyhow::Result<()> {
+    let tmp = with_suffix(wasm, "opt");
+    let status = Command::new("wasm-opt")
+        .args(wasm_opt_args(WASM_OPT_LEVEL, wasm, &tmp))
+        .status()
+        .context("spawning wasm-opt (is it on PATH?)")?;
+    if !status.success() {
+        bail!("wasm-opt failed ({status}) for {}", wasm.display());
+    }
+    std::fs::rename(&tmp, wasm)
+        .with_context(|| format!("replacing {} with the optimised wasm", wasm.display()))?;
+    Ok(())
 }
 
 /// Append `.<ext>` to a path (e.g. `jaunder.wasm` -> `jaunder.wasm.br`).
@@ -104,6 +178,10 @@ pub fn run(wasm: &Path, out: &Path) -> anyhow::Result<()> {
         .with_context(|| format!("reading {}", js_path.display()))?;
     std::fs::write(&js_path, rewrite_wasm_ref(&js))
         .with_context(|| format!("writing {}", js_path.display()))?;
+
+    // Optimise before compressing, so the `.br`/`.gz` siblings describe the bytes
+    // that actually ship.
+    run_wasm_opt(&out.join(OUT_WASM)).context("optimising jaunder.wasm")?;
 
     // Precompress the final JS (post wasm-ref rewrite) and the wasm.
     write_precompressed(&js_path).context("precompressing jaunder.js")?;
@@ -168,6 +246,101 @@ mod tests {
             .read_to_end(&mut decoded)
             .unwrap();
         assert_eq!(decoded, input);
+    }
+
+    #[test]
+    fn wasm_opt_args_carry_the_pinned_level() {
+        let args = wasm_opt_args(WASM_OPT_LEVEL, Path::new("in.wasm"), Path::new("out.wasm"));
+        assert!(args.contains(&WASM_OPT_LEVEL.to_string()), "{args:?}");
+    }
+
+    #[test]
+    fn wasm_opt_args_enable_every_rustc_target_feature() {
+        // Binaryen rejects input using features it was not told to allow, so an
+        // unflagged run can hard-fail the build (#836). The list mirrors
+        // `rustc --print cfg --target wasm32-unknown-unknown`.
+        let args = wasm_opt_args(WASM_OPT_LEVEL, Path::new("in.wasm"), Path::new("out.wasm"));
+        for (_rustc_cfg, binaryen_flag) in WASM_TARGET_FEATURES {
+            assert!(
+                args.contains(&format!("--enable-{binaryen_flag}")),
+                "missing --enable-{binaryen_flag} in {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn passes_binaryen_spellings_not_rustc_cfg_names() {
+        // The two vocabularies diverge, and binaryen rejects the rustc spelling
+        // with "Unknown option" — a hard build failure, found the hard way (#836).
+        let args = wasm_opt_args(WASM_OPT_LEVEL, Path::new("in.wasm"), Path::new("out.wasm"));
+        assert!(
+            args.contains(&"--enable-nontrapping-float-to-int".to_string()),
+            "{args:?}"
+        );
+        assert!(
+            !args.contains(&"--enable-nontrapping-fptoint".to_string()),
+            "the rustc cfg spelling is not a binaryen flag: {args:?}"
+        );
+    }
+
+    #[test]
+    fn every_rustc_cfg_name_is_covered_exactly_once() {
+        // The table is meant to be re-derivable from `rustc --print cfg`; a
+        // duplicated or missing row would silently drop a feature.
+        let mut cfgs: Vec<&str> = WASM_TARGET_FEATURES.iter().map(|(c, _)| *c).collect();
+        cfgs.sort_unstable();
+        let mut unique = cfgs.clone();
+        unique.dedup();
+        assert_eq!(cfgs, unique, "duplicate rustc cfg in the table");
+        assert_eq!(
+            cfgs,
+            [
+                "bulk-memory",
+                "multivalue",
+                "mutable-globals",
+                "nontrapping-fptoint",
+                "reference-types",
+                "sign-ext",
+            ]
+        );
+    }
+
+    #[test]
+    fn wasm_opt_args_never_use_all_features() {
+        // `-all` silently tracks whatever the installed binaryen considers "all",
+        // so a binaryen upgrade could change the accepted input set with no diff.
+        let args = wasm_opt_args(WASM_OPT_LEVEL, Path::new("in.wasm"), Path::new("out.wasm"));
+        assert!(
+            !args.iter().any(|a| a == "-all" || a == "--all-features"),
+            "{args:?}"
+        );
+    }
+
+    #[test]
+    fn wasm_opt_args_name_input_and_output() {
+        let args = wasm_opt_args(
+            WASM_OPT_LEVEL,
+            Path::new("a/in.wasm"),
+            Path::new("b/out.wasm"),
+        );
+        assert!(args.contains(&"a/in.wasm".to_string()), "{args:?}");
+        let o = args.iter().position(|a| a == "-o").expect("has -o");
+        assert_eq!(args[o + 1], "b/out.wasm", "{args:?}");
+    }
+
+    #[test]
+    fn wasm_opt_does_not_request_debug_names() {
+        // `-g` would retain the name section; the shipped bundle must not (#836).
+        let args = wasm_opt_args(WASM_OPT_LEVEL, Path::new("in.wasm"), Path::new("out.wasm"));
+        assert!(!args.iter().any(|a| a == "-g"), "{args:?}");
+    }
+
+    #[test]
+    fn wasm_opt_writes_to_a_distinct_path_from_its_input() {
+        // Streaming in and out of the same file would truncate the input.
+        let args = wasm_opt_args(WASM_OPT_LEVEL, Path::new("x.wasm"), Path::new("x.wasm.opt"));
+        let o = args.iter().position(|a| a == "-o").expect("has -o");
+        assert_ne!(args[o + 1], "x.wasm");
     }
 
     #[test]

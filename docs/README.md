@@ -133,6 +133,7 @@ convention). See the Status column below for each ADR's current status.
 | [0103](adr/0103-prefer-real-harness-over-mirroring-fake.md)        | Prefer the real harness over a fake that mirrors backend behaviour                                           | accepted   |
 | [0104](adr/0104-edition-2024-unsafe-env-and-precise-capturing.md)  | Edition 2024 has one audited `unsafe` env seam, and borrowing views capture precisely                        | accepted   |
 | [0105](adr/0105-post-body-non-blank-invariant.md)                  | A post body has a non-blank invariant, and normalization is format-aware                                     | accepted   |
+| [0106](adr/0106-wasm-raw-size-budget.md)                           | The wasm size budget is on raw bytes, not compressed                                                         | accepted   |
 
 <!-- adr-table:end -->
 
