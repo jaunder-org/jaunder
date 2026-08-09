@@ -627,7 +627,7 @@ contradicts what shipped.
 
 **Interfaces:** none — documentation only.
 
-- [ ] **Step 1: `compose_state.rs` — `seed_from`'s doc**
+- [x] **Step 1: `compose_state.rs` — `seed_from`'s doc**
 
 Replace the sentence beginning "The slug is deliberately **not** seeded here"
 with:
@@ -640,7 +640,7 @@ with:
     /// so the editor sets it at the call site rather than handing the field in here.
 ```
 
-- [ ] **Step 2: `component.rs` — `FullComposer`'s doc**
+- [x] **Step 2: `component.rs` — `FullComposer`'s doc**
 
 The current text names the old field order and calls the slug local. Replace
 with:
@@ -652,7 +652,7 @@ with:
 /// compact shape shares [`ComposeState`] and has no slug — see that type's `seed_from`.
 ```
 
-- [ ] **Step 3: `component.rs` — the `EditPostPage` inline comment**
+- [x] **Step 3: `component.rs` — the `EditPostPage` inline comment**
 
 Replace `// The slug is not part of the bundle — see seed_from.` with:
 
@@ -661,7 +661,7 @@ Replace `// The slug is not part of the bundle — see seed_from.` with:
                         // none) — see `seed_from`.
 ```
 
-- [ ] **Step 4: `component.rs` — `EditPostForm`'s doc and its `slug_field` prop
+- [x] **Step 4: `component.rs` — `EditPostForm`'s doc and its `slug_field` prop
       doc**
 
 The doc still enumerates markup the component no longer holds. Replace with:
@@ -680,7 +680,7 @@ and the `slug_field` prop doc:
     /// shares that bundle and has no slug field — see that type's `seed_from`.
 ```
 
-- [ ] **Step 5: Verify no "local to that shape" justification survives**
+- [x] **Step 5: Verify no "local to that shape" justification survives**
 
 Run:
 
@@ -690,7 +690,7 @@ rg -n 'local to (that|this) shape' web/src
 
 Expected: **no matches** (AC11).
 
-- [ ] **Step 6: Edit issue #863's body** (AC12)
+- [x] **Step 6: Edit issue #863's body** (AC12)
 
 Replace the third bullet of the **Constraints** section — "No markup change: the
 rendered output of both shapes must be identical, which the e2e suite is the
@@ -716,7 +716,7 @@ real check on" — with:
 Leave the rest of the body — Problem, Why it is filed rather than fixed, What to
 do, Notes — unchanged.
 
-- [ ] **Step 7: Run the gate**
+- [x] **Step 7: Run the gate**
 
 Run:
 
@@ -739,7 +739,7 @@ rg -n 'fn (ComposeOptions|MediaSection)' web/src/posts/component.rs
 Expected: both found, and both are items in the same module as every doc comment
 that links them — which is what makes the shorthand links resolve.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add web/src/posts/component.rs web/src/posts/compose_state.rs

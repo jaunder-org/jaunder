@@ -603,9 +603,10 @@ fn CompactComposer(
     }
 }
 
-/// The full compose page: body column plus the options aside (slug, summary, tags,
-/// audience, schedule, format, media) and the dispatch buttons. Split out of
-/// [`PostCreateForm`] (#301); the slug field is local to this shape.
+/// The full compose page: body column plus the options aside ([`ComposeOptions`]), the
+/// media column ([`MediaSection`]) and the dispatch buttons. Split out of
+/// [`PostCreateForm`] (#301). The slug field is owned here and passed down, because the
+/// compact shape shares [`ComposeState`] and has no slug — see that type's `seed_from`.
 #[component]
 fn FullComposer(
     state: ComposeState,
@@ -1054,7 +1055,8 @@ pub fn EditPostPage() -> impl IntoView {
                         if let Ok(selection) = current_audience.await {
                             state.audience.set(selection);
                         }
-                        // The slug is not part of the bundle — see `seed_from`.
+                        // The slug is not part of the bundle (the compact shape has
+                        // none) — see `seed_from`.
                         view! {
                             <EditPostForm
                                 state=state
@@ -1074,14 +1076,15 @@ pub fn EditPostPage() -> impl IntoView {
     }
 }
 
-/// The editor's form: body column plus the options aside (slug and schedule while
-/// still a draft, summary, tags, audience, format, media) and the save controls.
+/// The editor's form: body column plus the options aside ([`ComposeOptions`], which
+/// hides the slug and schedule once the post is published), the media column
+/// ([`MediaSection`]) and the save controls.
 /// Split out of [`EditPostPage`] (#301), which keeps only the fetch and its branch.
 #[component]
 fn EditPostForm(
     state: ComposeState,
-    /// Page-level rather than held by [`ComposeState`], because the composer's full
-    /// shape owns its own — see that type's `seed_from`.
+    /// Page-level rather than held by [`ComposeState`], because the compact shape
+    /// shares that bundle and has no slug field — see that type's `seed_from`.
     slug_field: Field<Slug>,
     post_id: PostId,
     /// A published post shows neither the slug nor the schedule control: its URL is
