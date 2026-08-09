@@ -229,7 +229,7 @@ await page.waitForURL((url) => !url.pathname.endsWith("/edit"));
 
 Re-run Step 2 until it passes. Do not change `web/src` in this task.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add end2end/tests/posts.spec.ts
@@ -256,7 +256,7 @@ change.
 - Produces: `#[component] fn MediaSection() -> impl IntoView` — no props. Task
   4's rewired parents render it.
 
-- [ ] **Step 1: Add the component**
+- [x] **Step 1: Add the component**
 
 Place it immediately after the `EditSaveActions` component (ends `:1315` at
 HEAD). The wrapper `<div>` is part of the component (D2, AC2) — both asides are
@@ -282,7 +282,7 @@ fn MediaSection() -> impl IntoView {
 }
 ```
 
-- [ ] **Step 2: Replace both call sites**
+- [x] **Step 2: Replace both call sites**
 
 Replace the media block in `FullComposer`, then the one in `EditPostForm` —
 found by content as described in **Files** above. Both become exactly:
@@ -291,7 +291,7 @@ found by content as described in **Files** above. Both become exactly:
 <MediaSection />
 ```
 
-- [ ] **Step 3: Run the gate**
+- [x] **Step 3: Run the gate**
 
 Run:
 
@@ -300,9 +300,11 @@ devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-863-compose-
 ```
 
 Expected: PASS, including `thin-components` (`MediaSection` has 0 control-flow
-units on both surfaces).
+units on both surfaces). — **PASS** (`check --no-test`; the full `check` runs in
+the pre-commit hook at Step 5). Diff reviewed: the two blocks collapsed to
+`<MediaSection />` and nothing else moved.
 
-- [ ] **Step 4: Verify no DOM change**
+- [x] **Step 4: Verify no DOM change**
 
 Run:
 
@@ -310,9 +312,10 @@ Run:
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-863-compose-options -- cargo xtask e2e-local media.spec.ts
 ```
 
-Expected: PASS — `media.spec.ts:163` drives the full composer's upload widget.
+Expected: PASS — `media.spec.ts:163` drives the full composer's upload widget. —
+**11 passed**, 149s.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src/posts/component.rs

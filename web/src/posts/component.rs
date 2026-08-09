@@ -695,12 +695,7 @@ fn FullComposer(
                     </div>
                     <FormatToggle format=state.format style="margin-top:10px" />
                 </div>
-                <div style="margin-top:16px">
-                    <div class="j-sb-head" style="padding:0 0 10px">
-                        "Media"
-                    </div>
-                    <MediaUpload show_result=true />
-                </div>
+                <MediaSection />
                 <div style="margin-top:auto;display:flex;align-items:center;gap:8px">
                     <button
                         class="j-btn"
@@ -1235,12 +1230,7 @@ fn EditPostForm(
                     </div>
                     <FormatToggle format=state.format style="margin-top:10px" />
                 </div>
-                <div style="margin-top:16px">
-                    <div class="j-sb-head" style="padding:0 0 10px">
-                        "Media"
-                    </div>
-                    <MediaUpload show_result=true />
-                </div>
+                <MediaSection />
                 <div class="j-edit-form-actions">
                     <EditSaveActions
                         is_published=is_published
@@ -1311,6 +1301,24 @@ fn EditSaveActions(
             }
                 .into_any()
         }}
+    }
+}
+
+/// The media column shared by the two full-page compose shapes.
+///
+/// Extracted from [`FullComposer`] and [`EditPostForm`] (#863), which held
+/// byte-identical copies. Emits a single wrapping `<div>` on purpose: both asides are
+/// flex columns with `gap:18px`, so a bare fragment would space the heading off the
+/// control it labels.
+#[component]
+fn MediaSection() -> impl IntoView {
+    view! {
+        <div style="margin-top:16px">
+            <div class="j-sb-head" style="padding:0 0 10px">
+                "Media"
+            </div>
+            <MediaUpload show_result=true />
+        </div>
     }
 }
 
