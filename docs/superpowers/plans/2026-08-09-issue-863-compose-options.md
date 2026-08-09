@@ -111,7 +111,7 @@ plan.
       line. Filed as #871 (forms-crate labels), #872 (duplicate aside/grid
       classes), #873 (format-toggle e2e gap).
 
-- [ ] **Step 3: Commit the spec and the plan**
+- [x] **Step 3: Commit the spec and the plan**
 
 Both are tracked-but-uncommitted, and Step 2 edits the plan again. They must
 land now: `cargo xtask validate` refuses a dirty worktree
@@ -150,7 +150,7 @@ guessed.
   `"scheduling from the edit page shows a Scheduled-for badge on the drafts page"`.
   Task 4 changes exactly one line of it.
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 ```ts
 test("scheduling from the edit page shows a Scheduled-for badge on the drafts page", async ({
@@ -197,7 +197,7 @@ test("scheduling from the edit page shows a Scheduled-for badge on the drafts pa
 });
 ```
 
-- [ ] **Step 2: Run it against unchanged code**
+- [x] **Step 2: Run it against unchanged code** — **36 passed** (was 35), 275s.
 
 Run:
 
@@ -208,7 +208,8 @@ devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-863-compose-
 Expected: **PASS.** This is a characterization test — the behaviour already
 works; the test is new.
 
-- [ ] **Step 3: If it fails, fix the test, not the app**
+- [x] **Step 3: If it fails, fix the test, not the app** — not needed; the test
+      passed as written, so neither settle-step fallback below was used.
 
 The one step this plan cannot fully determine statically is how the click on
 Publish settles, because a scheduled publish leaves the editor via the
