@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use common::absolute_url::AbsoluteUrl;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -13,7 +14,11 @@ pub enum WebSubError {
 
 #[async_trait]
 pub trait WebSubClient: Send + Sync {
-    async fn send_publish(&self, hub_url: &str, feed_url: &str) -> Result<(), WebSubError>;
+    async fn send_publish(
+        &self,
+        hub_url: &AbsoluteUrl,
+        feed_url: &AbsoluteUrl,
+    ) -> Result<(), WebSubError>;
 }
 
 pub mod file_capture;
@@ -44,6 +49,7 @@ pub fn default_client(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::test_support::parse_absolute_url;
     use rstest::*;
 
     #[fixture]
@@ -55,19 +61,27 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn default_client_selects_file_capture_when_path_given(capture_dir: tempfile::TempDir) {
-        // None ⇒ the live HTTP client rejects an unroutable host.
+        // None ⇒ the live HTTP client fails on an unreachable hub. Port 1 on
+        // loopback has no listener, so the connect is refused immediately — no
+        // DNS lookup, no network egress, deterministic offline and in CI.
         let http = default_client(None);
         assert!(
-            http.send_publish("not-a-valid-url", "https://example.com/feed.rss")
-                .await
-                .is_err()
+            http.send_publish(
+                &parse_absolute_url("http://127.0.0.1:1/"),
+                &parse_absolute_url("https://example.com/feed.rss"),
+            )
+            .await
+            .is_err()
         );
 
         // Some ⇒ the file-capture client records the ping to <dir>/websub.jsonl.
         let path = capture_dir.path().join("websub.jsonl");
         let captured = default_client(Some(path.clone()));
         captured
-            .send_publish("https://hub.example.com/", "https://example.com/feed.rss")
+            .send_publish(
+                &parse_absolute_url("https://hub.example.com/"),
+                &parse_absolute_url("https://example.com/feed.rss"),
+            )
             .await
             .expect("file capture write");
 

@@ -106,7 +106,7 @@ Unchanged, verified only: `server/src/atompub/rsd.rs:39` (already passes two
 - Produces: issue numbers recorded in the spec. Nothing downstream consumes
   them; this task exists so the findings are not lost behind this cycle.
 
-- [ ] **Step 1: Check the three existing issues for overlap**
+- [x] **Step 1: Check the three existing issues for overlap**
 
 ```bash
 gh issue view 751 --repo jaunder-org/jaunder
@@ -117,7 +117,8 @@ gh issue view 827 --repo jaunder-org/jaunder
 For each concern below: already covered (record that issue's number) or file
 new.
 
-- [ ] **Step 2: File what is not covered** (via **`jaunder-issues`**)
+- [x] **Step 2: File what is not covered** (via **`jaunder-issues`**) — filed
+      #875, #877, #878, #879, #880; none of #751/#697/#827 covered them
 
 Five concerns, all milestone "Domain-value type safety (newtypes)", label
 `type-safety`:
@@ -140,13 +141,13 @@ Five concerns, all milestone "Domain-value type safety (newtypes)", label
    adjacent lines apart (`worker.rs:201` vs `:205`). Deliberately out of scope
    here; file it so the asymmetry reads as a decision, not an oversight.
 
-- [ ] **Step 3: Record the numbers in the spec**
+- [x] **Step 3: Record the numbers in the spec**
 
 Replace each `_(#TBD)_` in the spec's Separable-concerns list with the real
 issue number (or the covering issue's number), and add a bullet for concern 5.
 Spec AC13.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit** — `de0550d2`
 
 ```bash
 devtool run -- prettier -w docs/superpowers/specs/2026-08-09-issue-688-absoluteurl-websub.md
@@ -163,7 +164,7 @@ git commit -m "docs(spec): record #688's separable concerns as filed issues (#68
 
 **Interfaces:** none.
 
-- [ ] **Step 1: Edit the issue body**
+- [x] **Step 1: Edit the issue body**
 
 Remove the section "## Why the ADR-0063 §4 read-path allowance does not cover
 this" and its claim that typing the two parameters makes a swap a compile error.
@@ -176,7 +177,7 @@ fifth impl the original scope missed.
 
 Spec AC12. Use the GitHub MCP tools.
 
-- [ ] **Step 2: Verify**
+- [x] **Step 2: Verify**
 
 ```bash
 gh issue view 688 --repo jaunder-org/jaunder

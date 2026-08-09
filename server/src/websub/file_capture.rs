@@ -3,6 +3,7 @@ use chrono::Utc;
 use std::path::PathBuf;
 
 use super::{WebSubClient, WebSubError};
+use common::absolute_url::AbsoluteUrl;
 
 /// A [`WebSubClient`] that appends each ping as a JSON line to a file on disk
 /// instead of contacting a hub.  Used for the `websub.jsonl` stream of the
@@ -20,7 +21,11 @@ impl FileCapturingWebSubClient {
 
 #[async_trait]
 impl WebSubClient for FileCapturingWebSubClient {
-    async fn send_publish(&self, hub_url: &str, feed_url: &str) -> Result<(), WebSubError> {
+    async fn send_publish(
+        &self,
+        hub_url: &AbsoluteUrl,
+        feed_url: &AbsoluteUrl,
+    ) -> Result<(), WebSubError> {
         use std::io::Write;
 
         // Value::to_string is infallible for this all-string structure.
@@ -48,6 +53,7 @@ impl WebSubClient for FileCapturingWebSubClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::test_support::parse_absolute_url;
 
     #[tokio::test]
     async fn appends_one_json_line_per_ping() {
@@ -58,11 +64,17 @@ mod tests {
 
         let client = FileCapturingWebSubClient::new(&path);
         client
-            .send_publish("https://hub.example.com/", "https://site/~alice/feed.rss")
+            .send_publish(
+                &parse_absolute_url("https://hub.example.com/"),
+                &parse_absolute_url("https://site/~alice/feed.rss"),
+            )
             .await
             .expect("first ping");
         client
-            .send_publish("https://hub.example.com/", "https://site/~bob/feed.rss")
+            .send_publish(
+                &parse_absolute_url("https://hub.example.com/"),
+                &parse_absolute_url("https://site/~bob/feed.rss"),
+            )
             .await
             .expect("second ping");
 
@@ -84,7 +96,10 @@ mod tests {
         // append, so the open fails and the error is surfaced.
         let client = FileCapturingWebSubClient::new("/nonexistent-dir-xyz/websub.jsonl");
         let err = client
-            .send_publish("https://hub.example.com/", "https://site/~alice/feed.rss")
+            .send_publish(
+                &parse_absolute_url("https://hub.example.com/"),
+                &parse_absolute_url("https://site/~alice/feed.rss"),
+            )
             .await
             .expect_err("open should fail");
         assert!(matches!(err, WebSubError::Http(_)));
@@ -97,7 +112,10 @@ mod tests {
     async fn returns_error_when_write_fails() {
         let client = FileCapturingWebSubClient::new("/dev/full");
         let err = client
-            .send_publish("https://hub.example.com/", "https://site/~alice/feed.rss")
+            .send_publish(
+                &parse_absolute_url("https://hub.example.com/"),
+                &parse_absolute_url("https://site/~alice/feed.rss"),
+            )
             .await
             .expect_err("write should fail");
         assert!(matches!(err, WebSubError::Http(_)));
