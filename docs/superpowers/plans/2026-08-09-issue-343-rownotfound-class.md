@@ -25,12 +25,14 @@ boundary); `set_post_tags`'s insert-then-select (filed as a follow-up in Task
 **Tasks.**
 
 - [x] **1.** File the separable follow-up issue. → #883
-- [ ] **2.** `StorageError`, its `From` impl, and the `fetch_exactly_one`
-      wrapper. **Merges into Task 4** — see the note on Task 2 below.
+- [x] **2.** `StorageError`, its `From` impl, and the `fetch_exactly_one`
+      wrapper. **Merged into Task 4** — see the note on Task 2 below.
 - [x] **3.** `subscribe` becomes one atomic upsert (spec D5) — independent,
       closes today's only reachable race.
-- [ ] **4.** Slice: `subscriptions` — retype, triage, and the missing-seed
-      backend test.
+- [x] **4.** Slice: `subscriptions` — retype, triage, and the missing-seed
+      backend test. Feasibility gate passed: `channels` has exactly one inbound
+      FK (`subscriptions.channel_id`) and a fresh DB has no subscriptions, so
+      the seed row deletes on both backends.
 - [ ] **5.** Slice: `posts` — mechanical retype, including `post_service` and
       its `atompub` consumers.
 - [ ] **6.** Slice: `posts` — the 9 `fetch_one` triage judgements.

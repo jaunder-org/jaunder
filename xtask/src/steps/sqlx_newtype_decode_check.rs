@@ -914,7 +914,7 @@ const ALLOWLIST: &[Allowed] = &[
     Allowed {
         file: "subscriptions.rs",
         function: "is_subscriber",
-        target: "(i64,)",
+        target: "i64",
         what: "DB::IS_ACTIVE_SUBSCRIBER",
         count: 1,
         category: Category::CountOrExists,
@@ -923,7 +923,7 @@ const ALLOWLIST: &[Allowed] = &[
     Allowed {
         file: "subscriptions.rs",
         function: "is_subscriber",
-        target: "(i64,)",
+        target: "i64",
         what: "DB::IS_ACTIVE_LOCAL_SUBSCRIBER",
         count: 1,
         category: Category::CountOrExists,

@@ -22,7 +22,7 @@ use storage::{
     DbConnectOptions, FeedCacheRow, GoLivePost, ListByTagError, PostCursor, PostFormat, PostRecord,
     PostTag, PostUpdate, PostgresSubscriptionStorage, ProfileUpdate, PublishUpdate,
     RegisterWithInviteError, RenderedPostContent, SessionAuthError, SqliteSubscriptionStorage,
-    SubscriptionStorage, UpdatePostError, UseEmailVerificationError, UseInviteError,
+    StorageError, SubscriptionStorage, UpdatePostError, UseEmailVerificationError, UseInviteError,
     UsePasswordResetError, UserAuthError, UserConfigKey, create_rendered_post, open_database,
     perform_post_update,
 };
@@ -294,6 +294,24 @@ async fn local_channel_id_returns_seeded_local(#[case] backend: Backend) {
     let expected = local_channel_id(backend, &env).await;
     let actual = state.subscriptions.local_channel_id().await.unwrap();
     assert_eq!(actual, expected);
+}
+
+// The other half of the accessor's contract: with the seed gone, the absence is
+// reported as a *named* `MissingRow`, not as an anonymous driver error that the
+// boundary would page on with "storage operation failed" (#343). Deleting the
+// row is possible on both backends because `subscriptions` is the only table
+// referencing `channels` and a fresh test database has no subscription rows.
+#[apply(backends)]
+#[tokio::test]
+async fn local_channel_id_names_the_row_when_the_seed_is_missing(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    raw_exec(backend, &env, "DELETE FROM channels WHERE name = 'local'").await;
+    let error = state.subscriptions.local_channel_id().await.unwrap_err();
+    let StorageError::MissingRow { what } = error else {
+        panic!("expected MissingRow, got: {error:?}");
+    };
+    assert_eq!(what, "the seeded 'local' channel row");
 }
 
 #[apply(backends)]
