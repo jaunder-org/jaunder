@@ -7,6 +7,20 @@
     <script>(function(){try{var m=localStorage.getItem('jaunder_auth');if(m){var u=JSON.parse(m).username;if(u){var e=document.documentElement;e.classList.add('authed');e.setAttribute('data-user',u);if(localStorage.getItem('jaunder_home_redirect')==='app'&&location.pathname==='/'){location.replace('/app');}}}}catch(_){}})();</script>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Boot hints before the stylesheets (#866), mirroring web::app::render_head.
+         Without them the wasm download waits on the module script below fetching,
+         parsing and executing 56 KiB of glue.
+         `crossorigin` is required: an as="fetch" preload without it is no-cors,
+         while init()'s fetch() defaults to cors. Firefox will not reuse the
+         mismatched preload and downloads the 2.2 MB bundle twice. -->
+    <link rel="modulepreload" href="/pkg/jaunder.js" />
+    <link
+      rel="preload"
+      href="/pkg/jaunder.wasm"
+      as="fetch"
+      type="application/wasm"
+      crossorigin
+    />
     <link rel="stylesheet" href="/style/jaunder.css" />
     <link rel="stylesheet" href="/style/jaunder-themes.css" />
   </head>

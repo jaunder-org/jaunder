@@ -50,6 +50,23 @@ if(localStorage.getItem('jaunder_home_redirect')==='app'&&location.pathname==='/
 /// shell; copied to no build output.
 pub const SPA_SHELL: &str = include_str!("../../../csr/index.html");
 
+/// The wasm bundle's URL, and the JS glue's. Single source of truth for the boot
+/// artifacts' paths (#866).
+///
+/// These exist because the paths were previously written out by hand in every
+/// place that needed them — both shells, the projector's boot script, and two
+/// xtask checks — with nothing tying the copies together. That was survivable
+/// while the only consumer was `init()`. It stopped being survivable when the
+/// shells gained a `<link rel="preload">` for the same bytes: a preload whose
+/// URL has drifted from the `init()` target does not fail, it silently
+/// **downloads the wasm twice**, which is strictly worse than no preload at all.
+///
+/// So the preload and the `init()` call are both asserted against these
+/// constants — see the drift guards in this module's tests.
+pub const WASM_URL: &str = "/pkg/jaunder.wasm";
+/// The wasm-bindgen JS glue's URL. See [`WASM_URL`].
+pub const GLUE_URL: &str = "/pkg/jaunder.js";
+
 /// The document `<head>` inner HTML: per-page title + description + Open Graph.
 /// This is the SEO/discoverability payload — the whole reason the public
 /// surface stays server-rendered.
@@ -76,6 +93,20 @@ pub fn render_head(seed: &PageSeed) -> Markup {
     Markup::new(html! {
         meta charset="utf-8";
         meta name="viewport" content="width=device-width, initial-scale=1";
+        // Boot hints before the stylesheets (#866). Without them the wasm download
+        // cannot start until the module script in <body> has fetched, parsed and
+        // executed 56 KiB of wasm-bindgen glue — a serial chain that measured
+        // 212-261 ms before the fetch even begins.
+        //
+        // `crossorigin` is REQUIRED and was not obvious. An `as="fetch"` preload
+        // without it is a `no-cors` request; wasm-bindgen's `init()` calls `fetch()`,
+        // which defaults to `cors`. Firefox honours that distinction and will not
+        // reuse the preload — measured: it requested the identical URL TWICE,
+        // downloading 2.2 MB of wasm for nothing. Chromium coalesced it either way,
+        // so this only ever reproduced on firefox. The e2e request-count guard in
+        // `boot-marks.spec.ts` is what caught it.
+        link rel="modulepreload" href=(GLUE_URL);
+        link rel="preload" href=(WASM_URL) as="fetch" type="application/wasm" crossorigin;
         link rel="stylesheet" href="/style/jaunder.css";
         link rel="stylesheet" href="/style/jaunder-themes.css";
         title { (title) }
@@ -263,11 +294,97 @@ mod tests {
         // init(), not the arg-less init() that falls back to wasm-bindgen's
         // `jaunder_bg.wasm` default. This runs in `check`; `cargo xtask audit-wasm`
         // is what ties this URL to the file the build actually emits.
-        let index = include_str!("../../../csr/index.html");
+        //
+        // Derived from WASM_URL rather than a literal (#866) — this is the assertion
+        // that anchors the preload to the *actual* boot target.
         assert!(
-            index.contains(r#"init("/pkg/jaunder.wasm")"#),
-            "csr/index.html must boot via an explicit init(\"/pkg/jaunder.wasm\") (drift guard #234)"
+            SPA_SHELL.contains(&format!(r#"init("{WASM_URL}")"#)),
+            "csr/index.html must boot via an explicit init(\"{WASM_URL}\") (drift guard #234)"
         );
+    }
+
+    /// `render_head` is the shared `<head>` for every projected page. The preload is
+    /// what takes the wasm fetch off the serial boot chain (#866): without it the
+    /// download cannot start until 56 KiB of JS glue has been fetched, parsed and
+    /// executed.
+    #[test]
+    fn render_head_preloads_the_wasm_and_the_glue() {
+        let head = render_head(&PageSeed::Permalink(sample_post())).into_string();
+        assert!(
+            head.contains(&format!(r#"rel="modulepreload" href="{GLUE_URL}""#)),
+            "render_head must modulepreload the JS glue (#866): {head}"
+        );
+        assert!(
+            head.contains(&format!(r#"rel="preload" href="{WASM_URL}""#)),
+            "render_head must preload the wasm (#866): {head}"
+        );
+    }
+
+    /// Collapse whitespace runs to single spaces so an assertion about *markup*
+    /// does not double as an assertion about *formatting*. Prettier is free to
+    /// break a long `<link>` across lines, and it does — asserting a contiguous
+    /// substring against the raw file made these tests fail on reformatting alone,
+    /// which is a brittleness bug in the test, not a drift in the shell.
+    fn collapse_ws(s: &str) -> String {
+        s.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    /// The two shells must not drift: `csr/index.html` is served for the SPA-shell
+    /// fallback while `render_head` covers projected routes, so a preload in only one
+    /// of them means half the pages keep the serial boot chain.
+    #[test]
+    fn csr_index_html_preloads_match_render_head() {
+        let shell = collapse_ws(SPA_SHELL);
+        assert!(
+            shell.contains(&format!(r#"rel="modulepreload" href="{GLUE_URL}""#)),
+            "csr/index.html must modulepreload the JS glue, as render_head does (#866)"
+        );
+        assert!(
+            shell.contains(&format!(r#"rel="preload" href="{WASM_URL}""#)),
+            "csr/index.html must preload the wasm, as render_head does (#866)"
+        );
+    }
+
+    /// The failure this guards is silent: a preload whose URL no longer matches the
+    /// `init()` target fetches the wasm **twice** rather than erroring — measured on
+    /// firefox, which will not reuse a preload whose request mode disagrees. Asserting
+    /// both against one constant is what makes the drift impossible.
+    #[test]
+    fn preload_url_and_init_target_cannot_drift() {
+        let shell = collapse_ws(SPA_SHELL);
+        assert!(
+            shell.contains(&format!(r#"rel="preload" href="{WASM_URL}""#)),
+            "csr/index.html must preload {WASM_URL} (#866)"
+        );
+        assert!(
+            shell.contains(&format!(r#"init("{WASM_URL}")"#)),
+            "csr/index.html must init() the same URL it preloads (#866)"
+        );
+    }
+
+    /// `crossorigin` is load-bearing and easy to drop as noise: without it the
+    /// `as="fetch"` preload is a `no-cors` request, `init()`'s `fetch()` is `cors`,
+    /// and firefox downloads the 2.2 MB bundle a second time (#866).
+    #[test]
+    fn wasm_preload_is_cors_so_firefox_reuses_it() {
+        for (source, shell) in [
+            ("csr/index.html", collapse_ws(SPA_SHELL)),
+            (
+                "render_head",
+                collapse_ws(&render_head(&PageSeed::Permalink(sample_post())).into_string()),
+            ),
+        ] {
+            let start = shell
+                .find(&format!(r#"rel="preload" href="{WASM_URL}""#))
+                .unwrap_or_else(|| panic!("{source} must preload {WASM_URL}"));
+            let tag = &shell[start..];
+            let tag = &tag[..tag.find('>').expect("preload link tag is closed")];
+            assert!(
+                tag.contains("crossorigin"),
+                "{source}'s wasm preload must carry crossorigin, or firefox \
+                 double-fetches the bundle (#866): {tag}"
+            );
+        }
     }
 
     #[test]
