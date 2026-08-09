@@ -405,13 +405,15 @@ type we do not own (e.g. `atom_syndication`, the `rss` crate,
 `Deref`/`AsRef`/`Display`/`Serialize` at that boundary. The newtype must still
 be held on every surface _we_ define up to that point.
 
-The same carve-out covers **test doubles that decode the wire** — an axum
-`Form`/`Json` extractor in a spawned test server, a capture-file parser. Decode
-into the primitive and validate explicitly in the test body: a validating field
-turns a malformed send into a transport-layer rejection the test never observes,
-instead of a readable assertion diff. Instances: `HubForm`
-(`server/src/websub/http.rs`) and `Resp` (`server/tests/web/web_auth.rs`), whose
-production counterpart `web/src/auth/api.rs LoginResponse` _is_ typed.
+**Wire-decoding test doubles.** Amended by
+[#688](https://github.com/jaunder-org/jaunder/issues/688). The same carve-out
+covers **test doubles that decode the wire** — an axum `Form`/`Json` extractor
+in a spawned test server, a capture-file parser. Decode into the primitive and
+validate explicitly in the test body: a validating field turns a malformed send
+into a transport-layer rejection the test never observes, instead of a readable
+assertion diff. Instances: `HubForm` (`server/src/websub/http.rs`) and `Resp`
+(`server/tests/web/web_auth.rs`), whose production counterpart
+`web/src/auth/api.rs LoginResponse` _is_ typed.
 
 This does **not** extend to **in-process doubles**, which receive already-typed
 values with no serialization hop and so take the newtype like any other surface

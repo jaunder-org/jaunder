@@ -204,7 +204,7 @@ own.
 - Produces:
   `pub fn render_rsd_document(service_url: &AbsoluteUrl, homepage_url: &AbsoluteUrl) -> String`
 
-- [ ] **Step 1: Rewrite the two tests**
+- [x] **Step 1: Rewrite the two tests**
 
 Replace the whole `#[cfg(test)] mod tests` block in `common/src/atompub/rsd.rs`.
 No `cfg` guard is needed on the `test_support` import — see Global Constraints.
@@ -242,12 +242,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run, verify they fail**
+- [x] **Step 2: Run, verify they fail**
 
 Run: `devtool run -- cargo nextest run -p common rsd` Expected: FAIL —
 `render_rsd_document` takes `&str`, not `&AbsoluteUrl`.
 
-- [ ] **Step 3: Change the signature**
+- [x] **Step 3: Change the signature**
 
 `common/src/atompub/rsd.rs:19`:
 
@@ -273,16 +273,16 @@ Extend the doc comment's "Both URLs are XML-escaped to prevent injection." to
 say why it is still load-bearing after typing: `&` is legal in a query and
 survives normalization.
 
-- [ ] **Step 4: Run, verify they pass**
+- [x] **Step 4: Run, verify they pass**
 
 Run: `devtool run -- cargo nextest run -p common rsd` Expected: PASS (2 tests)
 
-- [ ] **Step 5: Verify the caller needs no change**
+- [x] **Step 5: Verify the caller needs no change**
 
 Run: `devtool run -- cargo check -p jaunder` Expected: PASS —
 `server/src/atompub/rsd.rs:39` already passes two `AbsoluteUrl`s from `compose`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-688-absoluteurl-websub -- cargo xtask check
@@ -312,7 +312,7 @@ the test targets do not build until task 5.
 - Produces: `process_feed_group(.., hub_url: Option<&AbsoluteUrl>, ..)` and
   `ping_websub(feed_url: &FeedPath, .., hub_url: Option<&AbsoluteUrl>, ..)`.
 
-- [ ] **Step 1: Change the trait**
+- [x] **Step 1: Change the trait**
 
 `server/src/websub/mod.rs`:
 
@@ -329,7 +329,7 @@ pub trait WebSubClient: Send + Sync {
 }
 ```
 
-- [ ] **Step 2: Update the three production impls**
+- [x] **Step 2: Update the three production impls**
 
 `http.rs:37` — signature, plus two reads at the `reqwest` boundary (spec D1's
 sanctioned external flatten). `reqwest`'s `IntoUrl` is sealed with impls only
@@ -373,7 +373,7 @@ async fn send_publish(
 }
 ```
 
-- [ ] **Step 3: Un-flatten the worker's read and signatures**
+- [x] **Step 3: Un-flatten the worker's read and signatures**
 
 `worker.rs:159`: `hub_url.as_deref()` → `hub_url.as_ref()`.
 
@@ -401,7 +401,7 @@ records `PingOutcome::NoHub` and calls `mark_pinged`. That branch does not move
 and its behavior does not change (spec D2, AC4). The call at `:201` already
 passes `&feed_path`, so it is unchanged.
 
-- [ ] **Step 4: Fix the worker body**
+- [x] **Step 4: Fix the worker body**
 
 `compose(base, feed_url)` at `:233` still compiles — `FeedPath` derives
 `StrNewtype`, so `&FeedPath` coerces to `&str`. `send_publish(hub, &absolute)`
@@ -419,7 +419,7 @@ Apply the same at `:240` (`succeeded`), `:248` (`exhausted`, no `attempt`), and
 `:256` (`failed`, which also has `error = %e`). **Field names and event names
 must not change** — they are the observability contract.
 
-- [ ] **Step 5: Verify the library compiles**
+- [x] **Step 5: Verify the library compiles**
 
 Run: `devtool run -- cargo check -p jaunder --lib` Expected: **PASS.**
 Production code is now internally consistent. `--all-targets` still fails (task
@@ -444,7 +444,7 @@ Production code is now internally consistent. `--all-targets` still fails (task
 - Produces:
   `CapturedPing { pub hub_url: AbsoluteUrl, pub feed_url: AbsoluteUrl }`.
 
-- [ ] **Step 1: Delete the obsolete test and re-fixture `websub/*.rs`**
+- [x] **Step 1: Delete the obsolete test and re-fixture `websub/*.rs`**
 
 Delete `returns_http_error_for_invalid_url_scheme` (`http.rs:108-116`) entirely
 (spec D6). Its subject — reqwest rejecting an unparseable URL — is unreachable
@@ -509,7 +509,7 @@ assert!(
 );
 ```
 
-- [ ] **Step 2: Type `CapturedPing` and the two test-crate impls**
+- [x] **Step 2: Type `CapturedPing` and the two test-crate impls**
 
 `server/tests/helpers/websub_capturing.rs`:
 
@@ -556,7 +556,7 @@ async fn send_publish(
 }
 ```
 
-- [ ] **Step 3: Confirm the ping assertions need NO edit**
+- [x] **Step 3: Confirm the ping assertions need NO edit**
 
 The `.pings()` assertions live at `feed_worker.rs:110-118`
 (`worker_pings_hub_when_configured`) and `:158-163`
@@ -570,17 +570,17 @@ applies.
 **Expected outcome: zero lines changed in those two test bodies.** If you find
 yourself editing them, stop — something upstream is wrong.
 
-- [ ] **Step 4: Compile all targets**
+- [x] **Step 4: Compile all targets**
 
 Run: `devtool run -- cargo check -p jaunder --all-targets` Expected: PASS.
 
-- [ ] **Step 5: Run the server suite**
+- [x] **Step 5: Run the server suite**
 
 Run: `devtool run -- cargo nextest run -p jaunder` Expected: PASS — in
 particular `feed::feed_worker`'s ping assertions and the `PingOutcome::NoHub`
 coverage.
 
-- [ ] **Step 6: Commit tasks 4 and 5 together**
+- [x] **Step 6: Commit tasks 4 and 5 together**
 
 One compile unit, one commit. Gate once over both:
 
@@ -607,7 +607,7 @@ git commit -m "refactor(websub): AbsoluteUrl through send_publish and the worker
 
 **Interfaces:** none.
 
-- [ ] **Step 1: Append the carve-out paragraph**
+- [x] **Step 1: Append the carve-out paragraph**
 
 After the existing "**Sole carve-out — external types.**" paragraph, add:
 
@@ -626,13 +626,13 @@ take the newtype (`CapturedPing`).
 The heading now covers two cases — reword it to "**Carve-outs — external types
 and wire decoders.**" so the text is not self-contradictory.
 
-- [ ] **Step 2: Check ADR status and cross-references**
+- [x] **Step 2: Check ADR status and cross-references**
 
 ADR-0063 is amended, not superseded. Confirm its status line still reads
 Accepted and that `docs/adr/README.md`'s table needs no change — this is an
 amendment to an existing numbered ADR, so **no `cargo xtask adr promote`**.
 
-- [ ] **Step 3: Format and commit**
+- [x] **Step 3: Format and commit**
 
 ```bash
 devtool run -- prettier -w docs/adr/0063-domain-value-newtype-convention.md
@@ -649,7 +649,7 @@ git commit -m "docs(adr): ADR-0063 §5 covers wire-decoding test doubles (#688)"
 
 **Interfaces:** none.
 
-- [ ] **Step 1: Run the full local gate**
+- [x] **Step 1: Run the full local gate**
 
 Spec AC14 requires the **full** `validate`, with e2e — the spec makes a claim
 about the e2e WebSub capture path that `--no-e2e` cannot test. Long, cold run:
@@ -663,7 +663,7 @@ If an e2e WebSub fixture needs updating, **stop and investigate** — per the
 spec's Verification section that signals the serialization changed, which this
 plan asserts it does not. Do not patch the fixture.
 
-- [ ] **Step 2: Walk the spec's 14 acceptance criteria**
+- [x] **Step 2: Walk the spec's 14 acceptance criteria**
 
 ```bash
 git diff wt-base-issue-688..HEAD --stat
@@ -677,7 +677,7 @@ comment · AC7 ADR §5 paragraph · AC8 RSD `&AbsoluteUrl` + escaping kept · AC
 `127.0.0.1:1` · AC12 issue body corrected · AC13 issue numbers in the spec ·
 AC14 green.
 
-- [ ] **Step 3: Confirm the wire is unchanged**
+- [x] **Step 3: Confirm the wire is unchanged**
 
 ```bash
 git diff wt-base-issue-688..HEAD -- server/src/websub/file_capture.rs
@@ -686,12 +686,45 @@ git diff wt-base-issue-688..HEAD -- server/src/websub/file_capture.rs
 Expected: the `serde_json::json!` block and the `hub.mode`/`hub.url` form keys
 are untouched — only the signature changed.
 
-- [ ] **Step 4: Hand off to `jaunder-ship`**
+- [x] **Step 4: Hand off to `jaunder-ship`**
 
 No commit. Any fixes found in steps 2–3 go in as their own commit before
 shipping.
 
 ---
+
+## Execution notes — where reality differed from the plan
+
+Recorded so the diff is readable against the plan rather than silently
+divergent.
+
+1. **Tasks 3, 4 and 5 landed as one commit (`30bf4c58`), not two.** The plan had
+   task 3 committing separately. The pre-commit gate reads the **working tree**,
+   not the index, and task 4's edits were started while task 3's commit was
+   still running its gate — so the gate saw a half-applied trait change and
+   failed. Once the tree contained tasks 3–5, splitting them would have meant
+   committing a tree the gate had never checked, which is the invariant that
+   matters more than commit granularity. Lesson for the next cycle: do not edit
+   while a gate runs.
+
+2. **Task 3's "Expected: FAIL" was wrong.** The rewritten RSD tests passed
+   against the _old_ `&str` signature, because `&AbsoluteUrl` deref-coerces to
+   `&str` at a call site. No test can pin this signature change — it is a
+   type-level refactor whose only verifier is the compiler at the call sites
+   being constrained. The red step was skipped rather than faked.
+
+3. **`cargo nextest run -p jaunder` (task 5 step 5) is not runnable bare** in
+   this worktree: three `case_2_postgres` tests fail with `ConnectionRefused`
+   because no local Postgres is listening, and nextest's fail-fast then abandons
+   the run at 137/1402. The gate supplies Postgres via Nix, so
+   `cargo xtask check` is the real checkpoint. Prefer it over a bare nextest for
+   anything backend-touching.
+
+4. **Task 1 filed five issues, not four** — `on_regen_failure` (#880) was added
+   once task 4 made the asymmetry concrete.
+
+5. **Zero edits were needed** to `feed_worker.rs`'s ping assertions, as
+   predicted; `--all-targets` compiled without touching them.
 
 ## Self-Review
 

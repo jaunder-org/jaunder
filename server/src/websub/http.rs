@@ -40,13 +40,13 @@ impl WebSubClient for HttpWebSubClient {
         hub_url: &AbsoluteUrl,
         feed_url: &AbsoluteUrl,
     ) -> Result<(), WebSubError> {
-        // reqwest is an external type, so reading the inner value out here is the
-        // ADR-0063 §5 carve-out. `IntoUrl` is sealed and has no impl for our
-        // newtype, hence the explicit reborrow rather than a coercion.
+        // reqwest is an external type, so reading both inner values out here is
+        // the ADR-0063 §5 carve-out. `IntoUrl` is sealed and has no impl for our
+        // newtype, so `post` needs the `&str` explicitly.
         let form = [("hub.mode", "publish"), ("hub.url", feed_url.as_ref())];
         let res = self
             .client
-            .post(&**hub_url)
+            .post(hub_url.as_ref())
             .timeout(self.timeout)
             .form(&form)
             .send()
@@ -118,12 +118,8 @@ mod tests {
         let _ = HttpWebSubClient::default();
     }
 
-    // `returns_http_error_for_invalid_url_scheme` lived here until #688. Its
-    // subject — reqwest rejecting an unparseable URL — became unconstructible once
-    // `send_publish` took `AbsoluteUrl`, whose `FromStr` rejects a bad scheme at
-    // the parse boundary (see `absolute_url::tests::rejects_non_http_schemes`).
-    // Its `WebSubError::Http(_)` arm stays covered by
-    // `returns_http_error_on_connection_refused` below.
+    // Scheme rejection is `absolute_url::tests::rejects_non_http_schemes`; the
+    // `WebSubError::Http(_)` arm is `returns_http_error_on_connection_refused`.
 
     #[tokio::test]
     async fn posts_form_body_to_hub_on_success() {

@@ -276,6 +276,15 @@ covered, so all five were filed fresh:
   `on_regen_failure` as `&str`, four lines apart. Filed so the asymmetry reads
   as a decision.
 
+**Noted during review, not filed:**
+`common/src/absolute_url.rs compose(base: &AbsoluteUrl, path: &str)` is the one
+surface _we own_ where this cycle's own newtypes still meet a primitive —
+`ping_websub` now holds a `FeedPath` and `compose` deref-flattens it back to
+`&str`. It is a genuine §5 residual rather than an external-type carve-out. Left
+alone because typing it means deciding what `path` actually is (`FeedPath` is
+only one of its callers' types), which is a design question, not a mechanical
+retype — and #879's `RootRelativeUrl` work is the natural place to answer it.
+
 **Noted, deliberately not filed** as low-value: the xtask-internal
 `Span { method, uri }` (`xtask/src/traces/parse.rs:26` and its two conversion
 siblings), `CheckEntry`, and `RunRef` (`xtask/src/pr/snapshot.rs`).
