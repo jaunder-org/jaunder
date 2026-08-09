@@ -17,7 +17,7 @@ new validation, no wire change. Test fixtures build values through
 `rstest`, `cargo nextest`.
 
 **Spec:**
-[`docs/superpowers/specs/2026-08-09-issue-688-absoluteurl-websub.md`](../specs/2026-08-09-issue-688-absoluteurl-websub.md)
+[`docs/archive/2026-08-09-issue-688-absoluteurl-websub-spec.md`](./2026-08-09-issue-688-absoluteurl-websub-spec.md)
 
 ## Global Constraints
 

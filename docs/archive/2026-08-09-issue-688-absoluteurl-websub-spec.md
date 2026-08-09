@@ -2,7 +2,7 @@
 
 - Issue: [#688](https://github.com/jaunder-org/jaunder/issues/688)
 - Milestone: Domain-value type safety (newtypes)
-- Governing ADR: [ADR-0063](../../adr/0063-domain-value-newtype-convention.md)
+- Governing ADR: [ADR-0063](../adr/0063-domain-value-newtype-convention.md)
   §5 (existing-newtype adoption — **amended by this issue**)
 - Date: 2026-08-09
 
