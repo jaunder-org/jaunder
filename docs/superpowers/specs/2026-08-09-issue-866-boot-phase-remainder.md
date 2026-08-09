@@ -22,15 +22,15 @@ Arm C (what ships), three runs pooled, all six segments:
 
 | segment                             | chromium              | firefox          |
 | ----------------------------------- | --------------------- | ---------------- |
-| `document_start → wasm_fetch_start` | **44.2 s** (54% boot) | **54.4 s** (36%) |
+| `document_start → wasm_fetch_start` | **44.2 s** (54% boot) | **54.2 s** (36%) |
 | `wasm_fetch`                        | 33.5 s                | 11.8 s           |
-| `wasm_instantiate`                  | 2.9 s                 | **84.5 s** (56%) |
+| `wasm_instantiate`                  | 2.9 s                 | **84.2 s** (56%) |
 | `boot.entry → seed_parsed`          | 0.3 s                 | 0.3 s            |
 | `seed_parsed → render_start`        | 0.1 s                 | 0.3 s            |
 | `render_start → mount_done`         | 0.7 s                 | 0.4 s            |
-| **boot total**                      | 81.9 s                | 151.7 s          |
-| frame skew (`commitToMount` − boot) | **61.3 s**            | 38.4 s           |
-| **`commitToMount`**                 | 143.2 s               | 190.1 s          |
+| **boot total**                      | 81.9 s                | 151.2 s          |
+| frame skew (`commitToMount` − boot) | **61.3 s**            | 38.3 s           |
+| **`commitToMount`**                 | 143.2 s               | 189.5 s          |
 
 The ~95 s/browser wasm did not explain is **two** things: the pre-fetch window
 and frame skew. Neither had been looked at.

@@ -933,6 +933,104 @@ workspace-wide, so setting it would flip the _server's_ release build to abort,
 where a panicking tokio task would kill the process. Recorded in the root
 `Cargo.toml` at the profile someone would add it to.
 
+## #866 — where the rest of boot goes (2026-08-09)
+
+#836 established that page boot is **43–47% of e2e suite wall-clock** and that
+wasm explains only part of it. This is the rest.
+
+**Denominator, stated once.** Each suite run performs **211 navigations**, of
+which **208 mount** and carry boot marks. Every per-suite second below is
+`mean × 208`. **Means, never medians** — `median(a+b) ≠ median(a) + median(b)`,
+and #818 saw a 2–7% apparent residual that was purely that artifact.
+
+Source: #836's arm-C captures (the shipped bundle), single-worker sqlite, three
+runs pooled per engine. No new collection — this re-reads segments the corpus
+already carried.
+
+### The six segments
+
+| segment                             | chromium ms/nav | s/suite  | firefox ms/nav | s/suite   |
+| ----------------------------------- | --------------- | -------- | -------------- | --------- |
+| `document_start → wasm_fetch_start` | **212.5**       | **44.2** | **260.7**      | **54.2**  |
+| `wasm_fetch`                        | 161.3           | 33.5     | 56.8           | 11.8      |
+| `wasm_instantiate`                  | 14.1            | 2.9      | **405.0**      | **84.2**  |
+| `boot.entry → seed_parsed`          | 1.5             | 0.3      | 1.3            | 0.3       |
+| `seed_parsed → render_start`        | 0.6             | 0.1      | 1.3            | 0.3       |
+| `render_start → mount_done`         | 3.6             | 0.7      | 2.0            | 0.4       |
+| **boot total**                      | **393.6**       | **81.9** | **727.0**      | **151.2** |
+| frame skew (`commitToMount` − boot) | 294.9           | **61.3** | 184.2          | **38.3**  |
+| **`commitToMount`**                 | **688.5**       | 143.2    | **911.2**      | 189.5     |
+
+Two things close here rather than deferring.
+
+**The Rust boot path is ~1 s of a 300–450 s suite.** `seed_parsed`,
+`render_start` and `mount_done` sum to 1.1 s (chromium) and 1.0 s (firefox).
+#801 was right to be redirected; there is nothing there, and there is no point
+looking again.
+
+**`topSlow` is truncated and carries no shares.**
+`e2e.resource_top_slow_dropped` sums to **54** across 822 arm-C spans, so
+per-resource timings from `e2e.resource_summary_json` are duration-biased. They
+may illustrate a single resource, never a population. The contrast with
+`navigation_top_json` — `dropped = 0`, a genuine census — is exactly the
+distinction that makes a top-N slice readable as a population if it is lost.
+
+### The pre-fetch window
+
+`document_start → wasm_fetch_start` is the **largest boot segment on chromium**
+(54% of boot) and the second largest on firefox. It is entirely our own code.
+
+**Observed**, from `csr/index.html`: a synchronous inline pre-paint auth script
+(#181, ADR-0044) in `<head>`, then two `<link rel="stylesheet">`, then an inline
+`<script type="module">` in `<body>` that imports `/pkg/jaunder.js` and only
+then calls `init("/pkg/jaunder.wasm")`. So the wasm fetch cannot begin until 56
+KiB of JS glue has been fetched, parsed and executed. That ordering is a fact
+about the file.
+
+The window shrinks 35–39% cold→warm — chromium 257.9 → 158.5 ms, firefox 310.2 →
+201.4 ms — so it is part network and part not, with a substantial residual
+surviving a warm cache in both engines.
+
+**Hypothesised and explicitly not established:** a pending stylesheet blocks
+script execution per spec, so those two stylesheets _may_ sit on the critical
+path to the wasm fetch starting. **This was not measured**, and nothing here
+rests on it. Filed as #870 to be tested rather than asserted — naming it as the
+cause on the strength of waterfall shape is the mistake #840 had to withdraw a
+claim for.
+
+### Frame skew
+
+61.3 s (chromium) / 38.3 s (firefox) per suite, and **larger on the faster
+engine**. `commitToMountMs` is Node-side wall clock; the six segments are
+document-relative. **ADR-0100 forbids decomposing one into the other** — they
+are different clocks — so this cycle reports the magnitude and does not split
+it. Attribution needs a Node-frame instrument that does not exist. Filed as
+#868.
+
+Whether it is harness overhead that costs real users nothing, or real time the
+document frame cannot see, is unknown. Those two answers point in opposite
+directions, which is the argument for measuring rather than guessing.
+
+### What this leaves
+
+| lever                                | worth                         | status                     |
+| ------------------------------------ | ----------------------------- | -------------------------- |
+| firefox `wasm_instantiate`           | 84.2 s — the largest by far   | #864 (~377 ms fixed floor) |
+| frame skew                           | 61.3 / 38.3 s                 | #868                       |
+| pre-fetch window                     | 44.2 / 54.2 s                 | preload below; #870        |
+| `wasm_fetch`                         | 33.5 / 11.8 s, ~44% are `304` | #869 — caching             |
+| navigation count (211 for 137 tests) | ~190 s firefox                | #867                       |
+| Rust boot path                       | ~1 s                          | **closed**                 |
+
+#869 deserves particular note: `/pkg/*` sets no `Cache-Control`, only an `ETag`,
+and `server/src/site.rs` records ~44% of wasm requests as conditional. Removing
+those round-trips outright is plausibly worth more than the preload below, which
+can only start them earlier.
+
+Corpus limits are inherited from #836 and apply: n=3 per arm, host not perfectly
+quiescent, arm confounded with position within a round. The last one threatens
+cross-arm contrasts; this decomposition makes none.
+
 ## #792 — the per-test warmup A/B (findings, 2026-08-04)
 
 **Verdict: delete the warmup, both browsers.** It costs 113 s/combo (chromium)
