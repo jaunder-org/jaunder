@@ -66,24 +66,30 @@ impl From<StorageError> for InternalError {
     }
 }
 
-/// Fetches a row that must exist, naming it if it does not.
+/// Turns "the row may be absent" into "the row is required, and here is its
+/// name" — the single place absence becomes [`StorageError::MissingRow`].
 ///
-/// The sanctioned replacement for `fetch_one`. Built on `fetch_optional`, so
-/// the banned method appears nowhere and `RowNotFound` is never constructed;
-/// the `None` arm becomes [`StorageError::MissingRow`] carrying `what`.
+/// Both fetch wrappers below end here rather than each writing their own `None`
+/// arm. That is not only deduplication: the arm is reachable from *some*
+/// callers and not others (a `RETURNING` read can never miss), so one shared
+/// arm is one line the suite covers once, instead of one uncovered line per
+/// wrapper shape.
+fn require_row<O>(row: Option<O>, what: &'static str) -> Result<O, StorageError> {
+    row.ok_or(StorageError::MissingRow { what })
+}
+
+/// Fetches a single-column row that must exist, naming it if it does not.
+///
+/// The sanctioned replacement for `fetch_one` on a `query_scalar`. Built on
+/// `fetch_optional`, so the banned method appears nowhere and `RowNotFound` is
+/// never constructed; the absent case becomes [`StorageError::MissingRow`]
+/// carrying `what`.
 ///
 /// Requiring `what` is the forcing function: a caller cannot read a required
 /// row without writing down which row it is. Use this even where the query is
 /// row-guaranteed (`COUNT`, `INSERT … RETURNING`) — the arm is then unreachable,
 /// costs nothing, and catches the day someone adds an `ON CONFLICT DO NOTHING`
 /// that silently makes the row optional.
-///
-/// Only the `query_scalar` shape exists today, because every current caller
-/// reads a single column — an id, an `EXISTS` flag, a `RETURNING` key. A
-/// `QueryAs` twin was written first and removed: with no multi-column caller its
-/// `None` arm was unreachable, and covering it would have meant a test that
-/// exists solely to exercise code nothing calls. Add the row variant back when a
-/// caller genuinely needs it.
 pub(crate) async fn fetch_exactly_one_scalar<'q, DB, O, A, E>(
     query: sqlx::query::QueryScalar<'q, DB, O, A>,
     executor: E,
@@ -96,10 +102,28 @@ where
     A: 'q + sqlx::IntoArguments<'q, DB> + Send,
     E: sqlx::Executor<'q, Database = DB>,
 {
-    match query.fetch_optional(executor).await? {
-        Some(value) => Ok(value),
-        None => Err(StorageError::MissingRow { what }),
-    }
+    require_row(query.fetch_optional(executor).await?, what)
+}
+
+/// The multi-column twin of [`fetch_exactly_one_scalar`], for a `query_as`.
+///
+/// This shape was written first, removed for want of a caller, and brought back
+/// by #343's `posts` slice: `update_post` reads a whole [`PostRow`] back through
+/// `RETURNING`, which no scalar wrapper can express.
+///
+/// [`PostRow`]: crate::helpers::PostRow
+pub(crate) async fn fetch_exactly_one<'q, DB, O, A, E>(
+    query: sqlx::query::QueryAs<'q, DB, O, A>,
+    executor: E,
+    what: &'static str,
+) -> Result<O, StorageError>
+where
+    DB: sqlx::Database,
+    O: Send + Unpin + for<'r> sqlx::FromRow<'r, DB::Row>,
+    A: 'q + sqlx::IntoArguments<'q, DB> + Send,
+    E: sqlx::Executor<'q, Database = DB>,
+{
+    require_row(query.fetch_optional(executor).await?, what)
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{Pool, Postgres};
 
+use crate::error::{fetch_exactly_one, fetch_exactly_one_scalar};
 use crate::helpers::{PostRow, post_record_from_row};
 use crate::posts::{
     DELETE_POST_TAG_BY_SLUG, SELECT_POST_TAGS, SELECT_TAG_ID_BY_SLUG, post_tag_diff,
@@ -81,7 +82,13 @@ impl PostDialect for Postgres {
         .execute(&mut *tx)
         .await?;
 
-        let row = sqlx::query_as::<_, PostRow>(
+        // The `FOR UPDATE` check above holds the row for this statement, so the
+        // `UPDATE … RETURNING` is row-guaranteed and the wrapper's `MissingRow`
+        // arm is unreachable. Routed through it anyway (#343) — a bare
+        // `fetch_one` is what is being removed, and the named arm costs one
+        // string. Mirrors the SQLite twin.
+        let row = fetch_exactly_one(
+            sqlx::query_as::<_, PostRow>(
             "UPDATE posts
              SET title = $1,
                  slug = CASE WHEN published_at IS NULL THEN $2 ELSE slug END,
@@ -122,8 +129,10 @@ impl PostDialect for Postgres {
         // edit/clear — the column was previously omitted from the SET clause, so
         // an edited summary was silently dropped (surfaced by #545's clear e2e).
         .bind(input.summary.as_ref())
-        .bind(post_id)
-        .fetch_one(&mut *tx)
+        .bind(post_id),
+            &mut *tx,
+            "the updated post row returned by the UPDATE",
+        )
         .await?;
 
         crate::posts::replace_post_audiences::<Postgres>(&mut tx, post_id, &input.audiences)
@@ -132,7 +141,7 @@ impl PostDialect for Postgres {
             .await?;
 
         tx.commit().await?;
-        post_record_from_row(row).map_err(UpdatePostError::Internal)
+        post_record_from_row(row).map_err(UpdatePostError::from)
     }
 
     async fn set_post_tags(
@@ -170,10 +179,17 @@ impl PostDialect for Postgres {
                 .bind(&slug)
                 .execute(&mut *tx)
                 .await?;
-            let tag_id = sqlx::query_scalar::<_, TagId>(SELECT_TAG_ID_BY_SLUG)
-                .bind(&slug)
-                .fetch_one(&mut *tx)
-                .await?;
+            // The `ON CONFLICT DO NOTHING` insert above guarantees the tag row
+            // exists by the time this reads it, so the `MissingRow` arm is
+            // unreachable — and this is precisely the shape that would break
+            // silently if the insert's conflict handling changed, so it is
+            // named (#343). Mirrors the SQLite twin.
+            let tag_id = fetch_exactly_one_scalar(
+                sqlx::query_scalar::<_, TagId>(SELECT_TAG_ID_BY_SLUG).bind(&slug),
+                &mut *tx,
+                "the tag row just inserted or already present",
+            )
+            .await?;
             // ON CONFLICT DO NOTHING, not a bare INSERT: `desired` may carry two
             // labels sharing a slug (post_tag_diff does not dedupe), and the
             // first occurrence's casing must win.

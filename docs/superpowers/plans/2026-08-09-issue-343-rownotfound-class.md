@@ -33,9 +33,10 @@ boundary); `set_post_tags`'s insert-then-select (filed as a follow-up in Task
       backend test. Feasibility gate passed: `channels` has exactly one inbound
       FK (`subscriptions.channel_id`) and a fresh DB has no subscriptions, so
       the seed row deletes on both backends.
-- [ ] **5.** Slice: `posts` — mechanical retype, including `post_service` and
-      its `atompub` consumers.
-- [ ] **6.** Slice: `posts` — the 9 `fetch_one` triage judgements.
+- [x] **5.** Slice: `posts` — mechanical retype, including `post_service` and
+      its `atompub` consumers. **Merged with Task 6** — the retype breaks every
+      bare `?` on a sqlx call, so the conversions cannot land separately.
+- [x] **6.** Slice: `posts` — the `fetch_one` triage judgements (landed with 5).
 - [ ] **7.** Slice: `users`, `password`, `email`.
 - [ ] **8.** Slice: `sessions`.
 - [ ] **9.** Slice: `media`, `feed_cache`, `feed_events` — including
@@ -70,6 +71,16 @@ boundary); `set_post_tags`'s insert-then-select (filed as a follow-up in Task
 - **Zero lint suppressions.** Every site becomes `fetch_optional` or
   `fetch_exactly_one`; the wrapper itself is built on `fetch_optional`. See
   "Zero suppressions" below. Needing an `#[allow]` means a site was mis-triaged.
+- **Retyping an error payload forces its `fetch_one` conversions into the same
+  commit.** Rust does not chain `From`, so the moment `Internal` carries
+  `StorageError`, a bare `?` on a raw sqlx call stops converting. Each retyped
+  enum therefore keeps `Internal(#[from] StorageError)` **and** gains a
+  hand-written `From<sqlx::Error>` wrapping via `StorageError::Db`. That is not
+  a hole: `RowNotFound` cannot reach that arm, because `fetch_one` is banned.
+- **The coverage gate rejects an unreachable arm.** Both fetch wrappers delegate
+  absence to one shared `require_row`, so `MissingRow` is constructed on exactly
+  one line, covered once by the subscriptions seed-deletion test — rather than
+  one uncovered line per wrapper shape.
 - **The `fetch_one` triage rides the slices**, not Task 16. By the time the
   guard turns on, no `fetch_one` should remain in `storage/src` at all; Task 16
   is then a green confirmation plus the 6 test-site rewrites.

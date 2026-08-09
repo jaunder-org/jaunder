@@ -911,7 +911,11 @@ mod server_tests {
     // guard:no-backend — mock store
     #[tokio::test]
     async fn publish_maps_internal_publish_error_to_storage() {
-        let owner = setup(|| Err(UpdatePostError::Internal(sqlx::Error::PoolClosed)));
+        let owner = setup(|| {
+            Err(UpdatePostError::Internal(storage::StorageError::Db(
+                sqlx::Error::PoolClosed,
+            )))
+        });
         let result = publish(PostId::from(1)).await;
         drop(owner);
         assert!(matches!(result.unwrap_err(), WebError::Storage { .. }));

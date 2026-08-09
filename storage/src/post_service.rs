@@ -8,8 +8,8 @@ use chrono::{DateTime, Utc};
 use thiserror::Error;
 
 use crate::{
-    CreatePostError, CreatePostInput, PostFormat, PostRecord, PostStorage, UpdatePostError,
-    UpdatePostInput,
+    CreatePostError, CreatePostInput, PostFormat, PostRecord, PostStorage, StorageError,
+    UpdatePostError, UpdatePostInput,
 };
 use common::ids::{PostId, UserId};
 use common::post_body::PostBody;
@@ -139,7 +139,7 @@ pub enum PerformUpdateError {
     #[error("not authorized")]
     Unauthorized,
     #[error("storage error: {0}")]
-    Storage(#[source] sqlx::Error),
+    Storage(#[source] StorageError),
 }
 
 impl From<UpdatePostError> for PerformUpdateError {
@@ -167,7 +167,8 @@ impl From<PerformUpdateError> for host::error::InternalError {
             PerformUpdateError::NotFound | PerformUpdateError::Unauthorized => {
                 InternalError::not_found("Post")
             }
-            PerformUpdateError::Storage(e) => InternalError::storage(e),
+            // Delegated so a named missing row keeps its name (#343).
+            PerformUpdateError::Storage(e) => e.into(),
         }
     }
 }
@@ -306,7 +307,7 @@ pub enum PerformCreationError {
     #[error("idempotency key already used for this user")]
     IdempotencyConflict,
     #[error("storage error: {0}")]
-    Storage(#[source] sqlx::Error),
+    Storage(#[source] StorageError),
 }
 
 impl From<PerformCreationError> for host::error::InternalError {
@@ -335,7 +336,8 @@ impl From<PerformCreationError> for host::error::InternalError {
             PerformCreationError::CreatedNotFound => {
                 InternalError::server_message("created post not found")
             }
-            PerformCreationError::Storage(e) => InternalError::storage(e),
+            // Delegated so a named missing row keeps its name (#343).
+            PerformCreationError::Storage(e) => e.into(),
         }
     }
 }
@@ -458,7 +460,10 @@ pub async fn perform_post_creation(
                 let record = storage
                     .get_post_by_id(post_id, &viewer)
                     .await
-                    .map_err(PerformCreationError::Storage)?
+                    // `get_post_by_id` still returns a raw `sqlx::Error`; wrap it
+                    // as a driver failure — it reads through `fetch_optional`, so
+                    // absence arrives as `Ok(None)` below, never as an error.
+                    .map_err(|e| PerformCreationError::Storage(StorageError::Db(e)))?
                     .ok_or(PerformCreationError::CreatedNotFound)?;
                 return Ok(record);
             }
@@ -644,9 +649,11 @@ mod tests {
         // retryable `SlugConflict`) short-circuits the slug-retry loop into
         // `PerformCreationError::Storage`.
         let mut storage = crate::MockPostStorage::new();
-        storage
-            .expect_create_post()
-            .returning(|_input| Err(CreatePostError::Internal(sqlx::Error::RowNotFound)));
+        storage.expect_create_post().returning(|_input| {
+            Err(CreatePostError::Internal(StorageError::Db(
+                sqlx::Error::PoolClosed,
+            )))
+        });
 
         let err = perform_post_creation(
             &storage,
@@ -1323,11 +1330,18 @@ mod tests {
     #[test]
     fn perform_creation_error_storage_preserves_sqlx_source() {
         use std::error::Error;
-        // §3.1a: Storage carries the sqlx::Error as a typed source (downcastable
-        // for classification), not a flattened string.
-        let err = PerformCreationError::Storage(sqlx::Error::RowNotFound);
+        // §3.1a: Storage carries the failure as a typed source (downcastable for
+        // classification), not a flattened string. The payload is now
+        // `StorageError` (#343); its `Db` arm is `#[error(transparent)]`, so it
+        // *is* the driver error's link in the chain rather than a wrapper above
+        // it — which is why the downcast target is `StorageError`, and why the
+        // arm is matched to prove the driver failure was not reclassified.
+        let err = PerformCreationError::Storage(StorageError::Db(sqlx::Error::PoolClosed));
         let source = err.source().expect("Storage should expose a source");
-        assert!(source.downcast_ref::<sqlx::Error>().is_some());
+        let storage = source
+            .downcast_ref::<StorageError>()
+            .expect("the typed StorageError must survive as the source");
+        assert!(matches!(storage, StorageError::Db(sqlx::Error::PoolClosed)));
     }
 
     // -- PerformUpdateError tests --
@@ -1377,7 +1391,8 @@ mod tests {
     #[test]
     fn perform_update_error_from_update_post_internal() {
         use crate::UpdatePostError;
-        let err: PerformUpdateError = UpdatePostError::Internal(sqlx::Error::RowNotFound).into();
+        let err: PerformUpdateError =
+            UpdatePostError::Internal(StorageError::Db(sqlx::Error::PoolClosed)).into();
         assert!(matches!(err, PerformUpdateError::Storage(_)));
     }
 
@@ -1402,7 +1417,8 @@ mod tests {
         assert_eq!(unauthorized.kind(), ErrorKind::NotFound);
         assert_eq!(unauthorized.public_message(), "Post not found");
 
-        let storage: InternalError = PerformUpdateError::Storage(sqlx::Error::PoolClosed).into();
+        let storage: InternalError =
+            PerformUpdateError::Storage(StorageError::Db(sqlx::Error::PoolClosed)).into();
         assert_eq!(storage.kind(), ErrorKind::Storage);
         assert_eq!(storage.public_message(), "storage operation failed");
     }
@@ -1446,7 +1462,8 @@ mod tests {
             "server operation failed"
         );
 
-        let storage: InternalError = PerformCreationError::Storage(sqlx::Error::PoolClosed).into();
+        let storage: InternalError =
+            PerformCreationError::Storage(StorageError::Db(sqlx::Error::PoolClosed)).into();
         assert_eq!(storage.kind(), ErrorKind::Storage);
         assert_eq!(storage.public_message(), "storage operation failed");
     }

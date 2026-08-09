@@ -3942,6 +3942,63 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
     assert!(posts.iter().any(|p| p.post_id == post2));
 }
 
+/// A row that fails to decode surfaces as `Internal`, not as a silent empty
+/// list — the only test that reaches `ListByTagError`'s `From<sqlx::Error>`.
+///
+/// Reaching a decode failure needs malformed data, so the `tags` table is
+/// corrupted directly. Two tags are attached and only one slug is rewritten,
+/// because the listing is done by the *other* tag: rewriting the tag being
+/// searched for would fail the existence probe and yield `TagNotFound` instead.
+/// `"Not A Slug"` is the same value `helpers.rs` uses to prove
+/// `build_post_record` rejects a bad slug.
+#[apply(backends)]
+#[tokio::test]
+async fn list_posts_by_tag_reports_a_decode_failure(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let user = SeedUser::new().seed(state).await.user_id;
+    let post = SeedRawPost::new(user).seed(state).await.post_id;
+    state
+        .posts
+        .set_post_tags(
+            post,
+            &[
+                "javascript".parse::<TagLabel>().unwrap(),
+                "rust".parse::<TagLabel>().unwrap(),
+            ],
+        )
+        .await
+        .expect("set_post_tags failed");
+
+    raw_exec(
+        backend,
+        &env,
+        "UPDATE tags SET tag_slug = 'Not A Slug' WHERE tag_slug = 'rust'",
+    )
+    .await;
+
+    let result = state
+        .posts
+        .list_posts_by_tag(
+            &"javascript".parse::<Tag>().unwrap(),
+            None,
+            parse_row_limit("50"),
+            &ViewerIdentity::Anonymous,
+            Utc::now(),
+        )
+        .await;
+
+    assert!(
+        matches!(
+            result,
+            Err(ListByTagError::Internal(StorageError::Db(
+                sqlx::Error::Decode(_)
+            )))
+        ),
+        "a malformed tag slug must surface as a typed decode failure"
+    );
+}
+
 #[apply(backends)]
 #[tokio::test]
 async fn list_user_posts_by_tag(#[case] backend: Backend) {

@@ -459,7 +459,10 @@ mod tests {
             StatusCode::INTERNAL_SERVER_ERROR
         );
         assert_eq!(
-            status(PerformCreationError::Storage(sqlx::Error::PoolClosed).into()),
+            status(
+                PerformCreationError::Storage(storage::StorageError::Db(sqlx::Error::PoolClosed))
+                    .into()
+            ),
             StatusCode::INTERNAL_SERVER_ERROR
         );
     }
@@ -479,7 +482,10 @@ mod tests {
             StatusCode::NOT_FOUND
         );
         assert_eq!(
-            status(PerformUpdateError::Storage(sqlx::Error::PoolClosed).into()),
+            status(
+                PerformUpdateError::Storage(storage::StorageError::Db(sqlx::Error::PoolClosed))
+                    .into()
+            ),
             StatusCode::INTERNAL_SERVER_ERROR
         );
     }

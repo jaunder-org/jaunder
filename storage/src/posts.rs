@@ -22,6 +22,7 @@ use common::visibility::{AudienceTarget, TargetKind, ViewerIdentity, local_subsc
 use host::error::{InternalError, InternalResult};
 
 use crate::backend::Backend;
+use crate::error::{StorageError, fetch_exactly_one, fetch_exactly_one_scalar};
 use crate::helpers::{PostRow, post_record_from_row};
 
 pub use common::render::{InvalidPostFormat, PostFormat, RenderOutput, RenderedHtml};
@@ -152,7 +153,19 @@ pub enum CreatePostError {
     IdempotencyConflict,
     /// An unexpected database error occurred.
     #[error(transparent)]
-    Internal(#[from] sqlx::Error),
+    Internal(#[from] StorageError),
+}
+
+impl From<sqlx::Error> for CreatePostError {
+    /// Hand-written because `From` does not chain: with the payload retyped, a
+    /// bare `?` on a raw `execute`/`fetch_all`/`fetch_optional` no longer
+    /// reaches `Internal` on its own.
+    ///
+    /// Not a hole in the #343 guarantee: `RowNotFound` cannot arrive here,
+    /// because `fetch_one` is banned and nothing in the crate constructs it.
+    fn from(error: sqlx::Error) -> Self {
+        Self::Internal(StorageError::Db(error))
+    }
 }
 
 /// Errors that can occur when updating a post.
@@ -166,7 +179,16 @@ pub enum UpdatePostError {
     Unauthorized,
     /// An unexpected database error occurred.
     #[error(transparent)]
-    Internal(#[from] sqlx::Error),
+    Internal(#[from] StorageError),
+}
+
+impl From<sqlx::Error> for UpdatePostError {
+    /// See [`CreatePostError`]'s twin: `From` does not chain, so the bare `?`
+    /// on raw sqlx calls needs this hop. `RowNotFound` cannot reach it, because
+    /// `fetch_one` is banned crate-wide.
+    fn from(error: sqlx::Error) -> Self {
+        Self::Internal(StorageError::Db(error))
+    }
 }
 
 impl From<UpdatePostError> for host::error::InternalError {
@@ -179,7 +201,9 @@ impl From<UpdatePostError> for host::error::InternalError {
             UpdatePostError::NotFound | UpdatePostError::Unauthorized => {
                 InternalError::not_found("Post")
             }
-            UpdatePostError::Internal(e) => InternalError::storage(e),
+            // Delegated, not re-classified: `StorageError`'s own lift already
+            // separates a driver failure from a named missing row (#343).
+            UpdatePostError::Internal(e) => e.into(),
         }
     }
 }
@@ -376,7 +400,16 @@ pub enum TaggingError {
     PostNotFound,
     /// An unexpected database error occurred.
     #[error(transparent)]
-    Internal(#[from] sqlx::Error),
+    Internal(#[from] StorageError),
+}
+
+impl From<sqlx::Error> for TaggingError {
+    /// See [`CreatePostError`]'s twin: `From` does not chain, so the bare `?`
+    /// on raw sqlx calls needs this hop. `RowNotFound` cannot reach it, because
+    /// `fetch_one` is banned crate-wide.
+    fn from(error: sqlx::Error) -> Self {
+        Self::Internal(StorageError::Db(error))
+    }
 }
 
 impl From<TaggingError> for host::error::InternalError {
@@ -398,7 +431,16 @@ pub enum ListByTagError {
     TagNotFound,
     /// An unexpected database error occurred.
     #[error(transparent)]
-    Internal(#[from] sqlx::Error),
+    Internal(#[from] StorageError),
+}
+
+impl From<sqlx::Error> for ListByTagError {
+    /// See [`CreatePostError`]'s twin: `From` does not chain, so the bare `?`
+    /// on raw sqlx calls needs this hop. `RowNotFound` cannot reach it, because
+    /// `fetch_one` is banned crate-wide.
+    fn from(error: sqlx::Error) -> Self {
+        Self::Internal(StorageError::Db(error))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -558,7 +600,9 @@ pub fn list_by_tag_rows(
     match result {
         Ok(rows) => Ok(rows),
         Err(ListByTagError::TagNotFound) => Ok(Vec::new()),
-        Err(ListByTagError::Internal(e)) => Err(InternalError::storage(e)),
+        // Delegated so a missing row keeps its name, rather than being flattened
+        // into the anonymous storage lift (#343).
+        Err(ListByTagError::Internal(e)) => Err(e.into()),
     }
 }
 
@@ -1251,11 +1295,18 @@ where
              WHERE p.post_id = $1",
             tags = DB::TAGS_SUBQUERY,
         );
-        let row = sqlx::query_as::<_, PostRow>(&sql)
-            .bind(post_id)
-            .fetch_one(&self.pool)
-            .await?;
-        post_record_from_row(row).map_err(UpdatePostError::Internal)
+        // The UPDATE above matched, so this re-read is row-guaranteed and the
+        // `MissingRow` arm is unreachable today. Routed through the wrapper
+        // anyway: it costs one string, and if the row ever does go missing
+        // (a concurrent hard delete) the operator is told which row, instead of
+        // reading an anonymous `RowNotFound` (#343).
+        let row = fetch_exactly_one(
+            sqlx::query_as::<_, PostRow>(&sql).bind(post_id),
+            &self.pool,
+            "the updated post row, re-read for its record projection",
+        )
+        .await?;
+        post_record_from_row(row).map_err(UpdatePostError::from)
     }
 
     #[tracing::instrument(
@@ -1573,11 +1624,16 @@ where
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
-        let tag_exists: bool =
-            sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1")
-                .bind(tag_slug)
-                .fetch_one(&self.pool)
-                .await?;
+        // A `COUNT(*) > 0` always yields exactly one row, so the wrapper's
+        // `MissingRow` arm is unreachable here. It is used regardless — a bare
+        // `fetch_one` is the thing #343 removes, and an unreachable named arm
+        // costs nothing.
+        let tag_exists: bool = fetch_exactly_one_scalar(
+            sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1").bind(tag_slug),
+            &self.pool,
+            "the tag-existence flag",
+        )
+        .await?;
 
         if !tag_exists {
             return Err(ListByTagError::TagNotFound);
@@ -1650,7 +1706,7 @@ where
         rows.into_iter()
             .map(post_record_from_row)
             .collect::<sqlx::Result<_>>()
-            .map_err(ListByTagError::Internal)
+            .map_err(ListByTagError::from)
     }
 
     #[tracing::instrument(
@@ -1667,11 +1723,14 @@ where
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
-        let tag_exists: bool =
-            sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1")
-                .bind(tag_slug)
-                .fetch_one(&self.pool)
-                .await?;
+        // Row-guaranteed for the same reason as the listing twin above; routed
+        // through the wrapper for the same reason too (#343).
+        let tag_exists: bool = fetch_exactly_one_scalar(
+            sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1").bind(tag_slug),
+            &self.pool,
+            "the tag-existence flag",
+        )
+        .await?;
 
         if !tag_exists {
             return Err(ListByTagError::TagNotFound);
@@ -1750,7 +1809,7 @@ where
         rows.into_iter()
             .map(post_record_from_row)
             .collect::<sqlx::Result<_>>()
-            .map_err(ListByTagError::Internal)
+            .map_err(ListByTagError::from)
     }
 
     #[tracing::instrument(
@@ -2151,7 +2210,7 @@ fn map_idempotency_insert_error(e: sqlx::Error) -> CreatePostError {
         sqlx::Error::Database(db) if db.is_unique_violation() => {
             CreatePostError::IdempotencyConflict
         }
-        e => CreatePostError::Internal(e),
+        e => CreatePostError::from(e),
     }
 }
 
@@ -2194,7 +2253,12 @@ where
 {
     let now = Utc::now();
 
-    let post_id = sqlx::query_scalar::<_, PostId>(
+    // `INSERT … RETURNING` with no `ON CONFLICT` clause either raises or yields a
+    // row, so the wrapper's `MissingRow` arm is unreachable. Routed through it
+    // regardless (#343): the day someone adds `ON CONFLICT DO NOTHING` here, the
+    // absent row is reported by name rather than as an anonymous `RowNotFound`.
+    let post_id = fetch_exactly_one_scalar(
+        sqlx::query_scalar::<_, PostId>(
         "INSERT INTO posts (user_id, title, slug, body, format, rendered_html, created_at, updated_at, published_at, summary)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING post_id",
@@ -2213,11 +2277,15 @@ where
     // `Option::as_ref` → `Option<&PostSummary>` (a typed newtype bind via the
     // ADR-0071 sqlx bridge, not an `AsRef<str>` strip); the `sqlx-newtype-bind`
     // gate forbids stripping to `&str` here.
-    .bind(input.summary.as_ref())
-    .fetch_one(&mut *conn)
+    .bind(input.summary.as_ref()),
+        &mut *conn,
+        "the inserted post row",
+    )
     .await
     .map_err(|e| match e {
-        sqlx::Error::Database(db) if db.is_unique_violation() => CreatePostError::SlugConflict,
+        StorageError::Db(sqlx::Error::Database(db)) if db.is_unique_violation() => {
+            CreatePostError::SlugConflict
+        }
         e => CreatePostError::Internal(e),
     })?;
 
@@ -3035,7 +3103,9 @@ mod tests {
         let debug_str = format!("{err:?}");
         assert!(debug_str.contains("PostNotFound"));
 
-        let err2 = TaggingError::Internal(sqlx::Error::RowNotFound);
+        let err2 = TaggingError::Internal(StorageError::MissingRow {
+            what: "the tag row just inserted or already present",
+        });
         let debug_str2 = format!("{err2:?}");
         assert!(debug_str2.contains("Internal"));
     }
@@ -3800,9 +3870,24 @@ mod tests {
         assert_eq!(unauthorized.kind(), ErrorKind::NotFound);
         assert_eq!(unauthorized.public_message(), "Post not found");
 
-        let internal: InternalError = UpdatePostError::Internal(sqlx::Error::PoolClosed).into();
+        let internal: InternalError =
+            UpdatePostError::Internal(StorageError::Db(sqlx::Error::PoolClosed)).into();
         assert_eq!(internal.kind(), ErrorKind::Storage);
         assert_eq!(internal.public_message(), "storage operation failed");
+
+        // The retyped payload's other arm (#343): a named absent row is still a
+        // masked internal failure on the wire, but the operator is told which row.
+        let missing: InternalError = UpdatePostError::Internal(StorageError::MissingRow {
+            what: "the updated post row",
+        })
+        .into();
+        assert_eq!(missing.kind(), ErrorKind::Internal);
+        assert_eq!(missing.public_message(), "server operation failed");
+        let operator = missing.operator_message();
+        assert!(
+            operator.contains("the updated post row"),
+            "operator message must name the row, got: {operator}"
+        );
     }
 
     // The `set_post_tags` lift masked as a server error
@@ -3873,7 +3958,9 @@ mod tests {
         let tag_not_found = list_by_tag_rows(Err(ListByTagError::TagNotFound));
         assert!(matches!(tag_not_found, Ok(rows) if rows.is_empty()));
 
-        let internal = list_by_tag_rows(Err(ListByTagError::Internal(sqlx::Error::PoolClosed)));
+        let internal = list_by_tag_rows(Err(ListByTagError::Internal(StorageError::Db(
+            sqlx::Error::PoolClosed,
+        ))));
         assert!(internal.is_err());
     }
 
