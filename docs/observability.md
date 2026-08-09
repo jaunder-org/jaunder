@@ -1031,6 +1031,53 @@ Corpus limits are inherited from #836 and apply: n=3 per arm, host not perfectly
 quiescent, arm confounded with position within a round. The last one threatens
 cross-arm contrasts; this decomposition makes none.
 
+### The preload, and a prediction registered before capturing it
+
+`csr/index.html` and `render_head` now carry
+`<link rel="preload" href="/pkg/jaunder.wasm" as="fetch" type="application/wasm" crossorigin>`
+plus a `modulepreload` for the glue, so the wasm download starts during HTML
+parse rather than after 56 KiB of glue has executed.
+
+**`crossorigin` is load-bearing, and the reasoning that omitted it was wrong.**
+An `as="fetch"` preload without it is a `no-cors` request; wasm-bindgen's
+`init()` calls `fetch()`, which defaults to `cors`. Firefox will not reuse the
+mismatched preload — it requested the identical URL **twice**, downloading 2.2
+MB of wasm for nothing. Chromium coalesced it either way, so this only ever
+reproduced on firefox, and only because the e2e guard counts requests on both.
+
+#### Pre-registration
+
+Written **before** the capture. The point is to be able to be wrong.
+
+- **Decisive quantity:** `document_start → mount_done` (boot total),
+  document-frame, ADR-0100-clean. **Not** the pre-fetch segment alone — the fix
+  collapses the _later_ `wasm_fetch` into that window, so a per-segment reading
+  would misattribute the change. **Not** suite wall-clock, which did not
+  separate arms on firefox in #836 and cannot resolve an effect this size.
+- **Ceiling.** The saving cannot exceed the wasm fetch time: **≤161 ms/nav
+  chromium, ≤57 ms firefox**. It will not be reached — the moved download now
+  contends with the glue and both stylesheets, and ~44% of these requests are
+  conditional (#869), where preload only starts the round-trip earlier.
+- **Floor.** The improvement must exceed **3 × SE** on boot total in at least
+  one engine. Firefox boot total is ~727 ms with run-level SD ~3–9 ms at n=3, so
+  SE ≈ 2–6 ms and 3 × SE ≈ 6–18 ms. A ceiling alone would be confirmed by every
+  positive outcome; the floor is what can fail.
+- **Directional prediction:** `document_start → wasm_fetch_start` falls sharply
+  while `wasm_fetch` **rises**, because the download now overlaps rather than
+  following. If `wasm_fetch` does not rise, the preload is not doing what is
+  claimed even if the total improves.
+- **Abort rule (D8):** below the floor, or a regression in either engine, or any
+  double fetch → **the preload is reverted** and written up as a negative
+  result. It does not land on the strength of the reasoning being sound.
+
+**One disclosure, because it weakens half of this.** A single non-protocol
+chromium run — made while proving the request-count guard could fail — already
+showed `wasmFetchStartMs` 212.5 → 51.5 ms and `wasmFetchMs` 161.3 → 206.6 ms,
+about 116 ms net. So **chromium's prediction is informed by prior observation
+and is not a clean pre-registration.** Firefox's is: its timings have
+deliberately **not** been inspected, precisely so the gate's critical-path
+engine keeps an uncontaminated prediction. Firefox is the arm to read.
+
 ## #792 — the per-test warmup A/B (findings, 2026-08-04)
 
 **Verdict: delete the warmup, both browsers.** It costs 113 s/combo (chromium)
