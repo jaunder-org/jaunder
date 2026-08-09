@@ -98,7 +98,7 @@ no issue-filing first task. If Task 2's demonstration uncovers one, file it via
 
 ---
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `storage/src/posts.rs`'s `mod tests`, after
 `set_post_tags_rejects_missing_post_but_allows_soft_deleted`:
@@ -182,7 +182,7 @@ reach (`storage/src/posts.rs:3-27`) and the tests module's own `use` list
     use std::time::Duration;
 ```
 
-- [ ] **Step 2: Run the test, verify it fails**
+- [x] **Step 2: Run the test, verify it fails**
 
 ```bash
 devtool run -- devtool pg run -- cargo nextest run -p storage set_post_tags_locks_before_snapshotting
@@ -194,7 +194,7 @@ Expected: **FAIL** — compile error,
 it down after; a bare `cargo nextest run` fails the postgres case with a
 connection error.)
 
-- [ ] **Step 3: Implement the affordance**
+- [x] **Step 3: Implement the affordance**
 
 Add to `storage/src/test_support.rs`. The body cannot be pinned by tests — it
 _is_ the harness — so it is written out in full.
@@ -367,7 +367,7 @@ The borrow spellings are correct as written: `PoolConnection<Sqlite>` derefs to
 `SqliteConnection` and `Transaction<'_, Postgres>` to `PgConnection`, and
 `&mut Connection` is the `Executor`.
 
-- [ ] **Step 4: Run the test, verify it passes**
+- [x] **Step 4: Run the test, verify it passes**
 
 ```bash
 devtool run -- devtool pg run -- cargo nextest run -p storage set_post_tags_locks_before_snapshotting
@@ -375,7 +375,7 @@ devtool run -- devtool pg run -- cargo nextest run -p storage set_post_tags_lock
 
 Expected: **PASS**, two cases — `::sqlite` and `::postgres`.
 
-- [ ] **Step 5: Run the gate**
+- [x] **Step 5: Run the gate**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-339-atomic-tag-reconcile -- cargo xtask check
@@ -384,7 +384,7 @@ devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-339-atomic-t
 Expected: exit 0. Read `.xtask/last-result.json` `.steps` if it fails. Follow
 `jaunder-commit` — do not commit on a partial check.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add storage/src/test_support.rs storage/src/posts.rs
@@ -407,7 +407,7 @@ committed except the recorded evidence in this plan.
 
 **Interfaces:** none produced.
 
-- [ ] **Step 1: Reshape SQLite to read-then-lock**
+- [x] **Step 1: Reshape SQLite to read-then-lock**
 
 In `SqlitePostStorage::set_post_tags`, move the `SELECT_POST_TAGS` read (and its
 `post_tags_from_rows` / `post_tag_diff`) to run against `pool` **before**
@@ -418,7 +418,7 @@ Note the read must move _before_ the lock, not merely onto the pool. A pooled
 read placed _after_ `BEGIN IMMEDIATE` still runs only once the lock is granted,
 sees the rival's committed writes, and the test correctly passes.
 
-- [ ] **Step 2: Observe the sqlite case fail**
+- [x] **Step 2: Observe the sqlite case fail**
 
 ```bash
 devtool run -- devtool pg run -- cargo nextest run -p storage set_post_tags_locks_before_snapshotting
@@ -432,7 +432,7 @@ the postgres case also fails, with an unrelated connection error, and the
 recorded evidence then can't distinguish the demonstrated regression from a
 missing database.
 
-- [ ] **Step 3: Revert SQLite, reshape Postgres the same way**
+- [x] **Step 3: Revert SQLite, reshape Postgres the same way**
 
 ```bash
 git checkout -- storage/src/sqlite/posts.rs
@@ -441,7 +441,7 @@ git checkout -- storage/src/sqlite/posts.rs
 Then in `PostgresPostStorage::set_post_tags`, move the `SELECT_POST_TAGS` read
 to run against `pool` **before** `pool.begin()`.
 
-- [ ] **Step 4: Observe the postgres case fail**
+- [x] **Step 4: Observe the postgres case fail**
 
 ```bash
 devtool run -- devtool pg run -- cargo nextest run -p storage set_post_tags_locks_before_snapshotting
@@ -450,7 +450,7 @@ devtool run -- devtool pg run -- cargo nextest run -p storage set_post_tags_lock
 Expected: **FAIL**, `::postgres` case, same assertion, same left/right. Copy it
 verbatim.
 
-- [ ] **Step 5: Revert Postgres and confirm green**
+- [x] **Step 5: Revert Postgres and confirm green**
 
 ```bash
 git checkout -- storage/src/postgres/posts.rs
@@ -465,7 +465,7 @@ devtool run -- devtool pg run -- cargo nextest run -p storage set_post_tags_lock
 
 Expected: **PASS**, both cases.
 
-- [ ] **Step 6: Record the evidence and commit**
+- [x] **Step 6: Record the evidence and commit**
 
 Append to this plan:
 
@@ -513,6 +513,49 @@ uncovered-error justification the coverage policy prescribes rather than
 inventing a fault-injection test the spec did not authorize.
 
 ---
+
+## AC5 evidence
+
+Both failures observed with the snapshot read moved before the lock acquisition
+(the pre-#771 read-then-lock shape); the reshape was reverted, not committed.
+
+### sqlite
+
+Reshaped `storage/src/sqlite/posts.rs` only — the postgres case passed in the
+same run, confirming the failure is the reshape and not the harness:
+
+```
+FAIL [   0.820s] (1/2) storage posts::tests::set_post_tags_locks_before_snapshotting::case_1_sqlite
+PASS [   1.033s] (2/2) storage posts::tests::set_post_tags_locks_before_snapshotting::case_2_postgres
+
+thread 'posts::tests::set_post_tags_locks_before_snapshotting::case_1_sqlite' panicked at storage/src/posts.rs:2907:9:
+assertion `left == right` failed
+  left: ["beta", "gamma"]
+ right: ["gamma"]
+```
+
+### postgres
+
+Reshaped `storage/src/postgres/posts.rs`:
+
+```
+FAIL [   1.020s] (2/2) storage posts::tests::set_post_tags_locks_before_snapshotting::case_2_postgres
+
+thread 'posts::tests::set_post_tags_locks_before_snapshotting::case_2_postgres' panicked at storage/src/posts.rs:2907:9:
+assertion `left == right` failed
+  left: ["beta", "gamma"]
+ right: ["gamma"]
+```
+
+The sqlite case failed in that run too: the earlier `git checkout --` restored
+from the index rather than `HEAD`, because a hook had staged the reshape. The
+sqlite evidence above is from the run where it was the only reshape in the tree.
+After `git checkout HEAD -- storage/src/{sqlite,postgres}/posts.rs`,
+`git status` showed only this plan modified and both cases passed again.
+
+In both cases the 300ms probe still passed — the reshaped implementations still
+block on the lock. Only the final exact-tag-set assertion caught them, which is
+precisely the division of labor the spec describes.
 
 ## Self-review
 
