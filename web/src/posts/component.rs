@@ -603,9 +603,10 @@ fn CompactComposer(
     }
 }
 
-/// The full compose page: body column plus the options aside (slug, summary, tags,
-/// audience, schedule, format, media) and the dispatch buttons. Split out of
-/// [`PostCreateForm`] (#301); the slug field is local to this shape.
+/// The full compose page: body column plus the options aside ([`ComposeOptions`]), the
+/// media column ([`MediaSection`]) and the dispatch buttons. Split out of
+/// [`PostCreateForm`] (#301). The slug field is owned here and passed down — see
+/// [`ComposeState::seed_from`] for why the bundle does not hold it.
 #[component]
 fn FullComposer(
     state: ComposeState,
@@ -633,74 +634,8 @@ fn FullComposer(
                 />
             </div>
             <aside class="j-compose-aside">
-                <div>
-                    <div class="j-sb-head" style="padding:0 0 10px">
-                        "Options"
-                    </div>
-                    <div class="j-field-row" style="grid-template-columns:auto 1fr">
-                        <label class="j-field-label" for="compose-slug">
-                            "Slug"
-                        </label>
-                        <input
-                            id="compose-slug"
-                            type="text"
-                            name="slug_override"
-                            placeholder="auto"
-                            class="j-field-val"
-                            prop:value=slug_field.value
-                            on:input=move |ev| {
-                                let v = event_target_value(&ev);
-                                slug_field.value.set(v.clone());
-                                slug_field.error.set(slug_field.error_for(&v));
-                            }
-                            on:blur=move |_| slug_field.touch()
-                        />
-                        {move || {
-                            slug_field
-                                .is_touched()
-                                .then(|| slug_field.error.get())
-                                .flatten()
-                                .map(|msg| view! { <p class="error">{msg}</p> })
-                        }}
-                    </div>
-                    <div style="margin-top:10px">
-                        <ValidatedTextarea<
-                        PostSummary,
-                    >
-                            label="Summary"
-                            name="summary"
-                            field=state.summary_field
-                            placeholder="Optional summary or excerpt"
-                        />
-                    </div>
-                    <div style="margin-top:10px">
-                        <TagInput tags=state.tags />
-                    </div>
-                    <div style="margin-top:10px">
-                        <AudiencePicker selection=state.audience />
-                    </div>
-                    // Optional schedule: a future time schedules the post;
-                    // a past time backdates it; empty publishes immediately.
-                    <div style="margin-top:10px">
-                        <label class="j-field-label" for="compose-publish-at">
-                            "Publish at (optional)"
-                        </label>
-                        <input
-                            id="compose-publish-at"
-                            type="datetime-local"
-                            class="j-field-val"
-                            prop:value=state.publish_at
-                            on:input=move |ev| state.publish_at.set(event_target_value(&ev))
-                        />
-                    </div>
-                    <FormatToggle format=state.format style="margin-top:10px" />
-                </div>
-                <div style="margin-top:16px">
-                    <div class="j-sb-head" style="padding:0 0 10px">
-                        "Media"
-                    </div>
-                    <MediaUpload show_result=true />
-                </div>
+                <ComposeOptions state=state slug_field=slug_field is_published=false />
+                <MediaSection />
                 <div style="margin-top:auto;display:flex;align-items:center;gap:8px">
                     <button
                         class="j-btn"
@@ -1120,7 +1055,8 @@ pub fn EditPostPage() -> impl IntoView {
                         if let Ok(selection) = current_audience.await {
                             state.audience.set(selection);
                         }
-                        // The slug is not part of the bundle — see `seed_from`.
+                        // The slug is not part of the bundle (the compact shape has
+                        // none) — see `seed_from`.
                         view! {
                             <EditPostForm
                                 state=state
@@ -1140,14 +1076,15 @@ pub fn EditPostPage() -> impl IntoView {
     }
 }
 
-/// The editor's form: body column plus the options aside (slug and schedule while
-/// still a draft, summary, tags, audience, format, media) and the save controls.
+/// The editor's form: body column plus the options aside ([`ComposeOptions`], which
+/// hides the slug and schedule once the post is published), the media column
+/// ([`MediaSection`]) and the save controls.
 /// Split out of [`EditPostPage`] (#301), which keeps only the fetch and its branch.
 #[component]
 fn EditPostForm(
     state: ComposeState,
-    /// Page-level rather than held by [`ComposeState`], because the composer's full
-    /// shape owns its own — see that type's `seed_from`.
+    /// Page-level rather than held by [`ComposeState`] — see
+    /// [`ComposeState::seed_from`].
     slug_field: Field<Slug>,
     post_id: PostId,
     /// A published post shows neither the slug nor the schedule control: its URL is
@@ -1167,80 +1104,8 @@ fn EditPostForm(
                 <ComposerFields body=state.body format=state.format rows=20 show_seg=false />
             </div>
             <aside class="j-edit-form-aside">
-                <div>
-                    <div class="j-sb-head" style="padding:0 0 10px">
-                        "Options"
-                    </div>
-                    {(!is_published)
-                        .then(|| {
-                            view! {
-                                <div class="j-field-row" style="grid-template-columns:auto 1fr">
-                                    <label class="j-field-label" for="edit-slug">
-                                        "Slug"
-                                    </label>
-                                    <input
-                                        id="edit-slug"
-                                        type="text"
-                                        name="slug_override"
-                                        class="j-field-val"
-                                        prop:value=slug_field.value
-                                        on:input=move |ev| {
-                                            let v = event_target_value(&ev);
-                                            slug_field.value.set(v.clone());
-                                            slug_field.error.set(slug_field.error_for(&v));
-                                        }
-                                        on:blur=move |_| slug_field.touch()
-                                    />
-                                    {move || {
-                                        slug_field
-                                            .is_touched()
-                                            .then(|| slug_field.error.get())
-                                            .flatten()
-                                            .map(|msg| view! { <p class="error">{msg}</p> })
-                                    }}
-                                </div>
-                                // Optional schedule for a draft: a future
-                                // time schedules it; empty publishes now.
-                                <div style="margin-top:10px">
-                                    <label class="j-field-label" for="edit-publish-at">
-                                        "Publish at (optional)"
-                                    </label>
-                                    <input
-                                        id="edit-publish-at"
-                                        type="datetime-local"
-                                        class="j-field-val"
-                                        prop:value=state.publish_at
-                                        on:input=move |ev| {
-                                            state.publish_at.set(event_target_value(&ev));
-                                        }
-                                    />
-                                </div>
-                            }
-                        })}
-                    <div style="margin-top:10px">
-                        <ValidatedTextarea<
-                        PostSummary,
-                    >
-                            label="Summary"
-                            name="summary"
-                            field=state.summary_field
-                            placeholder="Optional summary or excerpt"
-                        />
-                    </div>
-                    <div style="margin-top:10px">
-                        <TagInput tags=state.tags />
-                    </div>
-                    <div style="margin-top:10px">
-                        <AudiencePicker selection=state.audience />
-                    </div>
-                    <FormatToggle format=state.format style="margin-top:10px" />
-                </div>
-                <div style="margin-top:16px">
-                    <div class="j-sb-head" style="padding:0 0 10px">
-                        "Media"
-                    </div>
-                    <MediaUpload show_result=true />
-                </div>
+                <ComposeOptions state=state slug_field=slug_field is_published=is_published />
+                <MediaSection />
                 <div class="j-edit-form-actions">
                     <EditSaveActions
                         is_published=is_published
@@ -1311,6 +1176,118 @@ fn EditSaveActions(
             }
                 .into_any()
         }}
+    }
+}
+
+/// The options aside shared by the two full-page compose shapes: slug and schedule
+/// while the post is still a draft, then summary, tags, audience and format.
+///
+/// Extracted from [`FullComposer`] and [`EditPostForm`] (#863), which rendered
+/// near-identical copies that had to be edited in lockstep. The composer's schedule
+/// control moved up beside its slug as part of that collapse, so both shapes now share
+/// one field order; the two shapes' `compose-`/`edit-` id prefixes were unified, since
+/// they never render on the same page; and the editor's slug input picked up the
+/// `placeholder="auto"` the composer already had, which it had been missing.
+///
+/// Emits a single wrapping `<div>` on purpose: both asides are flex columns with
+/// `gap:18px`, so a bare fragment would put 18px between every field.
+#[component]
+fn ComposeOptions(
+    state: ComposeState,
+    /// Page-level rather than held by [`ComposeState`] — see
+    /// [`ComposeState::seed_from`].
+    slug_field: Field<Slug>,
+    /// A published post shows neither the slug nor the schedule control: its URL is
+    /// already public, and it has no publish time left to choose. The composer passes
+    /// `false` — a post being composed is not yet published.
+    is_published: bool,
+) -> impl IntoView {
+    view! {
+        <div>
+            <div class="j-sb-head" style="padding:0 0 10px">
+                "Options"
+            </div>
+            {(!is_published)
+                .then(|| {
+                    view! {
+                        <div class="j-field-row" style="grid-template-columns:auto 1fr">
+                            <label class="j-field-label" for="options-slug">
+                                "Slug"
+                            </label>
+                            <input
+                                id="options-slug"
+                                type="text"
+                                name="slug_override"
+                                placeholder="auto"
+                                class="j-field-val"
+                                prop:value=slug_field.value
+                                on:input=move |ev| {
+                                    let v = event_target_value(&ev);
+                                    slug_field.value.set(v.clone());
+                                    slug_field.error.set(slug_field.error_for(&v));
+                                }
+                                on:blur=move |_| slug_field.touch()
+                            />
+                            {move || {
+                                slug_field
+                                    .is_touched()
+                                    .then(|| slug_field.error.get())
+                                    .flatten()
+                                    .map(|msg| view! { <p class="error">{msg}</p> })
+                            }}
+                        </div>
+                        // Optional schedule: a future time schedules the post;
+                        // a past time backdates it; empty publishes immediately.
+                        <div style="margin-top:10px">
+                            <label class="j-field-label" for="options-publish-at">
+                                "Publish at (optional)"
+                            </label>
+                            <input
+                                id="options-publish-at"
+                                type="datetime-local"
+                                class="j-field-val"
+                                prop:value=state.publish_at
+                                on:input=move |ev| state.publish_at.set(event_target_value(&ev))
+                            />
+                        </div>
+                    }
+                })}
+            <div style="margin-top:10px">
+                <ValidatedTextarea<
+                PostSummary,
+            >
+                    label="Summary"
+                    name="summary"
+                    field=state.summary_field
+                    placeholder="Optional summary or excerpt"
+                />
+            </div>
+            <div style="margin-top:10px">
+                <TagInput tags=state.tags />
+            </div>
+            <div style="margin-top:10px">
+                <AudiencePicker selection=state.audience />
+            </div>
+            <FormatToggle format=state.format style="margin-top:10px" />
+        </div>
+    }
+}
+
+/// The media column shared by the two full-page compose shapes.
+///
+/// Extracted from [`FullComposer`] and [`EditPostForm`] (#863), which held
+/// byte-identical copies. Emits a single wrapping `<div>` on purpose: both asides are
+/// flex columns with `gap:18px`, so a bare fragment would space the heading off the
+/// control it labels.
+#[component]
+fn MediaSection() -> impl IntoView {
+    view! {
+        <div style="margin-top:16px">
+            <div class="j-sb-head" style="padding:0 0 10px">
+                "Media"
+            </div>
+            <MediaUpload show_result=true />
+        </div>
     }
 }
 
