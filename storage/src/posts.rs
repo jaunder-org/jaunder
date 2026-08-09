@@ -2865,13 +2865,20 @@ mod tests {
             .await
             .expect("take post write lock");
         rival
-            .add_tag(post, &parse_tag_label("beta"))
+            .add_tag(&parse_tag_label("beta"))
             .await
             .expect("rival adds a tag");
 
         // Two pooled connections are live at once — this one and the spawned
         // call's — so the pool must allow >= 2. sqlx's default max_connections is
         // 10 and neither backend overrides it; at 1 this would deadlock, not fail.
+        //
+        // This is also safe under the current-thread runtime `#[tokio::test]`
+        // defaults to: sqlx-sqlite runs each connection on its own OS thread, so
+        // the spawned call waiting in SQLite's busy handler blocks that thread,
+        // not the runtime. Switching this test to `flavor = "multi_thread"` is
+        // unnecessary; switching sqlx to an in-runtime SQLite driver would make
+        // the block a hang.
         let posts = Arc::clone(&env.state.posts);
         let mut racer =
             tokio::spawn(

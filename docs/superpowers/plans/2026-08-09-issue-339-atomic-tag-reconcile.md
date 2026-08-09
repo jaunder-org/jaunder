@@ -492,7 +492,7 @@ git add docs/superpowers/plans/2026-08-09-issue-339-atomic-tag-reconcile.md
 git commit -m "docs(plan): record the #339 regression demonstration (#339)"
 ```
 
-- [ ] **Step 7: Run the full local gate (AC7)**
+- [x] **Step 7: Run the full local gate (AC7)**
 
 `cargo xtask check` in Task 1 is the iterate-time gate; AC7 names `validate`.
 Run it here so the criterion has an owner rather than being deferred to ship:

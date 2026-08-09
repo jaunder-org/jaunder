@@ -145,8 +145,8 @@ impl CloseablePool {
     ///
     /// Both serialize two writers on the same post, which is the invariant tests
     /// built on this assert. `post_id` is taken on both arms even though only the
-    /// Postgres arm needs it, so callers stay backend-agnostic and the intent is
-    /// visible at the call site.
+    /// Postgres arm needs it: the guard remembers it, so a caller cannot lock one
+    /// post and then write to another.
     ///
     /// # Errors
     ///
@@ -156,14 +156,14 @@ impl CloseablePool {
         &self,
         post_id: PostId,
     ) -> Result<PostWriteLock<'_>, sqlx::Error> {
-        match self {
+        let held = match self {
             CloseablePool::Sqlite(pool) => {
                 let mut conn = pool.acquire().await?;
                 // IMMEDIATE, mirroring `SqlitePostStorage::set_post_tags`: takes
                 // the write lock up front rather than upgrading a shared lock,
                 // which `busy_timeout` cannot rescue (ADR-0021).
                 sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
-                Ok(PostWriteLock::Sqlite(conn))
+                HeldWrite::Sqlite(conn)
             }
             CloseablePool::Postgres(pool) => {
                 let mut tx = pool.begin().await?;
@@ -174,9 +174,10 @@ impl CloseablePool {
                 .bind(post_id)
                 .fetch_one(&mut *tx)
                 .await?;
-                Ok(PostWriteLock::Postgres(tx))
+                HeldWrite::Postgres(tx)
             }
-        }
+        };
+        Ok(PostWriteLock { post_id, held })
     }
 
     /// The Postgres pool, for raw-SQL seed/inspect against the per-test database
@@ -204,14 +205,23 @@ impl CloseablePool {
 /// A test that panics between `lock_post_for_write` and
 /// [`commit`](PostWriteLock::commit) therefore wedges the rest of that test's
 /// writes rather than failing cleanly. Commit (or end the test) promptly.
-pub enum PostWriteLock<'a> {
+pub struct PostWriteLock<'a> {
+    /// The post the lock was taken for. Held so [`add_tag`](PostWriteLock::add_tag)
+    /// cannot be aimed at a post other than the one that is locked.
+    post_id: PostId,
+    held: HeldWrite<'a>,
+}
+
+/// The backend-specific half of a [`PostWriteLock`].
+enum HeldWrite<'a> {
     Sqlite(PoolConnection<Sqlite>),
     Postgres(Transaction<'a, Postgres>),
 }
 
 impl PostWriteLock<'_> {
-    /// Adds one tag to the post from inside the held lock — a rival writer, for
-    /// tests that must interleave a competing write with a storage method.
+    /// Adds one tag to the locked post from inside the held lock — a rival
+    /// writer, for tests that must interleave a competing write with a storage
+    /// method.
     ///
     /// Three statements, not one: `post_tags` carries a foreign key to
     /// `tags(tag_id)`, so the tag row must exist and its id be read back before
@@ -222,10 +232,11 @@ impl PostWriteLock<'_> {
     /// # Errors
     ///
     /// Returns the `sqlx::Error` if any of the three statements fails.
-    pub async fn add_tag(&mut self, post_id: PostId, label: &TagLabel) -> Result<(), sqlx::Error> {
+    pub async fn add_tag(&mut self, label: &TagLabel) -> Result<(), sqlx::Error> {
         let slug = label.slug();
-        match self {
-            PostWriteLock::Sqlite(conn) => {
+        let post_id = self.post_id;
+        match &mut self.held {
+            HeldWrite::Sqlite(conn) => {
                 sqlx::query("INSERT OR IGNORE INTO tags (tag_slug) VALUES ($1)")
                     .bind(&slug)
                     .execute(&mut **conn)
@@ -244,7 +255,7 @@ impl PostWriteLock<'_> {
                 .execute(&mut **conn)
                 .await?;
             }
-            PostWriteLock::Postgres(tx) => {
+            HeldWrite::Postgres(tx) => {
                 sqlx::query("INSERT INTO tags (tag_slug) VALUES ($1) ON CONFLICT DO NOTHING")
                     .bind(&slug)
                     .execute(&mut **tx)
@@ -274,11 +285,11 @@ impl PostWriteLock<'_> {
     ///
     /// Returns the `sqlx::Error` if the commit fails.
     pub async fn commit(self) -> Result<(), sqlx::Error> {
-        match self {
-            PostWriteLock::Sqlite(mut conn) => {
+        match self.held {
+            HeldWrite::Sqlite(mut conn) => {
                 sqlx::query("COMMIT").execute(&mut *conn).await?;
             }
-            PostWriteLock::Postgres(tx) => tx.commit().await?,
+            HeldWrite::Postgres(tx) => tx.commit().await?,
         }
         Ok(())
     }
