@@ -989,7 +989,7 @@ test("scheduling a post shows a Scheduled-for badge on the drafts page", async (
   test.slow();
   // A fixed far-future wall-clock time keeps the post unambiguously *scheduled*
   // no matter when the suite runs, with no Date arithmetic that could drift.
-  // The non-compact composer's optional schedule control is `#compose-publish-at`
+  // The non-compact composer's optional schedule control is `#options-publish-at`
   // (a `datetime-local` input); a future time plus Publish creates a post whose
   // `published_at` is in the future. Such posts surface on the drafts page with a
   // "Scheduled for …" badge (`.j-badge-scheduled`) rather than going live.
@@ -1000,7 +1000,7 @@ test("scheduling a post shows a Scheduled-for badge on the drafts page", async (
     SEL.postBody,
     "# Scheduled Draft\n\nbody for a scheduled post",
   );
-  await page.fill("#compose-publish-at", FUTURE_DATETIME_LOCAL);
+  await page.fill("#options-publish-at", FUTURE_DATETIME_LOCAL);
   await click(page, SEL.publishButton("true"));
   await waitForSelector(page, SEL.saveSummary);
 
@@ -1020,7 +1020,8 @@ test("scheduling from the edit page shows a Scheduled-for badge on the drafts pa
   test.slow();
   // The editor's schedule control had no coverage at all before #863, which is what
   // made its id unverifiable when both shapes' controls were unified into
-  // `ComposeOptions`. Mirrors the composer-side test above, with one deliberate
+  // `ComposeOptions` — the editor now renders the same `#options-publish-at` the
+  // composer does. Mirrors the composer-side test above, with one deliberate
   // difference in the settle step: a *scheduled* publish sets `published_at` to a
   // future instant, so `EditSaveOutcome` takes its `Ok(_)` "Redirecting…" arm rather
   // than rendering the `.j-save-summary` block the draft-save path renders.
@@ -1047,7 +1048,7 @@ test("scheduling from the edit page shows a Scheduled-for badge on the drafts pa
   await expect(page.locator(SEL.topbarHeading)).toHaveText("Edit Post");
 
   // The post is still a draft, so the slug and schedule controls are rendered.
-  await page.fill("#edit-publish-at", FUTURE_DATETIME_LOCAL);
+  await page.fill("#options-publish-at", FUTURE_DATETIME_LOCAL);
   await click(page, SEL.publishButton("true"));
 
   await goto(page, "/drafts");

@@ -351,7 +351,7 @@ the suite is green at every commit.
   `#[component] fn ComposeOptions(state: ComposeState, slug_field: Field<Slug>, is_published: bool) -> impl IntoView`
   (AC1).
 
-- [ ] **Step 1: Add the component**
+- [x] **Step 1: Add the component**
 
 Place it immediately before `MediaSection`. This body is written out in full
 because no test can pin markup — `component.rs` is wasm-only and the repo has no
@@ -477,7 +477,7 @@ are semantically identical. Everything else is byte-identical to one of the two
 originals. `leptosfmt` produced the odd `ValidatedTextarea<\nPostSummary,\n>`
 wrapping in the original; keep it and let the gate reformat.
 
-- [ ] **Step 2: Rewire `FullComposer`**
+- [x] **Step 2: Rewire `FullComposer`**
 
 Replace the composer's whole Options `<div>` (located by content per **Files**)
 with:
@@ -493,7 +493,7 @@ button div must remain the last flex child for its `margin-top:auto` bottom-pin
 closures at `:618-623` are unchanged: they still own the field, they just no
 longer render it.
 
-- [ ] **Step 3: Rewire `EditPostForm`**
+- [x] **Step 3: Rewire `EditPostForm`**
 
 Replace the editor's whole Options `<div>` (located by content per **Files**)
 with:
@@ -505,7 +505,7 @@ with:
 `<aside class="j-edit-form-aside">` and the `<div class="j-edit-form-actions">`
 wrapper around `EditSaveActions` stay as they are (AC4).
 
-- [ ] **Step 4: Update the two e2e id references**
+- [x] **Step 4: Update the two e2e id references**
 
 In `end2end/tests/posts.spec.ts`:
 
@@ -517,7 +517,7 @@ In `end2end/tests/posts.spec.ts`:
   `page.fill("#options-publish-at", …)`, and its comment about the rename
   updates to past tense.
 
-- [ ] **Step 5: Verify no old id survives**
+- [x] **Step 5: Verify no old id survives** — **no matches**.
 
 Run:
 
@@ -528,7 +528,8 @@ rg -n 'compose-slug|edit-slug|compose-publish-at|edit-publish-at' web/src end2en
 Expected: **no matches.** (`xtask/src/steps/thin_components.rs:455` and
 `docs/archive/` are deliberately out of this sweep — see Global Constraints.)
 
-- [ ] **Step 6: Run the gate**
+- [x] **Step 6: Run the gate** — **PASS** (`check --no-test`; full `check` in
+      the pre-commit hook at Step 9).
 
 Run:
 
@@ -541,7 +542,8 @@ Expected: PASS. `thin-components` budgets after the split (AC5):
 `FullComposer` 1 setup (the `if let Some(post)` in `dispatch`) / 0 view,
 `EditPostForm` 1 setup / 0 view — all within the budget of 2.
 
-- [ ] **Step 7: Run the e2e specs that touch the aside**
+- [x] **Step 7: Run the e2e specs that touch the aside** — posts **36 passed**,
+      visibility **4 passed**, media **11 passed**.
 
 Run:
 
@@ -573,10 +575,23 @@ devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-863-compose-
 
 Expected: PASS — `:163` drives the full composer's upload widget.
 
-- [ ] **Step 8: Eyeball all three shapes**
+- [x] **Step 8: Eyeball all three shapes** — done **structurally instead of by
+      eye**: a throwaway Playwright probe (`zzstructureprobe.spec.ts`, run then
+      deleted) dumped each aside's child list and its Options column's child
+      sequence. Results:
 
-No test checks that the aside still _looks_ right, and the wrapper-`<div>` risk
-(see Key risks) is invisible to both `check` and e2e. Visit all three states:
+| shape               | aside children                | Options column                                                                                      |
+| ------------------- | ----------------------------- | --------------------------------------------------------------------------------------------------- |
+| `/posts/new`        | 3                             | `j-sb-head`, `j-field-row#options-slug`, `div#options-publish-at`, summary, tags, audience, `j-seg` |
+| edit, **draft**     | 3, `j-edit-form-actions` last | identical to the row above                                                                          |
+| edit, **published** | 3, `j-edit-form-actions` last | `j-sb-head`, summary, tags, audience, `j-seg` — slug and publish-at absent                          |
+
+That confirms AC4 (three children, actions last), AC6 (order), AC7 (draft edit
+matches the composer element-for-element) and AC8 (both controls gone once
+published). It also rules out the fragment-instead-of-`<div>` failure mode: an
+aside with nine children would have shown up immediately.
+
+The original wording of this step, for the record:
 
 1. **`/posts/new`** (AC6) — the Options column reads: heading, Slug, "Publish at
    (optional)", Summary, Tags, Audience, format toggle. Buttons still pinned to
@@ -589,7 +604,7 @@ No test checks that the aside still _looks_ right, and the wrapper-`<div>` risk
    "Save". The slug half is covered by `posts.spec.ts:313`; the publish-at half
    has no test, so this eyeball is its only check.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add web/src/posts/component.rs end2end/tests/posts.spec.ts
