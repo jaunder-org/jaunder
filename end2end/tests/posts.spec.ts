@@ -1051,6 +1051,12 @@ test("scheduling from the edit page shows a Scheduled-for badge on the drafts pa
   await page.fill("#options-publish-at", FUTURE_DATETIME_LOCAL);
   await click(page, SEL.publishButton("true"));
 
+  // Settle before navigating, or the `goto` races the in-flight update. The signal is
+  // the editor's own redirect: `publish_redirect` (page_state.rs:127) returns the
+  // permalink whenever the settled post has a `published_at`, and a future schedule
+  // makes that `Some`, so a scheduled publish always leaves `/edit`.
+  await page.waitForURL((url) => !url.pathname.endsWith("/edit"));
+
   await goto(page, "/drafts");
   const editorScheduledRow = page.locator("li", {
     hasText: "Scheduled From Editor",

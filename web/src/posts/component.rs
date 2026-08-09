@@ -605,8 +605,8 @@ fn CompactComposer(
 
 /// The full compose page: body column plus the options aside ([`ComposeOptions`]), the
 /// media column ([`MediaSection`]) and the dispatch buttons. Split out of
-/// [`PostCreateForm`] (#301). The slug field is owned here and passed down, because the
-/// compact shape shares [`ComposeState`] and has no slug — see that type's `seed_from`.
+/// [`PostCreateForm`] (#301). The slug field is owned here and passed down — see
+/// [`ComposeState::seed_from`] for why the bundle does not hold it.
 #[component]
 fn FullComposer(
     state: ComposeState,
@@ -1083,8 +1083,8 @@ pub fn EditPostPage() -> impl IntoView {
 #[component]
 fn EditPostForm(
     state: ComposeState,
-    /// Page-level rather than held by [`ComposeState`], because the compact shape
-    /// shares that bundle and has no slug field — see that type's `seed_from`.
+    /// Page-level rather than held by [`ComposeState`] — see
+    /// [`ComposeState::seed_from`].
     slug_field: Field<Slug>,
     post_id: PostId,
     /// A published post shows neither the slug nor the schedule control: its URL is
@@ -1186,15 +1186,16 @@ fn EditSaveActions(
 /// near-identical copies that had to be edited in lockstep. The composer's schedule
 /// control moved up beside its slug as part of that collapse, so both shapes now share
 /// one field order; the two shapes' `compose-`/`edit-` id prefixes were unified, since
-/// they never render on the same page.
+/// they never render on the same page; and the editor's slug input picked up the
+/// `placeholder="auto"` the composer already had, which it had been missing.
 ///
 /// Emits a single wrapping `<div>` on purpose: both asides are flex columns with
 /// `gap:18px`, so a bare fragment would put 18px between every field.
 #[component]
 fn ComposeOptions(
     state: ComposeState,
-    /// Page-level rather than held by [`ComposeState`], because the compact shape uses
-    /// that bundle too and has no slug field — see that type's `seed_from`.
+    /// Page-level rather than held by [`ComposeState`] — see
+    /// [`ComposeState::seed_from`].
     slug_field: Field<Slug>,
     /// A published post shows neither the slug nor the schedule control: its URL is
     /// already public, and it has no publish time left to choose. The composer passes
