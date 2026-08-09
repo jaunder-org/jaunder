@@ -34,9 +34,11 @@ pub fn render_rsd_document(service_url: &AbsoluteUrl, homepage_url: &AbsoluteUrl
   </service>
 </rsd>"#,
         // `escape` takes `impl Into<Cow<str>>`, and deref coercion does not apply
-        // through a generic parameter — read the inner value out explicitly.
-        homepage = quick_xml::escape::escape(homepage_url.as_ref()).into_owned(),
-        service = quick_xml::escape::escape(service_url.as_ref()).into_owned(),
+        // through a generic parameter — hence the explicit `as_ref`. Its `Cow` is
+        // formatted directly: `Display` is all `format!` needs, so a URL with
+        // nothing to escape stays borrowed.
+        homepage = quick_xml::escape::escape(homepage_url.as_ref()),
+        service = quick_xml::escape::escape(service_url.as_ref()),
     )
 }
 

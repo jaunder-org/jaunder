@@ -91,6 +91,16 @@ mod tests {
         url: String,
     }
 
+    /// The spawned hub's publish endpoint.
+    fn hub_at(addr: SocketAddr) -> AbsoluteUrl {
+        parse_absolute_url(&format!("http://{addr}/"))
+    }
+
+    /// The feed every test in this module publishes; its value is incidental.
+    fn feed_url() -> AbsoluteUrl {
+        parse_absolute_url("https://example.com/feed.rss")
+    }
+
     async fn spawn_hub(received: Arc<Mutex<Vec<HubForm>>>, status: StatusCode) -> SocketAddr {
         let app = Router::new().route(
             "/",
@@ -126,12 +136,7 @@ mod tests {
         let received = Arc::new(Mutex::new(Vec::new()));
         let addr = spawn_hub(received.clone(), StatusCode::ACCEPTED).await;
         let c = HttpWebSubClient::new();
-        c.send_publish(
-            &parse_absolute_url(&format!("http://{addr}/")),
-            &parse_absolute_url("https://example.com/feed.rss"),
-        )
-        .await
-        .unwrap();
+        c.send_publish(&hub_at(addr), &feed_url()).await.unwrap();
         let got = received.lock().await.clone();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].mode, "publish");
@@ -144,10 +149,7 @@ mod tests {
         let addr = spawn_hub(received.clone(), StatusCode::BAD_REQUEST).await;
         let c = HttpWebSubClient::new();
         let err = c
-            .send_publish(
-                &parse_absolute_url(&format!("http://{addr}/")),
-                &parse_absolute_url("https://example.com/feed.rss"),
-            )
+            .send_publish(&hub_at(addr), &feed_url())
             .await
             .unwrap_err();
         assert!(matches!(err, WebSubError::HubRefused { status: 400 }));
@@ -182,10 +184,7 @@ mod tests {
 
         let c = HttpWebSubClient::new();
         let err = c
-            .send_publish(
-                &parse_absolute_url(&format!("http://{addr}/")),
-                &parse_absolute_url("https://example.com/feed.rss"),
-            )
+            .send_publish(&hub_at(addr), &feed_url())
             .await
             .unwrap_err();
         assert!(matches!(err, WebSubError::Http(_)));
@@ -198,10 +197,7 @@ mod tests {
         let addr = spawn_hanging_hub().await;
         let c = HttpWebSubClient::with_timeout(Duration::from_millis(100));
         let err = c
-            .send_publish(
-                &parse_absolute_url(&format!("http://{addr}/")),
-                &parse_absolute_url("https://example.com/feed.rss"),
-            )
+            .send_publish(&hub_at(addr), &feed_url())
             .await
             .unwrap_err();
         assert!(matches!(err, WebSubError::Timeout(_)));

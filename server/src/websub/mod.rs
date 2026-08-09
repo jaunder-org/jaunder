@@ -57,6 +57,11 @@ mod tests {
         tempfile::tempdir().unwrap()
     }
 
+    /// The feed both arms publish; its value is incidental.
+    fn feed_url() -> AbsoluteUrl {
+        parse_absolute_url("https://example.com/feed.rss")
+    }
+
     // The injected path selects the transport — no env, no lock (spec Decision 5).
     #[rstest]
     #[tokio::test]
@@ -66,22 +71,16 @@ mod tests {
         // DNS lookup, no network egress, deterministic offline and in CI.
         let http = default_client(None);
         assert!(
-            http.send_publish(
-                &parse_absolute_url("http://127.0.0.1:1/"),
-                &parse_absolute_url("https://example.com/feed.rss"),
-            )
-            .await
-            .is_err()
+            http.send_publish(&parse_absolute_url("http://127.0.0.1:1/"), &feed_url())
+                .await
+                .is_err()
         );
 
         // Some ⇒ the file-capture client records the ping to <dir>/websub.jsonl.
         let path = capture_dir.path().join("websub.jsonl");
         let captured = default_client(Some(path.clone()));
         captured
-            .send_publish(
-                &parse_absolute_url("https://hub.example.com/"),
-                &parse_absolute_url("https://example.com/feed.rss"),
-            )
+            .send_publish(&parse_absolute_url("https://hub.example.com/"), &feed_url())
             .await
             .expect("file capture write");
 

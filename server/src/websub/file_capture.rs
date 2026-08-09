@@ -55,6 +55,16 @@ mod tests {
     use super::*;
     use common::test_support::parse_absolute_url;
 
+    /// The hub every test in this module pings; its value is incidental.
+    fn hub_url() -> AbsoluteUrl {
+        parse_absolute_url("https://hub.example.com/")
+    }
+
+    /// `user`'s RSS feed — the pings differ only by whose feed regenerated.
+    fn feed_url(user: &str) -> AbsoluteUrl {
+        parse_absolute_url(&format!("https://site/~{user}/feed.rss"))
+    }
+
     #[tokio::test]
     async fn appends_one_json_line_per_ping() {
         let dir = std::env::temp_dir().join(format!("websub-capture-{}", std::process::id()));
@@ -64,17 +74,11 @@ mod tests {
 
         let client = FileCapturingWebSubClient::new(&path);
         client
-            .send_publish(
-                &parse_absolute_url("https://hub.example.com/"),
-                &parse_absolute_url("https://site/~alice/feed.rss"),
-            )
+            .send_publish(&hub_url(), &feed_url("alice"))
             .await
             .expect("first ping");
         client
-            .send_publish(
-                &parse_absolute_url("https://hub.example.com/"),
-                &parse_absolute_url("https://site/~bob/feed.rss"),
-            )
+            .send_publish(&hub_url(), &feed_url("bob"))
             .await
             .expect("second ping");
 
@@ -96,10 +100,7 @@ mod tests {
         // append, so the open fails and the error is surfaced.
         let client = FileCapturingWebSubClient::new("/nonexistent-dir-xyz/websub.jsonl");
         let err = client
-            .send_publish(
-                &parse_absolute_url("https://hub.example.com/"),
-                &parse_absolute_url("https://site/~alice/feed.rss"),
-            )
+            .send_publish(&hub_url(), &feed_url("alice"))
             .await
             .expect_err("open should fail");
         assert!(matches!(err, WebSubError::Http(_)));
@@ -112,10 +113,7 @@ mod tests {
     async fn returns_error_when_write_fails() {
         let client = FileCapturingWebSubClient::new("/dev/full");
         let err = client
-            .send_publish(
-                &parse_absolute_url("https://hub.example.com/"),
-                &parse_absolute_url("https://site/~alice/feed.rss"),
-            )
+            .send_publish(&hub_url(), &feed_url("alice"))
             .await
             .expect_err("write should fail");
         assert!(matches!(err, WebSubError::Http(_)));
