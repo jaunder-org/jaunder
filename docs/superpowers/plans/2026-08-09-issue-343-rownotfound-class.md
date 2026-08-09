@@ -24,10 +24,10 @@ boundary); `set_post_tags`'s insert-then-select (filed as a follow-up in Task
 
 **Tasks.**
 
-- [ ] **1.** File the separable follow-up issue.
+- [x] **1.** File the separable follow-up issue. → #883
 - [ ] **2.** `StorageError`, its `From` impl, and the `fetch_exactly_one`
-      wrapper.
-- [ ] **3.** `subscribe` becomes one atomic upsert (spec D5) — independent,
+      wrapper. **Merges into Task 4** — see the note on Task 2 below.
+- [x] **3.** `subscribe` becomes one atomic upsert (spec D5) — independent,
       closes today's only reachable race.
 - [ ] **4.** Slice: `subscriptions` — retype, triage, and the missing-seed
       backend test.
@@ -164,6 +164,23 @@ match query.fetch_optional(pool).await? {
 
 Settle whether `QueryAs` and `QueryScalar` need two functions or one extension
 trait — both are in live use.
+
+**Correction, found during execution:** this task cannot stand alone. With no
+caller, `fetch_exactly_one` and `fetch_exactly_one_scalar` are `dead_code`,
+which is a hard error under the gate's `-D warnings` — an unused wrapper cannot
+be committed. **Task 2 therefore lands as part of Task 4**, whose
+`local_channel_id` is the wrapper's first caller. Task 3 was resequenced ahead
+of it (it needs no wrapper) so it stays independently revertible, as the spec
+intends.
+
+A third test named in an earlier draft — asserting the typed error survives into
+the source chain by downcasting — is **not written**: `InternalError` does not
+implement `Error` and keeps `source` private, so the house pattern
+(`host/src/error.rs:554`) asserts the _rendered_ chain via `operator_message()`
+instead. That distinguishes `server` from `server_message` only for the `Db`
+arm, which carries a nested cause; `MissingRow` has none today, so the two would
+render identically. The `Db` arm is tested; the `MissingRow` rationale is
+documented in the code rather than asserted.
 
 **Test** (in-file `#[cfg(test)]`, modelled on `storage/src/posts.rs:3789-3805`):
 

@@ -84,13 +84,20 @@ pub trait SubscriptionStorage: Send + Sync {
 /// placeholder syntax (`SQLite` `?`, Postgres `$n`); the logical behavior is
 /// identical (ADR-0019).
 pub trait SubscriptionDialect: Database {
-    /// Idempotent insert: resolves the status name to its `status_id` via a
-    /// subquery and no-ops on the `(author_user_id, channel_id, subscriber_ref)`
-    /// conflict. Bind order: `author_user_id, channel_id, subscriber_ref, status_name`.
+    /// Idempotent upsert: resolves the status name to its `status_id` via a
+    /// subquery and **returns the `subscription_id` on both paths** — the fresh
+    /// insert and the `(author_user_id, channel_id, subscriber_ref)` conflict.
+    ///
+    /// The conflict arm is a deliberate no-op write
+    /// (`SET subscriber_ref = excluded.subscriber_ref`) rather than `DO NOTHING`,
+    /// because `DO NOTHING` returns no row and so cannot feed `RETURNING`. That
+    /// is what previously forced a second `SELECT`, and with it a window where a
+    /// concurrent delete made the id unrecoverable (#343). `status_id` is
+    /// deliberately absent from the `SET` list, so an existing subscription keeps
+    /// its status — the outcome `DO NOTHING` gave.
+    ///
+    /// Bind order: `author_user_id, channel_id, subscriber_ref, status_name`.
     const INSERT_SUBSCRIPTION: &'static str;
-    /// Selects the `subscription_id` for the unique triple. Bind order:
-    /// `author_user_id, channel_id, subscriber_ref`.
-    const SELECT_SUBSCRIPTION_ID: &'static str;
     /// Deletes the row for the unique triple. Bind order:
     /// `author_user_id, channel_id, subscriber_ref`.
     const DELETE_SUBSCRIPTION: &'static str;
@@ -153,17 +160,14 @@ where
         // an integer FK, not a TEXT-token enum column). Bind the name as a typed
         // `&'static str` (strum `IntoStaticStr`) — not a stringly `.as_str()` strip.
         let status_name: &'static str = status.into();
-        sqlx::query(DB::INSERT_SUBSCRIPTION)
+        // One statement, not two. The upsert's `RETURNING` yields the id on both
+        // the insert and the conflict path, so there is no window in which a
+        // concurrent delete can strand us without an id (#343).
+        sqlx::query_as::<_, (SubscriptionId,)>(DB::INSERT_SUBSCRIPTION)
             .bind(author_user_id)
             .bind(channel_id)
             .bind(subscriber_ref)
             .bind(status_name)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query_as::<_, (SubscriptionId,)>(DB::SELECT_SUBSCRIPTION_ID)
-            .bind(author_user_id)
-            .bind(channel_id)
-            .bind(subscriber_ref)
             .fetch_one(&self.pool)
             .await
             .map(|(id,)| id)
