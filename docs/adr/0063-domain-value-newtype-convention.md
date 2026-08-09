@@ -399,11 +399,24 @@ from a newtype-typed record field _is_ that type, and must be declared as it —
 not re-derived as a bare `String` with a `.to_string()` / `String::from` /
 `.map(String::from)` at the assignment.
 
-**Sole carve-out — external types.** Handing the inner value to a type we do not
-own (e.g. `atom_syndication`, the `rss` crate, `serde_json::Value`) is the one
-sanctioned flatten; read the value out via `Deref`/`AsRef`/`Display`/`Serialize`
-at that boundary. The newtype must still be held on every surface _we_ define up
-to that point.
+**Carve-outs — external types and wire decoders.** Handing the inner value to a
+type we do not own (e.g. `atom_syndication`, the `rss` crate,
+`serde_json::Value`) is a sanctioned flatten; read the value out via
+`Deref`/`AsRef`/`Display`/`Serialize` at that boundary. The newtype must still
+be held on every surface _we_ define up to that point.
+
+The same carve-out covers **test doubles that decode the wire** — an axum
+`Form`/`Json` extractor in a spawned test server, a capture-file parser. Decode
+into the primitive and validate explicitly in the test body: a validating field
+turns a malformed send into a transport-layer rejection the test never observes,
+instead of a readable assertion diff. Instances: `HubForm`
+(`server/src/websub/http.rs`) and `Resp` (`server/tests/web/web_auth.rs`), whose
+production counterpart `web/src/auth/api.rs LoginResponse` _is_ typed.
+
+This does **not** extend to **in-process doubles**, which receive already-typed
+values with no serialization hop and so take the newtype like any other surface
+we define (`CapturedPing`, `server/tests/helpers/websub_capturing.rs`). The
+distinction is whether the double is observing bytes or receiving values.
 
 ## Consequences
 
