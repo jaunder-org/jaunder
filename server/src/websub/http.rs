@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use std::time::Duration;
 
 use super::{WebSubClient, WebSubError};
+use common::absolute_url::AbsoluteUrl;
 
 pub struct HttpWebSubClient {
     client: reqwest::Client,
@@ -34,11 +35,18 @@ impl Default for HttpWebSubClient {
 
 #[async_trait]
 impl WebSubClient for HttpWebSubClient {
-    async fn send_publish(&self, hub_url: &str, feed_url: &str) -> Result<(), WebSubError> {
-        let form = [("hub.mode", "publish"), ("hub.url", feed_url)];
+    async fn send_publish(
+        &self,
+        hub_url: &AbsoluteUrl,
+        feed_url: &AbsoluteUrl,
+    ) -> Result<(), WebSubError> {
+        // reqwest is an external type, so reading both inner values out here is
+        // the ADR-0063 §5 carve-out. `IntoUrl` is sealed and has no impl for our
+        // newtype, so `post` needs the `&str` explicitly.
+        let form = [("hub.mode", "publish"), ("hub.url", feed_url.as_ref())];
         let res = self
             .client
-            .post(hub_url)
+            .post(hub_url.as_ref())
             .timeout(self.timeout)
             .form(&form)
             .send()
@@ -65,17 +73,32 @@ impl WebSubClient for HttpWebSubClient {
 mod tests {
     use super::*;
     use axum::{Router, extract::Form, http::StatusCode, routing::post};
+    use common::test_support::parse_absolute_url;
     use serde::Deserialize;
     use std::net::SocketAddr;
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
+    // Deliberately `String`, not `AbsoluteUrl`: this is the wire decoder on the
+    // test hub, so it must record exactly what was posted. A validating field
+    // would turn a malformed send into an axum form rejection this test never
+    // sees, instead of a readable assertion diff. ADR-0063 §5 (wire decoders).
     #[derive(Debug, Deserialize, Clone)]
     struct HubForm {
         #[serde(rename = "hub.mode")]
         mode: String,
         #[serde(rename = "hub.url")]
         url: String,
+    }
+
+    /// The spawned hub's publish endpoint.
+    fn hub_at(addr: SocketAddr) -> AbsoluteUrl {
+        parse_absolute_url(&format!("http://{addr}/"))
+    }
+
+    /// The feed every test in this module publishes; its value is incidental.
+    fn feed_url() -> AbsoluteUrl {
+        parse_absolute_url("https://example.com/feed.rss")
     }
 
     async fn spawn_hub(received: Arc<Mutex<Vec<HubForm>>>, status: StatusCode) -> SocketAddr {
@@ -105,24 +128,15 @@ mod tests {
         let _ = HttpWebSubClient::default();
     }
 
-    #[tokio::test]
-    async fn returns_http_error_for_invalid_url_scheme() {
-        let c = HttpWebSubClient::new();
-        let err = c
-            .send_publish("not-a-valid-url", "https://example.com/feed.rss")
-            .await
-            .expect_err("invalid URL should fail");
-        assert!(matches!(err, WebSubError::Http(_)));
-    }
+    // Scheme rejection is `absolute_url::tests::rejects_non_http_schemes`; the
+    // `WebSubError::Http(_)` arm is `returns_http_error_on_connection_refused`.
 
     #[tokio::test]
     async fn posts_form_body_to_hub_on_success() {
         let received = Arc::new(Mutex::new(Vec::new()));
         let addr = spawn_hub(received.clone(), StatusCode::ACCEPTED).await;
         let c = HttpWebSubClient::new();
-        c.send_publish(&format!("http://{addr}/"), "https://example.com/feed.rss")
-            .await
-            .unwrap();
+        c.send_publish(&hub_at(addr), &feed_url()).await.unwrap();
         let got = received.lock().await.clone();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].mode, "publish");
@@ -135,7 +149,7 @@ mod tests {
         let addr = spawn_hub(received.clone(), StatusCode::BAD_REQUEST).await;
         let c = HttpWebSubClient::new();
         let err = c
-            .send_publish(&format!("http://{addr}/"), "https://example.com/feed.rss")
+            .send_publish(&hub_at(addr), &feed_url())
             .await
             .unwrap_err();
         assert!(matches!(err, WebSubError::HubRefused { status: 400 }));
@@ -170,7 +184,7 @@ mod tests {
 
         let c = HttpWebSubClient::new();
         let err = c
-            .send_publish(&format!("http://{addr}/"), "https://example.com/feed.rss")
+            .send_publish(&hub_at(addr), &feed_url())
             .await
             .unwrap_err();
         assert!(matches!(err, WebSubError::Http(_)));
@@ -183,7 +197,7 @@ mod tests {
         let addr = spawn_hanging_hub().await;
         let c = HttpWebSubClient::with_timeout(Duration::from_millis(100));
         let err = c
-            .send_publish(&format!("http://{addr}/"), "https://example.com/feed.rss")
+            .send_publish(&hub_at(addr), &feed_url())
             .await
             .unwrap_err();
         assert!(matches!(err, WebSubError::Timeout(_)));
