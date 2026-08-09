@@ -2613,6 +2613,8 @@ mod tests {
     };
     use rstest::*;
     use rstest_reuse::*;
+    use std::sync::Arc;
+    use std::time::Duration;
 
     /// Guards the two dialect constants against drifting apart — the failure mode
     /// where one is edited and the other forgotten (#772; the rationale for the
@@ -2833,6 +2835,76 @@ mod tests {
             .set_post_tags(post, &[parse_tag_label("rust")])
             .await
             .expect("tagging a soft-deleted post still succeeds");
+    }
+
+    /// #339: `set_post_tags` must take its write lock **before** snapshotting the
+    /// tags it diffs against, and hold it through the writes — so two writers on
+    /// one post serialize and the committed result is exactly the desired set.
+    ///
+    /// The interleave is forced, not raced: the test holds the same lock
+    /// `set_post_tags` takes and acts as a rival writer. A hopeful two-task race
+    /// would pass or fail on scheduling and prove nothing.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn set_post_tags_locks_before_snapshotting(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user = SeedUser::new().seed(&env.state).await.user_id;
+        let post = SeedRawPost::new(user).seed(&env.state).await.post_id;
+
+        env.state
+            .posts
+            .set_post_tags(post, &[parse_tag_label("alpha")])
+            .await
+            .expect("seed tags");
+
+        // The rival writer: holds the post write lock and adds "beta", uncommitted.
+        let mut rival = env
+            .base
+            .pool()
+            .lock_post_for_write(post)
+            .await
+            .expect("take post write lock");
+        rival
+            .add_tag(post, &parse_tag_label("beta"))
+            .await
+            .expect("rival adds a tag");
+
+        // Two pooled connections are live at once — this one and the spawned
+        // call's — so the pool must allow >= 2. sqlx's default max_connections is
+        // 10 and neither backend overrides it; at 1 this would deadlock, not fail.
+        let posts = Arc::clone(&env.state.posts);
+        let mut racer =
+            tokio::spawn(
+                async move { posts.set_post_tags(post, &[parse_tag_label("gamma")]).await },
+            );
+
+        // PRECONDITION, not the regression guard: this proves mutual exclusion
+        // exists at all. A read-then-lock implementation still blocks here on its
+        // writes, so this assertion alone does not catch it — the final one does.
+        //
+        // 300ms sits well inside SQLite's 5s busy_timeout
+        // (storage/src/sqlite/mod.rs), so a correct implementation is still
+        // retrying — not failing with SQLITE_BUSY — when the lock is released below.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(300), &mut racer)
+                .await
+                .is_err(),
+            "set_post_tags completed while another writer held the post write lock; \
+             its read-diff-write is not serialized (#339)"
+        );
+
+        rival.commit().await.expect("rival commits");
+        racer
+            .await
+            .expect("racer task panicked")
+            .expect("set_post_tags failed");
+
+        // THE REGRESSION GUARD. A correct implementation snapshots after the lock
+        // is granted, so it sees {alpha, beta}, puts both in `to_remove`, and
+        // leaves exactly {gamma}. A read-then-lock implementation snapshots
+        // {alpha} before the rival commits, never removes "beta", and leaves
+        // {beta, gamma}.
+        assert_eq!(slugs_of(&*env.state.posts, post).await, vec!["gamma"]);
     }
 
     #[apply(backends)]
