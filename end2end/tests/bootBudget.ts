@@ -47,6 +47,17 @@ type BudgetState = {
 const states = new WeakMap<Page, BudgetState>();
 
 /**
+ * The pages armed since the last {@link takeOrphanedAllowances} call, so that
+ * teardown can sweep every page a test touched rather than only its default one.
+ *
+ * A strong `Set` where the state map is a `WeakMap`, deliberately: it is emptied
+ * once per test, so it retains a page for at most one test rather than for the
+ * run. Playwright runs a worker's tests serially in one process, so there is
+ * exactly one test's worth of pages in here at a time.
+ */
+const tracked = new Set<Page>();
+
+/**
  * A page's blank starting document is not a boot. Playwright opens every page
  * at `about:blank`, and whether that fires `domcontentloaded` is an engine
  * detail — counting it would make every real entry look like a second load.
@@ -60,9 +71,13 @@ function isRealDocument(url: string): boolean {
  * creates, so an explicit call in a test is a no-op rather than a double count.
  */
 export function trackBoots(page: Page): void {
-  if (states.has(page)) return;
+  if (states.has(page)) {
+    tracked.add(page);
+    return;
+  }
   const state: BudgetState = { loads: [], allowances: [], consumed: [] };
   states.set(page, state);
+  tracked.add(page);
 
   page.on("domcontentloaded", () => {
     const url = page.url();
@@ -120,6 +135,44 @@ export function bootCount(page: Page): number {
 /** The reasons consumed on `page` — its derived exemption census. */
 export function consumedReasons(page: Page): string[] {
   return [...(states.get(page)?.consumed ?? [])];
+}
+
+/** Allowances declared on `page` that no load has consumed yet. */
+export function pendingReasons(page: Page): string[] {
+  return [...(states.get(page)?.allowances ?? [])];
+}
+
+/**
+ * Take the unconsumed allowances across every page armed since the last call,
+ * clearing them and the tracked-page set.
+ *
+ * ## Why an unconsumed allowance is a defect, not slack
+ *
+ * An allowance does not expire. A declaration that authorises a load which never
+ * happens sits in the queue and silently absorbs the *next* extra load — which
+ * is precisely the undeclared second load the budget exists to catch. So an
+ * over-declaration does not merely waste a line; it disarms the check for the
+ * rest of the page's life, and does so invisibly. This is ADR-0094's
+ * orphan-marker rule ("a marker whose site no longer exists fails") in runtime
+ * form: an exemption nothing re-verifies must at least be checked to still apply.
+ *
+ * Returns one `"<entry url>: <reason>"` line per orphan. Always clears, so a
+ * failing test cannot leak its allowances into the next test in the worker; the
+ * caller decides whether to fail on the result.
+ */
+export function takeOrphanedAllowances(): string[] {
+  const orphans: string[] = [];
+  for (const page of tracked) {
+    const state = states.get(page);
+    if (state === undefined || state.allowances.length === 0) continue;
+    const where = state.loads[0] ?? "(a page that never loaded)";
+    for (const reason of state.allowances) {
+      orphans.push(`${where}: ${reason}`);
+    }
+    state.allowances.length = 0;
+  }
+  tracked.clear();
+  return orphans;
 }
 
 /**

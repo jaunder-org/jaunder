@@ -55,6 +55,7 @@ import {
   setAndVerifyEmail,
   TEST_PASSWORD,
 } from "./helpers";
+import { takeOrphanedAllowances, trackBoots } from "./bootBudget";
 import { readEmailLines, type CapturedEmail } from "./mail";
 import { pollUntil } from "./polling";
 import { applySeededSession, seedUserViaTool } from "./seed";
@@ -432,6 +433,17 @@ const test = base.extend<{
       const record: TracedContextRecord = { capture, perf: null };
       opened.push(record);
 
+      // Arm the boot budget on every page this context opens (#867). Wrapping
+      // `newPage` here covers all 15 spec-side `newPage()` sites at once — the
+      // budget's unit is the `Page`, so a second page that is never armed is a
+      // blind spot, not a page exempt from the rule.
+      const newPage = context.newPage.bind(context);
+      context.newPage = async (...args: Parameters<typeof newPage>) => {
+        const page = await newPage(...args);
+        trackBoots(page);
+        return page;
+      };
+
       // Snapshot the client-side perf BEFORE the context closes. `on("close")`
       // fires *after* closing, when `page.evaluate` would throw — and the caller
       // owns this context's lifetime, so wrapping `close` is the only hook that
@@ -577,6 +589,12 @@ const test = base.extend<{
       const lifecycleStartMs = _lifecycleStart;
       const perfSpanEntryMs = Date.now();
 
+      // Arm the one-boot-per-page budget (#867). This fixture is `auto`, and
+      // Playwright sets auto fixtures up before requested ones, so arming
+      // happens before `registeredPage` navigates — which is what lets the
+      // budget see a test's very first document load rather than only later ones.
+      trackBoots(page);
+
       // Capture attaches before the phase switch below, so any pre-test traffic
       // is measured rather than invisible (#794). Attribution is a separate
       // concern and still waits — fusing the two is what once left the (since
@@ -598,10 +616,17 @@ const test = base.extend<{
       const { requests, navigations } = capture.sinkFor("test");
 
       setCurrentActionTestKey(testKey);
+      let orphanedAllowances: string[] = [];
       try {
         await use();
       } finally {
         setCurrentActionTestKey(null);
+        // Collect-and-clear unconditionally, so a test that failed cannot leak
+        // its unconsumed allowances into the next test in this worker. Whether
+        // to FAIL on them is decided at the very end of this fixture, which a
+        // failing test never reaches — an orphaned allowance must never mask
+        // the real error.
+        orphanedAllowances = takeOrphanedAllowances();
       }
 
       const endMs = Date.now();
@@ -962,6 +987,19 @@ const test = base.extend<{
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.warn(`[e2e-otel] test export failed: ${message}`);
+      }
+
+      // Last, so the trace above is exported either way. Only reached when the
+      // test body passed, so this can never mask a real failure.
+      if (orphanedAllowances.length > 0) {
+        throw new Error(
+          `allowSecondBoot was declared but never consumed (#867):\n` +
+            orphanedAllowances.map((line) => `  - ${line}`).join("\n") +
+            `\nAn allowance does not expire: it waits and silently absorbs the ` +
+            `next extra document load, disarming the budget. Either the load it ` +
+            `authorised no longer happens — delete the declaration — or it moved, ` +
+            `and the declaration should move with it.`,
+        );
       }
     },
     { auto: true },

@@ -8,7 +8,13 @@
  */
 
 import { expect } from "@playwright/test";
-import { allowSecondBoot, bootCount, trackBoots } from "./bootBudget";
+import {
+  allowSecondBoot,
+  bootCount,
+  pendingReasons,
+  takeOrphanedAllowances,
+  trackBoots,
+} from "./bootBudget";
 import { test } from "./fixtures";
 import { BASE_URL, goto } from "./helpers";
 
@@ -90,4 +96,61 @@ test("registeredPage refuses a second call", async ({ registeredPage }) => {
   await expect(registeredPage("/profile")).rejects.toThrow(
     /called twice[\s\S]*\/posts\/new/,
   );
+});
+
+// ── Automatic arming (Task 8) ────────────────────────────────────────────────
+
+test("the budget is armed for every test's page", async ({
+  registeredPage,
+}) => {
+  // No explicit `trackBoots` call — the `_autoPerfSpan` auto fixture must have
+  // armed the page before `registeredPage` navigated it.
+  const page = await registeredPage("/");
+  expect(bootCount(page)).toBe(1);
+});
+
+test("the budget is armed for a second page too", async ({
+  registeredPage,
+  tracedContext,
+}) => {
+  await registeredPage("/");
+  const context = await tracedContext();
+  try {
+    const other = await context.newPage();
+    trackBoots(other); // must be idempotent — tracedContext already armed it
+    await goto(other, "/");
+    expect(bootCount(other)).toBe(1);
+  } finally {
+    await context.close();
+  }
+});
+
+// ── Orphaned allowances (Task 8) ─────────────────────────────────────────────
+
+test("an allowance nothing consumes is reported as an orphan", async ({
+  page,
+}) => {
+  await goto(page, "/");
+  allowSecondBoot(page, "a second load that never happens");
+
+  // Collected here rather than left for teardown on purpose: an orphan left in
+  // place fails the test it sits in, which is exactly the behaviour under test —
+  // so asserting it that way would require a test that fails to pass. What
+  // teardown does with this list is interpolate it into its error message, so
+  // pinning the list pins the message.
+  const orphans = takeOrphanedAllowances();
+  expect(orphans).toHaveLength(1);
+  // The line names the reason AND the page, so a multi-page test says which one.
+  expect(orphans[0]).toContain("a second load that never happens");
+  expect(orphans[0]).toContain(`${BASE_URL}/`);
+  // Taking them clears them, so one orphan is reported once.
+  expect(pendingReasons(page)).toEqual([]);
+  expect(takeOrphanedAllowances()).toEqual([]);
+});
+
+test("a consumed allowance is not an orphan", async ({ page }) => {
+  await goto(page, "/");
+  allowSecondBoot(page, "the login page's cold render is the subject");
+  await goto(page, "/login");
+  expect(takeOrphanedAllowances()).toEqual([]);
 });

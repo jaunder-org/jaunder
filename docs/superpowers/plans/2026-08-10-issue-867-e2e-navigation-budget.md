@@ -948,7 +948,8 @@ Lands after 6–7: wiring it earlier would fail every not-yet-converted test.
 
 - Consumes: `trackBoots` (Task 3).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test** — four added, 14 in the file. Two for
+      arming, two for the orphan check.
 
 Append to `end2end/tests/bootBudget.spec.ts`:
 
@@ -973,7 +974,7 @@ test("the budget is armed for a second page too", async ({
 });
 ```
 
-- [ ] **Step 2: Run it, verify it fails**
+- [x] **Step 2: Run it, verify it fails**
 
 Run: `... cargo xtask e2e-local bootBudget` Expected: FAIL — `bootCount` reports
 0, the pages were never tracked.
@@ -988,7 +989,14 @@ ADR-0094's orphan-marker rule ("a marker whose site no longer exists fails") in
 runtime form, and for the same reason — a written exemption nothing re-verifies
 must at least be checked to still apply. Pin it with a test.
 
-- [ ] **Step 3: Arm the budget and surface violations**
+- [x] **Step 3: Arm the budget and surface violations** — `trackBoots` is the
+      first statement of `_autoPerfSpan`'s body, and `tracedContext`'s `newPage`
+      is wrapped so every page it opens is armed on creation (the same shape as
+      the existing `close` wrapper) rather than editing 15 call sites. The
+      orphan sweep runs unconditionally in the `finally` around `use()`, so a
+      failing test cannot leak allowances into the next test in the worker, but
+      the **throw** happens after the span export — a failing test never reaches
+      it, so an orphan can never mask the real error.
 
 Call `trackBoots(page)` in `fixtures.ts` at page setup, in the auto fixture that
 already runs before the test body and owns per-page instrumentation
@@ -1006,12 +1014,27 @@ also arm explicitly.
 The violation surfacing already landed in Task 3 (`throwIfViolated` called from
 `goto`); nothing to add here.
 
-- [ ] **Step 4: Run the full suite on both browsers**
+- [x] **Step 4: Run the full suite on both browsers** — **`e2e-local`: 155
+      passed, 0 failed, none skipped (4.6 m)**. Firefox still deferred to the
+      final `validate`.
 
-Expected: PASS. Any failure here is a real undeclared second load the
-classification missed — add the declaration and record it in the artifact.
+      The first run was **1 failed / 147 passed / 7 did not run**, and the one
+      failure was the new orphan check firing correctly on its first outing. It
+      caught an over-declaration in
+      `owner: jaunder_home_redirect='app' makes the pre-paint script redirect / → /app`,
+      which declared two allowances where only one load lands — and in doing so
+      corrected a wrong belief about the app. See Amendment 2 in the
+      classification: the `/` load **never counts**, because the pre-paint
+      `location.replace` (`web/src/app/render.rs`, ADR-0076's named exception)
+      runs during head parsing and replaces the document before it reaches
+      `DOMContentLoaded`; the load the budget sees is `/app`. Measured with a
+      throwaway probe listening to both events, not reasoned.
 
-- [ ] **Step 5: Commit**
+      Without the orphan check that spare allowance would have sat in the queue
+      and silently absorbed the next genuine undeclared second load on that page
+      — the exact failure the budget exists to catch, hidden by the budget.
+
+- [x] **Step 5: Commit**
 
 ```bash
 git add end2end/tests/fixtures.ts end2end/tests/helpers.ts end2end/tests/bootBudget.spec.ts

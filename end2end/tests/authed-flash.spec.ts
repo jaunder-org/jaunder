@@ -152,14 +152,15 @@ test("owner: jaunder_home_redirect='app' makes the pre-paint script redirect / â
     localStorage.setItem("jaunder_home_redirect", "app"),
   );
 
-  // Two further loads: this `/` and the pre-paint script's own redirect to /app.
+  // ONE further load, not two. The `/` document commits and then the pre-paint
+  // `location.replace("/app")` fires during head parsing, so `/` is replaced
+  // before it ever reaches DOMContentLoaded: the budget sees a single load, and
+  // its URL is `/app`. (Measured â€” `framenavigated` fires for both `/` and
+  // `/app`, `domcontentloaded` only for `/app`.) That load is the subject and is
+  // the script's own redirect, so it cannot be routed in-app.
   allowSecondBoot(
     page,
-    "the pre-paint redirect script runs only on a cold document load of `/`, and that redirect is the subject",
-  );
-  allowSecondBoot(
-    page,
-    "this load is the pre-paint script's own redirect, not a test-issued navigation; it cannot be routed in-app",
+    "the pre-paint redirect is a location.replace during head parsing, so the only load that lands is /app; it is the script's own redirect, not a test-issued navigation, and it is the subject",
   );
   await page.goto(`${BASE_URL}/`, { waitUntil: "commit" });
   await page.waitForURL(/\/app$/, {

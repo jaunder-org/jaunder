@@ -68,6 +68,55 @@ be read correctly:
   permalink, so it must precede the `/tags/xeditc` load that leaves it. Both
   assertions are intact; only the order changed. Listed under Subject changes.
 
+### Amendment 2 — the pre-paint `/`→`/app` redirect is one load, not two (Task 8)
+
+Arming the budget (Task 8) made the orphan check fail `authed-flash.spec.ts` ›
+`owner: jaunder_home_redirect='app' makes the pre-paint script redirect / → /app`:
+it declared two further loads and only one arrived.
+
+**Measured, not inferred.** A throwaway probe listened to both events on that
+exact flow:
+
+```
+framenavigated   -> http://127.0.0.1:35173/
+framenavigated   -> http://127.0.0.1:35173/app
+domcontentloaded -> http://127.0.0.1:35173/app     <- the only one
+```
+
+The pre-paint redirect is a `location.replace` emitted as a JS string from
+`web/src/app/render.rs` (ADR-0076 names it the one remaining in-app document
+load, and specifically as a string its AST scan cannot see). It runs during head
+parsing, so the `/` document is **replaced before it reaches
+`DOMContentLoaded`**. `/` commits and navigates, but never fires the event the
+budget counts.
+
+Two consequences, and they point in different directions:
+
+- **The budget counts 1** (and the load it counts is `/app`, not `/`). The two
+  declarations collapse to one, whose reason now says exactly this. Note the
+  surviving load is the one the classification had described as the _second_ of
+  the pair — the row that reads "the pre-paint redirect script runs only on a
+  cold document load of `/`" was describing a load that is real but uncountable.
+- **The trace still counts 2.** The corpus rows come from
+  `e2e.navigation_top_json`, which is built from navigation records, not from
+  `domcontentloaded` — and it lists `/` and `/app` as separate rows for this
+  test, which is why the classification predicted two. Both are genuine
+  navigations; only one is a document _load_ by the budget's definition.
+
+**The arithmetic does not move.** `PREDICTED_TOTAL` (169) is measured against
+the trace's navigation count, and the trace's view of this test is unchanged
+at 2. I checked this rather than assuming it: the evidence is the
+classification's own two rows for this test, which were derived from the trace.
+
+**What does move is the declaration census:** 40 → **39** `allowSecondBoot`
+source sites, 42 → **41** declarations executed per run. So
+`count(kept:declared)` as an _enforced_ number is 41, one below the 42 predicted
+from the trace. The gap is exactly this row, and it is a definitional difference
+between the two counters rather than a miscount in either.
+
+**For Task 11:** the budget census and the trace count are not the same
+measurement and must not be reconciled by adjusting one to fit the other.
+
 ## Method
 
 **Source.**
@@ -191,24 +240,24 @@ the ADR-0098 holdouts whose subject is the real auth flow (in-source comments at
 
 ### `authed-flash.spec.ts` — 16 loads
 
-| test                                                                             | url       | class           | reason                                                                                                                                    |
-| -------------------------------------------------------------------------------- | --------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| anonymous: / has no authed sidebar chrome                                        | /         | `kept:entry`    | the page's one boot, at the URL under test                                                                                                |
-| anonymous: /app bounces to /login                                                | /app      | `kept:entry`    | the page's one boot; the bounce to /login is the app's own redirect                                                                       |
-| operator: admin chrome is seeded flash-free from the marker                      | /login    | `kept:entry`    | ADR-0098 holdout: `login()` through the real UI is what writes the operator marker                                                        |
-| operator: admin chrome is seeded flash-free from the marker                      | /         | `kept:declared` | the pre-paint marker read happens only on a cold boot, and with get_session() failing that boot is the only source of the operator chrome |
-| owner: /app cockpit boots straight into the personalized feed                    | /         | `removed`       | `registeredPage`'s fixture boot; the test asserts nothing at `/` and goes straight to /app                                                |
-| owner: /app cockpit boots straight into the personalized feed                    | /app      | `kept:entry`    | the cold boot of /app is the subject — "directly bookmarkable, zero intermediate clicks"                                                  |
-| owner: jaunder_home_redirect='app' makes the pre-paint script redirect / → /app  | /register | `kept:entry`    | ADR-0098 holdout: `registerViaUi` writes a real marker, which a seeded helper cannot (it never navigates)                                 |
-| owner: jaunder_home_redirect='app' makes the pre-paint script redirect / → /app  | /         | `kept:declared` | the pre-paint redirect script runs only on a cold document load of `/`, and that redirect is the subject                                  |
-| owner: jaunder_home_redirect='app' makes the pre-paint script redirect / → /app  | /app      | `kept:declared` | this load is the pre-paint script's own redirect, not a test-issued navigation; it cannot be routed in-app                                |
-| owner: pre-paint auth marks html.authed and / stays the enhanced public timeline | /register | `kept:entry`    | ADR-0098 holdout: registering through the real UI is what leaves a correct marker                                                         |
-| owner: pre-paint auth marks html.authed and / stays the enhanced public timeline | /         | `kept:declared` | the pre-paint `html.authed` marking is observable only on a cold document load, and it is the subject                                     |
-| seeded: logout survives a full navigation (tombstone respected)                  | /         | `kept:entry`    | the page's one boot, at the URL under test                                                                                                |
-| seeded: logout survives a full navigation (tombstone respected)                  | /         | `kept:declared` | a full post-logout document load is exactly what pins the tombstone; the pushState logout tests never re-run the init script              |
-| seeded: pre-paint auth marks html.authed and data-user                           | /         | `kept:entry`    | the page's one boot, at the URL under test                                                                                                |
-| seeded: re-seed as the same user after logout boots authed                       | /         | `kept:entry`    | the page's one boot, at the URL under test                                                                                                |
-| seeded: re-seed as the same user after logout boots authed                       | /         | `kept:declared` | the re-seeded marker is re-applied by the init script only on a fresh document load, and booting authed again is the subject              |
+| test                                                                             | url       | class             | reason                                                                                                                                                                                                                |
+| -------------------------------------------------------------------------------- | --------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| anonymous: / has no authed sidebar chrome                                        | /         | `kept:entry`      | the page's one boot, at the URL under test                                                                                                                                                                            |
+| anonymous: /app bounces to /login                                                | /app      | `kept:entry`      | the page's one boot; the bounce to /login is the app's own redirect                                                                                                                                                   |
+| operator: admin chrome is seeded flash-free from the marker                      | /login    | `kept:entry`      | ADR-0098 holdout: `login()` through the real UI is what writes the operator marker                                                                                                                                    |
+| operator: admin chrome is seeded flash-free from the marker                      | /         | `kept:declared`   | the pre-paint marker read happens only on a cold boot, and with get_session() failing that boot is the only source of the operator chrome                                                                             |
+| owner: /app cockpit boots straight into the personalized feed                    | /         | `removed`         | `registeredPage`'s fixture boot; the test asserts nothing at `/` and goes straight to /app                                                                                                                            |
+| owner: /app cockpit boots straight into the personalized feed                    | /app      | `kept:entry`      | the cold boot of /app is the subject — "directly bookmarkable, zero intermediate clicks"                                                                                                                              |
+| owner: jaunder_home_redirect='app' makes the pre-paint script redirect / → /app  | /register | `kept:entry`      | ADR-0098 holdout: `registerViaUi` writes a real marker, which a seeded helper cannot (it never navigates)                                                                                                             |
+| owner: jaunder_home_redirect='app' makes the pre-paint script redirect / → /app  | /         | `kept:declared`\* | \*Amendment 2: a real navigation in the trace, but **not** a document load the budget can see — `location.replace` during head parsing replaces `/` before DOMContentLoaded, so this row carries no `allowSecondBoot` |
+| owner: jaunder_home_redirect='app' makes the pre-paint script redirect / → /app  | /app      | `kept:declared`   | the pre-paint redirect is a location.replace during head parsing, so the only load that lands is /app; it is the script's own redirect, not a test-issued navigation, and it is the subject                           |
+| owner: pre-paint auth marks html.authed and / stays the enhanced public timeline | /register | `kept:entry`      | ADR-0098 holdout: registering through the real UI is what leaves a correct marker                                                                                                                                     |
+| owner: pre-paint auth marks html.authed and / stays the enhanced public timeline | /         | `kept:declared`   | the pre-paint `html.authed` marking is observable only on a cold document load, and it is the subject                                                                                                                 |
+| seeded: logout survives a full navigation (tombstone respected)                  | /         | `kept:entry`      | the page's one boot, at the URL under test                                                                                                                                                                            |
+| seeded: logout survives a full navigation (tombstone respected)                  | /         | `kept:declared`   | a full post-logout document load is exactly what pins the tombstone; the pushState logout tests never re-run the init script                                                                                          |
+| seeded: pre-paint auth marks html.authed and data-user                           | /         | `kept:entry`      | the page's one boot, at the URL under test                                                                                                                                                                            |
+| seeded: re-seed as the same user after logout boots authed                       | /         | `kept:entry`      | the page's one boot, at the URL under test                                                                                                                                                                            |
+| seeded: re-seed as the same user after logout boots authed                       | /         | `kept:declared`   | the re-seeded marker is re-applied by the init script only on a fresh document load, and booting authed again is the subject                                                                                          |
 
 ### `backup.spec.ts` — 6 loads
 
