@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use crate::websub::WebSubClient;
 use chrono::{DateTime, Utc};
-use common::absolute_url::compose;
+use common::absolute_url::{AbsoluteUrl, compose};
 use common::feed::{FeedPath, affected_feed_urls};
 use common::ids::FeedEventId;
 use storage::{
@@ -156,7 +156,7 @@ impl FeedWorker {
         let identity = self.site_config.get_identity().await.ok();
 
         for (feed_path, recs) in groups {
-            self.process_feed_group(feed_path, recs, hub_url.as_deref(), identity.as_ref())
+            self.process_feed_group(feed_path, recs, hub_url.as_ref(), identity.as_ref())
                 .await;
         }
     }
@@ -168,7 +168,7 @@ impl FeedWorker {
         &self,
         feed_path: FeedPath,
         recs: Vec<FeedEventRecord>,
-        hub_url: Option<&str>,
+        hub_url: Option<&AbsoluteUrl>,
         identity: Option<&common::site::SiteIdentity>,
     ) {
         let ids: Vec<FeedEventId> = recs.iter().map(|r| r.id).collect();
@@ -213,10 +213,10 @@ impl FeedWorker {
     /// complete.
     async fn ping_websub(
         &self,
-        feed_url: &str,
+        feed_url: &FeedPath,
         ids: &[FeedEventId],
         attempt: i32,
-        hub_url: Option<&str>,
+        hub_url: Option<&AbsoluteUrl>,
         identity: Option<&common::site::SiteIdentity>,
     ) {
         if let Some(hub) = hub_url {
@@ -231,13 +231,13 @@ impl FeedWorker {
             };
             // `compose` joins the required base + the feed path into an absolute URL.
             let absolute = compose(base, feed_url);
-            tracing::info!(feed_url, hub, attempt, "feed.websub.ping.attempted");
+            tracing::info!(feed_url = %feed_url, hub = %hub, attempt, "feed.websub.ping.attempted");
 
             let result = self.websub.send_publish(hub, &absolute).await;
             match result {
                 Ok(()) => {
                     host::metrics::websub_ping(host::metrics::PingOutcome::Success);
-                    tracing::info!(feed_url, hub, attempt, "feed.websub.ping.succeeded");
+                    tracing::info!(feed_url = %feed_url, hub = %hub, attempt, "feed.websub.ping.succeeded");
                     let _ = self.feed_events.mark_pinged(ids).await;
                 }
                 Err(e) => {
@@ -245,7 +245,7 @@ impl FeedWorker {
                     let next_attempt_idx = attempt_usize.saturating_sub(1);
                     if next_attempt_idx >= BACKOFFS_SECS.len() {
                         host::metrics::websub_ping(host::metrics::PingOutcome::Exhausted);
-                        tracing::warn!(feed_url, hub, "feed.websub.ping.exhausted");
+                        tracing::warn!(feed_url = %feed_url, hub = %hub, "feed.websub.ping.exhausted");
                         let _ = self.feed_events.mark_exhausted(ids, &e.to_string()).await;
                     } else {
                         let delay = chrono::Duration::seconds(
@@ -253,7 +253,7 @@ impl FeedWorker {
                         );
                         let next = Utc::now() + delay;
                         host::metrics::websub_ping(host::metrics::PingOutcome::Failed);
-                        tracing::warn!(feed_url, hub, attempt, error = %e, "feed.websub.ping.failed");
+                        tracing::warn!(feed_url = %feed_url, hub = %hub, attempt, error = %e, "feed.websub.ping.failed");
                         let _ = self
                             .feed_events
                             .mark_failed(ids, &e.to_string(), next)
@@ -273,13 +273,13 @@ impl FeedWorker {
     /// used up.
     async fn on_regen_failure(
         &self,
-        feed_url: &str,
+        feed_url: &FeedPath,
         ids: &[FeedEventId],
         recs: &[FeedEventRecord],
         e: &RegenerateError,
     ) {
         host::metrics::feed_regeneration(host::metrics::RegenResult::Error);
-        tracing::error!(error = %e, feed_url, "feed.regen.failed");
+        tracing::error!(error = %e, feed_url = %feed_url, "feed.regen.failed");
         let attempt = recs.iter().map(|r| r.attempts).max().unwrap_or(0) + 1;
         let attempt_usize = usize::try_from(attempt).unwrap_or(0);
         let next_attempt_idx = attempt_usize.saturating_sub(1);

@@ -989,7 +989,7 @@ test("scheduling a post shows a Scheduled-for badge on the drafts page", async (
   test.slow();
   // A fixed far-future wall-clock time keeps the post unambiguously *scheduled*
   // no matter when the suite runs, with no Date arithmetic that could drift.
-  // The non-compact composer's optional schedule control is `#compose-publish-at`
+  // The non-compact composer's optional schedule control is `#options-publish-at`
   // (a `datetime-local` input); a future time plus Publish creates a post whose
   // `published_at` is in the future. Such posts surface on the drafts page with a
   // "Scheduled for …" badge (`.j-badge-scheduled`) rather than going live.
@@ -1000,7 +1000,7 @@ test("scheduling a post shows a Scheduled-for badge on the drafts page", async (
     SEL.postBody,
     "# Scheduled Draft\n\nbody for a scheduled post",
   );
-  await page.fill("#compose-publish-at", FUTURE_DATETIME_LOCAL);
+  await page.fill("#options-publish-at", FUTURE_DATETIME_LOCAL);
   await click(page, SEL.publishButton("true"));
   await waitForSelector(page, SEL.saveSummary);
 
@@ -1012,6 +1012,59 @@ test("scheduling a post shows a Scheduled-for badge on the drafts page", async (
   const badge = scheduledRow.locator(".j-badge-scheduled");
   await expect(badge).toBeVisible();
   await expect(badge).toContainText("Scheduled for");
+});
+
+test("scheduling from the edit page shows a Scheduled-for badge on the drafts page", async ({
+  registeredPage: page,
+}) => {
+  test.slow();
+  // The editor's schedule control had no coverage at all before #863, which is what
+  // made its id unverifiable when both shapes' controls were unified into
+  // `ComposeOptions` — the editor now renders the same `#options-publish-at` the
+  // composer does. Mirrors the composer-side test above, with one deliberate
+  // difference in the settle step: a *scheduled* publish sets `published_at` to a
+  // future instant, so `EditSaveOutcome` takes its `Ok(_)` "Redirecting…" arm rather
+  // than rendering the `.j-save-summary` block the draft-save path renders.
+  const FUTURE_DATETIME_LOCAL = "2999-01-01T09:00";
+
+  // Create a draft and reach its edit page, the same route the edit test above uses.
+  await goto(page, "/posts/new");
+  await page.fill(SEL.postBody, "# Scheduled From Editor\n\nbody");
+  await click(page, SEL.publishButton("false"));
+  await waitForSelector(page, SEL.saveSummary);
+
+  const permalinkHref = (await page
+    .locator(SEL.saveSummary)
+    .locator('[data-test="permalink-link"]')
+    .getAttribute("href"))!;
+  await goto(page, permalinkHref);
+  const editLink = page.locator('.j-post-acts a:has-text("Edit")');
+  await editLink.waitFor();
+  const postId = (await editLink.getAttribute("href"))!.match(
+    /\/posts\/(\d+)\/edit/,
+  )![1];
+
+  await goto(page, `/posts/${postId}/edit`);
+  await expect(page.locator(SEL.topbarHeading)).toHaveText("Edit Post");
+
+  // The post is still a draft, so the slug and schedule controls are rendered.
+  await page.fill("#options-publish-at", FUTURE_DATETIME_LOCAL);
+  await click(page, SEL.publishButton("true"));
+
+  // Settle before navigating, or the `goto` races the in-flight update. The signal is
+  // the editor's own redirect: `publish_redirect` (page_state.rs:127) returns the
+  // permalink whenever the settled post has a `published_at`, and a future schedule
+  // makes that `Some`, so a scheduled publish always leaves `/edit`.
+  await page.waitForURL((url) => !url.pathname.endsWith("/edit"));
+
+  await goto(page, "/drafts");
+  const editorScheduledRow = page.locator("li", {
+    hasText: "Scheduled From Editor",
+  });
+  await expect(editorScheduledRow).toBeVisible();
+  const editorBadge = editorScheduledRow.locator(".j-badge-scheduled");
+  await expect(editorBadge).toBeVisible();
+  await expect(editorBadge).toContainText("Scheduled for");
 });
 
 // #671: `/` is the one timeline whose Loading arm is reachable ONLY by a client-side

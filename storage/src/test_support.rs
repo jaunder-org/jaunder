@@ -14,12 +14,12 @@
 #![expect(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::media::MediaRecord;
-use crate::posts::{CreatePostError, CreatePostInput, UpdatePostInput};
+use crate::posts::{CreatePostError, CreatePostInput, SELECT_TAG_ID_BY_SLUG, UpdatePostInput};
 use crate::sql::quote_identifier;
 use crate::{AppState, DbConnectOptions, PostFormat, PostRecord};
 use chrono::{DateTime, Utc};
 use common::feed::FeedPath;
-use common::ids::{PostId, UserId};
+use common::ids::{PostId, TagId, UserId};
 use common::mailer::{MailSender, NoopMailSender};
 use common::media::{Filename, MediaRef, MediaSource, detect_content_type, media_url};
 use common::post_body::PostBody;
@@ -35,7 +35,8 @@ use common::test_support::{
 use common::username::Username;
 use common::visibility::AudienceTarget;
 use host::invite::InviteCode;
-use sqlx::{Connection, PgPool, SqlitePool};
+use sqlx::pool::PoolConnection;
+use sqlx::{Connection, PgPool, Postgres, Sqlite, SqlitePool, Transaction};
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -138,6 +139,55 @@ impl CloseablePool {
         }
     }
 
+    /// Takes the same write lock `set_post_tags` takes and holds it until the
+    /// returned guard commits or drops — which [`execute`](CloseablePool::execute)
+    /// cannot do, since it returns its connection to the pool as soon as the
+    /// statement finishes.
+    ///
+    /// The lock's granularity differs per backend, deliberately:
+    ///
+    /// * `SQLite` — `BEGIN IMMEDIATE` takes a **database-wide** write lock, so the
+    ///   guard excludes any concurrent writer, not just one on `post_id`.
+    /// * Postgres — `SELECT … FOR UPDATE` locks the **post row**, so exclusion is
+    ///   per-post.
+    ///
+    /// Both serialize two writers on the same post, which is the invariant tests
+    /// built on this assert. `post_id` is taken on both arms even though only the
+    /// Postgres arm needs it: the guard remembers it, so a caller cannot lock one
+    /// post and then write to another.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `sqlx::Error` if the connection cannot be acquired or the lock
+    /// cannot be taken (including when `post_id` does not exist on Postgres).
+    pub async fn lock_post_for_write(
+        &self,
+        post_id: PostId,
+    ) -> Result<PostWriteLock<'_>, sqlx::Error> {
+        let held = match self {
+            CloseablePool::Sqlite(pool) => {
+                let mut conn = pool.acquire().await?;
+                // IMMEDIATE, mirroring `SqlitePostStorage::set_post_tags`: takes
+                // the write lock up front rather than upgrading a shared lock,
+                // which `busy_timeout` cannot rescue (ADR-0021).
+                sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+                HeldWrite::Sqlite(conn)
+            }
+            CloseablePool::Postgres(pool) => {
+                let mut tx = pool.begin().await?;
+                // Mirrors `PostgresPostStorage::set_post_tags`.
+                sqlx::query_scalar::<_, PostId>(
+                    "SELECT post_id FROM posts WHERE post_id = $1 FOR UPDATE",
+                )
+                .bind(post_id)
+                .fetch_one(&mut *tx)
+                .await?;
+                HeldWrite::Postgres(tx)
+            }
+        };
+        Ok(PostWriteLock { post_id, held })
+    }
+
     /// The Postgres pool, for raw-SQL seed/inspect against the per-test database
     /// (avoids reconnecting a fresh pool via [`recorded_postgres_url`]).
     ///
@@ -150,6 +200,106 @@ impl CloseablePool {
             CloseablePool::Postgres(pool) => pool,
             CloseablePool::Sqlite(_) => panic!("postgres() on a SQLite CloseablePool"),
         }
+    }
+}
+
+/// A held post write lock, from [`CloseablePool::lock_post_for_write`].
+///
+/// **The two arms do not behave the same on drop.** The Postgres arm is a real
+/// `Transaction`, which rolls back when dropped. The `SQLite` arm's
+/// `BEGIN IMMEDIATE` was issued as a raw statement, so sqlx's transaction-depth
+/// tracking never saw it: dropping the guard returns the connection to the pool
+/// **with the write transaction still open**, holding a database-wide write lock.
+/// A test that panics between `lock_post_for_write` and
+/// [`commit`](PostWriteLock::commit) therefore wedges the rest of that test's
+/// writes rather than failing cleanly. Commit (or end the test) promptly.
+pub struct PostWriteLock<'a> {
+    /// The post the lock was taken for. Held so [`add_tag`](PostWriteLock::add_tag)
+    /// cannot be aimed at a post other than the one that is locked.
+    post_id: PostId,
+    held: HeldWrite<'a>,
+}
+
+/// The backend-specific half of a [`PostWriteLock`].
+enum HeldWrite<'a> {
+    Sqlite(PoolConnection<Sqlite>),
+    Postgres(Transaction<'a, Postgres>),
+}
+
+impl PostWriteLock<'_> {
+    /// Adds one tag to the locked post from inside the held lock — a rival
+    /// writer, for tests that must interleave a competing write with a storage
+    /// method.
+    ///
+    /// Three statements, not one: `post_tags` carries a foreign key to
+    /// `tags(tag_id)`, so the tag row must exist and its id be read back before
+    /// the join row can be inserted. The conflict-tolerant spelling also diverges
+    /// per dialect (`INSERT OR IGNORE` vs `ON CONFLICT DO NOTHING`). Dispatching
+    /// it here is what keeps dialect SQL out of test bodies.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `sqlx::Error` if any of the three statements fails.
+    pub async fn add_tag(&mut self, label: &TagLabel) -> Result<(), sqlx::Error> {
+        let slug = label.slug();
+        let post_id = self.post_id;
+        match &mut self.held {
+            HeldWrite::Sqlite(conn) => {
+                sqlx::query("INSERT OR IGNORE INTO tags (tag_slug) VALUES ($1)")
+                    .bind(&slug)
+                    .execute(&mut **conn)
+                    .await?;
+                let tag_id = sqlx::query_scalar::<_, TagId>(SELECT_TAG_ID_BY_SLUG)
+                    .bind(&slug)
+                    .fetch_one(&mut **conn)
+                    .await?;
+                sqlx::query(
+                    "INSERT OR IGNORE INTO post_tags (post_id, tag_id, tag_display) \
+                     VALUES ($1, $2, $3)",
+                )
+                .bind(post_id)
+                .bind(tag_id)
+                .bind(label)
+                .execute(&mut **conn)
+                .await?;
+            }
+            HeldWrite::Postgres(tx) => {
+                sqlx::query("INSERT INTO tags (tag_slug) VALUES ($1) ON CONFLICT DO NOTHING")
+                    .bind(&slug)
+                    .execute(&mut **tx)
+                    .await?;
+                let tag_id = sqlx::query_scalar::<_, TagId>(SELECT_TAG_ID_BY_SLUG)
+                    .bind(&slug)
+                    .fetch_one(&mut **tx)
+                    .await?;
+                sqlx::query(
+                    "INSERT INTO post_tags (post_id, tag_id, tag_display) VALUES ($1, $2, $3) \
+                     ON CONFLICT DO NOTHING",
+                )
+                .bind(post_id)
+                .bind(tag_id)
+                .bind(label)
+                .execute(&mut **tx)
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Commits the held transaction, releasing the lock and persisting whatever
+    /// was written through it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `sqlx::Error` if the commit fails.
+    pub async fn commit(self) -> Result<(), sqlx::Error> {
+        match self.held {
+            HeldWrite::Sqlite(mut conn) => {
+                sqlx::query("COMMIT").execute(&mut *conn).await?;
+            }
+            HeldWrite::Postgres(tx) => tx.commit().await?,
+        }
+        Ok(())
     }
 }
 

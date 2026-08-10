@@ -933,6 +933,259 @@ workspace-wide, so setting it would flip the _server's_ release build to abort,
 where a panicking tokio task would kill the process. Recorded in the root
 `Cargo.toml` at the profile someone would add it to.
 
+## #866 — where the rest of boot goes (2026-08-09)
+
+#836 established that page boot is **43–47% of e2e suite wall-clock** and that
+wasm explains only part of it. This is the rest.
+
+**Denominator, stated once.** Each suite run performs **211 navigations**, of
+which **208 mount** and carry boot marks. Every per-suite second below is
+`mean × 208`. **Means, never medians** — `median(a+b) ≠ median(a) + median(b)`,
+and #818 saw a 2–7% apparent residual that was purely that artifact.
+
+Source: #836's arm-C captures (the shipped bundle), single-worker sqlite, three
+runs pooled per engine. No new collection — this re-reads segments the corpus
+already carried.
+
+### The six segments
+
+| segment                             | chromium ms/nav | s/suite  | firefox ms/nav | s/suite   |
+| ----------------------------------- | --------------- | -------- | -------------- | --------- |
+| `document_start → wasm_fetch_start` | **212.5**       | **44.2** | **260.7**      | **54.2**  |
+| `wasm_fetch`                        | 161.3           | 33.5     | 56.8           | 11.8      |
+| `wasm_instantiate`                  | 14.1            | 2.9      | **405.0**      | **84.2**  |
+| `boot.entry → seed_parsed`          | 1.5             | 0.3      | 1.3            | 0.3       |
+| `seed_parsed → render_start`        | 0.6             | 0.1      | 1.3            | 0.3       |
+| `render_start → mount_done`         | 3.6             | 0.7      | 2.0            | 0.4       |
+| **boot total**                      | **393.6**       | **81.9** | **727.0**      | **151.2** |
+| frame skew (`commitToMount` − boot) | 294.9           | **61.3** | 184.2          | **38.3**  |
+| **`commitToMount`**                 | **688.5**       | 143.2    | **911.2**      | 189.5     |
+
+Split by cache warmth, ms per navigation (n = 339 / 285 / 341 / 285):
+
+| segment                             | chr cold  | chr warm  | ff cold   | ff warm   |
+| ----------------------------------- | --------- | --------- | --------- | --------- |
+| `document_start → wasm_fetch_start` | 257.9     | 158.5     | 310.2     | 201.4     |
+| `wasm_fetch`                        | 189.0     | 128.3     | 77.0      | 32.6      |
+| `wasm_instantiate`                  | 14.6      | 13.6      | 403.9     | 406.4     |
+| `boot.entry → seed_parsed`          | 2.7       | 0.2       | 2.1       | 0.3       |
+| `seed_parsed → render_start`        | 0.9       | 0.2       | 1.9       | 0.5       |
+| `render_start → mount_done`         | 5.8       | 0.9       | 1.8       | 2.2       |
+| **boot total**                      | **470.9** | **301.6** | **796.9** | **643.4** |
+
+Note what does _not_ move with warmth: **firefox's `wasm_instantiate` is 403.9
+ms cold and 406.4 ms warm.** A warm HTTP cache removes the download and changes
+the compile cost not at all. That is consistent with #864's size-independent
+floor and is the same segment #866's own preload experiment later moved by 125
+ms — see #887.
+
+Two things close here rather than deferring.
+
+**The Rust boot path is ~1 s of a 300–450 s suite.** `seed_parsed`,
+`render_start` and `mount_done` sum to 1.1 s (chromium) and 1.0 s (firefox).
+#801 was right to be redirected; there is nothing there, and there is no point
+looking again.
+
+**`topSlow` is truncated and carries no shares.**
+`e2e.resource_top_slow_dropped` sums to **54** across 822 arm-C spans, so
+per-resource timings from `e2e.resource_summary_json` are duration-biased. They
+may illustrate a single resource, never a population. The contrast with
+`navigation_top_json` — `dropped = 0`, a genuine census — is exactly the
+distinction that makes a top-N slice readable as a population if it is lost.
+
+### The pre-fetch window
+
+`document_start → wasm_fetch_start` is the **largest boot segment on chromium**
+(54% of boot) and the second largest on firefox. It is entirely our own code.
+
+**Observed**, from `csr/index.html`: a synchronous inline pre-paint auth script
+(#181, ADR-0044) in `<head>`, then two `<link rel="stylesheet">`, then an inline
+`<script type="module">` in `<body>` that imports `/pkg/jaunder.js` and only
+then calls `init("/pkg/jaunder.wasm")`. So the wasm fetch cannot begin until 56
+KiB of JS glue has been fetched, parsed and executed. That ordering is a fact
+about the file.
+
+The window shrinks 35–39% cold→warm — chromium 257.9 → 158.5 ms, firefox 310.2 →
+201.4 ms — so it is part network and part not, with a substantial residual
+surviving a warm cache in both engines.
+
+**Hypothesised and explicitly not established:** a pending stylesheet blocks
+script execution per spec, so those two stylesheets _may_ sit on the critical
+path to the wasm fetch starting. **This was not measured**, and nothing here
+rests on it. Filed as #870 to be tested rather than asserted — naming it as the
+cause on the strength of waterfall shape is the mistake #840 had to withdraw a
+claim for.
+
+### Frame skew
+
+61.3 s (chromium) / 38.3 s (firefox) per suite, and **larger on the faster
+engine**. `commitToMountMs` is Node-side wall clock; the six segments are
+document-relative. **ADR-0100 forbids decomposing one into the other** — they
+are different clocks — so this cycle reports the magnitude and does not split
+it. Attribution needs a Node-frame instrument that does not exist. Filed as
+#868.
+
+Whether it is harness overhead that costs real users nothing, or real time the
+document frame cannot see, is unknown. Those two answers point in opposite
+directions, which is the argument for measuring rather than guessing.
+
+### What this leaves
+
+| lever                                | worth                         | status                     |
+| ------------------------------------ | ----------------------------- | -------------------------- |
+| firefox `wasm_instantiate`           | 84.2 s — the largest by far   | #864 (~377 ms fixed floor) |
+| frame skew                           | 61.3 / 38.3 s                 | #868                       |
+| pre-fetch window                     | 44.2 / 54.2 s                 | preload below; #870        |
+| `wasm_fetch`                         | 33.5 / 11.8 s, ~44% are `304` | #869 — caching             |
+| navigation count (211 for 137 tests) | ~190 s firefox                | #867                       |
+| Rust boot path                       | ~1 s                          | **closed**                 |
+
+#869 deserves particular note: `/pkg/*` sets no `Cache-Control`, only an `ETag`,
+and `server/src/site.rs` records ~44% of wasm requests as conditional. Removing
+those round-trips outright is plausibly worth more than the preload below, which
+can only start them earlier.
+
+Corpus limits are inherited from #836 and apply: n=3 per arm, host not perfectly
+quiescent, arm confounded with position within a round. The last one threatens
+cross-arm contrasts; this decomposition makes none.
+
+### The preload, and a prediction registered before capturing it
+
+`csr/index.html` and `render_head` now carry
+`<link rel="preload" href="/pkg/jaunder.wasm" as="fetch" type="application/wasm" crossorigin>`
+plus a `modulepreload` for the glue, so the wasm download starts during HTML
+parse rather than after 56 KiB of glue has executed.
+
+**`crossorigin` is load-bearing, and the reasoning that omitted it was wrong.**
+An `as="fetch"` preload without it is a `no-cors` request; wasm-bindgen's
+`init()` calls `fetch()`, which defaults to `cors`. Firefox will not reuse the
+mismatched preload — it requested the identical URL **twice**, downloading 2.2
+MB of wasm for nothing. Chromium coalesced it either way, so this only ever
+reproduced on firefox, and only because the e2e guard counts requests on both.
+
+#### Pre-registration
+
+Written **before** the capture. The point is to be able to be wrong.
+
+- **Decisive quantity:** `document_start → mount_done` (boot total),
+  document-frame, ADR-0100-clean. **Not** the pre-fetch segment alone — the fix
+  collapses the _later_ `wasm_fetch` into that window, so a per-segment reading
+  would misattribute the change. **Not** suite wall-clock, which did not
+  separate arms on firefox in #836 and cannot resolve an effect this size.
+- **Ceiling.** The saving cannot exceed the wasm fetch time: **≤161 ms/nav
+  chromium, ≤57 ms firefox**. It will not be reached — the moved download now
+  contends with the glue and both stylesheets, and ~44% of these requests are
+  conditional (#869), where preload only starts the round-trip earlier.
+- **Floor.** The improvement must exceed **3 × SE** on boot total in at least
+  one engine. Firefox boot total is ~727 ms with run-level SD ~3–9 ms at n=3, so
+  SE ≈ 2–6 ms and 3 × SE ≈ 6–18 ms. A ceiling alone would be confirmed by every
+  positive outcome; the floor is what can fail.
+- **Directional prediction:** `document_start → wasm_fetch_start` falls sharply
+  while `wasm_fetch` **rises**, because the download now overlaps rather than
+  following. If `wasm_fetch` does not rise, the preload is not doing what is
+  claimed even if the total improves.
+- **Abort rule (D8):** below the floor, or a regression in either engine, or any
+  double fetch → **the preload is reverted** and written up as a negative
+  result. It does not land on the strength of the reasoning being sound.
+
+**One disclosure, because it weakens half of this.** A single non-protocol
+chromium run — made while proving the request-count guard could fail — already
+showed `wasmFetchStartMs` 212.5 → 51.5 ms and `wasmFetchMs` 161.3 → 206.6 ms,
+about 116 ms net. So **chromium's prediction is informed by prior observation
+and is not a clean pre-registration.** Firefox's is: its timings have
+deliberately **not** been inspected, precisely so the gate's critical-path
+engine keeps an uncontaminated prediction. Firefox is the arm to read.
+
+#### Observed — the abort rule fired, and the preload is reverted
+
+Captured 2026-08-10, 12 runs, corpus at
+`~/measurements/jaunder/issue-866-preload/`. Certified before analysis:
+`dropped = 0` on all 24 rows, full marks on 100% of 2496 mounted navigations,
+exactly 208 mounted per capture. Arm integrity by an independent signal — the
+wasm resource's `initiatorType` is `fetch` on 100% of before-arm navigations and
+`link` on 100% of after-arm ones, in both engines.
+
+**Boot total, mean of three run-means:**
+
+| engine   | warmth | before | after | delta | 3 × SE | verdict          |
+| -------- | ------ | ------ | ----- | ----- | ------ | ---------------- |
+| firefox  | all    | 762.0  | 743.1 | 18.8  | 38.8   | **below floor**  |
+| firefox  | cold   | 829.8  | 820.1 | 9.7   | 40.0   | **below floor**  |
+| firefox  | warm   | 680.8  | 651.7 | 29.0  | 38.4   | **below floor**  |
+| chromium | all    | 410.4  | 394.0 | 16.4  | 16.3   | clears by 0.1 ms |
+| chromium | cold   | 489.2  | 467.3 | 21.9  | 17.8   | clears           |
+| chromium | warm   | 316.7  | 306.9 | 9.9   | 16.4   | below floor      |
+
+**The preload does exactly what it was built to do.** The pre-fetch window
+collapses — firefox 276.2 → 81.5 ms, chromium 220.4 → 54.4 ms. The mechanism is
+not in doubt.
+
+**And the engines give it all back.** Per navigation, all navigations:
+
+| segment            | firefox           | chromium         |
+| ------------------ | ----------------- | ---------------- |
+| pre-fetch window   | 276.2 → **81.5**  | 220.4 → **54.4** |
+| `wasm_fetch`       | 60.1 → 110.2      | 169.0 → 312.6    |
+| `wasm_instantiate` | 421.0 → **546.0** | 15.3 → 21.1      |
+
+The directional prediction held: `wasm_fetch` rose, as the moved download now
+contends.
+
+`wasm_instantiate` also rose 125 ms on firefox — **and that figure must not be
+read as a compile regression.** It is **derived, not measured**: `fixtures.ts`
+computes it as `boot.entry.startTime − wasm.responseEndMs`, because Rust cannot
+observe its own fetch or instantiation. It is a **residual**, so it absorbs
+whatever happens between those two points.
+
+That makes it **not comparable across arms that move when the fetch starts**:
+
+- **Before**, `init()` starts the fetch, so it runs only after the glue has
+  loaded and executed. The residual is close to genuine instantiate.
+- **After**, the preload finishes early but `init()` still waits on the glue, so
+  the glue's load and execution fall **inside** the residual — reattributed out
+  of the pre-fetch window, not newly incurred.
+
+The arithmetic fits reattribution: firefox −194.8 (pre-fetch) +50.1 (fetch)
++125.0 (residual) nets −19.6 ms. A pure reattribution nets zero, so what is left
+is a small genuine saving on top of a large reshuffle across segment boundaries.
+
+**No claim is made about compile cost here, in either direction.** Whether
+delivery affects firefox's real instantiate is untested and needs an instrument
+that measures it rather than subtracting for it — #887.
+
+**This does not touch the decomposition above.** That was computed within a
+_single_ delivery mode (arm C), where `init()` always starts the fetch, so the
+residual means what it says; the same holds for its cold/warm split. The
+residual only becomes uninterpretable when an experiment moves the fetch's start
+— which is exactly what this one did, and what this caveat exists to record.
+
+#### Verdict against the pre-registered rules
+
+- **Firefox — the decisive, uncontaminated arm — does not clear the floor** in
+  any warmth. 18.8 ms against a required 38.8 ms.
+- **Chromium clears by 0.1 ms** on the pooled figure (16.4 vs 16.3), which is
+  not a result, and clears more convincingly cold (21.9 vs 17.8). Chromium's
+  prediction was also disclosed in advance as contaminated.
+- A large, consistent component regression landed on the engine that is the e2e
+  gate's critical path.
+
+**D8 fires: the preload is reverted.** It does not land on the strength of the
+mechanism being real — and the mechanism _is_ real: the serial boot chain was a
+genuine 166–195 ms of waiting and the preload genuinely removed it. It bought
+~19 ms of boot, because the glue load stays on the critical path either way.
+
+**What this does _not_ establish.** An earlier draft of this section claimed the
+experiment showed firefox's instantiate floor (#864) is "delivery-dependent".
+**That claim is withdrawn**: it rested on the derived residual described above,
+which reattributes the glue load between arms. The floor may or may not depend
+on delivery; this capture cannot say, and #887 is now framed as a question about
+the instrument rather than a report of a regression.
+
+The pre-fetch window (#870's stylesheet question) remains open and is sharpened:
+166–195 ms of it is genuinely removable, and removing it this way converts
+almost none of it into boot time — because whatever else sits between
+`document_start` and `boot.entry` (the glue, at minimum) is still serial.
+
 ## #792 — the per-test warmup A/B (findings, 2026-08-04)
 
 **Verdict: delete the warmup, both browsers.** It costs 113 s/combo (chromium)

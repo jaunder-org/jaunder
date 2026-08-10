@@ -6,11 +6,12 @@
 use crate::error::WebResult;
 // `Username` / `ProfferedPassword` / `SessionLabel` are ungated: they are wire-arg
 // types of `login`, so the `#[server]`-generated arg struct references them on both
-// the client and server builds. `RawToken` is ungated for the same reason — it is
-// `login`'s wire *return* type, named in the `#[server]` signature on both builds.
+// the client and server builds. `RawToken` is deliberately *not* here: the session
+// token no longer crosses the wire (#533), so it is a server-only value that the
+// `#[server]` body infers from `create_session`. The rule is recorded in
+// docs/adr/0107-web-session-establishment-is-cookie-only.md.
 use common::password::ProfferedPassword;
 use common::session_label::SessionLabel;
-use common::token::RawToken;
 use common::username::Username;
 
 // One grouped `feature = "server"` support block for the `#[server]` bodies: the
@@ -25,18 +26,22 @@ use {
     tracing::Instrument,
 };
 
-/// `login`'s success payload: the raw session token (unchanged) plus the viewer's
-/// operator flag, so the client writes a complete marker immediately (flash-free
-/// first login, #591). Web-only wire type — the elisp frontend uses HTTP Basic auth,
-/// not this endpoint.
+/// `login`'s success payload: the viewer's operator flag, so the client writes a
+/// complete marker immediately (flash-free first login, #591).
+///
+/// It carries **no session token**. The session travels only in the `HttpOnly`
+/// `session` cookie (#533), so an XSS at login time cannot read a credential that
+/// was never handed to JS — see
+/// `docs/adr/0107-web-session-establishment-is-cookie-only.md`. Web-only wire
+/// type — the elisp frontend uses HTTP Basic auth, not this endpoint.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct LoginResponse {
-    pub token: RawToken,
     pub is_operator: bool,
 }
 
-/// Authenticates a user.  Returns a [`LoginResponse`] (the freshly minted session
-/// [`RawToken`] + the viewer's operator flag) and sets the `session` cookie.
+/// Authenticates a user.  Sets the `HttpOnly` `session` cookie and returns a
+/// [`LoginResponse`] carrying the viewer's operator flag — deliberately not the
+/// session token (#533).
 ///
 /// `label` is a typed wire arg (ADR-0065): the [`SessionLabel`] serde bridge trims it
 /// and rejects whitespace-only or over-long values at decode. It has **no client-side
@@ -105,11 +110,10 @@ pub async fn login(
 
     set_session_cookie(&raw_token);
     leptos_axum::redirect("/");
-    // `record` is the authenticated `UserRecord`, which already carries
-    // `is_operator` (storage `UserRecord`) — no extra query. `raw_token` is the
-    // typed `RawToken` (#578); `LoginResponse` carries it plus the marker seed.
+    // The session travels only in the HttpOnly cookie set above (#533) — `raw_token`
+    // is never returned, so the body carries just the marker seed. `record` is the
+    // authenticated `UserRecord`, which already has `is_operator` — no extra query.
     Ok(LoginResponse {
-        token: raw_token,
         is_operator: record.is_operator,
     })
 }

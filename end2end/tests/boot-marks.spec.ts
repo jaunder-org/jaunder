@@ -70,14 +70,55 @@ test.describe("mergeDocumentTiming", () => {
 // asserts the mechanism works at all, which needs no knowledge of the coverage
 // distribution and so can ship before the distribution exists. Gradual erosion is
 // #831's job.
-test("the harness captures the full boot mark set after mount", async ({
+test("boot fetches the wasm once and the harness captures the full mark set", async ({
   page,
   bootTiming,
 }) => {
+  // Piggy-backed on this navigation rather than given its own `test()` (#866).
+  // Boot cost is per-navigation and the suite already runs 211 of them for 137
+  // tests (#867), so a spec that exists only to navigate makes the thing we are
+  // trying to measure worse.
+  //
+  // Counts by PATHNAME: the server content-negotiates `.br`/`.gz` against the
+  // same URL and answers conditional requests with `304`, so encoding and status
+  // are both the wrong discriminator — a variant or a revalidation is still one
+  // fetch of one resource.
+  //
+  // Cache state is COLD: each test gets a fresh `browser.newContext()`, so the
+  // HTTP cache starts empty and this is the uncached path. The warm path is not
+  // exercised here.
+  const wasmRequests: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/pkg/jaunder.wasm") {
+      wasmRequests.push(request.url());
+    }
+  });
+
   // `goto` awaits `waitForMount` itself, so the mount binding has already fired
   // and its harvest is either done or in flight — which is what `bootTiming`'s
   // `settle()` covers.
   await goto(page, "/");
+
+  // The failure mode this exists for is silent (#866): a `<link rel="preload">`
+  // whose request mode does not match wasm-bindgen's own `fetch` does not error,
+  // it downloads the 2.2 MB bundle TWICE — strictly worse than having no preload.
+  // Nothing else in the suite would notice.
+  //
+  // Proven able to fail, by mutation, rather than assumed (#866). Pointing the
+  // preload at `/pkg/jaunder.wasm?mutation-proof` — same pathname, distinct URL,
+  // so no cache coalescing — reddened this with
+  //   "expected exactly one /pkg/jaunder.wasm request, got 2"
+  // naming both URLs. Reverted afterwards. A guard that has never been red is
+  // not a guard.
+  //
+  // Note what did NOT reproduce it: a `crossorigin="anonymous"` mismatch against
+  // wasm-bindgen's same-origin `init()` fetch. Chromium coalesced that and made
+  // one request. So this asserts the property, not that specific hazard, and
+  // firefox is not known to behave the same way.
+  expect(
+    wasmRequests.length,
+    `expected exactly one /pkg/jaunder.wasm request, got ${wasmRequests.length}: ${wasmRequests.join(", ")}`,
+  ).toBe(1);
 
   const timing = await bootTiming();
   expect(

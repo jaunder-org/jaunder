@@ -1,12 +1,13 @@
 use async_trait::async_trait;
 use std::sync::Mutex;
 
+use common::absolute_url::AbsoluteUrl;
 use jaunder::websub::{WebSubClient, WebSubError};
 
 #[derive(Debug, Clone)]
 pub struct CapturedPing {
-    pub hub_url: String,
-    pub feed_url: String,
+    pub hub_url: AbsoluteUrl,
+    pub feed_url: AbsoluteUrl,
 }
 
 #[derive(Default)]
@@ -27,13 +28,17 @@ impl CapturingWebSubClient {
 
 #[async_trait]
 impl WebSubClient for CapturingWebSubClient {
-    async fn send_publish(&self, hub_url: &str, feed_url: &str) -> Result<(), WebSubError> {
+    async fn send_publish(
+        &self,
+        hub_url: &AbsoluteUrl,
+        feed_url: &AbsoluteUrl,
+    ) -> Result<(), WebSubError> {
         self.pings
             .lock()
             .expect("mutex not poisoned")
             .push(CapturedPing {
-                hub_url: hub_url.to_string(),
-                feed_url: feed_url.to_string(),
+                hub_url: hub_url.clone(),
+                feed_url: feed_url.clone(),
             });
         Ok(())
     }

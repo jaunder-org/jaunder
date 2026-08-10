@@ -94,9 +94,11 @@ impl ComposeState {
     /// The editor reuses the bundle because it edits the same things and dispatches
     /// the same [`PostInputs`] payload; only the surrounding action (`Update` vs
     /// `Create`) differs. The slug is deliberately **not** seeded here: this type
-    /// does not hold that field — the composer's full shape owns its own, local to
-    /// that shape — so the editor sets it at the call site rather than handing the
-    /// field in to be written once.
+    /// does not hold that field, because the compact composer uses this same bundle
+    /// and renders no slug control — which is why `inputs` takes `slug_override` as a
+    /// parameter. The two full-page shapes own the field at page level and hand it to
+    /// `ComposeOptions`, so the editor sets it at the call site rather than handing
+    /// the field in here to be written once.
     pub fn seed_from(&self, fetched: &AuthoredPost) {
         self.body.set(String::from(fetched.body.clone()));
         self.format.set(fetched.format);
