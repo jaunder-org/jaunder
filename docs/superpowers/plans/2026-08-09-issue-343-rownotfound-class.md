@@ -62,7 +62,12 @@ boundary); `set_post_tags`'s insert-then-select (filed as a follow-up in Task
       `From<StorageError>`.
 - [x] **16.** Turn the clippy guard on; rewrite the 6 `server/tests` sites. Gate
       green on the first run — the triage that rode the slices was complete.
-- [ ] **17.** Durable self-test proving the guard rejects a bare `fetch_one`.
+- [x] **17.** Durable self-test proving the guard cannot go quiet — a
+      `fetch-one-guard` xtask step that runs in the gate. It checks the
+      _configuration_, not clippy's behaviour: a path that stops resolving is
+      already self-announcing under `-D warnings`, so the real risk is entries
+      being edited away, plus `allow-invalid` silencing the announcement.
+      Demonstrated to fail by deleting a path and re-running the gate.
 - [x] **18.** Delete the blanket `From<sqlx::Error>` and its pinning test. The
       workspace still compiles, which is the proof no row-access path leaks.
 - [x] **19.** ADR draft → `docs/adr/drafts/absence-is-named-at-its-source.md`

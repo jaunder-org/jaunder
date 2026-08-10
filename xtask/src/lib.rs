@@ -31,6 +31,7 @@ mod steps {
     pub mod doctest_fences;
     pub mod e2e_local;
     pub mod e2e_scaffold_check;
+    pub mod fetch_one_guard_check;
     pub mod flaky;
     pub mod host_tests;
     pub mod html_sink_check;
@@ -467,6 +468,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::thin_components::run(&mut result);
             steps::sqlx_newtype_bind_check::run(&mut result);
             steps::sqlx_newtype_decode_check::run(&mut result);
+            steps::fetch_one_guard_check::run(&mut result);
             steps::doctest_fences::run(&mut result);
             steps::rendered_html_from_trusted_check::run(&mut result);
             steps::raw_html_door_check::run(&mut result);
@@ -512,6 +514,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::thin_components::run(&mut result);
             steps::sqlx_newtype_bind_check::run(&mut result);
             steps::sqlx_newtype_decode_check::run(&mut result);
+            steps::fetch_one_guard_check::run(&mut result);
             steps::doctest_fences::run(&mut result);
             steps::rendered_html_from_trusted_check::run(&mut result);
             steps::raw_html_door_check::run(&mut result);
