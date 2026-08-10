@@ -87,7 +87,7 @@ exception); any `LoginResponse` rename (#782's); any structural xtask gate.
 
 ---
 
-- [ ] **Step 1: Write the helper**
+- [x] **Step 1: Write the helper**
 
 Add to `server/tests/helpers/mod.rs`, directly after `session_cookie`:
 
@@ -111,7 +111,7 @@ pub fn token_from_set_cookie(set_cookie: &str) -> RawToken {
 }
 ```
 
-- [ ] **Step 2: Write the failing assertions**
+- [x] **Step 2: Write the failing assertions**
 
 In `register_open_creates_user_sets_cookie_returns_token`, after the existing
 `let cookie = set_cookie.expect(...)` / `starts_with("session=")` lines, add:
@@ -141,7 +141,7 @@ the file never uses a `helpers::`-qualified path — a
 `str::contains` is generic over `Pattern`, so `.as_ref()` leaves the target type
 unpinned and can need a type annotation.
 
-- [ ] **Step 3: Run the tests, verify they fail**
+- [x] **Step 3: Run the tests, verify they fail**
 
 ```bash
 devtool run -- devtool pg run -- cargo nextest run -p jaunder register_open_creates_user_sets_cookie_returns_token login_correct_password_sets_cookie_and_returns_token
@@ -155,7 +155,7 @@ equivalent. The token is currently in both bodies, which is the bug.
 trailer, and `server/tests/helpers/mod.rs:12` already imports it — the helper
 compiles as written.)
 
-- [ ] **Step 4: Do NOT commit — carry into Task 2**
+- [x] **Step 4: Do NOT commit — carry into Task 2**
 
 **Deliberate exception to one-clean-commit-per-task.** Changing a server-fn
 signature breaks compilation of every test in the crate, so the signature change
@@ -189,7 +189,7 @@ the red observed and go straight to Task 2.
 
 ---
 
-- [ ] **Step 1: Shrink `LoginResponse` and `login`**
+- [x] **Step 1: Shrink `LoginResponse` and `login`**
 
 In `web/src/auth/api.rs`, delete the `token` field:
 
@@ -216,7 +216,7 @@ and the construction at the end of `login`:
 The rest of `login` is unchanged — it still mints `raw_token` and sets the
 cookie.
 
-- [ ] **Step 2: Collapse `register`**
+- [x] **Step 2: Collapse `register`**
 
 In `web/src/registration/api.rs`, change the signature to `-> WebResult<()>` and
 the tail to:
@@ -228,7 +228,7 @@ the tail to:
     Ok(())
 ```
 
-- [ ] **Step 3: Rewrite every stale doc and fix the imports**
+- [x] **Step 3: Rewrite every stale doc and fix the imports**
 
 This is the step AC5 checks, and the intra-doc links are a build hazard, not a
 nicety. AC5 lists **seven** stale docs; two of them are handled elsewhere in
@@ -254,7 +254,7 @@ Then fix the imports: `web/src/auth/api.rs:13` and
 it if so; clippy will say. In `web/src/registration/component.rs`, drop the
 `RawToken` import (line 13) once Step 4 removes its last use.
 
-- [ ] **Step 4: Fix the client annotation**
+- [x] **Step 4: Fix the client annotation**
 
 `web/src/registration/component.rs:146` — the action-value annotation becomes:
 
@@ -264,7 +264,7 @@ it if so; clippy will say. In `web/src/registration/component.rs`, drop the
 
 `LoginPage` needs no change: it already matches `Ok(_)`.
 
-- [ ] **Step 5: Rework the test helpers**
+- [x] **Step 5: Rework the test helpers**
 
 In `server/tests/web/web_auth.rs`:
 
@@ -291,7 +291,7 @@ fn is_operator_from_body(body: &str) -> bool {
 - Drop `use common::token::RawToken;` (line 5) if nothing else in the file needs
   it.
 
-- [ ] **Step 6: Update all eight call sites**
+- [x] **Step 6: Update all eight call sites**
 
 Work the inventory from the spec; none may be skipped.
 
@@ -308,7 +308,7 @@ Work the inventory from the spec; none may be skipped.
   binding `set_cookie` without using it is an unused-variable warning that fails
   the lint gate. Do not invent a new assertion here to justify a binding.
 
-- [ ] **Step 6b: Give `register` a real session check (AC4)**
+- [x] **Step 6b: Give `register` a real session check (AC4)**
 
 All four `authenticate` sites are `login` tests. AC4 says "for **both**
 endpoints, a test takes the `session` cookie, authenticates, and gets the
@@ -371,7 +371,7 @@ and becomes:
 keeping each site's own label assertion (`"my-device"`, `"Unknown device"`, and
 whatever `:539` / `:577` assert).
 
-- [ ] **Step 7: Rename the two misleading tests**
+- [x] **Step 7: Rename the two misleading tests**
 
 - `register_open_creates_user_sets_cookie_returns_token` →
   `register_open_creates_user_and_sets_session_cookie`
@@ -381,7 +381,7 @@ whatever `:539` / `:577` assert).
 Update the `// M2.9.8:` / `// M2.9.12:` comments above them, which also say
 "returns token".
 
-- [ ] **Step 8: Run the auth tests, verify they pass**
+- [x] **Step 8: Run the auth tests, verify they pass**
 
 ```bash
 devtool run -- devtool pg run -- cargo nextest run -p jaunder web_auth
@@ -390,7 +390,7 @@ devtool run -- devtool pg run -- cargo nextest run -p jaunder web_auth
 Expected: **PASS**, every case. The two Task 1 assertions now hold because the
 bodies no longer carry the token.
 
-- [ ] **Step 9: Run the gate**
+- [x] **Step 9: Run the gate**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-533-session-token-body -- cargo xtask check
@@ -400,7 +400,7 @@ Expected: exit 0. Watch the `doc-links` step specifically — it is what catches
 surviving intra-doc link to a gated-away `RawToken`. Read
 `.xtask/last-result.json` `.steps` on failure. Follow `jaunder-commit`.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add web/src/auth/api.rs web/src/registration/api.rs web/src/registration/component.rs server/tests/helpers/mod.rs server/tests/web/web_auth.rs
