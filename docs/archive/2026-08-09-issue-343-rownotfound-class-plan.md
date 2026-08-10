@@ -70,7 +70,7 @@ boundary); `set_post_tags`'s insert-then-select (filed as a follow-up in Task
       Demonstrated to fail by deleting a path and re-running the gate.
 - [x] **18.** Delete the blanket `From<sqlx::Error>` and its pinning test. The
       workspace still compiles, which is the proof no row-access path leaks.
-- [x] **19.** ADR draft → `docs/adr/drafts/absence-is-named-at-its-source.md`
+- [x] **19.** ADR draft → `docs/adr/0108-absence-is-named-at-its-source.md`
       (gitignored until `cargo xtask adr promote` numbers it at ship).
 - [x] **20.** Amend #343's body — the superseded acceptance criterion is stated
       as superseded, with the replacement criteria.
