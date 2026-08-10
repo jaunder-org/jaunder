@@ -423,7 +423,7 @@ except `README.md`, so `git add` on the draft fails. `cargo xtask adr promote`
 at ship is what numbers it and makes its first, correctly-numbered appearance in
 history. Leave it untracked here.
 
-- [ ] **Step 1: Read the ADR conventions**
+- [x] **Step 1: Read the ADR conventions**
 
 Read `docs/adr/drafts/README.md`. The binding constraints come from there,
 **not** from the `adr-format` gate — `xtask/src/steps/adr_check.rs` only scans
@@ -438,7 +438,7 @@ README:
   `doc-links` after promotion, not now — which is why it must be right the first
   time.
 
-- [ ] **Step 2: Write the draft**
+- [x] **Step 2: Write the draft**
 
 It must state:
 
@@ -464,7 +464,7 @@ It must state:
 Reference #533 and #591 (which is why `LoginResponse` still exists, carrying
 `is_operator`).
 
-- [ ] **Step 3: Confirm the tree is otherwise clean, and run the full gate
+- [x] **Step 3: Confirm the tree is otherwise clean, and run the full gate
       (AC8)**
 
 ```bash

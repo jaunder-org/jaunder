@@ -8,7 +8,8 @@ use crate::error::WebResult;
 // types of `login`, so the `#[server]`-generated arg struct references them on both
 // the client and server builds. `RawToken` is deliberately *not* here: the session
 // token no longer crosses the wire (#533), so it is a server-only value that the
-// `#[server]` body infers from `create_session`.
+// `#[server]` body infers from `create_session`. The rule is recorded in
+// docs/adr/drafts/web-session-establishment-is-cookie-only.md.
 use common::password::ProfferedPassword;
 use common::session_label::SessionLabel;
 use common::username::Username;
@@ -30,8 +31,9 @@ use {
 ///
 /// It carries **no session token**. The session travels only in the `HttpOnly`
 /// `session` cookie (#533), so an XSS at login time cannot read a credential that
-/// was never handed to JS. Web-only wire type — the elisp frontend uses HTTP Basic
-/// auth, not this endpoint.
+/// was never handed to JS — see
+/// `docs/adr/drafts/web-session-establishment-is-cookie-only.md`. Web-only wire
+/// type — the elisp frontend uses HTTP Basic auth, not this endpoint.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct LoginResponse {
     pub is_operator: bool,

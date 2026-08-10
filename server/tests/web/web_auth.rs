@@ -2,6 +2,7 @@ use axum::http::StatusCode;
 use chrono::Utc;
 use common::config_key::SiteConfigKey;
 use common::session_label::MAX_SESSION_LABEL_CHARS;
+use common::token::RawToken;
 use common::username::Username;
 use server_fn::ServerFn;
 
@@ -14,8 +15,34 @@ use crate::helpers::{
 };
 use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
 
+/// The session token a login/register response established, read from its
+/// `Set-Cookie` header — the only channel that carries it (#533). Tests reach the
+/// session this way, which is also what proves the cookie is still being set.
+fn session_token_of(set_cookie: Option<String>) -> RawToken {
+    let cookie = set_cookie.expect("Set-Cookie header should be present");
+    token_from_set_cookie(&cookie)
+}
+
+/// Asserts a response body does not carry the session token its `Set-Cookie`
+/// established.
+///
+/// These assertions are the enforcement mechanism named by
+/// `docs/adr/drafts/web-session-establishment-is-cookie-only.md`, so the invariant
+/// is spelled out once here rather than re-derived per endpoint. It compares the
+/// token *value*: `register`'s body is a bare `null`, so checking for a `"token"`
+/// field name would be vacuous.
+fn assert_body_carries_no_token(endpoint: &str, body: &str, token: &RawToken) {
+    assert!(
+        !body.contains(&**token),
+        "{endpoint} body leaked the session token: {body}"
+    );
+}
+
 /// The `is_operator` flag from a login response body — all that `login` returns now
 /// that the session token travels only in the `HttpOnly` cookie (#533).
+///
+/// Deserializes its own shape rather than `web::auth::LoginResponse`, so a change
+/// to that type cannot silently make this assertion vacuous.
 fn is_operator_from_body(body: &str) -> bool {
     #[derive(serde::Deserialize)]
     struct Resp {
@@ -52,14 +79,8 @@ async fn register_open_creates_user_and_sets_session_cookie(#[case] backend: Bac
     let cookie = set_cookie.expect("Set-Cookie header should be present");
     assert!(cookie.starts_with("session="), "cookie: {cookie}");
 
-    // #533: the cookie is the only channel. The body must not carry the token —
-    // asserted against the real token value, not just the field name, because
-    // `register`'s body is a bare `null` and a name check would be vacuous.
     let cookie_token = token_from_set_cookie(&cookie);
-    assert!(
-        !body.contains(&*cookie_token),
-        "register body leaked the session token: {body}"
-    );
+    assert_body_carries_no_token("register", &body, &cookie_token);
 
     let user = state
         .users
@@ -307,12 +328,8 @@ async fn login_correct_password_sets_session_cookie(#[case] backend: Backend) {
     let cookie = set_cookie.expect("Set-Cookie header should be present on login");
     assert!(cookie.starts_with("session="), "cookie: {cookie}");
 
-    // #533: the cookie is the only channel — the body must not carry the token.
     let cookie_token = token_from_set_cookie(&cookie);
-    assert!(
-        !body.contains(&*cookie_token),
-        "login body leaked the session token: {body}"
-    );
+    assert_body_carries_no_token("login", &body, &cookie_token);
 }
 
 // #591: login's response carries `is_operator` so the client writes a complete
@@ -399,10 +416,7 @@ async fn login_with_label_creates_session_with_label(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    // #533: the token reaches us only via the cookie, which is the channel a browser
-    // actually uses — so this also proves the cookie is still being set.
-    let cookie = set_cookie.expect("Set-Cookie header should be present on login");
-    let raw_token = token_from_set_cookie(&cookie);
+    let raw_token = session_token_of(set_cookie);
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
     assert_eq!(record.label, "my-device");
 }
@@ -435,9 +449,7 @@ async fn login_with_empty_label_falls_back_to_user_agent_default(#[case] backend
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    // #533: the token reaches us only via the cookie.
-    let cookie = set_cookie.expect("Set-Cookie header should be present on login");
-    let raw_token = token_from_set_cookie(&cookie);
+    let raw_token = session_token_of(set_cookie);
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
     // An empty `label=` decodes to `None` (the Option form layer absorbs it before
     // SessionLabel's deserializer runs), so this takes the User-Agent branch — and
@@ -548,9 +560,7 @@ async fn login_bounds_long_user_agent_at_session_label_cap(#[case] backend: Back
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    // #533: the token reaches us only via the cookie.
-    let cookie = set_cookie.expect("Set-Cookie header should be present on login");
-    let raw_token = token_from_set_cookie(&cookie);
+    let raw_token = session_token_of(set_cookie);
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
     assert_eq!(record.label, "a".repeat(250).as_str());
 }
@@ -588,9 +598,7 @@ async fn login_truncates_user_agent_past_session_label_cap(#[case] backend: Back
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    // #533: the token reaches us only via the cookie.
-    let cookie = set_cookie.expect("Set-Cookie header should be present on login");
-    let raw_token = token_from_set_cookie(&cookie);
+    let raw_token = session_token_of(set_cookie);
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
     assert_eq!(record.label.chars().count(), MAX_SESSION_LABEL_CHARS);
 }
