@@ -37,7 +37,7 @@
 //! site from it, which is what principle 3 governs. So the gate resolves the
 //! qualifier again, but now by reading what the AST plainly says rather than by
 //! pattern, and it **fails closed** on anything it cannot resolve. See
-//! `docs/adr/drafts/gate-population-membership-is-structural.md`.
+//! `docs/adr/0110-gate-population-membership-is-structural.md`.
 //!
 //! Two consequences follow:
 //!

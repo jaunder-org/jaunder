@@ -782,7 +782,7 @@ git commit -m "feat(xtask,common): police RenderedHtml's door only; drop the Con
 
 **Files:**
 
-- Create: `docs/adr/drafts/gate-population-membership-is-structural.md`
+- Create: `docs/adr/0110-gate-population-membership-is-structural.md`
 - Modify: `docs/adr/0079-*.md` (§89), `docs/adr/0094-*.md` (§122-127 and §229),
   `common/src/render.rs` (`:216-218`), `xtask/src/steps/ident_gate.rs` (module
   doc §29-33, §50-52, §69-73)

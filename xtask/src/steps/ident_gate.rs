@@ -48,7 +48,7 @@
 //! exempting a site from it, so ADR-0085 principle 3 is not in play. #778 conflated the
 //! two and deleted a qualifier check as a pattern exemption, which left the codebase
 //! carrying markers on a provably harmless population. See
-//! `docs/adr/drafts/gate-population-membership-is-structural.md`.
+//! `docs/adr/0110-gate-population-membership-is-structural.md`.
 //!
 //! Macro bodies are deliberately **not** resolved — [`walk_macro_tokens`] sees a flat
 //! token stream, and under the rule above not resolving is fail-closed. The old

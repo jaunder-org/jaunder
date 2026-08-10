@@ -127,13 +127,12 @@ costs a fail-open. The affected sites took ordinary markers like anything else.
 Deleting the exemption was right; concluding that the qualifier must therefore
 go _unread_ was not. Reading it decides **membership**, which is structural,
 rather than granting an exemption — see
-`docs/adr/drafts/gate-population-membership-is-structural.md`, numbered at ship.
-So the gate now resolves the qualifier and those four markers are gone. Note the
-consequence for the sentence this section used to end on: with `ContentType`'s
-door out of the population, the "grep `ContentType::from_trusted` to enumerate
-every mint site" instruction in its doc comment is once again a convention
-backed by tests, not something the gate enforces — and that doc comment now says
-so.
+[ADR-0110](0110-gate-population-membership-is-structural.md). So the gate now
+resolves the qualifier and those four markers are gone. Note the consequence for
+the sentence this section used to end on: with `ContentType`'s door out of the
+population, the "grep `ContentType::from_trusted` to enumerate every mint site"
+instruction in its doc comment is once again a convention backed by tests, not
+something the gate enforces — and that doc comment now says so.
 
 ### Inferred exemptions are tripwired; written exemptions are keyed
 
