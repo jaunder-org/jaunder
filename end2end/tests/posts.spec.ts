@@ -15,6 +15,7 @@ import { createPerfProbe } from "./perf";
 import { seedPostsViaTool } from "./seed";
 import { SEL } from "./selectors";
 import { composePost, createPostViaApi } from "./posts";
+import { navigateInApp } from "./navigate";
 
 const TIMELINE_PAGE_SIZE = 50;
 const TIMELINE_OVERFLOW_COUNT = 1;
@@ -55,7 +56,12 @@ test("authenticated user can create a post with a summary", async ({
   const permalinkHref = await permalinkLink.getAttribute("href");
   expect(permalinkHref).toBeTruthy();
 
-  await goto(page, permalinkHref!);
+  // The subject is that the summary persisted, not the permalink's cold render,
+  // so follow the flash's own "View post" link in-app (#867).
+  await navigateInApp(page, () => permalinkLink.click(), {
+    url: permalinkHref!,
+    ready: "article h1",
+  });
 
   await expect(page.locator("article h1")).toHaveText("Summary Test");
   await expect(page.locator("article")).toContainText("This is a summary");
@@ -138,7 +144,7 @@ test("authenticated user can save a draft through the UI", async ({
 
 test("published post renders at permalink", async ({ registeredPage }) => {
   test.slow();
-  // `composePost` navigates to `/posts/new` itself, so that is the entry.
+  // `composePost` fills the composer in place, so the entry is the composer.
   const page = await registeredPage("/posts/new");
   const summary = await composePost(page, {
     body: "# Permalink Story\n\n**hello permalink**",
@@ -746,12 +752,16 @@ test("create post with tags via UI: tags persist and appear on the post", async 
   await waitForSelector(page, SEL.saveSummary);
   await expect(page.locator(SEL.saveSummary)).toContainText("Post published.");
 
-  // Navigate to the permalink and confirm all three tags appear
-  const permalink = await page
-    .locator('[data-test="permalink-link"]')
-    .getAttribute("href");
+  // Follow the flash's own "View post" link to the permalink and confirm all
+  // three tags appear. The subject is that the tags persisted, not the cold
+  // render, so this is an in-app move (#867).
+  const permalinkLink = page.locator('[data-test="permalink-link"]');
+  const permalink = await permalinkLink.getAttribute("href");
   expect(permalink).toBeTruthy();
-  await goto(page, permalink!);
+  await navigateInApp(page, () => permalinkLink.click(), {
+    url: permalink!,
+    ready: ".j-tag-list",
+  });
 
   const tagList = page.locator(".j-tag-list");
   await expect(tagList).toContainText("#alpha");

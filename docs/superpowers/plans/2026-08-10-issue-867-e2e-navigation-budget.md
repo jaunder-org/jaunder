@@ -707,7 +707,22 @@ This half: the create/composer group — the inline-composer tests (7, `/` →
 - Consumes: `navigateInApp` (Task 4), `RegisteredPage` (Task 5),
   `allowSecondBoot` (Task 3).
 
-- [ ] **Step 1: Convert each `converted` row in this group**
+- [x] **Step 1: Convert each `converted` row in this group** — 2 rows, which is
+      all the classification lists for this group (most of `posts.spec.ts`'s 19
+      conversions are Task 6b's). Both go through the publish flash's permalink
+      link: `create a post with a summary` (ready `article h1`) and
+      `create post with tags via UI` (ready `.j-tag-list`). Both ready selectors
+      were checked against the renderers (`web/src/posts/render.rs`,
+      `web/src/taglist/markup.rs:18`) and are absent from the composer — the
+      composer's tag UI is `.j-tag-chip`, a different class — so neither tripped
+      the already-matches assertion.
+
+      `composePost` (`posts.ts:61`) no longer navigates; it waits for
+      `SEL.postBody` and fills in place, so its caller must already be on
+      `/posts/new`. That wait stays: it asserts the new precondition, so a
+      caller on the wrong page fails fast instead of filling nothing. This
+      removes the double-load Task 5 deliberately left in
+      `published post renders at permalink`.
 
 Work test by test in classification order. Replace each `goto` with
 `navigateInApp` driving the real control the app offers — the composer's publish
@@ -720,28 +735,39 @@ test's entry already is `/posts/new` it no longer needs `openComposer`; where a
 test reaches the composer mid-flow, `openComposer` becomes a `navigateInApp`
 through the app's own compose control.
 
-- [ ] **Step 2: Add declarations for each `kept:declared` row in this group**
+- [x] **Step 2: Add declarations for each `kept:declared` row in this group** —
+      none exist in this group, so no `allowSecondBoot` calls were added.
 
 `allowSecondBoot(page, "<reason from the classification>")` immediately before
 the load it authorises, reason copied verbatim from the artifact.
 
-- [ ] **Step 3: Iterate**
+- [x] **Step 3: Iterate**
 
 Run: `... cargo xtask e2e-local posts` Expected: PASS.
 
-- [ ] **Step 4: Verify on both browsers**
+- [x] **Step 4: Verify on both browsers** — **`e2e-local`: 150 passed (7.0 m)**,
+      matching the pre-conversion baseline exactly. Firefox still deferred to
+      the final `validate`, for the host-contention reason recorded in Task 5.
 
 Run: `... cargo xtask e2e sqlite chromium` and
 `... cargo xtask e2e sqlite firefox` Expected: PASS. New flake here is this
 task's characteristic risk — an intermittent failure means the conversion lost a
 barrier. Fix the barrier; never add a retry.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add end2end/tests/posts.spec.ts end2end/tests/posts.ts
 git commit -m "test(e2e): move the posts composer flows to in-app navigation (#867)"
 ```
+
+**One assumption to watch.** The permalink control is a plain `<a>`
+(`web/src/posts/component.rs:773`), not leptos's `<A>`; the conversion relies on
+`handle_anchor_click` intercepting it (ADR-0076). The pre-existing
+`tag chip on permalink navigates to tag listing` test already rests on the same
+fact for `.j-tag`. If the assumption is wrong, these two fail as an undeclared
+second load once Task 8 arms the budget — loudly, not silently, which is the
+point of arming it.
 
 ---
 

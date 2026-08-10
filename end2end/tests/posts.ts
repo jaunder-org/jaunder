@@ -9,7 +9,7 @@
 
 import { expect, type Locator, type Page } from "@playwright/test";
 import { withTimedAction } from "./actions";
-import { BASE_URL, click, goto, waitForSelector } from "./helpers";
+import { BASE_URL, click, waitForSelector } from "./helpers";
 import { SEL } from "./selectors";
 
 /** Create a post via `POST /api/posts/create`. Wraps the request in
@@ -48,17 +48,23 @@ export async function createPostViaApi(
   return (await res.json()) as { post_id: number; permalink: string };
 }
 
-/** Compose and submit a post through the `/posts/new` UI: navigate, fill the
- *  body (and the summary / slug inputs when provided), click publish/save, and
- *  wait for the save-summary panel. Returns the `.j-save-summary` locator for
- *  follow-up assertions. Serves the plain `goto("/posts/new")` composer sites;
- *  the home-page `.j-composer` flow is a separate path this does not cover. */
+/** Compose and submit a post through the `/posts/new` UI: fill the body (and the
+ *  summary / slug inputs when provided), click publish/save, and wait for the
+ *  save-summary panel. Returns the `.j-save-summary` locator for follow-up
+ *  assertions. The home-page `.j-composer` flow is a separate path this does not
+ *  cover.
+ *
+ *  **The caller must already be on `/posts/new`** — normally by entering there,
+ *  `const page = await registeredPage("/posts/new")`. This used to `goto` the
+ *  composer itself, which cost a second document load on a page whose entry was
+ *  already the composer (#867). Nothing in the app links to `/posts/new`
+ *  (#896), so reaching it is always an entry, never an in-app move. */
 export async function composePost(
   page: Page,
   opts: { body: string; summary?: string; slug?: string; publish: boolean },
 ): Promise<Locator> {
   return withTimedAction(page, "flow.compose_post", async () => {
-    await goto(page, "/posts/new");
+    await waitForSelector(page, SEL.postBody);
     await page.fill(SEL.postBody, opts.body);
     if (opts.summary !== undefined) {
       await page.fill(SEL.postSummary, opts.summary);
