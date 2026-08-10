@@ -103,11 +103,13 @@
 //!    `test` and not `not`. So `#[cfg(feature = "test-utils")]` reads as test code
 //!    and its members are dropped from the population entirely — no marker owed,
 //!    no census row. Nothing under the policed roots currently matches *and*
-//!    encloses a gate ident, so there is no live hole; it is recorded because it
-//!    is structurally the pattern-decided exemption #778 removed on the qualifier
-//!    side (ADR-0085 principle 3), and because the marker work made it
-//!    load-bearing in a second place (`test_ranges`, which suppresses orphan
-//!    reports). Parsing the predicate would close it.
+//!    encloses a gate ident, so there is no live hole; it is recorded because a
+//!    **pattern** on an attribute's text is deciding an exemption, which is what
+//!    ADR-0085 principle 3 forbids — and unlike deciding *membership* from a
+//!    resolved qualifier (#790, which is structural), this really is an exemption
+//!    granted by pattern. The marker work also made it load-bearing in a second
+//!    place (`test_ranges`, which suppresses orphan reports). Parsing the predicate
+//!    would close it.
 //!
 //! A `syn` parse failure is a **hard error** everywhere (ADR-0085 principle 6): a
 //! file we cannot walk could hide a member, and a gate that quietly shrinks its own
@@ -221,17 +223,35 @@ pub fn owner_aliases(sources: &[(String, String)], owner: &str) -> BTreeSet<Stri
         let Ok(file) = syn::parse_file(source) else {
             continue;
         };
-        for item in &file.items {
-            match item {
-                syn::Item::Use(u) => collect_owner_renames(&u.tree, owner, &mut set),
-                syn::Item::Type(t) if type_name(&t.ty).is_some_and(|id| id == owner) => {
-                    set.insert(t.ident.to_string());
-                }
-                _ => {}
-            }
-        }
+        collect_owner_aliases_in(&file.items, owner, &mut set);
     }
     set
+}
+
+/// Harvest owner aliases from a list of items, **recursing into inline modules**.
+///
+/// Recursing is not tidiness, it closes a fail-open. Miss a
+/// `mod inner { pub use …Owner as Doc; }` here and `Doc` never enters the owner set —
+/// while the file that then writes `use crate::a::inner::Doc;` *does* bind `Doc`, so
+/// [`Resolver::membership`] reads `Doc::from_trusted` as another type and suppresses a
+/// real door. Widening this pass can only move sites into the population, so recursing is
+/// the safe direction; recursing [`Resolver::for_file`] without this would be the unsafe
+/// one.
+fn collect_owner_aliases_in(items: &[syn::Item], owner: &str, set: &mut BTreeSet<String>) {
+    for item in items {
+        match item {
+            syn::Item::Use(u) => collect_owner_renames(&u.tree, owner, set),
+            syn::Item::Type(t) if type_name(&t.ty).is_some_and(|id| id == owner) => {
+                set.insert(t.ident.to_string());
+            }
+            syn::Item::Mod(m) => {
+                if let Some((_, inner)) = &m.content {
+                    collect_owner_aliases_in(inner, owner, set);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Whose door a policed site belongs to.
@@ -984,6 +1004,38 @@ mod tests {
     fn an_unparseable_file_is_skipped_rather_than_panicking() {
         assert_eq!(owner_aliases(&[src("fn (((")], "Owner").len(), 1);
     }
+
+    /// A rename inside an inline module must be harvested. Missing it is fail-**open**:
+    /// the importing file binds the alias, so the resolver would read the door as another
+    /// type and suppress it. Found by the whole-branch standards review on #790.
+    #[test]
+    fn a_rename_inside_an_inline_module_is_harvested() {
+        let set = owner_aliases(
+            &[src("mod inner { pub use crate::render::Owner as Doc; }\n")],
+            "Owner",
+        );
+        assert!(
+            set.contains("Doc"),
+            "nested renames must widen the set: {set:?}"
+        );
+    }
+
+    #[test]
+    fn a_type_alias_inside_an_inline_module_is_harvested() {
+        let set = owner_aliases(&[src("mod inner { pub type Html = Owner; }\n")], "Owner");
+        assert!(set.contains("Html"), "{set:?}");
+    }
+
+    #[test]
+    fn nesting_is_harvested_to_any_depth() {
+        let set = owner_aliases(
+            &[src(
+                "mod a { mod b { pub use crate::render::Owner as Deep; } }\n",
+            )],
+            "Owner",
+        );
+        assert!(set.contains("Deep"), "{set:?}");
+    }
 }
 
 /// Qualifier resolution (#790): the rule is "prove this is not the owner's door, or
@@ -1229,6 +1281,28 @@ mod owned_scan_tests {
         let c = classified_owned("fn a() { Owner::from_trusted(x); }\n");
         assert_eq!(c.unexempt.len(), 1, "recorded once, not once per hook");
         assert!(matches!(c.unexempt[0].why, Why::Unmarked));
+    }
+
+    /// The end-to-end form of the fail-open the standards review found on #790: the alias
+    /// is declared inside an inline module in one file and imported in another. Before the
+    /// harvest recursed into `mod`, `Doc` was absent from the owner set while the importing
+    /// file still bound it — so a real door resolved as another type and was suppressed,
+    /// with no marker owed and no census row.
+    #[test]
+    fn an_owner_alias_declared_inside_a_module_still_puts_a_site_in_the_population() {
+        let reexport = (
+            "a.rs".to_string(),
+            "mod inner { pub use crate::render::Owner as Doc; }\n".to_string(),
+        );
+        let site_src = "use crate::a::inner::Doc;\nfn f() { Doc::from_trusted(x); }\n";
+        let site = ("b.rs".to_string(), site_src.to_string());
+        let owners = owner_aliases(&[reexport, site], "Owner");
+        let s = scan(site_src, &["from_trusted"], Some(("Owner", &owners))).unwrap();
+        assert_eq!(
+            classify(site_src, &s, TOKEN).unexempt.len(),
+            1,
+            "a real door must not be suppressed by an unharvested nested alias"
+        );
     }
 
     #[test]

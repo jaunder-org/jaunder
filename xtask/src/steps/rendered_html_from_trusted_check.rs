@@ -19,22 +19,36 @@
 //! shipping. (`sanitize` needs no gate: it is safe wherever it is called.)
 //!
 //! **Population** (read structurally, ADR-0085 principle 1): every `from_trusted`
-//! ident under [`POLICED_ROOTS`], in ordinary code and inside macro token streams.
-//! Deliberately **not** "only paths qualified by `RenderedHtml`". Until #778 this
-//! gate skipped any `ContentType::from_trusted` by matching the path's qualifier —
-//! a pattern-decided exemption (ADR-0085 principle 3, *"Grants no automatic
-//! exemption from a pattern. Nothing self-exempts"*) that also failed **open**
-//! asymmetrically: an aliased *leaf* stayed guarded, but an aliased *qualifier*
-//! (`use RenderedHtml as ContentType`) handed out the exemption. `ContentType`'s
-//! door now says so in a marker like anything else. Two consequences follow:
+//! under [`POLICED_ROOTS`] whose qualifier is **`RenderedHtml`'s**, plus every one
+//! whose qualifier cannot be determined — in ordinary code and inside macro token
+//! streams.
 //!
-//! - `ContentType::from_trusted` sites cost one marker each. That is the friction
-//!   ADR-0085 prices deliberately, and it turns that door's own doc instruction
-//!   ("grep `ContentType::from_trusted` to enumerate every mint site") from a
-//!   request to a human into something the gate enforces.
-//! - A `from_trusted` **definition** is in the population too — `syn` visits a fn's
-//!   own `sig.ident` — so `pub fn from_trusted` carries a marker saying it is the
-//!   door itself. Fails closed, which is the direction this gate must err in.
+//! That population has moved twice. Until #778 the gate skipped any
+//! `ContentType::from_trusted` by matching the path's qualifier against a list — a
+//! pattern-decided exemption (ADR-0085 principle 3, *"Grants no automatic exemption
+//! from a pattern. Nothing self-exempts"*) that failed **open** asymmetrically: an
+//! aliased *leaf* stayed guarded, but an aliased *qualifier*
+//! (`use RenderedHtml as ContentType`) handed out the exemption. #778 deleted the
+//! list, correctly, and fell back to the bare leaf ident — which put every other
+//! type's `from_trusted` in the population, costing a marker apiece.
+//!
+//! #790 separated the two questions #778 had run together. Deciding *membership* is
+//! structural — it identifies the door — and is not the same act as *exempting* a
+//! site from it, which is what principle 3 governs. So the gate resolves the
+//! qualifier again, but now by reading what the AST plainly says rather than by
+//! pattern, and it **fails closed** on anything it cannot resolve. See
+//! `docs/adr/drafts/gate-population-membership-is-structural.md`.
+//!
+//! Two consequences follow:
+//!
+//! - **Another type's door owes nothing** once the gate can see whose door it is.
+//!   `ContentType::from_trusted` carries no marker. A qualifier the gate *cannot*
+//!   resolve — glob import, generic parameter, unqualified call, macro body — stays
+//!   in the population, so obscuring one buys a failure, not an exemption.
+//! - A `from_trusted` **definition** is in the population when it sits in
+//!   `impl RenderedHtml` — `syn` visits a fn's own `sig.ident` — so `pub fn
+//!   from_trusted` carries a marker saying it is the door itself. A definition in
+//!   another type's `impl` does not.
 //!
 //! Every member fails unless the line **immediately above** it carries a
 //! `// rendered-html-from-trusted:allow <reason>` marker. The scan, the marker rule
@@ -52,13 +66,15 @@
 //! where the unescaped sink lives — the residual gap the old doc called "the most
 //! plausible" became the ordinary case, so it is no longer acceptable.
 //!
-//! **Unreadable classes** (ADR-0085's honesty obligation) specific to this gate: a
-//! same-named `from_trusted` on an unrelated type is in the population and costs a
-//! marker — deliberate, since distinguishing them by qualifier is the fail-open
-//! this gate just removed, and #790 tracks removing the collision at its source
-//! instead. The classes inherent to the shared scan (a `use … as` rename, the
-//! unwalked attribute-macro tokens, the absent call graph, and that a marker is
-//! trusted rather than verified) are stated in [`crate::steps::ident_gate`]. A
+//! **Unreadable classes** (ADR-0085's honesty obligation) specific to this gate:
+//! resolution reads names, not types, so it can be misled by a chain of renames. The
+//! three ways, all fail-**open**, are enumerated as class 1 in
+//! [`crate::steps::ident_gate`] — a rename of a rename, a renaming re-export outside
+//! the roots, and a free `fn` nested inside another type's `impl`. None has a live
+//! instance. Each is strictly narrower than the blind spot #778 removed, which handed
+//! out a tree-wide exemption for one aliased qualifier. The classes inherent to the
+//! shared scan (the unwalked attribute-macro tokens, the absent call graph, and that a
+//! marker is trusted rather than verified) are also stated there. A
 //! `syn` parse failure is a **hard error** (a file we cannot walk could hide a
 //! spurious door — a false pass), matching
 //! [`crate::steps::server_fn_registrar_check`].
@@ -411,17 +427,19 @@ fn t() {
         assert!(violations("fn broken( {{{ not valid").is_err());
     }
 
-    /// The verdict fires at `ContentType::from_trusted` and at definition sites too,
-    /// so it must not make claims that are false there: that *this* site is
-    /// `RenderedHtml`'s door, or that a string minted here reaches the DOM. Naming
-    /// `RenderedHtml` while explaining why the gate exists is fine and stays —
-    /// the assertion is about what the message claims of the site, not about which
-    /// words appear in it.
+    /// The verdict fires at **unresolvable-qualifier** sites as well as at the door's
+    /// own, so it must not make claims that are false there: that *this* site is
+    /// `RenderedHtml`'s door, or that a string minted here reaches the DOM. Since #790
+    /// the verdict may name `RenderedHtml` again, but only disjunctively — "either it is
+    /// `RenderedHtml`'s door … or its qualifier could not be resolved" — which is true at
+    /// both kinds of site. Naming the type while explaining why the gate exists is fine
+    /// and stays; the assertion is about what the message claims *of this site*, not
+    /// about which words appear in it.
     ///
     /// Checked on the violation line alone; the recovery paragraph discusses
     /// `RenderedHtml` at length and should.
     #[test]
-    fn the_verdict_claims_nothing_false_at_a_content_type_site() {
+    fn the_verdict_claims_nothing_false_at_an_unresolvable_site() {
         let scanned = vec![(
             "common/src/media.rs".to_string(),
             "fn detect(n: &str) -> ContentType { ContentType::from_trusted(n) }\n".to_string(),

@@ -198,11 +198,12 @@ is a real test, not an eyeball.
 **Gate wiring — `xtask/src/steps/rendered_html_from_trusted_check.rs`**
 
 - **AC9** The gate declares `RenderedHtml` as its owner.
-  `raw_html_door_check.rs` and `html_sink_check.rs` change by **exactly one line
-  each — `owner: None`** and nothing else. `Gate` is a `const` struct literal in
-  both with no `Default`, so a new field is a compile error until they name it;
-  "untouched" was never achievable. Their behaviour is unchanged, which is the
-  property that matters, and their own tests pin it.
+  `raw_html_door_check.rs` and `html_sink_check.rs` gain **`owner: None` plus a
+  short comment saying why the feature is meaningless for them, and nothing
+  else** — additions only, no deletions, no behavioural change. `Gate` is a
+  `const` struct literal in both with no `Default`, so a new field is a compile
+  error until they name it; "untouched" was never achievable. Behaviour being
+  unchanged is the property that matters, and their own tests pin it.
 - **AC10** The three fixtures that currently assert a `ContentType` door needs a
   marker (`:194`, `:200`, `:206`) are inverted or re-pointed: an other-type door
   is now clean with no marker. The `Widget::from_trusted` case (`:206`) becomes
