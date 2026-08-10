@@ -259,12 +259,13 @@ relationship to ADR-0076 and ADR-0099.
 
 ## Separable concerns — filed as issues, not folded in
 
-- **Secondary-page navigations are not attributed.** 20 loads sit on `e2e.page`
-  spans that carry no `navigation_top_json`, and they do not reconcile with the
-  per-test totals (`visibility.spec.ts` "Subscribers post: visible after
-  Subscribe…" reports 1 on its test span while its page spans sum to 5). So 211
-  under-counts real page loads. Fixing the attribution is a tracing change in
-  the ADR-0096 lineage, not a navigation-count change.
+- **Secondary-page navigations are not attributed** —
+  [#895](https://github.com/jaunder-org/jaunder/issues/895). 20 loads sit on
+  `e2e.page` spans that carry no `navigation_top_json`, and they do not
+  reconcile with the per-test totals (`visibility.spec.ts` "Subscribers post:
+  visible after Subscribe…" reports 1 on its test span while its page spans sum
+  to 5). So 211 under-counts real page loads. Fixing the attribution is a
+  tracing change in the ADR-0096 lineage, not a navigation-count change.
 - **`verifiedUser` still drives the set-email/verify UI** (`fixtures.ts:541`, 2
   navigations × 5 uses). Deliberate under ADR-0098 — it is
   `email::request_verification` / `email::verify` coverage — and out of scope

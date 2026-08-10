@@ -131,7 +131,7 @@ Copied from the spec; every task's requirements implicitly include these.
 - Produces: an issue number, referenced in the spec's Separable Concerns section
   and in Task 2's artifact.
 
-- [ ] **Step 1: File the issue** via `jaunder-issues`.
+- [x] **Step 1: File the issue** via `jaunder-issues`. → **#895**
 
 Title: `e2e: secondary-page navigations are unattributed and do not reconcile`
 
@@ -143,7 +143,7 @@ after Unsubscribe" reports 1 on its `e2e.test` span while its page spans sum to
 ADR-0096 lineage. Labels `test-infra`, `observability`; milestone
 `Observability & diagnostics`.
 
-- [ ] **Step 2: Cross-reference it**
+- [x] **Step 2: Cross-reference it**
 
 Edit the spec's "Separable concerns" bullet to carry the new issue number.
 
