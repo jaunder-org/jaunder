@@ -356,6 +356,13 @@ impl From<sqlx::Error> for InternalError {
     /// A storage-driver failure: masks as `"storage operation failed"` (kind
     /// `Storage`, class `Bug`) while preserving the `sqlx::Error` as a typed,
     /// downcastable source. Behavior-identical to `InternalError::storage(error)`.
+    ///
+    /// Lifting *every* `sqlx::Error` to class `Bug` is right for what this impl
+    /// actually carries: pool timeouts, I/O, protocol and constraint failures,
+    /// all genuinely pageable. `Error::RowNotFound` reaching here would mean a
+    /// call site used `fetch_one` on a row that can be absent — a caller
+    /// defect. Absence is named at its source instead, by
+    /// `storage::error::MissingRow` (#343).
     fn from(error: sqlx::Error) -> Self {
         Self::storage(error)
     }

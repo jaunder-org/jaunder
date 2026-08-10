@@ -9,10 +9,9 @@ impl SubscriptionDialect for Sqlite {
     const INSERT_SUBSCRIPTION: &'static str = "INSERT INTO subscriptions \
          (author_user_id, channel_id, subscriber_ref, status_id) \
          VALUES (?, ?, ?, (SELECT status_id FROM subscription_statuses WHERE name = ?)) \
-         ON CONFLICT (author_user_id, channel_id, subscriber_ref) DO NOTHING";
-
-    const SELECT_SUBSCRIPTION_ID: &'static str = "SELECT subscription_id FROM subscriptions \
-         WHERE author_user_id = ? AND channel_id = ? AND subscriber_ref = ?";
+         ON CONFLICT (author_user_id, channel_id, subscriber_ref) \
+         DO UPDATE SET subscriber_ref = excluded.subscriber_ref \
+         RETURNING subscription_id";
 
     const DELETE_SUBSCRIPTION: &'static str = "DELETE FROM subscriptions \
          WHERE author_user_id = ? AND channel_id = ? AND subscriber_ref = ?";

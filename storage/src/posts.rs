@@ -372,6 +372,18 @@ pub enum TaggingError {
     /// The target post does not exist.
     #[error("post not found")]
     PostNotFound,
+    /// A row the tagging path required is not there.
+    ///
+    /// Reading a tag id back is the one step here that is **not** structurally
+    /// guaranteed: the insert before it is `ON CONFLICT DO NOTHING` /
+    /// `INSERT OR IGNORE`, so it may not have written anything and the `SELECT`
+    /// may be reading a pre-existing row. Nothing in the tree deletes a tag
+    /// today, which is the only reason absence is unreachable — a fact about
+    /// the data, not a property of the statement (#883). So it is a named
+    /// error, not an `unreachable!`: if tag deletion ever lands, this reports
+    /// which row went missing instead of panicking a request handler.
+    #[error(transparent)]
+    MissingRow(#[from] crate::error::MissingRow),
     /// An unexpected database error occurred.
     #[error(transparent)]
     Internal(#[from] sqlx::Error),

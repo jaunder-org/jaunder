@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{Pool, Sqlite};
 
+use crate::error::RequireRow;
 use crate::helpers::{PostRow, post_record_from_row};
 use crate::posts::{
     DELETE_POST_TAG_BY_SLUG, SELECT_POST_TAGS, SELECT_TAG_ID_BY_SLUG, post_tag_diff,
@@ -183,10 +184,16 @@ impl PostDialect for Sqlite {
                     .bind(&slug)
                     .execute(&mut *conn)
                     .await?;
+                // A named absence rather than `fetch_one`'s anonymous
+                // `RowNotFound`: `INSERT OR IGNORE` may not have written
+                // anything, so this can be reading a pre-existing row. It is
+                // unreachable only because nothing deletes a tag today — a fact
+                // about the data, not the statement (#883).
                 let tag_id = sqlx::query_scalar::<_, TagId>(SELECT_TAG_ID_BY_SLUG)
                     .bind(&slug)
-                    .fetch_one(&mut *conn)
-                    .await?;
+                    .fetch_optional(&mut *conn)
+                    .await?
+                    .require_row("the tag row read back for its id")?;
                 // OR IGNORE, not a bare INSERT: `desired` may carry two labels
                 // sharing a slug (post_tag_diff does not dedupe), and the first
                 // occurrence's casing must win.

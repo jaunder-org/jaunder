@@ -9,10 +9,9 @@ impl SubscriptionDialect for Postgres {
     const INSERT_SUBSCRIPTION: &'static str = "INSERT INTO subscriptions \
          (author_user_id, channel_id, subscriber_ref, status_id) \
          VALUES ($1, $2, $3, (SELECT status_id FROM subscription_statuses WHERE name = $4)) \
-         ON CONFLICT (author_user_id, channel_id, subscriber_ref) DO NOTHING";
-
-    const SELECT_SUBSCRIPTION_ID: &'static str = "SELECT subscription_id FROM subscriptions \
-         WHERE author_user_id = $1 AND channel_id = $2 AND subscriber_ref = $3";
+         ON CONFLICT (author_user_id, channel_id, subscriber_ref) \
+         DO UPDATE SET subscriber_ref = excluded.subscriber_ref \
+         RETURNING subscription_id";
 
     const DELETE_SUBSCRIPTION: &'static str = "DELETE FROM subscriptions \
          WHERE author_user_id = $1 AND channel_id = $2 AND subscriber_ref = $3";

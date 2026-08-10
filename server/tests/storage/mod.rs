@@ -296,6 +296,27 @@ async fn local_channel_id_returns_seeded_local(#[case] backend: Backend) {
     assert_eq!(actual, expected);
 }
 
+// The other half of the accessor's contract: with the seed gone, the absence is
+// reported as a *named* missing row, not as an anonymous driver error the
+// boundary would page on with "storage operation failed" (#343). Deleting the
+// row is possible on both backends because `subscriptions` is the only table
+// referencing `channels` and a fresh test database has no subscription rows.
+#[apply(backends)]
+#[tokio::test]
+async fn local_channel_id_names_the_row_when_the_seed_is_missing(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    raw_exec(backend, &env, "DELETE FROM channels WHERE name = 'local'").await;
+    let error = state.subscriptions.local_channel_id().await.unwrap_err();
+    assert_eq!(error.kind(), host::error::ErrorKind::Internal);
+    assert_eq!(error.class(), host::error::ErrorClass::Bug);
+    let operator = error.operator_message();
+    assert!(
+        operator.contains("the seeded 'local' channel row"),
+        "operator message must name the missing row, got: {operator}"
+    );
+}
+
 #[apply(backends)]
 #[tokio::test]
 async fn subscribe_is_idempotent_and_active(#[case] backend: Backend) {

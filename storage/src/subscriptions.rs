@@ -17,6 +17,9 @@ use common::ids::{ChannelId, SubscriptionId, UserId};
 use common::visibility::{
     SubscriptionPolicy, SubscriptionStatus, ViewerIdentity, local_subscriber_ref,
 };
+use host::error::InternalResult;
+
+use crate::error::RequireRow;
 
 /// A subscription row returned by [`SubscriptionStorage::list_subscribers`].
 #[derive(Clone, Debug)]
@@ -77,20 +80,29 @@ pub trait SubscriptionStorage: Send + Sync {
     /// filter and `is_subscriber` resolve the local channel inline in SQL
     /// (#6), which is both cheaper than a round trip and impossible to point at
     /// the wrong row.
-    async fn local_channel_id(&self) -> sqlx::Result<ChannelId>;
+    ///
+    /// Unlike its siblings this returns an [`InternalResult`], because it is the
+    /// one method here that reads a row which can genuinely be absent: a
+    /// database whose `local` seed is gone. That absence is named — the
+    /// operator is told which row — rather than surfacing as an anonymous
+    /// driver error (#343). It still pages; a missing seed is a broken install.
+    async fn local_channel_id(&self) -> InternalResult<ChannelId>;
 }
 
 /// Per-backend SQL for [`SubscriptionStore`]. The statements differ only in the
 /// placeholder syntax (`SQLite` `?`, Postgres `$n`); the logical behavior is
 /// identical (ADR-0019).
 pub trait SubscriptionDialect: Database {
-    /// Idempotent insert: resolves the status name to its `status_id` via a
-    /// subquery and no-ops on the `(author_user_id, channel_id, subscriber_ref)`
-    /// conflict. Bind order: `author_user_id, channel_id, subscriber_ref, status_name`.
+    /// Idempotent upsert: resolves the status name to its `status_id` via a
+    /// subquery and, on the `(author_user_id, channel_id, subscriber_ref)`
+    /// conflict, rewrites `subscriber_ref` to the value it already holds. That
+    /// deliberate no-op write is what makes `RETURNING` emit the row on the
+    /// conflict path too — so the statement returns the `subscription_id` on
+    /// both paths, and no second `SELECT` (and no TOCTOU window) is needed.
+    /// `status_id` stays out of the `SET` list, so an existing subscription
+    /// keeps its status. Bind order:
+    /// `author_user_id, channel_id, subscriber_ref, status_name`.
     const INSERT_SUBSCRIPTION: &'static str;
-    /// Selects the `subscription_id` for the unique triple. Bind order:
-    /// `author_user_id, channel_id, subscriber_ref`.
-    const SELECT_SUBSCRIPTION_ID: &'static str;
     /// Deletes the row for the unique triple. Bind order:
     /// `author_user_id, channel_id, subscriber_ref`.
     const DELETE_SUBSCRIPTION: &'static str;
@@ -153,17 +165,16 @@ where
         // an integer FK, not a TEXT-token enum column). Bind the name as a typed
         // `&'static str` (strum `IntoStaticStr`) — not a stringly `.as_str()` strip.
         let status_name: &'static str = status.into();
-        sqlx::query(DB::INSERT_SUBSCRIPTION)
+        // One statement, not an insert followed by a select: the separate
+        // `SELECT` could miss a row a concurrent unsubscribe had just deleted
+        // (#343). `RETURNING` fires on the insert arm and on the `DO UPDATE`
+        // conflict arm alike, so the row is guaranteed and `fetch_one` is the
+        // honest read.
+        sqlx::query_as::<_, (SubscriptionId,)>(DB::INSERT_SUBSCRIPTION)
             .bind(author_user_id)
             .bind(channel_id)
             .bind(subscriber_ref)
             .bind(status_name)
-            .execute(&self.pool)
-            .await?;
-        sqlx::query_as::<_, (SubscriptionId,)>(DB::SELECT_SUBSCRIPTION_ID)
-            .bind(author_user_id)
-            .bind(channel_id)
-            .bind(subscriber_ref)
             .fetch_one(&self.pool)
             .await
             .map(|(id,)| id)
@@ -245,11 +256,12 @@ where
             .collect())
     }
 
-    async fn local_channel_id(&self) -> sqlx::Result<ChannelId> {
-        sqlx::query_as::<_, (ChannelId,)>(DB::SELECT_LOCAL_CHANNEL_ID)
-            .fetch_one(&self.pool)
-            .await
-            .map(|(id,)| id)
+    async fn local_channel_id(&self) -> InternalResult<ChannelId> {
+        let row = sqlx::query_as::<_, (ChannelId,)>(DB::SELECT_LOCAL_CHANNEL_ID)
+            .fetch_optional(&self.pool)
+            .await?;
+        let (id,) = row.require_row("the seeded 'local' channel row")?;
+        Ok(id)
     }
 }
 
