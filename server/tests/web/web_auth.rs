@@ -27,7 +27,7 @@ fn session_token_of(set_cookie: Option<String>) -> RawToken {
 /// established.
 ///
 /// These assertions are the enforcement mechanism named by
-/// `docs/adr/drafts/web-session-establishment-is-cookie-only.md`, so the invariant
+/// `docs/adr/0107-web-session-establishment-is-cookie-only.md`, so the invariant
 /// is spelled out once here rather than re-derived per endpoint. It compares the
 /// token *value*: `register`'s body is a bare `null`, so checking for a `"token"`
 /// field name would be vacuous.

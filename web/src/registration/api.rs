@@ -14,7 +14,7 @@ use common::password::ProfferedPassword;
 // `#[server]`-generated signature references it on both the client and server
 // builds. `RawToken` is deliberately absent — `register` returns `()`, and the
 // session token it mints stays server-side in the HttpOnly cookie (#533; the rule
-// is recorded in docs/adr/drafts/web-session-establishment-is-cookie-only.md).
+// is recorded in docs/adr/0107-web-session-establishment-is-cookie-only.md).
 use common::registration::RegistrationPolicy;
 use common::username::Username;
 
@@ -50,7 +50,7 @@ pub async fn get_policy() -> WebResult<RegistrationPolicy> {
 /// Returns `()`: the freshly minted session token is deliberately not sent back in
 /// the body (#533), so an XSS at registration time has no credential to read. The
 /// rule is recorded in
-/// `docs/adr/drafts/web-session-establishment-is-cookie-only.md`.
+/// `docs/adr/0107-web-session-establishment-is-cookie-only.md`.
 #[macros::server(skip(password, invite_code))]
 pub async fn register(
     username: Username,
