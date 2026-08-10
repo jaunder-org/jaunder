@@ -130,7 +130,9 @@ works.
 
 2. **AC2 — the opt-in matrix matches the table above.** `StrNewtype` (both
    forms), `IdNewtype` and `#[text_enum(sqlx)]` set it; `NumNewtype` and
-   `SqlxBridge` do not. Six `BridgeSpec` construction sites are updated.
+   `SqlxBridge` do not. **Nine** `BridgeSpec` construction sites are updated:
+   the seven production ones listed in the Design section, plus the two literals
+   in `sqlx_bridge.rs`'s own `tests` module.
 
 3. **AC3 — the non-arrayable newtypes still compile.** `common` builds with its
    `sqlx` feature on. Named as its own criterion because `PageSize`,

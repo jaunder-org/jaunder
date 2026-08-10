@@ -83,7 +83,7 @@ rstest_reuse, cargo-nextest, `cargo xtask` gate.
 
 ---
 
-- [ ] **Step 1: Add the field and the impl**
+- [x] **Step 1: Add the field and the impl**
 
 In `macros/src/sqlx_bridge.rs`, add to `BridgeSpec`:
 
@@ -126,7 +126,7 @@ built as:
     };
 ```
 
-- [ ] **Step 2: Set the flag at all seven sites**
+- [x] **Step 2: Set the flag at all seven sites**
 
 `pg_array: true` — `id_newtype.rs:102` (inner `i64`), `str_newtype.rs:338` and
 `:355` (both `String`), `text_enum.rs:221` (`String`).
@@ -140,7 +140,7 @@ one.
 Also add `pg_array` to the two `BridgeSpec` literals in the `tests` module —
 `spec_for` (`:123`) with `false`, and the inline one at `:167`.
 
-- [ ] **Step 3: Write the macro unit tests**
+- [x] **Step 3: Write the macro unit tests**
 
 Add to `macros/src/sqlx_bridge.rs`'s `tests` module:
 
@@ -179,7 +179,7 @@ update syntax — writing the literal out by hand would let the two drift.
 (Step 2 must have added `pg_array` to `spec_for`'s own literal first, or this
 does not compile.)
 
-- [ ] **Step 4: Split the `#[automatically_derived]` count test**
+- [x] **Step 4: Split the `#[automatically_derived]` count test**
 
 `output_is_feature_gated_and_marked_derived` (`:180-186`) asserts exactly 3. Do
 **not** just change it to 4 — it must assert 3 for a disabled spec and 4 for an
@@ -202,7 +202,7 @@ enabled one:
     }
 ```
 
-- [ ] **Step 5: Run the macro tests**
+- [x] **Step 5: Run the macro tests**
 
 ```bash
 devtool run -- cargo nextest run -p macros
@@ -210,7 +210,7 @@ devtool run -- cargo nextest run -p macros
 
 Expected: **PASS**, including the two new tests and the split count test.
 
-- [ ] **Step 6: Prove the opt-in protects the non-arrayable newtypes (AC3)**
+- [x] **Step 6: Prove the opt-in protects the non-arrayable newtypes (AC3)**
 
 ```bash
 devtool run -- cargo check -p common --features sqlx
@@ -235,7 +235,7 @@ turning `num_newtype`'s flag on would be caught by CI failing to compile
 deliberate (a compile-fail test harness is not worth standing up for this), and
 is recorded so the absence reads as a decision rather than an oversight.
 
-- [ ] **Step 7: PROBE THE COVERAGE GATE (AC9) — before Tasks 2–3**
+- [x] **Step 7: PROBE THE COVERAGE GATE (AC9) — before Tasks 2–3**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-891-pg-array-newtype -- cargo xtask check
@@ -256,7 +256,7 @@ lines**?
 This step exists because it is much cheaper to discover a red coverage gate here
 than after two more tasks depend on the design.
 
-- [ ] **Step 8: Update the docs that count the impls**
+- [x] **Step 8: Update the docs that count the impls**
 
 Three sites count the impls, not two:
 
@@ -268,7 +268,7 @@ Three sites count the impls, not two:
 All become four, and the table gains a `pg_array` column recording which callers
 opt in and why `NumNewtype` cannot.
 
-- [ ] **Step 9: Gate and commit**
+- [x] **Step 9: Gate and commit**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-891-pg-array-newtype -- cargo xtask check
@@ -297,12 +297,12 @@ git commit -m "feat(macros): emit PgHasArrayType for opted-in newtypes (#891)"
 
 ---
 
-- [ ] **Step 1: Delete the helper and its doc block**
+- [x] **Step 1: Delete the helper and its doc block**
 
 Remove lines 38-49 in full — the doc block narrates a defect that no longer
 exists, so leaving it would be worse than leaving the function.
 
-- [ ] **Step 2: Bind typed slices at all five call sites**
+- [x] **Step 2: Bind typed slices at all five call sites**
 
 `:27` becomes:
 
@@ -324,7 +324,7 @@ the local and bind `ids` directly:
 If `.bind(ids)` needs a reborrow (`ids` is already `&[FeedEventId]`), follow the
 compiler — sqlx's `Encode for &[T]` is what makes this work.
 
-- [ ] **Step 3: Run the feed-events tests**
+- [x] **Step 3: Run the feed-events tests**
 
 ```bash
 devtool run -- devtool pg run -- cargo nextest run -p storage feed_events
@@ -333,7 +333,7 @@ devtool run -- devtool pg run -- cargo nextest run -p storage feed_events
 Expected: **PASS**. These already exercise all five statements on Postgres, so
 they are the regression cover for the bind change.
 
-- [ ] **Step 4: Confirm the strip is gone**
+- [x] **Step 4: Confirm the strip is gone**
 
 ```bash
 rg -n 'raw_ids|i64::from' storage/src/postgres/feed_events.rs
@@ -341,7 +341,7 @@ rg -n 'raw_ids|i64::from' storage/src/postgres/feed_events.rs
 
 Expected: no output.
 
-- [ ] **Step 5: Gate and commit**
+- [x] **Step 5: Gate and commit**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-891-pg-array-newtype -- cargo xtask check
@@ -369,7 +369,7 @@ git commit -m "refactor(storage): bind FeedEventId slices without stripping to i
 
 ---
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 `feed_events` covers the `i64` case; nothing covers `String`, and #876 needs it.
 Add:
@@ -432,7 +432,7 @@ So the imports to add are: `rstest::*`, `rstest_reuse::*`, `common::tag::Tag`,
 `crate::test_support::{Backend, CloseablePool, postgres_only}`. Follow
 `storage/src/postgres/backup.rs:361-363` for the shape.
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 ```bash
 devtool run -- devtool pg run -- cargo nextest run -p storage str_newtype_slices_bind
@@ -444,7 +444,7 @@ To confirm it is actually testing the new capability, temporarily set
 `pg_array: false` on `str_newtype.rs`'s two sites and re-run: expected **compile
 error** on `.bind(&wanted)`. Revert.
 
-- [ ] **Step 3: Gate and commit**
+- [x] **Step 3: Gate and commit**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-891-pg-array-newtype -- cargo xtask check
@@ -457,7 +457,7 @@ git add storage/src/postgres/mod.rs
 git commit -m "test(storage): pin that StrNewtype slices bind as Postgres arrays (#891)"
 ```
 
-- [ ] **Step 4: Run the full local gate (AC10)**
+- [x] **Step 4: Run the full local gate (AC10)**
 
 `check` is the iterate-time gate; AC10 names `validate`. Run it here so the
 criterion has an owner rather than being deferred to ship in prose:

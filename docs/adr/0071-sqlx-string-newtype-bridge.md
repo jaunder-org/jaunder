@@ -4,7 +4,9 @@
 - Date: 2026-07-20
 - Issue: [#438](https://github.com/jaunder-org/jaunder/issues/438),
   [#686](https://github.com/jaunder-org/jaunder/issues/686) (extended to
-  `IdNewtype`/`NumNewtype`)
+  `IdNewtype`/`NumNewtype`),
+  [#891](https://github.com/jaunder-org/jaunder/issues/891) (amended: a fourth,
+  opt-in `PgHasArrayType` impl)
 
 ## Context
 
@@ -144,6 +146,36 @@ rather than bounds implied by an unsigned primitive that the boundary discards
 anyway. The general rule is recorded in ADR-0063 §2: an unsigned `inner` is not
 a substitute for a declared `min` on a value that crosses this boundary. So the
 numeric half of the gate is now absolute rather than absolute-with-footnotes.
+
+### Amended by #891: a fourth impl, `PgHasArrayType`, opt-in per caller
+
+Without it a _slice_ of a newtype has no Postgres array encoding, so `= ANY($n)`
+call sites had to strip to a raw `Vec<i64>`/`Vec<String>` first — the laundering
+#716 describes, which grew with every newly-typed caller (#715 typed a parameter
+and thereby added a _fourth_ stripping caller). The fourth impl restores
+ADR-0063's "the newtype survives to the bind" for slices, and let the last such
+helper be deleted.
+
+It departs from this ADR's "one generic impl covers both backends" shape in
+three ways, deliberately:
+
+- It is **Postgres-only**. `PgHasArrayType` is a `sqlx::postgres` trait; SQLite
+  has no array type and needs no equivalent.
+- It is **concrete, not `impl<DB: Database>`** — which is why it cannot carry a
+  `where #type_inner: PgHasArrayType` guard. On a concrete impl that is a
+  _trivial bound_, discharged at the definition, so an inner lacking the trait
+  is `E0277` **at the impl** rather than an unusable impl. Emission is therefore
+  decided by the caller, via `BridgeSpec::pg_array`.
+- Consequently it is **not universal**. sqlx implements `PgHasArrayType` for
+  `i32`/`i64`/`String` only, so `StrNewtype`, `IdNewtype` and
+  `#[text_enum(sqlx)]` opt in, while `NumNewtype` (inners include `u32`/`usize`)
+  and `SqlxBridge` (caller-declared field type) stay off. Turning `NumNewtype`
+  on stops `common` compiling. The per-caller matrix lives in
+  `macros/src/sqlx_bridge.rs`'s module doc, beside the code it governs.
+
+`#[sqlx_bridge(text)]`'s inner _is_ `String`, so it could opt in safely; it
+stays off because nothing binds a slice of one, not because it cannot. That
+asymmetry is deliberate and one line to reverse.
 
 ## Consequences
 
