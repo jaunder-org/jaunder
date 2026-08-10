@@ -273,13 +273,13 @@ impl FeedWorker {
     /// used up.
     async fn on_regen_failure(
         &self,
-        feed_url: &str,
+        feed_url: &FeedPath,
         ids: &[FeedEventId],
         recs: &[FeedEventRecord],
         e: &RegenerateError,
     ) {
         host::metrics::feed_regeneration(host::metrics::RegenResult::Error);
-        tracing::error!(error = %e, feed_url, "feed.regen.failed");
+        tracing::error!(error = %e, feed_url = %feed_url, "feed.regen.failed");
         let attempt = recs.iter().map(|r| r.attempts).max().unwrap_or(0) + 1;
         let attempt_usize = usize::try_from(attempt).unwrap_or(0);
         let next_attempt_idx = attempt_usize.saturating_sub(1);
