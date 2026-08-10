@@ -25,6 +25,49 @@ Arithmetic checked: the four class counts sum to 231, the corpus total. The
 `kept:entry` count decomposes as 114 test-attributed (exactly one per test that
 navigates at all — 114 such tests) plus 14 secondary-page entries.
 
+### Amendment 1 — `PREDICTED_TOTAL` 170 → 169 (Task 6b, still before any arm)
+
+The block above is left as first written; this records what changed and why.
+
+Implementing Task 6b found one row the classification had called `converted`
+that cannot be converted, because it was never a navigation at all. In
+`draft lifecycle: create, view, edit, and publish`, the second
+`goto(page, permalinkUrl)` targeted the URL `page` was **already displaying** —
+only `guestPage` had moved in between. It was a full reload of the current page,
+so there is no in-app move to replace it with, and `navigateInApp` cannot
+express it (its barrier would be vacuous by construction). It is deleted
+outright.
+
+Deleting rather than converting removes one more load than predicted, so:
+
+```
+saved            = 62          (was 61)
+PREDICTED_TOTAL  = 169         (was 170)
+
+ceiling firefox  = 62 x 911 ms = 56.5 s   (was 55.6 s)
+ceiling chromium = 62 x 689 ms = 42.7 s   (was 42.0 s)
+floor (60%)      = firefox 33.9 s / chromium 25.6 s
+```
+
+Nothing else moves. The deletion is safe: the assertions that follow it stash
+`__jaunderNoReload` on `window` to prove the publish flip happens _without_ a
+document reload, and that sentinel is set after the deleted line, so removing a
+reload strengthens rather than weakens the test.
+
+**Two changes that do NOT move the prediction**, recorded so the count check can
+be read correctly:
+
+- `scheduling from the edit page shows a Scheduled-for badge on the drafts page`
+  (#863) was converted too. It postdates the corpus, so none of its loads are in
+  the 231 baseline and none are in `PREDICTED_TOTAL`. The post-change observed
+  total will therefore include loads the prediction never counted; Task 11 must
+  subtract this test before comparing.
+- `editing a post updates tag chips and tag listing pages` had its two
+  tag-listing assertions **reordered**. `/tags/xeditd` is reached by clicking
+  the post's own chip, which exists only while the page is still on the
+  permalink, so it must precede the `/tags/xeditc` load that leaves it. Both
+  assertions are intact; only the order changed. Listed under Subject changes.
+
 ## Method
 
 **Source.**
@@ -488,7 +531,24 @@ to make one of those two tests enter at `/drafts` and reach the composer instead
 
 ## Subject changes
 
-None yet — populated by Task 7 step 2 as conversions land.
+Tests whose subject moved, as opposed to tests that merely reach the same place
+by a different route. Populated as conversions land; quoted into the Task 11
+write-up (spec A10). No `expect` assertion has been deleted or weakened in any
+of them.
+
+**Task 6b — `editing a post updates tag chips and tag listing pages`.** The two
+tag-listing assertions are **reordered**. `/tags/xeditd` (the retained tag) is
+now reached by clicking the post's own `#xeditd` chip, and that chip exists only
+while the page is still on the permalink — so it must be checked before the
+`/tags/xeditc` load, which leaves the permalink behind. Previously both were
+independent cold loads in the other order. What each assertion checks is
+unchanged; what changed is that one of them now also depends on the chip being a
+working in-app link.
+
+**Task 6b — `draft lifecycle: create, view, edit, and publish`.** A reload of
+the already-displayed permalink is deleted (Amendment 1). Nothing it asserted is
+lost, and the `__jaunderNoReload` sentinel that follows is strengthened by the
+removal.
 
 ## Uncertain — review these
 

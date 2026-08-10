@@ -66,6 +66,16 @@ test("an empty reason is rejected", async ({ page }) => {
   expect(() => allowSecondBoot(page, "   ")).toThrow(/reason/);
 });
 
+test("a declaration works on a page armed late", async ({ page }) => {
+  // No trackBoots: the declaration itself arms the page. A test may declare a
+  // second load on a page the fixtures have not armed, and refusing that would
+  // deadlock — declarations are written before arming becomes automatic.
+  await goto(page, "/");
+  allowSecondBoot(page, "arming happens at declaration time here");
+  await goto(page, "/login");
+  expect(new URL(page.url()).pathname).toBe("/login");
+});
+
 // `registeredPage` is the same one-boot rule expressed as a fixture: the test
 // names its entry, and the fixture refuses to boot the page a second time.
 // No `bootCount` assertion here — the fixture navigates before the test body

@@ -97,14 +97,19 @@ export function allowSecondBoot(page: Page, reason: string): void {
         "page boots more than once (#867).",
     );
   }
-  const state = states.get(page);
+  let state = states.get(page);
   if (state === undefined) {
-    throw new Error(
-      "allowSecondBoot called on a page whose budget was never armed — call " +
-        "trackBoots(page) first (fixtures arm it automatically).",
-    );
+    // Arming late. A declaration can only ever follow the page's entry load —
+    // you cannot declare a *second* boot before the first — so the entry is
+    // counted here rather than refused. Refusing instead would make a
+    // declaration unusable on any page the fixtures had not already armed,
+    // which is a deadlock: declarations are written before arming becomes
+    // automatic, and arming cannot become automatic until they are written.
+    trackBoots(page);
+    state = states.get(page);
+    state?.loads.push(page.url());
   }
-  state.allowances.push(reason);
+  state?.allowances.push(reason);
 }
 
 /** Document loads counted on `page` so far. Zero if never armed. */

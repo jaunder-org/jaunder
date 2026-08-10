@@ -792,7 +792,26 @@ The remainder: the four 5-navigation tests,
 
 **Interfaces:** as Task 6a.
 
-- [ ] **Step 1: Convert and declare, per the classification**
+- [x] **Step 1: Convert and declare, per the classification** — 14 conversions
+      and 7 declarations. Permalink destinations use `ready: "article.j-post"`
+      (emitted only by the post renderers), edit pages use `SEL.postBody`
+      (absent from permalinks and `/drafts`); neither tripped the
+      already-matches assertion. `/drafts` is reached through the real sidebar
+      nav item (`web/src/sidebar/markup.rs:20`).
+
+      **A defect in this plan surfaced here, not in the conversions.**
+      `allowSecondBoot` threw on any page the fixtures had not armed — and
+      automatic arming is Task 8, which cannot land until Task 7's files are
+      converted, which cannot happen without declarations. A deadlock, and all
+      6 failures in the first run were that one cause. Fixed in
+      `bootBudget.ts`: a declaration can only ever follow a page's entry load,
+      so arming late infers the entry rather than refusing it. Pinned by a new
+      test, `a declaration works on a page armed late`.
+
+      Also converted `scheduling from the edit page shows a Scheduled-for badge`
+      (#863), which postdates the corpus and so appears in no classification
+      row. Leaving it would have failed Task 8 with no task assigned to fix it.
+      Its loads are outside the 231 baseline — see Amendment 1.
 
 Same rules as Task 6a. Note the cold-render subjects concentrated here —
 `published post renders at permalink` is `kept:declared` and its reason must say
@@ -802,16 +821,17 @@ the cold permalink render is the subject (this is the criterion A7 rests on).
 (`/posts/999999999/edit`, `/posts/abc/edit`). Both are cold loads of a not-found
 route by design; classify accordingly rather than routing in-app.
 
-- [ ] **Step 2: Iterate**
+- [x] **Step 2: Iterate**
 
 Run: `... cargo xtask e2e-local posts` Expected: PASS.
 
-- [ ] **Step 3: Verify on both browsers**
+- [x] **Step 3: Verify on both browsers** — **`e2e-local`: 151 passed (6.0 m)**,
+      the 150 baseline plus the new late-arming regression test. The first run
+      was 6 failed / 137 passed, every failure the `allowSecondBoot` deadlock
+      above; fixed at the cause, not silenced. Firefox still deferred to the
+      final `validate`.
 
-Run: `... cargo xtask e2e sqlite chromium` and
-`... cargo xtask e2e sqlite firefox` Expected: PASS.
-
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add end2end/tests/posts.spec.ts

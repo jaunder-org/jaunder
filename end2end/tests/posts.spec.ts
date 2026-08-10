@@ -16,6 +16,7 @@ import { seedPostsViaTool } from "./seed";
 import { SEL } from "./selectors";
 import { composePost, createPostViaApi } from "./posts";
 import { navigateInApp } from "./navigate";
+import { allowSecondBoot } from "./bootBudget";
 
 const TIMELINE_PAGE_SIZE = 50;
 const TIMELINE_OVERFLOW_COUNT = 1;
@@ -106,7 +107,11 @@ test("clearing a post summary on edit persists as empty", async ({
     .locator('[data-test="permalink-link"]')
     .getAttribute("href"))!;
   expect(permalinkHref).toBeTruthy();
-  await goto(page, permalinkHref);
+  await navigateInApp(
+    page,
+    () => summary.locator('[data-test="permalink-link"]').click(),
+    { url: permalinkHref, ready: "article.j-post" },
+  );
   const editLink = page.locator('.j-post-acts a:has-text("Edit")');
   await editLink.waitFor();
   const postId = (await editLink.getAttribute("href"))!.match(
@@ -114,7 +119,10 @@ test("clearing a post summary on edit persists as empty", async ({
   )![1];
 
   // Edit: the summary prefills; clear it and save.
-  await goto(page, `/posts/${postId}/edit`);
+  await navigateInApp(page, () => editLink.click(), {
+    url: `/posts/${postId}/edit`,
+    ready: SEL.postBody,
+  });
   await expect(page.locator(SEL.postSummary)).toHaveValue(
     "A summary to remove",
   );
@@ -123,6 +131,10 @@ test("clearing a post summary on edit persists as empty", async ({
   await waitForSelector(page, SEL.saveSummary);
 
   // Reopen the editor: the summary is now empty (cleared via None-omission).
+  allowSecondBoot(
+    page,
+    "reopening the editor from cold is what proves the emptied summary was persisted as None rather than held in client state",
+  );
   await goto(page, `/posts/${postId}/edit`);
   await expect(page.locator(SEL.postSummary)).toHaveValue("");
 });
@@ -164,6 +176,12 @@ test("published post renders at permalink", async ({ registeredPage }) => {
 
   const targetUrl = permalinkHref!;
 
+  // The cold render of the permalink is what this test asserts, so this load
+  // stays a document load rather than becoming an in-app move (#867).
+  allowSecondBoot(
+    page,
+    "the cold render of the permalink is what this test asserts",
+  );
   await goto(page, targetUrl);
 
   await expect(page.locator("article h1")).toHaveText("Permalink Story");
@@ -185,7 +203,11 @@ test("authenticated user can edit a draft post", async ({ registeredPage }) => {
     .locator('[data-test="permalink-link"]')
     .getAttribute("href"))!;
   expect(permalinkHref).toBeTruthy();
-  await goto(page, permalinkHref);
+  await navigateInApp(
+    page,
+    () => summary.locator('[data-test="permalink-link"]').click(),
+    { url: permalinkHref, ready: "article.j-post" },
+  );
   const editLink = page.locator('.j-post-acts a:has-text("Edit")');
   await editLink.waitFor();
   const postId = (await editLink.getAttribute("href"))!.match(
@@ -193,7 +215,10 @@ test("authenticated user can edit a draft post", async ({ registeredPage }) => {
   )![1];
 
   // Navigate to edit page
-  await goto(page, `/posts/${postId}/edit`);
+  await navigateInApp(page, () => editLink.click(), {
+    url: `/posts/${postId}/edit`,
+    ready: SEL.postBody,
+  });
 
   await expect(page.locator(SEL.topbarHeading)).toHaveText("Edit Post");
 
@@ -228,6 +253,10 @@ test("edit page pre-selects the post's current audience", async ({
   ).toBeVisible();
 
   // Save a draft targeted to Subscribers + the named audience.
+  allowSecondBoot(
+    page,
+    "the app exposes no link to /posts/new anywhere, so the composer cannot be reached by an in-app control",
+  );
   await goto(page, "/posts/new");
   await waitForSelector(page, "#audience-base");
   await page.fill(SEL.postBody, "# Targeted Draft\n\nbody for targeted draft");
@@ -240,19 +269,25 @@ test("edit page pre-selects the post's current audience", async ({
   await waitForSelector(page, SEL.saveSummary);
 
   // Reach the draft's edit page via the post_id on its PostCard Edit affordance.
-  const permalinkHref = (await page
+  const permalinkLink = page
     .locator(SEL.saveSummary)
-    .locator('[data-test="permalink-link"]')
-    .getAttribute("href"))!;
+    .locator('[data-test="permalink-link"]');
+  const permalinkHref = (await permalinkLink.getAttribute("href"))!;
   expect(permalinkHref).toBeTruthy();
-  await goto(page, permalinkHref);
+  await navigateInApp(page, () => permalinkLink.click(), {
+    url: permalinkHref,
+    ready: "article.j-post",
+  });
   const editLink = page.locator('.j-post-acts a:has-text("Edit")');
   await editLink.waitFor();
   const postId = (await editLink.getAttribute("href"))!.match(
     /\/posts\/(\d+)\/edit/,
   )![1];
 
-  await goto(page, `/posts/${postId}/edit`);
+  await navigateInApp(page, () => editLink.click(), {
+    url: `/posts/${postId}/edit`,
+    ready: SEL.postBody,
+  });
   await waitForSelector(page, "#audience-base");
 
   // The seed pre-selects the stored base...
@@ -277,6 +312,10 @@ test("editing an invalid or nonexistent post shows not-found", async ({
 
   // A well-formed but nonexistent id takes the unchanged `Some(id)` server path
   // and must still surface the same message (parity with pre-#487 behavior).
+  allowSecondBoot(
+    page,
+    "the cold load of a well-formed-but-nonexistent edit route is a distinct subject (the `Some(id)` server path) from the unparseable one",
+  );
   await goto(page, "/posts/999999999/edit");
   await expect(page.locator(SEL.error)).toContainText("Post not found");
 });
@@ -303,7 +342,11 @@ test("editing a published post freezes the slug", async ({
     .locator('[data-test="permalink-link"]')
     .getAttribute("href"))!;
   expect(permalinkHref).toBeTruthy();
-  await goto(page, permalinkHref);
+  await navigateInApp(
+    page,
+    () => summary.locator('[data-test="permalink-link"]').click(),
+    { url: permalinkHref, ready: "article.j-post" },
+  );
   const editLink = page.locator('.j-post-acts a:has-text("Edit")');
   await editLink.waitFor();
   const postId = (await editLink.getAttribute("href"))!.match(
@@ -311,7 +354,10 @@ test("editing a published post freezes the slug", async ({
   )![1];
 
   // Navigate to edit page
-  await goto(page, `/posts/${postId}/edit`);
+  await navigateInApp(page, () => editLink.click(), {
+    url: `/posts/${postId}/edit`,
+    ready: SEL.postBody,
+  });
 
   // Published post should not have a slug_override input
   await expect(page.locator('input[name="slug_override"]')).not.toBeVisible();
@@ -340,7 +386,10 @@ test("draft lifecycle: create, view, edit, and publish", async ({
 
   // Preview is gone (#24): the drafts listing links only the canonical permalink
   // and carries the Edit affordance — derive both from the row (AC5).
-  await goto(page, "/drafts");
+  await navigateInApp(page, () => click(page, '.j-nav a[href="/drafts"]'), {
+    url: "/drafts",
+    ready: '.j-topbar h1:has-text("Drafts")',
+  });
   const initialDraftRow = page.locator("li", { hasText: "Lifecycle Draft" });
   await expect(initialDraftRow).toBeVisible();
   await expect(initialDraftRow.locator('a:has-text("Preview")')).toHaveCount(0);
@@ -354,12 +403,25 @@ test("draft lifecycle: create, view, edit, and publish", async ({
     .getAttribute("href");
   expect(editHref).toBeTruthy();
 
-  await goto(page, editHref!);
+  await navigateInApp(
+    page,
+    () => initialDraftRow.locator('a:has-text("Edit")').click(),
+    { url: editHref!, ready: SEL.postBody },
+  );
   await page.fill(SEL.postBody, "# Lifecycle Draft\n\nedited draft body");
   await click(page, SEL.publishButton("false"));
   await waitForSelector(page, SEL.saveSummary);
 
-  await goto(page, permalinkUrl);
+  // Follow the save-summary's own "View post" link to the permalink.
+  await navigateInApp(
+    page,
+    () =>
+      page
+        .locator(SEL.saveSummary)
+        .locator('[data-test="permalink-link"]')
+        .click(),
+    { url: permalinkUrl, ready: "article.j-post" },
+  );
   // The permalink is a fresh CSR mount; under worker CPU contention (#155,
   // workers=4) its render can exceed the global 5s expect timeout, so scale
   // these post-navigation assertions with the same contention factor the
@@ -393,7 +455,8 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   // Publish from the post's own permalink via the draft-aware PostCard (#23/#24):
   // Publish sits behind a confirm and, on success, navigates to the canonical
   // published permalink — where the post renders without the draft banner.
-  await goto(page, permalinkUrl);
+  // `page` never left the permalink — only `guestPage` navigated — so the reload
+  // that used to sit here was a document load of the URL already displayed (#867).
   // Same-day create+publish → the permalink does not move, so `use_navigate` is a
   // router no-op and the draft→published flip comes from the in-place resource
   // refetch (#592, spec AC2). A stashed sentinel proves it happens WITHOUT a full
@@ -553,8 +616,11 @@ test("authenticated user can delete a published post", async ({
   expect(permalinkHref).toBeTruthy();
   const permalinkUrl = permalinkHref!;
 
-  // Navigate to permalink page
-  await goto(page, permalinkUrl);
+  // Navigate to permalink page via the publish flash's own link
+  await navigateInApp(page, () => permalinkLink.click(), {
+    url: permalinkUrl,
+    ready: "article.j-post",
+  });
   await expect(page.locator("article h1")).toHaveText("Post To Delete");
 
   // Delete button should be visible for the author
@@ -567,12 +633,20 @@ test("authenticated user can delete a published post", async ({
   await expect(page.locator(".success")).toContainText("Post deleted.");
 
   // Verify the permalink now returns a not-found error
+  allowSecondBoot(
+    page,
+    "after the delete succeeds the app offers no control back to the deleted permalink; the fresh load is what proves it now serves Post not found",
+  );
   await goto(page, permalinkUrl);
   await expect(page.locator(SEL.error)).toContainText("Post not found");
 
   // Verify excluded from user timeline
   const username = permalinkUrl.match(/\/~([^/]+)\//)?.[1];
   expect(username).toBeTruthy();
+  allowSecondBoot(
+    page,
+    "the deleted post's permalink renders a not-found page with no link to the author timeline, so the timeline exclusion must be checked from a fresh load",
+  );
   await goto(page, `/~${username}`);
   await expect(page.locator("body")).not.toContainText("Post To Delete");
 });
@@ -586,11 +660,13 @@ test("unpublishing from a permalink navigates to /drafts without a full reload",
   await page.fill(SEL.postBody, "# Unpublish Me\n\nsoon a draft again");
   await click(page, SEL.publishButton("true"));
   await waitForSelector(page, SEL.saveSummary);
-  const permalinkHref = await page
-    .locator('[data-test="permalink-link"]')
-    .getAttribute("href");
+  const permalinkLink = page.locator('[data-test="permalink-link"]');
+  const permalinkHref = await permalinkLink.getAttribute("href");
   expect(permalinkHref).toBeTruthy();
-  await goto(page, permalinkHref!);
+  await navigateInApp(page, () => permalinkLink.click(), {
+    url: permalinkHref!,
+    ready: "article.j-post",
+  });
   await expect(page.locator('button:has-text("Unpublish")')).toBeVisible();
 
   // Unpublish dispatches directly (no confirm) and navigates client-side to /drafts
@@ -853,17 +929,28 @@ test("editing a post updates tag chips and tag listing pages", async ({
   await expect(tagList).toContainText("#xeditd");
   await expect(tagList).not.toContainText("#xeditc");
 
+  // /tags/xeditd should list it. The post's own #xeditd chip is the in-app route
+  // there, and it exists only while we are still on the permalink — so this check
+  // now runs BEFORE the /tags/xeditc one it used to follow (#867). Both
+  // assertions are unchanged; only their order is.
+  await navigateInApp(
+    page,
+    () => page.locator('.j-tag-list .j-tag[href="/tags/xeditd"]').click(),
+    { url: "/tags/xeditd", ready: '.j-topbar:has-text("#xeditd")' },
+  );
+  await waitForSelector(page, ".j-post-body");
+  await expect(page.locator(".j-post-body")).toContainText("Tag Edit Post");
+
   // /tags/xeditc should no longer list the post
+  allowSecondBoot(
+    page,
+    "the removed tag's chip no longer exists on the permalink, so nothing in the app links to /tags/xeditc — the empty listing must be checked from a fresh load",
+  );
   await goto(page, "/tags/xeditc");
   await waitForSelector(page, ".j-scroll");
   await expect(page.locator(".j-scroll")).toContainText(
     "No posts with this tag yet.",
   );
-
-  // /tags/xeditd should list it
-  await goto(page, "/tags/xeditd");
-  await waitForSelector(page, ".j-post-body");
-  await expect(page.locator(".j-post-body")).toContainText("Tag Edit Post");
 });
 
 test("user tag page lists that user's tagged posts", async ({
@@ -987,8 +1074,11 @@ test("authenticated user can delete a draft from the drafts page", async ({
   await click(page, SEL.publishButton("false"));
   await waitForSelector(page, SEL.saveSummary);
 
-  // Navigate to drafts page
-  await goto(page, "/drafts");
+  // Navigate to drafts page via the sidebar's own Drafts nav item
+  await navigateInApp(page, () => click(page, '.j-nav a[href="/drafts"]'), {
+    url: "/drafts",
+    ready: '.j-topbar h1:has-text("Drafts")',
+  });
   await expect(page.locator("body")).toContainText("Draft To Delete");
 
   // Delete the draft
@@ -1022,7 +1112,10 @@ test("scheduling a post shows a Scheduled-for badge on the drafts page", async (
 
   // The scheduled post lists on /drafts (published_at in the future), marked with
   // the "Scheduled for …" badge that distinguishes it from a true draft.
-  await goto(page, "/drafts");
+  await navigateInApp(page, () => click(page, '.j-nav a[href="/drafts"]'), {
+    url: "/drafts",
+    ready: '.j-topbar h1:has-text("Drafts")',
+  });
   const scheduledRow = page.locator("li", { hasText: "Scheduled Draft" });
   await expect(scheduledRow).toBeVisible();
   const badge = scheduledRow.locator(".j-badge-scheduled");
@@ -1049,18 +1142,24 @@ test("scheduling from the edit page shows a Scheduled-for badge on the drafts pa
   await click(page, SEL.publishButton("false"));
   await waitForSelector(page, SEL.saveSummary);
 
-  const permalinkHref = (await page
+  const permalinkLink = page
     .locator(SEL.saveSummary)
-    .locator('[data-test="permalink-link"]')
-    .getAttribute("href"))!;
-  await goto(page, permalinkHref);
+    .locator('[data-test="permalink-link"]');
+  const permalinkHref = (await permalinkLink.getAttribute("href"))!;
+  await navigateInApp(page, () => permalinkLink.click(), {
+    url: permalinkHref,
+    ready: "article.j-post",
+  });
   const editLink = page.locator('.j-post-acts a:has-text("Edit")');
   await editLink.waitFor();
   const postId = (await editLink.getAttribute("href"))!.match(
     /\/posts\/(\d+)\/edit/,
   )![1];
 
-  await goto(page, `/posts/${postId}/edit`);
+  await navigateInApp(page, () => editLink.click(), {
+    url: `/posts/${postId}/edit`,
+    ready: SEL.postBody,
+  });
   await expect(page.locator(SEL.topbarHeading)).toHaveText("Edit Post");
 
   // The post is still a draft, so the slug and schedule controls are rendered.
@@ -1073,7 +1172,10 @@ test("scheduling from the edit page shows a Scheduled-for badge on the drafts pa
   // makes that `Some`, so a scheduled publish always leaves `/edit`.
   await page.waitForURL((url) => !url.pathname.endsWith("/edit"));
 
-  await goto(page, "/drafts");
+  await navigateInApp(page, () => click(page, '.j-nav a[href="/drafts"]'), {
+    url: "/drafts",
+    ready: '.j-topbar h1:has-text("Drafts")',
+  });
   const editorScheduledRow = page.locator("li", {
     hasText: "Scheduled From Editor",
   });
