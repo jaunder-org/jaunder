@@ -112,11 +112,17 @@ mod tests {
 
     /// The real file must pass — this is the assertion that actually guards the
     /// guard; the fixtures below only prove the checker can fail.
+    ///
+    /// Resolved from `CARGO_MANIFEST_DIR` rather than the process cwd. A
+    /// cwd-relative read with a fallback would silently pick up a *different*
+    /// `clippy.toml` if the test working directory ever moved, and this
+    /// assertion would then pass while guarding nothing — the exact failure the
+    /// step exists to prevent.
     #[test]
     fn the_real_clippy_toml_bans_fetch_one() {
-        let source = std::fs::read_to_string("../clippy.toml")
-            .or_else(|_| std::fs::read_to_string("clippy.toml"))
-            .expect("clippy.toml must be readable from the xtask test cwd");
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../clippy.toml");
+        let source = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("the repo's clippy.toml must be readable at {path}: {e}"));
         assert_eq!(
             problems(&source),
             None,

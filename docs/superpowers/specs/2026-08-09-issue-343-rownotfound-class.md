@@ -409,9 +409,19 @@ behaviour with a better message rather than introducing a new fault.
 
 - **AC1** No public **row-access** fn, trait method, or error-variant payload in
   `storage/src` names `sqlx::Error` in its public signature. The exempt
-  connection paths are exactly `db.rs:179` (the `FromStr::Err` associated type)
-  and `db.rs:247,262,286`; each carries a comment citing D4's row-access
-  boundary. No other exemption exists.
+  connection paths are `db.rs:179` (the `FromStr::Err` associated type),
+  `db.rs:247,262,286`, their two backend `database_is_empty` halves in
+  `{sqlite,postgres}/mod.rs`, and `postgres::resolved_postgres_options` — which
+  reads a password file, not a row. Each carries a comment citing D4's
+  row-access boundary. No other exemption exists.
+
+  _(The backend halves and `resolved_postgres_options` were added to this list
+  during the ship review, which found them exempt in substance but unlisted. The
+  ~16 hand-written `impl From<sqlx::Error> for <Enum>` conversions are **not**
+  exemptions: they are the non-chaining hop D2 requires, and a conversion is not
+  a row-access signature — `RowNotFound` cannot reach one, because `fetch_one`
+  is banned.)_
+
 - **AC2** `impl From<sqlx::Error> for InternalError` no longer exists in
   `host/src/error.rs`, and no `sqlx::Error` is lifted by `?` into an
   `InternalError` anywhere.
@@ -422,11 +432,44 @@ behaviour with a better message rather than introducing a new fault.
 - **AC4** `clippy.toml` lists all six sqlx `fetch_one` definitions under
   `disallowed-methods` by their `sqlx_core::` paths, each with a message naming
   the wrapper.
-- **AC5** A **durable, executed** check proves the guard rejects a bare
-  `fetch_one` — a committed fixture that `cargo xtask validate` runs, not a log
-  pasted into the PR. The natural form is an xtask self-test that plants a
-  violation and asserts a non-zero clippy exit; the plan settles the form. A
-  PR-body paste does not satisfy this.
+- **AC5** Two separate things, split during the ship review because the original
+  wording conflated them:
+
+  **(a) The guard rejects a bare `fetch_one` — demonstrated once, against the
+  final `clippy.toml`.** A real `fetch_one` was planted at
+  `storage/src/subscriptions.rs:275` and
+  `cargo clippy -p storage --all-targets -- -D warnings` failed with:
+
+  ```
+  error: use of a disallowed method `sqlx_core::query_scalar::QueryScalar::fetch_one`
+     --> storage/src/subscriptions.rs:275:14
+      = note: use fetch_optional, or storage::error::fetch_exactly_one{,_scalar}
+              to name the required row (#343)
+      = note: `-D clippy::disallowed-methods` implied by `-D warnings`
+  ```
+
+  The plant was then reverted. This is a one-time proof that the mechanism binds
+  and that the reason string reaches the developer at the call site — it is
+  deliberately **not** a recurring gate step, because re-proving it on every run
+  would cost a crate compile forever to re-establish a fact that does not
+  change.
+
+  **(b) The configuration cannot decay silently — durably checked.** The
+  `fetch-one-guard` xtask step runs in the gate and fails if any of the six
+  paths is removed or if `allow-invalid` is set. That covers the failure mode
+  nothing else does: entries edited away by a bad merge or a cleanup pass. A
+  path that stops resolving after an sqlx upgrade is already self-announcing
+  (`does not refer to a reachable function`, a hard error under `-D warnings`),
+  which is why `allow-invalid` is refused.
+
+  Known residual: if clippy itself stopped being applied to the workspace,
+  neither mechanism would notice. That is out of scope — it would disable every
+  lint in the repo, not just this one.
+
+  _An earlier draft of this AC asked for a committed fixture that runs clippy on
+  every gate. That was reduced deliberately: it buys only the residual case
+  above, at the cost of a crate compile per gate run._
+
 - **AC6** **No `#[allow]` or `#[expect]` for `clippy::disallowed_methods` exists
   anywhere in the workspace**, and no bare `fetch_one` call remains — including
   in `storage/src`, `server/tests` and the wrapper itself, which is built on

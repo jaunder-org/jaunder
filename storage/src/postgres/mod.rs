@@ -264,6 +264,12 @@ fn postgres_password_from_env() -> io::Result<Option<String>> {
 /// Resolve final Postgres options, applying password overrides from env
 /// and the slow-query log threshold.
 ///
+/// Keeps `sqlx::Result` under #343's row-access boundary (spec D4): this reads a
+/// password file, never a database row, so its only failure is
+/// `sqlx::Error::Io` and a `StorageError` — whose other arm names a missing
+/// row — would be meaningless here. It also runs at connection setup, so it
+/// never crosses a server-fn boundary where the classification would matter.
+///
 /// # Errors
 ///
 /// Returns `sqlx::Error::Io` if the password file env var points at an
