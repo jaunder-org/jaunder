@@ -433,5 +433,11 @@ mod tests {
             boot_wasm_url(spa_shell),
             "projector and csr/index.html must boot the same wasm URL (drift guard #234)"
         );
+        assert_eq!(
+            boot_wasm_url(&doc),
+            web::app::WASM_URL,
+            "the boot URL must be web::app::WASM_URL, the single definition every \
+             copy of this path is checked against (#866)"
+        );
     }
 }
