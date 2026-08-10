@@ -1349,6 +1349,49 @@ git commit -m "docs(observability): measure the #867 navigation reduction (#867)
 
 ---
 
+## Code review at the deliverable boundary (after Task 10)
+
+A two-axis review ran over `wt-base-issue-867...HEAD` — Standards and Spec, in
+parallel sub-agents. It found one real hole in the headline mechanism and one
+real defect, both since fixed.
+
+**A3 was partial — detection without enforcement.** The budget _detected_ every
+document load (per-`Page` event, unbypassable) but only _raised_ from `goto`. A
+test taking an undeclared second load and issuing no later `goto` had its
+violation recorded and discarded — and the raw sites carrying static markers are
+exactly the ones that never route through `goto`, so the gap lined up precisely
+with the sites least covered otherwise. Fixed: teardown now raises violations as
+well as orphans, through one sweep. Closing it surfaced **no** hidden violation
+(156 passed), so the conversions were sound; the gap was in plumbing.
+
+**A defect in late arming.** `allowSecondBoot` on an unarmed page pushed
+`page.url()` unconditionally, recording `about:blank` as the entry — after which
+the page's first real load would consume the allowance and leave a genuine
+second load uncounted. The budget disarming itself. Fixed: infer an entry only
+from a real document.
+
+**Three smaller items, all taken.** `consumedReasons` (and the state field it
+read) deleted as speculative generality; the whole-file gate exemption for
+`helpers.ts` replaced with an ordinary ADR-0094 marker, since ADR-0085 principle
+4 forbids region-scoped exemptions and that file holds exactly one `page.goto`;
+and the check now walks each file once instead of four times.
+
+**Deviation from this plan, accepted.** Task 9 specified `pub fn problems`,
+copying `no_full_reload_check.rs`. Collapsing the four scans made `problems` /
+`census` / `violations` thin test-facing wrappers over `audit`, so they are now
+`#[cfg(test)]`. Preserving the signature would have meant keeping the redundant
+scan the review asked us to remove — a plan written before the code existed does
+not outrank the code.
+
+**Scope creep, flagged honestly by the reviewer and kept.** The orphan-allowance
+rule is a failure mode the spec never named. It is justified — it caught a real
+over-declaration — but it is added scope, and Task 11's write-up should say so
+rather than present it as something the spec asked for.
+
+**One soft spot left for Task 11.** Amendment 1 says the #863 test's loads must
+be subtracted before comparing observed to predicted, but never pins the number.
+Pin it _before_ the first arm is captured.
+
 ## Self-review
 
 **Spec coverage.** A1→T5 (incl. the `fixtures.ts:354` type), A2→T5/T2, A3→T3/T8,

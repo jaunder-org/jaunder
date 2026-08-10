@@ -55,7 +55,7 @@ import {
   setAndVerifyEmail,
   TEST_PASSWORD,
 } from "./helpers";
-import { takeOrphanedAllowances, trackBoots } from "./bootBudget";
+import { takeBudgetFailures, trackBoots } from "./bootBudget";
 import { readEmailLines, type CapturedEmail } from "./mail";
 import { pollUntil } from "./polling";
 import { applySeededSession, seedUserViaTool } from "./seed";
@@ -616,17 +616,16 @@ const test = base.extend<{
       const { requests, navigations } = capture.sinkFor("test");
 
       setCurrentActionTestKey(testKey);
-      let orphanedAllowances: string[] = [];
+      let budgetFailures: string[] = [];
       try {
         await use();
       } finally {
         setCurrentActionTestKey(null);
         // Collect-and-clear unconditionally, so a test that failed cannot leak
-        // its unconsumed allowances into the next test in this worker. Whether
-        // to FAIL on them is decided at the very end of this fixture, which a
-        // failing test never reaches — an orphaned allowance must never mask
-        // the real error.
-        orphanedAllowances = takeOrphanedAllowances();
+        // its budget state into the next test in this worker. Whether to FAIL on
+        // it is decided at the very end of this fixture, which a failing test
+        // never reaches — a budget failure must never mask the real error.
+        budgetFailures = takeBudgetFailures();
       }
 
       const endMs = Date.now();
@@ -991,12 +990,15 @@ const test = base.extend<{
 
       // Last, so the trace above is exported either way. Only reached when the
       // test body passed, so this can never mask a real failure.
-      if (orphanedAllowances.length > 0) {
+      if (budgetFailures.length > 0) {
         throw new Error(
-          `allowSecondBoot was declared but never consumed (#867):\n` +
-            orphanedAllowances.map((line) => `  - ${line}`).join("\n") +
-            `\nAn allowance does not expire: it waits and silently absorbs the ` +
-            `next extra document load, disarming the budget. Either the load it ` +
+          `the per-page document-load budget failed (#867):\n` +
+            budgetFailures.map((line) => `  - ${line}`).join("\n") +
+            `\nAn undeclared second load either belongs in the app (move within ` +
+            `it with navigateInApp) or is deliberate, and then it is declared ` +
+            `with allowSecondBoot(page, "<reason>"). An allowance that nothing ` +
+            `consumed does not expire: it waits and silently absorbs the next ` +
+            `extra document load, disarming the budget. Either the load it ` +
             `authorised no longer happens — delete the declaration — or it moved, ` +
             `and the declaration should move with it.`,
         );

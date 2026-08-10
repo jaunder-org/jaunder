@@ -25,10 +25,16 @@
  * ## How a violation surfaces
  *
  * The event handler cannot reject its caller's promise, so it records the
- * violation and `throwIfViolated` — called from `goto` — raises it. A violation
- * caused by a raw `page.goto` therefore surfaces on the next budget-aware call
- * rather than at the offending line; the message names both URLs so the page is
- * still identifiable.
+ * violation and something else raises it. Two raisers, and both are needed:
+ * `throwIfViolated` — called from `goto` — fails the test at the next
+ * budget-aware call, which is the earliest and most informative moment; and the
+ * teardown sweep (`takeBudgetFailures`) catches the rest, because a page whose
+ * test issues no later `goto` reaches no such call, and the raw sites that
+ * legitimately cannot use the wrapper are exactly the ones on that path. With
+ * only the first, a violation on those pages would be detected and then
+ * discarded. A violation caused by a raw `page.goto` therefore surfaces later
+ * than the offending line; the message names both URLs so the page is still
+ * identifiable.
  */
 
 import type { Page } from "@playwright/test";
@@ -38,9 +44,8 @@ type BudgetState = {
   loads: string[];
   /** Unconsumed `allowSecondBoot` reasons, consumed in call order. */
   allowances: string[];
-  /** The reasons consumed so far — the page's derived exemption census. */
-  consumed: string[];
-  /** Set on the first undeclared extra load; raised by `throwIfViolated`. */
+  /** Set on the first undeclared extra load; raised at the next `goto` or, if
+   *  there is none, by the teardown sweep. */
   violation?: string;
 };
 
@@ -75,7 +80,7 @@ export function trackBoots(page: Page): void {
     tracked.add(page);
     return;
   }
-  const state: BudgetState = { loads: [], allowances: [], consumed: [] };
+  const state: BudgetState = { loads: [], allowances: [] };
   states.set(page, state);
   tracked.add(page);
 
@@ -85,11 +90,7 @@ export function trackBoots(page: Page): void {
     state.loads.push(url);
     if (state.loads.length === 1) return;
 
-    const allowance = state.allowances.shift();
-    if (allowance !== undefined) {
-      state.consumed.push(allowance);
-      return;
-    }
+    if (state.allowances.shift() !== undefined) return;
     state.violation ??=
       `second document load on this page: it booted at ${state.loads[0]}, ` +
       `then loaded ${url}. A page boots once (#867) — move within the app ` +
@@ -122,7 +123,14 @@ export function allowSecondBoot(page: Page, reason: string): void {
     // automatic, and arming cannot become automatic until they are written.
     trackBoots(page);
     state = states.get(page);
-    state?.loads.push(page.url());
+    // Only if the page really has an entry to infer. Pushing unconditionally
+    // would record `about:blank` as the entry on a page that has not navigated
+    // yet, and then the page's *first* real load would look like its second and
+    // consume this allowance — leaving the genuine second load uncounted. That
+    // is the budget silently disarming itself, which is the one failure it
+    // exists to prevent.
+    const url = page.url();
+    if (isRealDocument(url)) state?.loads.push(url);
   }
   state?.allowances.push(reason);
 }
@@ -132,39 +140,45 @@ export function bootCount(page: Page): number {
   return states.get(page)?.loads.length ?? 0;
 }
 
-/** The reasons consumed on `page` — its derived exemption census. */
-export function consumedReasons(page: Page): string[] {
-  return [...(states.get(page)?.consumed ?? [])];
-}
-
 /** Allowances declared on `page` that no load has consumed yet. */
 export function pendingReasons(page: Page): string[] {
   return [...(states.get(page)?.allowances ?? [])];
 }
 
 /**
- * Take the unconsumed allowances across every page armed since the last call,
- * clearing them and the tracked-page set.
+ * Take every budget failure across the pages armed since the last call, clearing
+ * them and the tracked-page set. Two kinds, violations first:
  *
- * ## Why an unconsumed allowance is a defect, not slack
+ * 1. **An undeclared second load** — recorded by the event handler, which cannot
+ *    reject its caller's promise. `throwIfViolated` raises one at the next
+ *    budget-aware call, but a page whose test issues no further `goto` has no
+ *    such call — and the sites that legitimately cannot use the wrapper are
+ *    exactly the ones on that path. Without this sweep the budget would detect
+ *    those loads and then discard them, which is detection without enforcement.
+ * 2. **An unconsumed allowance.** An allowance does not expire. A declaration
+ *    that authorises a load which never happens sits in the queue and silently
+ *    absorbs the *next* extra load — precisely the undeclared second load the
+ *    budget exists to catch. So an over-declaration does not merely waste a
+ *    line; it disarms the check for the rest of the page's life, and does so
+ *    invisibly. This is ADR-0094's orphan-marker rule ("a marker whose site no
+ *    longer exists fails") in runtime form: an exemption nothing re-verifies
+ *    must at least be checked to still apply.
  *
- * An allowance does not expire. A declaration that authorises a load which never
- * happens sits in the queue and silently absorbs the *next* extra load — which
- * is precisely the undeclared second load the budget exists to catch. So an
- * over-declaration does not merely waste a line; it disarms the check for the
- * rest of the page's life, and does so invisibly. This is ADR-0094's
- * orphan-marker rule ("a marker whose site no longer exists fails") in runtime
- * form: an exemption nothing re-verifies must at least be checked to still apply.
- *
- * Returns one `"<entry url>: <reason>"` line per orphan. Always clears, so a
- * failing test cannot leak its allowances into the next test in the worker; the
- * caller decides whether to fail on the result.
+ * A violation line leads with `undeclared second load —`; an orphan line is
+ * `"<entry url>: <reason>"`. Always clears, so a failing test cannot leak either
+ * kind into the next test in the worker; the caller decides whether to fail on
+ * the result.
  */
-export function takeOrphanedAllowances(): string[] {
+export function takeBudgetFailures(): string[] {
+  const violations: string[] = [];
   const orphans: string[] = [];
   for (const page of tracked) {
     const state = states.get(page);
-    if (state === undefined || state.allowances.length === 0) continue;
+    if (state === undefined) continue;
+    if (state.violation !== undefined) {
+      violations.push(`undeclared second load — ${state.violation}`);
+      state.violation = undefined;
+    }
     const where = state.loads[0] ?? "(a page that never loaded)";
     for (const reason of state.allowances) {
       orphans.push(`${where}: ${reason}`);
@@ -172,13 +186,16 @@ export function takeOrphanedAllowances(): string[] {
     state.allowances.length = 0;
   }
   tracked.clear();
-  return orphans;
+  // Violations first: a load that happened outranks a declaration for one that
+  // did not.
+  return [...violations, ...orphans];
 }
 
 /**
  * Raise any recorded violation. Called by `goto` so an undeclared second load
- * fails the test rather than passing silently. The violation is cleared as it
- * is raised, so one budget breach produces one error.
+ * fails the test at the earliest budget-aware moment rather than at teardown.
+ * The violation is cleared as it is raised, so one budget breach produces one
+ * error and the teardown sweep does not report it a second time.
  */
 export function throwIfViolated(page: Page): void {
   const state = states.get(page);

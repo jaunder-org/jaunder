@@ -1,12 +1,18 @@
 //! The `e2e-goto-wrapper` static check (#867): forbids a raw `page.goto(` anywhere
-//! under `end2end/tests` except in `helpers.ts`, so every document load goes through
-//! the navigation wrapper and keeps its synchronisation barrier (and its boot count).
-//! A raw `page.goto` returns as soon as Playwright's own wait condition is met, which
-//! is before the wasm has mounted — the flake class the wrapper exists to remove.
+//! under `end2end/tests`, so every document load goes through the navigation wrapper
+//! and keeps its synchronisation barrier (and its boot count). A raw `page.goto`
+//! returns as soon as Playwright's own wait condition is met, which is before the wasm
+//! has mounted — the flake class the wrapper exists to remove.
 //!
 //! It is a host source-scan rather than a lint because the e2e suite has no linter in
-//! the gate, and because the rule is about *which module* may make the call, which no
+//! the gate, and because the rule is about *which call* may be written, which no
 //! per-file lint can express.
+//!
+//! **No file is exempt, including the wrapper's own.** `helpers.ts` holds exactly one
+//! `page.goto` — the barrier itself — and it carries an ordinary marker like every
+//! other exempt site. A whole-file exemption would be an ADR-0085 principle-4 region
+//! exemption: it would let a second, unreviewed `page.goto` enter that file silently,
+//! and it would hide the wrapper from the census.
 //!
 //! Exemptions are in-source markers (ADR-0094): `// e2e-goto-wrapper:allow <reason>`
 //! on the line **immediately above** the site. Line form only, a reason is required,
@@ -58,12 +64,6 @@ const RECOVERY: &str = "  recovery: use `goto(page, path)` from `end2end/tests/h
 /// longer exists (ADR-0094).
 fn marker_token() -> String {
     format!("{STEP}:allow")
-}
-
-/// The wrapper's own home is the one file allowed to call `page.goto`: it *is* the
-/// barrier. Nothing else is exempt by path — everything else exempts per site.
-pub fn is_exempt_path(path: &str) -> bool {
-    path.ends_with("end2end/tests/helpers.ts")
 }
 
 /// One scanned source line: how many sites it holds, and its real `//` comment.
@@ -135,12 +135,12 @@ fn scan_lines(source: &str) -> Vec<Line<'_>> {
         .collect()
 }
 
-/// 1-based line numbers of every raw `page.goto(` in `source`, one entry per
-/// occurrence, ignoring markers. Comment text — line or block — is not code, so prose
-/// naming the call is never a site. Pure — unit-tested.
-fn violations(source: &str) -> Vec<usize> {
+/// 1-based line numbers of every site in already-scanned `lines`, one entry per
+/// occurrence. The single definition of "where the sites are": [`audit`] and
+/// [`violations`] both read it, so the gate acts on exactly what the tests exercise.
+fn site_lines(lines: &[Line<'_>]) -> Vec<usize> {
     let mut out = Vec::new();
-    for (i, line) in scan_lines(source).iter().enumerate() {
+    for (i, line) in lines.iter().enumerate() {
         for _ in 0..line.sites {
             out.push(i + 1);
         }
@@ -148,30 +148,59 @@ fn violations(source: &str) -> Vec<usize> {
     out
 }
 
+/// 1-based line numbers of every raw `page.goto(` in `source`, one entry per
+/// occurrence, ignoring markers. Comment text — line or block — is not code, so prose
+/// naming the call is never a site.
+///
+/// Test-facing: the gate walks each file once through [`audit`], which reads
+/// [`site_lines`] off that same walk, so this is the same answer reached from a
+/// source string instead of a scanned file.
+#[cfg(test)]
+fn violations(source: &str) -> Vec<usize> {
+    site_lines(&scan_lines(source))
+}
+
 /// One row of the derived census: a live marker and the site it exempts.
 struct Marked {
+    path: String,
     /// The **site's** line, not the marker's — that is what a reader needs.
     line: usize,
     reason: String,
 }
 
+/// What one pass over the scanned files found: the failures, and the census of live
+/// markers. Both come out of the same walk — the census is not recomputed, because a
+/// second walk is a second chance for the two answers to disagree.
+struct Audit {
+    problems: Vec<String>,
+    census: Vec<Marked>,
+}
+
+impl Audit {
+    /// The census as printable rows, `file:line — reason`.
+    fn census_rows(&self) -> Vec<String> {
+        self.census
+            .iter()
+            .map(|m| format!("    - {}:{} — {}", m.path, m.line, m.reason))
+            .collect()
+    }
+}
+
 /// Sort every site and marker in the scanned files into failures and census rows.
-fn audit(scanned: &[(String, String)]) -> (Vec<String>, Vec<(String, Marked)>) {
+fn audit(scanned: &[(String, String)]) -> Audit {
     let token = marker_token();
     let mut problems = Vec::new();
     let mut census = Vec::new();
     for (path, source) in scanned {
-        if is_exempt_path(path) {
-            continue;
-        }
+        // One walk per file: the site counts and the comments both come from it.
         let lines = scan_lines(source);
-        let marker_at = |line: usize| -> Option<&str> {
+        // The marker ON `line`, if any. The site loop asks about the line above its
+        // site; the orphan loop asks about the marker's own line.
+        let marker_on = |line: usize| -> Option<&str> {
             marker_in_comment(lines.get(line.checked_sub(1)?)?.comment?, &token)
         };
-        // Site counts come from `violations`, so "what is a site" has one definition
-        // here and the unit tests exercise the same answer the gate acts on.
         let mut sites_on_line: HashMap<usize, usize> = HashMap::new();
-        for line in violations(source) {
+        for line in site_lines(&lines) {
             *sites_on_line.entry(line).or_insert(0) += 1;
         }
         let sites_on = |line: usize| sites_on_line.get(&line).copied().unwrap_or(0);
@@ -180,11 +209,10 @@ fn audit(scanned: &[(String, String)]) -> (Vec<String>, Vec<(String, Marked)>) {
             if sites_on(line) == 0 {
                 continue;
             }
-            match line.checked_sub(1).and_then(marker_at) {
+            match line.checked_sub(1).and_then(marker_on) {
                 None => problems.push(format!(
-                    "{path}:{line}: raw `page.goto` is forbidden outside \
-                     `end2end/tests/helpers.ts` — it returns before the wasm has mounted and \
-                     hides the load from the boot budget (#867)"
+                    "{path}:{line}: raw `page.goto` is forbidden — it returns before the wasm \
+                     has mounted and hides the load from the boot budget (#867)"
                 )),
                 Some("") => problems.push(format!(
                     "{path}:{line}: this site carries a bare `{token}` marker — an exemption \
@@ -198,13 +226,11 @@ fn audit(scanned: &[(String, String)]) -> (Vec<String>, Vec<(String, Marked)>) {
                              cannot justify them — split the line so each carries its own"
                         ));
                     } else {
-                        census.push((
-                            path.clone(),
-                            Marked {
-                                line,
-                                reason: reason.to_string(),
-                            },
-                        ));
+                        census.push(Marked {
+                            path: path.clone(),
+                            line,
+                            reason: reason.to_string(),
+                        });
                     }
                 }
             }
@@ -213,7 +239,7 @@ fn audit(scanned: &[(String, String)]) -> (Vec<String>, Vec<(String, Marked)>) {
         // An orphan is a marker whose very next line holds no site: a live,
         // pre-approved exemption waiting for a future edit to land on it.
         for line in 1..=lines.len() {
-            if marker_at(line).is_some() && sites_on(line + 1) == 0 {
+            if marker_on(line).is_some() && sites_on(line + 1) == 0 {
                 problems.push(format!(
                     "{path}:{line}: `{token}` marker on a line above no `page.goto` site — an \
                      orphan exemption; delete it"
@@ -222,31 +248,39 @@ fn audit(scanned: &[(String, String)]) -> (Vec<String>, Vec<(String, Marked)>) {
         }
     }
     problems.sort();
-    census.sort_by(|a, b| (&a.0, a.1.line).cmp(&(&b.0, b.1.line)));
-    (problems, census)
+    census.sort_by(|a, b| (&a.path, a.line).cmp(&(&b.path, b.line)));
+    Audit { problems, census }
 }
 
 /// The derived census of live markers, one `file:line — reason` row per exempt site.
 /// Derived from the scan rather than declared, so it cannot go stale (ADR-0094).
-pub fn census(scanned: &[(String, String)]) -> Vec<String> {
-    audit(scanned)
-        .1
-        .into_iter()
-        .map(|(path, m)| format!("    - {path}:{} — {}", m.line, m.reason))
-        .collect()
+///
+/// Test-facing, like [`problems`]: [`run`] reads both off one [`Audit`].
+#[cfg(test)]
+fn census(scanned: &[(String, String)]) -> Vec<String> {
+    audit(scanned).census_rows()
 }
 
 /// The failure detail for every offending line across the scanned files, or `None`
 /// when every site is either wrapped or legitimately marked. The detail ends with the
 /// `recovery:` line and then the derived census. Pure given the `(path, source)`
 /// pairs, so it is unit-tested directly.
-pub fn problems(scanned: &[(String, String)]) -> Option<String> {
-    let (mut lines, _) = audit(scanned);
-    if lines.is_empty() {
+///
+/// Test-facing: [`run`] calls [`audit`] once and hands the result to [`detail`], so
+/// the census it prints and the failures it reports come from a single walk.
+#[cfg(test)]
+fn problems(scanned: &[(String, String)]) -> Option<String> {
+    detail(&audit(scanned))
+}
+
+/// The failure detail for an already-computed [`Audit`], or `None` when it is clean.
+fn detail(found: &Audit) -> Option<String> {
+    if found.problems.is_empty() {
         return None;
     }
+    let mut lines = found.problems.clone();
     lines.push(RECOVERY.to_string());
-    lines.extend(census(scanned));
+    lines.extend(found.census_rows());
     Some(lines.join("\n"))
 }
 
@@ -272,9 +306,12 @@ pub fn run(result: &mut CommandResult) {
             Err(e) => read_errors.push(format!("{}: cannot read: {e}", p.display())),
         }
     }
-    let step = match (read_errors.is_empty(), problems(&scanned)) {
+    // One walk of the tree, whose census the success path prints and whose failures
+    // the failure path reports.
+    let found = audit(&scanned);
+    let step = match (read_errors.is_empty(), detail(&found)) {
         (true, None) => {
-            let rows = census(&scanned);
+            let rows = found.census_rows();
             StepResult::ok(STEP).detail(format!(
                 "{} exempt site(s)\n{}",
                 rows.len(),
@@ -361,16 +398,26 @@ mod tests {
         assert!(detail.contains("share this line"));
     }
 
+    /// The wrapper's own module is not exempt by being the wrapper: an unmarked
+    /// `page.goto` in `helpers.ts` fails like anywhere else, and the marked one enters
+    /// the census. A whole-file exemption would hide a second call added there later.
     #[test]
-    fn the_helpers_module_may_call_page_goto() {
-        // The wrapper itself is not a bypass.
-        assert!(super::is_exempt_path("end2end/tests/helpers.ts"));
+    fn the_helpers_module_is_scanned_like_any_other_file() {
         assert!(
             problems(&[(
                 "end2end/tests/helpers.ts".to_string(),
                 "  await page.goto(url);\n".to_string()
             )])
-            .is_none()
+            .is_some(),
+            "an unmarked call in the wrapper's own module still fails"
+        );
+        assert_eq!(
+            census(&[(
+                "end2end/tests/helpers.ts".to_string(),
+                "  // e2e-goto-wrapper:allow this call IS the wrapper\n  await page.goto(url);\n"
+                    .to_string()
+            )]),
+            vec!["    - end2end/tests/helpers.ts:2 — this call IS the wrapper"]
         );
     }
 

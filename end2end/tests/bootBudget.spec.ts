@@ -12,7 +12,7 @@ import {
   allowSecondBoot,
   bootCount,
   pendingReasons,
-  takeOrphanedAllowances,
+  takeBudgetFailures,
   trackBoots,
 } from "./bootBudget";
 import { test } from "./fixtures";
@@ -138,19 +138,37 @@ test("an allowance nothing consumes is reported as an orphan", async ({
   // so asserting it that way would require a test that fails to pass. What
   // teardown does with this list is interpolate it into its error message, so
   // pinning the list pins the message.
-  const orphans = takeOrphanedAllowances();
+  const orphans = takeBudgetFailures();
   expect(orphans).toHaveLength(1);
   // The line names the reason AND the page, so a multi-page test says which one.
   expect(orphans[0]).toContain("a second load that never happens");
   expect(orphans[0]).toContain(`${BASE_URL}/`);
   // Taking them clears them, so one orphan is reported once.
   expect(pendingReasons(page)).toEqual([]);
-  expect(takeOrphanedAllowances()).toEqual([]);
+  expect(takeBudgetFailures()).toEqual([]);
 });
 
 test("a consumed allowance is not an orphan", async ({ page }) => {
   await goto(page, "/");
   allowSecondBoot(page, "the login page's cold render is the subject");
   await goto(page, "/login");
-  expect(takeOrphanedAllowances()).toEqual([]);
+  expect(takeBudgetFailures()).toEqual([]);
+});
+
+test("an undeclared second load is reported even when no later goto raises it", async ({
+  page,
+}) => {
+  await goto(page, "/");
+  // e2e-goto-wrapper:allow the subject is a load the wrapper never sees, so nothing calls throwIfViolated and only the teardown sweep can surface it
+  await page.goto(`${BASE_URL}/login`);
+
+  // Collected here rather than left for teardown for the same reason as the
+  // orphan test above: teardown would fail this test with the very violation it
+  // is asserting. Pinning the list pins the message teardown interpolates.
+  const failures = takeBudgetFailures();
+  expect(failures).toHaveLength(1);
+  expect(failures[0]).toContain("undeclared second load");
+  expect(failures[0]).toContain(`${BASE_URL}/login`);
+  // Taking clears it, so teardown does not report the same breach twice.
+  expect(takeBudgetFailures()).toEqual([]);
 });

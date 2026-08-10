@@ -94,6 +94,7 @@ export async function goto(
   options?: Parameters<Page["goto"]>[1],
 ): Promise<void> {
   await withTimedAction(page, "page.goto", () =>
+    // e2e-goto-wrapper:allow this call is the wrapper — the one document load that supplies the mount barrier every other site is required to go through
     page.goto(`${BASE_URL}${path}`, {
       waitUntil: "domcontentloaded",
       ...options,
