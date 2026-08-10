@@ -11,7 +11,9 @@ use web::app::App;
 // The e2e suite waits on `body[data-mounted]` as the "app is mounted and
 // interactive" signal — the counterpart of `MOUNTED_ATTR` in
 // `end2end/tests/mount.ts`. The two literals must agree; if they drift, every
-// e2e test times out.
+// e2e test times out. That agreement is enforced by the `xlang-literal` gate
+// (`xtask/src/steps/xlang_literal_check.rs`), which reads this literal and its
+// TypeScript counterpart and fails `cargo xtask check` when they differ (#767).
 #[wasm_bindgen::prelude::wasm_bindgen(inline_js = "
     export function mark_ready() {
         if (document && document.body) {
