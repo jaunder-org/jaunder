@@ -93,6 +93,9 @@ const GATE: Gate = Gate {
     step: "rendered-html-from-trusted",
     roots: POLICED_ROOTS,
     population: DOORS,
+    // Not yet pointed at `RenderedHtml`: Task 5 of #790 flips this, together with the
+    // marker deletions it makes correct. Until then the gate polices the bare ident.
+    owner: None,
     report: Report {
         subject: "a `from_trusted` door",
         verdict: "is not marked — this gate pins every `from_trusted` in production code, \

@@ -19,7 +19,14 @@ existing `syn` walker behind one optional `Gate` field. **Resolution only ever
 suppresses; `visit_ident` stays the sole recorder** (AC1a), so nothing it
 catches today is lost and no site can be double-counted.
 
-**Tech Stack:** Rust, `syn` 2 / `proc-macro2`, `cargo nextest`, `cargo xtask`.
+**Tech Stack:** Rust, `syn` 2 / `proc-macro2`, `cargo xtask`.
+
+**Running the tests:** `xtask` is **not** a workspace member — it has its own
+manifest and the flake excludes it. So the tests below run via
+`cargo test --manifest-path xtask/Cargo.toml <filter>`, which is exactly what
+the `xtask-tests` gate step does (`xtask/src/steps/host_tests.rs:14-17`).
+`cargo nextest run -p xtask` fails with "package ID specification `xtask` did
+not match any packages".
 
 ## Review header
 
@@ -68,6 +75,16 @@ rename-of-a-rename; moving any gate to `ast-grep` (**#893**, **#894**).
   flagging `:98`. Task 3 tests the nested-group form.
 - **The owner set is deliberately over-approximated** (Task 2, spec D2):
   widening it only moves sites _into_ the population.
+- **Tasks 2–4 land as ONE commit** — found the hard way. `xtask-clippy` runs
+  with `-D warnings`, so `-D dead-code` rejects `owner_aliases` / `Resolver`
+  while only `#[cfg(test)]` code calls them; a `#[cfg(test)]` caller does not
+  count as a use for the non-test build. Tasks 2 and 3 therefore cannot be
+  committed before Task 4 wires them into the walker. They stay separate
+  **development** units — write and green each one's tests in turn — but the
+  commit comes once, at the end of Task 4. The alternative, an
+  `#[expect(dead_code)]` bridging two commits, needs explicit user approval per
+  CONTRIBUTING and would be a suppression that exists purely to satisfy commit
+  granularity.
 - Unlike #863 this is host-compiled, so **every criterion is a real test**.
 
 ## Global Constraints
@@ -112,7 +129,7 @@ only).
 - [x] **Step 2: Record the numbers** in this plan's Review header — **#893**
       (`no-full-reload`, the one fully-movable gate) and **#894** (the hybrid
       matching layer for the ident gates).
-- [ ] **Step 3: Commit the spec and plan** — `cargo xtask validate` refuses a
+- [x] **Step 3: Commit the spec and plan** — `cargo xtask validate` refuses a
       dirty tree.
 
 ```bash
@@ -134,7 +151,7 @@ git commit -m "docs(plan): spec and plan for gate qualifier resolution (#790)"
   — every ident that can denote `owner` anywhere in the tree; always contains
   `owner`. Tasks 4 and 5 consume it.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```rust
 #[test]
@@ -197,15 +214,15 @@ fn an_unparseable_file_is_skipped_rather_than_panicking() {
 }
 ```
 
-- [ ] **Step 2: Run them, verify they fail**
+- [x] **Step 2: Run them, verify they fail**
 
 ```bash
-devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-790-contenttype-rename -- cargo nextest run -p xtask owner_alias
+devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-790-contenttype-rename -- cargo test --manifest-path xtask/Cargo.toml steps::ident_gate::tests
 ```
 
 Expected: FAIL — `owner_aliases` not defined.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 The tests pin every branch. Signature and doc:
 
@@ -227,9 +244,9 @@ The tests pin every branch. Signature and doc:
 pub fn owner_aliases(sources: &[(String, String)], owner: &str) -> BTreeSet<String>
 ```
 
-- [ ] **Step 4: Run the tests, verify they pass** — same command. Expected:
+- [x] **Step 4: Run the tests, verify they pass** — same command. Expected:
       PASS.
-- [ ] **Step 5: Gate and commit**
+- [x] **Step 5: Gate and commit**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-790-contenttype-rename -- cargo xtask check
@@ -282,7 +299,7 @@ impl Resolver {
 }
 ```
 
-- [ ] **Step 1: Write the test helper, precisely**
+- [x] **Step 1: Write the test helper, precisely**
 
 Eleven tests depend on it, and a wrong helper silently inverts assertions:
 
@@ -296,7 +313,7 @@ Eleven tests depend on it, and a wrong helper silently inverts assertions:
 fn first_policed_path(file: &syn::File, leaf: &str) -> Option<syn::Path>
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 ```rust
 fn resolve(src: &str, owners: &[&str], impl_self: Option<&str>) -> Membership {
@@ -391,15 +408,15 @@ fn an_unqualified_call_is_unknown() {
 }
 ```
 
-- [ ] **Step 3: Run them, verify they fail**
+- [x] **Step 3: Run them, verify they fail**
 
 ```bash
-devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-790-contenttype-rename -- cargo nextest run -p xtask resolver
+devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-790-contenttype-rename -- cargo test --manifest-path xtask/Cargo.toml steps::ident_gate::resolver_tests
 ```
 
 Expected: FAIL — `Resolver` / `Membership` not defined.
 
-- [ ] **Step 4: Implement against the tests**
+- [x] **Step 4: Implement against the tests**
 
 Classification reads the segment _before_ the leaf. Order matters and every
 branch has a test: owner set first (so a renamed owner wins over any other
@@ -410,9 +427,9 @@ non-glob `use` leaves — recursing `UseTree` through
 `UsePath`/`UseGroup`/`UseName`/`UseRename`, ignoring `UseGlob` — plus
 `struct`/`enum`/`union`/`type` names.
 
-- [ ] **Step 5: Run the tests, verify they pass** — same command. Expected:
+- [x] **Step 5: Run the tests, verify they pass** — same command. Expected:
       PASS.
-- [ ] **Step 6: Gate and commit**
+- [x] **Step 6: Gate and commit**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-790-contenttype-rename -- cargo xtask check
@@ -447,7 +464,7 @@ git commit -m "feat(xtask): resolve a policed path's qualifier within a file (#7
   `(path, source)` pairs it already has; `Gate::violations` builds a single-file
   set from its own fixture.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add a `["from_trusted"]` helper beside the existing `classified` (which scans
 `["GUARDED"]` and must keep doing so):
@@ -564,15 +581,15 @@ fn an_owner_alias_from_another_file_puts_a_site_in_the_population() {
 }
 ```
 
-- [ ] **Step 2: Run them, verify they fail**
+- [x] **Step 2: Run them, verify they fail**
 
 ```bash
-devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-790-contenttype-rename -- cargo nextest run -p xtask ident_gate
+devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-790-contenttype-rename -- cargo test --manifest-path xtask/Cargo.toml steps::ident_gate
 ```
 
 Expected: FAIL — `scan_owned` not defined.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 `Scanner` gains `owner: Option<(&'p str, &'p BTreeSet<String>)>` — **one field
 carrying the tuple**, for the same reason `scan_owned` takes one argument: with
@@ -621,18 +638,18 @@ would suppress **wrongly**.
 
 `walk_macro_tokens` (`:311-325`) is untouched — D4.
 
-- [ ] **Step 4: Run the whole xtask suite**
+- [x] **Step 4: Run the whole xtask suite**
 
 AC1 rests on the pre-existing shared `marker_tests` passing untouched, so run
 everything, not just the new tests:
 
 ```bash
-devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-790-contenttype-rename -- cargo nextest run -p xtask
+devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-790-contenttype-rename -- cargo test --manifest-path xtask/Cargo.toml
 ```
 
 Expected: PASS, including every pre-existing `marker_tests` case.
 
-- [ ] **Step 5: Gate and commit** — `GATE.owner` is still unset, so the tree is
+- [x] **Step 5: Gate and commit** — `GATE.owner` is still unset, so the tree is
       unchanged.
 
 ```bash
@@ -683,7 +700,7 @@ site is _still flagged_. So:
 - [ ] **Step 2: Run them, verify the new ones fail**
 
 ```bash
-devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-790-contenttype-rename -- cargo nextest run -p xtask rendered_html
+devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-790-contenttype-rename -- cargo test --manifest-path xtask/Cargo.toml steps::rendered_html_from_trusted_check
 ```
 
 Expected: the two **new** bound-qualifier tests FAIL (owner not yet set); the
@@ -714,7 +731,7 @@ retitled ones PASS.
 - [ ] **Step 4: Run the tests**
 
 ```bash
-devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-790-contenttype-rename -- cargo nextest run -p xtask
+devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-790-contenttype-rename -- cargo test --manifest-path xtask/Cargo.toml
 ```
 
 Expected: PASS. The verdict test at `:380` is another unresolvable-qualifier

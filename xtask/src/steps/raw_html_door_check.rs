@@ -75,6 +75,9 @@ const GATE: Gate = Gate {
     step: "raw-html-door",
     roots: POLICED_ROOTS,
     population: DOORS,
+    // `PreEscaped` *is* the type and appears as a path head, so there is no qualifier to
+    // resolve — the ident is the whole question here (#790).
+    owner: None,
     report: Report {
         subject: "`PreEscaped`",
         verdict: "is not a marked raw-HTML door — markup minted here reaches the DOM \
