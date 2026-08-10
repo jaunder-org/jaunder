@@ -1,3 +1,5 @@
 # Discovery run artifacts — regenerated, never reviewed.
 discover.log
+discover.log.*
 out/
+discovery.pid

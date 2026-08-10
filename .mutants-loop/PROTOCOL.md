@@ -14,15 +14,20 @@ would also pass. Your job is to write a test that kills it.
 
 Everything lives in `.mutants-loop/`. Nothing lives in your head.
 
-| File                               | Holds                                    |
-| ---------------------------------- | ---------------------------------------- |
-| `common.sh`                        | the mandatory flags, filter, and TMPDIR  |
-| `discover.sh`                      | the discovery run (never edits code)     |
-| `verify.sh`                        | `verify.sh <pkg> <file>` — did they die? |
-| `discover.log`                     | discovery progress                       |
-| `out/<pkg>/mutants.out/missed.txt` | surviving mutants found by discovery     |
-| `queue.md`                         | the work queue and its state             |
-| `journal.md`                       | append-only record, newest last          |
+| File                   | Holds                                          |
+| ---------------------- | ---------------------------------------------- |
+| `common.sh`            | the mandatory flags, filter, and TMPDIR        |
+| `discover.sh`          | the discovery run (never edits code)           |
+| `start-discovery.sh`   | starts discovery detached; `--status`/`--stop` |
+| `verify.sh`            | `verify.sh <pkg> <file>` — did they die?       |
+| `discover.log`         | discovery progress                             |
+| `out/<pkg>/missed.txt` | surviving mutants, merged once a package ends  |
+| `queue.md`             | the work queue and its state                   |
+| `journal.md`           | append-only record, newest last                |
+
+`out/<pkg>/missed.txt` is written only when every shard of that package has
+finished. Mid-run, the per-shard files under `out/<pkg>/shard-N/mutants.out/`
+are the live view — `start-discovery.sh --status` sums them for you.
 
 ## Each wake-up
 

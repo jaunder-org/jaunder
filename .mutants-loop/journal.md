@@ -70,3 +70,20 @@ Append-only. Newest last. One line per event.
   discover.sh and a new verify.sh. PROTOCOL now says to call the scripts and
   never hand-roll the command. discover.sh also no longer marks a package done
   when the baseline failed (exit 4).
+- 2026-08-10 — re-ran discovery workspace-scoped, web and client excluded (the
+  user's call on web). Baseline green on common; 0 missed through the first 154
+  of 580 mutants, consistent with the render.rs finding.
+- 2026-08-10 — the harness killed that run mid-package ("ERROR interrupted").
+  Two gaps it exposed, both now fixed:
+  - discover.sh only resumed BETWEEN packages, so 154 mutants of work were
+    thrown away. It now scans each package in 8 shards (`--shard i/8`), each
+    with its own `.done`. An interruption costs one shard. The price is one
+    extra baseline build per shard (~30s), against losing an hour.
+  - a run launched as a child of the agent's shell is a tracked background task,
+    and those get killed. `start-discovery.sh` now launches it setsid-detached
+    with a pidfile, so it survives the session. `--status` sums shard progress
+    live; `--stop` kills it by PID (never pattern-kill). Also noting 12 timeouts
+    in the first 154 mutants, against 2 in the entire package-scoped run:
+    workspace-wide test runs are slower, so cargo-mutants' auto timeout bites
+    more often. Timeouts are not survivors, but they are unexamined. If the rate
+    holds, the timeout needs raising.
