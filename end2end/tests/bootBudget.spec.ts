@@ -9,6 +9,7 @@
 
 import { expect } from "@playwright/test";
 import {
+  allowEngineDependentBoot,
   allowSecondBoot,
   bootCount,
   pendingReasons,
@@ -171,4 +172,52 @@ test("an undeclared second load is reported even when no later goto raises it", 
   expect(failures[0]).toContain(`${BASE_URL}/login`);
   // Taking clears it, so teardown does not report the same breach twice.
   expect(takeBudgetFailures()).toEqual([]);
+});
+
+// ── Engine-dependent loads (#867, found on firefox) ──────────────────────────
+
+test("an engine-dependent allowance nothing consumes is not an orphan", async ({
+  page,
+}) => {
+  await goto(page, "/");
+  allowEngineDependentBoot(
+    page,
+    "a load only some engines produce, and this one did not",
+  );
+  // The whole point of the form: unconsumed is not evidence of an
+  // over-declaration, because whether the load happens is not the test's choice.
+  expect(takeBudgetFailures()).toEqual([]);
+});
+
+test("an engine-dependent allowance covers a load that does happen", async ({
+  page,
+}) => {
+  await goto(page, "/");
+  allowEngineDependentBoot(page, "a load some engines produce");
+  await goto(page, "/login");
+  expect(bootCount(page)).toBe(2);
+  expect(takeBudgetFailures()).toEqual([]);
+});
+
+test("an exact declaration is spent before an engine-dependent one", async ({
+  page,
+}) => {
+  await goto(page, "/");
+  // Declared engine-dependent FIRST, deliberately: consuming in call order would
+  // let it absorb the load that always happens and orphan the exact declaration,
+  // making the outcome depend on which line the test wrote first. This is the
+  // engine that produces only ONE of the two loads.
+  allowEngineDependentBoot(page, "the load this engine did not produce");
+  allowSecondBoot(page, "the load that always happens");
+  await goto(page, "/login");
+
+  expect(pendingReasons(page)).toEqual([
+    "the load this engine did not produce",
+  ]);
+  expect(takeBudgetFailures()).toEqual([]);
+});
+
+test("an engine-dependent allowance still needs a reason", async ({ page }) => {
+  await goto(page, "/");
+  expect(() => allowEngineDependentBoot(page, "   ")).toThrow(/reason/);
 });

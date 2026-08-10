@@ -20,7 +20,7 @@ import {
   signInAsNewUser,
   failServerFn,
 } from "./helpers";
-import { allowSecondBoot } from "./bootBudget";
+import { allowEngineDependentBoot, allowSecondBoot } from "./bootBudget";
 import { SEL } from "./selectors";
 import { createPostViaApi } from "./posts";
 
@@ -152,15 +152,23 @@ test("owner: jaunder_home_redirect='app' makes the pre-paint script redirect / �
     localStorage.setItem("jaunder_home_redirect", "app"),
   );
 
-  // ONE further load, not two. The `/` document commits and then the pre-paint
-  // `location.replace("/app")` fires during head parsing, so `/` is replaced
-  // before it ever reaches DOMContentLoaded: the budget sees a single load, and
-  // its URL is `/app`. (Measured — `framenavigated` fires for both `/` and
-  // `/app`, `domcontentloaded` only for `/app`.) That load is the subject and is
-  // the script's own redirect, so it cannot be routed in-app.
+  // How many further loads this produces is ENGINE-DEPENDENT, so it takes both
+  // declaration forms. The `/` document commits and the pre-paint
+  // `location.replace("/app")` fires during head parsing. On chromium `/` is
+  // replaced before it ever reaches DOMContentLoaded, so the budget counts one
+  // load and its URL is `/app`; on firefox `/` does fire the event, so the budget
+  // counts two. (Measured on both — `framenavigated` fires for `/` and `/app`
+  // everywhere; `domcontentloaded` for `/app` everywhere and for `/` on firefox
+  // only.) `/app` always lands, so it is declared exactly; `/` is declared with
+  // the engine-dependent form. Neither can be routed in-app: the redirect is the
+  // script's own, and it is the subject.
   allowSecondBoot(
     page,
-    "the pre-paint redirect is a location.replace during head parsing, so the only load that lands is /app; it is the script's own redirect, not a test-issued navigation, and it is the subject",
+    "the /app load the pre-paint location.replace always produces; it is the script's own redirect, not a test-issued navigation, and it is the subject",
+  );
+  allowEngineDependentBoot(
+    page,
+    "the / document itself: the pre-paint location.replace runs during head parsing, so whether / reaches DOMContentLoaded before being replaced is engine timing — firefox fires it and counts the load, chromium replaces / first and never does",
   );
   // e2e-goto-wrapper:allow `waitUntil: "commit"` plus the `waitForURL` below is the subject — the pre-paint redirect replaces `/` during head parsing, so the wrapper would wait for a mount on a document that never paints
   await page.goto(`${BASE_URL}/`, { waitUntil: "commit" });

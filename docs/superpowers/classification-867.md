@@ -68,14 +68,17 @@ be read correctly:
   permalink, so it must precede the `/tags/xeditc` load that leaves it. Both
   assertions are intact; only the order changed. Listed under Subject changes.
 
-### Amendment 2 — the pre-paint `/`→`/app` redirect is one load, not two (Task 8)
+### Amendment 2 — the pre-paint `/`→`/app` redirect counts 1 on chromium and 2 on firefox (Tasks 8 and 9 review)
 
 Arming the budget (Task 8) made the orphan check fail `authed-flash.spec.ts` ›
 `owner: jaunder_home_redirect='app' makes the pre-paint script redirect / → /app`:
-it declared two further loads and only one arrived.
+it declared two further loads and only one arrived. Collapsing the declaration
+to one then made the **firefox** combo fail the same test the other way, with an
+undeclared second load (`booted at /register, then loaded /app`) — the single
+allowance had been consumed by `/`.
 
-**Measured, not inferred.** A throwaway probe listened to both events on that
-exact flow:
+**Measured on both engines, not inferred.** A throwaway probe listened to both
+events on that exact flow under chromium:
 
 ```
 framenavigated   -> http://127.0.0.1:35173/
@@ -83,20 +86,28 @@ framenavigated   -> http://127.0.0.1:35173/app
 domcontentloaded -> http://127.0.0.1:35173/app     <- the only one
 ```
 
+Firefox's budget failure is the counterpart observation: it counted `/` and then
+`/app`, so `domcontentloaded` fires for both there.
+
 The pre-paint redirect is a `location.replace` emitted as a JS string from
 `web/src/app/render.rs` (ADR-0076 names it the one remaining in-app document
 load, and specifically as a string its AST scan cannot see). It runs during head
-parsing, so the `/` document is **replaced before it reaches
-`DOMContentLoaded`**. `/` commits and navigates, but never fires the event the
-budget counts.
+parsing, so whether the `/` document is **replaced before it reaches
+`DOMContentLoaded`** is a race between the engine's parser and its navigation —
+chromium replaces it first and never fires the event; firefox fires it.
 
-Two consequences, and they point in different directions:
+Three consequences:
 
-- **The budget counts 1** (and the load it counts is `/app`, not `/`). The two
-  declarations collapse to one, whose reason now says exactly this. Note the
-  surviving load is the one the classification had described as the _second_ of
-  the pair — the row that reads "the pre-paint redirect script runs only on a
-  cold document load of `/`" was describing a load that is real but uncountable.
+- **The count is engine-dependent: 1 on chromium, 2 on firefox.** No fixed
+  number of declarations is right — one orphans on firefox, two orphan on
+  chromium. **This is why `allowEngineDependentBoot` exists** (Task 9 review):
+  the `/app` load always happens and keeps an exact `allowSecondBoot`, while the
+  `/` document takes the engine-dependent form, which authorises at most one
+  load and is exempt from the orphan rule. On chromium the `/` declaration goes
+  unconsumed and that is not a defect; on firefox it is consumed.
+- **On chromium the load the budget sees is `/app`, not `/`.** The row that
+  reads "the pre-paint redirect script runs only on a cold document load of `/`"
+  was describing a load that is real but, on that engine, uncountable.
 - **The trace still counts 2.** The corpus rows come from
   `e2e.navigation_top_json`, which is built from navigation records, not from
   `domcontentloaded` — and it lists `/` and `/app` as separate rows for this
@@ -108,11 +119,13 @@ the trace's navigation count, and the trace's view of this test is unchanged
 at 2. I checked this rather than assuming it: the evidence is the
 classification's own two rows for this test, which were derived from the trace.
 
-**What does move is the declaration census:** 40 → **39** `allowSecondBoot`
-source sites, 42 → **41** declarations executed per run. So
-`count(kept:declared)` as an _enforced_ number is 41, one below the 42 predicted
-from the trace. The gap is exactly this row, and it is a definitional difference
-between the two counters rather than a miscount in either.
+**What does move is the declaration census, and it is now engine-dependent
+too:** the source sites stay at **40** — 39 exact `allowSecondBoot` plus 1
+`allowEngineDependentBoot` — but the number _consumed_ per run is **41 on
+chromium and 42 on firefox**. So `count(kept:declared)` as an _enforced_ number
+matches the trace's 42 on firefox and sits one below it on chromium. The gap is
+exactly this row, and it is a definitional difference between the two counters
+(and between two engines) rather than a miscount in any of them.
 
 **For Task 11:** the budget census and the trace count are not the same
 measurement and must not be reconciled by adjusting one to fit the other.

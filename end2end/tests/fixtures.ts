@@ -996,7 +996,9 @@ const test = base.extend<{
             budgetFailures.map((line) => `  - ${line}`).join("\n") +
             `\nAn undeclared second load either belongs in the app (move within ` +
             `it with navigateInApp) or is deliberate, and then it is declared ` +
-            `with allowSecondBoot(page, "<reason>"). An allowance that nothing ` +
+            `with allowSecondBoot(page, "<reason>") — or, if whether the load ` +
+            `happens at all depends on the browser engine, with ` +
+            `allowEngineDependentBoot(page, "<reason>"). An allowance that nothing ` +
             `consumed does not expire: it waits and silently absorbs the next ` +
             `extra document load, disarming the budget. Either the load it ` +
             `authorised no longer happens — delete the declaration — or it moved, ` +

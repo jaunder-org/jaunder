@@ -27,7 +27,10 @@
  *   destination's cold render being the subject, or a re-load proving
  *   persistence).  One allowance covers one load.  An allowance nothing
  *   consumes fails the test as an orphan — it does not expire, so leaving one
- *   behind would silently absorb the next undeclared load.
+ *   behind would silently absorb the next undeclared load.  For the rare load
+ *   whose very occurrence depends on the browser engine, and only for that,
+ *   declare it with `allowEngineDependentBoot(page, reason)`: it covers at most
+ *   one load and is exempt from the orphan rule.
  *
  * - Pass paths (e.g. `"/login"`, `"/posts/new"`) to `goto` — it always
  *   prepends `BASE_URL` automatically.  Use `BASE_URL` directly only for

@@ -14,6 +14,12 @@
  * document is parsed, so a router push is invisible to it and a full load never
  * is. `bootBudget.spec.ts` pins both halves of that claim.
  *
+ * The price is that a document replaced before it reaches `DOMContentLoaded` is
+ * counted by some engines and not others — measured on the pre-paint `/`→`/app`
+ * redirect, which firefox counts and chromium does not. Such a load is declared
+ * with `allowEngineDependentBoot`; every other load takes the exact
+ * `allowSecondBoot`.
+ *
  * ## Why the page, not the wrapper
  *
  * Counting inside `goto` would leave every raw `page.goto` as a blind spot,
@@ -39,11 +45,17 @@
 
 import type { Page } from "@playwright/test";
 
+/** One declared further load. `engineDependent` allowances may go unconsumed. */
+type Allowance = {
+  reason: string;
+  engineDependent: boolean;
+};
+
 type BudgetState = {
   /** Document loads on this page, in order, as URLs. */
   loads: string[];
-  /** Unconsumed `allowSecondBoot` reasons, consumed in call order. */
-  allowances: string[];
+  /** Declared further loads not yet consumed — see {@link takeAllowance}. */
+  allowances: Allowance[];
   /** Set on the first undeclared extra load; raised at the next `goto` or, if
    *  there is none, by the teardown sweep. */
   violation?: string;
@@ -72,6 +84,23 @@ function isRealDocument(url: string): boolean {
 }
 
 /**
+ * Consume one allowance for a load, **exact declarations first**.
+ *
+ * Order matters and call order is the wrong rule. A page carrying one exact and
+ * one engine-dependent declaration takes either one load or two, depending on the
+ * engine; consuming in call order would make the outcome depend on which line the
+ * test happened to write first (the engine-dependent one could absorb the load
+ * that always happens, orphaning the exact one). Spending the exact declarations
+ * first makes both engines pass with the same two lines: they are the ones that
+ * MUST be consumed, so they are the ones to spend while loads are arriving.
+ */
+function takeAllowance(state: BudgetState): Allowance | undefined {
+  const index = state.allowances.findIndex((a) => !a.engineDependent);
+  const [taken] = state.allowances.splice(index === -1 ? 0 : index, 1);
+  return taken;
+}
+
+/**
  * Arm the budget on `page`. Idempotent: `tracedContext` arms every page it
  * creates, so an explicit call in a test is a no-op rather than a double count.
  */
@@ -90,7 +119,7 @@ export function trackBoots(page: Page): void {
     state.loads.push(url);
     if (state.loads.length === 1) return;
 
-    if (state.allowances.shift() !== undefined) return;
+    if (takeAllowance(state) !== undefined) return;
     state.violation ??=
       `second document load on this page: it booted at ${state.loads[0]}, ` +
       `then loaded ${url}. A page boots once (#867) — move within the app ` +
@@ -104,12 +133,47 @@ export function trackBoots(page: Page): void {
  *
  * One allowance covers one load, so a page that legitimately boots three times
  * calls this twice. The reason is required and is the record of what was
- * deliberately left alone — it is read by humans, never by the gate.
+ * deliberately left alone — it is read by humans, never by the gate. The count is
+ * exact: an allowance nothing consumes fails the test (see
+ * {@link takeBudgetFailures}). Use {@link allowEngineDependentBoot} for the rare
+ * load whose very existence depends on the browser engine.
  */
 export function allowSecondBoot(page: Page, reason: string): void {
+  declare(page, reason, false, "allowSecondBoot");
+}
+
+/**
+ * Authorise **at most one** further document load on `page` whose occurrence
+ * depends on the browser engine, for a stated reason.
+ *
+ * Exempt from the orphan rule, and only for that reason: whether the load happens
+ * is not the test's choice, so a declaration that goes unconsumed is not an
+ * over-declaration. Measured case — the pre-paint `location.replace` off `/`:
+ * chromium replaces the document during head parsing, so `/` never reaches
+ * `DOMContentLoaded` and the budget counts one load; firefox does fire it, and the
+ * budget counts two. No fixed count is right for that flow, which is why this form
+ * exists.
+ *
+ * **This is not the default and must not become one.** `allowSecondBoot` keeps
+ * exact-count semantics and its orphan rule, and that rule is the only thing a
+ * machine can check about a written exemption. Reach for this form only when the
+ * load's existence genuinely varies by engine, and say in the reason *why* it
+ * varies — "engine-dependent" on its own records nothing a reader can check.
+ */
+export function allowEngineDependentBoot(page: Page, reason: string): void {
+  declare(page, reason, true, "allowEngineDependentBoot");
+}
+
+/** The shared body of the two declaration forms. `by` names the caller in errors. */
+function declare(
+  page: Page,
+  reason: string,
+  engineDependent: boolean,
+  by: string,
+): void {
   if (reason.trim() === "") {
     throw new Error(
-      "allowSecondBoot needs a non-empty reason: it is the record of why this " +
+      `${by} needs a non-empty reason: it is the record of why this ` +
         "page boots more than once (#867).",
     );
   }
@@ -132,7 +196,7 @@ export function allowSecondBoot(page: Page, reason: string): void {
     const url = page.url();
     if (isRealDocument(url)) state?.loads.push(url);
   }
-  state?.allowances.push(reason);
+  state?.allowances.push({ reason, engineDependent });
 }
 
 /** Document loads counted on `page` so far. Zero if never armed. */
@@ -140,9 +204,9 @@ export function bootCount(page: Page): number {
   return states.get(page)?.loads.length ?? 0;
 }
 
-/** Allowances declared on `page` that no load has consumed yet. */
+/** Reasons declared on `page` that no load has consumed yet, either form. */
 export function pendingReasons(page: Page): string[] {
-  return [...(states.get(page)?.allowances ?? [])];
+  return (states.get(page)?.allowances ?? []).map((a) => a.reason);
 }
 
 /**
@@ -162,7 +226,11 @@ export function pendingReasons(page: Page): string[] {
  *    line; it disarms the check for the rest of the page's life, and does so
  *    invisibly. This is ADR-0094's orphan-marker rule ("a marker whose site no
  *    longer exists fails") in runtime form: an exemption nothing re-verifies
- *    must at least be checked to still apply.
+ *    must at least be checked to still apply. An `allowEngineDependentBoot`
+ *    declaration is deliberately excluded: whether its load happens is the
+ *    engine's choice, not the test's, so an unconsumed one is not evidence of
+ *    anything. That exclusion is why that form is narrow and its reason must say
+ *    what varies.
  *
  * A violation line leads with `undeclared second load —`; an orphan line is
  * `"<entry url>: <reason>"`. Always clears, so a failing test cannot leak either
@@ -180,8 +248,9 @@ export function takeBudgetFailures(): string[] {
       state.violation = undefined;
     }
     const where = state.loads[0] ?? "(a page that never loaded)";
-    for (const reason of state.allowances) {
-      orphans.push(`${where}: ${reason}`);
+    for (const allowance of state.allowances) {
+      if (allowance.engineDependent) continue;
+      orphans.push(`${where}: ${allowance.reason}`);
     }
     state.allowances.length = 0;
   }
