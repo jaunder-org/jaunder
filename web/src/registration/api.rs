@@ -10,11 +10,11 @@ use crate::error::WebResult;
 // client and server builds.
 use common::invite::ProfferedInviteCode;
 use common::password::ProfferedPassword;
-// Ungated: `RegistrationPolicy` is the wire *return* type of `get_policy`,
-// and `RawToken` the wire *return* type of `register`, so the `#[server]`-generated
-// signatures reference them on both the client and server builds.
+// Ungated: `RegistrationPolicy` is the wire *return* type of `get_policy`, so the
+// `#[server]`-generated signature references it on both the client and server
+// builds. `RawToken` is deliberately absent — `register` returns `()`, and the
+// session token it mints stays server-side in the HttpOnly cookie (#533).
 use common::registration::RegistrationPolicy;
-use common::token::RawToken;
 use common::username::Username;
 
 // One grouped `feature = "server"` support block for the `#[server]` bodies.
@@ -44,14 +44,16 @@ pub async fn get_policy() -> WebResult<RegistrationPolicy> {
     Ok(policy)
 }
 
-/// Registers a new user.  Returns the freshly minted session [`RawToken`] on
-/// success and sets the `session` cookie.
+/// Registers a new user and logs them in by setting the `HttpOnly` `session` cookie.
+///
+/// Returns `()`: the freshly minted session token is deliberately not sent back in
+/// the body (#533), so an XSS at registration time has no credential to read.
 #[macros::server(skip(password, invite_code))]
 pub async fn register(
     username: Username,
     password: ProfferedPassword,
     invite_code: Option<ProfferedInviteCode>,
-) -> WebResult<RawToken> {
+) -> WebResult<()> {
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
     let users = expect_context::<Arc<dyn UserStorage>>();
     let atomic = expect_context::<Arc<dyn AtomicOps>>();
@@ -128,5 +130,6 @@ pub async fn register(
 
     set_session_cookie(&raw_token);
     leptos_axum::redirect("/");
-    Ok(raw_token)
+    // Session establishment is cookie-only (#533) — nothing to return.
+    Ok(())
 }

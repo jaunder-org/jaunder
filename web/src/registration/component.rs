@@ -10,7 +10,6 @@ use crate::forms::{Field, ValidatedInput};
 use crate::topbar::Topbar;
 use common::password::Password;
 use common::registration::RegistrationPolicy;
-use common::token::RawToken;
 use common::username::Username;
 use leptos::prelude::*;
 
@@ -54,7 +53,7 @@ pub fn RegisterPage() -> impl IntoView {
     // live `username` field, which the user could have edited between submit and
     // response. The server still owns the real cookie.
     Effect::new(move |_| {
-        if let Some(Ok(_)) = register_action.value().get()
+        if let Some(Ok(())) = register_action.value().get()
             && let Some(input) = register_action.input().get()
         {
             set_session(SessionUser {
@@ -143,7 +142,7 @@ pub fn RegisterPage() -> impl IntoView {
                     register_action
                         .value()
                         .get()
-                        .and_then(|r: Result<RawToken, WebError>| r.err())
+                        .and_then(|r: Result<(), WebError>| r.err())
                         .map(|e| view! { <p class="error">{e.to_string()}</p> })
                 }}
             </div>
