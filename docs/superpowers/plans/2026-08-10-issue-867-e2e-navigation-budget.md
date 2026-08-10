@@ -170,7 +170,9 @@ pages lose incidental cold coverage, and the source of the pre-registered count.
 - Produces: **`PREDICTED_TOTAL`** — the post-change total document loads, cited
   by Task 11's pre-registration and by the spec's A9.
 
-- [ ] **Step 1: Derive the per-test navigation table from the corpus**
+- [x] **Step 1: Derive the per-test navigation table from the corpus** —
+      reproduced exactly: 137 tests, 211 test-attributed, 20 page-span, 231
+      total, `dropped = 0`.
 
 Use `ctx_execute` (javascript, absolute paths) over
 `/home/mdorman/measurements/jaunder/issue-866-preload/traces/before-1-sqlite-chromium.jsonl`.
@@ -183,7 +185,7 @@ Expected: 137 tests, 211 test-attributed navigations, 20 page-span navigations.
 If these do not reproduce, stop — the baseline is wrong and the rest of the plan
 rests on it.
 
-- [ ] **Step 2: Write the classification table**
+- [x] **Step 2: Write the classification table**
 
 One row per navigation, grouped by file then test. Columns:
 `file | test | url | class | reason`.
@@ -207,13 +209,17 @@ Rules for assigning `converted` vs `kept:declared`, applied per the spec:
   `admin-site.spec.ts`, `backup.spec.ts`).
 - Otherwise, and a router push or a real UI control can reach it → `converted`.
 
-- [ ] **Step 3: Add the coverage-movement section**
+- [x] **Step 3: Add the coverage-movement section** — one real loss: `/drafts`
+      stops being an entry URL. No assertion deleted.
 
 List every destination page that currently receives an incidental cold render
 and will stop receiving one, with the test that provided it. This is the
 enumeration the spec requires so coverage loss is stated, not asserted.
 
-- [ ] **Step 4: Compute and record the prediction**
+- [x] **Step 4: Compute and record the prediction** — `PREDICTED_TOTAL = 170`;
+      saved 61; ceilings 55.6 s firefox / 42.0 s chromium; floor 33.3 s / 25.2
+      s. Counts independently re-derived from the written table: 231 rows, and
+      every per-file subtotal matches the trace.
 
 ```
 PREDICTED_TOTAL = 231 - count(removed) - count(converted)
@@ -224,12 +230,17 @@ and the derived ceilings `count_saved × 911 ms` (firefox) and `× 689 ms`
 (chromium) in a summary block at the top of the artifact. State explicitly that
 this is registered before any timing arm is captured.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add docs/superpowers/classification-867.md
 git commit -m "docs(e2e): classify all 231 document loads and pin the prediction (#867)"
 ```
+
+**Also discovered here and filed, not folded in:**
+[#896](https://github.com/jaunder-org/jaunder/issues/896) — `/posts/new` is
+registered as a route but nothing in the app links to it, so the full composer
+is reachable only by typing the URL.
 
 ---
 
