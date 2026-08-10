@@ -430,7 +430,7 @@ mod tests {
         posts
             .expect_feed_urls_needing_catchup()
             .times(1)
-            .returning(|_| Err(sqlx::Error::PoolClosed));
+            .returning(|_| Err(storage::StorageError::Db(sqlx::Error::PoolClosed)));
         let mut events = storage::MockFeedEventStorage::new();
         events
             .expect_claim_pending_batch()
@@ -585,7 +585,7 @@ mod tests {
         site_config
             .expect_get_feeds_config()
             .times(0..)
-            .returning(|| Err(sqlx::Error::PoolClosed));
+            .returning(|| Err(storage::StorageError::Db(sqlx::Error::PoolClosed)));
         site_config
             .expect_get_feeds_websub_hub_url()
             .times(0..)
@@ -633,7 +633,7 @@ mod tests {
         site_config
             .expect_get_feeds_config()
             .times(0..)
-            .returning(|| Err(sqlx::Error::PoolClosed));
+            .returning(|| Err(storage::StorageError::Db(sqlx::Error::PoolClosed)));
         site_config
             .expect_get_feeds_websub_hub_url()
             .times(0..)

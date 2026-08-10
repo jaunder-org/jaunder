@@ -191,19 +191,13 @@ fn log_internal<E: std::error::Error>(err: &E) {
     tracing::error!(error = %err, "AtomPub handler internal error");
 }
 
-impl From<sqlx::Error> for HandlerError {
-    fn from(err: sqlx::Error) -> Self {
-        log_internal(&err);
-        HandlerError::Internal
-    }
-}
-
 impl From<storage::StorageError> for HandlerError {
-    /// The row-access twin of the `sqlx::Error` lift above: `MediaStorage`'s
-    /// reads now report [`storage::StorageError`], so the media handlers' bare
-    /// `?` needs this hop (#343). Same outcome — a storage failure is an
-    /// internal error to an `AtomPub` client either way — but a `MissingRow`
-    /// arrives named, so the log says which row.
+    /// The one storage lift these handlers need. It replaced a
+    /// `From<sqlx::Error>` twin, which lost its last caller once every storage
+    /// API the handlers touch reported [`storage::StorageError`] instead of a
+    /// raw driver error (#343). Same outcome — a storage failure is an internal
+    /// error to an `AtomPub` client either way — but a `MissingRow` arrives
+    /// named, so the log says which row.
     fn from(err: storage::StorageError) -> Self {
         log_internal(&err);
         HandlerError::Internal
@@ -442,10 +436,6 @@ mod tests {
 
     #[test]
     fn storage_and_document_errors_map_to_status() {
-        assert_eq!(
-            status(sqlx::Error::PoolClosed.into()),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
         assert_eq!(
             status(storage::StorageError::Db(sqlx::Error::PoolClosed).into()),
             StatusCode::INTERNAL_SERVER_ERROR

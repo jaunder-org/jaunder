@@ -10,6 +10,8 @@ use common::token::RawToken;
 use common::username::Username;
 use host::invite::InviteCode;
 
+use crate::error::StorageError;
+
 /// Errors that can occur during atomic invite-and-user creation.
 #[derive(Debug, Error)]
 pub enum RegisterWithInviteError {
@@ -27,7 +29,19 @@ pub enum RegisterWithInviteError {
     UsernameTaken,
     /// An unexpected database error occurred.
     #[error(transparent)]
-    Internal(#[from] sqlx::Error),
+    Internal(#[from] StorageError),
+}
+
+impl From<sqlx::Error> for RegisterWithInviteError {
+    /// Hand-written because `From` does not chain: with the payload retyped, a
+    /// bare `?` on a raw `execute`/`fetch_optional` in the backend `AtomicOps`
+    /// impls no longer reaches `Internal` on its own.
+    ///
+    /// Not a hole in the #343 guarantee: `RowNotFound` cannot arrive here,
+    /// because `fetch_one` is banned and nothing in the crate constructs it.
+    fn from(error: sqlx::Error) -> Self {
+        Self::Internal(StorageError::Db(error))
+    }
 }
 
 impl From<RegisterWithInviteError> for host::error::InternalError {
@@ -50,7 +64,9 @@ impl From<RegisterWithInviteError> for host::error::InternalError {
             RegisterWithInviteError::InviteAlreadyUsed => {
                 InternalError::validation("invite code has already been used")
             }
-            RegisterWithInviteError::Internal(e) => InternalError::storage(e),
+            // Delegate to `StorageError`'s own lift rather than re-classifying:
+            // it is the type that knows a missing row is not a driver failure.
+            RegisterWithInviteError::Internal(e) => e.into(),
         }
     }
 }
@@ -69,7 +85,16 @@ pub enum ConfirmPasswordResetError {
     AlreadyUsed,
     /// An unexpected database error occurred.
     #[error(transparent)]
-    Internal(#[from] sqlx::Error),
+    Internal(#[from] StorageError),
+}
+
+impl From<sqlx::Error> for ConfirmPasswordResetError {
+    /// See [`RegisterWithInviteError`]'s twin: `From` does not chain, so the
+    /// bare `?` on a raw sqlx call needs this hop. `RowNotFound` cannot arrive —
+    /// `fetch_one` is banned crate-wide.
+    fn from(error: sqlx::Error) -> Self {
+        Self::Internal(StorageError::Db(error))
+    }
 }
 
 impl From<ConfirmPasswordResetError> for host::error::InternalError {
@@ -87,7 +112,8 @@ impl From<ConfirmPasswordResetError> for host::error::InternalError {
             ConfirmPasswordResetError::AlreadyUsed => {
                 InternalError::validation("token has already been used")
             }
-            ConfirmPasswordResetError::Internal(e) => InternalError::storage(e),
+            // Delegate to `StorageError`'s own lift rather than re-classifying.
+            ConfirmPasswordResetError::Internal(e) => e.into(),
         }
     }
 }
@@ -154,8 +180,10 @@ mod tests {
             let mapped: InternalError = error.into();
             assert_eq!(mapped.kind(), ErrorKind::Validation);
         }
+        // `PoolClosed`, not `RowNotFound`: the latter is the exact value #343
+        // exists to purge, and it can no longer reach this payload.
         let mapped: InternalError =
-            ConfirmPasswordResetError::Internal(sqlx::Error::RowNotFound).into();
+            ConfirmPasswordResetError::Internal(StorageError::Db(sqlx::Error::PoolClosed)).into();
         assert_eq!(mapped.kind(), ErrorKind::Storage);
     }
 
@@ -275,7 +303,7 @@ mod tests {
         assert_eq!(used.public_message(), "invite code has already been used");
 
         let internal: InternalError =
-            RegisterWithInviteError::Internal(sqlx::Error::PoolClosed).into();
+            RegisterWithInviteError::Internal(StorageError::Db(sqlx::Error::PoolClosed)).into();
         assert_eq!(internal.kind(), ErrorKind::Storage);
         assert_eq!(internal.public_message(), "storage operation failed");
     }

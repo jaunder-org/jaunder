@@ -18,7 +18,7 @@ use crate::sql::quote_identifier;
 /// `foreign_key_violation`) to `ConstraintViolation`, so a restore that violates the
 /// schema fails uniformly with `SQLite` (which detects it via `foreign_key_check`).
 /// Any other database error is a genuine infrastructure failure and passes through as
-/// `Sqlx`.
+/// `Storage`.
 fn map_restore_error(error: sqlx::Error) -> BackupError {
     let constraint_message = error
         .as_database_error()
@@ -26,7 +26,7 @@ fn map_restore_error(error: sqlx::Error) -> BackupError {
         .map(|db| db.message().to_owned());
     match constraint_message {
         Some(message) => BackupError::ConstraintViolation(message),
-        None => BackupError::Sqlx(error),
+        None => BackupError::from(error),
     }
 }
 
@@ -320,12 +320,14 @@ fn json_select(table: &str, columns: &[ColumnInfo]) -> String {
 }
 
 async fn schema_version(connection: &mut PgConnection) -> Result<i64, BackupError> {
-    Ok(
-        sqlx::query_scalar::<_, Option<i64>>("SELECT MAX(version) FROM _sqlx_migrations")
-            .fetch_one(&mut *connection)
-            .await?
-            .unwrap_or_default(),
+    // Routed through the wrapper (#343) — see the `SQLite` twin.
+    Ok(crate::error::fetch_exactly_one_scalar(
+        sqlx::query_scalar::<_, Option<i64>>("SELECT MAX(version) FROM _sqlx_migrations"),
+        &mut *connection,
+        "the _sqlx_migrations MAX(version) aggregate row",
     )
+    .await?
+    .unwrap_or_default())
 }
 
 async fn schema_checksum(connection: &mut PgConnection) -> Result<String, BackupError> {
@@ -390,11 +392,11 @@ mod tests {
     // users.ndjson carries a non-numeric `user_id`. `import_table`'s
     // `CAST($n AS BIGINT)` then raises SQLSTATE 22P02 (class 22, a data exception —
     // not a class-23 constraint violation), so `map_restore_error` takes its `None`
-    // arm and yields `BackupError::Sqlx`. That arm is unreachable through the public
+    // arm and yields `BackupError::Storage`. That arm is unreachable through the public
     // restore interface, so it is exercised at the dialect level here.
     #[apply(postgres_only)]
     #[tokio::test]
-    async fn restore_maps_non_constraint_error_to_sqlx(
+    async fn restore_maps_non_constraint_error_to_storage(
         #[case] backend: Backend,
     ) -> Result<(), BackupError> {
         let source = backend.setup().await;
@@ -438,8 +440,8 @@ mod tests {
             .expect_err("restore should fail casting a non-numeric user_id");
 
         assert!(
-            matches!(error, BackupError::Sqlx(_)),
-            "non-constraint (class 22) restore error must map to Sqlx, got {error:?}"
+            matches!(error, BackupError::Storage(_)),
+            "non-constraint (class 22) restore error must map to Storage, got {error:?}"
         );
         Ok(())
     }

@@ -218,7 +218,7 @@ mod tests {
         // A storage failure during regeneration surfaces as a 500.
         site_config
             .expect_get_feeds_config()
-            .returning(|| Err(sqlx::Error::PoolClosed));
+            .returning(|| Err(storage::StorageError::Db(sqlx::Error::PoolClosed)));
 
         let resp = serve(
             Arc::new(cache),

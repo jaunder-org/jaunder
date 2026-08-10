@@ -632,7 +632,7 @@ pub trait PostStorage: Send + Sync {
         &self,
         user_id: UserId,
         key: &str,
-    ) -> Result<Option<PostId>, sqlx::Error>;
+    ) -> Result<Option<PostId>, StorageError>;
 
     /// Fetches a post by its ID, applying the viewer-resolution filter: the post
     /// is returned only if `viewer` is the author or a targeted audience admits
@@ -641,7 +641,7 @@ pub trait PostStorage: Send + Sync {
         &self,
         post_id: PostId,
         viewer: &ViewerIdentity,
-    ) -> sqlx::Result<Option<PostRecord>>;
+    ) -> Result<Option<PostRecord>, StorageError>;
 
     /// Fetches a post by its public permalink components, applying the
     /// viewer-resolution filter. See ADR-0020.
@@ -655,7 +655,7 @@ pub trait PostStorage: Send + Sync {
         slug: &Slug,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
-    ) -> sqlx::Result<Option<PostRecord>>;
+    ) -> Result<Option<PostRecord>, StorageError>;
 
     /// Updates a post and creates a new revision.
     ///
@@ -688,10 +688,10 @@ pub trait PostStorage: Send + Sync {
     ) -> Result<PostRecord, UpdatePostError>;
 
     /// Marks a post as deleted without removing it from the database.
-    async fn soft_delete_post(&self, post_id: PostId) -> sqlx::Result<()>;
+    async fn soft_delete_post(&self, post_id: PostId) -> Result<(), StorageError>;
 
     /// Reverts a published post to draft status.
-    async fn unpublish_post(&self, post_id: PostId) -> sqlx::Result<()>;
+    async fn unpublish_post(&self, post_id: PostId) -> Result<(), StorageError>;
 
     /// Lists published posts for a specific user, ordered by creation date,
     /// applying the viewer-resolution filter. See ADR-0020.
@@ -712,7 +712,7 @@ pub trait PostStorage: Send + Sync {
         limit: RowLimit,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
-    ) -> sqlx::Result<Vec<PostRecord>>;
+    ) -> Result<Vec<PostRecord>, StorageError>;
 
     /// Lists all published posts across the entire site, applying the
     /// viewer-resolution filter. See ADR-0020.
@@ -726,7 +726,7 @@ pub trait PostStorage: Send + Sync {
         limit: RowLimit,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
-    ) -> sqlx::Result<Vec<PostRecord>>;
+    ) -> Result<Vec<PostRecord>, StorageError>;
 
     /// Lists draft posts for a specific user.
     ///
@@ -742,7 +742,7 @@ pub trait PostStorage: Send + Sync {
         cursor: Option<&'a PostCursor>,
         limit: RowLimit,
         now: DateTime<Utc>,
-    ) -> sqlx::Result<Vec<PostRecord>>;
+    ) -> Result<Vec<PostRecord>, StorageError>;
 
     /// Lists all of a user's non-soft-deleted posts (drafts + published)
     /// ordered by `updated_at DESC, post_id DESC` for the `AtomPub` Collection
@@ -753,7 +753,7 @@ pub trait PostStorage: Send + Sync {
         user_id: UserId,
         cursor: Option<&'a CollectionCursor>,
         limit: RowLimit,
-    ) -> sqlx::Result<Vec<PostRecord>>;
+    ) -> Result<Vec<PostRecord>, StorageError>;
 
     /// Makes the post's tags equal `desired`, in one transaction (#771, ADR-0092).
     ///
@@ -822,7 +822,7 @@ pub trait PostStorage: Send + Sync {
         &self,
         prefix: Option<&'a str>,
         limit: RowLimit,
-    ) -> sqlx::Result<Vec<TagRecord>>;
+    ) -> Result<Vec<TagRecord>, StorageError>;
 
     /// Lists published posts matching `surface`, applying the
     /// [`HybridWindow`](common::feed::HybridWindow) selection rule (union of
@@ -837,7 +837,7 @@ pub trait PostStorage: Send + Sync {
         window: &common::feed::HybridWindow,
         now: DateTime<Utc>,
         viewer: &ViewerIdentity,
-    ) -> sqlx::Result<Vec<PostRecord>>;
+    ) -> Result<Vec<PostRecord>, StorageError>;
 
     /// Lists posts that crossed into "live" within the window `(after, upto]`
     /// (exclusive lower, inclusive upper): `published_at > after AND
@@ -848,13 +848,16 @@ pub trait PostStorage: Send + Sync {
         &self,
         after: DateTime<Utc>,
         upto: DateTime<Utc>,
-    ) -> sqlx::Result<Vec<GoLivePost>>;
+    ) -> Result<Vec<GoLivePost>, StorageError>;
 
     /// Returns the URLs of cached feeds whose surface has a live post
     /// (`published_at <= now`, not deleted) strictly newer than the feed's own
     /// `generated_at` — i.e. cached feeds that missed a go-live while the worker
     /// was down. Drives the feed-relative startup catch-up.
-    async fn feed_urls_needing_catchup(&self, now: DateTime<Utc>) -> sqlx::Result<Vec<FeedPath>>;
+    async fn feed_urls_needing_catchup(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<FeedPath>, StorageError>;
 
     /// Reads a post's audience targeting as a [`Vec<AudienceTarget>`], for
     /// pre-selecting the editor's audience picker.
@@ -865,7 +868,10 @@ pub trait PostStorage: Send + Sync {
     /// `subscribers` → [`AudienceTarget::Subscribers`], `named` →
     /// [`AudienceTarget::Named`]); a post with no rows yields an empty vec
     /// (equivalent to [`AudienceTarget::Private`]). See ADR-0020.
-    async fn get_post_audiences(&self, post_id: PostId) -> sqlx::Result<Vec<AudienceTarget>>;
+    async fn get_post_audiences(
+        &self,
+        post_id: PostId,
+    ) -> Result<Vec<AudienceTarget>, StorageError>;
 
     /// The ids of `user_id`'s non-soft-deleted posts whose rendered HTML points at
     /// `media`, ascending. An unreferenced item yields an empty vec.
@@ -886,7 +892,7 @@ pub trait PostStorage: Send + Sync {
         &self,
         user_id: UserId,
         media: &MediaRef,
-    ) -> sqlx::Result<Vec<PostId>>;
+    ) -> Result<Vec<PostId>, StorageError>;
 }
 
 /// Backend-specific divergence for [`PostStore`].
@@ -1089,7 +1095,7 @@ where
         &self,
         user_id: UserId,
         key: &str,
-    ) -> Result<Option<PostId>, sqlx::Error> {
+    ) -> Result<Option<PostId>, StorageError> {
         let post_id = sqlx::query_scalar::<_, PostId>(
             "SELECT post_id FROM idempotency_keys WHERE user_id = $1 AND key = $2",
         )
@@ -1109,7 +1115,7 @@ where
         &self,
         post_id: PostId,
         viewer: &ViewerIdentity,
-    ) -> sqlx::Result<Option<PostRecord>> {
+    ) -> Result<Option<PostRecord>, StorageError> {
         let (resolution, binds, _) = resolution_where(viewer, 2);
         let sql = format!(
             "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
@@ -1131,7 +1137,10 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn get_post_audiences(&self, post_id: PostId) -> sqlx::Result<Vec<AudienceTarget>> {
+    async fn get_post_audiences(
+        &self,
+        post_id: PostId,
+    ) -> Result<Vec<AudienceTarget>, StorageError> {
         // Owner-only: no viewer resolution. `ORDER BY` makes the result
         // deterministic so callers can compare vecs directly.
         let rows: Vec<(TargetKind, Option<AudienceId>)> = sqlx::query_as(
@@ -1159,7 +1168,7 @@ where
         &self,
         user_id: UserId,
         media: &MediaRef,
-    ) -> sqlx::Result<Vec<PostId>> {
+    ) -> Result<Vec<PostId>, StorageError> {
         // Identical on both backends, so it stays here rather than becoming a
         // `PostDialect` const (ADR-0019). No `LIMIT`: see the trait doc. The predicate
         // itself is `POSTS_REFERENCING_MEDIA_FROM_WHERE`, shared with the delete guard.
@@ -1169,13 +1178,13 @@ where
         // decode bound off this impl.
         let sql =
             format!("SELECT pm.post_id {POSTS_REFERENCING_MEDIA_FROM_WHERE} ORDER BY pm.post_id");
-        sqlx::query_scalar::<_, PostId>(&sql)
+        Ok(sqlx::query_scalar::<_, PostId>(&sql)
             .bind(user_id)
             .bind(media.source)
             .bind(&media.sha256)
             .bind(&media.filename)
             .fetch_all(&self.pool)
-            .await
+            .await?)
     }
 
     #[tracing::instrument(
@@ -1190,7 +1199,7 @@ where
         slug: &Slug,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
-    ) -> sqlx::Result<Option<PostRecord>> {
+    ) -> Result<Option<PostRecord>, StorageError> {
         // `PermalinkDate`'s Display is ISO `YYYY-MM-DD` — the exact string the
         // `PERMALINK_DATE_CLAUSE` binds (replacing the old `format!("{y:04}-…")`).
         let date_str = date.to_string();
@@ -1314,7 +1323,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn soft_delete_post(&self, post_id: PostId) -> sqlx::Result<()> {
+    async fn soft_delete_post(&self, post_id: PostId) -> Result<(), StorageError> {
         let now = Utc::now();
         sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
             .bind(now)
@@ -1329,7 +1338,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn unpublish_post(&self, post_id: PostId) -> sqlx::Result<()> {
+    async fn unpublish_post(&self, post_id: PostId) -> Result<(), StorageError> {
         sqlx::query("UPDATE posts SET published_at = NULL WHERE post_id = $1")
             .bind(post_id)
             .execute(&self.pool)
@@ -1349,7 +1358,7 @@ where
         limit: RowLimit,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
-    ) -> sqlx::Result<Vec<PostRecord>> {
+    ) -> Result<Vec<PostRecord>, StorageError> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
             // Binds: $1 username, $2/$3 cursor, $4 post_id, $5 now, then the
@@ -1409,7 +1418,10 @@ where
                 .fetch_all(&self.pool)
                 .await?
         };
-        rows.into_iter().map(post_record_from_row).collect()
+        Ok(rows
+            .into_iter()
+            .map(post_record_from_row)
+            .collect::<sqlx::Result<_>>()?)
     }
 
     #[tracing::instrument(
@@ -1423,7 +1435,7 @@ where
         limit: RowLimit,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
-    ) -> sqlx::Result<Vec<PostRecord>> {
+    ) -> Result<Vec<PostRecord>, StorageError> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
             // Binds: $1/$2 cursor, $3 post_id, $4 now, then the variant-sized
@@ -1479,7 +1491,10 @@ where
                 .fetch_all(&self.pool)
                 .await?
         };
-        rows.into_iter().map(post_record_from_row).collect()
+        Ok(rows
+            .into_iter()
+            .map(post_record_from_row)
+            .collect::<sqlx::Result<_>>()?)
     }
 
     #[tracing::instrument(
@@ -1493,7 +1508,7 @@ where
         cursor: Option<&'a PostCursor>,
         limit: RowLimit,
         now: DateTime<Utc>,
-    ) -> sqlx::Result<Vec<PostRecord>> {
+    ) -> Result<Vec<PostRecord>, StorageError> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
             // `published_at IS NULL OR published_at > $5` surfaces both true
@@ -1542,7 +1557,10 @@ where
                 .fetch_all(&self.pool)
                 .await?
         };
-        rows.into_iter().map(post_record_from_row).collect()
+        Ok(rows
+            .into_iter()
+            .map(post_record_from_row)
+            .collect::<sqlx::Result<_>>()?)
     }
 
     #[tracing::instrument(
@@ -1555,7 +1573,7 @@ where
         user_id: UserId,
         cursor: Option<&'a CollectionCursor>,
         limit: RowLimit,
-    ) -> sqlx::Result<Vec<PostRecord>> {
+    ) -> Result<Vec<PostRecord>, StorageError> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
             let sql = format!(
@@ -1595,7 +1613,10 @@ where
                 .fetch_all(&self.pool)
                 .await?
         };
-        rows.into_iter().map(post_record_from_row).collect()
+        Ok(rows
+            .into_iter()
+            .map(post_record_from_row)
+            .collect::<sqlx::Result<_>>()?)
     }
 
     #[tracing::instrument(
@@ -1821,7 +1842,7 @@ where
         &self,
         prefix: Option<&'a str>,
         limit: RowLimit,
-    ) -> sqlx::Result<Vec<TagRecord>> {
+    ) -> Result<Vec<TagRecord>, StorageError> {
         let normalized = prefix
             .map(str::trim)
             .filter(|p| !p.is_empty())
@@ -1872,7 +1893,7 @@ where
         window: &common::feed::HybridWindow,
         now: DateTime<Utc>,
         viewer: &ViewerIdentity,
-    ) -> sqlx::Result<Vec<PostRecord>> {
+    ) -> Result<Vec<PostRecord>, StorageError> {
         // ROW_NUMBER() identifies the top `min_items` posts; OR-combining with
         // `published_at >= cutoff` produces the hybrid-window union in a single
         // query. Only the JSON tag aggregation differs per backend, so the SQL
@@ -1883,7 +1904,10 @@ where
             &self.pool, surface, now, cutoff, min_items, viewer,
         )
         .await?;
-        rows.into_iter().map(post_record_from_row).collect()
+        Ok(rows
+            .into_iter()
+            .map(post_record_from_row)
+            .collect::<sqlx::Result<_>>()?)
     }
 
     #[tracing::instrument(
@@ -1895,7 +1919,7 @@ where
         &self,
         after: DateTime<Utc>,
         upto: DateTime<Utc>,
-    ) -> sqlx::Result<Vec<GoLivePost>> {
+    ) -> Result<Vec<GoLivePost>, StorageError> {
         // `published_at > $1 AND published_at <= $2` selects exactly the posts
         // that crossed into "live" within the half-open window `(after, upto]`.
         // The standard post projection (incl. the JSON tag subquery) is reused
@@ -1935,7 +1959,10 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn feed_urls_needing_catchup(&self, now: DateTime<Utc>) -> sqlx::Result<Vec<FeedPath>> {
+    async fn feed_urls_needing_catchup(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<FeedPath>, StorageError> {
         // Cached feeds live in the same database, so they are enumerated here
         // and, for each, the newest live post on that surface is compared
         // against the feed's own `generated_at`. Feed count is small, so a
@@ -2320,7 +2347,7 @@ pub(crate) async fn replace_post_audiences<DB>(
     conn: &mut DB::Connection,
     post_id: PostId,
     audiences: &[AudienceTarget],
-) -> sqlx::Result<()>
+) -> Result<(), StorageError>
 where
     DB: PostDialect,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -2361,7 +2388,7 @@ pub(crate) async fn replace_post_media<DB>(
     conn: &mut DB::Connection,
     post_id: PostId,
     media: &[MediaRef],
-) -> sqlx::Result<()>
+) -> Result<(), StorageError>
 where
     DB: PostDialect,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -2407,7 +2434,7 @@ async fn list_published_in_window_rows<DB>(
     cutoff: DateTime<Utc>,
     min_items: i64,
     viewer: &ViewerIdentity,
-) -> sqlx::Result<Vec<PostRow>>
+) -> Result<Vec<PostRow>, StorageError>
 where
     DB: PostDialect,
     PostRow: for<'r> sqlx::FromRow<'r, DB::Row>,
@@ -2428,7 +2455,7 @@ where
 {
     use common::feed::FeedSurface;
     let tags = DB::TAGS_SUBQUERY;
-    match surface {
+    Ok(match surface {
         FeedSurface::Site => {
             // Binds: $1 now, $2 min_items, $3 cutoff, then the variant-sized
             // resolution fragment from $4. `window_sql` places it last, so
@@ -2439,7 +2466,7 @@ where
                 .bind(now)
                 .bind(min_items)
                 .bind(cutoff);
-            binds.bind_onto(query).fetch_all(pool).await
+            binds.bind_onto(query).fetch_all(pool).await?
         }
         FeedSurface::User { username } => {
             // Binds: $1 now, $2 username, $3 min_items, $4 cutoff, then the
@@ -2451,7 +2478,7 @@ where
                 .bind(username)
                 .bind(min_items)
                 .bind(cutoff);
-            binds.bind_onto(query).fetch_all(pool).await
+            binds.bind_onto(query).fetch_all(pool).await?
         }
         FeedSurface::SiteTag { tag } => {
             // Binds: $1 now, $2 tag, $3 min_items, $4 cutoff, then the
@@ -2463,7 +2490,7 @@ where
                 .bind(tag)
                 .bind(min_items)
                 .bind(cutoff);
-            binds.bind_onto(query).fetch_all(pool).await
+            binds.bind_onto(query).fetch_all(pool).await?
         }
         FeedSurface::UserTag { username, tag } => {
             // Binds: $1 now, $2 username, $3 tag, $4 min_items, $5 cutoff, then
@@ -2476,9 +2503,9 @@ where
                 .bind(tag)
                 .bind(min_items)
                 .bind(cutoff);
-            binds.bind_onto(query).fetch_all(pool).await
+            binds.bind_onto(query).fetch_all(pool).await?
         }
-    }
+    })
 }
 
 /// Assembles the hybrid-window SQL for `surface`.
@@ -2591,7 +2618,7 @@ async fn max_published_at_for_surface<DB>(
     pool: &Pool<DB>,
     surface: &common::feed::FeedSurface,
     now: DateTime<Utc>,
-) -> sqlx::Result<Option<DateTime<Utc>>>
+) -> Result<Option<DateTime<Utc>>, StorageError>
 where
     DB: PostDialect,
     (DateTime<Utc>,): for<'r> sqlx::FromRow<'r, DB::Row>,
@@ -3007,7 +3034,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(err, sqlx::Error::ColumnDecode { .. }),
+            matches!(err, StorageError::Db(sqlx::Error::ColumnDecode { .. })),
             "an unrecognised kind must surface as a decode error, not a shorter list: {err:?}"
         );
     }
@@ -4142,7 +4169,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(err, sqlx::Error::ColumnDecode { .. }),
+            matches!(err, StorageError::Db(sqlx::Error::ColumnDecode { .. })),
             "expected a column-decode error, got: {err:?}"
         );
     }
@@ -4212,7 +4239,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(err, sqlx::Error::ColumnDecode { .. }),
+            matches!(err, StorageError::Db(sqlx::Error::ColumnDecode { .. })),
             "expected a column-decode error, got: {err:?}"
         );
     }

@@ -43,20 +43,23 @@ boundary); `set_post_tags`'s insert-then-select (filed as a follow-up in Task
       hand-written `From<sqlx::Error>` here.
 - [x] **9.** Slice: `media`, `feed_cache`, `feed_events` — including
       `media_manager` and `atompub`.
-- [ ] **9b.** Slice: `posts` **trait methods**. The Task 5/6 brief enumerated
+- [x] **9b.** Slice: `posts` **trait methods**. The Task 5/6 brief enumerated
       the four error payloads and missed that `PostStorage` has ~20 methods
       returning `sqlx::Result` directly — AC1 covers those too. Found by the
       Task 9 agent noticing `feed_urls_needing_catchup` still on `sqlx::Result`.
-      **Lesson for the remaining slices: retype every public fn and trait method
-      returning `sqlx::Result` in the module, not just the payloads named in the
-      brief.**
-- [ ] **10.** Slice: `site_config` — 19 trait methods plus the `smtp` coupling.
+      **Lesson: retype every public fn and trait method returning `sqlx::Result`
+      in the module, not just the payloads named in the brief** — the later
+      briefs were reframed as a measurement (drive the `rg` count to its
+      justified floor) rather than a list of line numbers.
+- [x] **10.** Slice: `site_config` — 19 trait methods plus the `smtp` coupling.
 - [x] **11.** Slice: `audiences`.
-- [ ] **12.** Slice: `invites`, `user_config`.
-- [ ] **13.** Slice: `backup`, `atomic`, `postgres/bootstrap` — including both
+- [x] **12.** Slice: `invites`, `user_config`.
+- [x] **13.** Slice: `backup`, `atomic`, `postgres/bootstrap` — including both
       `mod.rs` `AtomicOps` impls.
 - [ ] **14.** `test_support`, its `server/tests` consumers, and the final sweep.
-- [ ] **15.** `server/atompub`'s own `From` impl.
+- [x] **15.** `server/atompub`'s own `From` impl — the sqlx one is **deleted**
+      (its last raw-`sqlx::Error` caller went with Task 12) and replaced by
+      `From<StorageError>`.
 - [ ] **16.** Turn the clippy guard on; rewrite the 6 `server/tests` sites.
 - [ ] **17.** Durable self-test proving the guard rejects a bare `fetch_one`.
 - [ ] **18.** Delete the blanket `From<sqlx::Error>` and its pinning test.

@@ -460,10 +460,9 @@ pub async fn perform_post_creation(
                 let record = storage
                     .get_post_by_id(post_id, &viewer)
                     .await
-                    // `get_post_by_id` still returns a raw `sqlx::Error`; wrap it
-                    // as a driver failure — it reads through `fetch_optional`, so
-                    // absence arrives as `Ok(None)` below, never as an error.
-                    .map_err(|e| PerformCreationError::Storage(StorageError::Db(e)))?
+                    // `get_post_by_id` reads through `fetch_optional`, so absence
+                    // arrives as `Ok(None)` below, never as an error.
+                    .map_err(PerformCreationError::Storage)?
                     .ok_or(PerformCreationError::CreatedNotFound)?;
                 return Ok(record);
             }
