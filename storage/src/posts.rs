@@ -102,15 +102,13 @@ impl PostRecord {
     ///
     /// This was a body → title → slug preference chain until #811. The lower two rungs
     /// existed only to cover a blank body, and [`PostBody`]'s invariant is now *exactly*
-    /// the predicate [`SummarySeed::first_body_line`] searches with — at least one line
+    /// the condition [`SummarySeed::first_body_line`] relies on — at least one line
     /// non-empty after trimming — so they became unreachable and were removed. #830's
-    /// doc anticipated precisely this collapse.
+    /// doc anticipated precisely this collapse; #858 finished it by making
+    /// `first_body_line` total, which retired the `unreachable!` that stood here.
     #[must_use]
     pub fn fallback_summary_label(&self) -> PostSummary {
-        let Some(seed) = SummarySeed::first_body_line(&self.body) else {
-            unreachable!("PostBody guarantees at least one non-blank line");
-        };
-        PostSummary::truncated(&seed)
+        PostSummary::truncated(&SummarySeed::first_body_line(&self.body))
     }
 }
 
