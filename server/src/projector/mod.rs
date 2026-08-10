@@ -436,8 +436,8 @@ mod tests {
         assert_eq!(
             boot_wasm_url(&doc),
             web::app::WASM_URL,
-            "the boot URL must be web::app::WASM_URL, the same constant the preload \
-             is emitted from (#866)"
+            "the boot URL must be web::app::WASM_URL, the single definition every \
+             copy of this path is checked against (#866)"
         );
     }
 }

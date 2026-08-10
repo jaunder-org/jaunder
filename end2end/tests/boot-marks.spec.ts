@@ -70,7 +70,7 @@ test.describe("mergeDocumentTiming", () => {
 // asserts the mechanism works at all, which needs no knowledge of the coverage
 // distribution and so can ship before the distribution exists. Gradual erosion is
 // #831's job.
-test("the harness captures the full boot mark set after mount", async ({
+test("boot fetches the wasm once and the harness captures the full mark set", async ({
   page,
   bootTiming,
 }) => {

@@ -961,6 +961,24 @@ already carried.
 | frame skew (`commitToMount` − boot) | 294.9           | **61.3** | 184.2          | **38.3**  |
 | **`commitToMount`**                 | **688.5**       | 143.2    | **911.2**      | 189.5     |
 
+Split by cache warmth, ms per navigation (n = 339 / 285 / 341 / 285):
+
+| segment                             | chr cold  | chr warm  | ff cold   | ff warm   |
+| ----------------------------------- | --------- | --------- | --------- | --------- |
+| `document_start → wasm_fetch_start` | 257.9     | 158.5     | 310.2     | 201.4     |
+| `wasm_fetch`                        | 189.0     | 128.3     | 77.0      | 32.6      |
+| `wasm_instantiate`                  | 14.6      | 13.6      | 403.9     | 406.4     |
+| `boot.entry → seed_parsed`          | 2.7       | 0.2       | 2.1       | 0.3       |
+| `seed_parsed → render_start`        | 0.9       | 0.2       | 1.9       | 0.5       |
+| `render_start → mount_done`         | 5.8       | 0.9       | 1.8       | 2.2       |
+| **boot total**                      | **470.9** | **301.6** | **796.9** | **643.4** |
+
+Note what does _not_ move with warmth: **firefox's `wasm_instantiate` is 403.9
+ms cold and 406.4 ms warm.** A warm HTTP cache removes the download and changes
+the compile cost not at all. That is consistent with #864's size-independent
+floor and is the same segment #866's own preload experiment later moved by 125
+ms — see #887.
+
 Two things close here rather than deferring.
 
 **The Rust boot path is ~1 s of a 300–450 s suite.** `seed_parsed`,
@@ -1111,16 +1129,35 @@ not in doubt.
 | `wasm_instantiate` | 421.0 → **546.0** | 15.3 → 21.1      |
 
 The directional prediction held: `wasm_fetch` rose, as the moved download now
-contends. What was **not** predicted is `wasm_instantiate` rising by **125 ms on
-firefox** — 422.5 → 599.3 cold, 419.2 → 482.7 warm, with **no overlap between
-the arms in any of the three runs**. Chromium shows the same sign, much smaller
-(15.5 → 26.8 cold). `wasmEncodedBytes` and `wasmDecodedBytes` are identical
-across arms, so it is not a different payload.
+contends.
 
-**Why instantiate got worse is unexplained.** A preload changing _how_ bytes
-arrive plausibly changes whether the engine can compile while downloading, but
-this capture tested a size-independent question and cannot attribute a compile
-regression. Naming a mechanism here is exactly the #840 error. Filed as #887.
+`wasm_instantiate` also rose 125 ms on firefox — **and that figure must not be
+read as a compile regression.** It is **derived, not measured**: `fixtures.ts`
+computes it as `boot.entry.startTime − wasm.responseEndMs`, because Rust cannot
+observe its own fetch or instantiation. It is a **residual**, so it absorbs
+whatever happens between those two points.
+
+That makes it **not comparable across arms that move when the fetch starts**:
+
+- **Before**, `init()` starts the fetch, so it runs only after the glue has
+  loaded and executed. The residual is close to genuine instantiate.
+- **After**, the preload finishes early but `init()` still waits on the glue, so
+  the glue's load and execution fall **inside** the residual — reattributed out
+  of the pre-fetch window, not newly incurred.
+
+The arithmetic fits reattribution: firefox −194.8 (pre-fetch) +50.1 (fetch)
++125.0 (residual) nets −19.6 ms. A pure reattribution nets zero, so what is left
+is a small genuine saving on top of a large reshuffle across segment boundaries.
+
+**No claim is made about compile cost here, in either direction.** Whether
+delivery affects firefox's real instantiate is untested and needs an instrument
+that measures it rather than subtracting for it — #887.
+
+**This does not touch the decomposition above.** That was computed within a
+_single_ delivery mode (arm C), where `init()` always starts the fetch, so the
+residual means what it says; the same holds for its cold/warm split. The
+residual only becomes uninterpretable when an experiment moves the fetch's start
+— which is exactly what this one did, and what this caveat exists to record.
 
 #### Verdict against the pre-registered rules
 
@@ -1133,19 +1170,21 @@ regression. Naming a mechanism here is exactly the #840 error. Filed as #887.
   gate's critical path.
 
 **D8 fires: the preload is reverted.** It does not land on the strength of the
-mechanism being real — and the mechanism _is_ real, which is the interesting
-part. The serial boot chain was a genuine 166–195 ms of waiting, and removing it
-bought nothing, because the time reappears as fetch contention and compile.
+mechanism being real — and the mechanism _is_ real: the serial boot chain was a
+genuine 166–195 ms of waiting and the preload genuinely removed it. It bought
+~19 ms of boot, because the glue load stays on the critical path either way.
 
-**What this changes downstream.** #864 records firefox's instantiate as a ~377
-ms _size-independent_ floor. This experiment shows it is not
-delivery-independent: the same bytes cost 125 ms more to instantiate when they
-arrive via a preload. That is a live clue for #864 and is cross-referenced
-there.
+**What this does _not_ establish.** An earlier draft of this section claimed the
+experiment showed firefox's instantiate floor (#864) is "delivery-dependent".
+**That claim is withdrawn**: it rested on the derived residual described above,
+which reattributes the glue load between arms. The floor may or may not depend
+on delivery; this capture cannot say, and #887 is now framed as a question about
+the instrument rather than a report of a regression.
 
-The pre-fetch window (#870's stylesheet question) remains open and is now more
-interesting, not less: 166–195 ms of it is removable, but removing it this way
-does not convert into boot time.
+The pre-fetch window (#870's stylesheet question) remains open and is sharpened:
+166–195 ms of it is genuinely removable, and removing it this way converts
+almost none of it into boot time — because whatever else sits between
+`document_start` and `boot.entry` (the glue, at minimum) is still serial.
 
 ## #792 — the per-test warmup A/B (findings, 2026-08-04)
 

@@ -55,14 +55,14 @@ pub const SPA_SHELL: &str = include_str!("../../../csr/index.html");
 ///
 /// These exist because the paths were previously written out by hand in every
 /// place that needed them — both shells, the projector's boot script, and two
-/// xtask checks — with nothing tying the copies together. That was survivable
-/// while the only consumer was `init()`. It stopped being survivable when the
-/// shells gained a `<link rel="preload">` for the same bytes: a preload whose
-/// URL has drifted from the `init()` target does not fail, it silently
-/// **downloads the wasm twice**, which is strictly worse than no preload at all.
+/// xtask checks — with nothing tying the copies together.
 ///
-/// So the preload and the `init()` call are both asserted against these
-/// constants — see the drift guards in this module's tests.
+/// #866 introduced them while trialling a `<link rel="preload">`, where a URL
+/// that had drifted from the `init()` target would not fail but silently
+/// **download the wasm twice**. That preload was measured and reverted, so the
+/// hazard is gone — but the copies remain, and the shell's `init()` target, its
+/// glue `import`, and the projector's boot script are all still asserted against
+/// these constants by the drift guards in this module's tests.
 pub const WASM_URL: &str = "/pkg/jaunder.wasm";
 /// The wasm-bindgen JS glue's URL. See [`WASM_URL`].
 pub const GLUE_URL: &str = "/pkg/jaunder.js";
