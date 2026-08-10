@@ -96,6 +96,9 @@ Copied from the spec; every task's requirements implicitly include these.
 - **ADR-0094 marker form:** `// e2e-goto-wrapper:allow <reason>` on the line
   immediately above the site. Line form only, reason required, one site per
   line, orphan markers fail, census derived and printed.
+- **No `/s` (dotAll) regex flag in `end2end/`** — the suite's tsc target
+  predates es2018 and `tsc` fails with TS1501. Use `[\s\S]` instead of `.`.
+  (Found by the gate in Task 3.)
 - **Per-navigation cost (from #866, for all arithmetic):** firefox 911 ms,
   chromium 689 ms `commitToMount`.
 - **Commits:** run
@@ -260,7 +263,7 @@ is reachable only by typing the URL.
   - `export function bootCount(page: Page): number`
   - `export function throwIfViolated(page: Page): void`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `end2end/tests/bootBudget.spec.ts`. These run in the real browser because the
 counter's whole claim is about which browser events fire. Import `test` from
@@ -292,7 +295,7 @@ test("a second document load is rejected when undeclared", async ({ page }) => {
   trackBoots(page);
   await goto(page, "/");
   await expect(goto(page, "/login")).rejects.toThrow(
-    /second document load .*\/login.*allowSecondBoot/s,
+    /second document load [\s\S]*\/login[\s\S]*allowSecondBoot/,
   );
 });
 
@@ -325,7 +328,7 @@ test("an empty reason is rejected", async ({ page }) => {
 });
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-867-e2e-nav-count -- cargo xtask e2e-local bootBudget`
@@ -337,7 +340,7 @@ verification.
 
 Expected: FAIL — `./bootBudget` not found.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 Write `bootBudget.ts` to the four signatures above, **and** add the surfacing
 call to `helpers.ts`'s `goto`: after `waitForMount`, call
@@ -362,11 +365,19 @@ The design decisions the tests cannot express, and which must be honoured:
 - Allowances are a counter, decremented per extra load, each carrying its reason
   for the failure message and for the derived census.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
-Run: `... cargo xtask e2e-local bootBudget` Expected: PASS, 7 tests.
+Run: `... cargo xtask e2e-local bootBudget` Expected: PASS, 7 tests. **Actual: 7
+passed (27.9 s)** — including "a same-document router push does not count",
+which is what turns the `domcontentloaded` choice from reasoning into evidence.
 
-- [ ] **Step 5: Commit**
+One implementation decision the tests did not dictate, recorded because it is
+load-bearing: the handler ignores `about:blank`. Playwright opens every page
+there, and whether that fires `domcontentloaded` is an engine detail — counting
+it would make every real entry look like a second load, plausibly on one engine
+and not the other.
+
+- [x] **Step 5: Commit**
 
 ```bash
 git add end2end/tests/bootBudget.ts end2end/tests/bootBudget.spec.ts end2end/tests/helpers.ts
@@ -455,7 +466,7 @@ test("it rejects a barrier that is already satisfied", async ({ page }) => {
       url: "/app",
       ready: "body",
     }),
-  ).rejects.toThrow(/already matches.*barrier/s);
+  ).rejects.toThrow(/already matches[\s\S]*barrier/);
 });
 
 test("it records timing in the trace like goto does", async ({
@@ -546,7 +557,7 @@ test("registeredPage boots at the given entry", async ({ registeredPage }) => {
 test("registeredPage refuses a second call", async ({ registeredPage }) => {
   await registeredPage("/posts/new");
   await expect(registeredPage("/profile")).rejects.toThrow(
-    /called twice.*\/posts\/new/s,
+    /called twice[\s\S]*\/posts\/new/,
   );
 });
 ```

@@ -39,6 +39,7 @@
 
 import { expect, type Page } from "@playwright/test";
 import { withTimedAction } from "./actions";
+import { throwIfViolated } from "./bootBudget";
 import { extractLink, extractToken, type CapturedEmail } from "./mail";
 import { waitForMount } from "./mount";
 import {
@@ -76,6 +77,10 @@ export async function goto(
     }),
   );
   await waitForMount(page, options?.timeout);
+  // The budget's event handler cannot reject this promise, so it records the
+  // breach and we raise it here (#867). Last, so a genuine mount failure — the
+  // more informative error — wins.
+  throwIfViolated(page);
 }
 
 /** Click `selector`, recording timing in the OTEL trace. */
