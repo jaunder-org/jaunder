@@ -19,7 +19,7 @@ error, extraction error, and disagreement. Registered in `Command::Check` and
 `tempfile` 3 is already present for the fixture-root test.
 
 **Spec:**
-[`docs/superpowers/specs/2026-08-10-issue-767-xlang-literal-gate.md`](../specs/2026-08-10-issue-767-xlang-literal-gate.md)
+[`2026-08-10-issue-767-xlang-literal-gate-spec.md`](2026-08-10-issue-767-xlang-literal-gate-spec.md)
 
 ## Review header
 
