@@ -507,10 +507,11 @@ mod tests {
     #[tokio::test]
     async fn register_in_db_maps_internal_create_error() {
         let mut media = crate::MockMediaStorage::new();
-        media
-            .expect_create_media()
-            .times(1)
-            .returning(|_| Err(CreateMediaError::Internal(sqlx::Error::PoolClosed)));
+        media.expect_create_media().times(1).returning(|_| {
+            Err(CreateMediaError::Internal(crate::StorageError::Db(
+                sqlx::Error::PoolClosed,
+            )))
+        });
         let manager = MediaManager::new(
             Arc::new(media),
             Arc::new(crate::MockSiteConfigStorage::new()),

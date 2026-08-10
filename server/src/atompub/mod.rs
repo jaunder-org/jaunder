@@ -198,6 +198,18 @@ impl From<sqlx::Error> for HandlerError {
     }
 }
 
+impl From<storage::StorageError> for HandlerError {
+    /// The row-access twin of the `sqlx::Error` lift above: `MediaStorage`'s
+    /// reads now report [`storage::StorageError`], so the media handlers' bare
+    /// `?` needs this hop (#343). Same outcome — a storage failure is an
+    /// internal error to an `AtomPub` client either way — but a `MissingRow`
+    /// arrives named, so the log says which row.
+    fn from(err: storage::StorageError) -> Self {
+        log_internal(&err);
+        HandlerError::Internal
+    }
+}
+
 impl From<StatusCode> for HandlerError {
     fn from(code: StatusCode) -> Self {
         HandlerError::Status(code)
@@ -435,6 +447,10 @@ mod tests {
             StatusCode::INTERNAL_SERVER_ERROR
         );
         assert_eq!(
+            status(storage::StorageError::Db(sqlx::Error::PoolClosed).into()),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        assert_eq!(
             status(common::atompub::AtomError::InvalidStartTag.into()),
             StatusCode::BAD_REQUEST
         );
@@ -497,7 +513,10 @@ mod tests {
             StatusCode::NOT_FOUND
         );
         assert_eq!(
-            status(DeleteMediaError::Internal(sqlx::Error::PoolClosed).into()),
+            status(
+                DeleteMediaError::Internal(storage::StorageError::Db(sqlx::Error::PoolClosed))
+                    .into()
+            ),
             StatusCode::INTERNAL_SERVER_ERROR
         );
     }

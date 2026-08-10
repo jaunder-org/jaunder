@@ -10,6 +10,7 @@ use sqlx::{Database, Pool};
 use thiserror::Error;
 
 use crate::backend::Backend;
+use crate::error::{StorageError, fetch_exactly_one_scalar};
 
 // Re-exported so `server`'s feed worker keeps importing it from `storage` alongside
 // `FeedEventRecord`; the type itself lives in `common` (#728, see its doc for why).
@@ -35,7 +36,19 @@ pub struct FeedEventRecord {
 #[derive(Debug, Error)]
 pub enum FeedEventError {
     #[error("database error: {0}")]
-    Db(#[from] sqlx::Error),
+    Db(#[from] StorageError),
+}
+
+impl From<sqlx::Error> for FeedEventError {
+    /// Hand-written because `From` does not chain: with the payload retyped, a
+    /// bare `?` on a raw `execute`/`fetch_all`/`begin` no longer reaches `Db` on
+    /// its own — the two dialect impls are built almost entirely of those.
+    ///
+    /// Not a hole in the #343 guarantee: `RowNotFound` cannot arrive here,
+    /// because `fetch_one` is banned and nothing in the crate constructs it.
+    fn from(error: sqlx::Error) -> Self {
+        Self::Db(StorageError::Db(error))
+    }
 }
 
 /// One row of a claim batch: either a decoded record, or the id of a row whose `feed_url`
@@ -245,10 +258,17 @@ where
     )]
     async fn enqueue(&self, feed_path: &FeedPath) -> Result<FeedEventId, FeedEventError> {
         let sql = format!("{INSERT_FEED_EVENT} RETURNING id");
-        let id = sqlx::query_scalar::<_, FeedEventId>(&sql)
-            .bind(feed_path)
-            .fetch_one(&self.pool)
-            .await?;
+        // A plain `INSERT … RETURNING`, so the row is guaranteed and the
+        // `MissingRow` arm is unreachable today. Routed through the wrapper
+        // anyway: `fetch_one` is the thing being removed, and the `what` string
+        // is what reports the absence by name the day an `ON CONFLICT` makes
+        // the row optional (#343).
+        let id = fetch_exactly_one_scalar(
+            sqlx::query_scalar::<_, FeedEventId>(&sql).bind(feed_path),
+            &self.pool,
+            "the inserted feed_events row",
+        )
+        .await?;
         Ok(id)
     }
 
@@ -507,7 +527,10 @@ mod tests {
             .await
             .expect_err("a non-feed_url decode failure must propagate");
         assert!(
-            matches!(err, FeedEventError::Db(sqlx::Error::ColumnDecode { .. })),
+            matches!(
+                err,
+                FeedEventError::Db(StorageError::Db(sqlx::Error::ColumnDecode { .. }))
+            ),
             "expected a column-decode error, got {err:?}"
         );
 

@@ -383,7 +383,11 @@ mod tests {
         events
             .expect_claim_pending_batch()
             .times(1)
-            .returning(|_, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_, _| {
+                Err(FeedEventError::Db(storage::StorageError::Db(
+                    sqlx::Error::PoolClosed,
+                )))
+            });
         // No mark_* expectation is set: any call after the claim error would
         // panic as an unexpected call, proving the tick returned early.
         let w = worker(

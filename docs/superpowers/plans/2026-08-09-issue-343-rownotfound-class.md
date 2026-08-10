@@ -41,10 +41,17 @@ boundary); `set_post_tags`'s insert-then-select (filed as a follow-up in Task
 - [x] **8.** Slice: `sessions` — including `SessionDialect::touch_and_load`, a
       public trait method AC1 requires; retyping it removed the need for a
       hand-written `From<sqlx::Error>` here.
-- [ ] **9.** Slice: `media`, `feed_cache`, `feed_events` — including
+- [x] **9.** Slice: `media`, `feed_cache`, `feed_events` — including
       `media_manager` and `atompub`.
+- [ ] **9b.** Slice: `posts` **trait methods**. The Task 5/6 brief enumerated
+      the four error payloads and missed that `PostStorage` has ~20 methods
+      returning `sqlx::Result` directly — AC1 covers those too. Found by the
+      Task 9 agent noticing `feed_urls_needing_catchup` still on `sqlx::Result`.
+      **Lesson for the remaining slices: retype every public fn and trait method
+      returning `sqlx::Result` in the module, not just the payloads named in the
+      brief.**
 - [ ] **10.** Slice: `site_config` — 19 trait methods plus the `smtp` coupling.
-- [ ] **11.** Slice: `audiences`.
+- [x] **11.** Slice: `audiences`.
 - [ ] **12.** Slice: `invites`, `user_config`.
 - [ ] **13.** Slice: `backup`, `atomic`, `postgres/bootstrap` — including both
       `mod.rs` `AtomicOps` impls.
@@ -53,8 +60,10 @@ boundary); `set_post_tags`'s insert-then-select (filed as a follow-up in Task
 - [ ] **16.** Turn the clippy guard on; rewrite the 6 `server/tests` sites.
 - [ ] **17.** Durable self-test proving the guard rejects a bare `fetch_one`.
 - [ ] **18.** Delete the blanket `From<sqlx::Error>` and its pinning test.
-- [ ] **19.** ADR draft.
-- [ ] **20.** Amend #343's body.
+- [x] **19.** ADR draft → `docs/adr/drafts/absence-is-named-at-its-source.md`
+      (gitignored until `cargo xtask adr promote` numbers it at ship).
+- [x] **20.** Amend #343's body — the superseded acceptance criterion is stated
+      as superseded, with the replacement criteria.
 - [ ] **21.** Full gate.
 
 **Key risks and decisions.**
