@@ -158,12 +158,14 @@ impl CloseablePool {
     ///
     /// # Errors
     ///
-    /// Returns the `sqlx::Error` if the connection cannot be acquired or the lock
-    /// cannot be taken (including when `post_id` does not exist on Postgres).
+    /// Returns a [`StorageError`] if the connection cannot be acquired or the
+    /// lock cannot be taken. On Postgres a non-existent `post_id` yields
+    /// `MissingRow` naming the locked row, rather than an anonymous
+    /// `RowNotFound` (#343).
     pub async fn lock_post_for_write(
         &self,
         post_id: PostId,
-    ) -> Result<PostWriteLock<'_>, sqlx::Error> {
+    ) -> Result<PostWriteLock<'_>, crate::StorageError> {
         let held = match self {
             CloseablePool::Sqlite(pool) => {
                 let mut conn = pool.acquire().await?;
@@ -176,11 +178,14 @@ impl CloseablePool {
             CloseablePool::Postgres(pool) => {
                 let mut tx = pool.begin().await?;
                 // Mirrors `PostgresPostStorage::set_post_tags`.
-                sqlx::query_scalar::<_, PostId>(
-                    "SELECT post_id FROM posts WHERE post_id = $1 FOR UPDATE",
+                crate::error::fetch_exactly_one_scalar(
+                    sqlx::query_scalar::<_, PostId>(
+                        "SELECT post_id FROM posts WHERE post_id = $1 FOR UPDATE",
+                    )
+                    .bind(post_id),
+                    &mut *tx,
+                    "the post row being locked for write",
                 )
-                .bind(post_id)
-                .fetch_one(&mut *tx)
                 .await?;
                 HeldWrite::Postgres(tx)
             }
@@ -239,8 +244,10 @@ impl PostWriteLock<'_> {
     ///
     /// # Errors
     ///
-    /// Returns the `sqlx::Error` if any of the three statements fails.
-    pub async fn add_tag(&mut self, label: &TagLabel) -> Result<(), sqlx::Error> {
+    /// Returns a [`StorageError`] if any of the three statements fails. The tag
+    /// id read-back reports `MissingRow` rather than an anonymous `RowNotFound`
+    /// if the row the insert just guaranteed is somehow absent (#343).
+    pub async fn add_tag(&mut self, label: &TagLabel) -> Result<(), crate::StorageError> {
         let slug = label.slug();
         let post_id = self.post_id;
         match &mut self.held {
@@ -249,10 +256,12 @@ impl PostWriteLock<'_> {
                     .bind(&slug)
                     .execute(&mut **conn)
                     .await?;
-                let tag_id = sqlx::query_scalar::<_, TagId>(SELECT_TAG_ID_BY_SLUG)
-                    .bind(&slug)
-                    .fetch_one(&mut **conn)
-                    .await?;
+                let tag_id = crate::error::fetch_exactly_one_scalar(
+                    sqlx::query_scalar::<_, TagId>(SELECT_TAG_ID_BY_SLUG).bind(&slug),
+                    &mut **conn,
+                    "the tag row just inserted, read back for its id",
+                )
+                .await?;
                 sqlx::query(
                     "INSERT OR IGNORE INTO post_tags (post_id, tag_id, tag_display) \
                      VALUES ($1, $2, $3)",
@@ -268,10 +277,12 @@ impl PostWriteLock<'_> {
                     .bind(&slug)
                     .execute(&mut **tx)
                     .await?;
-                let tag_id = sqlx::query_scalar::<_, TagId>(SELECT_TAG_ID_BY_SLUG)
-                    .bind(&slug)
-                    .fetch_one(&mut **tx)
-                    .await?;
+                let tag_id = crate::error::fetch_exactly_one_scalar(
+                    sqlx::query_scalar::<_, TagId>(SELECT_TAG_ID_BY_SLUG).bind(&slug),
+                    &mut **tx,
+                    "the tag row just inserted, read back for its id",
+                )
+                .await?;
                 sqlx::query(
                     "INSERT INTO post_tags (post_id, tag_id, tag_display) VALUES ($1, $2, $3) \
                      ON CONFLICT DO NOTHING",
