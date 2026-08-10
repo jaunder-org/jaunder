@@ -8,6 +8,7 @@ use thiserror::Error;
 use common::token::RawToken;
 
 use crate::backend::Backend;
+use crate::error::StorageError;
 use common::ids::UserId;
 
 /// Errors returned by [`PasswordResetStorage::use_password_reset`].
@@ -24,7 +25,19 @@ pub enum UsePasswordResetError {
     AlreadyUsed,
     /// An unexpected database error occurred.
     #[error(transparent)]
-    Internal(#[from] sqlx::Error),
+    Internal(#[from] StorageError),
+}
+
+impl From<sqlx::Error> for UsePasswordResetError {
+    /// Hand-written because `From` does not chain: with the payload retyped, a
+    /// bare `?` on a raw `fetch_optional` no longer reaches `Internal` on its
+    /// own.
+    ///
+    /// Not a hole in the #343 guarantee: `RowNotFound` cannot arrive here,
+    /// because `fetch_one` is banned and nothing in the crate constructs it.
+    fn from(error: sqlx::Error) -> Self {
+        Self::Internal(StorageError::Db(error))
+    }
 }
 
 /// Storage for password-reset tokens.
@@ -40,7 +53,7 @@ pub trait PasswordResetStorage: Send + Sync {
         &self,
         user_id: UserId,
         expires_at: DateTime<Utc>,
-    ) -> sqlx::Result<RawToken>;
+    ) -> Result<RawToken, StorageError>;
 
     /// Validates a raw reset token and marks it as used.
     ///
@@ -90,7 +103,7 @@ where
         &self,
         user_id: UserId,
         expires_at: DateTime<Utc>,
-    ) -> sqlx::Result<RawToken> {
+    ) -> Result<RawToken, StorageError> {
         let (raw_token, token_hash) = host::token::generate_hashed();
         let now = Utc::now();
 

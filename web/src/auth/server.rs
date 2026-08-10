@@ -178,9 +178,9 @@ fn auth_rejection_error(error: AuthRejection) -> InternalError {
         AuthRejection::Session(storage::SessionAuthError::SessionNotFound) => {
             InternalError::unauthorized("session not found")
         }
-        AuthRejection::Session(storage::SessionAuthError::Internal(error)) => {
-            InternalError::storage(error)
-        }
+        // Delegates to `StorageError`'s own lift rather than re-classifying: it
+        // is the type that knows a missing row is not a driver failure (#343).
+        AuthRejection::Session(storage::SessionAuthError::Internal(error)) => error.into(),
     }
 }
 
@@ -326,9 +326,10 @@ mod tests {
 
     #[test]
     fn auth_rejection_into_response_renders_500_for_session_internal_error() {
-        let response =
-            AuthRejection::Session(storage::SessionAuthError::Internal(sqlx::Error::PoolClosed))
-                .into_response();
+        let response = AuthRejection::Session(storage::SessionAuthError::Internal(
+            storage::StorageError::Db(sqlx::Error::PoolClosed),
+        ))
+        .into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -369,7 +370,7 @@ mod tests {
         ));
 
         let internal = auth_rejection_error(AuthRejection::Session(
-            storage::SessionAuthError::Internal(sqlx::Error::PoolClosed),
+            storage::SessionAuthError::Internal(storage::StorageError::Db(sqlx::Error::PoolClosed)),
         ));
         assert!(matches!(
             crate::error::project(internal.kind(), internal.public_message()),

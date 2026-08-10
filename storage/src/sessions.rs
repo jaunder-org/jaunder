@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 
+use crate::error::StorageError;
 use common::ids::UserId;
 use common::session_label::SessionLabel;
 use common::token::{RawToken, TokenHash};
@@ -38,9 +39,15 @@ pub enum SessionAuthError {
     SessionNotFound,
     /// An unexpected database error occurred.
     #[error(transparent)]
-    Internal(#[from] sqlx::Error),
+    Internal(#[from] StorageError),
 }
 
+// No hand-written `From<sqlx::Error> for SessionAuthError`, unlike the other
+// retyped enums. `authenticate`'s only fallible database call is
+// `SessionDialect::touch_and_load`, which is itself typed `StorageError`, so the
+// bare `?` lifts through the derived `#[from]`. Adding the sqlx hop as well
+// would mean leaving `sqlx::Error` in a public trait signature purely to keep an
+// impl reachable — the opposite of what #343 is for (spec AC1).
 /// Maps a session-validation failure to its bounded `outcome` attribute for the
 /// `jaunder.auth.session_validations` metric. Kept separate (and exhaustively
 /// tested) so every variant's mapping is covered independent of which errors a
@@ -67,8 +74,11 @@ pub trait SessionStorage: Send + Sync {
     /// It is stored in the database and returned in session listings.
     ///
     /// Returns the raw (un-hashed) token to be delivered to the client.
-    async fn create_session(&self, user_id: UserId, label: &SessionLabel)
-    -> sqlx::Result<RawToken>;
+    async fn create_session(
+        &self,
+        user_id: UserId,
+        label: &SessionLabel,
+    ) -> Result<RawToken, StorageError>;
 
     /// Validates a raw session token and returns the associated record.
     ///
@@ -81,10 +91,10 @@ pub trait SessionStorage: Send + Sync {
     async fn authenticate(&self, raw_token: &RawToken) -> Result<SessionRecord, SessionAuthError>;
 
     /// Revokes a specific session by its token hash.
-    async fn revoke_session(&self, token_hash: &TokenHash) -> sqlx::Result<()>;
+    async fn revoke_session(&self, token_hash: &TokenHash) -> Result<(), StorageError>;
 
     /// Returns a list of all active sessions for a user.
-    async fn list_sessions(&self, user_id: UserId) -> sqlx::Result<Vec<SessionRecord>>;
+    async fn list_sessions(&self, user_id: UserId) -> Result<Vec<SessionRecord>, StorageError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -116,7 +126,7 @@ where
         pool: &Pool<Self>,
         token_hash: &TokenHash,
         now: DateTime<Utc>,
-    ) -> sqlx::Result<Option<SessionRow>>;
+    ) -> Result<Option<SessionRow>, StorageError>;
 }
 
 /// Generic `SessionStorage` backed by any [`SessionDialect`] database.
@@ -156,7 +166,7 @@ where
         &self,
         user_id: UserId,
         label: &SessionLabel,
-    ) -> sqlx::Result<RawToken> {
+    ) -> Result<RawToken, StorageError> {
         let (raw_token, token_hash) = host::token::generate_hashed();
         let now = Utc::now();
 
@@ -199,7 +209,7 @@ where
         skip(self, token_hash),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn revoke_session(&self, token_hash: &TokenHash) -> sqlx::Result<()> {
+    async fn revoke_session(&self, token_hash: &TokenHash) -> Result<(), StorageError> {
         sqlx::query("DELETE FROM sessions WHERE token_hash = $1")
             .bind(token_hash)
             .execute(&self.pool)
@@ -207,7 +217,7 @@ where
         Ok(())
     }
 
-    async fn list_sessions(&self, user_id: UserId) -> sqlx::Result<Vec<SessionRecord>> {
+    async fn list_sessions(&self, user_id: UserId) -> Result<Vec<SessionRecord>, StorageError> {
         let rows = sqlx::query_as::<_, SessionRow>(
             "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at
              FROM sessions s JOIN users u ON s.user_id = u.user_id
@@ -311,7 +321,7 @@ mod tests {
         // bridge's `Decode` error arm).
         let err = env.state.sessions.list_sessions(user_id).await.unwrap_err();
         assert!(
-            matches!(err, sqlx::Error::ColumnDecode { .. }),
+            matches!(err, StorageError::Db(sqlx::Error::ColumnDecode { .. })),
             "expected a column-decode error, got: {err:?}"
         );
     }
@@ -328,7 +338,9 @@ mod tests {
             SessionOutcome::SessionNotFound
         ));
         assert!(matches!(
-            session_outcome(&SessionAuthError::Internal(sqlx::Error::PoolClosed)),
+            session_outcome(&SessionAuthError::Internal(StorageError::Db(
+                sqlx::Error::PoolClosed
+            ))),
             SessionOutcome::Internal
         ));
     }

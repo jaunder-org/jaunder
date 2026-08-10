@@ -15,6 +15,7 @@ use common::password::Password;
 use common::stored_password_hash::StoredPasswordHash;
 use common::username::Username;
 
+use crate::error::{StorageError, fetch_exactly_one_scalar};
 use crate::helpers::{UserRow, user_record_from_row};
 
 /// A user account record returned by [`UserStorage`] queries.
@@ -52,7 +53,19 @@ pub enum CreateUserError {
     UsernameTaken,
     /// An unexpected database error occurred.
     #[error(transparent)]
-    Internal(#[from] sqlx::Error),
+    Internal(#[from] StorageError),
+}
+
+impl From<sqlx::Error> for CreateUserError {
+    /// Hand-written because `From` does not chain: with the payload retyped, a
+    /// bare `?` on a raw `execute`/`fetch_all`/`fetch_optional` no longer
+    /// reaches `Internal` on its own.
+    ///
+    /// Not a hole in the #343 guarantee: `RowNotFound` cannot arrive here,
+    /// because `fetch_one` is banned and nothing in the crate constructs it.
+    fn from(error: sqlx::Error) -> Self {
+        Self::Internal(StorageError::Db(error))
+    }
 }
 
 /// Errors that can occur when authenticating a user by password.
@@ -79,7 +92,9 @@ impl From<CreateUserError> for host::error::InternalError {
         use host::error::InternalError;
         match error {
             CreateUserError::UsernameTaken => InternalError::conflict("username is already taken"),
-            CreateUserError::Internal(e) => InternalError::storage(e),
+            // Delegate to `StorageError`'s own lift rather than re-classifying:
+            // it is the type that knows a missing row is not a driver failure.
+            CreateUserError::Internal(e) => e.into(),
         }
     }
 }
@@ -162,10 +177,13 @@ pub trait UserStorage: Send + Sync {
     ) -> Result<UserRecord, UserAuthError>;
 
     /// Fetches a user record by its internal ID.
-    async fn get_user(&self, user_id: UserId) -> sqlx::Result<Option<UserRecord>>;
+    async fn get_user(&self, user_id: UserId) -> Result<Option<UserRecord>, StorageError>;
 
     /// Fetches a user record by their username.
-    async fn get_user_by_username(&self, username: &Username) -> sqlx::Result<Option<UserRecord>>;
+    async fn get_user_by_username(
+        &self,
+        username: &Username,
+    ) -> Result<Option<UserRecord>, StorageError>;
 
     /// Updates the display name and/or bio for a user.
     // Explicit `'a` for `mockall::automock` — see
@@ -174,7 +192,7 @@ pub trait UserStorage: Send + Sync {
         &self,
         user_id: UserId,
         update: &ProfileUpdate<'a>,
-    ) -> sqlx::Result<()>;
+    ) -> Result<(), StorageError>;
 
     /// Sets or clears a user's email address and verification status.
     // Explicit `'a` for `mockall::automock` — see
@@ -184,13 +202,17 @@ pub trait UserStorage: Send + Sync {
         user_id: UserId,
         email: Option<&'a Email>,
         verified: bool,
-    ) -> sqlx::Result<()>;
+    ) -> Result<(), StorageError>;
 
     /// Replaces the stored password hash for `user_id` with a hash of `new_password`.
     ///
     /// This is typically used during password resets. Hashing is performed
     /// asynchronously on a blocking thread.
-    async fn set_password(&self, user_id: UserId, new_password: &Password) -> sqlx::Result<()>;
+    async fn set_password(
+        &self,
+        user_id: UserId,
+        new_password: &Password,
+    ) -> Result<(), StorageError>;
 }
 
 /// Generic [`UserStorage`] backed by any [`Backend`] database.
@@ -266,21 +288,31 @@ where
                 db.system = DB::DB_SYSTEM
             ))
             .await
-            .map_err(|e| CreateUserError::Internal(sqlx::Error::Io(e)))?;
+            // Lifts through the hand-written `From<sqlx::Error>` below rather
+            // than naming `Internal` inline, so the hop stays in one place.
+            .map_err(sqlx::Error::Io)?;
 
         let now = Utc::now();
 
-        let result = sqlx::query_scalar::<_, UserId>(
-            "INSERT INTO users (username, password_hash, display_name, created_at, is_operator)
-             VALUES ($1, $2, $3, $4, $5)
-             RETURNING user_id",
+        // A plain `INSERT … RETURNING`, so the row is guaranteed and the
+        // `MissingRow` arm is unreachable today. Routed through the wrapper
+        // anyway: `fetch_one` is the thing being removed, and the `what` string
+        // is what reports the absence by name the day an `ON CONFLICT` makes
+        // the row optional (#343).
+        let result = fetch_exactly_one_scalar(
+            sqlx::query_scalar::<_, UserId>(
+                "INSERT INTO users (username, password_hash, display_name, created_at, is_operator)
+                 VALUES ($1, $2, $3, $4, $5)
+                 RETURNING user_id",
+            )
+            .bind(username)
+            .bind(&password_hash)
+            .bind(display_name)
+            .bind(now)
+            .bind(is_operator),
+            &self.pool,
+            "the inserted user row",
         )
-        .bind(username)
-        .bind(&password_hash)
-        .bind(display_name)
-        .bind(now)
-        .bind(is_operator)
-        .fetch_one(&self.pool)
         .instrument(tracing::info_span!(
             "storage.user.create_user.insert_user_row",
             db.system = DB::DB_SYSTEM
@@ -289,7 +321,9 @@ where
 
         match result {
             Ok(id) => Ok(id),
-            Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
+            // The unique violation now arrives wrapped, so the match reaches
+            // one level further in.
+            Err(StorageError::Db(sqlx::Error::Database(error))) if error.is_unique_violation() => {
                 Err(CreateUserError::UsernameTaken)
             }
             Err(error) => Err(CreateUserError::Internal(error)),
@@ -398,7 +432,7 @@ where
         ))
     }
 
-    async fn get_user(&self, user_id: UserId) -> sqlx::Result<Option<UserRecord>> {
+    async fn get_user(&self, user_id: UserId) -> Result<Option<UserRecord>, StorageError> {
         let row = sqlx::query_as::<_, UserRow>(
             "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at,
                     email, email_verified, is_operator
@@ -410,7 +444,10 @@ where
         Ok(row.map(user_record_from_row))
     }
 
-    async fn get_user_by_username(&self, username: &Username) -> sqlx::Result<Option<UserRecord>> {
+    async fn get_user_by_username(
+        &self,
+        username: &Username,
+    ) -> Result<Option<UserRecord>, StorageError> {
         let row = sqlx::query_as::<_, UserRow>(
             "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at,
                     email, email_verified, is_operator
@@ -426,7 +463,7 @@ where
         &self,
         user_id: UserId,
         update: &ProfileUpdate<'a>,
-    ) -> sqlx::Result<()> {
+    ) -> Result<(), StorageError> {
         sqlx::query("UPDATE users SET display_name = $1, bio = $2 WHERE user_id = $3")
             .bind(update.display_name)
             .bind(update.bio)
@@ -441,7 +478,7 @@ where
         user_id: UserId,
         email: Option<&'a Email>,
         verified: bool,
-    ) -> sqlx::Result<()> {
+    ) -> Result<(), StorageError> {
         sqlx::query("UPDATE users SET email = $1, email_verified = $2 WHERE user_id = $3")
             .bind(email)
             .bind(verified)
@@ -451,7 +488,11 @@ where
         Ok(())
     }
 
-    async fn set_password(&self, user_id: UserId, new_password: &Password) -> sqlx::Result<()> {
+    async fn set_password(
+        &self,
+        user_id: UserId,
+        new_password: &Password,
+    ) -> Result<(), StorageError> {
         let password_hash = crate::helpers::hash_password(new_password.clone())
             .await
             .map_err(sqlx::Error::Io)?;
@@ -578,7 +619,7 @@ mod tests {
         // bridge's `Decode` error arm).
         let err = env.state.users.get_user(user_id).await.unwrap_err();
         assert!(
-            matches!(err, sqlx::Error::ColumnDecode { .. }),
+            matches!(err, StorageError::Db(sqlx::Error::ColumnDecode { .. })),
             "expected a column-decode error, got: {err:?}"
         );
     }
@@ -640,7 +681,7 @@ mod tests {
         env.base.pool().execute(sql.as_str()).await.unwrap();
         let err = env.state.users.get_user(user_id).await.unwrap_err();
         assert!(
-            matches!(err, sqlx::Error::ColumnDecode { .. }),
+            matches!(err, StorageError::Db(sqlx::Error::ColumnDecode { .. })),
             "expected a column-decode error, got: {err:?}"
         );
     }
@@ -829,7 +870,8 @@ mod tests {
         assert_eq!(taken.kind(), ErrorKind::Conflict);
         assert_eq!(taken.public_message(), "username is already taken");
 
-        let internal: InternalError = CreateUserError::Internal(sqlx::Error::PoolClosed).into();
+        let internal: InternalError =
+            CreateUserError::Internal(StorageError::Db(sqlx::Error::PoolClosed)).into();
         assert_eq!(internal.kind(), ErrorKind::Storage);
         assert_eq!(internal.public_message(), "storage operation failed");
     }

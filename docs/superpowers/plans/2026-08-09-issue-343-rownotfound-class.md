@@ -37,8 +37,10 @@ boundary); `set_post_tags`'s insert-then-select (filed as a follow-up in Task
       its `atompub` consumers. **Merged with Task 6** — the retype breaks every
       bare `?` on a sqlx call, so the conversions cannot land separately.
 - [x] **6.** Slice: `posts` — the `fetch_one` triage judgements (landed with 5).
-- [ ] **7.** Slice: `users`, `password`, `email`.
-- [ ] **8.** Slice: `sessions`.
+- [x] **7.** Slice: `users`, `password`, `email`.
+- [x] **8.** Slice: `sessions` — including `SessionDialect::touch_and_load`, a
+      public trait method AC1 requires; retyping it removed the need for a
+      hand-written `From<sqlx::Error>` here.
 - [ ] **9.** Slice: `media`, `feed_cache`, `feed_events` — including
       `media_manager` and `atompub`.
 - [ ] **10.** Slice: `site_config` — 19 trait methods plus the `smtp` coupling.

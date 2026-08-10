@@ -15,7 +15,7 @@ impl SessionDialect for Sqlite {
         pool: &Pool<Sqlite>,
         token_hash: &TokenHash,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> sqlx::Result<Option<SessionRow>> {
+    ) -> Result<Option<SessionRow>, crate::StorageError> {
         // Two statements in one tx: SQLite's RETURNING with a correlated
         // subquery causes SQLITE_BUSY under concurrency, so update then select.
         let mut tx = pool.begin().await?;
