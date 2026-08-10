@@ -424,7 +424,28 @@ mechanism.
 and use the selector those tests already use to prove the timeline rendered.
 `DEST` below stands for that selector.
 
-- [ ] **Step 1: Write the failing tests**
+**Three deviations from the tests as drafted, each with its reason. Recorded
+because they change what is verified, not merely how.**
+
+1. **`DEST` resolves to `SEL.postBody`** — the inline composer's body field,
+   present on `/app` and absent on `/`. `selectors.ts` has no timeline entry,
+   and this is the selector the destination genuinely proves.
+2. **The tests take `registeredPage`, not the bare `page`.** The `/app` nav item
+   is authed-only (`web/src/sidebar/markup.rs`, `auth_required = true`), so an
+   anonymous page has no `a[href="/app"]` to click. These become three more
+   consumers for Task 5 to migrate.
+3. **The span-recording test is dropped.** `drainActionsForTest`
+   (`end2end/tests/actions.ts:79`) is destructive — it removes the records so
+   `_autoPerfSpan` can finalise the span. A test that drained its own records
+   would corrupt the very trace data this work is measured by. `navigateInApp`
+   still wraps the move in `withTimedAction(page, "ui.navigate", …)`; that is
+   verified by reading it, not by a test that breaks the fixture. Replaced by an
+   assertion that no `domcontentloaded` fires during the move, which listens
+   directly rather than through `bootBudget` — the budget is not armed
+   automatically until Task 8, and a test proving the mechanism should not
+   depend on it.
+
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 import { expect } from "@playwright/test";
@@ -491,12 +512,12 @@ first and match its exact key argument and `ActionRecord` field names; the
 `testInfo`/`.name` shape above is illustrative of the check, not of its
 signature.
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `... cargo xtask e2e-local navigate` Expected: FAIL — `./navigate` not
 found.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 Signature as above. Wrap the whole move in
 `withTimedAction(page, "ui.navigate", …)` so in-app moves appear in the trace
@@ -508,11 +529,18 @@ vacuous); run `action`; `page.waitForURL` against
 app is already mounted and `body[data-mounted]` is already present, so it would
 pass vacuously and provide no barrier.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+An optional `timeoutMs` was added to the destination options. The "never
+renders" test would otherwise sit on Playwright's default timeout and risk
+exceeding the ambient test budget; a caller that wants to fail fast needs to be
+able to say so.
 
-Run: `... cargo xtask e2e-local navigate` Expected: PASS, 4 tests.
+- [x] **Step 4: Run the tests, verify they pass**
 
-- [ ] **Step 5: Commit**
+Run: `... cargo xtask e2e-local navigate` Expected: PASS, 4 tests. **Actual: 3
+passed (15.1 s)** — three, not four, because the span test was dropped for the
+reason recorded above.
+
+- [x] **Step 5: Commit**
 
 ```bash
 git add end2end/tests/navigate.ts end2end/tests/navigate.spec.ts
