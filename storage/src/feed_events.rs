@@ -245,17 +245,11 @@ where
     )]
     async fn enqueue(&self, feed_path: &FeedPath) -> Result<FeedEventId, FeedEventError> {
         let sql = format!("{INSERT_FEED_EVENT} RETURNING id");
-        // `fetch_optional`, not the banned `fetch_one` (#343): an
-        // `INSERT … RETURNING` with no `ON CONFLICT` clause either raises or
-        // yields the row it wrote.
         let id = sqlx::query_scalar::<_, FeedEventId>(&sql)
             .bind(feed_path)
-            .fetch_optional(&self.pool)
+            .fetch_one(&self.pool)
             .await?;
-        match id {
-            Some(id) => Ok(id),
-            None => unreachable!("the feed_events INSERT RETURNs the row it wrote"),
-        }
+        Ok(id)
     }
 
     #[tracing::instrument(

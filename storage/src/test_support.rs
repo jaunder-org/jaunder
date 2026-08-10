@@ -107,20 +107,11 @@ impl CloseablePool {
     /// # Errors
     ///
     /// Returns the `sqlx::Error` if the query fails.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the query yields no row — an aggregate always does, so an
-    /// empty result means the caller passed non-aggregate SQL.
     pub async fn scalar_i64(&self, sql: &str) -> Result<i64, sqlx::Error> {
-        // `fetch_optional`, not the banned `fetch_one` (#343). Callers pass
-        // aggregate queries, which always yield a row; an absent one is a bug
-        // in the test that wrote the SQL, so it panics with the reason.
-        let row = match self {
-            CloseablePool::Sqlite(pool) => sqlx::query_scalar(sql).fetch_optional(pool).await?,
-            CloseablePool::Postgres(pool) => sqlx::query_scalar(sql).fetch_optional(pool).await?,
-        };
-        Ok(row.expect("a scalar_i64 harness query must yield exactly one row"))
+        match self {
+            CloseablePool::Sqlite(pool) => sqlx::query_scalar(sql).fetch_one(pool).await,
+            CloseablePool::Postgres(pool) => sqlx::query_scalar(sql).fetch_one(pool).await,
+        }
     }
 
     /// Fetches every row of a three-`TEXT`-column query — the multi-row sibling of
@@ -181,9 +172,7 @@ impl CloseablePool {
                     "SELECT post_id FROM posts WHERE post_id = $1 FOR UPDATE",
                 )
                 .bind(post_id)
-                // `fetch_optional`, not the banned `fetch_one` (#343); the row
-                // is only being locked, so the result is discarded either way.
-                .fetch_optional(&mut *tx)
+                .fetch_one(&mut *tx)
                 .await?;
                 HeldWrite::Postgres(tx)
             }
@@ -243,11 +232,6 @@ impl PostWriteLock<'_> {
     /// # Errors
     ///
     /// Returns the `sqlx::Error` if any of the three statements fails.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the tag row cannot be read back after its insert, which the
-    /// enclosing transaction makes impossible.
     pub async fn add_tag(&mut self, label: &TagLabel) -> Result<(), sqlx::Error> {
         let slug = label.slug();
         let post_id = self.post_id;
@@ -257,13 +241,10 @@ impl PostWriteLock<'_> {
                     .bind(&slug)
                     .execute(&mut **conn)
                     .await?;
-                // `fetch_optional`, not the banned `fetch_one` (#343): the
-                // insert above put the row there in this transaction.
                 let tag_id = sqlx::query_scalar::<_, TagId>(SELECT_TAG_ID_BY_SLUG)
                     .bind(&slug)
-                    .fetch_optional(&mut **conn)
-                    .await?
-                    .expect("the tag row was just inserted");
+                    .fetch_one(&mut **conn)
+                    .await?;
                 sqlx::query(
                     "INSERT OR IGNORE INTO post_tags (post_id, tag_id, tag_display) \
                      VALUES ($1, $2, $3)",
@@ -279,13 +260,10 @@ impl PostWriteLock<'_> {
                     .bind(&slug)
                     .execute(&mut **tx)
                     .await?;
-                // `fetch_optional`, not the banned `fetch_one` (#343): the
-                // insert above put the row there in this transaction.
                 let tag_id = sqlx::query_scalar::<_, TagId>(SELECT_TAG_ID_BY_SLUG)
                     .bind(&slug)
-                    .fetch_optional(&mut **tx)
-                    .await?
-                    .expect("the tag row was just inserted");
+                    .fetch_one(&mut **tx)
+                    .await?;
                 sqlx::query(
                     "INSERT INTO post_tags (post_id, tag_id, tag_display) VALUES ($1, $2, $3) \
                      ON CONFLICT DO NOTHING",
@@ -724,11 +702,9 @@ async fn ensure_template_db() {
     let exists: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)")
             .bind(TEMPLATE_DB)
-            // `fetch_optional`, not the banned `fetch_one` (#343).
-            .fetch_optional(&mut admin)
+            .fetch_one(&mut admin)
             .await
-            .unwrap()
-            .expect("SELECT EXISTS always yields exactly one row");
+            .unwrap();
 
     if !exists {
         let DbConnectOptions::Postgres { options, .. } = postgres_url() else {

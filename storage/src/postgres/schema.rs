@@ -24,10 +24,9 @@ mod tests {
              WHERE contype = 'f' AND connamespace = 'public'::regnamespace \
                AND NOT condeferrable",
         )
-        .fetch_optional(pool)
+        .fetch_one(pool)
         .await
-        .unwrap()
-        .expect("COUNT always yields a row");
+        .unwrap();
         assert_eq!(
             non_deferrable, 0,
             "every foreign key must be DEFERRABLE so restore can SET CONSTRAINTS ALL DEFERRED"

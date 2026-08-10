@@ -33,10 +33,9 @@ mod tests {
         let exists: bool =
             sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)")
                 .bind(db_name)
-                .fetch_optional(&mut conn)
+                .fetch_one(&mut conn)
                 .await
-                .expect("query pg_database")
-                .expect("SELECT EXISTS always yields a row");
+                .expect("query pg_database");
         conn.close().await.ok();
         exists
     }

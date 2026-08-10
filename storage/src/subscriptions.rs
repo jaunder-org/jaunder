@@ -167,20 +167,17 @@ where
         let status_name: &'static str = status.into();
         // One statement, not an insert followed by a select: the separate
         // `SELECT` could miss a row a concurrent unsubscribe had just deleted
-        // (#343). `fetch_optional`, not the banned `fetch_one`.
-        let row = sqlx::query_as::<_, (SubscriptionId,)>(DB::INSERT_SUBSCRIPTION)
+        // (#343). `RETURNING` fires on the insert arm and on the `DO UPDATE`
+        // conflict arm alike, so the row is guaranteed and `fetch_one` is the
+        // honest read.
+        sqlx::query_as::<_, (SubscriptionId,)>(DB::INSERT_SUBSCRIPTION)
             .bind(author_user_id)
             .bind(channel_id)
             .bind(subscriber_ref)
             .bind(status_name)
-            .fetch_optional(&self.pool)
-            .await?;
-        match row {
-            Some((id,)) => Ok(id),
-            // `RETURNING` fires on the insert arm and on the `DO UPDATE`
-            // conflict arm alike, so the statement cannot come back empty.
-            None => unreachable!("the subscription upsert RETURNs a row on both arms"),
-        }
+            .fetch_one(&self.pool)
+            .await
+            .map(|(id,)| id)
     }
 
     async fn unsubscribe(
@@ -206,10 +203,7 @@ where
         // Bind arity is per-variant: a local viewer's channel is the seeded
         // `local` row, resolved inside `IS_ACTIVE_LOCAL_SUBSCRIBER` rather than
         // bound, so that arm has one fewer bind (#6).
-        // `fetch_optional`, not the banned `fetch_one` (#343): `SELECT EXISTS`
-        // is row-guaranteed, and the impossible `None` folds into the same
-        // `false` an absent subscription gives, so no row needs naming here.
-        let exists = match viewer {
+        let (exists,) = match viewer {
             ViewerIdentity::Anonymous => return Ok(false), // short-circuit; no query.
             // A local viewer carries no channel: it can only ever be the
             // `local` row, which `IS_ACTIVE_LOCAL_SUBSCRIBER` resolves itself.
@@ -218,7 +212,7 @@ where
                 sqlx::query_as::<_, (i64,)>(DB::IS_ACTIVE_LOCAL_SUBSCRIBER)
                     .bind(author_user_id)
                     .bind(subscriber_ref.as_str())
-                    .fetch_optional(&self.pool)
+                    .fetch_one(&self.pool)
                     .await?
             }
             ViewerIdentity::Remote {
@@ -229,11 +223,11 @@ where
                     .bind(author_user_id)
                     .bind(*channel_id)
                     .bind(subscriber_ref.as_str())
-                    .fetch_optional(&self.pool)
+                    .fetch_one(&self.pool)
                     .await?
             }
         };
-        Ok(exists.is_some_and(|(exists,)| exists != 0))
+        Ok(exists != 0)
     }
 
     async fn list_subscribers(

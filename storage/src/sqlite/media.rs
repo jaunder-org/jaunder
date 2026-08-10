@@ -15,15 +15,9 @@ impl MediaDialect for Sqlite {
             "SELECT COALESCE(SUM(size_bytes), 0) FROM media WHERE user_id = $1 AND source = 'upload'",
         )
         .bind(user_id)
-        // `fetch_optional`, not the banned `fetch_one` (#343): a bare aggregate
-        // always yields one row, and the impossible `None` folds into the same
-        // zero a user with no uploads gives.
-        .fetch_optional(pool)
+        .fetch_one(pool)
         .await?;
 
-        let Some((bytes,)) = row else {
-            unreachable!("a bare COALESCE(SUM(...)) aggregate always yields one row");
-        };
-        Ok(bytes)
+        Ok(row.0)
     }
 }

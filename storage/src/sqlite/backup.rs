@@ -291,14 +291,10 @@ fn is_bool_column(column: &ColumnInfo) -> bool {
 }
 
 async fn schema_version(connection: &mut SqliteConnection) -> Result<i64, BackupError> {
-    // `fetch_optional`, not the banned `fetch_one` (#343): a bare aggregate
-    // always yields one row, and the impossible `None` folds into the same 0
-    // an empty `_sqlx_migrations` gives.
     Ok(
         sqlx::query_scalar::<_, Option<i64>>("SELECT MAX(version) FROM _sqlx_migrations")
-            .fetch_optional(&mut *connection)
+            .fetch_one(&mut *connection)
             .await?
-            .flatten()
             .unwrap_or_default(),
     )
 }

@@ -147,17 +147,13 @@ pub(super) async fn database_is_empty(options: &SqliteConnectOptions) -> sqlx::R
         if crate::db::MIGRATION_SEEDED_TABLES.contains(&table.as_str()) {
             continue;
         }
-        // `fetch_optional`, not the banned `fetch_one` (#343). `SELECT EXISTS`
-        // is row-guaranteed, and this startup-only path has no error type to
-        // name a `MissingRow` in, so the impossible `None` folds into the same
-        // answer an empty table gives.
         let has_row = sqlx::query_scalar::<_, i64>(&format!(
             "SELECT EXISTS(SELECT 1 FROM {} LIMIT 1)",
             crate::sql::quote_identifier(&table)
         ))
-        .fetch_optional(&pool)
+        .fetch_one(&pool)
         .await?
-        .is_some_and(|exists| exists != 0);
+            != 0;
         if has_row {
             return Ok(false);
         }
@@ -237,9 +233,6 @@ impl AtomicOps for SqliteAtomicOps {
                 .await
                 .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(e)))?;
 
-            // `fetch_optional`, not the banned `fetch_one` (#343): an
-            // `INSERT ... RETURNING` with no `ON CONFLICT` clause either raises
-            // or yields the row it wrote.
             let insert = sqlx::query_scalar::<_, UserId>(
                 "INSERT INTO users (username, password_hash, display_name, created_at, is_operator)
                  VALUES ($1, $2, $3, $4, $5)
@@ -250,12 +243,11 @@ impl AtomicOps for SqliteAtomicOps {
             .bind(display_name)
             .bind(now)
             .bind(is_operator)
-            .fetch_optional(&mut *conn)
+            .fetch_one(&mut *conn)
             .await;
 
             let user_id = match insert {
-                Ok(Some(id)) => id,
-                Ok(None) => unreachable!("the users INSERT RETURNs the row it wrote"),
+                Ok(id) => id,
                 Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
                     return Err(RegisterWithInviteError::UsernameTaken);
                 }

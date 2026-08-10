@@ -269,20 +269,16 @@ async fn channel_id_by_name(backend: Backend, env: &TestEnv, name: &str) -> Chan
     let sql = format!("SELECT channel_id FROM channels WHERE name = '{name}'");
     let sql = sql.as_str();
     match backend {
-        // `fetch_optional`, not the banned `fetch_one` (#343); the `.expect`
-        // also gives a better failure than a bare `RowNotFound` panic.
         Backend::Sqlite => sqlx::query_scalar::<_, ChannelId>(sql)
-            .fetch_optional(&open_pool(&env.base).await)
+            .fetch_one(&open_pool(&env.base).await)
             .await
-            .unwrap()
-            .expect("the channel row must exist"),
+            .unwrap(),
         Backend::Postgres => {
             let pool = env.base.pool().postgres();
             sqlx::query_scalar::<_, ChannelId>(sql)
-                .fetch_optional(pool)
+                .fetch_one(pool)
                 .await
                 .unwrap()
-                .expect("the channel row must exist")
         }
     }
 }
@@ -5825,19 +5821,16 @@ async fn raw_try_exec(backend: Backend, env: &TestEnv, sql: &str) -> Result<(), 
 // deleted audience). Mirrors `raw_exec`'s per-backend pool selection.
 async fn raw_scalar_i64(backend: Backend, env: &TestEnv, sql: &str) -> i64 {
     match backend {
-        // `fetch_optional`, not the banned `fetch_one` (#343).
         Backend::Sqlite => sqlx::query_scalar::<_, i64>(sql)
-            .fetch_optional(&open_pool(&env.base).await)
+            .fetch_one(&open_pool(&env.base).await)
             .await
-            .unwrap()
-            .expect("a scalar query must yield exactly one row"),
+            .unwrap(),
         Backend::Postgres => {
             let pool = env.base.pool().postgres();
             sqlx::query_scalar::<_, i64>(sql)
-                .fetch_optional(pool)
+                .fetch_one(pool)
                 .await
                 .unwrap()
-                .expect("a scalar query must yield exactly one row")
         }
     }
 }

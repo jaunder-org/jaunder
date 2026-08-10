@@ -357,12 +357,12 @@ impl From<sqlx::Error> for InternalError {
     /// `Storage`, class `Bug`) while preserving the `sqlx::Error` as a typed,
     /// downcastable source. Behavior-identical to `InternalError::storage(error)`.
     ///
-    /// Lifting *every* `sqlx::Error` to class `Bug` is correct because
-    /// `fetch_one` is banned workspace-wide (`clippy.toml`, #343) and
-    /// `Error::RowNotFound` is constructed nowhere else in sqlx. Absence can
-    /// therefore never reach this impl; what is left — pool timeouts, I/O,
-    /// protocol and constraint failures — is genuinely pageable. Absence is
-    /// named at its source instead, by `storage::error::MissingRow`.
+    /// Lifting *every* `sqlx::Error` to class `Bug` is right for what this impl
+    /// actually carries: pool timeouts, I/O, protocol and constraint failures,
+    /// all genuinely pageable. `Error::RowNotFound` reaching here would mean a
+    /// call site used `fetch_one` on a row that can be absent — a caller
+    /// defect. Absence is named at its source instead, by
+    /// `storage::error::MissingRow` (#343).
     fn from(error: sqlx::Error) -> Self {
         Self::storage(error)
     }
@@ -641,20 +641,13 @@ mod tests {
     #[test]
     fn from_sqlx_error_matches_storage_constructor() {
         // `?` on a `sqlx::Error` produces exactly `InternalError::storage(err)`.
-        // `PoolClosed`, not `RowNotFound`: the latter is unconstructible now
-        // that `fetch_one` is banned (#343), and a pool failure is the shape
-        // this impl actually carries.
-        let error: InternalError = sqlx::Error::PoolClosed.into();
+        let error: InternalError = sqlx::Error::RowNotFound.into();
         assert_eq!(error.kind(), ErrorKind::Storage);
         assert_eq!(error.class(), ErrorClass::Bug);
         // Same wire projection inputs as `InternalError::storage(...)`.
         assert_eq!(error.public_message(), "storage operation failed");
         // The typed `sqlx::Error` is preserved on the operator side, not the wire.
-        assert!(
-            error
-                .operator_message()
-                .contains("attempted to acquire a connection on a closed pool")
-        );
+        assert!(error.operator_message().contains("no rows returned"));
     }
 
     #[test]

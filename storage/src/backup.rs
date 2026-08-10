@@ -731,17 +731,14 @@ mod tests {
             CloseablePool::Sqlite(pool) => sqlx::query_scalar(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
             )
-            // `fetch_optional`, not the banned `fetch_one` (#343).
-            .fetch_optional(pool)
-            .await?
-            .expect("COUNT always yields exactly one row"),
+            .fetch_one(pool)
+            .await?,
             CloseablePool::Postgres(pool) => sqlx::query_scalar(
                 "SELECT COUNT(*) FROM information_schema.tables \
                  WHERE table_schema = 'public' AND table_type = 'BASE TABLE'",
             )
-            .fetch_optional(pool)
-            .await?
-            .expect("COUNT always yields exactly one row"),
+            .fetch_one(pool)
+            .await?,
         };
         assert_eq!(
             live_count, 24,
@@ -770,18 +767,14 @@ mod tests {
         for table in ["channels", "subscription_statuses", "target_kinds"] {
             let count: i64 = match env.base.pool() {
                 CloseablePool::Sqlite(pool) => {
-                    // `fetch_optional`, not the banned `fetch_one` (#343).
                     sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table}"))
-                        .fetch_optional(pool)
+                        .fetch_one(pool)
                         .await?
-                        .expect("COUNT always yields exactly one row")
                 }
                 CloseablePool::Postgres(pool) => {
-                    // `fetch_optional`, not the banned `fetch_one` (#343).
                     sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table}"))
-                        .fetch_optional(pool)
+                        .fetch_one(pool)
                         .await?
-                        .expect("COUNT always yields exactly one row")
                 }
             };
             assert!(count > 0, "{table} must be seeded by migrations");

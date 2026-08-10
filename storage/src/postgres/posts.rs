@@ -124,11 +124,8 @@ impl PostDialect for Postgres {
         // an edited summary was silently dropped (surfaced by #545's clear e2e).
         .bind(input.summary.as_ref())
         .bind(post_id)
-        // `fetch_optional`, not the banned `fetch_one` (#343). Mirrors the
-        // `SQLite` twin: row-guaranteed under the transaction, named anyway.
-        .fetch_optional(&mut *tx)
-        .await?
-        .require_row("the updated post row")?;
+        .fetch_one(&mut *tx)
+        .await?;
 
         crate::posts::replace_post_audiences::<Postgres>(&mut tx, post_id, &input.audiences)
             .await?;
@@ -174,11 +171,11 @@ impl PostDialect for Postgres {
                 .bind(&slug)
                 .execute(&mut *tx)
                 .await?;
-            // `fetch_optional`, not the banned `fetch_one` (#343), and a named
-            // absence rather than an `unreachable!`: `ON CONFLICT DO NOTHING`
-            // may not have written anything, so this can be reading a
-            // pre-existing row. It is unreachable only because nothing deletes
-            // a tag today — a fact about the data, not the statement (#883).
+            // A named absence rather than `fetch_one`'s anonymous
+            // `RowNotFound`: `ON CONFLICT DO NOTHING` may not have written
+            // anything, so this can be reading a pre-existing row. It is
+            // unreachable only because nothing deletes a tag today — a fact
+            // about the data, not the statement (#883).
             let tag_id = sqlx::query_scalar::<_, TagId>(SELECT_TAG_ID_BY_SLUG)
                 .bind(&slug)
                 .fetch_optional(&mut *tx)

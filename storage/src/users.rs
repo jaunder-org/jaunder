@@ -280,10 +280,7 @@ where
         .bind(display_name)
         .bind(now)
         .bind(is_operator)
-        // `fetch_optional`, not the banned `fetch_one` (#343): an
-        // `INSERT … RETURNING` with no `ON CONFLICT` clause either raises or
-        // yields the row it wrote.
-        .fetch_optional(&self.pool)
+        .fetch_one(&self.pool)
         .instrument(tracing::info_span!(
             "storage.user.create_user.insert_user_row",
             db.system = DB::DB_SYSTEM
@@ -291,8 +288,7 @@ where
         .await;
 
         match result {
-            Ok(Some(id)) => Ok(id),
-            Ok(None) => unreachable!("the users INSERT RETURNs the row it wrote"),
+            Ok(id) => Ok(id),
             Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
                 Err(CreateUserError::UsernameTaken)
             }

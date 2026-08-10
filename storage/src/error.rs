@@ -3,14 +3,16 @@
 //! `sqlx::Error::RowNotFound` is what `fetch_one` returns when a query matched
 //! nothing. Lifted anonymously to the error boundary it becomes
 //! [`ErrorClass::Bug`] — ERROR-level and pageable — with the useless operator
-//! text `"no rows returned"`: neither the table nor the reason. So `fetch_one`
-//! is banned workspace-wide via `clippy.toml`'s `disallowed-methods` (#343),
-//! and `RowNotFound` is constructed nowhere in the tree.
+//! text `"no rows returned"`: neither the table nor the reason.
 //!
-//! Absence is modelled at its source instead. Either as an `Option` — via
-//! `fetch_optional`, the dominant idiom, where the caller should decide — or,
-//! where the row is genuinely required and its absence names a broken
-//! invariant, as [`MissingRow`] via [`RequireRow::require_row`].
+//! So absence is *named* wherever a row can genuinely be missing. `fetch_one`
+//! stays the right call for a row the statement structurally guarantees — a
+//! bare aggregate, a `SELECT EXISTS`, an `INSERT … RETURNING` with no
+//! `ON CONFLICT` — because there absence is not a case at all. Everywhere else
+//! it is modelled at its source: either as an `Option` — via `fetch_optional`,
+//! the dominant idiom, where the caller should decide — or, where the row is
+//! genuinely required and its absence names a broken invariant, as
+//! [`MissingRow`] via [`RequireRow::require_row`].
 //!
 //! [`ErrorClass::Bug`]: host::error::ErrorClass::Bug
 
@@ -45,9 +47,9 @@ impl From<MissingRow> for InternalError {
 /// Turns "this row may be absent" into "this row is required, and here is its
 /// name".
 ///
-/// The sanctioned partner of `fetch_optional` wherever `fetch_one` would once
-/// have been written: `…fetch_optional(pool).await?.require_row("…")?`. The
-/// driver error takes the path it always took; only absence is new.
+/// The partner of `fetch_optional` wherever the row is required but *can* be
+/// absent: `…fetch_optional(pool).await?.require_row("…")?`. The driver error
+/// takes the path it always took; only absence is named.
 pub trait RequireRow<T> {
     /// Names the row and requires it, mapping absence to [`MissingRow`].
     ///

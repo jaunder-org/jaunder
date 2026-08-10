@@ -117,8 +117,6 @@ impl AtomicOps for PostgresAtomicOps {
             .await
             .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(e)))?; // cov:ignore
 
-        // `fetch_optional`, not the banned `fetch_one` (#343) — see the `SQLite`
-        // twin for why the empty case cannot happen.
         let result = sqlx::query_scalar::<_, UserId>(
             "INSERT INTO users (username, password_hash, display_name, created_at, is_operator)
              VALUES ($1, $2, $3, $4, $5)
@@ -129,12 +127,11 @@ impl AtomicOps for PostgresAtomicOps {
         .bind(display_name)
         .bind(now)
         .bind(is_operator)
-        .fetch_optional(&mut *tx)
+        .fetch_one(&mut *tx)
         .await;
 
         let user_id = match result {
-            Ok(Some(id)) => id,
-            Ok(None) => unreachable!("the users INSERT RETURNs the row it wrote"),
+            Ok(id) => id,
             // Let the UNIQUE(username) constraint be the arbiter rather than a
             // pre-INSERT existence check: that closes the check-then-insert race
             // between concurrent registrations.
@@ -307,15 +304,12 @@ pub(crate) async fn database_is_empty(options: &PgConnectOptions) -> sqlx::Resul
         if crate::db::MIGRATION_SEEDED_TABLES.contains(&table.as_str()) {
             continue;
         }
-        // `fetch_optional`, not the banned `fetch_one` (#343) — see the `SQLite`
-        // twin for why the impossible `None` folds into `false` here.
         let has_row = sqlx::query_scalar::<_, bool>(&format!(
             "SELECT EXISTS(SELECT 1 FROM {} LIMIT 1)",
             crate::sql::quote_identifier(&table)
         ))
-        .fetch_optional(&pool)
-        .await?
-        .unwrap_or(false);
+        .fetch_one(&pool)
+        .await?;
         if has_row {
             return Ok(false);
         }

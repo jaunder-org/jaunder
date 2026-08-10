@@ -320,13 +320,10 @@ fn json_select(table: &str, columns: &[ColumnInfo]) -> String {
 }
 
 async fn schema_version(connection: &mut PgConnection) -> Result<i64, BackupError> {
-    // `fetch_optional`, not the banned `fetch_one` (#343) — see the `SQLite`
-    // twin.
     Ok(
         sqlx::query_scalar::<_, Option<i64>>("SELECT MAX(version) FROM _sqlx_migrations")
-            .fetch_optional(&mut *connection)
+            .fetch_one(&mut *connection)
             .await?
-            .flatten()
             .unwrap_or_default(),
     )
 }

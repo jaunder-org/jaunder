@@ -122,13 +122,8 @@ impl PostDialect for Sqlite {
             // an edited summary was silently dropped (surfaced by #545's clear e2e).
             .bind(input.summary.as_ref())
             .bind(post_id)
-            // `fetch_optional`, not the banned `fetch_one` (#343). The row is
-            // guaranteed under the `BEGIN IMMEDIATE` write lock taken above;
-            // naming it costs one string and reports which row went if that
-            // ever stops holding. Mirrors the Postgres twin.
-            .fetch_optional(&mut *conn)
-            .await?
-            .require_row("the updated post row")?;
+            .fetch_one(&mut *conn)
+            .await?;
 
             crate::posts::replace_post_audiences::<Sqlite>(&mut *conn, post_id, &input.audiences)
                 .await?;
@@ -167,15 +162,11 @@ impl PostDialect for Sqlite {
 
         let result: Result<(), TaggingError> = async {
             // No `deleted_at` filter: soft-deleted posts stay taggable, as before.
-            // `fetch_optional`, not the banned `fetch_one` (#343): a bare
-            // `COUNT` always yields one row, and the impossible `None` folds
-            // into the same `false` an absent post gives.
             let post_exists: bool =
                 sqlx::query_scalar("SELECT COUNT(*) > 0 FROM posts WHERE post_id = $1")
                     .bind(post_id)
-                    .fetch_optional(&mut *conn)
-                    .await?
-                    .unwrap_or(false);
+                    .fetch_one(&mut *conn)
+                    .await?;
             if !post_exists {
                 return Err(TaggingError::PostNotFound);
             }
@@ -193,12 +184,11 @@ impl PostDialect for Sqlite {
                     .bind(&slug)
                     .execute(&mut *conn)
                     .await?;
-                // `fetch_optional`, not the banned `fetch_one` (#343), and a
-                // named absence rather than an `unreachable!`: `INSERT OR
-                // IGNORE` may not have written anything, so this can be reading
-                // a pre-existing row. It is unreachable only because nothing
-                // deletes a tag today — a fact about the data, not the
-                // statement (#883).
+                // A named absence rather than `fetch_one`'s anonymous
+                // `RowNotFound`: `INSERT OR IGNORE` may not have written
+                // anything, so this can be reading a pre-existing row. It is
+                // unreachable only because nothing deletes a tag today — a fact
+                // about the data, not the statement (#883).
                 let tag_id = sqlx::query_scalar::<_, TagId>(SELECT_TAG_ID_BY_SLUG)
                     .bind(&slug)
                     .fetch_optional(&mut *conn)

@@ -22,7 +22,6 @@ use common::visibility::{AudienceTarget, TargetKind, ViewerIdentity, local_subsc
 use host::error::{InternalError, InternalResult};
 
 use crate::backend::Backend;
-use crate::error::RequireRow;
 use crate::helpers::{PostRow, post_record_from_row};
 
 pub use common::render::{InvalidPostFormat, PostFormat, RenderOutput, RenderedHtml};
@@ -168,15 +167,6 @@ pub enum UpdatePostError {
     /// An unexpected database error occurred.
     #[error(transparent)]
     Internal(#[from] sqlx::Error),
-    /// A row the update requires — the target post, or its re-read through the
-    /// record projection — was gone by the time it was read.
-    ///
-    /// Distinct from [`UpdatePostError::NotFound`], which is the *caller's*
-    /// post being absent and masks as a 404. This one is a broken invariant:
-    /// posts are only ever soft-deleted, so nothing should be able to remove
-    /// the row mid-update. It stays pageable, and names which row went (#343).
-    #[error(transparent)]
-    MissingRow(#[from] crate::error::MissingRow),
 }
 
 impl From<UpdatePostError> for host::error::InternalError {
@@ -190,8 +180,6 @@ impl From<UpdatePostError> for host::error::InternalError {
                 InternalError::not_found("Post")
             }
             UpdatePostError::Internal(e) => InternalError::storage(e),
-            // `server`, not `storage`: no driver failed, an invariant did.
-            UpdatePostError::MissingRow(missing) => missing.into(),
         }
     }
 }
@@ -1275,15 +1263,10 @@ where
              WHERE p.post_id = $1",
             tags = DB::TAGS_SUBQUERY,
         );
-        // `fetch_optional`, not the banned `fetch_one` (#343). The row is there
-        // unless something hard-deleted the post mid-update — which nothing
-        // does, posts being soft-deleted — so this names the row rather than
-        // reporting an anonymous `RowNotFound` if that ever changes.
         let row = sqlx::query_as::<_, PostRow>(&sql)
             .bind(post_id)
-            .fetch_optional(&self.pool)
-            .await?
-            .require_row("the updated post row, re-read for its record projection")?;
+            .fetch_one(&self.pool)
+            .await?;
         post_record_from_row(row).map_err(UpdatePostError::Internal)
     }
 
@@ -1602,15 +1585,11 @@ where
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
-        // `fetch_optional`, not the banned `fetch_one` (#343). A bare `COUNT`
-        // always yields one row; the impossible `None` folds into `false`,
-        // which is the same answer an absent tag gives, so nothing is named.
         let tag_exists: bool =
             sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1")
                 .bind(tag_slug)
-                .fetch_optional(&self.pool)
-                .await?
-                .unwrap_or(false);
+                .fetch_one(&self.pool)
+                .await?;
 
         if !tag_exists {
             return Err(ListByTagError::TagNotFound);
@@ -1700,15 +1679,11 @@ where
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
-        // `fetch_optional`, not the banned `fetch_one` (#343). A bare `COUNT`
-        // always yields one row; the impossible `None` folds into `false`,
-        // which is the same answer an absent tag gives, so nothing is named.
         let tag_exists: bool =
             sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1")
                 .bind(tag_slug)
-                .fetch_optional(&self.pool)
-                .await?
-                .unwrap_or(false);
+                .fetch_one(&self.pool)
+                .await?;
 
         if !tag_exists {
             return Err(ListByTagError::TagNotFound);
@@ -2251,18 +2226,12 @@ where
     // ADR-0071 sqlx bridge, not an `AsRef<str>` strip); the `sqlx-newtype-bind`
     // gate forbids stripping to `&str` here.
     .bind(input.summary.as_ref())
-    // `fetch_optional`, not the banned `fetch_one` (#343).
-    .fetch_optional(&mut *conn)
+    .fetch_one(&mut *conn)
     .await
     .map_err(|e| match e {
         sqlx::Error::Database(db) if db.is_unique_violation() => CreatePostError::SlugConflict,
         e => CreatePostError::Internal(e),
     })?;
-    // `INSERT … RETURNING` with no `ON CONFLICT` clause either raises or yields
-    // the row it just wrote.
-    let Some(post_id) = post_id else {
-        unreachable!("the post INSERT RETURNs the row it wrote");
-    };
 
     replace_post_audiences::<DB>(conn, post_id, &input.audiences).await?;
     replace_post_media::<DB>(conn, post_id, input.rendered.media()).await?;
@@ -3925,21 +3894,6 @@ mod tests {
         let internal: InternalError = UpdatePostError::Internal(sqlx::Error::PoolClosed).into();
         assert_eq!(internal.kind(), ErrorKind::Storage);
         assert_eq!(internal.public_message(), "storage operation failed");
-
-        // A missing row is a broken invariant, not a 404 and not a driver
-        // failure: kind `Internal`, and the operator is told which row (#343).
-        let missing: UpdatePostError = Option::<()>::None
-            .require_row("the updated post row")
-            .expect_err("absent")
-            .into();
-        let missing: InternalError = missing.into();
-        assert_eq!(missing.kind(), ErrorKind::Internal);
-        assert_eq!(missing.public_message(), "server operation failed");
-        let operator = missing.operator_message();
-        assert!(
-            operator.contains("the updated post row"),
-            "operator message must name the row, got: {operator}"
-        );
     }
 
     // The `set_post_tags` lift masked as a server error

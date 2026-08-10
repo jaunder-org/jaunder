@@ -181,14 +181,10 @@ where
         )
         .bind(author_user_id)
         .bind(name)
-        // `fetch_optional`, not the banned `fetch_one` (#343): an
-        // `INSERT … RETURNING` with no `ON CONFLICT` clause either raises or
-        // yields the row it wrote.
-        .fetch_optional(&self.pool)
+        .fetch_one(&self.pool)
         .await
         {
-            Ok(Some((id,))) => Ok(id),
-            Ok(None) => unreachable!("the audience INSERT RETURNs the row it wrote"),
+            Ok((id,)) => Ok(id),
             Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
                 Err(AudienceError::DuplicateName)
             }

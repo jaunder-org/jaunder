@@ -271,8 +271,7 @@ impl From<storage::PerformUpdateError> for HandlerError {
         match &err {
             E::EmptyPost => HandlerError::BadRequest,
             E::NotFound | E::Unauthorized => HandlerError::NotFound,
-            // A missing required row is an invariant break, not a 404 (#343).
-            E::Storage(_) | E::MissingRow(_) => {
+            E::Storage(_) => {
                 log_internal(&err);
                 HandlerError::Internal
             }

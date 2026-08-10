@@ -140,10 +140,6 @@ pub enum PerformUpdateError {
     Unauthorized,
     #[error("storage error: {0}")]
     Storage(#[source] sqlx::Error),
-    /// Carries [`UpdatePostError::MissingRow`] through unchanged — a broken
-    /// invariant, not a 404 (#343).
-    #[error(transparent)]
-    MissingRow(#[from] crate::error::MissingRow),
 }
 
 impl From<UpdatePostError> for PerformUpdateError {
@@ -152,7 +148,6 @@ impl From<UpdatePostError> for PerformUpdateError {
             UpdatePostError::NotFound => Self::NotFound,
             UpdatePostError::Unauthorized => Self::Unauthorized,
             UpdatePostError::Internal(e) => Self::Storage(e),
-            UpdatePostError::MissingRow(missing) => Self::MissingRow(missing),
         }
     }
 }
@@ -173,8 +168,6 @@ impl From<PerformUpdateError> for host::error::InternalError {
                 InternalError::not_found("Post")
             }
             PerformUpdateError::Storage(e) => InternalError::storage(e),
-            // `server`, not `storage`: no driver failed, an invariant did.
-            PerformUpdateError::MissingRow(missing) => missing.into(),
         }
     }
 }
@@ -1412,22 +1405,6 @@ mod tests {
         let storage: InternalError = PerformUpdateError::Storage(sqlx::Error::PoolClosed).into();
         assert_eq!(storage.kind(), ErrorKind::Storage);
         assert_eq!(storage.public_message(), "storage operation failed");
-
-        // A missing row rides through from `UpdatePostError` and stays a
-        // pageable invariant break, named for the operator (#343).
-        let missing: PerformUpdateError = UpdatePostError::from(
-            crate::error::RequireRow::require_row(Option::<()>::None, "the updated post row")
-                .expect_err("absent"),
-        )
-        .into();
-        let missing: InternalError = missing.into();
-        assert_eq!(missing.kind(), ErrorKind::Internal);
-        assert_eq!(missing.public_message(), "server operation failed");
-        let operator = missing.operator_message();
-        assert!(
-            operator.contains("the updated post row"),
-            "operator message must name the row, got: {operator}"
-        );
     }
 
     // Behavior-preserving translation of the former `web` `perform_creation_error`

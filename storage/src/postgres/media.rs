@@ -18,14 +18,9 @@ impl MediaDialect for Postgres {
             "SELECT COALESCE(SUM(size_bytes), 0)::bigint FROM media WHERE user_id = $1 AND source = 'upload'",
         )
         .bind(user_id)
-        // `fetch_optional`, not the banned `fetch_one` (#343) — see the
-        // `SQLite` twin.
-        .fetch_optional(pool)
+        .fetch_one(pool)
         .await?;
 
-        let Some((bytes,)) = row else {
-            unreachable!("a bare COALESCE(SUM(...)) aggregate always yields one row");
-        };
-        Ok(bytes)
+        Ok(row.0)
     }
 }
