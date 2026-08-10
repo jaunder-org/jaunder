@@ -85,12 +85,13 @@ Supporting choices:
 - **A `Decode` blesses any text column decoded into `RenderedHtml`.** This was
   the original argument against having one. Accepted on a single ground: typing
   a column as `RenderedHtml` is a deliberate, reviewable act. The
-  `rendered-html-from-trusted` gate does **not** cover it — that gate matches
-  the `from_trusted` ident wherever it appears (#778 widened it to definitions
-  and to other types' doors), whereas a `FromRow` field typed over the wrong
-  column names no door at all. This is the one residual risk in the design that
-  nothing mechanical enforces; widening the gate to flag `RenderedHtml`-typed
-  row fields is filed as
+  `rendered-html-from-trusted` gate does **not** cover it — that gate's
+  population is `from_trusted` on **this** type, the definition and every use,
+  with the qualifier resolved since
+  [#790](https://github.com/jaunder-org/jaunder/issues/790), whereas a `FromRow`
+  field typed over the wrong column names no door at all. This is the one
+  residual risk in the design that nothing mechanical enforces; widening the
+  gate to flag `RenderedHtml`-typed row fields is filed as
   [#701](https://github.com/jaunder-org/jaunder/issues/701).
 - **`from_trusted` survives, narrowed to inherited trust.** It is down to one
   production call site, and the gate keeps it greppable and confined.

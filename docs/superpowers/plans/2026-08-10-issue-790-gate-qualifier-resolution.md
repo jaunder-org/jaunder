@@ -678,7 +678,7 @@ deletions cannot land in a later commit.
 
 **Interfaces:** Consumes `Gate::owner` (Task 4). No API changes anywhere (AC15).
 
-- [ ] **Step 1: Fix the gate's fixtures**
+- [x] **Step 1: Fix the gate's fixtures**
 
 Read them first — this is where the plan's earlier draft was wrong. `:195`'s
 fixture is
@@ -697,7 +697,7 @@ site is _still flagged_. So:
   bound-`Widget` sibling asserting clean, so both halves of the rule have a
   test.
 
-- [ ] **Step 2: Run them, verify the new ones fail**
+- [x] **Step 2: Run them, verify the new ones fail**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-790-contenttype-rename -- cargo test --manifest-path xtask/Cargo.toml steps::rendered_html_from_trusted_check
@@ -706,7 +706,7 @@ devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-790-contentt
 Expected: the two **new** bound-qualifier tests FAIL (owner not yet set); the
 retitled ones PASS.
 
-- [ ] **Step 3: Set the owner, fix the prose, delete the markers**
+- [x] **Step 3: Set the owner, fix the prose, delete the markers**
 
 - `GATE` gains `owner: Some("RenderedHtml")`.
 - `verdict` names `RenderedHtml`'s door instead of hedging about every
@@ -728,7 +728,7 @@ retitled ones PASS.
   `feed_path::…::format_content_types`), not a build-time guarantee (AC13).
 - Fix the two prose references at `media.rs:939` and `feed_path.rs:87` (AC14).
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-790-contenttype-rename -- cargo test --manifest-path xtask/Cargo.toml
@@ -739,7 +739,7 @@ fixture, so its assertions still hold — but its doc comment ("The verdict fire
 at `ContentType::from_trusted` and at definition sites too") goes stale and must
 be rewritten to say "at unresolvable-qualifier sites".
 
-- [ ] **Step 5: Confirm the sibling gates changed by one line each and no more**
+- [x] **Step 5: Confirm the sibling gates changed by one line each and no more**
 
 ```bash
 git diff wt-base-issue-790...HEAD -- xtask/src/steps/raw_html_door_check.rs xtask/src/steps/html_sink_check.rs
@@ -749,7 +749,7 @@ Expected: exactly one added line per file, `owner: None,` — the `const Gate`
 literals had to name the new field to compile (Task 4). Anything else in that
 diff is out of scope (AC9).
 
-- [ ] **Step 6: Confirm the gate agrees on the real tree**
+- [x] **Step 6: Confirm the gate agrees on the real tree**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-790-contenttype-rename -- cargo xtask check
@@ -760,7 +760,7 @@ the markers gone (AC16). A failure here is informative: `Unmarked` at a
 `render.rs` line means resolution is not reaching the owner's own door; an
 orphan means a marker outlived its site.
 
-- [ ] **Step 7: Confirm no rename crept in**
+- [x] **Step 7: Confirm no rename crept in**
 
 ```bash
 rg -n 'fn from_trusted' common/src
@@ -769,7 +769,7 @@ rg -n 'fn from_trusted' common/src
 Expected: two definitions, `common/src/media.rs` and `common/src/render.rs`,
 both still named `from_trusted` (AC15).
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add xtask/src/steps/rendered_html_from_trusted_check.rs common/src/media.rs common/src/feed/feed_path.rs
@@ -790,7 +790,7 @@ git commit -m "feat(xtask,common): police RenderedHtml's door only; drop the Con
 **Interfaces:** none. The draft is numbered at ship by
 `cargo xtask adr promote`.
 
-- [ ] **Step 1: Write the ADR draft** via `jaunder-adr` — numberless, in
+- [x] **Step 1: Write the ADR draft** via `jaunder-adr` — numberless, in
       `docs/adr/drafts/`. Content per D6:
   - **Context** — #398 built the gate on a leaf ident; #778 deleted a qualifier
     exemption as a pattern-decided exemption under ADR-0085 principle 3, leaving
@@ -810,18 +810,18 @@ git commit -m "feat(xtask,common): police RenderedHtml's door only; drop the Con
     could resolve to another type and be suppressed. That is the price of
     resolving names without a compiler, and it is why the roots must cover every
     tree the gate claims to police.
-- [ ] **Step 2: ADR-0079 §89** — "the `from_trusted` ident wherever it appears
+- [x] **Step 2: ADR-0079 §89** — "the `from_trusted` ident wherever it appears
       (#778 widened it to definitions and to other types' doors)" is now false
       for other types' doors. State the resolved-qualifier rule; cite the new
       ADR.
-- [ ] **Step 3: `common/src/render.rs:216-218`** — carries that same sentence
+- [x] **Step 3: `common/src/render.rs:216-218`** — carries that same sentence
       **verbatim in code**. Fix it identically.
-- [ ] **Step 4: ADR-0094** — §229 (the note that `ident_gate` lost the free
+- [x] **Step 4: ADR-0094** — §229 (the note that `ident_gate` lost the free
       `ContentType` coverage; it is back, by resolution) and §122-127 (that the
       affected sites "take ordinary markers like anything else", which turned
       the doc-comment instruction into something "the gate enforces" — the exact
       claim Task 5 walked back in `media.rs`).
-- [ ] **Step 5: `ident_gate.rs`'s module doc** — §50-52's unreadable class 1 ("A
+- [x] **Step 5: `ident_gate.rs`'s module doc** — §50-52's unreadable class 1 ("A
       `use … as` rename … evades ident matching — `syn` has no name resolution")
       is now false for an owner-configured gate; §29-33 and §69-73 describe the
       old design. Rewrite, and add to that same numbered blind-spot list all
@@ -837,7 +837,7 @@ git commit -m "feat(xtask,common): police RenderedHtml's door only; drop the Con
   3. **a free `fn from_trusted` nested inside a non-owner impl's method body** —
      `impl_stack.last()` still names the impl, so the inner definition is
      suppressed although it belongs to no impl. Fail-open, vanishingly unlikely.
-- [ ] **Step 6: Gate and commit**
+- [x] **Step 6: Gate and commit**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-790-contenttype-rename -- cargo xtask check

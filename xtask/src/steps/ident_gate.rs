@@ -26,11 +26,37 @@
 //! defended on exactly that "say what you do not look at" ground. The argument is
 //! sound and is why the property is stated here rather than dropped; what did not
 //! survive was paying a type parameter across four files for a trait with one
-//! implementor and no variation.) A future gate whose membership genuinely depends on
-//! positional context — `TrustedDoor`, removed in #778, read the path qualifier three
-//! tokens to the left — re-introduces a seam in `walk_macro_tokens`, which already
-//! materialises the flat sibling stream (the index is one `.enumerate()` away); it
-//! does not resurrect the trait blind.
+//! implementor and no variation.)
+//!
+//! **Where the ident is not the whole question, the qualifier decides** (#790). A gate
+//! whose population is an associated fn name another type may legitimately share sets
+//! [`Gate::owner`]; the walker then resolves each site's qualifier and **suppresses**
+//! the ones that belong to some other type. Two properties make that safe rather than
+//! a hole:
+//!
+//! - **[`visit_ident`] stays the sole recorder.** Resolution only ever suppresses. A
+//!   `fn` ident is not a [`syn::Path`], nor is a method-call ident or a macro token, so
+//!   recording from a path hook would silently drop every definition site — including
+//!   the guarded door's own. It also means a site cannot be counted twice, and that
+//!   `owner: None` is byte-identical to the pre-#790 scan by construction: the
+//!   suppression set is simply empty.
+//! - **Unresolvable means in-population.** A qualifier the gate cannot pin — glob
+//!   import, generic parameter, unqualified call, macro body — stays policed. Obscuring
+//!   a qualifier buys a gate failure, not an exemption.
+//!
+//! Deciding membership this way is **structural**: it identifies the door rather than
+//! exempting a site from it, so ADR-0085 principle 3 is not in play. #778 conflated the
+//! two and deleted a qualifier check as a pattern exemption, which left the codebase
+//! carrying markers on a provably harmless population. See
+//! `docs/adr/drafts/gate-population-membership-is-structural.md`.
+//!
+//! Macro bodies are deliberately **not** resolved — [`walk_macro_tokens`] sees a flat
+//! token stream, and under the rule above not resolving is fail-closed. The old
+//! `TrustedDoor` (removed in #778) read the path qualifier three tokens to the left; that
+//! seam is still available, since `walk_macro_tokens` already materialises the flat
+//! sibling stream (the index is one `.enumerate()` away).
+//!
+//! [`visit_ident`]: syn::visit::Visit::visit_ident
 //!
 //! **Exemptions are markers, not a list** (#778). A site is exempt when the line
 //! *immediately above* it carries `// <gate-step>:allow <reason>`. The key is one
@@ -46,8 +72,18 @@
 //! **Unreadable classes inherent to this scan** (ADR-0085's honesty obligation;
 //! each gate states the ones specific to *its* idents on top of these):
 //!
-//! 1. A `use … as` rename, or a re-export under another name, evades ident matching
-//!    — `syn` has no name resolution.
+//! 1. **Only for an owner-configured gate** (see [`Gate::owner`]), three ways a
+//!    qualifier can mislead resolution, all fail-**open** (#790):
+//!    a rename of a rename — [`owner_aliases`] harvests a single
+//!    `use …Owner as X`, so a rename *of that rename* in a third module evades;
+//!    a renaming re-export living **outside** the gate's roots, which is never
+//!    harvested at all, so a use site inside them resolves to the alias's own name
+//!    and is suppressed; and a free `fn` nested inside another type's `impl` method
+//!    body, which the enclosing-`impl` lookup attributes to that type. None has a
+//!    live instance; the first two are why a gate's roots must cover every tree it
+//!    claims to police. For a gate with no owner there is nothing to resolve, and a
+//!    `use … as` rename simply evades ident matching outright — `syn` has no name
+//!    resolution, and before #790 that was this class's whole content.
 //! 2. Tokens inside an *attribute* macro's argument list are not walked; only
 //!    [`syn::Macro`] invocations are. Macro **expansions** are never seen either,
 //!    which is deliberate: only author-written tokens are in the population.
