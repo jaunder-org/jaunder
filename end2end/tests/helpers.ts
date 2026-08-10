@@ -3,10 +3,31 @@
  *
  * ## Usage rules
  *
+ * - **A page boots once, at the URL under test** (#867).  That single document
+ *   load is the page's entry; fixtures take the entry path rather than guessing
+ *   it.  Everything after it moves within the app.
+ *
  * - Always use `goto`, `click`, and `waitForSelector` from this module instead
  *   of `page.goto` / `page.click` / `page.waitForSelector` directly.  The
  *   wrappers record timing via `withTimedAction` so every navigation and
- *   interaction appears in the OTEL trace.
+ *   interaction appears in the OTEL trace.  A `page.goto` anywhere under
+ *   `end2end/tests` other than this module fails the `e2e-goto-wrapper` xtask
+ *   check, unless the site carries a `// e2e-goto-wrapper:allow <reason>`
+ *   marker on the line directly above it (ADR-0094).
+ *
+ * - **Move within the app with `navigateInApp`** (`./navigate`), not with a
+ *   second `goto`: in a CSR SPA the router serves the move, and a document load
+ *   exercises a path no user takes.  Its `ready` selector must not already
+ *   match before the move — a barrier that waits for nothing is rejected, not
+ *   silently accepted.
+ *
+ * - **A second document load on an already-booted page must be declared** with
+ *   `allowSecondBoot(page, reason)` (`./bootBudget`), and the reason must be
+ *   non-empty: it is the record of what was deliberately left alone (the
+ *   destination's cold render being the subject, or a re-load proving
+ *   persistence).  One allowance covers one load.  An allowance nothing
+ *   consumes fails the test as an orphan — it does not expire, so leaving one
+ *   behind would silently absorb the next undeclared load.
  *
  * - Pass paths (e.g. `"/login"`, `"/posts/new"`) to `goto` — it always
  *   prepends `BASE_URL` automatically.  Use `BASE_URL` directly only for
@@ -16,6 +37,8 @@
  * - `goto` waits for the CSR mount automatically.  Call
  *   `waitForMount(page)` only after action-triggered navigations (e.g.
  *   redirects from form submits, server-side 302s) where `goto` was not used.
+ *   Do not call it after `navigateInApp` — the app is already mounted, so
+ *   `body[data-mounted]` would pass vacuously.
  *
  * - Never use `page.waitForLoadState("networkidle")` — it fires before ActionForm
  *   AJAX responses arrive under load.  Wait for a specific element instead.

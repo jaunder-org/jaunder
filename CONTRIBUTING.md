@@ -227,6 +227,22 @@ invoke it.
   `{sqlite,postgres}×{chromium,firefox}` combos. The VM path is what green means
   before you push.
 
+### One boot per page
+
+An e2e page performs **exactly one document load — its entry, at the URL under
+test**; everything after it moves within the app. This is the test-side
+counterpart of ADR-0076, and it is enforced two ways: a runtime per-`Page`
+budget fails an undeclared second load, and the `e2e-goto-wrapper` static check
+fails a `page.goto` written outside the navigation wrapper. The reasoning is in
+`docs/adr/drafts/e2e-one-boot-per-page.md` (numbered at ship; cited by path
+rather than linked, since a draft is gitignored).
+
+The API is in `end2end/tests/helpers.ts` (its docblock is the usage rules):
+`goto` to enter, `navigateInApp` to move inside the app, and
+`allowSecondBoot(page, reason)` to declare a further load where the
+destination's cold render is the subject. A declared allowance that no load
+consumes fails the test.
+
 ### Local checks: `cargo xtask`
 
 The driver for all checks is `cargo xtask`. The host runs only the static
