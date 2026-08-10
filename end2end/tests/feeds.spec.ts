@@ -9,6 +9,7 @@ import {
 // an `e2e.test` span and its traffic — including the direct `page.request.post`
 // to /api/posts/update below — is attributable to a named test (#681).
 import { test, expect, setTestBudget } from "./fixtures";
+import { allowSecondBoot } from "./bootBudget";
 import { readPingLines, waitForPingMatching } from "./websub";
 // `FEED_POLL_TIMEOUT_MS` is imported, not restated: this spec derives its
 // whole-test budget from it (#270), and `feeds.ts` owns the poll that consumes
@@ -74,6 +75,10 @@ test("auto-discovery links are present on site home and user timeline, and resol
   }
 
   // Test user timeline feed discovery (canonical user URL is ~-prefixed)
+  allowSecondBoot(
+    page,
+    "the document-served head link set for the user timeline is the subject; the sibling test already covers the client-side-nav case, so converting this one would collapse the two into one scenario",
+  );
   await goto(page, `/~${username}`);
   const userLinks = await page.$$eval('head link[rel="alternate"]', (els) =>
     els.map((e) => ({

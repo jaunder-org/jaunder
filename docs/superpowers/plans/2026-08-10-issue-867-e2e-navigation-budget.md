@@ -854,7 +854,28 @@ git commit -m "test(e2e): move the posts edit and permalink flows to in-app navi
 
 **Interfaces:** as Task 6a.
 
-- [ ] **Step 1: Convert and declare, per the classification**
+- [x] **Step 1: Convert and declare, per the classification** — 2 conversions
+      (the private-permalink click in `visibility.spec.ts`; the redundant
+      `/login` `goto` in `password_reset.spec.ts` **deleted**, with a
+      `waitForSelector` keeping the barrier the `goto` used to provide) and **36
+      declarations**. `audiences.spec.ts` and `auth.spec.ts` needed no change —
+      every row in both is `kept:entry`.
+
+      **A hazard found here, and the rule it forced.** An `allowSecondBoot`
+      allowance that is never consumed does not expire — it sits waiting and
+      silently absorbs a later, genuine violation. So a declaration goes inside
+      a helper only when the load is a second load for *every* caller
+      (`setAndVerifyEmail`, `followEmailLink`); otherwise it belongs at the call
+      site. `subscribeTo`/`unsubscribeFrom` forced the rule: one caller has a
+      booted page, four pass a freshly created one where the same `goto` is that
+      page's entry, so a helper-side declaration would dangle in four of five.
+      Task 8 adds an orphan-allowance check so this stops depending on care.
+
+      **One correction to the brief I gave.** I claimed `signInAsNewUser` boots
+      the page, making `posts.spec.ts:382` a second load. It does not —
+      `helpers.ts:214` seeds out of band with no navigation, so that `goto` is
+      the page's entry, exactly as the classification has it. No declaration was
+      added; one would have planted the dangling allowance described above.
 
 The persistence reloads in `profile.spec.ts`, `admin-site.spec.ts` and
 `backup.spec.ts` are `kept:declared` — they re-read through the server and are
@@ -879,7 +900,12 @@ real flow (`auth.spec.ts:14,52`; `authed-flash.spec.ts`;
 declaration wherever the caller's page was already booted. Missing these is how
 the budget fails at Task 8 with no step to fix it, so do not skip them.
 
-- [ ] **Step 2: Check no assertion was lost (spec A10)**
+- [x] **Step 2: Check no assertion was lost (spec A10)** — **no file fell.**
+      Unchanged: admin-site 10, auth 28, authed-flash 20, backup 20, email 8,
+      feeds 30, helpers 3, password_reset 8, posts 130, posts.ts 1, profile 18,
+      unicode-slug 8, visibility 20. Counts rose only in the new files
+      (bootBudget.spec 0→10, navigate.spec 0→4, navigate.ts 0→1). Four entries
+      now sit under "Subject changes" in the classification.
 
 For each file touched in Tasks 6a, 6b and 7, compare the count of `expect(`
 occurrences against the fork point:
@@ -896,12 +922,11 @@ what they exercised before and after — into
 `docs/superpowers/classification-867.md` under a "Subject changes" heading; Task
 11 quotes it into the write-up.
 
-- [ ] **Step 3: Run the full suite on both browsers**
+- [x] **Step 3: Run the full suite on both browsers** — **`e2e-local`: 151
+      passed (5.0 m)**, green first time. Firefox still deferred to the final
+      `validate`.
 
-Run: `... cargo xtask e2e sqlite chromium` and
-`... cargo xtask e2e sqlite firefox` Expected: PASS.
-
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add end2end/tests docs/superpowers/classification-867.md
@@ -952,6 +977,16 @@ test("the budget is armed for a second page too", async ({
 
 Run: `... cargo xtask e2e-local bootBudget` Expected: FAIL — `bootCount` reports
 0, the pages were never tracked.
+
+**Added after Task 7: the orphan-allowance check.** An `allowSecondBoot`
+allowance that is never consumed does not expire — it waits and silently absorbs
+a later, genuine violation, which is the failure this whole budget exists to
+prevent. Task 7 had to place every declaration by hand to avoid planting one.
+Fix it structurally instead: at test teardown, fail if any tracked page has
+unconsumed allowances, naming the page and the orphaned reasons. This is
+ADR-0094's orphan-marker rule ("a marker whose site no longer exists fails") in
+runtime form, and for the same reason — a written exemption nothing re-verifies
+must at least be checked to still apply. Pin it with a test.
 
 - [ ] **Step 3: Arm the budget and surface violations**
 

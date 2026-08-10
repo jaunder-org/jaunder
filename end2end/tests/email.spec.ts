@@ -1,5 +1,6 @@
 import { test, expect } from "./fixtures";
 import { goto, signInAs, setAndVerifyEmail } from "./helpers";
+import { allowSecondBoot } from "./bootBudget";
 import { SEL } from "./selectors";
 
 // M3.10.11: Full email verification flow.
@@ -15,6 +16,10 @@ test("email verification flow completes successfully", async ({
   await setAndVerifyEmail(page, user.email, mailbox);
 
   // Confirm email is shown as verified on the profile page
+  allowSecondBoot(
+    page,
+    "a fresh load reads the verified state back through the server, proving email::verify persisted",
+  );
   await goto(page, "/profile/email");
   await expect(page.locator("p")).toContainText("verified");
 });

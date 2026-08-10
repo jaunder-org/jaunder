@@ -1,5 +1,6 @@
 import { test, expect } from "./fixtures";
 import { goto, signInAs, waitForSelector } from "./helpers";
+import { allowSecondBoot } from "./bootBudget";
 import { SEL } from "./selectors";
 
 // M8.5: Site settings admin page allows operators to configure site identity.
@@ -30,6 +31,10 @@ test("admin site settings page loads and allows updating title and base_url", as
   await waitForSelector(page, ".j-settings-saved");
 
   // Reload the page and verify values are persisted
+  allowSecondBoot(
+    page,
+    "a fresh load reads the persisted title and base URL back through site::get",
+  );
   await goto(page, "/admin/site");
 
   // The title round-trips verbatim; the base URL round-trips in its canonical form
@@ -60,6 +65,10 @@ test("site base URL round-trips, clears via omission, and validates inline", asy
   await waitForSelector(page, ".j-settings-saved");
 
   // Reload and confirm it round-trips in canonical form.
+  allowSecondBoot(
+    page,
+    "a fresh load reads the saved base URL back through site::get in its canonical form",
+  );
   await goto(page, "/admin/site");
   await expect(page.locator('input[name="base_url"]')).toHaveValue(
     "https://roundtrip.example.com/",
@@ -72,6 +81,10 @@ test("site base URL round-trips, clears via omission, and validates inline", asy
   await waitForSelector(page, ".j-settings-saved");
 
   // Reload and confirm the base URL is now empty.
+  allowSecondBoot(
+    page,
+    "a fresh load reads the cleared base URL back through site::get to prove the None round-trip",
+  );
   await goto(page, "/admin/site");
   await expect(page.locator('input[name="base_url"]')).toHaveValue("");
 
@@ -120,6 +133,10 @@ test("site base URL warning banner shows when unset and hides once configured", 
   await page.fill('input[name="base_url"]', "https://example.com");
   await saveButton.click();
   await waitForSelector(page, ".j-settings-saved");
+  allowSecondBoot(
+    page,
+    "the warning banner is painted from the boot-time site config, so a fresh load is what proves it hides once configured",
+  );
   await goto(page, "/admin/site");
   await expect(banner).toBeHidden();
 
@@ -127,6 +144,10 @@ test("site base URL warning banner shows when unset and hides once configured", 
   await page.fill('input[name="base_url"]', "");
   await page.locator('button:has-text("Save Site Settings")').click();
   await waitForSelector(page, ".j-settings-saved");
+  allowSecondBoot(
+    page,
+    "the warning banner is painted from the boot-time site config, so a fresh load is what proves it reappears once cleared",
+  );
   await goto(page, "/admin/site");
   await expect(banner).toBeVisible();
 });

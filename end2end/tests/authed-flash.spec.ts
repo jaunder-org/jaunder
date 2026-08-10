@@ -20,6 +20,7 @@ import {
   signInAsNewUser,
   failServerFn,
 } from "./helpers";
+import { allowSecondBoot } from "./bootBudget";
 import { SEL } from "./selectors";
 import { createPostViaApi } from "./posts";
 
@@ -31,6 +32,10 @@ test("owner: pre-paint auth marks html.authed and / stays the enhanced public ti
   const username = await registerViaUi(page, firstNav);
   await createPostViaApi(page, { body: "# Owner Post\n\nBody for Owner Post" });
 
+  allowSecondBoot(
+    page,
+    "the pre-paint `html.authed` marking is observable only on a cold document load, and it is the subject",
+  );
   await goto(page, "/");
 
   // Pre-paint auth detection (D5): only the inline <head> script sets these â€” the
@@ -87,6 +92,10 @@ test("seeded: logout survives a full navigation (tombstone respected)", async ({
   await click(page, SEL.logoutLink);
   await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
 
+  allowSecondBoot(
+    page,
+    "a full post-logout document load is exactly what pins the tombstone; the pushState logout tests never re-run the init script",
+  );
   await goto(page, "/", { timeout: firstNav });
 
   await expect(page.locator("html")).not.toHaveClass(/\bauthed\b/);
@@ -106,6 +115,10 @@ test("seeded: re-seed as the same user after logout boots authed", async ({
   await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
 
   await signInAs(page, username);
+  allowSecondBoot(
+    page,
+    "the re-seeded marker is re-applied by the init script only on a fresh document load, and booting authed again is the subject",
+  );
   await goto(page, "/", { timeout: firstNav });
 
   await expect(page.locator("html")).toHaveClass(/\bauthed\b/);
@@ -139,6 +152,15 @@ test("owner: jaunder_home_redirect='app' makes the pre-paint script redirect / â
     localStorage.setItem("jaunder_home_redirect", "app"),
   );
 
+  // Two further loads: this `/` and the pre-paint script's own redirect to /app.
+  allowSecondBoot(
+    page,
+    "the pre-paint redirect script runs only on a cold document load of `/`, and that redirect is the subject",
+  );
+  allowSecondBoot(
+    page,
+    "this load is the pre-paint script's own redirect, not a test-issued navigation; it cannot be routed in-app",
+  );
   await page.goto(`${BASE_URL}/`, { waitUntil: "commit" });
   await page.waitForURL(/\/app$/, {
     timeout: firstNav,
@@ -175,6 +197,10 @@ test("operator: admin chrome is seeded flash-free from the marker", async ({
 
   // With get_session() failing, the operator admin nav can only come from the marker.
   await failServerFn(page, "auth/get_session");
+  allowSecondBoot(
+    page,
+    "the pre-paint marker read happens only on a cold boot, and with get_session() failing that boot is the only source of the operator chrome",
+  );
   await goto(page, "/");
 
   await expect(

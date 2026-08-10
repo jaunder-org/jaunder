@@ -1,5 +1,6 @@
 import { test, expect } from "./fixtures";
 import { goto } from "./helpers";
+import { allowSecondBoot } from "./bootBudget";
 import { SEL } from "./selectors";
 
 // The profile "Update Profile" control is a plain button that dispatches the
@@ -24,6 +25,10 @@ test("profile update persists a valid display name", async ({
   expect((await updated).ok()).toBe(true);
 
   // A fresh load reads the persisted value back through profile::get.
+  allowSecondBoot(
+    page,
+    "a fresh load reads the persisted value back through profile::get",
+  );
   await goto(page, "/profile");
   await expect(page.locator(DISPLAY_NAME)).toHaveValue("Ada Lovelace");
 });
@@ -62,6 +67,10 @@ test("clearing the display name persists as empty", async ({
   await page.click(UPDATE_BUTTON);
   expect((await updated).ok()).toBe(true);
 
+  allowSecondBoot(
+    page,
+    "a fresh load reads the persisted value back through profile::get",
+  );
   await goto(page, "/profile");
   await expect(page.locator(DISPLAY_NAME)).toHaveValue("Temp Name");
 
@@ -73,6 +82,10 @@ test("clearing the display name persists as empty", async ({
   await page.click(UPDATE_BUTTON);
   expect((await updated).ok()).toBe(true);
 
+  allowSecondBoot(
+    page,
+    "a fresh load reads the cleared display name back through profile::get to prove the None round-trip",
+  );
   await goto(page, "/profile");
   await expect(page.locator(DISPLAY_NAME)).toHaveValue("");
 });
@@ -90,6 +103,10 @@ test("profile update persists a valid bio", async ({ registeredPage }) => {
   await page.click(UPDATE_BUTTON);
   expect((await updated).ok()).toBe(true);
 
+  allowSecondBoot(
+    page,
+    "a fresh load reads the persisted value back through profile::get",
+  );
   await goto(page, "/profile");
   await expect(page.locator(BIO)).toHaveValue(
     "Mathematician and first programmer.",
@@ -127,19 +144,28 @@ test("default post format round-trips through the typed dispatch", async ({
 }) => {
   const page = await registeredPage("/profile");
 
-  const saveAndReload = async (value: string) => {
+  // Each flip's reload is a declared second boot, and the two flips are declared
+  // for different reasons, so the reason is a parameter rather than a constant.
+  const saveAndReload = async (value: string, reason: string) => {
     await page.selectOption(FORMAT_SELECT, value);
     const saved = page.waitForResponse((response) =>
       response.url().includes("set_default_post_format"),
     );
     await page.click(FORMAT_SAVE);
     expect((await saved).ok()).toBe(true);
+    allowSecondBoot(page, reason);
     await goto(page, "/profile");
     await expect(page.locator(FORMAT_SELECT)).toHaveValue(value);
   };
 
-  await saveAndReload("org");
-  await saveAndReload("markdown");
+  await saveAndReload(
+    "org",
+    "a fresh load reads the saved default post format back through get_default_post_format",
+  );
+  await saveAndReload(
+    "markdown",
+    "the second flip's fresh load proves the persisted value is the selected one, not a constant",
+  );
 });
 
 // #545: clearing the box removes the bio end-to-end. Under the typed Option<Bio>
@@ -156,6 +182,10 @@ test("clearing the bio persists as empty", async ({ registeredPage }) => {
   await page.click(UPDATE_BUTTON);
   expect((await updated).ok()).toBe(true);
 
+  allowSecondBoot(
+    page,
+    "a fresh load reads the persisted value back through profile::get",
+  );
   await goto(page, "/profile");
   await expect(page.locator(BIO)).toHaveValue("Temporary bio");
 
@@ -167,6 +197,10 @@ test("clearing the bio persists as empty", async ({ registeredPage }) => {
   await page.click(UPDATE_BUTTON);
   expect((await updated).ok()).toBe(true);
 
+  allowSecondBoot(
+    page,
+    "a fresh load reads the cleared bio back through profile::get to prove the None round-trip",
+  );
   await goto(page, "/profile");
   await expect(page.locator(BIO)).toHaveValue("");
 });

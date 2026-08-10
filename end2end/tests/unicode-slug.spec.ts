@@ -1,5 +1,6 @@
 import { test, expect } from "./fixtures";
 import { goto, click, waitForSelector } from "./helpers";
+import { allowSecondBoot } from "./bootBudget";
 import { SEL } from "./selectors";
 
 // Acceptance test for issue #72: slug generation is Unicode-preserving and
@@ -28,6 +29,10 @@ test("a Unicode-titled post is reachable at its permalink", async ({
     .getAttribute("href");
   expect(href).toBeTruthy();
 
+  allowSecondBoot(
+    page,
+    "the cold render of the percent-encoded Unicode permalink is what this test asserts",
+  );
   await goto(page, href!); // the browser percent-encodes the Unicode path segment
   await expect(page.locator("article h1")).toContainText("Café 日本語");
   await expect(page.locator(".j-post-body")).toContainText("unicode body");
@@ -51,6 +56,10 @@ test("an emoji-only title falls back to the 'post' slug and is reachable", async
   const href = await page
     .locator('.j-save-summary [data-test="permalink-link"]')
     .getAttribute("href");
+  allowSecondBoot(
+    page,
+    "the cold render of the fallback `post` permalink is what this test asserts",
+  );
   await goto(page, href!);
   await expect(page.locator(".j-post-body")).toContainText("emoji body");
 });

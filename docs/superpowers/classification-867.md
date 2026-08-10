@@ -550,6 +550,25 @@ the already-displayed permalink is deleted (Amendment 1). Nothing it asserted is
 lost, and the `__jaunderNoReload` sentinel that follows is strengthened by the
 removal.
 
+**Task 7 — `password reset flow completes successfully`.** The old- and
+new-password login assertions used to run on a **cold** `/login` that the test
+loaded itself, immediately after awaiting the router's own client-side redirect
+to that same URL. The `goto` is deleted, so they now run on the page the reset
+flow actually landed on. The subject moves from "a freshly loaded `/login`
+accepts the reset credentials" to "the page the reset flow lands on accepts
+them" — which is the more faithful scenario, since that is what a real user
+sees. `/login` keeps cold coverage in `auth.spec.ts` (×4) and `authed-flash.ts`,
+as the coverage-movement table records.
+
+**Task 7 —
+`Private post: hidden from anonymous and non-subscriber, visible to author`.**
+The author's own read of the permalink moves from a cold document load to an
+in-app click on the publish flash's link. The assertion is unchanged; what it
+now also depends on is that the flash's permalink link works as an in-app route.
+The four other viewers in this test (anonymous, non-subscriber, and the two
+`expectPostHidden` pages) still read the permalink cold, so the gate's cold path
+keeps its coverage.
+
 ## Uncertain — review these
 
 Nine rows where the conversion was not obviously safe. All are classified

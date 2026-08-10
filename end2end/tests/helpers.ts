@@ -39,7 +39,7 @@
 
 import { expect, type Page } from "@playwright/test";
 import { withTimedAction } from "./actions";
-import { throwIfViolated } from "./bootBudget";
+import { allowSecondBoot, throwIfViolated } from "./bootBudget";
 import { extractLink, extractToken, type CapturedEmail } from "./mail";
 import { waitForMount } from "./mount";
 import {
@@ -179,6 +179,11 @@ export async function fillLoginForm(
  * Login redirects via client-side pushState now (#591), so `waitForURL` would be
  * reliable — but `SEL.logoutLink` is the better signal because it confirms auth
  * state (content readiness), not merely the URL.
+ *
+ * **Boots the page** (#867). An ADR-0098 holdout: the subject is the real login
+ * flow, so the document load of `/login` stays. Callers whose page has already
+ * booted must declare it with `allowSecondBoot` before calling — the declaration
+ * belongs to the caller, since only the caller knows whether this is its entry.
  */
 export async function login(
   page: Page,
@@ -246,6 +251,10 @@ export async function signInAs(page: Page, username: string): Promise<void> {
  *
  * After submission the helper races between `a[href='/logout']` (success) and
  * `.error` (failure) for fast failure detection.
+ *
+ * **Boots the page** (#867), on the same terms as {@link login}: an ADR-0098
+ * holdout whose document load of `/register` is the subject. A caller whose page
+ * has already booted declares it with `allowSecondBoot`.
  */
 export async function registerViaUi(
   page: Page,
@@ -300,6 +309,11 @@ export type EmailWaiter = {
  * Was written inline in the `verifiedUser` fixture and again in the email spec.
  * Factored so the phases are delimited in the trace and the sequence has one
  * home (#794).
+ *
+ * **Two document loads** (#867): `/profile/email` is the page's entry for both
+ * current callers, and following the emailed link is a second load this helper
+ * declares itself — it is an arrival from outside the app either way, so the
+ * declaration does not depend on the caller.
  */
 export async function setAndVerifyEmail(
   page: Page,
@@ -313,6 +327,10 @@ export async function setAndVerifyEmail(
     await expectFlash(page, "Check your email");
     const mail = await mailbox.waitForNewEmail();
     const token = extractToken(mail);
+    allowSecondBoot(
+      page,
+      "following the emailed verification link is an arrival from outside the app, exactly as a real recipient does",
+    );
     await goto(page, `/verify-email?token=${token}`);
     await expectFlash(page, "verified");
   });
@@ -325,6 +343,9 @@ export async function setAndVerifyEmail(
  * things about it — the happy path expects a neutral confirmation that does not
  * reveal whether the user exists, while the no-verified-email path expects an
  * error — so the shared part stops at the submit.
+ *
+ * **Boots the page** (#867): `/forgot-password` is reached from outside a
+ * session, and for both current callers it is the page's entry.
  */
 export async function requestPasswordReset(
   page: Page,
@@ -378,6 +399,11 @@ async function toggleSubscription(
 /**
  * Subscribe the current (authenticated) page's user to `authorUsername` via the
  * author's profile page, settling once the button flips to "Unsubscribe".
+ *
+ * **Boots the page** (#867): nothing in the app links to an arbitrary author's
+ * profile from wherever the caller happens to be, so this stays a document load.
+ * For most callers it is a freshly created page's entry; a caller whose page has
+ * already booted declares it with `allowSecondBoot` first.
  */
 export async function subscribeTo(
   page: Page,
@@ -391,6 +417,8 @@ export async function subscribeTo(
 /**
  * Unsubscribe the current page's user from `authorUsername` via the profile
  * page, settling once the button flips back to "Subscribe".
+ *
+ * **Boots the page** (#867), on the same terms as {@link subscribeTo}.
  */
 export async function unsubscribeFrom(
   page: Page,
@@ -436,6 +464,10 @@ export async function followEmailLink(
       new RegExp(`^https://example\\.com${pathPrefix}\\?token=`),
     );
     const { pathname, search } = new URL(link);
+    allowSecondBoot(
+      page,
+      "following the emailed reset link is an arrival from outside the app, exactly as a real recipient does",
+    );
     await goto(page, `${pathname}${search}`);
   });
 }

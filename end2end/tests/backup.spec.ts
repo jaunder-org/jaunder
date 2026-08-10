@@ -1,5 +1,6 @@
 import { test, expect } from "./fixtures";
 import { goto, signInAs, waitForSelector } from "./helpers";
+import { allowSecondBoot } from "./bootBudget";
 import { SEL } from "./selectors";
 
 // #453: the schedule field is client-validated (ValidatedInput<BackupSchedule>, ADR-0065) —
@@ -118,6 +119,10 @@ test("backup destination round-trips and clears via omission", async ({
   ]);
 
   // Reload and confirm it round-trips.
+  allowSecondBoot(
+    page,
+    "a fresh load reads the persisted destination path back through backup::get_settings",
+  );
   await goto(page, "/admin/backups");
   await expect(page.locator('input[name="destination_path"]')).toHaveValue(
     "/srv/jaunder/backups",
@@ -134,6 +139,10 @@ test("backup destination round-trips and clears via omission", async ({
   ]);
 
   // Reload and confirm the destination is now empty.
+  allowSecondBoot(
+    page,
+    "a fresh load reads the cleared destination back through backup::get_settings to prove the None round-trip",
+  );
   await goto(page, "/admin/backups");
   await expect(page.locator('input[name="destination_path"]')).toHaveValue("");
 });
