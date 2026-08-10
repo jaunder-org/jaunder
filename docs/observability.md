@@ -1078,6 +1078,75 @@ and is not a clean pre-registration.** Firefox's is: its timings have
 deliberately **not** been inspected, precisely so the gate's critical-path
 engine keeps an uncontaminated prediction. Firefox is the arm to read.
 
+#### Observed — the abort rule fired, and the preload is reverted
+
+Captured 2026-08-10, 12 runs, corpus at
+`~/measurements/jaunder/issue-866-preload/`. Certified before analysis:
+`dropped = 0` on all 24 rows, full marks on 100% of 2496 mounted navigations,
+exactly 208 mounted per capture. Arm integrity by an independent signal — the
+wasm resource's `initiatorType` is `fetch` on 100% of before-arm navigations and
+`link` on 100% of after-arm ones, in both engines.
+
+**Boot total, mean of three run-means:**
+
+| engine   | warmth | before | after | delta | 3 × SE | verdict          |
+| -------- | ------ | ------ | ----- | ----- | ------ | ---------------- |
+| firefox  | all    | 762.0  | 743.1 | 18.8  | 38.8   | **below floor**  |
+| firefox  | cold   | 829.8  | 820.1 | 9.7   | 40.0   | **below floor**  |
+| firefox  | warm   | 680.8  | 651.7 | 29.0  | 38.4   | **below floor**  |
+| chromium | all    | 410.4  | 394.0 | 16.4  | 16.3   | clears by 0.1 ms |
+| chromium | cold   | 489.2  | 467.3 | 21.9  | 17.8   | clears           |
+| chromium | warm   | 316.7  | 306.9 | 9.9   | 16.4   | below floor      |
+
+**The preload does exactly what it was built to do.** The pre-fetch window
+collapses — firefox 276.2 → 81.5 ms, chromium 220.4 → 54.4 ms. The mechanism is
+not in doubt.
+
+**And the engines give it all back.** Per navigation, all navigations:
+
+| segment            | firefox           | chromium         |
+| ------------------ | ----------------- | ---------------- |
+| pre-fetch window   | 276.2 → **81.5**  | 220.4 → **54.4** |
+| `wasm_fetch`       | 60.1 → 110.2      | 169.0 → 312.6    |
+| `wasm_instantiate` | 421.0 → **546.0** | 15.3 → 21.1      |
+
+The directional prediction held: `wasm_fetch` rose, as the moved download now
+contends. What was **not** predicted is `wasm_instantiate` rising by **125 ms on
+firefox** — 422.5 → 599.3 cold, 419.2 → 482.7 warm, with **no overlap between
+the arms in any of the three runs**. Chromium shows the same sign, much smaller
+(15.5 → 26.8 cold). `wasmEncodedBytes` and `wasmDecodedBytes` are identical
+across arms, so it is not a different payload.
+
+**Why instantiate got worse is unexplained.** A preload changing _how_ bytes
+arrive plausibly changes whether the engine can compile while downloading, but
+this capture tested a size-independent question and cannot attribute a compile
+regression. Naming a mechanism here is exactly the #840 error. Filed as #887.
+
+#### Verdict against the pre-registered rules
+
+- **Firefox — the decisive, uncontaminated arm — does not clear the floor** in
+  any warmth. 18.8 ms against a required 38.8 ms.
+- **Chromium clears by 0.1 ms** on the pooled figure (16.4 vs 16.3), which is
+  not a result, and clears more convincingly cold (21.9 vs 17.8). Chromium's
+  prediction was also disclosed in advance as contaminated.
+- A large, consistent component regression landed on the engine that is the e2e
+  gate's critical path.
+
+**D8 fires: the preload is reverted.** It does not land on the strength of the
+mechanism being real — and the mechanism _is_ real, which is the interesting
+part. The serial boot chain was a genuine 166–195 ms of waiting, and removing it
+bought nothing, because the time reappears as fetch contention and compile.
+
+**What this changes downstream.** #864 records firefox's instantiate as a ~377
+ms _size-independent_ floor. This experiment shows it is not
+delivery-independent: the same bytes cost 125 ms more to instantiate when they
+arrive via a preload. That is a live clue for #864 and is cross-referenced
+there.
+
+The pre-fetch window (#870's stylesheet question) remains open and is now more
+interesting, not less: 166–195 ms of it is removable, but removing it this way
+does not convert into boot time.
+
 ## #792 — the per-test warmup A/B (findings, 2026-08-04)
 
 **Verdict: delete the warmup, both browsers.** It costs 113 s/combo (chromium)

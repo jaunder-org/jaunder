@@ -440,31 +440,4 @@ mod tests {
              is emitted from (#866)"
         );
     }
-
-    /// The projector composes `render_head`, which now carries the preload links
-    /// (#866). It must not emit its own copy: a duplicated `<link rel="preload">`
-    /// is not an error the browser reports — it is a second download of a 2.2 MB
-    /// wasm, which is exactly the regression the preload was meant to avoid.
-    #[test]
-    fn projected_document_emits_each_preload_exactly_once() {
-        use super::document;
-        use common::seed::{PageSeed, TimelinePage};
-        let doc = document(&PageSeed::SiteTimeline(TimelinePage {
-            posts: vec![],
-            next_cursor: None,
-            has_more: false,
-        }));
-        let wasm_preload = format!(r#"rel="preload" href="{}""#, web::app::WASM_URL);
-        let glue_preload = format!(r#"rel="modulepreload" href="{}""#, web::app::GLUE_URL);
-        assert_eq!(
-            doc.matches(wasm_preload.as_str()).count(),
-            1,
-            "exactly one wasm preload in the projected document: {doc}"
-        );
-        assert_eq!(
-            doc.matches(glue_preload.as_str()).count(),
-            1,
-            "exactly one glue modulepreload in the projected document: {doc}"
-        );
-    }
 }
