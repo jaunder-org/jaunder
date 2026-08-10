@@ -13,41 +13,55 @@
 //! Playwright timeouts whose output never names the one-word typo that caused
 //! them. This gate turns that into one line here.
 //!
-//! **How a site is located.** Each [`Site`] carries a literal `anchor` — the
-//! *declaration* form, `MOUNTED_ATTR = ` rather than `data-mounted` — and the
-//! quote that opens the literal directly after it. The anchor **locates a site;
-//! it never decides a violation.** The violation is exact string inequality
-//! between two extracted literals, so an out-of-date anchor cannot pass
-//! silently: zero occurrences or more than one are both hard failures, as are an
-//! unreadable file and a malformed literal.
+//! **How a site is located.** Each [`Site`] carries a literal `anchor` naming the
+//! syntax that introduces the literal — `MOUNTED_ATTR = ` for a declaration, or
+//! `setAttribute(` for the CSR site, which has no Rust constant to name because
+//! the literal only exists inside the JS string — and the quote that opens the
+//! literal directly after it. The anchor **locates a site; it never decides a
+//! violation.** The violation is exact string inequality between two extracted
+//! literals, so an out-of-date anchor cannot pass silently: zero occurrences or
+//! more than one are both hard failures, as are an unreadable file and a
+//! malformed literal.
 //!
-//! Anchoring on the declaration rather than the value is load-bearing, not
-//! stylistic. Every policed site carries a prose comment naming its counterpart,
-//! and those comments mention the value — an anchor that matched the value would
-//! let a documentation edit change this gate's verdict.
+//! Anchoring on the introducing syntax rather than on the literal's **value** is
+//! load-bearing, not stylistic: `csr/src/lib.rs`'s counterpart comment quotes
+//! `body[data-mounted]`, so a value-anchor would match it too and let an edit to
+//! that prose change this gate's verdict.
 //!
-//! **What this gate does not claim.** Its population is exactly [`PAIRS`]. A
-//! third literal duplicated across languages that nobody added to the table is
-//! unpoliced, and recorded nowhere — no green run here implies it was examined.
-//! That limit is inherent to a declared-pair design: there is no structural
-//! property distinguishing "duplicated across languages on purpose" from "two
-//! files that happen to share a string." Stated here per ADR-0085's honesty
-//! obligation. See `docs/adr/drafts/cross-language-literal-agreement.md`.
+//! **What this gate does not claim.** Two limits, per ADR-0085's honesty
+//! obligation:
+//!
+//! 1. Its population is exactly [`PAIRS`]. A third literal duplicated across
+//!    languages that nobody added to the table is unpoliced, and recorded
+//!    nowhere — no green run here implies it was examined. That is inherent to a
+//!    declared-pair design: there is no structural property distinguishing
+//!    "duplicated across languages on purpose" from "two files that happen to
+//!    share a string."
+//! 2. It compares **source spellings, not decoded values.** A backslash escape is
+//!    kept verbatim (see [`literal_in`]), so two sides that agree on the decoded
+//!    string while escaping it differently would be reported as drift. No shipped
+//!    pair contains an escape; if one ever does, this is where it will surface,
+//!    as a false failure rather than a false pass.
+//!
+//! See `docs/adr/drafts/cross-language-literal-agreement.md` (path-form on
+//! purpose — `cargo xtask adr promote` rewrites it to the assigned number at
+//! ship).
 
 use std::path::Path;
 
 use crate::result::{CommandResult, StepResult};
 
-/// One side of a cross-language literal pair: where the literal is declared, and
+/// One side of a cross-language literal pair: where the literal is written, and
 /// how to find it.
 ///
-/// `anchor` must be the declaration form and must occur exactly once in `file`;
-/// `quote` must be the character immediately following it. See the module doc for
-/// why both of those are stricter than they need to be to work today.
-pub struct Site {
-    pub file: &'static str,
-    pub anchor: &'static str,
-    pub quote: char,
+/// `anchor` must be the syntax introducing the literal — never the literal's own
+/// value — and must occur exactly once in `file`; `quote` must be the character
+/// immediately following it. See the module doc for why both are stricter than
+/// they need to be to work today.
+struct Site {
+    file: &'static str,
+    anchor: &'static str,
+    quote: char,
 }
 
 /// The literal `site` declares, read out of `source`.
@@ -55,7 +69,7 @@ pub struct Site {
 /// `Err` carries a message naming `site.file` and what went wrong — every failure
 /// path here means the gate could not locate what it was asked to compare, which
 /// must be loud rather than treated as agreement.
-pub fn literal_in(site: &Site, source: &str) -> Result<String, String> {
+fn literal_in(site: &Site, source: &str) -> Result<String, String> {
     // Occurrences, not matching lines: two anchors on one line must not resolve
     // to a silent first-wins.
     let occurrences = source.matches(site.anchor).count();
@@ -89,8 +103,11 @@ pub fn literal_in(site: &Site, source: &str) -> Result<String, String> {
     let mut escaped = false;
     for c in rest[site.quote.len_utf8()..].chars() {
         if escaped {
-            // The backslash is kept: the gate compares literals to each other, not
-            // to a decoded value, and both sides are read the same way.
+            // The backslash is kept rather than decoded: an escape only needs to
+            // suppress a closing quote here, and keeping it means this function
+            // never has to model two languages' escape vocabularies. The cost is
+            // limit 2 in the module doc — sides that agree on the decoded value
+            // while spelling the escape differently read as drift.
             literal.push('\\');
             literal.push(c);
             escaped = false;
@@ -108,16 +125,16 @@ pub fn literal_in(site: &Site, source: &str) -> Result<String, String> {
     ))
 }
 
-/// Two declarations of the same constant, in two languages, that must agree.
-pub struct Pair {
-    pub key: &'static str,
-    pub a: Site,
-    pub b: Site,
+/// Two spellings of the same constant, in two languages, that must agree.
+struct Pair {
+    key: &'static str,
+    a: Site,
+    b: Site,
 }
 
 /// The cross-language literal pairs this gate polices. Adding a pair is a row
 /// here; see the module doc for what this table does **not** claim.
-pub const PAIRS: &[Pair] = &[
+const PAIRS: &[Pair] = &[
     Pair {
         key: "mount-marker",
         a: Site {
@@ -205,39 +222,34 @@ mod tests {
 
     use super::{PAIRS, Site, literal_in, problems};
 
-    fn ts_site() -> Site {
-        Site {
-            file: "end2end/tests/mount.ts",
-            anchor: "MOUNTED_ATTR = ",
-            quote: '"',
-        }
+    /// The two sites of the `mount-marker` pair, borrowed from the real table
+    /// rather than re-spelled: a helper carrying its own copy of an anchor would
+    /// silently stop testing the shipped one the moment the table changed.
+    fn ts_site() -> &'static Site {
+        &PAIRS[0].b
     }
 
-    fn rust_site() -> Site {
-        Site {
-            file: "csr/src/lib.rs",
-            anchor: "setAttribute(",
-            quote: '\'',
-        }
+    fn rust_site() -> &'static Site {
+        &PAIRS[0].a
     }
 
     #[test]
     fn extracts_a_double_quoted_literal() {
         let src = "export const MOUNTED_ATTR = \"data-mounted\";\n";
-        assert_eq!(literal_in(&ts_site(), src).unwrap(), "data-mounted");
+        assert_eq!(literal_in(ts_site(), src).unwrap(), "data-mounted");
     }
 
     #[test]
     fn extracts_a_single_quoted_literal() {
         let src = "        document.body.setAttribute('data-mounted', 'true');\n";
-        assert_eq!(literal_in(&rust_site(), src).unwrap(), "data-mounted");
+        assert_eq!(literal_in(rust_site(), src).unwrap(), "data-mounted");
     }
 
     /// The whole point of the gate: a locator that has stopped locating anything
     /// must be loud, never a pass.
     #[test]
     fn a_missing_anchor_is_an_error_naming_the_file_and_anchor() {
-        let e = literal_in(&ts_site(), "export const OTHER = \"z\";\n").unwrap_err();
+        let e = literal_in(ts_site(), "export const OTHER = \"z\";\n").unwrap_err();
         assert!(e.contains("end2end/tests/mount.ts"), "{e}");
         assert!(e.contains("MOUNTED_ATTR = "), "{e}");
         assert!(e.contains("not found"), "{e}");
@@ -247,9 +259,11 @@ mod tests {
     #[test]
     fn a_repeated_anchor_is_an_error_naming_the_count() {
         let src = "export const MOUNTED_ATTR = \"a\";\nexport const MOUNTED_ATTR = \"b\";\n";
-        let e = literal_in(&ts_site(), src).unwrap_err();
+        let e = literal_in(ts_site(), src).unwrap_err();
         assert!(e.contains("2 times"), "{e}");
         assert!(e.contains("end2end/tests/mount.ts"), "{e}");
+        assert!(e.contains("MOUNTED_ATTR = "), "{e}");
+        assert!(e.contains("#767"), "{e}");
     }
 
     /// Counting occurrences rather than matching lines — two anchors on one line
@@ -257,36 +271,37 @@ mod tests {
     #[test]
     fn two_anchors_on_one_line_also_fail() {
         let src = "MOUNTED_ATTR = \"a\"; MOUNTED_ATTR = \"b\";\n";
-        let e = literal_in(&ts_site(), src).unwrap_err();
+        let e = literal_in(ts_site(), src).unwrap_err();
         assert!(e.contains("2 times"), "{e}");
+        assert!(e.contains("end2end/tests/mount.ts"), "{e}");
+        assert!(e.contains("MOUNTED_ATTR = "), "{e}");
     }
 
     /// The anchor ends immediately before the opening quote, so anything else
     /// there means the declaration's shape changed and the table is stale.
     #[test]
     fn an_anchor_not_immediately_followed_by_the_quote_is_an_error() {
-        let e = literal_in(&ts_site(), "export const MOUNTED_ATTR = someIdent;\n").unwrap_err();
+        let e = literal_in(ts_site(), "export const MOUNTED_ATTR = someIdent;\n").unwrap_err();
         assert!(e.contains("not immediately followed"), "{e}");
         assert!(e.contains("end2end/tests/mount.ts"), "{e}");
     }
 
     #[test]
     fn an_unterminated_literal_is_an_error() {
-        let e =
-            literal_in(&ts_site(), "export const MOUNTED_ATTR = \"data-mounted;\n").unwrap_err();
+        let e = literal_in(ts_site(), "export const MOUNTED_ATTR = \"data-mounted;\n").unwrap_err();
         assert!(e.contains("unterminated"), "{e}");
     }
 
     #[test]
     fn an_escaped_quote_does_not_end_the_literal() {
         let src = "export const MOUNTED_ATTR = \"a\\\"b\";\n";
-        assert_eq!(literal_in(&ts_site(), src).unwrap(), "a\\\"b");
+        assert_eq!(literal_in(ts_site(), src).unwrap(), "a\\\"b");
     }
 
     #[test]
     fn an_empty_literal_extracts_as_empty_rather_than_erroring() {
         let src = "export const MOUNTED_ATTR = \"\";\n";
-        assert_eq!(literal_in(&ts_site(), src).unwrap(), "");
+        assert_eq!(literal_in(ts_site(), src).unwrap(), "");
     }
 
     /// Build a fixture root holding every file `PAIRS` names, with the literal of
