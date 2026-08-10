@@ -68,7 +68,7 @@ pub fn problems(clippy_toml: &str) -> Option<String> {
             lines.push(format!(
                 "clippy.toml: `disallowed-methods` no longer lists `{path}` — the \
                  `fetch_one` ban (#343) is incomplete. Absence must stay modelled as \
-                 `fetch_optional` or `storage::error::fetch_exactly_one{{,_scalar}}`; \
+                 `fetch_optional`, or named via `storage::error::RequireRow`; \
                  restore the entry rather than deleting it."
             ));
         }

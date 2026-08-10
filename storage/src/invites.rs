@@ -7,7 +7,6 @@ use sqlx::{Database, Pool};
 use thiserror::Error;
 
 use crate::backend::Backend;
-use crate::error::StorageError;
 use common::ids::UserId;
 
 /// An invite code record returned by [`InviteStorage`] queries.
@@ -47,7 +46,7 @@ pub trait InviteStorage: Send + Sync {
     /// Generates and stores a new invite code.
     ///
     /// Returns the generated [`InviteCode`].
-    async fn create_invite(&self, expires_at: DateTime<Utc>) -> Result<InviteCode, StorageError>;
+    async fn create_invite(&self, expires_at: DateTime<Utc>) -> sqlx::Result<InviteCode>;
 
     /// Marks an invite code as used by a specific user.
     ///
@@ -57,7 +56,7 @@ pub trait InviteStorage: Send + Sync {
     async fn use_invite(&self, code: &InviteCode, user_id: UserId) -> Result<(), UseInviteError>;
 
     /// Returns a list of all invite codes in the system.
-    async fn list_invites(&self) -> Result<Vec<InviteRecord>, StorageError>;
+    async fn list_invites(&self) -> sqlx::Result<Vec<InviteRecord>>;
 }
 
 /// Generic [`InviteStorage`] backed by any [`Backend`] database.
@@ -90,7 +89,7 @@ where
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
-    async fn create_invite(&self, expires_at: DateTime<Utc>) -> Result<InviteCode, StorageError> {
+    async fn create_invite(&self, expires_at: DateTime<Utc>) -> sqlx::Result<InviteCode> {
         // Mint a typed `InviteCode` up front (infallible trusted door) and bind it
         // directly, so the code is a domain value end-to-end with no raw-`String` bind
         // and no fallible re-parse on the return (#438).
@@ -150,7 +149,7 @@ where
         Err(UseInviteError::Expired)
     }
 
-    async fn list_invites(&self) -> Result<Vec<InviteRecord>, StorageError> {
+    async fn list_invites(&self) -> sqlx::Result<Vec<InviteRecord>> {
         let rows = sqlx::query_as::<_, crate::helpers::InviteRow>(
             "SELECT code, created_at, expires_at, used_at, used_by FROM invites",
         )
@@ -231,7 +230,7 @@ mod tests {
         // `ColumnDecode`, not the hand-rolled `Decode` the old re-parse produced.
         let err = state.invites.list_invites().await.unwrap_err();
         assert!(
-            matches!(err, StorageError::Db(sqlx::Error::ColumnDecode { .. })),
+            matches!(err, sqlx::Error::ColumnDecode { .. }),
             "expected a column-decode error, got: {err:?}"
         );
     }

@@ -87,8 +87,8 @@ impl CloseablePool {
     ///
     /// # Errors
     ///
-    /// Returns a [`StorageError`] if the statement fails to execute.
-    pub async fn execute(&self, sql: &str) -> Result<(), crate::StorageError> {
+    /// Returns the `sqlx::Error` if the statement fails to execute.
+    pub async fn execute(&self, sql: &str) -> Result<(), sqlx::Error> {
         match self {
             CloseablePool::Sqlite(pool) => {
                 sqlx::query(sql).execute(pool).await?;
@@ -106,20 +106,21 @@ impl CloseablePool {
     ///
     /// # Errors
     ///
-    /// Returns a [`StorageError`] if the query fails, or `MissingRow` if it
-    /// yields no row at all — the harness is inside `storage`, so it goes
-    /// through the same audited door as production code rather than the banned
-    /// `fetch_one` (#343).
-    pub async fn scalar_i64(&self, sql: &str) -> Result<i64, crate::StorageError> {
-        let what = "a scalar_i64 harness query row";
-        match self {
-            CloseablePool::Sqlite(pool) => {
-                crate::error::fetch_exactly_one_scalar(sqlx::query_scalar(sql), pool, what).await
-            }
-            CloseablePool::Postgres(pool) => {
-                crate::error::fetch_exactly_one_scalar(sqlx::query_scalar(sql), pool, what).await
-            }
-        }
+    /// Returns the `sqlx::Error` if the query fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the query yields no row — an aggregate always does, so an
+    /// empty result means the caller passed non-aggregate SQL.
+    pub async fn scalar_i64(&self, sql: &str) -> Result<i64, sqlx::Error> {
+        // `fetch_optional`, not the banned `fetch_one` (#343). Callers pass
+        // aggregate queries, which always yield a row; an absent one is a bug
+        // in the test that wrote the SQL, so it panics with the reason.
+        let row = match self {
+            CloseablePool::Sqlite(pool) => sqlx::query_scalar(sql).fetch_optional(pool).await?,
+            CloseablePool::Postgres(pool) => sqlx::query_scalar(sql).fetch_optional(pool).await?,
+        };
+        Ok(row.expect("a scalar_i64 harness query must yield exactly one row"))
     }
 
     /// Fetches every row of a three-`TEXT`-column query — the multi-row sibling of
@@ -128,14 +129,14 @@ impl CloseablePool {
     ///
     /// # Errors
     ///
-    /// Returns a [`StorageError`] if the query fails.
+    /// Returns the `sqlx::Error` if the query fails.
     pub async fn string_triples(
         &self,
         sql: &str,
-    ) -> Result<Vec<(String, String, String)>, crate::StorageError> {
+    ) -> Result<Vec<(String, String, String)>, sqlx::Error> {
         match self {
-            CloseablePool::Sqlite(pool) => Ok(sqlx::query_as(sql).fetch_all(pool).await?),
-            CloseablePool::Postgres(pool) => Ok(sqlx::query_as(sql).fetch_all(pool).await?),
+            CloseablePool::Sqlite(pool) => sqlx::query_as(sql).fetch_all(pool).await,
+            CloseablePool::Postgres(pool) => sqlx::query_as(sql).fetch_all(pool).await,
         }
     }
 
@@ -158,14 +159,12 @@ impl CloseablePool {
     ///
     /// # Errors
     ///
-    /// Returns a [`StorageError`] if the connection cannot be acquired or the
-    /// lock cannot be taken. On Postgres a non-existent `post_id` yields
-    /// `MissingRow` naming the locked row, rather than an anonymous
-    /// `RowNotFound` (#343).
+    /// Returns the `sqlx::Error` if the connection cannot be acquired or the lock
+    /// cannot be taken (including when `post_id` does not exist on Postgres).
     pub async fn lock_post_for_write(
         &self,
         post_id: PostId,
-    ) -> Result<PostWriteLock<'_>, crate::StorageError> {
+    ) -> Result<PostWriteLock<'_>, sqlx::Error> {
         let held = match self {
             CloseablePool::Sqlite(pool) => {
                 let mut conn = pool.acquire().await?;
@@ -178,14 +177,13 @@ impl CloseablePool {
             CloseablePool::Postgres(pool) => {
                 let mut tx = pool.begin().await?;
                 // Mirrors `PostgresPostStorage::set_post_tags`.
-                crate::error::fetch_exactly_one_scalar(
-                    sqlx::query_scalar::<_, PostId>(
-                        "SELECT post_id FROM posts WHERE post_id = $1 FOR UPDATE",
-                    )
-                    .bind(post_id),
-                    &mut *tx,
-                    "the post row being locked for write",
+                sqlx::query_scalar::<_, PostId>(
+                    "SELECT post_id FROM posts WHERE post_id = $1 FOR UPDATE",
                 )
+                .bind(post_id)
+                // `fetch_optional`, not the banned `fetch_one` (#343); the row
+                // is only being locked, so the result is discarded either way.
+                .fetch_optional(&mut *tx)
                 .await?;
                 HeldWrite::Postgres(tx)
             }
@@ -244,10 +242,13 @@ impl PostWriteLock<'_> {
     ///
     /// # Errors
     ///
-    /// Returns a [`StorageError`] if any of the three statements fails. The tag
-    /// id read-back reports `MissingRow` rather than an anonymous `RowNotFound`
-    /// if the row the insert just guaranteed is somehow absent (#343).
-    pub async fn add_tag(&mut self, label: &TagLabel) -> Result<(), crate::StorageError> {
+    /// Returns the `sqlx::Error` if any of the three statements fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the tag row cannot be read back after its insert, which the
+    /// enclosing transaction makes impossible.
+    pub async fn add_tag(&mut self, label: &TagLabel) -> Result<(), sqlx::Error> {
         let slug = label.slug();
         let post_id = self.post_id;
         match &mut self.held {
@@ -256,12 +257,13 @@ impl PostWriteLock<'_> {
                     .bind(&slug)
                     .execute(&mut **conn)
                     .await?;
-                let tag_id = crate::error::fetch_exactly_one_scalar(
-                    sqlx::query_scalar::<_, TagId>(SELECT_TAG_ID_BY_SLUG).bind(&slug),
-                    &mut **conn,
-                    "the tag row just inserted, read back for its id",
-                )
-                .await?;
+                // `fetch_optional`, not the banned `fetch_one` (#343): the
+                // insert above put the row there in this transaction.
+                let tag_id = sqlx::query_scalar::<_, TagId>(SELECT_TAG_ID_BY_SLUG)
+                    .bind(&slug)
+                    .fetch_optional(&mut **conn)
+                    .await?
+                    .expect("the tag row was just inserted");
                 sqlx::query(
                     "INSERT OR IGNORE INTO post_tags (post_id, tag_id, tag_display) \
                      VALUES ($1, $2, $3)",
@@ -277,12 +279,13 @@ impl PostWriteLock<'_> {
                     .bind(&slug)
                     .execute(&mut **tx)
                     .await?;
-                let tag_id = crate::error::fetch_exactly_one_scalar(
-                    sqlx::query_scalar::<_, TagId>(SELECT_TAG_ID_BY_SLUG).bind(&slug),
-                    &mut **tx,
-                    "the tag row just inserted, read back for its id",
-                )
-                .await?;
+                // `fetch_optional`, not the banned `fetch_one` (#343): the
+                // insert above put the row there in this transaction.
+                let tag_id = sqlx::query_scalar::<_, TagId>(SELECT_TAG_ID_BY_SLUG)
+                    .bind(&slug)
+                    .fetch_optional(&mut **tx)
+                    .await?
+                    .expect("the tag row was just inserted");
                 sqlx::query(
                     "INSERT INTO post_tags (post_id, tag_id, tag_display) VALUES ($1, $2, $3) \
                      ON CONFLICT DO NOTHING",
@@ -721,6 +724,7 @@ async fn ensure_template_db() {
     let exists: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)")
             .bind(TEMPLATE_DB)
+            // `fetch_optional`, not the banned `fetch_one` (#343).
             .fetch_optional(&mut admin)
             .await
             .unwrap()

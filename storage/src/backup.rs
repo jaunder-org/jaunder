@@ -70,10 +70,8 @@ pub struct BackupRestoreOptions<'a> {
 pub enum BackupError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-    /// Renamed from `Sqlx` with its payload: no public error variant in this
-    /// crate names `sqlx::Error` any more (#343).
     #[error("database error: {0}")]
-    Storage(#[from] crate::error::StorageError),
+    Sqlx(#[from] sqlx::Error),
     #[error("migration error: {0}")]
     Migrate(#[from] sqlx::migrate::MigrateError),
     #[error("JSON error: {0}")]
@@ -98,18 +96,6 @@ pub enum BackupError {
     },
     #[error("restored database failed constraint validation: {0}")]
     ConstraintViolation(String),
-}
-
-impl From<sqlx::Error> for BackupError {
-    /// Hand-written because `From` does not chain: with the payload retyped, the
-    /// bare `?` on the raw sqlx calls throughout the export/restore paths no
-    /// longer reaches `Storage` on its own.
-    ///
-    /// Not a hole in the #343 guarantee: `RowNotFound` cannot arrive here,
-    /// because `fetch_one` is banned and nothing in the crate constructs it.
-    fn from(error: sqlx::Error) -> Self {
-        Self::Storage(crate::error::StorageError::Db(error))
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -742,23 +728,20 @@ mod tests {
         // _sqlx_migrations. A table added and then denylisted (so the manifest
         // stays 22) still trips this count.
         let live_count: i64 = match env.base.pool() {
-            CloseablePool::Sqlite(pool) => crate::error::fetch_exactly_one_scalar(
-                sqlx::query_scalar(
-                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
-                ),
-                pool,
-                "the sqlite_master table count",
+            CloseablePool::Sqlite(pool) => sqlx::query_scalar(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
             )
-            .await?,
-            CloseablePool::Postgres(pool) => crate::error::fetch_exactly_one_scalar(
-                sqlx::query_scalar(
-                    "SELECT COUNT(*) FROM information_schema.tables \
-                     WHERE table_schema = 'public' AND table_type = 'BASE TABLE'",
-                ),
-                pool,
-                "the information_schema.tables count",
+            // `fetch_optional`, not the banned `fetch_one` (#343).
+            .fetch_optional(pool)
+            .await?
+            .expect("COUNT always yields exactly one row"),
+            CloseablePool::Postgres(pool) => sqlx::query_scalar(
+                "SELECT COUNT(*) FROM information_schema.tables \
+                 WHERE table_schema = 'public' AND table_type = 'BASE TABLE'",
             )
-            .await?,
+            .fetch_optional(pool)
+            .await?
+            .expect("COUNT always yields exactly one row"),
         };
         assert_eq!(
             live_count, 24,
@@ -787,20 +770,18 @@ mod tests {
         for table in ["channels", "subscription_statuses", "target_kinds"] {
             let count: i64 = match env.base.pool() {
                 CloseablePool::Sqlite(pool) => {
-                    crate::error::fetch_exactly_one_scalar(
-                        sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table}")),
-                        pool,
-                        "the seeded-lookup table count",
-                    )
-                    .await?
+                    // `fetch_optional`, not the banned `fetch_one` (#343).
+                    sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table}"))
+                        .fetch_optional(pool)
+                        .await?
+                        .expect("COUNT always yields exactly one row")
                 }
                 CloseablePool::Postgres(pool) => {
-                    crate::error::fetch_exactly_one_scalar(
-                        sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table}")),
-                        pool,
-                        "the seeded-lookup table count",
-                    )
-                    .await?
+                    // `fetch_optional`, not the banned `fetch_one` (#343).
+                    sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table}"))
+                        .fetch_optional(pool)
+                        .await?
+                        .expect("COUNT always yields exactly one row")
                 }
             };
             assert!(count > 0, "{table} must be seeded by migrations");

@@ -10,7 +10,6 @@ use common::pg_role_password::PgRolePassword;
 use sqlx::postgres::PgConnectOptions;
 use sqlx::{Connection, PgConnection};
 
-use crate::error::StorageError;
 use crate::sql::{quote_identifier, quote_literal};
 
 /// Error returned by [`create_postgres_database_and_role`].
@@ -23,21 +22,8 @@ pub enum PgBootstrapError {
     #[error("database '{0}' already exists")]
     DatabaseExists(String),
     /// Any other connection or statement failure.
-    ///
-    /// Renamed from `Sqlx` with its payload: no public error variant in this
-    /// crate names `sqlx::Error` any more (#343). Nothing here reads a row, so
-    /// the payload is always [`StorageError::Db`].
     #[error(transparent)]
-    Storage(#[from] StorageError),
-}
-
-impl From<sqlx::Error> for PgBootstrapError {
-    /// Hand-written because `From` does not chain: with the payload retyped, the
-    /// bare `?` on `connect_with` and `execute_utility` no longer reaches
-    /// `Storage` on its own.
-    fn from(error: sqlx::Error) -> Self {
-        Self::Storage(StorageError::Db(error))
-    }
+    Sqlx(#[from] sqlx::Error),
 }
 
 /// Creates the application role and the database it owns, connecting with the
@@ -88,7 +74,7 @@ impl From<sqlx::Error> for PgBootstrapError {
 ///
 /// Returns [`PgBootstrapError::RoleExists`] or
 /// [`PgBootstrapError::DatabaseExists`] when the role or database already
-/// exists, or [`PgBootstrapError::Storage`] for any other failure.
+/// exists, or [`PgBootstrapError::Sqlx`] for any other failure.
 pub async fn create_postgres_database_and_role(
     bootstrap: &PgConnectOptions,
     app_role: &PgRoleName,

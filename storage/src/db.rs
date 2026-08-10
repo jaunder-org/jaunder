@@ -176,9 +176,6 @@ impl fmt::Display for DbConnectOptions {
 }
 
 impl FromStr for DbConnectOptions {
-    /// Deliberately still `sqlx::Error` (#343 spec D4). The boundary #343 draws
-    /// is **row access**, not the sqlx dependency: parsing a connection string
-    /// reads no row, so `StorageError::MissingRow` would have nothing to name.
     type Err = sqlx::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -246,10 +243,6 @@ pub(crate) fn sql_slow_query_threshold() -> std::time::Duration {
 /// # Errors
 ///
 /// Returns `Err` if the database connection pool cannot be established.
-///
-/// Deliberately still `sqlx::Result` (#343 spec D4): the boundary #343 draws is
-/// **row access**, and connection/migration failures abort startup rather than
-/// cross a server-fn boundary, so `MissingRow` is meaningless here.
 #[tracing::instrument(name = "storage.open_database", skip(opts))]
 pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
     match opts {
@@ -265,8 +258,6 @@ pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState
 /// # Errors
 ///
 /// Returns `Err` if the database connection pool cannot be established.
-///
-/// Still `sqlx::Result` for the same reason as [`open_database`] (#343 spec D4).
 #[tracing::instrument(name = "storage.open_existing_database", skip(opts))]
 pub async fn open_existing_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
     match opts {
@@ -292,12 +283,6 @@ pub(crate) const MIGRATION_SEEDED_TABLES: &[&str] =
 ///
 /// Returns the underlying [`sqlx::Error`] if the database cannot be reached or a
 /// query fails.
-///
-/// Named exempt by #343 spec D4 with the other connection paths: this is a
-/// restore preflight that runs before any `AppState` exists and aborts the
-/// command rather than crossing a server-fn boundary. Its `SELECT EXISTS` probes
-/// are row-guaranteed, so both backend halves read them with `fetch_optional`
-/// rather than the banned `fetch_one`.
 pub async fn database_is_empty(options: &DbConnectOptions) -> sqlx::Result<bool> {
     match options {
         DbConnectOptions::Sqlite(options) => crate::sqlite::database_is_empty(options).await,

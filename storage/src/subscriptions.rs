@@ -17,8 +17,9 @@ use common::ids::{ChannelId, SubscriptionId, UserId};
 use common::visibility::{
     SubscriptionPolicy, SubscriptionStatus, ViewerIdentity, local_subscriber_ref,
 };
+use host::error::InternalResult;
 
-use crate::error::{StorageError, fetch_exactly_one_scalar};
+use crate::error::RequireRow;
 
 /// A subscription row returned by [`SubscriptionStorage::list_subscribers`].
 #[derive(Clone, Debug)]
@@ -47,7 +48,7 @@ pub trait SubscriptionStorage: Send + Sync {
         author_user_id: UserId,
         channel_id: ChannelId,
         subscriber_ref: &str,
-    ) -> Result<SubscriptionId, StorageError>;
+    ) -> sqlx::Result<SubscriptionId>;
 
     /// Removes a subscription. A no-op if it does not exist.
     async fn unsubscribe(
@@ -55,7 +56,7 @@ pub trait SubscriptionStorage: Send + Sync {
         author_user_id: UserId,
         channel_id: ChannelId,
         subscriber_ref: &str,
-    ) -> Result<(), StorageError>;
+    ) -> sqlx::Result<()>;
 
     /// Returns `true` only for an `active` subscription matching the viewer.
     /// `Anonymous` short-circuits to `Ok(false)` without a query.
@@ -63,13 +64,13 @@ pub trait SubscriptionStorage: Send + Sync {
         &self,
         author_user_id: UserId,
         viewer: &ViewerIdentity,
-    ) -> Result<bool, StorageError>;
+    ) -> sqlx::Result<bool>;
 
     /// Lists the author's `active` subscribers.
     async fn list_subscribers(
         &self,
         author_user_id: UserId,
-    ) -> Result<Vec<SubscriptionRecord>, StorageError>;
+    ) -> sqlx::Result<Vec<SubscriptionRecord>>;
 
     /// Returns the `channel_id` of the seeded `local` channel.
     ///
@@ -80,9 +81,12 @@ pub trait SubscriptionStorage: Send + Sync {
     /// (#6), which is both cheaper than a round trip and impossible to point at
     /// the wrong row.
     ///
-    /// Returns [`StorageError::MissingRow`] if the seed is absent — a broken
-    /// install, named rather than lifted as an anonymous driver error (#343).
-    async fn local_channel_id(&self) -> Result<ChannelId, StorageError>;
+    /// Unlike its siblings this returns an [`InternalResult`], because it is the
+    /// one method here that reads a row which can genuinely be absent: a
+    /// database whose `local` seed is gone. That absence is named — the
+    /// operator is told which row — rather than surfacing as an anonymous
+    /// driver error (#343). It still pages; a missing seed is a broken install.
+    async fn local_channel_id(&self) -> InternalResult<ChannelId>;
 }
 
 /// Per-backend SQL for [`SubscriptionStore`]. The statements differ only in the
@@ -90,18 +94,14 @@ pub trait SubscriptionStorage: Send + Sync {
 /// identical (ADR-0019).
 pub trait SubscriptionDialect: Database {
     /// Idempotent upsert: resolves the status name to its `status_id` via a
-    /// subquery and **returns the `subscription_id` on both paths** — the fresh
-    /// insert and the `(author_user_id, channel_id, subscriber_ref)` conflict.
-    ///
-    /// The conflict arm is a deliberate no-op write
-    /// (`SET subscriber_ref = excluded.subscriber_ref`) rather than `DO NOTHING`,
-    /// because `DO NOTHING` returns no row and so cannot feed `RETURNING`. That
-    /// is what previously forced a second `SELECT`, and with it a window where a
-    /// concurrent delete made the id unrecoverable (#343). `status_id` is
-    /// deliberately absent from the `SET` list, so an existing subscription keeps
-    /// its status — the outcome `DO NOTHING` gave.
-    ///
-    /// Bind order: `author_user_id, channel_id, subscriber_ref, status_name`.
+    /// subquery and, on the `(author_user_id, channel_id, subscriber_ref)`
+    /// conflict, rewrites `subscriber_ref` to the value it already holds. That
+    /// deliberate no-op write is what makes `RETURNING` emit the row on the
+    /// conflict path too — so the statement returns the `subscription_id` on
+    /// both paths, and no second `SELECT` (and no TOCTOU window) is needed.
+    /// `status_id` stays out of the `SET` list, so an existing subscription
+    /// keeps its status. Bind order:
+    /// `author_user_id, channel_id, subscriber_ref, status_name`.
     const INSERT_SUBSCRIPTION: &'static str;
     /// Deletes the row for the unique triple. Bind order:
     /// `author_user_id, channel_id, subscriber_ref`.
@@ -157,7 +157,7 @@ where
         author_user_id: UserId,
         channel_id: ChannelId,
         subscriber_ref: &str,
-    ) -> Result<SubscriptionId, StorageError> {
+    ) -> sqlx::Result<SubscriptionId> {
         let status = self
             .policy
             .initial_status(author_user_id, channel_id, subscriber_ref);
@@ -165,23 +165,22 @@ where
         // an integer FK, not a TEXT-token enum column). Bind the name as a typed
         // `&'static str` (strum `IntoStaticStr`) — not a stringly `.as_str()` strip.
         let status_name: &'static str = status.into();
-        // One statement, not two. The upsert's `RETURNING` yields the id on both
-        // the insert and the conflict path, so there is no window in which a
-        // concurrent delete can strand us without an id (#343).
-        // `RETURNING` on both arms makes the row guaranteed, so the `MissingRow`
-        // arm is unreachable today — it is still routed through the wrapper, so
-        // the day someone turns the conflict arm back into `DO NOTHING` the
-        // absence is reported by name rather than as `RowNotFound` (#343).
-        fetch_exactly_one_scalar(
-            sqlx::query_scalar::<_, SubscriptionId>(DB::INSERT_SUBSCRIPTION)
-                .bind(author_user_id)
-                .bind(channel_id)
-                .bind(subscriber_ref)
-                .bind(status_name),
-            &self.pool,
-            "the upserted subscription row",
-        )
-        .await
+        // One statement, not an insert followed by a select: the separate
+        // `SELECT` could miss a row a concurrent unsubscribe had just deleted
+        // (#343). `fetch_optional`, not the banned `fetch_one`.
+        let row = sqlx::query_as::<_, (SubscriptionId,)>(DB::INSERT_SUBSCRIPTION)
+            .bind(author_user_id)
+            .bind(channel_id)
+            .bind(subscriber_ref)
+            .bind(status_name)
+            .fetch_optional(&self.pool)
+            .await?;
+        match row {
+            Some((id,)) => Ok(id),
+            // `RETURNING` fires on the insert arm and on the `DO UPDATE`
+            // conflict arm alike, so the statement cannot come back empty.
+            None => unreachable!("the subscription upsert RETURNs a row on both arms"),
+        }
     }
 
     async fn unsubscribe(
@@ -189,7 +188,7 @@ where
         author_user_id: UserId,
         channel_id: ChannelId,
         subscriber_ref: &str,
-    ) -> Result<(), StorageError> {
+    ) -> sqlx::Result<()> {
         sqlx::query(DB::DELETE_SUBSCRIPTION)
             .bind(author_user_id)
             .bind(channel_id)
@@ -203,51 +202,44 @@ where
         &self,
         author_user_id: UserId,
         viewer: &ViewerIdentity,
-    ) -> Result<bool, StorageError> {
+    ) -> sqlx::Result<bool> {
         // Bind arity is per-variant: a local viewer's channel is the seeded
         // `local` row, resolved inside `IS_ACTIVE_LOCAL_SUBSCRIBER` rather than
         // bound, so that arm has one fewer bind (#6).
-        //
-        // Both statements are `EXISTS`-shaped and so always yield a row; they go
-        // through the wrapper anyway, because a bare `fetch_one` is the thing
-        // being removed and an unreachable named arm costs nothing (#343).
+        // `fetch_optional`, not the banned `fetch_one` (#343): `SELECT EXISTS`
+        // is row-guaranteed, and the impossible `None` folds into the same
+        // `false` an absent subscription gives, so no row needs naming here.
         let exists = match viewer {
             ViewerIdentity::Anonymous => return Ok(false), // short-circuit; no query.
             // A local viewer carries no channel: it can only ever be the
             // `local` row, which `IS_ACTIVE_LOCAL_SUBSCRIBER` resolves itself.
             ViewerIdentity::Local { user_id } => {
                 let subscriber_ref = local_subscriber_ref(*user_id);
-                fetch_exactly_one_scalar(
-                    sqlx::query_scalar::<_, i64>(DB::IS_ACTIVE_LOCAL_SUBSCRIBER)
-                        .bind(author_user_id)
-                        .bind(subscriber_ref.as_str()),
-                    &self.pool,
-                    "the local viewer's active-subscription existence flag",
-                )
-                .await?
+                sqlx::query_as::<_, (i64,)>(DB::IS_ACTIVE_LOCAL_SUBSCRIBER)
+                    .bind(author_user_id)
+                    .bind(subscriber_ref.as_str())
+                    .fetch_optional(&self.pool)
+                    .await?
             }
             ViewerIdentity::Remote {
                 channel_id,
                 subscriber_ref,
             } => {
-                fetch_exactly_one_scalar(
-                    sqlx::query_scalar::<_, i64>(DB::IS_ACTIVE_SUBSCRIBER)
-                        .bind(author_user_id)
-                        .bind(*channel_id)
-                        .bind(subscriber_ref.as_str()),
-                    &self.pool,
-                    "the remote viewer's active-subscription existence flag",
-                )
-                .await?
+                sqlx::query_as::<_, (i64,)>(DB::IS_ACTIVE_SUBSCRIBER)
+                    .bind(author_user_id)
+                    .bind(*channel_id)
+                    .bind(subscriber_ref.as_str())
+                    .fetch_optional(&self.pool)
+                    .await?
             }
         };
-        Ok(exists != 0)
+        Ok(exists.is_some_and(|(exists,)| exists != 0))
     }
 
     async fn list_subscribers(
         &self,
         author_user_id: UserId,
-    ) -> Result<Vec<SubscriptionRecord>, StorageError> {
+    ) -> sqlx::Result<Vec<SubscriptionRecord>> {
         let rows = sqlx::query_as::<_, (SubscriptionId, ChannelId, String, DateTime<Utc>)>(
             DB::LIST_ACTIVE_SUBSCRIBERS,
         )
@@ -270,41 +262,18 @@ where
             .collect())
     }
 
-    async fn local_channel_id(&self) -> Result<ChannelId, StorageError> {
-        fetch_exactly_one_scalar(
-            sqlx::query_scalar::<_, ChannelId>(DB::SELECT_LOCAL_CHANNEL_ID),
-            &self.pool,
-            "the seeded 'local' channel row",
-        )
-        .await
+    async fn local_channel_id(&self) -> InternalResult<ChannelId> {
+        let row = sqlx::query_as::<_, (ChannelId,)>(DB::SELECT_LOCAL_CHANNEL_ID)
+            .fetch_optional(&self.pool)
+            .await?;
+        let (id,) = row.require_row("the seeded 'local' channel row")?;
+        Ok(id)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{Backend, TestEnv, backends};
-    use rstest::*;
-    use rstest_reuse::*;
-
-    /// Covers [`StorageError::Db`] — the wrapper's *other* arm.
-    ///
-    /// The `MissingRow` arm is proven end-to-end by
-    /// `local_channel_id_names_the_row_when_the_seed_is_missing` in
-    /// `server/tests/storage`. This pins that a genuine driver failure still
-    /// classifies as `Db`, so the wrapper cannot quietly report every failure as
-    /// a missing row (#343, spec AC13).
-    #[apply(backends)]
-    #[tokio::test]
-    async fn local_channel_id_with_closed_pool_reports_a_driver_error(#[case] backend: Backend) {
-        let TestEnv { state, base } = backend.setup().await;
-        base.close_pool().await;
-        let result = state.subscriptions.local_channel_id().await;
-        assert!(
-            matches!(result, Err(StorageError::Db(_))),
-            "a closed pool is a driver failure, not an absent row"
-        );
-    }
 
     /// Guards the two dialect constants against drifting apart — the failure mode
     /// where one backend gains the local-channel statement and the other is

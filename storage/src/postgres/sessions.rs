@@ -15,7 +15,7 @@ impl SessionDialect for Postgres {
         pool: &Pool<Postgres>,
         token_hash: &TokenHash,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Option<SessionRow>, crate::StorageError> {
+    ) -> sqlx::Result<Option<SessionRow>> {
         // Postgres can update-and-join atomically with a data-modifying CTE.
         sqlx::query_as::<_, SessionRow>(
             "WITH updated AS (
@@ -32,6 +32,5 @@ impl SessionDialect for Postgres {
         .bind(token_hash)
         .fetch_optional(pool)
         .await
-        .map_err(Into::into)
     }
 }

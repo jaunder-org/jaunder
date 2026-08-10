@@ -352,18 +352,21 @@ impl InternalError {
 // operator-side: the *typed* source is now preserved on the `anyhow` chain
 // instead of being eagerly stringified (ADR-0017 §3, A19).
 
-// There is deliberately **no** `From<sqlx::Error> for InternalError` (#343).
-//
-// It existed, and it was the footgun: a bare `?` on any `sqlx::Result` lifted
-// `RowNotFound` — an ordinary missing row — into kind `Storage`, class `Bug`,
-// which is ERROR-level and pages. `storage` now models absence before it can
-// escape (an `Option`, or a `MissingRow` naming the row), so nothing outside
-// that crate holds a `sqlx::Error` to lift, and the conversion has no honest
-// caller. Removing it is what makes the guarantee compiler-enforced rather than
-// conventional — ADR-0017's "remove footguns rather than document around them".
-//
-// If you find yourself wanting this impl back, the call site is reaching for a
-// raw driver error where it should be carrying a `storage::StorageError`.
+impl From<sqlx::Error> for InternalError {
+    /// A storage-driver failure: masks as `"storage operation failed"` (kind
+    /// `Storage`, class `Bug`) while preserving the `sqlx::Error` as a typed,
+    /// downcastable source. Behavior-identical to `InternalError::storage(error)`.
+    ///
+    /// Lifting *every* `sqlx::Error` to class `Bug` is correct because
+    /// `fetch_one` is banned workspace-wide (`clippy.toml`, #343) and
+    /// `Error::RowNotFound` is constructed nowhere else in sqlx. Absence can
+    /// therefore never reach this impl; what is left — pool timeouts, I/O,
+    /// protocol and constraint failures — is genuinely pageable. Absence is
+    /// named at its source instead, by `storage::error::MissingRow`.
+    fn from(error: sqlx::Error) -> Self {
+        Self::storage(error)
+    }
+}
 
 impl From<common::mailer::MailError> for InternalError {
     /// A mail-transport failure. Matches the pre-existing
@@ -635,11 +638,24 @@ mod tests {
         .emit_boundary_failure();
     }
 
-    // `from_sqlx_error_matches_storage_constructor` was deleted with the impl it
-    // pinned (#343). It asserted that `sqlx::Error::RowNotFound.into()` yields
-    // kind `Storage` / class `Bug` — the behaviour this cycle removed.
-    // `InternalError::storage` itself is retained (`StorageError::Db` maps
-    // through it) and stays covered by `constructors_set_kind_and_class`.
+    #[test]
+    fn from_sqlx_error_matches_storage_constructor() {
+        // `?` on a `sqlx::Error` produces exactly `InternalError::storage(err)`.
+        // `PoolClosed`, not `RowNotFound`: the latter is unconstructible now
+        // that `fetch_one` is banned (#343), and a pool failure is the shape
+        // this impl actually carries.
+        let error: InternalError = sqlx::Error::PoolClosed.into();
+        assert_eq!(error.kind(), ErrorKind::Storage);
+        assert_eq!(error.class(), ErrorClass::Bug);
+        // Same wire projection inputs as `InternalError::storage(...)`.
+        assert_eq!(error.public_message(), "storage operation failed");
+        // The typed `sqlx::Error` is preserved on the operator side, not the wire.
+        assert!(
+            error
+                .operator_message()
+                .contains("attempted to acquire a connection on a closed pool")
+        );
+    }
 
     #[test]
     fn from_mail_error_matches_server_constructor() {

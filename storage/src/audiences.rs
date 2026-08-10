@@ -17,7 +17,6 @@ use common::ids::{AudienceId, SubscriptionId, UserId};
 use sqlx::{Database, Pool};
 
 use crate::backend::Backend;
-use crate::error::{StorageError, fetch_exactly_one_scalar};
 
 /// A named audience row returned by [`AudienceStorage::list_audiences`].
 #[derive(Clone, Debug)]
@@ -38,18 +37,12 @@ pub enum AudienceError {
     /// No audience matched the `(author_user_id, audience_id)` scope.
     NotFound,
     /// Any other storage-layer failure.
-    Storage(StorageError),
+    Storage(sqlx::Error),
 }
 
 impl From<sqlx::Error> for AudienceError {
-    /// Kept, and hand-written, because `From` does not chain: with the payload
-    /// retyped, `add_member`'s bare `?` on its raw `execute` no longer reaches
-    /// `Storage` on its own.
-    ///
-    /// Not a hole in the #343 guarantee: `RowNotFound` cannot arrive here,
-    /// because `fetch_one` is banned and nothing in the crate constructs it.
     fn from(error: sqlx::Error) -> Self {
-        AudienceError::Storage(StorageError::Db(error))
+        AudienceError::Storage(error)
     }
 }
 
@@ -66,9 +59,7 @@ impl From<AudienceError> for host::error::InternalError {
                 InternalError::conflict("an audience with that name already exists")
             }
             AudienceError::NotFound => InternalError::not_found("audience"),
-            // Delegate to `StorageError`'s own lift rather than re-classifying:
-            // it is the type that knows a missing row is not a driver failure.
-            AudienceError::Storage(e) => e.into(),
+            AudienceError::Storage(e) => InternalError::storage(e),
         }
     }
 }
@@ -105,13 +96,10 @@ pub trait AudienceStorage: Send + Sync {
         &self,
         author_user_id: UserId,
         audience_id: AudienceId,
-    ) -> Result<(), StorageError>;
+    ) -> sqlx::Result<()>;
 
     /// Lists the author's audiences, ordered by `audience_id`.
-    async fn list_audiences(
-        &self,
-        author_user_id: UserId,
-    ) -> Result<Vec<AudienceRecord>, StorageError>;
+    async fn list_audiences(&self, author_user_id: UserId) -> sqlx::Result<Vec<AudienceRecord>>;
 
     /// Adds a subscription to an audience. `author_user_id` is written into the
     /// row so the composite FKs reject a cross-author pairing at the database
@@ -131,7 +119,7 @@ pub trait AudienceStorage: Send + Sync {
         author_user_id: UserId,
         audience_id: AudienceId,
         subscription_id: SubscriptionId,
-    ) -> Result<(), StorageError>;
+    ) -> sqlx::Result<()>;
 
     /// Lists the `subscription_id`s belonging to an audience the author owns,
     /// ordered. Empty when `audience_id` belongs to another author.
@@ -139,7 +127,7 @@ pub trait AudienceStorage: Send + Sync {
         &self,
         author_user_id: UserId,
         audience_id: AudienceId,
-    ) -> Result<Vec<SubscriptionId>, StorageError>;
+    ) -> sqlx::Result<Vec<SubscriptionId>>;
 }
 
 /// Generic [`AudienceStorage`] backed by any [`Backend`] database. The SQL is
@@ -188,26 +176,20 @@ where
         author_user_id: UserId,
         name: &AudienceName,
     ) -> Result<AudienceId, AudienceError> {
-        // A plain `INSERT … RETURNING`, so the row is guaranteed and the
-        // `MissingRow` arm is unreachable today. Routed through the wrapper
-        // anyway: `fetch_one` is the thing being removed, and the `what` string
-        // is what reports the absence by name the day an `ON CONFLICT` makes
-        // the row optional (#343).
-        match fetch_exactly_one_scalar(
-            sqlx::query_scalar::<_, AudienceId>(
-                "INSERT INTO audiences (author_user_id, name) VALUES ($1, $2) RETURNING audience_id",
-            )
-            .bind(author_user_id)
-            .bind(name),
-            &self.pool,
-            "the inserted audience row",
+        match sqlx::query_as::<_, (AudienceId,)>(
+            "INSERT INTO audiences (author_user_id, name) VALUES ($1, $2) RETURNING audience_id",
         )
+        .bind(author_user_id)
+        .bind(name)
+        // `fetch_optional`, not the banned `fetch_one` (#343): an
+        // `INSERT … RETURNING` with no `ON CONFLICT` clause either raises or
+        // yields the row it wrote.
+        .fetch_optional(&self.pool)
         .await
         {
-            Ok(id) => Ok(id),
-            // The unique violation now arrives wrapped, so the match reaches
-            // one level further in.
-            Err(StorageError::Db(sqlx::Error::Database(error))) if error.is_unique_violation() => {
+            Ok(Some((id,))) => Ok(id),
+            Ok(None) => unreachable!("the audience INSERT RETURNs the row it wrote"),
+            Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
                 Err(AudienceError::DuplicateName)
             }
             Err(error) => Err(AudienceError::Storage(error)),
@@ -242,9 +224,7 @@ where
             Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
                 Err(AudienceError::DuplicateName)
             }
-            // Lifts through the hand-written `From<sqlx::Error>` above rather
-            // than naming `Storage` inline, so the hop stays in one place.
-            Err(error) => Err(error.into()),
+            Err(error) => Err(AudienceError::Storage(error)),
         }
     }
 
@@ -257,7 +237,7 @@ where
         &self,
         author_user_id: UserId,
         audience_id: AudienceId,
-    ) -> Result<(), StorageError> {
+    ) -> sqlx::Result<()> {
         let mut tx = self.pool.begin().await?;
         sqlx::query("DELETE FROM audience_members WHERE author_user_id = $1 AND audience_id = $2")
             .bind(author_user_id)
@@ -278,10 +258,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn list_audiences(
-        &self,
-        author_user_id: UserId,
-    ) -> Result<Vec<AudienceRecord>, StorageError> {
+    async fn list_audiences(&self, author_user_id: UserId) -> sqlx::Result<Vec<AudienceRecord>> {
         let rows = sqlx::query_as::<_, (AudienceId, AudienceName, DateTime<Utc>)>(
             "SELECT audience_id, name, created_at FROM audiences \
              WHERE author_user_id = $1 ORDER BY audience_id",
@@ -333,7 +310,7 @@ where
         author_user_id: UserId,
         audience_id: AudienceId,
         subscription_id: SubscriptionId,
-    ) -> Result<(), StorageError> {
+    ) -> sqlx::Result<()> {
         sqlx::query(
             "DELETE FROM audience_members \
              WHERE author_user_id = $1 AND audience_id = $2 AND subscription_id = $3",
@@ -355,7 +332,7 @@ where
         &self,
         author_user_id: UserId,
         audience_id: AudienceId,
-    ) -> Result<Vec<SubscriptionId>, StorageError> {
+    ) -> sqlx::Result<Vec<SubscriptionId>> {
         let rows = sqlx::query_as::<_, (SubscriptionId,)>(
             "SELECT subscription_id FROM audience_members \
              WHERE author_user_id = $1 AND audience_id = $2 ORDER BY subscription_id",
@@ -370,7 +347,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{AudienceError, StorageError};
+    use super::AudienceError;
     use crate::test_support::{Backend, SeedUser, backends};
     use common::test_support::parse_audience_name;
     use host::error::{ErrorKind, InternalError};
@@ -420,7 +397,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(err, StorageError::Db(sqlx::Error::ColumnDecode { .. })),
+            matches!(err, sqlx::Error::ColumnDecode { .. }),
             "expected a column-decode error, got: {err:?}"
         );
     }
@@ -441,8 +418,7 @@ mod tests {
         assert_eq!(not_found.kind(), ErrorKind::NotFound);
         assert_eq!(not_found.public_message(), "audience not found");
 
-        let storage: InternalError =
-            AudienceError::Storage(StorageError::Db(sqlx::Error::PoolClosed)).into();
+        let storage: InternalError = AudienceError::Storage(sqlx::Error::PoolClosed).into();
         assert_eq!(storage.kind(), ErrorKind::Storage);
         assert_eq!(storage.public_message(), "storage operation failed");
     }

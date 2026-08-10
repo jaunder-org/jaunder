@@ -218,7 +218,7 @@ mod tests {
         // A storage failure during regeneration surfaces as a 500.
         site_config
             .expect_get_feeds_config()
-            .returning(|| Err(storage::StorageError::Db(sqlx::Error::PoolClosed)));
+            .returning(|| Err(sqlx::Error::PoolClosed));
 
         let resp = serve(
             Arc::new(cache),
@@ -236,11 +236,9 @@ mod tests {
     #[tokio::test]
     async fn serve_returns_500_when_cache_get_errors() {
         let mut cache = storage::MockFeedCacheStorage::new();
-        cache.expect_get().returning(|_| {
-            Err(FeedCacheError::Db(storage::StorageError::Db(
-                sqlx::Error::PoolClosed,
-            )))
-        });
+        cache
+            .expect_get()
+            .returning(|_| Err(FeedCacheError::Db(sqlx::Error::PoolClosed)));
 
         let resp = serve(
             Arc::new(cache),

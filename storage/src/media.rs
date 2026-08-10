@@ -8,7 +8,6 @@ use sqlx::{Database, FromRow, Pool};
 use thiserror::Error;
 
 use crate::backend::Backend;
-use crate::error::StorageError;
 use crate::posts::POSTS_REFERENCING_MEDIA_FROM_WHERE;
 use common::ids::UserId;
 use common::pagination::{PageOffset, RowLimit};
@@ -50,19 +49,7 @@ pub enum CreateMediaError {
     AlreadyExists,
     /// An unexpected database error occurred.
     #[error(transparent)]
-    Internal(#[from] StorageError),
-}
-
-impl From<sqlx::Error> for CreateMediaError {
-    /// Hand-written because `From` does not chain: with the payload retyped, a
-    /// bare `?` on a raw `execute`/`fetch_all`/`fetch_optional` no longer
-    /// reaches `Internal` on its own.
-    ///
-    /// Not a hole in the #343 guarantee: `RowNotFound` cannot arrive here,
-    /// because `fetch_one` is banned and nothing in the crate constructs it.
-    fn from(error: sqlx::Error) -> Self {
-        Self::Internal(StorageError::Db(error))
-    }
+    Internal(#[from] sqlx::Error),
 }
 
 /// Errors that can occur when deleting a media record.
@@ -73,18 +60,7 @@ pub enum DeleteMediaError {
     NotFound,
     /// An unexpected database error occurred.
     #[error(transparent)]
-    Internal(#[from] StorageError),
-}
-
-impl From<sqlx::Error> for DeleteMediaError {
-    /// The twin of [`CreateMediaError`]'s, and for the same reason: `From` does
-    /// not chain, so `try_delete_media`'s bare `?` on its two raw
-    /// `fetch_optional` calls needs this hop.
-    ///
-    /// `RowNotFound` cannot arrive here either — `fetch_one` is banned crate-wide.
-    fn from(error: sqlx::Error) -> Self {
-        Self::Internal(StorageError::Db(error))
-    }
+    Internal(#[from] sqlx::Error),
 }
 
 /// What [`MediaStorage::try_delete_media`] did.
@@ -122,7 +98,7 @@ pub trait MediaStorage: Send + Sync {
         sha256: &ContentHash,
         filename: &Filename,
         source: &MediaSource,
-    ) -> Result<Option<MediaRecord>, StorageError>;
+    ) -> sqlx::Result<Option<MediaRecord>>;
 
     /// Lists media records for a user, with optional filtering and pagination.
     // Explicit `'a` for `mockall::automock` — see
@@ -133,7 +109,7 @@ pub trait MediaStorage: Send + Sync {
         source: Option<&'a MediaSource>,
         limit: RowLimit,
         offset: PageOffset,
-    ) -> Result<Vec<MediaRecord>, StorageError>;
+    ) -> sqlx::Result<Vec<MediaRecord>>;
 
     /// Deletes a media record, refusing when one of `user_id`'s live posts references
     /// it unless `force`.
@@ -154,7 +130,7 @@ pub trait MediaStorage: Send + Sync {
     ) -> Result<TryDeleteOutcome, DeleteMediaError>;
 
     /// Calculates the total storage used by a user's uploads (in bytes).
-    async fn get_user_upload_usage(&self, user_id: UserId) -> Result<ByteSize, StorageError>;
+    async fn get_user_upload_usage(&self, user_id: UserId) -> sqlx::Result<ByteSize>;
 
     /// Finds a media record by its content hash and source across all users.
     ///
@@ -163,7 +139,7 @@ pub trait MediaStorage: Send + Sync {
         &self,
         sha256: &ContentHash,
         source: &MediaSource,
-    ) -> Result<Option<MediaRecord>, StorageError>;
+    ) -> sqlx::Result<Option<MediaRecord>>;
 }
 
 /// Backend-specific divergence for [`MediaStore`].
@@ -179,10 +155,7 @@ pub trait MediaStorage: Send + Sync {
 #[async_trait]
 pub trait MediaDialect: Backend {
     /// Returns the total upload bytes for `user_id` using backend-appropriate SQL.
-    async fn get_user_upload_usage(
-        pool: &Pool<Self>,
-        user_id: UserId,
-    ) -> Result<ByteSize, StorageError>;
+    async fn get_user_upload_usage(pool: &Pool<Self>, user_id: UserId) -> sqlx::Result<ByteSize>;
 }
 
 /// Generic [`MediaStorage`] backed by any [`MediaDialect`] database.
@@ -257,9 +230,7 @@ where
             {
                 Err(CreateMediaError::AlreadyExists)
             }
-            // Lifts through the hand-written `From<sqlx::Error>` above rather
-            // than naming `Internal` inline, so the hop stays in one place.
-            Err(e) => Err(e.into()),
+            Err(e) => Err(CreateMediaError::Internal(e)),
         }
     }
 
@@ -274,7 +245,7 @@ where
         sha256: &ContentHash,
         filename: &Filename,
         source: &MediaSource,
-    ) -> Result<Option<MediaRecord>, StorageError> {
+    ) -> sqlx::Result<Option<MediaRecord>> {
         let row = sqlx::query_as::<_, crate::helpers::MediaRow>(
             "SELECT user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at
              FROM media
@@ -301,7 +272,7 @@ where
         source: Option<&'a MediaSource>,
         limit: RowLimit,
         offset: PageOffset,
-    ) -> Result<Vec<MediaRecord>, StorageError> {
+    ) -> sqlx::Result<Vec<MediaRecord>> {
         // Fetch raw rows (not `query_as::<MediaRow>`) so each row decodes
         // independently: with the sqlx bridge (#438) the `sha256`/`filename` columns
         // now decode into their newtypes *inside* `MediaRow::from_row`, so a single
@@ -426,7 +397,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn get_user_upload_usage(&self, user_id: UserId) -> Result<ByteSize, StorageError> {
+    async fn get_user_upload_usage(&self, user_id: UserId) -> sqlx::Result<ByteSize> {
         // The dialect twin decodes `COALESCE(SUM(…), 0)` straight into `ByteSize`; the
         // bridge's bound-checking `Decode` rejects a negative total at the column.
         DB::get_user_upload_usage(&self.pool, user_id).await
@@ -441,7 +412,7 @@ where
         &self,
         sha256: &ContentHash,
         source: &MediaSource,
-    ) -> Result<Option<MediaRecord>, StorageError> {
+    ) -> sqlx::Result<Option<MediaRecord>> {
         let row = sqlx::query_as::<_, crate::helpers::MediaRow>(
             "SELECT user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at
              FROM media
@@ -543,7 +514,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(err, StorageError::Db(sqlx::Error::ColumnDecode { .. })),
+            matches!(err, sqlx::Error::ColumnDecode { .. }),
             "expected a column-decode error, got: {err:?}"
         );
     }
@@ -582,7 +553,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(err, StorageError::Db(sqlx::Error::ColumnDecode { .. })),
+            matches!(err, sqlx::Error::ColumnDecode { .. }),
             "expected a column-decode error, got: {err:?}"
         );
     }
@@ -613,7 +584,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(err, StorageError::Db(sqlx::Error::ColumnDecode { .. })),
+            matches!(err, sqlx::Error::ColumnDecode { .. }),
             "expected a column-decode error, got: {err:?}"
         );
     }

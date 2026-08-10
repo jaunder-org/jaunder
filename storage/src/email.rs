@@ -6,7 +6,6 @@ use sqlx::{Database, Pool};
 use thiserror::Error;
 
 use crate::backend::Backend;
-use crate::error::StorageError;
 use common::email::Email;
 use common::ids::UserId;
 use common::token::RawToken;
@@ -25,18 +24,7 @@ pub enum UseEmailVerificationError {
     AlreadyUsed,
     /// An unexpected database error occurred.
     #[error(transparent)]
-    Internal(#[from] StorageError),
-}
-
-impl From<sqlx::Error> for UseEmailVerificationError {
-    /// Hand-written because `From` does not chain: with the payload retyped, a
-    /// raw `sqlx::Error` no longer reaches `Internal` on its own.
-    ///
-    /// Not a hole in the #343 guarantee: `RowNotFound` cannot arrive here,
-    /// because `fetch_one` is banned and nothing in the crate constructs it.
-    fn from(error: sqlx::Error) -> Self {
-        Self::Internal(StorageError::Db(error))
-    }
+    Internal(#[from] sqlx::Error),
 }
 
 impl From<UseEmailVerificationError> for host::error::InternalError {
@@ -53,9 +41,7 @@ impl From<UseEmailVerificationError> for host::error::InternalError {
             UseEmailVerificationError::AlreadyUsed => {
                 InternalError::validation("token has already been used")
             }
-            // Delegate to `StorageError`'s own lift rather than re-classifying:
-            // it is the type that knows a missing row is not a driver failure.
-            UseEmailVerificationError::Internal(e) => e.into(),
+            UseEmailVerificationError::Internal(e) => InternalError::storage(e),
         }
     }
 }
@@ -77,7 +63,7 @@ pub trait EmailVerificationStorage: Send + Sync {
         user_id: UserId,
         email: &Email,
         expires_at: DateTime<Utc>,
-    ) -> Result<RawToken, StorageError>;
+    ) -> sqlx::Result<RawToken>;
 
     /// Validates a raw verification token and marks it as used.
     ///
@@ -131,7 +117,7 @@ where
         user_id: UserId,
         email: &Email,
         expires_at: DateTime<Utc>,
-    ) -> Result<RawToken, StorageError> {
+    ) -> sqlx::Result<RawToken> {
         let (raw_token, token_hash) = host::token::generate_hashed();
         let now = Utc::now();
 
@@ -198,9 +184,7 @@ where
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| match e {
-            // Via the hand-written `From<sqlx::Error>` above, so the wrapping
-            // hop is written in exactly one place.
-            sqlx::Error::ColumnDecode { .. } => UseEmailVerificationError::from(e),
+            sqlx::Error::ColumnDecode { .. } => UseEmailVerificationError::Internal(e),
             _ => UseEmailVerificationError::NotFound,
         })?;
 
@@ -308,9 +292,7 @@ mod tests {
         assert!(
             matches!(
                 err,
-                UseEmailVerificationError::Internal(StorageError::Db(
-                    sqlx::Error::ColumnDecode { .. }
-                ))
+                UseEmailVerificationError::Internal(sqlx::Error::ColumnDecode { .. })
             ),
             "expected Internal(ColumnDecode), got: {err:?}"
         );
@@ -330,7 +312,7 @@ mod tests {
             assert_eq!(mapped.kind(), ErrorKind::Validation);
         }
         let mapped: InternalError =
-            UseEmailVerificationError::Internal(StorageError::Db(sqlx::Error::PoolClosed)).into();
+            UseEmailVerificationError::Internal(sqlx::Error::RowNotFound).into();
         assert_eq!(mapped.kind(), ErrorKind::Storage);
     }
 

@@ -9,7 +9,6 @@ use sqlx::{Database, Pool};
 use thiserror::Error;
 
 use crate::backend::Backend;
-use crate::error::StorageError;
 
 /// A single cached feed body.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,19 +26,7 @@ pub struct FeedCacheRow {
 #[derive(Debug, Error)]
 pub enum FeedCacheError {
     #[error("database error: {0}")]
-    Db(#[from] StorageError),
-}
-
-impl From<sqlx::Error> for FeedCacheError {
-    /// Hand-written because `From` does not chain: with the payload retyped, a
-    /// bare `?` on a raw `execute`/`fetch_optional` no longer reaches `Db` on
-    /// its own.
-    ///
-    /// Not a hole in the #343 guarantee: `RowNotFound` cannot arrive here,
-    /// because `fetch_one` is banned and nothing in the crate constructs it.
-    fn from(error: sqlx::Error) -> Self {
-        Self::Db(StorageError::Db(error))
-    }
+    Db(#[from] sqlx::Error),
 }
 
 #[cfg_attr(feature = "test-utils", mockall::automock)]
@@ -249,10 +236,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(
-                err,
-                FeedCacheError::Db(StorageError::Db(sqlx::Error::ColumnDecode { .. }))
-            ),
+            matches!(err, FeedCacheError::Db(sqlx::Error::ColumnDecode { .. })),
             "expected a column-decode error, got: {err:?}"
         );
     }
@@ -284,10 +268,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(
-                err,
-                FeedCacheError::Db(StorageError::Db(sqlx::Error::ColumnDecode { .. }))
-            ),
+            matches!(err, FeedCacheError::Db(sqlx::Error::ColumnDecode { .. })),
             "expected a column-decode error, got: {err:?}"
         );
     }

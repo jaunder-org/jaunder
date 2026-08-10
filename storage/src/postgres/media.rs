@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use common::media::ByteSize;
 use sqlx::{Pool, Postgres};
 
-use crate::error::{StorageError, fetch_exactly_one_scalar};
 use crate::media::{MediaDialect, MediaStore};
 use common::ids::UserId;
 
@@ -14,17 +13,19 @@ impl MediaDialect for Postgres {
     async fn get_user_upload_usage(
         pool: &Pool<Postgres>,
         user_id: UserId,
-    ) -> Result<ByteSize, StorageError> {
-        // The `SQLite` twin, modulo the explicit `::bigint` cast; same
-        // row-guaranteed aggregate, same wrapper, same `what` string.
-        fetch_exactly_one_scalar(
-            sqlx::query_scalar::<_, ByteSize>(
-                "SELECT COALESCE(SUM(size_bytes), 0)::bigint FROM media WHERE user_id = $1 AND source = 'upload'",
-            )
-            .bind(user_id),
-            pool,
-            "the media upload-usage total",
+    ) -> sqlx::Result<ByteSize> {
+        let row = sqlx::query_as::<_, (ByteSize,)>(
+            "SELECT COALESCE(SUM(size_bytes), 0)::bigint FROM media WHERE user_id = $1 AND source = 'upload'",
         )
-        .await
+        .bind(user_id)
+        // `fetch_optional`, not the banned `fetch_one` (#343) — see the
+        // `SQLite` twin.
+        .fetch_optional(pool)
+        .await?;
+
+        let Some((bytes,)) = row else {
+            unreachable!("a bare COALESCE(SUM(...)) aggregate always yields one row");
+        };
+        Ok(bytes)
     }
 }

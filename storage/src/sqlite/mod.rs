@@ -135,11 +135,6 @@ pub(super) async fn open_sqlite_database(
 
 /// Returns `true` if the `SQLite` database holds no user data — every table
 /// except the migration-seeded lookups is empty.
-///
-/// Keeps `sqlx::Result` because it is the backend half of the exempt connection
-/// path `db::database_is_empty` (spec D4): the whole route runs before an
-/// `AppState` exists and aborts startup, so `MissingRow` has nothing to name
-/// there.
 pub(super) async fn database_is_empty(options: &SqliteConnectOptions) -> sqlx::Result<bool> {
     let pool = SqlitePool::connect_with(options.clone()).await?;
     let tables = sqlx::query_scalar::<_, String>(
@@ -152,10 +147,10 @@ pub(super) async fn database_is_empty(options: &SqliteConnectOptions) -> sqlx::R
         if crate::db::MIGRATION_SEEDED_TABLES.contains(&table.as_str()) {
             continue;
         }
-        // `fetch_optional`, not the banned `fetch_one` (#343). This fn keeps
-        // `sqlx::Result` (see the doc above), so it cannot name a `MissingRow`;
-        // `SELECT EXISTS` is row-guaranteed anyway, and the impossible `None`
-        // folds into the same answer an empty table gives.
+        // `fetch_optional`, not the banned `fetch_one` (#343). `SELECT EXISTS`
+        // is row-guaranteed, and this startup-only path has no error type to
+        // name a `MissingRow` in, so the impossible `None` folds into the same
+        // answer an empty table gives.
         let has_row = sqlx::query_scalar::<_, i64>(&format!(
             "SELECT EXISTS(SELECT 1 FROM {} LIMIT 1)",
             crate::sql::quote_identifier(&table)
@@ -240,35 +235,28 @@ impl AtomicOps for SqliteAtomicOps {
 
             let password_hash = crate::helpers::hash_password(password.clone())
                 .await
-                .map_err(|e| RegisterWithInviteError::from(sqlx::Error::Io(e)))?;
+                .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(e)))?;
 
-            // Routed through the wrapper even though `INSERT ... RETURNING` always
-            // yields a row (#343): `fetch_one` is the thing being removed, and the
-            // `what` string names the row the day someone adds an `ON CONFLICT DO
-            // NOTHING` that quietly makes it optional.
-            let insert = crate::error::fetch_exactly_one_scalar(
-                sqlx::query_scalar::<_, UserId>(
-                    "INSERT INTO users (username, password_hash, display_name, created_at, is_operator)
-                     VALUES ($1, $2, $3, $4, $5)
-                     RETURNING user_id",
-                )
-                .bind(username)
-                .bind(&password_hash)
-                .bind(display_name)
-                .bind(now)
-                .bind(is_operator),
-                &mut *conn,
-                "the inserted users row",
+            // `fetch_optional`, not the banned `fetch_one` (#343): an
+            // `INSERT ... RETURNING` with no `ON CONFLICT` clause either raises
+            // or yields the row it wrote.
+            let insert = sqlx::query_scalar::<_, UserId>(
+                "INSERT INTO users (username, password_hash, display_name, created_at, is_operator)
+                 VALUES ($1, $2, $3, $4, $5)
+                 RETURNING user_id",
             )
+            .bind(username)
+            .bind(&password_hash)
+            .bind(display_name)
+            .bind(now)
+            .bind(is_operator)
+            .fetch_optional(&mut *conn)
             .await;
 
             let user_id = match insert {
-                Ok(id) => id,
-                // The unique-violation match is one level deeper now that the
-                // payload is a `StorageError`.
-                Err(crate::error::StorageError::Db(sqlx::Error::Database(error)))
-                    if error.is_unique_violation() =>
-                {
+                Ok(Some(id)) => id,
+                Ok(None) => unreachable!("the users INSERT RETURNs the row it wrote"),
+                Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
                     return Err(RegisterWithInviteError::UsernameTaken);
                 }
                 Err(error) => return Err(RegisterWithInviteError::Internal(error)),
@@ -345,7 +333,7 @@ impl AtomicOps for SqliteAtomicOps {
         // `?`-returns and drops the tx → rollback → the claim reverts (token not consumed).
         let password_hash = crate::helpers::hash_password(new_password.clone())
             .await
-            .map_err(|e| ConfirmPasswordResetError::from(sqlx::Error::Io(e)))?;
+            .map_err(|e| ConfirmPasswordResetError::Internal(sqlx::Error::Io(e)))?;
 
         sqlx::query("UPDATE users SET password_hash = $1 WHERE user_id = $2")
             .bind(&password_hash)

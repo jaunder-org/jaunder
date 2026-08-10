@@ -7,7 +7,6 @@ use common::smtp_username::SmtpUsername;
 use thiserror::Error;
 
 use crate::SiteConfigStorage;
-use crate::error::StorageError;
 
 // The TLS mode now lives in `common` beside the other SMTP value types, where the
 // `#[text_enum]` convention is reachable (`storage` depends on neither `strum` nor
@@ -64,7 +63,7 @@ pub enum SmtpConfigError {
     /// read itself failed. The source's message names the key and echoes the offending
     /// value — the property `load_smtp_config_returns_err_for_*` pins.
     #[error("SMTP configuration could not be read: {0}")]
-    Read(#[source] StorageError),
+    Read(#[source] sqlx::Error),
 }
 
 // ---------------------------------------------------------------------------
@@ -105,9 +104,9 @@ pub async fn load_smtp_config(
 /// its source, and the source of a credential decode failure is the one message in this
 /// family that could be built from a secret. `read_value` labels the `ColumnDecode` with
 /// the key, which is what makes the two separable here.
-fn classify(error: StorageError) -> SmtpConfigError {
+fn classify(error: sqlx::Error) -> SmtpConfigError {
     match &error {
-        StorageError::Db(sqlx::Error::ColumnDecode { index, .. })
+        sqlx::Error::ColumnDecode { index, .. }
             if index == SiteConfigKey::SmtpUsername.as_ref()
                 || index == SiteConfigKey::SmtpPassword.as_ref() =>
         {

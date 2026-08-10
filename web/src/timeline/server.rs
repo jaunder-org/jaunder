@@ -307,9 +307,7 @@ mod tests {
         posts
             .expect_list_posts_by_tag()
             .returning(|_tag, _cursor, _limit, _viewer, _now| {
-                Err(ListByTagError::Internal(storage::StorageError::Db(
-                    sqlx::Error::PoolClosed,
-                )))
+                Err(ListByTagError::Internal(sqlx::Error::PoolClosed))
             });
         let result = fetch_posts_by_tag(
             &posts,
@@ -332,9 +330,7 @@ mod tests {
         let mut posts = MockPostStorage::new();
         posts.expect_list_user_posts_by_tag().returning(
             |_uid, _tag, _cursor, _limit, _viewer, _now| {
-                Err(ListByTagError::Internal(storage::StorageError::Db(
-                    sqlx::Error::PoolClosed,
-                )))
+                Err(ListByTagError::Internal(sqlx::Error::PoolClosed))
             },
         );
         let result = fetch_user_posts_by_tag(

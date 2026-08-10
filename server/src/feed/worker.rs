@@ -383,11 +383,7 @@ mod tests {
         events
             .expect_claim_pending_batch()
             .times(1)
-            .returning(|_, _| {
-                Err(FeedEventError::Db(storage::StorageError::Db(
-                    sqlx::Error::PoolClosed,
-                )))
-            });
+            .returning(|_, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
         // No mark_* expectation is set: any call after the claim error would
         // panic as an unexpected call, proving the tick returned early.
         let w = worker(
@@ -430,7 +426,7 @@ mod tests {
         posts
             .expect_feed_urls_needing_catchup()
             .times(1)
-            .returning(|_| Err(storage::StorageError::Db(sqlx::Error::PoolClosed)));
+            .returning(|_| Err(sqlx::Error::PoolClosed));
         let mut events = storage::MockFeedEventStorage::new();
         events
             .expect_claim_pending_batch()
@@ -585,7 +581,7 @@ mod tests {
         site_config
             .expect_get_feeds_config()
             .times(0..)
-            .returning(|| Err(storage::StorageError::Db(sqlx::Error::PoolClosed)));
+            .returning(|| Err(sqlx::Error::PoolClosed));
         site_config
             .expect_get_feeds_websub_hub_url()
             .times(0..)
@@ -633,7 +629,7 @@ mod tests {
         site_config
             .expect_get_feeds_config()
             .times(0..)
-            .returning(|| Err(storage::StorageError::Db(sqlx::Error::PoolClosed)));
+            .returning(|| Err(sqlx::Error::PoolClosed));
         site_config
             .expect_get_feeds_websub_hub_url()
             .times(0..)

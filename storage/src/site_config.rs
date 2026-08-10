@@ -1,7 +1,6 @@
 //! Site-wide configuration storage.
 
 use crate::backend::Backend;
-use crate::error::StorageError;
 use crate::smtp::SmtpConfig;
 use async_trait::async_trait;
 use common::absolute_url::AbsoluteUrl;
@@ -32,23 +31,23 @@ use sqlx::{Database, Pool};
 #[async_trait]
 pub trait SiteConfigStorage: Send + Sync {
     /// Returns the value for a specific configuration key.
-    async fn get(&self, key: SiteConfigKey) -> Result<Option<String>, StorageError>;
+    async fn get(&self, key: SiteConfigKey) -> sqlx::Result<Option<String>>;
 
     /// Sets or updates the value for a configuration key.
-    async fn set(&self, key: SiteConfigKey, value: &str) -> Result<(), StorageError>;
+    async fn set(&self, key: SiteConfigKey, value: &str) -> sqlx::Result<()>;
 
     /// Enumerates every `site_config` entry as `(key, value)`, ordered by key.
     ///
     /// A third primitive alongside [`get`](Self::get)/[`set`](Self::set) (no
     /// default: a `vec![]` default would silently under-report for any
     /// implementor). Backs `jaunder site-config list`.
-    async fn list(&self) -> Result<Vec<(String, String)>, StorageError>;
+    async fn list(&self) -> sqlx::Result<Vec<(String, String)>>;
 
     /// Deletes a `site_config` entry, returning whether a row was removed.
     ///
     /// Idempotent: deleting an absent key is a no-op that returns `false`. Backs
     /// `jaunder site-config unset`.
-    async fn delete(&self, key: SiteConfigKey) -> Result<bool, StorageError>;
+    async fn delete(&self, key: SiteConfigKey) -> sqlx::Result<bool>;
 
     /// Reads the whole SMTP block as one typed [`SmtpConfig`], or `None` when
     /// `smtp.host` is unset (which is how an instance says "no outbound mail").
@@ -62,12 +61,12 @@ pub trait SiteConfigStorage: Send + Sync {
     /// The optional fields fall back to their types' own defaults
     /// ([`SmtpPort`] 587, [`SmtpTlsMode::StartTls`], [`SmtpSender`]
     /// `Jaunder <noreply@localhost>`).
-    async fn get_smtp_config(&self) -> Result<Option<SmtpConfig>, StorageError>;
+    async fn get_smtp_config(&self) -> sqlx::Result<Option<SmtpConfig>>;
 
     /// Returns the configured media max upload size, falling back to the
     /// [`MaxFileSize`] default (50 MiB) if unset or unparseable (including a stored
     /// `0`/negative, which the positive invariant rejects).
-    async fn get_media_max_file_size(&self) -> Result<MaxFileSize, StorageError> {
+    async fn get_media_max_file_size(&self) -> sqlx::Result<MaxFileSize> {
         Ok(self
             .get(SiteConfigKey::MediaMaxFileSizeBytes)
             .await?
@@ -79,7 +78,7 @@ pub trait SiteConfigStorage: Send + Sync {
     /// Returns the configured per-user media quota, falling back to the
     /// [`UserQuota`] default (1 GiB) if unset or unparseable (including a stored
     /// `0`/negative, which the positive invariant rejects).
-    async fn get_media_user_quota(&self) -> Result<UserQuota, StorageError> {
+    async fn get_media_user_quota(&self) -> sqlx::Result<UserQuota> {
         Ok(self
             .get(SiteConfigKey::MediaUserQuotaBytes)
             .await?
@@ -89,7 +88,7 @@ pub trait SiteConfigStorage: Send + Sync {
     }
 
     /// Returns the backup configuration from stored values, using defaults for missing/invalid fields.
-    async fn get_backup_config(&self) -> Result<BackupConfig, StorageError> {
+    async fn get_backup_config(&self) -> sqlx::Result<BackupConfig> {
         let destination_path = self
             .get(SiteConfigKey::BackupDestinationPath)
             .await?
@@ -126,7 +125,7 @@ pub trait SiteConfigStorage: Send + Sync {
     /// safe default that prevents unintended open registration on a freshly
     /// initialised instance. Like [`get_backup_config`](Self::get_backup_config), a
     /// genuine DB read error propagates (only the absent/garbage value defaults).
-    async fn get_registration_policy(&self) -> Result<RegistrationPolicy, StorageError> {
+    async fn get_registration_policy(&self) -> sqlx::Result<RegistrationPolicy> {
         Ok(self
             .get(SiteConfigKey::SiteRegistrationPolicy)
             .await?
@@ -138,7 +137,7 @@ pub trait SiteConfigStorage: Send + Sync {
     /// Returns the configured `feeds.min_items` value, falling back to the
     /// [`FeedMinItems`] default (20) if unset or unparseable (including a stored `0`,
     /// which the min-1 invariant rejects).
-    async fn get_feeds_min_items(&self) -> Result<FeedMinItems, StorageError> {
+    async fn get_feeds_min_items(&self) -> sqlx::Result<FeedMinItems> {
         Ok(self
             .get(SiteConfigKey::FeedsMinItems)
             .await?
@@ -150,7 +149,7 @@ pub trait SiteConfigStorage: Send + Sync {
     /// Returns the configured `feeds.min_days` value, falling back to the
     /// [`FeedMinDays`] default (30) if unset or unparseable (including a stored `0`,
     /// which the min-1 invariant rejects).
-    async fn get_feeds_min_days(&self) -> Result<FeedMinDays, StorageError> {
+    async fn get_feeds_min_days(&self) -> sqlx::Result<FeedMinDays> {
         Ok(self
             .get(SiteConfigKey::FeedsMinDays)
             .await?
@@ -164,7 +163,7 @@ pub trait SiteConfigStorage: Send + Sync {
     /// `http(s)` URL (corruption, or legacy data pre-dating this validation) is
     /// **purged** and read as unset — mirroring the `feed_events` unparseable-`feed_url`
     /// purge, so a bad stored value never hard-fails the read.
-    async fn get_feeds_websub_hub_url(&self) -> Result<Option<AbsoluteUrl>, StorageError> {
+    async fn get_feeds_websub_hub_url(&self) -> sqlx::Result<Option<AbsoluteUrl>> {
         let Some(raw) = self
             .get(SiteConfigKey::FeedsWebsubHubUrl)
             .await?
@@ -185,7 +184,7 @@ pub trait SiteConfigStorage: Send + Sync {
     /// the same per-field defaults as the granular getters it delegates to.
     /// The granular getters remain for single-value callers (e.g. the worker's
     /// hub-URL read).
-    async fn get_feeds_config(&self) -> Result<FeedsConfig, StorageError> {
+    async fn get_feeds_config(&self) -> sqlx::Result<FeedsConfig> {
         Ok(FeedsConfig {
             min_items: self.get_feeds_min_items().await?,
             min_days: self.get_feeds_min_days().await?,
@@ -194,7 +193,7 @@ pub trait SiteConfigStorage: Send + Sync {
     }
 
     /// Returns the site identity (title and base URL).
-    async fn get_identity(&self) -> Result<SiteIdentity, StorageError> {
+    async fn get_identity(&self) -> sqlx::Result<SiteIdentity> {
         let title = self
             .get(SiteConfigKey::SiteTitle)
             .await?
@@ -225,7 +224,7 @@ pub trait SiteConfigStorage: Send + Sync {
     /// Stores the site identity (title and base URL).
     /// For `base_url`, an empty string is stored when `None` is provided; a set
     /// value is stored in its canonical form (the `AbsoluteUrl` normalized it).
-    async fn set_identity(&self, config: &SiteIdentity) -> Result<(), StorageError> {
+    async fn set_identity(&self, config: &SiteIdentity) -> sqlx::Result<()> {
         self.set(SiteConfigKey::SiteTitle, &config.title).await?;
         let base_url_value = config.base_url.as_deref().unwrap_or("");
         self.set(SiteConfigKey::SiteBaseUrl, base_url_value).await?;
@@ -233,7 +232,7 @@ pub trait SiteConfigStorage: Send + Sync {
     }
 
     /// Stores the backup configuration to the site config storage.
-    async fn set_backup_config(&self, config: &BackupConfig) -> Result<(), StorageError> {
+    async fn set_backup_config(&self, config: &BackupConfig) -> sqlx::Result<()> {
         self.set(
             SiteConfigKey::BackupDestinationPath,
             config.destination_path.as_deref().unwrap_or(""),
@@ -255,7 +254,7 @@ pub trait SiteConfigStorage: Send + Sync {
     /// [`AudienceTarget::Public`] when unset or unparseable. Only the built-in
     /// audiences (`public`/`subscribers`/`private`) are valid site-wide
     /// defaults; a `Named` audience is per-author and never returned here.
-    async fn get_default_audience(&self) -> Result<AudienceTarget, StorageError> {
+    async fn get_default_audience(&self) -> sqlx::Result<AudienceTarget> {
         Ok(self
             .get(SiteConfigKey::PostsDefaultAudience)
             .await?
@@ -266,7 +265,7 @@ pub trait SiteConfigStorage: Send + Sync {
 
     /// Stores the site-wide default post audience as its string form. A `Named`
     /// audience has no site-wide string form and is stored as `public`.
-    async fn set_default_audience(&self, audience: &AudienceTarget) -> Result<(), StorageError> {
+    async fn set_default_audience(&self, audience: &AudienceTarget) -> sqlx::Result<()> {
         self.set(
             SiteConfigKey::PostsDefaultAudience,
             default_audience_str(audience),
@@ -276,7 +275,7 @@ pub trait SiteConfigStorage: Send + Sync {
 
     /// Stores the feed-generation configuration. An absent `websub_hub_url` is
     /// stored as the empty string (treated as unset on read).
-    async fn set_feeds_config(&self, config: &FeedsConfig) -> Result<(), StorageError> {
+    async fn set_feeds_config(&self, config: &FeedsConfig) -> sqlx::Result<()> {
         self.set(SiteConfigKey::FeedsMinItems, &config.min_items.to_string())
             .await?;
         self.set(SiteConfigKey::FeedsMinDays, &config.min_days.to_string())
@@ -319,19 +318,16 @@ const SELECT_VALUE_SQL: &str = "SELECT value FROM site_config WHERE key = $1";
 /// same table says nothing. The key is what makes a corrupt row actionable, and it is what
 /// [`crate::load_smtp_config`] reads back to tell a credential failure (whose value is
 /// never echoed) from a plain value one.
-/// Takes the raw driver error because that is what a query hands back, and returns a
-/// [`StorageError`] because that is what leaves this crate (#343). Absence is never a
-/// failure here — every read is a `fetch_optional` — so no `MissingRow` is built.
-fn label_decode_error(key: SiteConfigKey, error: sqlx::Error) -> StorageError {
+fn label_decode_error(key: SiteConfigKey, error: sqlx::Error) -> sqlx::Error {
     let sqlx::Error::ColumnDecode { source, .. } = error else {
         // A non-decode failure (pool closed, connection lost) has no key to add and passes
         // through unchanged; reaching it needs fault injection.
-        return StorageError::Db(error); // cov:ignore
+        return error; // cov:ignore
     };
-    StorageError::Db(sqlx::Error::ColumnDecode {
+    sqlx::Error::ColumnDecode {
         index: key.as_ref().to_owned(),
         source,
-    })
+    }
 }
 
 #[async_trait]
@@ -356,7 +352,7 @@ where
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
-    async fn get(&self, key: SiteConfigKey) -> Result<Option<String>, StorageError> {
+    async fn get(&self, key: SiteConfigKey) -> sqlx::Result<Option<String>> {
         let row = sqlx::query_as::<_, (String,)>("SELECT value FROM site_config WHERE key = $1")
             .bind(key)
             .fetch_optional(&self.pool)
@@ -364,7 +360,7 @@ where
         Ok(row.map(|(value,)| value))
     }
 
-    async fn set(&self, key: SiteConfigKey, value: &str) -> Result<(), StorageError> {
+    async fn set(&self, key: SiteConfigKey, value: &str) -> sqlx::Result<()> {
         sqlx::query(
             "INSERT INTO site_config (key, value) VALUES ($1, $2)
              ON CONFLICT (key) DO UPDATE SET value = excluded.value",
@@ -376,7 +372,7 @@ where
         Ok(())
     }
 
-    async fn get_smtp_config(&self) -> Result<Option<SmtpConfig>, StorageError> {
+    async fn get_smtp_config(&self) -> sqlx::Result<Option<SmtpConfig>> {
         // Six direct reads, each decoding the `value` column straight into its newtype via
         // that type's sqlx bridge: a garbage stored value fails `FromStr` and surfaces as a
         // `ColumnDecode` labelled with the key (see `read_value`), never as a silently
@@ -437,7 +433,7 @@ where
         }))
     }
 
-    async fn list(&self) -> Result<Vec<(String, String)>, StorageError> {
+    async fn list(&self) -> sqlx::Result<Vec<(String, String)>> {
         let rows = sqlx::query_as::<_, (String, String)>(
             "SELECT key, value FROM site_config ORDER BY key",
         )
@@ -446,7 +442,7 @@ where
         Ok(rows)
     }
 
-    async fn delete(&self, key: SiteConfigKey) -> Result<bool, StorageError> {
+    async fn delete(&self, key: SiteConfigKey) -> sqlx::Result<bool> {
         // `RETURNING` + `fetch_optional` detects a no-match generically (a `None`),
         // avoiding `rows_affected()` which sqlx exposes only on concrete results
         // (mirrors `audiences::rename_audience`). Both backends support RETURNING.
@@ -461,7 +457,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{SiteConfigKey, SmtpTlsMode, StorageError};
+    use super::{SiteConfigKey, SmtpTlsMode};
     use crate::test_support::{Backend, backends};
     use common::backup::{BackupConfig, BackupMode, RetentionCount};
     use common::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
@@ -623,7 +619,7 @@ mod tests {
             .unwrap();
         let err = storage.get_smtp_config().await.unwrap_err();
         assert!(
-            matches!(&err, StorageError::Db(sqlx::Error::ColumnDecode { index, .. }) if index == "smtp.port"),
+            matches!(&err, sqlx::Error::ColumnDecode { index, .. } if index == "smtp.port"),
             "the decode error must name the offending key; got {err:?}"
         );
         assert!(
@@ -650,7 +646,7 @@ mod tests {
         storage.set(SiteConfigKey::SmtpPort, "0").await.unwrap();
         let err = storage.get_smtp_config().await.unwrap_err();
         assert!(
-            matches!(&err, StorageError::Db(sqlx::Error::ColumnDecode { index, .. }) if index == "smtp.port"),
+            matches!(&err, sqlx::Error::ColumnDecode { index, .. } if index == "smtp.port"),
             "port 0 must be refused at the query boundary; got {err:?}"
         );
     }
@@ -665,7 +661,7 @@ mod tests {
         storage.set(SiteConfigKey::SmtpHost, "").await.unwrap();
         let err = storage.get_smtp_config().await.unwrap_err();
         assert!(
-            matches!(&err, StorageError::Db(sqlx::Error::ColumnDecode { index, .. }) if index == "smtp.host"),
+            matches!(&err, sqlx::Error::ColumnDecode { index, .. } if index == "smtp.host"),
             "the decode error must name the offending key; got {err:?}"
         );
     }
@@ -687,7 +683,7 @@ mod tests {
             storage.set(key, "").await.unwrap();
             let err = storage.get_smtp_config().await.unwrap_err();
             assert!(
-                matches!(&err, StorageError::Db(sqlx::Error::ColumnDecode { index, .. }) if index == dotted),
+                matches!(&err, sqlx::Error::ColumnDecode { index, .. } if index == dotted),
                 "expected a column-decode error for {dotted}, got: {err:?}"
             );
             storage.delete(key).await.unwrap();

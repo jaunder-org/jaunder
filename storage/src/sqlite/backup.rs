@@ -291,16 +291,16 @@ fn is_bool_column(column: &ColumnInfo) -> bool {
 }
 
 async fn schema_version(connection: &mut SqliteConnection) -> Result<i64, BackupError> {
-    // Routed through the wrapper even though a bare aggregate always yields a
-    // row (#343): `fetch_one` is the thing being removed, and the `what` names
-    // the row if a future rewrite ever adds a GROUP BY that can return none.
-    Ok(crate::error::fetch_exactly_one_scalar(
-        sqlx::query_scalar::<_, Option<i64>>("SELECT MAX(version) FROM _sqlx_migrations"),
-        &mut *connection,
-        "the _sqlx_migrations MAX(version) aggregate row",
+    // `fetch_optional`, not the banned `fetch_one` (#343): a bare aggregate
+    // always yields one row, and the impossible `None` folds into the same 0
+    // an empty `_sqlx_migrations` gives.
+    Ok(
+        sqlx::query_scalar::<_, Option<i64>>("SELECT MAX(version) FROM _sqlx_migrations")
+            .fetch_optional(&mut *connection)
+            .await?
+            .flatten()
+            .unwrap_or_default(),
     )
-    .await?
-    .unwrap_or_default())
 }
 
 async fn schema_checksum(connection: &mut SqliteConnection) -> Result<String, BackupError> {

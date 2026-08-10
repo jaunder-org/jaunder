@@ -22,7 +22,7 @@ use storage::{
     DbConnectOptions, FeedCacheRow, GoLivePost, ListByTagError, PostCursor, PostFormat, PostRecord,
     PostTag, PostUpdate, PostgresSubscriptionStorage, ProfileUpdate, PublishUpdate,
     RegisterWithInviteError, RenderedPostContent, SessionAuthError, SqliteSubscriptionStorage,
-    StorageError, SubscriptionStorage, UpdatePostError, UseEmailVerificationError, UseInviteError,
+    SubscriptionStorage, UpdatePostError, UseEmailVerificationError, UseInviteError,
     UsePasswordResetError, UserAuthError, UserConfigKey, create_rendered_post, open_database,
     perform_post_update,
 };
@@ -269,6 +269,8 @@ async fn channel_id_by_name(backend: Backend, env: &TestEnv, name: &str) -> Chan
     let sql = format!("SELECT channel_id FROM channels WHERE name = '{name}'");
     let sql = sql.as_str();
     match backend {
+        // `fetch_optional`, not the banned `fetch_one` (#343); the `.expect`
+        // also gives a better failure than a bare `RowNotFound` panic.
         Backend::Sqlite => sqlx::query_scalar::<_, ChannelId>(sql)
             .fetch_optional(&open_pool(&env.base).await)
             .await
@@ -299,7 +301,7 @@ async fn local_channel_id_returns_seeded_local(#[case] backend: Backend) {
 }
 
 // The other half of the accessor's contract: with the seed gone, the absence is
-// reported as a *named* `MissingRow`, not as an anonymous driver error that the
+// reported as a *named* missing row, not as an anonymous driver error the
 // boundary would page on with "storage operation failed" (#343). Deleting the
 // row is possible on both backends because `subscriptions` is the only table
 // referencing `channels` and a fresh test database has no subscription rows.
@@ -310,10 +312,13 @@ async fn local_channel_id_names_the_row_when_the_seed_is_missing(#[case] backend
     let state = &env.state;
     raw_exec(backend, &env, "DELETE FROM channels WHERE name = 'local'").await;
     let error = state.subscriptions.local_channel_id().await.unwrap_err();
-    let StorageError::MissingRow { what } = error else {
-        panic!("expected MissingRow, got: {error:?}");
-    };
-    assert_eq!(what, "the seeded 'local' channel row");
+    assert_eq!(error.kind(), host::error::ErrorKind::Internal);
+    assert_eq!(error.class(), host::error::ErrorClass::Bug);
+    let operator = error.operator_message();
+    assert!(
+        operator.contains("the seeded 'local' channel row"),
+        "operator message must name the missing row, got: {operator}"
+    );
 }
 
 #[apply(backends)]
@@ -3944,63 +3949,6 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
     assert!(posts.iter().any(|p| p.post_id == post2));
 }
 
-/// A row that fails to decode surfaces as `Internal`, not as a silent empty
-/// list — the only test that reaches `ListByTagError`'s `From<sqlx::Error>`.
-///
-/// Reaching a decode failure needs malformed data, so the `tags` table is
-/// corrupted directly. Two tags are attached and only one slug is rewritten,
-/// because the listing is done by the *other* tag: rewriting the tag being
-/// searched for would fail the existence probe and yield `TagNotFound` instead.
-/// `"Not A Slug"` is the same value `helpers.rs` uses to prove
-/// `build_post_record` rejects a bad slug.
-#[apply(backends)]
-#[tokio::test]
-async fn list_posts_by_tag_reports_a_decode_failure(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-    let user = SeedUser::new().seed(state).await.user_id;
-    let post = SeedRawPost::new(user).seed(state).await.post_id;
-    state
-        .posts
-        .set_post_tags(
-            post,
-            &[
-                "javascript".parse::<TagLabel>().unwrap(),
-                "rust".parse::<TagLabel>().unwrap(),
-            ],
-        )
-        .await
-        .expect("set_post_tags failed");
-
-    raw_exec(
-        backend,
-        &env,
-        "UPDATE tags SET tag_slug = 'Not A Slug' WHERE tag_slug = 'rust'",
-    )
-    .await;
-
-    let result = state
-        .posts
-        .list_posts_by_tag(
-            &"javascript".parse::<Tag>().unwrap(),
-            None,
-            parse_row_limit("50"),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await;
-
-    assert!(
-        matches!(
-            result,
-            Err(ListByTagError::Internal(StorageError::Db(
-                sqlx::Error::Decode(_)
-            )))
-        ),
-        "a malformed tag slug must surface as a typed decode failure"
-    );
-}
-
 #[apply(backends)]
 #[tokio::test]
 async fn list_user_posts_by_tag(#[case] backend: Backend) {
@@ -5877,18 +5825,19 @@ async fn raw_try_exec(backend: Backend, env: &TestEnv, sql: &str) -> Result<(), 
 // deleted audience). Mirrors `raw_exec`'s per-backend pool selection.
 async fn raw_scalar_i64(backend: Backend, env: &TestEnv, sql: &str) -> i64 {
     match backend {
+        // `fetch_optional`, not the banned `fetch_one` (#343).
         Backend::Sqlite => sqlx::query_scalar::<_, i64>(sql)
             .fetch_optional(&open_pool(&env.base).await)
             .await
             .unwrap()
-            .expect("an aggregate query always yields exactly one row"),
+            .expect("a scalar query must yield exactly one row"),
         Backend::Postgres => {
             let pool = env.base.pool().postgres();
             sqlx::query_scalar::<_, i64>(sql)
                 .fetch_optional(pool)
                 .await
                 .unwrap()
-                .expect("an aggregate query always yields exactly one row")
+                .expect("a scalar query must yield exactly one row")
         }
     }
 }

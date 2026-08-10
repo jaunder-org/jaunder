@@ -822,7 +822,7 @@ const ALLOWLIST: &[Allowed] = &[
     Allowed {
         file: "test_support.rs",
         function: "string_triples",
-        target: "Result<Vec<(String,String,String)>,crate::StorageError>",
+        target: "Result<Vec<(String,String,String)>,sqlx::Error>",
         what: "sql",
         count: 2,
         category: Category::TestScaffolding,
@@ -905,7 +905,7 @@ const ALLOWLIST: &[Allowed] = &[
     Allowed {
         file: "test_support.rs",
         function: "scalar_i64",
-        target: "Result<i64,crate::StorageError>",
+        target: "Result<i64,sqlx::Error>",
         what: "sql",
         count: 2,
         category: Category::TestScaffolding,
@@ -914,7 +914,7 @@ const ALLOWLIST: &[Allowed] = &[
     Allowed {
         file: "subscriptions.rs",
         function: "is_subscriber",
-        target: "i64",
+        target: "(i64,)",
         what: "DB::IS_ACTIVE_SUBSCRIBER",
         count: 1,
         category: Category::CountOrExists,
@@ -923,7 +923,7 @@ const ALLOWLIST: &[Allowed] = &[
     Allowed {
         file: "subscriptions.rs",
         function: "is_subscriber",
-        target: "i64",
+        target: "(i64,)",
         what: "DB::IS_ACTIVE_LOCAL_SUBSCRIBER",
         count: 1,
         category: Category::CountOrExists,
@@ -2074,11 +2074,8 @@ mod tests {
         let arms: String = (0..n)
             .map(|_| "P(pool) => sqlx::query_scalar(sql).fetch_one(pool).await,\n".to_string())
             .collect();
-        // Mirrors the real `scalar_i64` signature, which #343 retyped to
-        // `StorageError`; the entry is keyed on the decode target, so the
-        // fixture has to carry the same return type or it stops matching.
         format!(
-            "async fn scalar_i64(&self, sql: &str) -> Result<i64, crate::StorageError> {{ match self {{ {arms} }} }}"
+            "async fn scalar_i64(&self, sql: &str) -> Result<i64, sqlx::Error> {{ match self {{ {arms} }} }}"
         )
     }
 

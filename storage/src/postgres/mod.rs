@@ -115,35 +115,30 @@ impl AtomicOps for PostgresAtomicOps {
 
         let password_hash = crate::helpers::hash_password(password.clone())
             .await
-            .map_err(|e| RegisterWithInviteError::from(sqlx::Error::Io(e)))?; // cov:ignore
+            .map_err(|e| RegisterWithInviteError::Internal(sqlx::Error::Io(e)))?; // cov:ignore
 
-        // Routed through the wrapper even though `INSERT ... RETURNING` always
-        // yields a row (#343) — see the `SQLite` twin.
-        let result = crate::error::fetch_exactly_one_scalar(
-            sqlx::query_scalar::<_, UserId>(
-                "INSERT INTO users (username, password_hash, display_name, created_at, is_operator)
-                 VALUES ($1, $2, $3, $4, $5)
-                 RETURNING user_id",
-            )
-            .bind(username)
-            .bind(&password_hash)
-            .bind(display_name)
-            .bind(now)
-            .bind(is_operator),
-            &mut *tx,
-            "the inserted users row",
+        // `fetch_optional`, not the banned `fetch_one` (#343) — see the `SQLite`
+        // twin for why the empty case cannot happen.
+        let result = sqlx::query_scalar::<_, UserId>(
+            "INSERT INTO users (username, password_hash, display_name, created_at, is_operator)
+             VALUES ($1, $2, $3, $4, $5)
+             RETURNING user_id",
         )
+        .bind(username)
+        .bind(&password_hash)
+        .bind(display_name)
+        .bind(now)
+        .bind(is_operator)
+        .fetch_optional(&mut *tx)
         .await;
 
         let user_id = match result {
-            Ok(id) => id,
+            Ok(Some(id)) => id,
+            Ok(None) => unreachable!("the users INSERT RETURNs the row it wrote"),
             // Let the UNIQUE(username) constraint be the arbiter rather than a
             // pre-INSERT existence check: that closes the check-then-insert race
-            // between concurrent registrations. The match is one level deeper now
-            // that the payload is a `StorageError`.
-            Err(crate::error::StorageError::Db(sqlx::Error::Database(error)))
-                if error.is_unique_violation() =>
-            {
+            // between concurrent registrations.
+            Err(sqlx::Error::Database(error)) if error.is_unique_violation() => {
                 return Err(RegisterWithInviteError::UsernameTaken);
             }
             Err(error) => return Err(RegisterWithInviteError::Internal(error)),
@@ -209,7 +204,7 @@ impl AtomicOps for PostgresAtomicOps {
         // `?`-returns and drops the tx → rollback → the claim reverts (token not consumed).
         let password_hash = crate::helpers::hash_password(new_password.clone())
             .await
-            .map_err(|e| ConfirmPasswordResetError::from(sqlx::Error::Io(e)))?;
+            .map_err(|e| ConfirmPasswordResetError::Internal(sqlx::Error::Io(e)))?;
 
         sqlx::query("UPDATE users SET password_hash = $1 WHERE user_id = $2")
             .bind(&password_hash)
@@ -264,12 +259,6 @@ fn postgres_password_from_env() -> io::Result<Option<String>> {
 /// Resolve final Postgres options, applying password overrides from env
 /// and the slow-query log threshold.
 ///
-/// Keeps `sqlx::Result` under #343's row-access boundary (spec D4): this reads a
-/// password file, never a database row, so its only failure is
-/// `sqlx::Error::Io` and a `StorageError` — whose other arm names a missing
-/// row — would be meaningless here. It also runs at connection setup, so it
-/// never crosses a server-fn boundary where the classification would matter.
-///
 /// # Errors
 ///
 /// Returns `sqlx::Error::Io` if the password file env var points at an
@@ -304,9 +293,6 @@ pub(crate) async fn open_postgres_database(
 
 /// Returns `true` if the `PostgreSQL` database holds no user data — every table
 /// except the migration-seeded lookups is empty.
-///
-/// Keeps `sqlx::Result` because it is the backend half of the exempt connection
-/// path `db::database_is_empty` (spec D4); see the `SQLite` twin.
 pub(crate) async fn database_is_empty(options: &PgConnectOptions) -> sqlx::Result<bool> {
     let options = resolved_postgres_options(options)?;
     let pool = PgPool::connect_with(options).await?;
@@ -322,7 +308,7 @@ pub(crate) async fn database_is_empty(options: &PgConnectOptions) -> sqlx::Resul
             continue;
         }
         // `fetch_optional`, not the banned `fetch_one` (#343) — see the `SQLite`
-        // twin for why the impossible `None` is folded into `false` here.
+        // twin for why the impossible `None` folds into `false` here.
         let has_row = sqlx::query_scalar::<_, bool>(&format!(
             "SELECT EXISTS(SELECT 1 FROM {} LIMIT 1)",
             crate::sql::quote_identifier(&table)

@@ -1,7 +1,6 @@
 //! Per-user preference storage.
 
 use crate::backend::Backend;
-use crate::error::StorageError;
 use crate::posts::PostFormat;
 use async_trait::async_trait;
 use common::ids::UserId;
@@ -17,22 +16,13 @@ pub use common::config_key::UserConfigKey;
 #[async_trait]
 pub trait UserConfigStorage: Send + Sync {
     /// Returns a user's configuration value for a specific key.
-    async fn get(
-        &self,
-        user_id: UserId,
-        key: UserConfigKey,
-    ) -> Result<Option<String>, StorageError>;
+    async fn get(&self, user_id: UserId, key: UserConfigKey) -> sqlx::Result<Option<String>>;
 
     /// Sets or updates a user's configuration value.
-    async fn set(
-        &self,
-        user_id: UserId,
-        key: UserConfigKey,
-        value: &str,
-    ) -> Result<(), StorageError>;
+    async fn set(&self, user_id: UserId, key: UserConfigKey, value: &str) -> sqlx::Result<()>;
 
     /// Deletes a specific configuration key for a user.
-    async fn delete(&self, user_id: UserId, key: UserConfigKey) -> Result<(), StorageError>;
+    async fn delete(&self, user_id: UserId, key: UserConfigKey) -> sqlx::Result<()>;
 }
 
 /// Reads a user's default post format preference, falling back to `Markdown`
@@ -48,7 +38,7 @@ pub trait UserConfigStorage: Send + Sync {
 pub async fn get_default_post_format(
     config: &dyn UserConfigStorage,
     user_id: UserId,
-) -> Result<PostFormat, StorageError> {
+) -> sqlx::Result<PostFormat> {
     let raw = config
         .get(user_id, UserConfigKey::DefaultPostFormat)
         .await?;
@@ -67,7 +57,7 @@ pub async fn set_default_post_format(
     config: &dyn UserConfigStorage,
     user_id: UserId,
     format: PostFormat,
-) -> Result<(), StorageError> {
+) -> sqlx::Result<()> {
     config
         .set(user_id, UserConfigKey::DefaultPostFormat, format.as_ref())
         .await
@@ -109,11 +99,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn get(
-        &self,
-        user_id: UserId,
-        key: UserConfigKey,
-    ) -> Result<Option<String>, StorageError> {
+    async fn get(&self, user_id: UserId, key: UserConfigKey) -> sqlx::Result<Option<String>> {
         let row = sqlx::query_as::<_, (String,)>(
             "SELECT value FROM user_config WHERE user_id = $1 AND key = $2",
         )
@@ -130,12 +116,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn set(
-        &self,
-        user_id: UserId,
-        key: UserConfigKey,
-        value: &str,
-    ) -> Result<(), StorageError> {
+    async fn set(&self, user_id: UserId, key: UserConfigKey, value: &str) -> sqlx::Result<()> {
         sqlx::query(
             "INSERT INTO user_config (user_id, key, value) VALUES ($1, $2, $3)
              ON CONFLICT (user_id, key) DO UPDATE SET value = excluded.value",
@@ -153,7 +134,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn delete(&self, user_id: UserId, key: UserConfigKey) -> Result<(), StorageError> {
+    async fn delete(&self, user_id: UserId, key: UserConfigKey) -> sqlx::Result<()> {
         sqlx::query("DELETE FROM user_config WHERE user_id = $1 AND key = $2")
             .bind(user_id)
             .bind(key)

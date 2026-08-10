@@ -147,7 +147,7 @@ fn describe_bootstrap_error(err: storage::PgBootstrapError) -> anyhow::Error {
         storage::PgBootstrapError::DatabaseExists(name) => anyhow::anyhow!(
             "database '{name}' already exists; refusing to modify existing database state"
         ),
-        storage::PgBootstrapError::Storage(err) => err.into(),
+        storage::PgBootstrapError::Sqlx(err) => err.into(),
     }
 }
 
@@ -845,14 +845,10 @@ mod tests {
     }
 
     #[test]
-    fn describe_bootstrap_error_storage_passes_through_source_message() {
-        // `StorageError::Db` is `#[error(transparent)]`, so the driver message is
-        // still what the CLI prints — asserted one link further down the chain
-        // now that the payload is typed (#343).
+    fn describe_bootstrap_error_sqlx_passes_through_source_message() {
         let expected = sqlx::Error::PoolClosed.to_string();
-        let err = describe_bootstrap_error(storage::PgBootstrapError::Storage(
-            storage::StorageError::Db(sqlx::Error::PoolClosed),
-        ));
+        let err =
+            describe_bootstrap_error(storage::PgBootstrapError::Sqlx(sqlx::Error::PoolClosed));
         assert_eq!(err.to_string(), expected);
     }
 

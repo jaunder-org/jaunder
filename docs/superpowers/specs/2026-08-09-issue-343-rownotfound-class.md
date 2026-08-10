@@ -1,7 +1,50 @@
-# Spec — absence is named at its source; `sqlx::Error` stops escaping `storage` (#343)
+# Spec — ban `fetch_one`, so absence cannot exist (#343)
 
 Issue: [#343](https://github.com/jaunder-org/jaunder/issues/343) Milestone:
 Observability & diagnostics
+
+> **Corrected after implementation — read this first.**
+>
+> The design below was built, reviewed, and then found to be substantially
+> wrong. It treated the blanket `impl From<sqlx::Error> for InternalError` as
+> the bug and replaced it with a `StorageError { Db(sqlx::Error), MissingRow }`
+> carried through every public signature in `storage`.
+>
+> **The blanket `From` was never the bug. `RowNotFound` being constructible
+> was.** This spec verified the load-bearing fact itself — in sqlx 0.8.6,
+> `RowNotFound` is constructed at exactly three sites, all `fetch_one` — and
+> then failed to draw the conclusion: once `fetch_one` is banned, every
+> `sqlx::Error` that can still exist is a pool timeout, an I/O failure, a
+> protocol error or a constraint violation. All are genuinely `Storage`/`Bug`
+> and correctly pageable. **The blanket `From` becomes right.**
+>
+> `StorageError::Db(sqlx::Error)` carried no information `sqlx::Error` did not.
+> It mapped to `InternalError::storage(e)` — precisely what it replaced. Its
+> only measurable effect was to break every bare `?` on a raw sqlx call, which
+> then required **sixteen hand-written `impl From<sqlx::Error>`** to undo. And
+> `sqlx::Error` escaped anyway, as a public payload inside `Db`, constructed at
+> 17 sites outside the crate.
+>
+> AC1 as written also contradicted D2: it forbade any "error-variant payload"
+> naming `sqlx::Error`, which `StorageError::Db` is.
+>
+> **What survives:** the `fetch_one` ban (the actual fix), naming a required
+> row's absence, `subscribe`'s atomic upsert (an independent TOCTOU fix), and
+> the guard self-test. **What is reverted:** `StorageError`, the 19 payload
+> retypes, the ~20 trait-signature changes, the 16 `From` impls, and the test
+> churn. The blanket `From<sqlx::Error> for InternalError` is restored.
+>
+> **The corrected design.** `MissingRow { what }` is a standalone error naming
+> an absent required row, with `From<MissingRow> for InternalError` →
+> `InternalError::server` (kind `Internal`, class `Bug` — still pages, now
+> legibly). A required row is read as
+> `…fetch_optional(pool).await?.require_row("the seeded 'local' channel row")?`
+> — the driver error takes the path it always took, and only absence is new.
+> Only fns that actually read a required row gain `MissingRow` in their error
+> type; nothing else changes.
+>
+> Sections below are left as written for the record. Where they describe
+> `StorageError`, read the note above.
 
 ## Problem
 

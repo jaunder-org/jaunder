@@ -22,7 +22,7 @@ use common::visibility::{AudienceTarget, TargetKind, ViewerIdentity, local_subsc
 use host::error::{InternalError, InternalResult};
 
 use crate::backend::Backend;
-use crate::error::{StorageError, fetch_exactly_one, fetch_exactly_one_scalar};
+use crate::error::RequireRow;
 use crate::helpers::{PostRow, post_record_from_row};
 
 pub use common::render::{InvalidPostFormat, PostFormat, RenderOutput, RenderedHtml};
@@ -153,19 +153,7 @@ pub enum CreatePostError {
     IdempotencyConflict,
     /// An unexpected database error occurred.
     #[error(transparent)]
-    Internal(#[from] StorageError),
-}
-
-impl From<sqlx::Error> for CreatePostError {
-    /// Hand-written because `From` does not chain: with the payload retyped, a
-    /// bare `?` on a raw `execute`/`fetch_all`/`fetch_optional` no longer
-    /// reaches `Internal` on its own.
-    ///
-    /// Not a hole in the #343 guarantee: `RowNotFound` cannot arrive here,
-    /// because `fetch_one` is banned and nothing in the crate constructs it.
-    fn from(error: sqlx::Error) -> Self {
-        Self::Internal(StorageError::Db(error))
-    }
+    Internal(#[from] sqlx::Error),
 }
 
 /// Errors that can occur when updating a post.
@@ -179,16 +167,16 @@ pub enum UpdatePostError {
     Unauthorized,
     /// An unexpected database error occurred.
     #[error(transparent)]
-    Internal(#[from] StorageError),
-}
-
-impl From<sqlx::Error> for UpdatePostError {
-    /// See [`CreatePostError`]'s twin: `From` does not chain, so the bare `?`
-    /// on raw sqlx calls needs this hop. `RowNotFound` cannot reach it, because
-    /// `fetch_one` is banned crate-wide.
-    fn from(error: sqlx::Error) -> Self {
-        Self::Internal(StorageError::Db(error))
-    }
+    Internal(#[from] sqlx::Error),
+    /// A row the update requires — the target post, or its re-read through the
+    /// record projection — was gone by the time it was read.
+    ///
+    /// Distinct from [`UpdatePostError::NotFound`], which is the *caller's*
+    /// post being absent and masks as a 404. This one is a broken invariant:
+    /// posts are only ever soft-deleted, so nothing should be able to remove
+    /// the row mid-update. It stays pageable, and names which row went (#343).
+    #[error(transparent)]
+    MissingRow(#[from] crate::error::MissingRow),
 }
 
 impl From<UpdatePostError> for host::error::InternalError {
@@ -201,9 +189,9 @@ impl From<UpdatePostError> for host::error::InternalError {
             UpdatePostError::NotFound | UpdatePostError::Unauthorized => {
                 InternalError::not_found("Post")
             }
-            // Delegated, not re-classified: `StorageError`'s own lift already
-            // separates a driver failure from a named missing row (#343).
-            UpdatePostError::Internal(e) => e.into(),
+            UpdatePostError::Internal(e) => InternalError::storage(e),
+            // `server`, not `storage`: no driver failed, an invariant did.
+            UpdatePostError::MissingRow(missing) => missing.into(),
         }
     }
 }
@@ -398,18 +386,21 @@ pub enum TaggingError {
     /// The target post does not exist.
     #[error("post not found")]
     PostNotFound,
+    /// A row the tagging path required is not there.
+    ///
+    /// Reading a tag id back is the one step here that is **not** structurally
+    /// guaranteed: the insert before it is `ON CONFLICT DO NOTHING` /
+    /// `INSERT OR IGNORE`, so it may not have written anything and the `SELECT`
+    /// may be reading a pre-existing row. Nothing in the tree deletes a tag
+    /// today, which is the only reason absence is unreachable — a fact about
+    /// the data, not a property of the statement (#883). So it is a named
+    /// error, not an `unreachable!`: if tag deletion ever lands, this reports
+    /// which row went missing instead of panicking a request handler.
+    #[error(transparent)]
+    MissingRow(#[from] crate::error::MissingRow),
     /// An unexpected database error occurred.
     #[error(transparent)]
-    Internal(#[from] StorageError),
-}
-
-impl From<sqlx::Error> for TaggingError {
-    /// See [`CreatePostError`]'s twin: `From` does not chain, so the bare `?`
-    /// on raw sqlx calls needs this hop. `RowNotFound` cannot reach it, because
-    /// `fetch_one` is banned crate-wide.
-    fn from(error: sqlx::Error) -> Self {
-        Self::Internal(StorageError::Db(error))
-    }
+    Internal(#[from] sqlx::Error),
 }
 
 impl From<TaggingError> for host::error::InternalError {
@@ -431,16 +422,7 @@ pub enum ListByTagError {
     TagNotFound,
     /// An unexpected database error occurred.
     #[error(transparent)]
-    Internal(#[from] StorageError),
-}
-
-impl From<sqlx::Error> for ListByTagError {
-    /// See [`CreatePostError`]'s twin: `From` does not chain, so the bare `?`
-    /// on raw sqlx calls needs this hop. `RowNotFound` cannot reach it, because
-    /// `fetch_one` is banned crate-wide.
-    fn from(error: sqlx::Error) -> Self {
-        Self::Internal(StorageError::Db(error))
-    }
+    Internal(#[from] sqlx::Error),
 }
 
 // ---------------------------------------------------------------------------
@@ -600,9 +582,7 @@ pub fn list_by_tag_rows(
     match result {
         Ok(rows) => Ok(rows),
         Err(ListByTagError::TagNotFound) => Ok(Vec::new()),
-        // Delegated so a missing row keeps its name, rather than being flattened
-        // into the anonymous storage lift (#343).
-        Err(ListByTagError::Internal(e)) => Err(e.into()),
+        Err(ListByTagError::Internal(e)) => Err(InternalError::storage(e)),
     }
 }
 
@@ -632,7 +612,7 @@ pub trait PostStorage: Send + Sync {
         &self,
         user_id: UserId,
         key: &str,
-    ) -> Result<Option<PostId>, StorageError>;
+    ) -> Result<Option<PostId>, sqlx::Error>;
 
     /// Fetches a post by its ID, applying the viewer-resolution filter: the post
     /// is returned only if `viewer` is the author or a targeted audience admits
@@ -641,7 +621,7 @@ pub trait PostStorage: Send + Sync {
         &self,
         post_id: PostId,
         viewer: &ViewerIdentity,
-    ) -> Result<Option<PostRecord>, StorageError>;
+    ) -> sqlx::Result<Option<PostRecord>>;
 
     /// Fetches a post by its public permalink components, applying the
     /// viewer-resolution filter. See ADR-0020.
@@ -655,7 +635,7 @@ pub trait PostStorage: Send + Sync {
         slug: &Slug,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
-    ) -> Result<Option<PostRecord>, StorageError>;
+    ) -> sqlx::Result<Option<PostRecord>>;
 
     /// Updates a post and creates a new revision.
     ///
@@ -688,10 +668,10 @@ pub trait PostStorage: Send + Sync {
     ) -> Result<PostRecord, UpdatePostError>;
 
     /// Marks a post as deleted without removing it from the database.
-    async fn soft_delete_post(&self, post_id: PostId) -> Result<(), StorageError>;
+    async fn soft_delete_post(&self, post_id: PostId) -> sqlx::Result<()>;
 
     /// Reverts a published post to draft status.
-    async fn unpublish_post(&self, post_id: PostId) -> Result<(), StorageError>;
+    async fn unpublish_post(&self, post_id: PostId) -> sqlx::Result<()>;
 
     /// Lists published posts for a specific user, ordered by creation date,
     /// applying the viewer-resolution filter. See ADR-0020.
@@ -712,7 +692,7 @@ pub trait PostStorage: Send + Sync {
         limit: RowLimit,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
-    ) -> Result<Vec<PostRecord>, StorageError>;
+    ) -> sqlx::Result<Vec<PostRecord>>;
 
     /// Lists all published posts across the entire site, applying the
     /// viewer-resolution filter. See ADR-0020.
@@ -726,7 +706,7 @@ pub trait PostStorage: Send + Sync {
         limit: RowLimit,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
-    ) -> Result<Vec<PostRecord>, StorageError>;
+    ) -> sqlx::Result<Vec<PostRecord>>;
 
     /// Lists draft posts for a specific user.
     ///
@@ -742,7 +722,7 @@ pub trait PostStorage: Send + Sync {
         cursor: Option<&'a PostCursor>,
         limit: RowLimit,
         now: DateTime<Utc>,
-    ) -> Result<Vec<PostRecord>, StorageError>;
+    ) -> sqlx::Result<Vec<PostRecord>>;
 
     /// Lists all of a user's non-soft-deleted posts (drafts + published)
     /// ordered by `updated_at DESC, post_id DESC` for the `AtomPub` Collection
@@ -753,7 +733,7 @@ pub trait PostStorage: Send + Sync {
         user_id: UserId,
         cursor: Option<&'a CollectionCursor>,
         limit: RowLimit,
-    ) -> Result<Vec<PostRecord>, StorageError>;
+    ) -> sqlx::Result<Vec<PostRecord>>;
 
     /// Makes the post's tags equal `desired`, in one transaction (#771, ADR-0092).
     ///
@@ -822,7 +802,7 @@ pub trait PostStorage: Send + Sync {
         &self,
         prefix: Option<&'a str>,
         limit: RowLimit,
-    ) -> Result<Vec<TagRecord>, StorageError>;
+    ) -> sqlx::Result<Vec<TagRecord>>;
 
     /// Lists published posts matching `surface`, applying the
     /// [`HybridWindow`](common::feed::HybridWindow) selection rule (union of
@@ -837,7 +817,7 @@ pub trait PostStorage: Send + Sync {
         window: &common::feed::HybridWindow,
         now: DateTime<Utc>,
         viewer: &ViewerIdentity,
-    ) -> Result<Vec<PostRecord>, StorageError>;
+    ) -> sqlx::Result<Vec<PostRecord>>;
 
     /// Lists posts that crossed into "live" within the window `(after, upto]`
     /// (exclusive lower, inclusive upper): `published_at > after AND
@@ -848,16 +828,13 @@ pub trait PostStorage: Send + Sync {
         &self,
         after: DateTime<Utc>,
         upto: DateTime<Utc>,
-    ) -> Result<Vec<GoLivePost>, StorageError>;
+    ) -> sqlx::Result<Vec<GoLivePost>>;
 
     /// Returns the URLs of cached feeds whose surface has a live post
     /// (`published_at <= now`, not deleted) strictly newer than the feed's own
     /// `generated_at` — i.e. cached feeds that missed a go-live while the worker
     /// was down. Drives the feed-relative startup catch-up.
-    async fn feed_urls_needing_catchup(
-        &self,
-        now: DateTime<Utc>,
-    ) -> Result<Vec<FeedPath>, StorageError>;
+    async fn feed_urls_needing_catchup(&self, now: DateTime<Utc>) -> sqlx::Result<Vec<FeedPath>>;
 
     /// Reads a post's audience targeting as a [`Vec<AudienceTarget>`], for
     /// pre-selecting the editor's audience picker.
@@ -868,10 +845,7 @@ pub trait PostStorage: Send + Sync {
     /// `subscribers` → [`AudienceTarget::Subscribers`], `named` →
     /// [`AudienceTarget::Named`]); a post with no rows yields an empty vec
     /// (equivalent to [`AudienceTarget::Private`]). See ADR-0020.
-    async fn get_post_audiences(
-        &self,
-        post_id: PostId,
-    ) -> Result<Vec<AudienceTarget>, StorageError>;
+    async fn get_post_audiences(&self, post_id: PostId) -> sqlx::Result<Vec<AudienceTarget>>;
 
     /// The ids of `user_id`'s non-soft-deleted posts whose rendered HTML points at
     /// `media`, ascending. An unreferenced item yields an empty vec.
@@ -892,7 +866,7 @@ pub trait PostStorage: Send + Sync {
         &self,
         user_id: UserId,
         media: &MediaRef,
-    ) -> Result<Vec<PostId>, StorageError>;
+    ) -> sqlx::Result<Vec<PostId>>;
 }
 
 /// Backend-specific divergence for [`PostStore`].
@@ -1095,7 +1069,7 @@ where
         &self,
         user_id: UserId,
         key: &str,
-    ) -> Result<Option<PostId>, StorageError> {
+    ) -> Result<Option<PostId>, sqlx::Error> {
         let post_id = sqlx::query_scalar::<_, PostId>(
             "SELECT post_id FROM idempotency_keys WHERE user_id = $1 AND key = $2",
         )
@@ -1115,7 +1089,7 @@ where
         &self,
         post_id: PostId,
         viewer: &ViewerIdentity,
-    ) -> Result<Option<PostRecord>, StorageError> {
+    ) -> sqlx::Result<Option<PostRecord>> {
         let (resolution, binds, _) = resolution_where(viewer, 2);
         let sql = format!(
             "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
@@ -1137,10 +1111,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn get_post_audiences(
-        &self,
-        post_id: PostId,
-    ) -> Result<Vec<AudienceTarget>, StorageError> {
+    async fn get_post_audiences(&self, post_id: PostId) -> sqlx::Result<Vec<AudienceTarget>> {
         // Owner-only: no viewer resolution. `ORDER BY` makes the result
         // deterministic so callers can compare vecs directly.
         let rows: Vec<(TargetKind, Option<AudienceId>)> = sqlx::query_as(
@@ -1168,7 +1139,7 @@ where
         &self,
         user_id: UserId,
         media: &MediaRef,
-    ) -> Result<Vec<PostId>, StorageError> {
+    ) -> sqlx::Result<Vec<PostId>> {
         // Identical on both backends, so it stays here rather than becoming a
         // `PostDialect` const (ADR-0019). No `LIMIT`: see the trait doc. The predicate
         // itself is `POSTS_REFERENCING_MEDIA_FROM_WHERE`, shared with the delete guard.
@@ -1178,13 +1149,13 @@ where
         // decode bound off this impl.
         let sql =
             format!("SELECT pm.post_id {POSTS_REFERENCING_MEDIA_FROM_WHERE} ORDER BY pm.post_id");
-        Ok(sqlx::query_scalar::<_, PostId>(&sql)
+        sqlx::query_scalar::<_, PostId>(&sql)
             .bind(user_id)
             .bind(media.source)
             .bind(&media.sha256)
             .bind(&media.filename)
             .fetch_all(&self.pool)
-            .await?)
+            .await
     }
 
     #[tracing::instrument(
@@ -1199,7 +1170,7 @@ where
         slug: &Slug,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
-    ) -> Result<Option<PostRecord>, StorageError> {
+    ) -> sqlx::Result<Option<PostRecord>> {
         // `PermalinkDate`'s Display is ISO `YYYY-MM-DD` — the exact string the
         // `PERMALINK_DATE_CLAUSE` binds (replacing the old `format!("{y:04}-…")`).
         let date_str = date.to_string();
@@ -1304,18 +1275,16 @@ where
              WHERE p.post_id = $1",
             tags = DB::TAGS_SUBQUERY,
         );
-        // The UPDATE above matched, so this re-read is row-guaranteed and the
-        // `MissingRow` arm is unreachable today. Routed through the wrapper
-        // anyway: it costs one string, and if the row ever does go missing
-        // (a concurrent hard delete) the operator is told which row, instead of
-        // reading an anonymous `RowNotFound` (#343).
-        let row = fetch_exactly_one(
-            sqlx::query_as::<_, PostRow>(&sql).bind(post_id),
-            &self.pool,
-            "the updated post row, re-read for its record projection",
-        )
-        .await?;
-        post_record_from_row(row).map_err(UpdatePostError::from)
+        // `fetch_optional`, not the banned `fetch_one` (#343). The row is there
+        // unless something hard-deleted the post mid-update — which nothing
+        // does, posts being soft-deleted — so this names the row rather than
+        // reporting an anonymous `RowNotFound` if that ever changes.
+        let row = sqlx::query_as::<_, PostRow>(&sql)
+            .bind(post_id)
+            .fetch_optional(&self.pool)
+            .await?
+            .require_row("the updated post row, re-read for its record projection")?;
+        post_record_from_row(row).map_err(UpdatePostError::Internal)
     }
 
     #[tracing::instrument(
@@ -1323,7 +1292,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn soft_delete_post(&self, post_id: PostId) -> Result<(), StorageError> {
+    async fn soft_delete_post(&self, post_id: PostId) -> sqlx::Result<()> {
         let now = Utc::now();
         sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
             .bind(now)
@@ -1338,7 +1307,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn unpublish_post(&self, post_id: PostId) -> Result<(), StorageError> {
+    async fn unpublish_post(&self, post_id: PostId) -> sqlx::Result<()> {
         sqlx::query("UPDATE posts SET published_at = NULL WHERE post_id = $1")
             .bind(post_id)
             .execute(&self.pool)
@@ -1358,7 +1327,7 @@ where
         limit: RowLimit,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
-    ) -> Result<Vec<PostRecord>, StorageError> {
+    ) -> sqlx::Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
             // Binds: $1 username, $2/$3 cursor, $4 post_id, $5 now, then the
@@ -1418,10 +1387,7 @@ where
                 .fetch_all(&self.pool)
                 .await?
         };
-        Ok(rows
-            .into_iter()
-            .map(post_record_from_row)
-            .collect::<sqlx::Result<_>>()?)
+        rows.into_iter().map(post_record_from_row).collect()
     }
 
     #[tracing::instrument(
@@ -1435,7 +1401,7 @@ where
         limit: RowLimit,
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
-    ) -> Result<Vec<PostRecord>, StorageError> {
+    ) -> sqlx::Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
             // Binds: $1/$2 cursor, $3 post_id, $4 now, then the variant-sized
@@ -1491,10 +1457,7 @@ where
                 .fetch_all(&self.pool)
                 .await?
         };
-        Ok(rows
-            .into_iter()
-            .map(post_record_from_row)
-            .collect::<sqlx::Result<_>>()?)
+        rows.into_iter().map(post_record_from_row).collect()
     }
 
     #[tracing::instrument(
@@ -1508,7 +1471,7 @@ where
         cursor: Option<&'a PostCursor>,
         limit: RowLimit,
         now: DateTime<Utc>,
-    ) -> Result<Vec<PostRecord>, StorageError> {
+    ) -> sqlx::Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
             // `published_at IS NULL OR published_at > $5` surfaces both true
@@ -1557,10 +1520,7 @@ where
                 .fetch_all(&self.pool)
                 .await?
         };
-        Ok(rows
-            .into_iter()
-            .map(post_record_from_row)
-            .collect::<sqlx::Result<_>>()?)
+        rows.into_iter().map(post_record_from_row).collect()
     }
 
     #[tracing::instrument(
@@ -1573,7 +1533,7 @@ where
         user_id: UserId,
         cursor: Option<&'a CollectionCursor>,
         limit: RowLimit,
-    ) -> Result<Vec<PostRecord>, StorageError> {
+    ) -> sqlx::Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
             let sql = format!(
@@ -1613,10 +1573,7 @@ where
                 .fetch_all(&self.pool)
                 .await?
         };
-        Ok(rows
-            .into_iter()
-            .map(post_record_from_row)
-            .collect::<sqlx::Result<_>>()?)
+        rows.into_iter().map(post_record_from_row).collect()
     }
 
     #[tracing::instrument(
@@ -1645,16 +1602,15 @@ where
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
-        // A `COUNT(*) > 0` always yields exactly one row, so the wrapper's
-        // `MissingRow` arm is unreachable here. It is used regardless — a bare
-        // `fetch_one` is the thing #343 removes, and an unreachable named arm
-        // costs nothing.
-        let tag_exists: bool = fetch_exactly_one_scalar(
-            sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1").bind(tag_slug),
-            &self.pool,
-            "the tag-existence flag",
-        )
-        .await?;
+        // `fetch_optional`, not the banned `fetch_one` (#343). A bare `COUNT`
+        // always yields one row; the impossible `None` folds into `false`,
+        // which is the same answer an absent tag gives, so nothing is named.
+        let tag_exists: bool =
+            sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1")
+                .bind(tag_slug)
+                .fetch_optional(&self.pool)
+                .await?
+                .unwrap_or(false);
 
         if !tag_exists {
             return Err(ListByTagError::TagNotFound);
@@ -1727,7 +1683,7 @@ where
         rows.into_iter()
             .map(post_record_from_row)
             .collect::<sqlx::Result<_>>()
-            .map_err(ListByTagError::from)
+            .map_err(ListByTagError::Internal)
     }
 
     #[tracing::instrument(
@@ -1744,14 +1700,15 @@ where
         viewer: &ViewerIdentity,
         now: DateTime<Utc>,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
-        // Row-guaranteed for the same reason as the listing twin above; routed
-        // through the wrapper for the same reason too (#343).
-        let tag_exists: bool = fetch_exactly_one_scalar(
-            sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1").bind(tag_slug),
-            &self.pool,
-            "the tag-existence flag",
-        )
-        .await?;
+        // `fetch_optional`, not the banned `fetch_one` (#343). A bare `COUNT`
+        // always yields one row; the impossible `None` folds into `false`,
+        // which is the same answer an absent tag gives, so nothing is named.
+        let tag_exists: bool =
+            sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1")
+                .bind(tag_slug)
+                .fetch_optional(&self.pool)
+                .await?
+                .unwrap_or(false);
 
         if !tag_exists {
             return Err(ListByTagError::TagNotFound);
@@ -1830,7 +1787,7 @@ where
         rows.into_iter()
             .map(post_record_from_row)
             .collect::<sqlx::Result<_>>()
-            .map_err(ListByTagError::from)
+            .map_err(ListByTagError::Internal)
     }
 
     #[tracing::instrument(
@@ -1842,7 +1799,7 @@ where
         &self,
         prefix: Option<&'a str>,
         limit: RowLimit,
-    ) -> Result<Vec<TagRecord>, StorageError> {
+    ) -> sqlx::Result<Vec<TagRecord>> {
         let normalized = prefix
             .map(str::trim)
             .filter(|p| !p.is_empty())
@@ -1893,7 +1850,7 @@ where
         window: &common::feed::HybridWindow,
         now: DateTime<Utc>,
         viewer: &ViewerIdentity,
-    ) -> Result<Vec<PostRecord>, StorageError> {
+    ) -> sqlx::Result<Vec<PostRecord>> {
         // ROW_NUMBER() identifies the top `min_items` posts; OR-combining with
         // `published_at >= cutoff` produces the hybrid-window union in a single
         // query. Only the JSON tag aggregation differs per backend, so the SQL
@@ -1904,10 +1861,7 @@ where
             &self.pool, surface, now, cutoff, min_items, viewer,
         )
         .await?;
-        Ok(rows
-            .into_iter()
-            .map(post_record_from_row)
-            .collect::<sqlx::Result<_>>()?)
+        rows.into_iter().map(post_record_from_row).collect()
     }
 
     #[tracing::instrument(
@@ -1919,7 +1873,7 @@ where
         &self,
         after: DateTime<Utc>,
         upto: DateTime<Utc>,
-    ) -> Result<Vec<GoLivePost>, StorageError> {
+    ) -> sqlx::Result<Vec<GoLivePost>> {
         // `published_at > $1 AND published_at <= $2` selects exactly the posts
         // that crossed into "live" within the half-open window `(after, upto]`.
         // The standard post projection (incl. the JSON tag subquery) is reused
@@ -1959,10 +1913,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn feed_urls_needing_catchup(
-        &self,
-        now: DateTime<Utc>,
-    ) -> Result<Vec<FeedPath>, StorageError> {
+    async fn feed_urls_needing_catchup(&self, now: DateTime<Utc>) -> sqlx::Result<Vec<FeedPath>> {
         // Cached feeds live in the same database, so they are enumerated here
         // and, for each, the newest live post on that surface is compared
         // against the feed's own `generated_at`. Feed count is small, so a
@@ -2237,7 +2188,7 @@ fn map_idempotency_insert_error(e: sqlx::Error) -> CreatePostError {
         sqlx::Error::Database(db) if db.is_unique_violation() => {
             CreatePostError::IdempotencyConflict
         }
-        e => CreatePostError::from(e),
+        e => CreatePostError::Internal(e),
     }
 }
 
@@ -2280,12 +2231,7 @@ where
 {
     let now = Utc::now();
 
-    // `INSERT … RETURNING` with no `ON CONFLICT` clause either raises or yields a
-    // row, so the wrapper's `MissingRow` arm is unreachable. Routed through it
-    // regardless (#343): the day someone adds `ON CONFLICT DO NOTHING` here, the
-    // absent row is reported by name rather than as an anonymous `RowNotFound`.
-    let post_id = fetch_exactly_one_scalar(
-        sqlx::query_scalar::<_, PostId>(
+    let post_id = sqlx::query_scalar::<_, PostId>(
         "INSERT INTO posts (user_id, title, slug, body, format, rendered_html, created_at, updated_at, published_at, summary)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING post_id",
@@ -2304,17 +2250,19 @@ where
     // `Option::as_ref` → `Option<&PostSummary>` (a typed newtype bind via the
     // ADR-0071 sqlx bridge, not an `AsRef<str>` strip); the `sqlx-newtype-bind`
     // gate forbids stripping to `&str` here.
-    .bind(input.summary.as_ref()),
-        &mut *conn,
-        "the inserted post row",
-    )
+    .bind(input.summary.as_ref())
+    // `fetch_optional`, not the banned `fetch_one` (#343).
+    .fetch_optional(&mut *conn)
     .await
     .map_err(|e| match e {
-        StorageError::Db(sqlx::Error::Database(db)) if db.is_unique_violation() => {
-            CreatePostError::SlugConflict
-        }
+        sqlx::Error::Database(db) if db.is_unique_violation() => CreatePostError::SlugConflict,
         e => CreatePostError::Internal(e),
     })?;
+    // `INSERT … RETURNING` with no `ON CONFLICT` clause either raises or yields
+    // the row it just wrote.
+    let Some(post_id) = post_id else {
+        unreachable!("the post INSERT RETURNs the row it wrote");
+    };
 
     replace_post_audiences::<DB>(conn, post_id, &input.audiences).await?;
     replace_post_media::<DB>(conn, post_id, input.rendered.media()).await?;
@@ -2347,7 +2295,7 @@ pub(crate) async fn replace_post_audiences<DB>(
     conn: &mut DB::Connection,
     post_id: PostId,
     audiences: &[AudienceTarget],
-) -> Result<(), StorageError>
+) -> sqlx::Result<()>
 where
     DB: PostDialect,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -2388,7 +2336,7 @@ pub(crate) async fn replace_post_media<DB>(
     conn: &mut DB::Connection,
     post_id: PostId,
     media: &[MediaRef],
-) -> Result<(), StorageError>
+) -> sqlx::Result<()>
 where
     DB: PostDialect,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -2434,7 +2382,7 @@ async fn list_published_in_window_rows<DB>(
     cutoff: DateTime<Utc>,
     min_items: i64,
     viewer: &ViewerIdentity,
-) -> Result<Vec<PostRow>, StorageError>
+) -> sqlx::Result<Vec<PostRow>>
 where
     DB: PostDialect,
     PostRow: for<'r> sqlx::FromRow<'r, DB::Row>,
@@ -2455,7 +2403,7 @@ where
 {
     use common::feed::FeedSurface;
     let tags = DB::TAGS_SUBQUERY;
-    Ok(match surface {
+    match surface {
         FeedSurface::Site => {
             // Binds: $1 now, $2 min_items, $3 cutoff, then the variant-sized
             // resolution fragment from $4. `window_sql` places it last, so
@@ -2466,7 +2414,7 @@ where
                 .bind(now)
                 .bind(min_items)
                 .bind(cutoff);
-            binds.bind_onto(query).fetch_all(pool).await?
+            binds.bind_onto(query).fetch_all(pool).await
         }
         FeedSurface::User { username } => {
             // Binds: $1 now, $2 username, $3 min_items, $4 cutoff, then the
@@ -2478,7 +2426,7 @@ where
                 .bind(username)
                 .bind(min_items)
                 .bind(cutoff);
-            binds.bind_onto(query).fetch_all(pool).await?
+            binds.bind_onto(query).fetch_all(pool).await
         }
         FeedSurface::SiteTag { tag } => {
             // Binds: $1 now, $2 tag, $3 min_items, $4 cutoff, then the
@@ -2490,7 +2438,7 @@ where
                 .bind(tag)
                 .bind(min_items)
                 .bind(cutoff);
-            binds.bind_onto(query).fetch_all(pool).await?
+            binds.bind_onto(query).fetch_all(pool).await
         }
         FeedSurface::UserTag { username, tag } => {
             // Binds: $1 now, $2 username, $3 tag, $4 min_items, $5 cutoff, then
@@ -2503,9 +2451,9 @@ where
                 .bind(tag)
                 .bind(min_items)
                 .bind(cutoff);
-            binds.bind_onto(query).fetch_all(pool).await?
+            binds.bind_onto(query).fetch_all(pool).await
         }
-    })
+    }
 }
 
 /// Assembles the hybrid-window SQL for `surface`.
@@ -2618,7 +2566,7 @@ async fn max_published_at_for_surface<DB>(
     pool: &Pool<DB>,
     surface: &common::feed::FeedSurface,
     now: DateTime<Utc>,
-) -> Result<Option<DateTime<Utc>>, StorageError>
+) -> sqlx::Result<Option<DateTime<Utc>>>
 where
     DB: PostDialect,
     (DateTime<Utc>,): for<'r> sqlx::FromRow<'r, DB::Row>,
@@ -3113,7 +3061,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(err, StorageError::Db(sqlx::Error::ColumnDecode { .. })),
+            matches!(err, sqlx::Error::ColumnDecode { .. }),
             "an unrecognised kind must surface as a decode error, not a shorter list: {err:?}"
         );
     }
@@ -3209,9 +3157,7 @@ mod tests {
         let debug_str = format!("{err:?}");
         assert!(debug_str.contains("PostNotFound"));
 
-        let err2 = TaggingError::Internal(StorageError::MissingRow {
-            what: "the tag row just inserted or already present",
-        });
+        let err2 = TaggingError::Internal(sqlx::Error::RowNotFound);
         let debug_str2 = format!("{err2:?}");
         assert!(debug_str2.contains("Internal"));
     }
@@ -3976,17 +3922,17 @@ mod tests {
         assert_eq!(unauthorized.kind(), ErrorKind::NotFound);
         assert_eq!(unauthorized.public_message(), "Post not found");
 
-        let internal: InternalError =
-            UpdatePostError::Internal(StorageError::Db(sqlx::Error::PoolClosed)).into();
+        let internal: InternalError = UpdatePostError::Internal(sqlx::Error::PoolClosed).into();
         assert_eq!(internal.kind(), ErrorKind::Storage);
         assert_eq!(internal.public_message(), "storage operation failed");
 
-        // The retyped payload's other arm (#343): a named absent row is still a
-        // masked internal failure on the wire, but the operator is told which row.
-        let missing: InternalError = UpdatePostError::Internal(StorageError::MissingRow {
-            what: "the updated post row",
-        })
-        .into();
+        // A missing row is a broken invariant, not a 404 and not a driver
+        // failure: kind `Internal`, and the operator is told which row (#343).
+        let missing: UpdatePostError = Option::<()>::None
+            .require_row("the updated post row")
+            .expect_err("absent")
+            .into();
+        let missing: InternalError = missing.into();
         assert_eq!(missing.kind(), ErrorKind::Internal);
         assert_eq!(missing.public_message(), "server operation failed");
         let operator = missing.operator_message();
@@ -4064,9 +4010,7 @@ mod tests {
         let tag_not_found = list_by_tag_rows(Err(ListByTagError::TagNotFound));
         assert!(matches!(tag_not_found, Ok(rows) if rows.is_empty()));
 
-        let internal = list_by_tag_rows(Err(ListByTagError::Internal(StorageError::Db(
-            sqlx::Error::PoolClosed,
-        ))));
+        let internal = list_by_tag_rows(Err(ListByTagError::Internal(sqlx::Error::PoolClosed)));
         assert!(internal.is_err());
     }
 
@@ -4248,7 +4192,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(err, StorageError::Db(sqlx::Error::ColumnDecode { .. })),
+            matches!(err, sqlx::Error::ColumnDecode { .. }),
             "expected a column-decode error, got: {err:?}"
         );
     }
@@ -4318,7 +4262,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(
-            matches!(err, StorageError::Db(sqlx::Error::ColumnDecode { .. })),
+            matches!(err, sqlx::Error::ColumnDecode { .. }),
             "expected a column-decode error, got: {err:?}"
         );
     }

@@ -191,14 +191,8 @@ fn log_internal<E: std::error::Error>(err: &E) {
     tracing::error!(error = %err, "AtomPub handler internal error");
 }
 
-impl From<storage::StorageError> for HandlerError {
-    /// The one storage lift these handlers need. It replaced a
-    /// `From<sqlx::Error>` twin, which lost its last caller once every storage
-    /// API the handlers touch reported [`storage::StorageError`] instead of a
-    /// raw driver error (#343). Same outcome — a storage failure is an internal
-    /// error to an `AtomPub` client either way — but a `MissingRow` arrives
-    /// named, so the log says which row.
-    fn from(err: storage::StorageError) -> Self {
+impl From<sqlx::Error> for HandlerError {
+    fn from(err: sqlx::Error) -> Self {
         log_internal(&err);
         HandlerError::Internal
     }
@@ -277,7 +271,8 @@ impl From<storage::PerformUpdateError> for HandlerError {
         match &err {
             E::EmptyPost => HandlerError::BadRequest,
             E::NotFound | E::Unauthorized => HandlerError::NotFound,
-            E::Storage(_) => {
+            // A missing required row is an invariant break, not a 404 (#343).
+            E::Storage(_) | E::MissingRow(_) => {
                 log_internal(&err);
                 HandlerError::Internal
             }
@@ -437,7 +432,7 @@ mod tests {
     #[test]
     fn storage_and_document_errors_map_to_status() {
         assert_eq!(
-            status(storage::StorageError::Db(sqlx::Error::PoolClosed).into()),
+            status(sqlx::Error::PoolClosed.into()),
             StatusCode::INTERNAL_SERVER_ERROR
         );
         assert_eq!(
@@ -465,10 +460,7 @@ mod tests {
             StatusCode::INTERNAL_SERVER_ERROR
         );
         assert_eq!(
-            status(
-                PerformCreationError::Storage(storage::StorageError::Db(sqlx::Error::PoolClosed))
-                    .into()
-            ),
+            status(PerformCreationError::Storage(sqlx::Error::PoolClosed).into()),
             StatusCode::INTERNAL_SERVER_ERROR
         );
     }
@@ -488,10 +480,7 @@ mod tests {
             StatusCode::NOT_FOUND
         );
         assert_eq!(
-            status(
-                PerformUpdateError::Storage(storage::StorageError::Db(sqlx::Error::PoolClosed))
-                    .into()
-            ),
+            status(PerformUpdateError::Storage(sqlx::Error::PoolClosed).into()),
             StatusCode::INTERNAL_SERVER_ERROR
         );
     }
@@ -503,10 +492,7 @@ mod tests {
             StatusCode::NOT_FOUND
         );
         assert_eq!(
-            status(
-                DeleteMediaError::Internal(storage::StorageError::Db(sqlx::Error::PoolClosed))
-                    .into()
-            ),
+            status(DeleteMediaError::Internal(sqlx::Error::PoolClosed).into()),
             StatusCode::INTERNAL_SERVER_ERROR
         );
     }

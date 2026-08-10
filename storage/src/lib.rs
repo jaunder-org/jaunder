@@ -52,7 +52,7 @@ pub use backup::{
 };
 pub use db::*;
 pub use email::*;
-pub use error::StorageError;
+pub use error::{MissingRow, RequireRow};
 pub use feed_cache::*;
 pub use feed_events::*;
 pub use invites::*;
