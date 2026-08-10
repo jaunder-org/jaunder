@@ -162,6 +162,7 @@ test("owner: jaunder_home_redirect='app' makes the pre-paint script redirect / â
     page,
     "the pre-paint redirect is a location.replace during head parsing, so the only load that lands is /app; it is the script's own redirect, not a test-issued navigation, and it is the subject",
   );
+  // e2e-goto-wrapper:allow `waitUntil: "commit"` plus the `waitForURL` below is the subject â€” the pre-paint redirect replaces `/` during head parsing, so the wrapper would wait for a mount on a document that never paints
   await page.goto(`${BASE_URL}/`, { waitUntil: "commit" });
   await page.waitForURL(/\/app$/, {
     timeout: firstNav,
@@ -171,6 +172,7 @@ test("owner: jaunder_home_redirect='app' makes the pre-paint script redirect / â
 test("anonymous: /app bounces to /login", async ({ page, firstNav }) => {
   // No session and no marker â†’ CockpitPage's session-reconcile gate resolves anon
   // and redirects to /login (D6).
+  // e2e-goto-wrapper:allow the subject is the bounce itself, so this waits on the URL and not on the mount â€” the wrapper would insert a mount barrier on the /app document before the redirect is ever observed
   await page.goto(`${BASE_URL}/app`, { waitUntil: "domcontentloaded" });
   await page.waitForURL(/\/login$/, {
     timeout: firstNav,

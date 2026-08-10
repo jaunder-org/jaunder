@@ -1059,7 +1059,36 @@ git commit -m "test(e2e): enforce one boot per page (#867)"
   and `pub fn run(result: &mut CommandResult)`, mirroring
   `no_full_reload_check.rs:46,62`.
 
-- [ ] **Step 1: Write the failing unit tests**
+**Task 9 outcome.** Done; 12 unit tests (the 9 below plus block-comment prose,
+census content, and the recovery line) and the full `cargo xtask check` green
+with a 4-site census. Notes worth keeping:
+
+- `files::with_extension` **is** extension-generic (`xtask/src/files.rs:23`
+  takes `ext` as a parameter and already tests that `.mts` is not matched as
+  `.ts`), so `"ts"` was the only change — no second walker.
+- Site detection tracks `/* … */` state across lines, because the JSDoc
+  paragraphs in `bootBudget.ts:19,29` discuss `page.goto` in prose and would
+  otherwise read as sites. String literals are deliberately not tracked: that
+  direction can only raise a false alarm, never miss a site.
+- Unit tests run from `xtask/`, which is its own workspace —
+  `cargo nextest run -p xtask` fails with package-not-found. Use
+  `devtool run --cwd <worktree>/xtask -- cargo nextest run <filter>`.
+- **Process miss, recorded rather than hidden:** tests and implementation were
+  written in one pass, so no red run was observed for the 9. The only red seen
+  was the package-not-found error, which is not the same thing.
+- **A factual error in this plan and in the spec, found here.** Both claim the
+  two `authed-flash.spec.ts` raw sites use `waitUntil: "commit"` through a
+  pre-paint redirect. Only the first does. The second
+  (`anonymous: /app bounces to /login`) uses `waitUntil: "domcontentloaded"`,
+  and its redirect is **not** pre-paint — `PREPAINT_SCRIPT`
+  (`web/src/app/render.rs:40`) only redirects `/`→`/app` for an authed marker,
+  so the `/app`→`/login` bounce is CockpitPage's post-mount session gate. The
+  wrapper's mount wait would probably succeed there, meaning the site may be
+  convertible. It is marked, not converted: writing the plan's supplied reason
+  would have put a false statement into a permanent, never-re-verified marker.
+  Left as a residual opportunity, not chased.
+
+- [x] **Step 1: Write the failing unit tests**
 
 In `e2e_goto_wrapper_check.rs`, modelled on `no_full_reload_check.rs:90-148`:
 

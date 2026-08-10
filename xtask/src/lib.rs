@@ -29,6 +29,7 @@ mod steps {
     pub mod build_csr;
     pub mod doc_links;
     pub mod doctest_fences;
+    pub mod e2e_goto_wrapper_check;
     pub mod e2e_local;
     pub mod e2e_scaffold_check;
     pub mod flaky;
@@ -464,6 +465,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::proffered_secret_check::run(&mut result);
             steps::proffered_filename_check::run(&mut result);
             steps::no_full_reload_check::run(&mut result);
+            steps::e2e_goto_wrapper_check::run(&mut result);
             steps::target_arch_placement_check::run(&mut result);
             steps::thin_components::run(&mut result);
             steps::sqlx_newtype_bind_check::run(&mut result);
@@ -510,6 +512,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::proffered_secret_check::run(&mut result);
             steps::proffered_filename_check::run(&mut result);
             steps::no_full_reload_check::run(&mut result);
+            steps::e2e_goto_wrapper_check::run(&mut result);
             steps::target_arch_placement_check::run(&mut result);
             steps::thin_components::run(&mut result);
             steps::sqlx_newtype_bind_check::run(&mut result);
