@@ -858,18 +858,18 @@ impl ContentType {
     /// Mint a `ContentType` from a string the caller asserts is a valid media type —
     /// a fixed `&'static` literal or other known-valid source — bypassing the
     /// [`FromStr`] check. The trusted-producer door, `pub(crate)` so outside this crate
-    /// the only way in stays the validating `FromStr`; grep `ContentType::from_trusted`
-    /// to enumerate every mint site, each pinned by a test that the value is valid
-    /// (`detect_content_type_outputs_are_valid`, `feed_path::…::format_content_types`).
-    /// (The `#398` `rendered-html-from-trusted` gate reserves the `from_trusted` name for
-    /// `RenderedHtml`'s XSS-sensitive door. Since `#778` it no longer exempts the
-    /// `ContentType::` qualifier by pattern — that failed open on an aliased qualifier —
-    /// so each site below carries its own marker saying this door mints a media type,
-    /// never HTML. That is what makes the "grep to enumerate every mint site"
-    /// instruction above something the gate enforces rather than a request. `#790`
-    /// tracks renaming this door to remove the collision outright.)
+    /// the only way in stays the validating `FromStr`.
+    ///
+    /// Grepping `ContentType::from_trusted` enumerates every mint site, and each is
+    /// pinned by a test that the value is valid (`detect_content_type_outputs_are_valid`,
+    /// `feed_path::…::format_content_types`). That is a **convention backed by those
+    /// tests**, not a build-time guarantee: nothing fails if a new mint site arrives
+    /// without one. (Between `#778` and `#790` the `rendered-html-from-trusted` gate did
+    /// enforce it as a side effect of a name collision — it policed the bare
+    /// `from_trusted` ident, so every site here carried a marker saying "not that door".
+    /// `#790` taught the gate to read the qualifier, so this door is no longer in its
+    /// population and the markers are gone.)
     #[must_use]
-    // rendered-html-from-trusted:allow ContentType's own door definition — mints a media type, never HTML (#584)
     pub(crate) fn from_trusted(content_type: impl Into<String>) -> Self {
         Self(content_type.into())
     }
@@ -965,11 +965,9 @@ pub fn detect_content_type(filename: &str) -> ContentType {
 
     for (extensions, content_type) in EXTENSIONS {
         if extensions.contains(&ext.as_str()) {
-            // rendered-html-from-trusted:allow ContentType from a detected, test-pinned media type — never HTML (#584)
             return ContentType::from_trusted(content_type);
         }
     }
-    // rendered-html-from-trusted:allow ContentType from the octet-stream literal — never HTML (#584)
     ContentType::from_trusted("application/octet-stream")
 }
 
