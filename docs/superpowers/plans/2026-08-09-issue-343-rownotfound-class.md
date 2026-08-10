@@ -56,13 +56,15 @@ boundary); `set_post_tags`'s insert-then-select (filed as a follow-up in Task
 - [x] **12.** Slice: `invites`, `user_config`.
 - [x] **13.** Slice: `backup`, `atomic`, `postgres/bootstrap` — including both
       `mod.rs` `AtomicOps` impls.
-- [ ] **14.** `test_support`, its `server/tests` consumers, and the final sweep.
+- [x] **14.** `test_support`, its `server/tests` consumers, and the final sweep.
 - [x] **15.** `server/atompub`'s own `From` impl — the sqlx one is **deleted**
       (its last raw-`sqlx::Error` caller went with Task 12) and replaced by
       `From<StorageError>`.
-- [ ] **16.** Turn the clippy guard on; rewrite the 6 `server/tests` sites.
+- [x] **16.** Turn the clippy guard on; rewrite the 6 `server/tests` sites. Gate
+      green on the first run — the triage that rode the slices was complete.
 - [ ] **17.** Durable self-test proving the guard rejects a bare `fetch_one`.
-- [ ] **18.** Delete the blanket `From<sqlx::Error>` and its pinning test.
+- [x] **18.** Delete the blanket `From<sqlx::Error>` and its pinning test. The
+      workspace still compiles, which is the proof no row-access path leaks.
 - [x] **19.** ADR draft → `docs/adr/drafts/absence-is-named-at-its-source.md`
       (gitignored until `cargo xtask adr promote` numbers it at ship).
 - [x] **20.** Amend #343's body — the superseded acceptance criterion is stated

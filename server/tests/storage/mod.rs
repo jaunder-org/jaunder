@@ -270,15 +270,17 @@ async fn channel_id_by_name(backend: Backend, env: &TestEnv, name: &str) -> Chan
     let sql = sql.as_str();
     match backend {
         Backend::Sqlite => sqlx::query_scalar::<_, ChannelId>(sql)
-            .fetch_one(&open_pool(&env.base).await)
+            .fetch_optional(&open_pool(&env.base).await)
             .await
-            .unwrap(),
+            .unwrap()
+            .expect("the channel row must exist"),
         Backend::Postgres => {
             let pool = env.base.pool().postgres();
             sqlx::query_scalar::<_, ChannelId>(sql)
-                .fetch_one(pool)
+                .fetch_optional(pool)
                 .await
                 .unwrap()
+                .expect("the channel row must exist")
         }
     }
 }
@@ -5876,15 +5878,17 @@ async fn raw_try_exec(backend: Backend, env: &TestEnv, sql: &str) -> Result<(), 
 async fn raw_scalar_i64(backend: Backend, env: &TestEnv, sql: &str) -> i64 {
     match backend {
         Backend::Sqlite => sqlx::query_scalar::<_, i64>(sql)
-            .fetch_one(&open_pool(&env.base).await)
+            .fetch_optional(&open_pool(&env.base).await)
             .await
-            .unwrap(),
+            .unwrap()
+            .expect("an aggregate query always yields exactly one row"),
         Backend::Postgres => {
             let pool = env.base.pool().postgres();
             sqlx::query_scalar::<_, i64>(sql)
-                .fetch_one(pool)
+                .fetch_optional(pool)
                 .await
                 .unwrap()
+                .expect("an aggregate query always yields exactly one row")
         }
     }
 }

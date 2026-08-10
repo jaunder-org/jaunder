@@ -40,9 +40,10 @@ async fn cmd_create_pg_db_provisions_role_and_database() {
     let role_exists =
         sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = $1)")
             .bind(&role_name)
-            .fetch_one(&mut admin_conn)
+            .fetch_optional(&mut admin_conn)
             .await
-            .unwrap();
+            .unwrap()
+            .expect("SELECT EXISTS always yields exactly one row");
     assert!(role_exists);
 
     let owner = sqlx::query_scalar::<_, Option<String>>(
@@ -116,9 +117,10 @@ async fn cmd_create_pg_db_fails_if_role_already_exists() {
         "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)",
     )
     .bind(&db_name)
-    .fetch_one(&mut admin_conn)
+    .fetch_optional(&mut admin_conn)
     .await
-    .unwrap();
+    .unwrap()
+    .expect("SELECT EXISTS always yields exactly one row");
     assert!(!db_exists);
 
     sqlx::query(&format!("DROP ROLE IF EXISTS \"{role_name}\""))

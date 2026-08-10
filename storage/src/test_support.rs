@@ -86,8 +86,8 @@ impl CloseablePool {
     ///
     /// # Errors
     ///
-    /// Returns the `sqlx::Error` if the statement fails to execute.
-    pub async fn execute(&self, sql: &str) -> Result<(), sqlx::Error> {
+    /// Returns a [`StorageError`] if the statement fails to execute.
+    pub async fn execute(&self, sql: &str) -> Result<(), crate::StorageError> {
         match self {
             CloseablePool::Sqlite(pool) => {
                 sqlx::query(sql).execute(pool).await?;
@@ -105,11 +105,19 @@ impl CloseablePool {
     ///
     /// # Errors
     ///
-    /// Returns the `sqlx::Error` if the query fails.
-    pub async fn scalar_i64(&self, sql: &str) -> Result<i64, sqlx::Error> {
+    /// Returns a [`StorageError`] if the query fails, or `MissingRow` if it
+    /// yields no row at all — the harness is inside `storage`, so it goes
+    /// through the same audited door as production code rather than the banned
+    /// `fetch_one` (#343).
+    pub async fn scalar_i64(&self, sql: &str) -> Result<i64, crate::StorageError> {
+        let what = "a scalar_i64 harness query row";
         match self {
-            CloseablePool::Sqlite(pool) => sqlx::query_scalar(sql).fetch_one(pool).await,
-            CloseablePool::Postgres(pool) => sqlx::query_scalar(sql).fetch_one(pool).await,
+            CloseablePool::Sqlite(pool) => {
+                crate::error::fetch_exactly_one_scalar(sqlx::query_scalar(sql), pool, what).await
+            }
+            CloseablePool::Postgres(pool) => {
+                crate::error::fetch_exactly_one_scalar(sqlx::query_scalar(sql), pool, what).await
+            }
         }
     }
 
@@ -119,14 +127,14 @@ impl CloseablePool {
     ///
     /// # Errors
     ///
-    /// Returns the `sqlx::Error` if the query fails.
+    /// Returns a [`StorageError`] if the query fails.
     pub async fn string_triples(
         &self,
         sql: &str,
-    ) -> Result<Vec<(String, String, String)>, sqlx::Error> {
+    ) -> Result<Vec<(String, String, String)>, crate::StorageError> {
         match self {
-            CloseablePool::Sqlite(pool) => sqlx::query_as(sql).fetch_all(pool).await,
-            CloseablePool::Postgres(pool) => sqlx::query_as(sql).fetch_all(pool).await,
+            CloseablePool::Sqlite(pool) => Ok(sqlx::query_as(sql).fetch_all(pool).await?),
+            CloseablePool::Postgres(pool) => Ok(sqlx::query_as(sql).fetch_all(pool).await?),
         }
     }
 
@@ -552,9 +560,10 @@ async fn ensure_template_db() {
     let exists: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)")
             .bind(TEMPLATE_DB)
-            .fetch_one(&mut admin)
+            .fetch_optional(&mut admin)
             .await
-            .unwrap();
+            .unwrap()
+            .expect("SELECT EXISTS always yields exactly one row");
 
     if !exists {
         let DbConnectOptions::Postgres { options, .. } = postgres_url() else {

@@ -4,3 +4,28 @@
 # (including `--all-targets` runs) free to use them.
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
+
+# `fetch_one` is banned workspace-wide (#343). It is the only sqlx call that can
+# produce `RowNotFound`, and lifted anonymously to the error boundary that becomes
+# an ERROR-level, pageable `ErrorClass::Bug` — an operator woken for a row that is
+# simply not there. Absence is modelled instead: `fetch_optional` where the caller
+# should decide, or `storage::error::fetch_exactly_one{,_scalar}` where the row is
+# required, which names it in the failure.
+#
+# All six definitions are listed. Three have call sites today (`QueryAs`,
+# `QueryScalar`, and `Query` via `Map`); the rest are listed so a future use is
+# caught rather than silently admitted.
+#
+# The paths must be `sqlx_core::`, not the `sqlx::` facade — sqlx re-exports these
+# types, and the facade path resolves but matches no call site. An unresolvable
+# entry is NOT silent: clippy emits "does not refer to a reachable function",
+# which is a hard error under the gate's `-D warnings`. Do not silence that with
+# `allow-invalid` — it is what stops this guard from quietly ceasing to guard.
+disallowed-methods = [
+  { path = "sqlx_core::query::Query::fetch_one", reason = "use fetch_optional, or storage::error::fetch_exactly_one{,_scalar} to name the required row (#343)" },
+  { path = "sqlx_core::query::Map::fetch_one", reason = "use fetch_optional, or storage::error::fetch_exactly_one{,_scalar} to name the required row (#343)" },
+  { path = "sqlx_core::query_as::QueryAs::fetch_one", reason = "use fetch_optional, or storage::error::fetch_exactly_one{,_scalar} to name the required row (#343)" },
+  { path = "sqlx_core::query_scalar::QueryScalar::fetch_one", reason = "use fetch_optional, or storage::error::fetch_exactly_one{,_scalar} to name the required row (#343)" },
+  { path = "sqlx_core::raw_sql::RawSql::fetch_one", reason = "use fetch_optional, or storage::error::fetch_exactly_one{,_scalar} to name the required row (#343)" },
+  { path = "sqlx_core::executor::Executor::fetch_one", reason = "use fetch_optional, or storage::error::fetch_exactly_one{,_scalar} to name the required row (#343)" },
+]
