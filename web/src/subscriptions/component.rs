@@ -1,12 +1,16 @@
+use super::state::{SubscribePaint, paint};
 use super::{Subscribe, Unsubscribe, is_subscribed};
 use common::username::Username;
 use leptos::prelude::*;
 
 /// Subscribe / Unsubscribe control shown on a user's profile (timeline) page.
 ///
-/// Hidden when the viewer is logged out or is viewing their own profile.
-/// Otherwise renders Subscribe when not subscribed and Unsubscribe when
-/// subscribed, querying state via `is_subscribed`.
+/// Hidden when the viewer is logged out or is viewing their own profile. Otherwise
+/// renders Subscribe when not subscribed, Unsubscribe when subscribed, and an error
+/// when the subscription state could not be determined.
+///
+/// The three-way choice is [`paint`], host-tested in `state.rs`: this file is
+/// wasm-only, so a decision made here could not be asserted anywhere (#306).
 #[component]
 pub fn SubscribeButton(username: Username) -> impl IntoView {
     let subscribe = ServerAction::<Subscribe>::new();
@@ -21,7 +25,8 @@ pub fn SubscribeButton(username: Username) -> impl IntoView {
         move |_| {
             let username = username_for_state.clone();
             async move {
-                let subscribed = is_subscribed(username.clone()).await.unwrap_or(false);
+                // The error is carried, not collapsed — see `state::paint` (#861).
+                let subscribed = is_subscribed(username.clone()).await;
                 (
                     session.current.get_untracked().map(|u| u.username),
                     subscribed,
@@ -38,22 +43,23 @@ pub fn SubscribeButton(username: Username) -> impl IntoView {
                 let username = profile_username.clone();
                 Suspend::new(async move {
                     let (viewer, subscribed) = state.await;
-                    let show = match &viewer {
-                        Some(name) => *name != username,
-                        None => false,
-                    };
-                    if !show {
-                        return ().into_any();
+                    match paint(viewer.as_ref(), &username, subscribed) {
+                        SubscribePaint::Hidden => ().into_any(),
+                        SubscribePaint::Toggle(subscribed) => {
+                            view! {
+                                <SubscriptionToggle
+                                    username=username
+                                    subscribed=subscribed
+                                    subscribe=subscribe
+                                    unsubscribe=unsubscribe
+                                />
+                            }
+                                .into_any()
+                        }
+                        SubscribePaint::Failed(err) => {
+                            view! { <p class="error">{err.to_string()}</p> }.into_any()
+                        }
                     }
-                    view! {
-                        <SubscriptionToggle
-                            username=username
-                            subscribed=subscribed
-                            subscribe=subscribe
-                            unsubscribe=unsubscribe
-                        />
-                    }
-                        .into_any()
                 })
             }}
         </Suspense>
@@ -96,6 +102,29 @@ fn SubscriptionToggle(
                 </ActionForm>
             }
                 .into_any()
+        }}
+        <SubscriptionActionError subscribe=subscribe unsubscribe=unsubscribe />
+    }
+}
+
+/// A failed subscribe/unsubscribe, rendered where the button is.
+///
+/// Without this the mutation was silent: only its `version()` bump re-ran the query,
+/// so a failed unsubscribe repainted a Subscribe button and read as success. That is
+/// the other half of #861 — the toggle flipping was never proof the write landed.
+#[component]
+fn SubscriptionActionError(
+    subscribe: ServerAction<Subscribe>,
+    unsubscribe: ServerAction<Unsubscribe>,
+) -> impl IntoView {
+    view! {
+        {move || {
+            subscribe
+                .value()
+                .get()
+                .and_then(Result::err)
+                .or_else(|| unsubscribe.value().get().and_then(Result::err))
+                .map(|e| view! { <p class="error">{e.to_string()}</p> })
         }}
     }
 }
