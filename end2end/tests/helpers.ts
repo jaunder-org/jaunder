@@ -333,33 +333,67 @@ export async function requestPasswordReset(
 }
 
 /**
+ * Click one side of the subscribe toggle and settle on an outcome.
+ *
+ * Waits for *either* the flipped button or an error, then decides — rather than
+ * waiting only for the flipped button. #861 is why: a failed subscription check
+ * used to repaint the opposite button, so "the button flipped" was satisfied by
+ * both success and failure, and the caller carried on believing the write had
+ * committed. The subsequent assertion then failed somewhere else entirely,
+ * looking indistinguishable from a privacy regression.
+ *
+ * The component now paints `.error` on either a failed check or a failed
+ * mutation, so a failure that once masqueraded as success surfaces here, named,
+ * at the step that actually broke.
+ */
+async function toggleSubscription(
+  page: Page,
+  authorUsername: string,
+  clickLabel: string,
+  settledLabel: string,
+): Promise<void> {
+  await goto(page, `/~${authorUsername}`);
+  await click(page, `button:has-text("${clickLabel}")`);
+
+  const settled = page.locator(`button:has-text("${settledLabel}")`);
+  const failed = page.locator(SEL.error);
+  await expect(settled.or(failed).first()).toBeVisible();
+
+  if ((await failed.count()) > 0) {
+    const detail = (await failed.first().innerText()).trim();
+    throw new Error(
+      `${clickLabel} for ~${authorUsername} failed: ${detail}. ` +
+        `The write did not commit, so any later visibility assertion would be ` +
+        `testing the wrong thing (#861).`,
+    );
+  }
+  await expect(settled).toBeVisible();
+}
+
+/**
  * Subscribe the current (authenticated) page's user to `authorUsername` via the
- * author's profile page, waiting for the button to flip to "Unsubscribe".
+ * author's profile page, settling once the button flips to "Unsubscribe".
  */
 export async function subscribeTo(
   page: Page,
   authorUsername: string,
 ): Promise<void> {
-  await withTimedAction(page, "flow.subscribe", async () => {
-    await goto(page, `/~${authorUsername}`);
-    await click(page, 'button:has-text("Subscribe")');
-    await waitForSelector(page, 'button:has-text("Unsubscribe")');
-  });
+  await withTimedAction(page, "flow.subscribe", () =>
+    toggleSubscription(page, authorUsername, "Subscribe", "Unsubscribe"),
+  );
 }
 
 /**
  * Unsubscribe the current page's user from `authorUsername` via the profile
- * page, waiting for the button to flip back to "Subscribe".
+ * page, settling once the button flips back to "Subscribe".
  */
 export async function unsubscribeFrom(
   page: Page,
   authorUsername: string,
 ): Promise<void> {
-  await withTimedAction(page, "flow.unsubscribe", async () => {
-    await goto(page, `/~${authorUsername}`);
-    await click(page, 'button:has-text("Unsubscribe")');
-    await waitForSelector(page, 'button:has-text("Subscribe")');
-  });
+  await withTimedAction(page, "flow.unsubscribe", () =>
+    toggleSubscription(page, authorUsername, "Unsubscribe", "Subscribe"),
+  );
 }
 
 /**

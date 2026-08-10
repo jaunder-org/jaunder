@@ -14,7 +14,9 @@ mod api;
 mod component;
 #[cfg(feature = "server")]
 mod server;
+pub mod state;
 
 pub use api::{IsSubscribed, Subscribe, Unsubscribe, is_subscribed, subscribe, unsubscribe};
 #[cfg(target_arch = "wasm32")]
 pub use component::SubscribeButton;
+pub use state::{SubscribePaint, paint};
