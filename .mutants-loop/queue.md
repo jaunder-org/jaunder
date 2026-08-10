@@ -2,6 +2,17 @@
 
 Read `PROTOCOL.md` first. **The unit of work is one file**, not one mutant.
 
+> **STALE — do not work this queue.** It was built by a discovery run that
+> scoped tests to one package at a time. That disables default-off Cargo
+> features (`common`'s `sanitize`, its `sqlx`), so feature-gated code was never
+> compiled and its mutants were filed as surviving when they are not. 27 of
+> `render.rs`'s 27 are false on this basis alone, and any feature-gated code
+> elsewhere is equally suspect.
+>
+> Discovery must be re-run with `--test-workspace true` (already fixed in
+> `discover.sh`) before these numbers mean anything. The counts below are an
+> upper bound on real survivors, not a work list.
+
 Discovery output is a snapshot. Always re-verify a mutant before working it —
 some listed here are already dead.
 
@@ -32,7 +43,10 @@ skip much of it.
 
 ## common — 66 surviving in 10 files
 
-- [ ] todo | common/src/render.rs | 27
+- [x] skipped (not compiled) | common/src/render.rs | 27 — all 27 were false.
+      Re-run workspace-scoped: 71 mutants, 50 caught, 20 unviable, **0 missed**.
+      The `sanitize` feature is default-off, so package-scoped none of this file
+      compiled. No test needed; the existing ones were already killing them.
 - [ ] todo | common/src/feed/atom.rs | 12
 - [ ] todo | common/src/atompub/entry.rs | 10
 - [ ] todo | common/src/media.rs | 4

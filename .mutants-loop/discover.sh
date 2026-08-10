@@ -14,33 +14,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$ROOT/.mutants-loop/out"
 LOG="$ROOT/.mutants-loop/discover.log"
 
-# cargo-mutants copies the whole source tree per job and builds it there. On the
-# default TMPDIR that is /tmp, a 16 GB tmpfs — four jobs at ~2.4 GB of build
-# artifacts each, running beside a Nix build, exhausted it and made the repo's
-# own gate fail a test that passes fine on its own. A red gate the loop cannot
-# explain is worse than a slow run: the rules tell it to revert and skip, so it
-# would throw away good work. Put the scratch trees on the big disk instead.
-export TMPDIR="${TMPDIR_MUTANTS:-$HOME/.cache/cargo-mutants-tmp}"
-mkdir -p "$TMPDIR"
+# TMPDIR, the nextest filter, and the mandatory flags all live in common.sh, so
+# discovery and verify.sh run the tool identically. They must: if they differ,
+# they answer different questions about the same mutant.
+# shellcheck source=/dev/null
+. "$ROOT/.mutants-loop/common.sh"
 
 mkdir -p "$OUT"
-
-# The nextest filter that keeps the unmutated baseline green. Defined once here
-# and printed into the log, because the loop must use the SAME expression when
-# it verifies a kill — a filter that drifts gives a different answer.
-#
-# Everything it excludes needs a live PostgreSQL that is not running:
-#   postgres       — the case_2_postgres / Backend__Postgres twins. Case-
-#                    insensitive on purpose: plain `postgres` misses
-#                    `backend_2_Backend__Postgres`, and one surviving test fails
-#                    the baseline and loses the entire package.
-#   backup_interop — backup_round_trips_full_cycle_across_backends drives
-#                    unique_postgres_url() directly, so its NAME never says
-#                    postgres. Named exclusions are needed for those.
-#
-# Every excluded test has a sqlite twin covering the same code, so no mutant
-# goes unexamined because of this.
-FILTER='not test(/(?i)postgres|backup_interop/)'
 
 # Order: pure-logic crates first (best signal), UI crates last (most noise).
 #
@@ -59,25 +39,19 @@ for pkg in $PACKAGES; do
   echo "[$pkg] starting $(date -Is)" >>"$LOG"
   rm -rf "$OUT/$pkg"
   mkdir -p "$OUT/$pkg"
-  # --test-tool nextest is required, not a preference. Under plain `cargo test`
-  # the host crate's metrics tests share one process and a global recorder, so
-  # the unmutated baseline fails and the whole package is skipped. nextest gives
-  # each test its own process, which is what the repo's own gate uses.
-  #
-  # $FILTER is defined and explained at the top of this file.
-  echo "[$pkg] filter: $FILTER" >>"$LOG"
-  cargo mutants \
-    --package "$pkg" \
-    --jobs 2 \
-    --no-shuffle \
-    --test-tool nextest \
-    --output "$OUT/$pkg" \
-    -- -E "$FILTER" \
-    >>"$LOG" 2>&1
+  # run_mutants carries the mandatory flags and the filter — see common.sh for
+  # what each one is for and what went wrong without it.
+  echo "[$pkg] filter: $MUTANTS_FILTER" >>"$LOG"
+  run_mutants --package "$pkg" --output "$OUT/$pkg" >>"$LOG" 2>&1
   status=$?
   echo "[$pkg] finished status=$status $(date -Is)" >>"$LOG"
-  # cargo-mutants exits non-zero when mutants survive. That is the expected
-  # outcome here, not a failure, so record completion either way.
+  # cargo-mutants exits non-zero when mutants survive — a result, not a failure.
+  # Exit 4 is different: the unmutated baseline failed, so NOTHING was tested
+  # and the empty result means nothing. Do not mark such a package done.
+  if [ "$status" -eq 4 ]; then
+    echo "[$pkg] BASELINE FAILED — no mutants tested, not marking done" >>"$LOG"
+    continue
+  fi
   touch "$OUT/$pkg/.done"
 done
 

@@ -46,3 +46,27 @@ Append-only. Newest last. One line per event.
   at 231 caught / 6 missed / 72 unviable / 6 timeout. 551 surviving mutants in
   total: web 361, storage 85, common 66, host 24, macros 9, jaunder 6. Discovery
   no longer needs to run, so the loop has the machine to itself.
+- 2026-08-10 — started the queue at common/src/render.rs and found the whole
+  discovery is measuring the wrong thing. `sanitize` is a default-OFF feature;
+  `cargo mutants --package common` never enables it, so the entire
+  `#[cfg(feature = "sanitize")]` module and its ~40 tests are not compiled.
+  Mutating uncompiled code changes nothing, tests pass, mutant filed as MISSED.
+  All 27 render.rs survivors are false on that basis. flake.nix already warned
+  ("--workspace is load-bearing, not incidental") for the same reason at its
+  doctests derivation. Fix is `--test-workspace true`, now in discover.sh and
+  PROTOCOL.md. Queue marked STALE; discovery must be re-run before any more
+  test-writing. Added an "is this mutant real?" gate to PROTOCOL — a false
+  survivor costs more than a skipped one, because writing the duplicate test
+  passes the gate and looks like progress.
+- 2026-08-10 — hypothesis CONFIRMED on render.rs. Workspace-scoped it yields 71
+  mutants (not 27 — more code compiles): 50 caught, 20 unviable, 0 missed. All
+  27 reported survivors were false.
+- 2026-08-10 — that verify run died at 51 min with a real ENOSPC: I ran
+  cargo-mutants by hand and the TMPDIR fix lived only in discover.sh, so it used
+  the 16 GB tmpfs. A workspace build is much bigger than a package one. Root
+  cause is the shape of the setup, not the disk: four things must be right
+  (runner, workspace scope, filter, TMPDIR) and they were spread across a script
+  and a doc. Moved all of them into `.mutants-loop/common.sh`, sourced by
+  discover.sh and a new verify.sh. PROTOCOL now says to call the scripts and
+  never hand-roll the command. discover.sh also no longer marks a package done
+  when the baseline failed (exit 4).

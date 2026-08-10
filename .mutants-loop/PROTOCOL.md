@@ -14,17 +14,21 @@ would also pass. Your job is to write a test that kills it.
 
 Everything lives in `.mutants-loop/`. Nothing lives in your head.
 
-| File                               | Holds                                |
-| ---------------------------------- | ------------------------------------ |
-| `discover.sh`                      | the discovery run (never edits code) |
-| `discover.log`                     | discovery progress                   |
-| `out/<pkg>/mutants.out/missed.txt` | surviving mutants found by discovery |
-| `queue.md`                         | the work queue and its state         |
-| `journal.md`                       | append-only record, newest last      |
+| File                               | Holds                                    |
+| ---------------------------------- | ---------------------------------------- |
+| `common.sh`                        | the mandatory flags, filter, and TMPDIR  |
+| `discover.sh`                      | the discovery run (never edits code)     |
+| `verify.sh`                        | `verify.sh <pkg> <file>` — did they die? |
+| `discover.log`                     | discovery progress                       |
+| `out/<pkg>/mutants.out/missed.txt` | surviving mutants found by discovery     |
+| `queue.md`                         | the work queue and its state             |
+| `journal.md`                       | append-only record, newest last          |
 
 ## Each wake-up
 
-1. Read `queue.md`. Do not read anything else first.
+1. Read `queue.md`. Do not read anything else first. Check whether its results
+   are marked stale — a queue built by a discovery run with the wrong flags
+   lists mutants that were never really alive.
 2. If the queue has no `todo` files left, refill it from the newest `missed.txt`
    files. Group the mutants by file, biggest file first — one `todo` line per
    file.
@@ -54,23 +58,55 @@ batch and commit it. A partial batch is fine; a broken tree is not.
     the other tests for that module.
 3.  Run the package's tests first — they are fast, and they catch your mistakes
     before the 8-minute gate does. Only then let the commit run the full gate.
-4.  Confirm the kills, into a scratch dir so discovery's own output survives.
-    **Use these exact flags** — see "How to invoke cargo-mutants here" below:
+4.  Confirm the kills:
 
-        devtool run -- cargo mutants -p <pkg> --file <file> \
-          --test-tool nextest --output /tmp/mutverify-<name> \
-          -- -E 'not test(/(?i)postgres|backup_interop/)'
+        devtool run -- .mutants-loop/verify.sh <package> <file>
 
-    Then read `/tmp/mutverify-<name>/mutants.out/missed.txt`. It must be empty,
-    or hold only the ones you deliberately skipped.
+    It prints the counts and lists anything still alive. `missed` must be 0, or
+    hold only what you deliberately skipped.
+
+    **Do not hand-roll a `cargo mutants` command.** The flags are not optional,
+    there are four things to get right (runner, workspace scope, test filter,
+    TMPDIR), and each one fails by producing a plausible wrong number rather
+    than an error. `verify.sh` and `discover.sh` share `common.sh` precisely so
+    the two cannot disagree.
 
 5.  Commit. One file per commit. `test(<pkg>): kill N mutants in <file>`
 6.  Mark the items `done` or `skipped` in `queue.md`.
 
+## Before writing anything: is this mutant real?
+
+A "surviving mutant" is a claim that no test covers a behavior. The claim can be
+false, and a false one costs more than a skipped one — you write a duplicate
+test, it passes, the gate goes green, and it looks like progress.
+
+Ask these first. Any "yes" means the mutant is **false**, not a gap:
+
+1. **Is the code behind a `#[cfg(feature = ...)]`?** Grep upward from the mutant
+   line for a `cfg(feature`. If the feature is not on by default, a
+   package-scoped run never compiled it. Re-verify with `--test-workspace true`
+   before believing anything.
+2. **Do tests for this function already exist?** Search the file's test module
+   for the function name. If there is thorough coverage and the mutant still
+   "survived", suspect the harness, not the tests. The existing tests in this
+   repo are good; a survivor next to ten targeted tests is a smell.
+3. **Is it `#[cfg(test)]`, a doctest, or WASM-only?** Nothing in the host unit
+   run reaches those.
+
+Record a false survivor as `skipped (not compiled)` or
+`skipped (already covered)` with the reason. That is a real finding and worth
+writing down — it says the measurement was wrong, not the code.
+
+**Never write a test whose only purpose is to kill a mutant you do not
+understand.** If you cannot say in one sentence what bug the test would catch in
+production, skip it.
+
 ## How to invoke cargo-mutants here
 
-Two flags are mandatory. Both were learned the hard way — the first discovery
-run lost three whole packages to them.
+**Use `verify.sh` / `discover.sh`.** They share `common.sh`, which carries
+everything below. This section is why those settings exist, so you do not
+"simplify" one away. Every one of them was learned by getting a wrong answer,
+not an error.
 
 - `--test-tool nextest`. Under plain `cargo test` the `host` crate's metrics
   tests share one process and a global recorder, so the **unmutated baseline
@@ -83,17 +119,45 @@ run lost three whole packages to them.
     not `backend_2_Backend__Postgres`.
   - **Keep `backup_interop`.** `backup_round_trips_full_cycle_across_backends`
     calls `unique_postgres_url()` directly, so its name never says postgres.
-  - The canonical copy of this expression is `$FILTER` at the top of
-    `discover.sh`. If you change one, change both — a filter that drifts between
-    discovery and verification gives two different answers.
+  - The one copy of this expression is `$MUTANTS_FILTER` in `common.sh`, which
+    both scripts source. There is deliberately nowhere else to change it.
 
   One surviving postgres test out of 898 is enough to fail the baseline and lose
   a whole 315-mutant package. That has now happened twice.
+
+- `--test-workspace true`. **Without this the tool reports mutants as surviving
+  in code that was never compiled.** Several crates gate real functionality
+  behind a Cargo feature that is off by default — `common`'s `sanitize`, its
+  `sqlx`. Nothing in `-p common` alone turns those on. Under a workspace-wide
+  test run, feature unification enables them (`storage` turns on `sanitize`).
+
+  Package-scoped, the whole `#[cfg(feature = "sanitize")]` module of
+  `common/src/render.rs` and its ~40 tests are absent from the build. Mutating
+  code that is not compiled changes nothing, the tests pass, and cargo-mutants
+  files the mutant as **missed**. That produced 27 false survivors in one file.
+
+  `flake.nix` already warns about this at the doctests derivation:
+  "`--workspace` is load-bearing, not incidental". The repo knew; the first
+  discovery run did not.
+
+- **`TMPDIR` on the big disk**, which `common.sh` exports. cargo-mutants copies
+  the tree per job and builds it there. The default `/tmp` is a 16 GB tmpfs, and
+  a workspace-wide build is far bigger than a package one — it killed a
+  51-minute run at mutant 70 of 71 with `ENOSPC`. This is the flag most easily
+  lost by typing a `cargo mutants` command by hand, which is the main reason not
+  to.
 
 **A baseline failure is silent-looking.** cargo-mutants prints
 `ERROR cargo test failed in an unmutated tree` and exits 4, having tested
 nothing. If a package reports zero caught and zero unviable, suspect the
 baseline before believing the result.
+
+**The pattern behind every failure so far: this tool reports a plausible number
+instead of an error.** A dead baseline, an uncompiled feature, a filter that
+misses one test — none of them look like failures. They look like results. So
+when a result surprises you (a whole package with nothing caught, dozens of
+survivors in a well-tested file), the first hypothesis is that the measurement
+is wrong, not that the code is untested.
 
 `client` is deliberately not scanned: it is WASM-only, no host test reaches it,
 and all 42 of its mutants survived with nothing caught. Pure noise.
