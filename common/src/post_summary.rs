@@ -75,17 +75,28 @@ impl SummarySeed {
         Self(title.to_string())
     }
 
-    /// The first non-blank line of `body`, capped at [`MAX_BODY_LINE_SEED_CHARS`].
+    /// The first non-blank line of `body`, trimmed and capped at
+    /// [`MAX_BODY_LINE_SEED_CHARS`].
     ///
-    /// `None` when the body has no non-blank line — a real domain answer (an empty
-    /// post), not a validation failure, which is why this is the one constructor that
-    /// can decline.
+    /// **Total.** [`PostBody`]'s `FromStr` rejects a body whose every line is blank
+    /// (#811), so such a line always exists — this constructor cannot decline, and
+    /// the caller needs no impossible-case arm.
+    ///
+    /// The search is written to *be* total rather than to search and then prove the
+    /// search succeeded: `trim_start` crosses newlines, so it skips the leading blank
+    /// lines wholesale and lands on the first non-whitespace character, which is by
+    /// definition inside the line we want. `split_once` then ends that line, and its
+    /// `None` arm is not a failure — it means the line runs to the end of the body.
     #[must_use]
-    pub fn first_body_line(body: &PostBody) -> Option<Self> {
-        body.lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty())
-            .map(|line| Self(line.chars().take(MAX_BODY_LINE_SEED_CHARS).collect()))
+    pub fn first_body_line(body: &PostBody) -> Self {
+        let rest = body.trim_start();
+        let line = rest.split_once('\n').map_or(rest, |(first, _)| first);
+        Self(
+            line.trim_end()
+                .chars()
+                .take(MAX_BODY_LINE_SEED_CHARS)
+                .collect(),
+        )
     }
 }
 
@@ -170,13 +181,15 @@ mod tests {
 
     #[test]
     fn first_body_line_finds_the_first_non_blank_line_and_caps_it() {
+        // Leading blank lines, then a line padded both sides: the seed is the trimmed
+        // line, and the blank lines are skipped rather than declined.
         let body = crate::test_support::parse_post_body("\n\n   \n  hello  \nsecond\n");
-        let seed = SummarySeed::first_body_line(&body).expect("a non-blank line");
+        let seed = SummarySeed::first_body_line(&body);
         assert_eq!(PostSummary::truncated(&seed), "hello");
 
         // The body-line seed carries its own, tighter cap.
         let long = crate::test_support::parse_post_body(&"x".repeat(MAX_POST_SUMMARY_CHARS));
-        let seed = SummarySeed::first_body_line(&long).expect("a non-blank line");
+        let seed = SummarySeed::first_body_line(&long);
         assert_eq!(
             PostSummary::truncated(&seed).chars().count(),
             MAX_BODY_LINE_SEED_CHARS
@@ -186,9 +199,29 @@ mod tests {
     // `first_body_line_declines_a_blank_body` is gone with #811, for the same reason
     // #830 retired the blank-title case just above it: `PostBody` now rejects a body
     // with no non-blank line, so the state it tested is unrepresentable and cannot be
-    // constructed. `first_body_line` keeps its `Option` — its own signature is not this
-    // issue's business — but through a real `PostBody` the `None` arm is unreachable,
-    // which is why `PostRecord::fallback_summary_label` now `unreachable!()`s on it.
+    // constructed. #858 then took the last step and made `first_body_line` total, so
+    // there is no longer a `None` arm to pin — nor the `unreachable!()` that
+    // `PostRecord::fallback_summary_label` needed to absorb it.
+
+    #[test]
+    fn first_body_line_takes_a_body_with_no_trailing_newline() {
+        // The `split_once` `None` arm: the first line runs to the end of the body.
+        let body = crate::test_support::parse_post_body("only line");
+        assert_eq!(
+            PostSummary::truncated(&SummarySeed::first_body_line(&body)),
+            "only line"
+        );
+    }
+
+    #[test]
+    fn first_body_line_strips_a_carriage_return() {
+        // CRLF bodies: `split_once('\n')` leaves the `\r`, and `trim_end` takes it.
+        let body = crate::test_support::parse_post_body("\r\n  hi  \r\nnext\r\n");
+        assert_eq!(
+            PostSummary::truncated(&SummarySeed::first_body_line(&body)),
+            "hi"
+        );
+    }
 
     #[test]
     fn seed_from_slug_is_the_always_available_fallback() {
