@@ -161,7 +161,7 @@ string."
   corrected. AC9 must still pass after these edits.
 
 - **AC12 — the ADR is recorded.**
-  `docs/adr/drafts/cross-language-literal-agreement.md` states that
+  `docs/adr/0109-cross-language-literal-agreement.md` states that
   cross-language literal agreement is enforced by a declared pair table, and how
   it stands relative to ADR-0085. Written numberless in the drafts pen;
   `cargo xtask adr promote` numbers it at ship.

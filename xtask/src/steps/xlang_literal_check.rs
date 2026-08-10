@@ -43,9 +43,7 @@
 //!    pair contains an escape; if one ever does, this is where it will surface,
 //!    as a false failure rather than a false pass.
 //!
-//! See `docs/adr/drafts/cross-language-literal-agreement.md` (path-form on
-//! purpose — `cargo xtask adr promote` rewrites it to the assigned number at
-//! ship).
+//! See `docs/adr/0109-cross-language-literal-agreement.md`.
 
 use std::path::Path;
 

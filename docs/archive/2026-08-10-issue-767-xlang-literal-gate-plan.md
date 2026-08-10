@@ -238,7 +238,7 @@ Two details the tests constrain but do not spell out:
 Also write the module doc comment now, including the AC10 honesty limit — that
 the gate polices exactly the declared pairs and cannot discover an undeclared
 duplicated literal — and a pointer to
-`docs/adr/drafts/cross-language-literal-agreement.md`.
+`docs/adr/0109-cross-language-literal-agreement.md`.
 
 - [ ] **Step 4: Run the tests, verify they pass**
 
@@ -591,7 +591,7 @@ git commit -m "feat(xtask): run the xlang-literal gate in check and validate (#7
 - Modify: `client/src/perf/mod.rs:22-24` (the doc comment on `MARK_PREFIX`)
 - Modify: `end2end/tests/capture-trace.ts:185-188`
 - Review only (already written, **not** committed — gitignored until ship):
-  `docs/adr/drafts/cross-language-literal-agreement.md`
+  `docs/adr/0109-cross-language-literal-agreement.md`
 
 **Every range above stops one line short of the declaration** — `perf/mod.rs:25`
 and `capture-trace.ts:189` are the anchor lines themselves. Editing into them is
@@ -639,7 +639,7 @@ comment edit introduced a second anchor occurrence; fix the comment.
 - [ ] **Step 2b: Verify the ADR draft against AC12 and against what shipped**
 
 The draft was written before the implementation, so read
-`docs/adr/drafts/cross-language-literal-agreement.md` and confirm it still
+`docs/adr/0109-cross-language-literal-agreement.md` and confirm it still
 describes what actually landed. Specifically:
 
 - It states the decision — cross-language literal agreement is enforced by one
@@ -658,7 +658,7 @@ it out of `drafts/`.
 - [ ] **Step 3: Format the touched TypeScript and markdown**
 
 Run:
-`devtool run -- prettier -w end2end/tests/mount.ts end2end/tests/capture-trace.ts docs/adr/drafts/cross-language-literal-agreement.md`
+`devtool run -- prettier -w end2end/tests/mount.ts end2end/tests/capture-trace.ts docs/adr/0109-cross-language-literal-agreement.md`
 
 - [ ] **Step 4: Run the full gate**
 
