@@ -118,6 +118,13 @@ fn sqlx_impls(name: &Ident, inner: &Type) -> TokenStream {
                 <#name as ::core::convert::TryFrom<#inner>>::try_from(v)?,
             )
         },
+        // Deliberately off (#891). `#inner` is whatever the caller declared, and sqlx
+        // implements `PgHasArrayType` for `i32`/`i64`/`String` only — not `u32`, not
+        // `usize`. Since the emitted impl is concrete, an inner without it is `E0277`
+        // at the impl rather than at a use site, so turning this on would stop
+        // `common` compiling on `PageSize`, `FeedMinItems`, `FeedMinDays` and the
+        // retention newtype. No caller binds a slice of a `NumNewtype`.
+        pg_array: false,
     })
 }
 

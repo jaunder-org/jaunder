@@ -65,6 +65,10 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
                         ::std::format!("{e}; stored value: {v:?}").into()
                     })
             },
+            // Off (#891). `String` would make this safe, but no caller binds a slice
+            // of a `#[sqlx_bridge(text)]` type, and the surface is kept minimal —
+            // turning it on later is one line plus a test.
+            pg_array: false,
         });
     }
     crate::sqlx_bridge::bridge(&crate::sqlx_bridge::BridgeSpec {
@@ -76,6 +80,10 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
         // optimal here — borrowing would add an allocation, not remove one.
         decode_inner: quote! { #inner },
         convert: quote! { ::core::result::Result::Ok(Self(v)) },
+        // Off (#891). `#inner` is the declared field type, which need not implement
+        // `PgHasArrayType`; since the emitted impl is concrete, enabling it would be a
+        // compile error at the impl for any such field.
+        pg_array: false,
     })
 }
 

@@ -233,6 +233,9 @@ fn sqlx_bridge(name: &syn::Ident) -> TokenStream {
                 },
             )
         },
+        // `type_inner` is `String`, which has `PgHasArrayType`, so a slice binds as
+        // `TEXT[]` (#891).
+        pg_array: true,
     })
 }
 

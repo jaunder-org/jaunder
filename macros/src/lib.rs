@@ -870,7 +870,8 @@ mod tests {
         assert!(!out.contains("v > "));
     }
 
-    /// True iff the emitted stream carries the three sqlx bridge impls.
+    /// True iff the emitted stream carries the three always-emitted sqlx bridge impls.
+    /// Deliberately does not check `PgHasArrayType`, which is opt-in per caller (#891).
     fn has_sqlx_bridge(out: &str) -> bool {
         out.contains("sqlx :: Type")
             && out.contains("sqlx :: Encode")
