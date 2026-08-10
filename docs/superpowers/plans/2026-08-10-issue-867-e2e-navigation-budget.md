@@ -632,21 +632,53 @@ Change the fixture type at `fixtures.ts:354` from `registeredPage: Page;` to
 Rewrite the fixture's docblock (`fixtures.ts:476-482`): it currently promises a
 page "mounted at `/`" and cites "spec D8" as the reason. Both are now false.
 
-- [ ] **Step 4: Migrate all 42 consumers**
-
 Each site changes from `async ({ registeredPage: page }) => {` plus a first-line
 `await goto(page, X)` to `async ({ registeredPage }) => {` plus
 `const page = await registeredPage(X);`, where `X` is the test's real first
 destination per Task 2's classification. Tests whose classification says their
 `/` boot is `kept:entry` (an assertion runs at `/`) pass `"/"`.
 
-- [ ] **Step 5: Run the full suite, verify it passes**
+- [x] **Step 4: Migrate all 42 consumers** — 45 sites, not 42: the three tests
+      in `navigate.spec.ts` (added by Task 4) are consumers too. Zero
+      `registeredPage: page` destructurings remain.
+
+      Six tests now destructure `{ page, registeredPage }`. They seed through
+      `createPostViaApi(page, …)` *before* their entry URL is known — in two
+      cases the URL is derived from the seed result — and `page` is the same
+      object the fixture later boots, with the session already on its context,
+      so no extra navigation is implied.
+
+      `published post renders at permalink` still loads `/posts/new` twice:
+      its first navigation is inside `composePost` (`posts.ts:61`), which
+      belongs to Task 6a. Net loads are unchanged, not worse. Flagged so it is
+      not miscounted as a Task 5 saving.
+
+- [x] **Step 5: Run the full suite, verify it passes**
 
 Run: `... cargo xtask e2e sqlite chromium` then
 `... cargo xtask e2e sqlite firefox` Expected: PASS. Navigation count should
 already have fallen; do not measure it here — Task 11 owns measurement.
 
-- [ ] **Step 6: Commit**
+**Verified as `cargo xtask e2e-local` instead: 150 passed (6.8 m), exit 0** —
+the whole suite under `chromium` + `chromium-admin`, on the host, no VM.
+
+Why the substitution, recorded because it is a weaker check than the plan asked
+for. The VM-based `e2e sqlite chromium` run failed at
+`machine.wait_for_unit("otel-collector.service", timeout=60)` — the guest never
+finished booting, so **no test executed**. Host load average was 40 on 16 cores,
+because another session was running `e2e-postgres-firefox` and
+`e2e-sqlite-firefox` from a different worktree. That is contention, not a defect
+in this change, and re-running VM tests into a saturated host would have starved
+that session too.
+
+**What this leaves outstanding: firefox is unverified for Task 5.** The final
+`cargo xtask validate` (Task 11 step 7) covers all four
+`{sqlite,postgres}×{chromium,firefox}` combos and is the gate that must be green
+before ship, so the coverage is deferred, not skipped. Later tasks should
+re-attempt a VM run when the host is quiet rather than inheriting this
+substitution by default.
+
+- [x] **Step 6: Commit**
 
 ```bash
 git add end2end/tests/fixtures.ts end2end/tests/*.spec.ts

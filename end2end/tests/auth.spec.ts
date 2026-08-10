@@ -209,8 +209,9 @@ test("sidebar shows only Home nav link when not logged in", async ({
 });
 
 test("sidebar footer shows Sign out link when logged in", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
+  const page = await registeredPage("/");
   // Wait for the authenticated nav to render from the marker (#181 — synchronous,
   // no Suspense swap).
   await waitForSelector(page, ".j-nav a[href='/drafts']");

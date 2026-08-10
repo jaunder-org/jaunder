@@ -8,10 +8,10 @@ import { SEL } from "./selectors";
 // run against SQLite and Postgres (the e2e-sqlite / e2e-postgres VMs).
 
 test("a Unicode-titled post is reachable at its permalink", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
   test.slow();
-  await goto(page, "/posts/new");
+  const page = await registeredPage("/posts/new");
   await page.fill(SEL.postBody, "# Café 日本語\n\nunicode body");
   await click(page, SEL.publishButton("true"));
   await waitForSelector(page, SEL.saveSummary);
@@ -34,10 +34,10 @@ test("a Unicode-titled post is reachable at its permalink", async ({
 });
 
 test("an emoji-only title falls back to the 'post' slug and is reachable", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
   test.slow();
-  await goto(page, "/posts/new");
+  const page = await registeredPage("/posts/new");
   await page.fill(SEL.postBody, "# 🚀🎉\n\nemoji body");
   await click(page, SEL.publishButton("true"));
   await waitForSelector(page, SEL.saveSummary);

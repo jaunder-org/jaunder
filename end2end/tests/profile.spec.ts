@@ -11,9 +11,9 @@ const BIO = 'textarea[name="bio"]';
 
 // #401: a valid display name entered on the profile page persists across a reload.
 test("profile update persists a valid display name", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
-  await goto(page, "/profile");
+  const page = await registeredPage("/profile");
 
   await page.fill(DISPLAY_NAME, "Ada Lovelace");
 
@@ -32,9 +32,9 @@ test("profile update persists a valid display name", async ({
 // DisplayName FromStr — the newtype's own message shows inline once the field is
 // touched, and submit is disabled (ADR-0065 disable-until-valid).
 test("over-long display name shows an inline error and gates submit", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
-  await goto(page, "/profile");
+  const page = await registeredPage("/profile");
 
   const input = page.locator(DISPLAY_NAME);
   await input.fill("a".repeat(256));
@@ -51,9 +51,9 @@ test("over-long display name shows an inline error and gates submit", async ({
 // valid optional value). This is the real-browser form of the former
 // "empty fields set to none" server test.
 test("clearing the display name persists as empty", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
-  await goto(page, "/profile");
+  const page = await registeredPage("/profile");
 
   await page.fill(DISPLAY_NAME, "Temp Name");
   let updated = page.waitForResponse((response) =>
@@ -79,10 +79,8 @@ test("clearing the display name persists as empty", async ({
 
 // #545: a valid bio entered on the profile page persists across a reload — the
 // typed Option<Bio> wire arg round-trips through profile::update/profile::get.
-test("profile update persists a valid bio", async ({
-  registeredPage: page,
-}) => {
-  await goto(page, "/profile");
+test("profile update persists a valid bio", async ({ registeredPage }) => {
+  const page = await registeredPage("/profile");
 
   await page.fill(BIO, "Mathematician and first programmer.");
 
@@ -102,9 +100,9 @@ test("profile update persists a valid bio", async ({
 // shared Bio FromStr — the newtype's own message shows inline once touched, and
 // submit is disabled (ADR-0065 disable-until-valid, gated on bio validity too).
 test("over-long bio shows an inline error and gates submit", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
-  await goto(page, "/profile");
+  const page = await registeredPage("/profile");
 
   const input = page.locator(BIO);
   await input.fill("a".repeat(1001));
@@ -125,9 +123,9 @@ const FORMAT_SELECT = "select#default-post-format";
 const FORMAT_SAVE = 'button:has-text("Save")';
 
 test("default post format round-trips through the typed dispatch", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
-  await goto(page, "/profile");
+  const page = await registeredPage("/profile");
 
   const saveAndReload = async (value: string) => {
     await page.selectOption(FORMAT_SELECT, value);
@@ -148,8 +146,8 @@ test("default post format round-trips through the typed dispatch", async ({
 // wire arg an empty value is *omitted* (dispatched as None), not sent as an empty
 // string that would fail to decode — so emptying the field and submitting must
 // persist as cleared, and submit stays enabled (empty is a valid optional value).
-test("clearing the bio persists as empty", async ({ registeredPage: page }) => {
-  await goto(page, "/profile");
+test("clearing the bio persists as empty", async ({ registeredPage }) => {
+  const page = await registeredPage("/profile");
 
   await page.fill(BIO, "Temporary bio");
   let updated = page.waitForResponse((response) =>

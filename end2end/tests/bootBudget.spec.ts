@@ -65,3 +65,19 @@ test("an empty reason is rejected", async ({ page }) => {
   trackBoots(page);
   expect(() => allowSecondBoot(page, "   ")).toThrow(/reason/);
 });
+
+// `registeredPage` is the same one-boot rule expressed as a fixture: the test
+// names its entry, and the fixture refuses to boot the page a second time.
+// No `bootCount` assertion here — the fixture navigates before the test body
+// can call `trackBoots`, so counting only works once arming is automatic.
+test("registeredPage boots at the given entry", async ({ registeredPage }) => {
+  const page = await registeredPage("/posts/new");
+  expect(new URL(page.url()).pathname).toBe("/posts/new");
+});
+
+test("registeredPage refuses a second call", async ({ registeredPage }) => {
+  await registeredPage("/posts/new");
+  await expect(registeredPage("/profile")).rejects.toThrow(
+    /called twice[\s\S]*\/posts\/new/,
+  );
+});

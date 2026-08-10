@@ -22,8 +22,9 @@ const APP_READY = SEL.postBody;
 const APP_LINK = 'a[href="/app"]';
 
 test("an in-app move changes route without a document load", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
+  const page = await registeredPage("/");
   let loads = 0;
   page.on("domcontentloaded", () => {
     loads += 1;
@@ -39,8 +40,9 @@ test("an in-app move changes route without a document load", async ({
 });
 
 test("it fails loudly when the destination never renders", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
+  const page = await registeredPage("/");
   await expect(
     navigateInApp(page, () => page.click(APP_LINK), {
       url: "/app",
@@ -51,8 +53,9 @@ test("it fails loudly when the destination never renders", async ({
 });
 
 test("it rejects a barrier that is already satisfied", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
+  const page = await registeredPage("/");
   await expect(
     navigateInApp(page, () => page.click(APP_LINK), {
       url: "/app",

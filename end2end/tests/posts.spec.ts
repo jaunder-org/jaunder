@@ -23,9 +23,9 @@ const HOME_FEED_SELF_COUNT = 51;
 const HOME_FEED_OTHER_COUNT = 2;
 
 test("authenticated user can create a post through the UI", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
-  await goto(page, "/posts/new");
+  const page = await registeredPage("/posts/new");
 
   await expect(page.locator(SEL.topbarHeading)).toHaveText("New post");
   await page.fill(SEL.postBody, "# Playwright Post\n\n**browser**");
@@ -39,9 +39,9 @@ test("authenticated user can create a post through the UI", async ({
 });
 
 test("authenticated user can create a post with a summary", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
-  await goto(page, "/posts/new");
+  const page = await registeredPage("/posts/new");
 
   await expect(page.locator(SEL.topbarHeading)).toHaveText("New post");
   await page.fill(SEL.postBody, "# Summary Test\n\nBody text");
@@ -66,9 +66,9 @@ test("authenticated user can create a post with a summary", async ({
 // inline once touched, and the publish button is disabled (ADR-0065
 // disable-until-valid, gated on summary validity alongside the slug).
 test("over-long post summary shows an inline error and gates submit", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
-  await goto(page, "/posts/new");
+  const page = await registeredPage("/posts/new");
 
   await page.fill(SEL.postBody, "# Over Cap\n\nBody text");
   const summaryInput = page.locator(SEL.postSummary);
@@ -84,10 +84,10 @@ test("over-long post summary shows an inline error and gates submit", async ({
 // persisting as cleared — verified in the browser: create with a summary, edit,
 // empty the field, save, then reopen the editor and confirm it is empty.
 test("clearing a post summary on edit persists as empty", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
   test.slow();
-  await goto(page, "/posts/new");
+  const page = await registeredPage("/posts/new");
   await page.fill(SEL.postBody, "# Clearable\n\nbody");
   await page.fill(SEL.postSummary, "A summary to remove");
   await click(page, SEL.publishButton("false"));
@@ -122,9 +122,9 @@ test("clearing a post summary on edit persists as empty", async ({
 });
 
 test("authenticated user can save a draft through the UI", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
-  await goto(page, "/posts/new");
+  const page = await registeredPage("/posts/new");
 
   await page.fill(SEL.postBody, "*draft*");
   await click(page, '.j-seg button:has-text("Org")');
@@ -136,10 +136,10 @@ test("authenticated user can save a draft through the UI", async ({
   await expect(page.locator(SEL.saveSummary)).toContainText("Slug: draft-slug");
 });
 
-test("published post renders at permalink", async ({
-  registeredPage: page,
-}) => {
+test("published post renders at permalink", async ({ registeredPage }) => {
   test.slow();
+  // `composePost` navigates to `/posts/new` itself, so that is the entry.
+  const page = await registeredPage("/posts/new");
   const summary = await composePost(page, {
     body: "# Permalink Story\n\n**hello permalink**",
     publish: true,
@@ -164,12 +164,10 @@ test("published post renders at permalink", async ({
   await expect(page.locator(".j-post-body")).toContainText("hello permalink");
 });
 
-test("authenticated user can edit a draft post", async ({
-  registeredPage: page,
-}) => {
+test("authenticated user can edit a draft post", async ({ registeredPage }) => {
   test.slow();
   // Create a draft; title embedded as # heading
-  await goto(page, "/posts/new");
+  const page = await registeredPage("/posts/new");
   await page.fill(SEL.postBody, "# Original Draft\n\noriginal body");
   await click(page, SEL.publishButton("false"));
   await waitForSelector(page, SEL.saveSummary);
@@ -205,7 +203,7 @@ test("authenticated user can edit a draft post", async ({
 });
 
 test("edit page pre-selects the post's current audience", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
   test.slow();
   // Characterization test (#643): opening the editor must render the post's
@@ -216,7 +214,7 @@ test("edit page pre-selects the post's current audience", async ({
   // unpublished posts, so this targets a draft.
 
   // A named audience must exist for its checkbox to appear in the picker.
-  await goto(page, "/audiences");
+  const page = await registeredPage("/audiences");
   await page.fill('input[name="name"]', "Confidants");
   await click(page, 'button:has-text("Create")');
   await expect(
@@ -262,13 +260,13 @@ test("edit page pre-selects the post's current audience", async ({
 });
 
 test("editing an invalid or nonexistent post shows not-found", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
   // Unparseable post_id ("abc") drives the #487 `None` arm: `post_id_param`
   // yields None and the fetcher short-circuits to a client-side "Post not found"
   // with no server lookup. This is the path the sentinel removal introduced, so
   // it must be guarded against regressing to a sentinel id / wasted round-trip.
-  await goto(page, "/posts/abc/edit");
+  const page = await registeredPage("/posts/abc/edit");
   await expect(page.locator(SEL.error)).toContainText("Post not found");
 
   // A well-formed but nonexistent id takes the unchanged `Some(id)` server path
@@ -278,11 +276,11 @@ test("editing an invalid or nonexistent post shows not-found", async ({
 });
 
 test("editing a published post freezes the slug", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
   test.slow();
   // Create and publish a post; title embedded as # heading
-  await goto(page, "/posts/new");
+  const page = await registeredPage("/posts/new");
   await page.fill(SEL.postBody, "# Published Article\n\noriginal content");
   await click(page, SEL.publishButton("true"));
   await waitForSelector(page, SEL.saveSummary);
@@ -535,11 +533,11 @@ test("cockpit /app shows the authenticated home feed with pagination", async ({
 });
 
 test("authenticated user can delete a published post", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
   test.slow();
   // Create a published post; title embedded as # heading (title input is removed from UI)
-  await goto(page, "/posts/new");
+  const page = await registeredPage("/posts/new");
   await page.fill(SEL.postBody, "# Post To Delete\n\nthis will be deleted");
   await click(page, SEL.publishButton("true"));
   await waitForSelector(page, SEL.saveSummary);
@@ -574,11 +572,11 @@ test("authenticated user can delete a published post", async ({
 });
 
 test("unpublishing from a permalink navigates to /drafts without a full reload", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
   test.slow();
   // Create a published post and open its permalink.
-  await goto(page, "/posts/new");
+  const page = await registeredPage("/posts/new");
   await page.fill(SEL.postBody, "# Unpublish Me\n\nsoon a draft again");
   await click(page, SEL.publishButton("true"));
   await waitForSelector(page, SEL.saveSummary);
@@ -608,10 +606,10 @@ test("unpublishing from a permalink navigates to /drafts without a full reload",
 });
 
 test("inline composer: published post appears in timeline without page reload", async ({
-  registeredPage: page,
+  registeredPage,
 }, testInfo) => {
   // The /app cockpit must already show the feed with the composer.
-  await goto(page, "/app");
+  const page = await registeredPage("/app");
   await waitForSelector(page, ".j-composer");
 
   const initialCount = await page.locator("article.j-post").count();
@@ -627,9 +625,9 @@ test("inline composer: published post appears in timeline without page reload", 
 });
 
 test("inline composer: plain body publishes titleless note", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
-  await goto(page, "/app");
+  const page = await registeredPage("/app");
   await waitForSelector(page, ".j-composer");
 
   await page.fill('.j-composer textarea[name="body"]', "Titleless inline note");
@@ -642,9 +640,9 @@ test("inline composer: plain body publishes titleless note", async ({
 });
 
 test("inline composer: markdown heading becomes article title", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
-  await goto(page, "/app");
+  const page = await registeredPage("/app");
   await waitForSelector(page, ".j-composer");
 
   await page.fill(
@@ -662,9 +660,9 @@ test("inline composer: markdown heading becomes article title", async ({
 });
 
 test("inline composer: publish flash is a link to the post permalink", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
-  await goto(page, "/app");
+  const page = await registeredPage("/app");
   await waitForSelector(page, ".j-composer");
 
   await page.fill('.j-composer textarea[name="body"]', "Flash link test");
@@ -679,9 +677,9 @@ test("inline composer: publish flash is a link to the post permalink", async ({
 });
 
 test("inline composer: draft flash links to the draft's canonical permalink", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
-  await goto(page, "/app");
+  const page = await registeredPage("/app");
   await waitForSelector(page, ".j-composer");
 
   await page.fill('.j-composer textarea[name="body"]', "Draft flash link test");
@@ -698,9 +696,9 @@ test("inline composer: draft flash links to the draft's canonical permalink", as
 });
 
 test("inline composer: flash clears when user starts typing", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
-  await goto(page, "/app");
+  const page = await registeredPage("/app");
   await waitForSelector(page, ".j-composer");
 
   await page.fill('.j-composer textarea[name="body"]', "Flash clear test");
@@ -713,9 +711,9 @@ test("inline composer: flash clears when user starts typing", async ({
 });
 
 test("inline composer: format toggle switches active button", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
-  await goto(page, "/app");
+  const page = await registeredPage("/app");
   await waitForSelector(page, ".j-composer");
 
   // Markdown is active by default.
@@ -731,9 +729,9 @@ test("inline composer: format toggle switches active button", async ({
 });
 
 test("create post with tags via UI: tags persist and appear on the post", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
-  await goto(page, "/posts/new");
+  const page = await registeredPage("/posts/new");
 
   await page.fill(SEL.postBody, "# Tagged Post\n\ncontent");
 
@@ -762,9 +760,12 @@ test("create post with tags via UI: tags persist and appear on the post", async 
 });
 
 test("tag chip on permalink navigates to site tag listing", async ({
-  registeredPage: page,
+  page,
+  registeredPage,
 }) => {
-  // Create a published post with two tags via the API
+  // Create a published post with two tags via the API. `page` is the same object
+  // `registeredPage` boots; the seeded session is already on its context, so the
+  // API call needs no navigation and the permalink can name the entry.
   const { permalink } = await createPostViaApi(page, {
     body: "# Chip Nav Post\n\ncontent",
     tags: ["rustlang", "nix"],
@@ -772,7 +773,7 @@ test("tag chip on permalink navigates to site tag listing", async ({
   expect(permalink).toBeTruthy();
 
   // Visit permalink; wait for tag chips to render
-  await goto(page, permalink);
+  await registeredPage(permalink);
   await waitForSelector(page, '.j-tag[href="/tags/rustlang"]');
 
   // Click the "rustlang" chip — Leptos router handles this client-side
@@ -784,7 +785,8 @@ test("tag chip on permalink navigates to site tag listing", async ({
 });
 
 test("editing a post updates tag chips and tag listing pages", async ({
-  registeredPage: page,
+  page,
+  registeredPage,
 }) => {
   // Use tags unique to this test so cross-test pollution can't affect the
   // /tags/:tag listing checks below.
@@ -794,7 +796,7 @@ test("editing a post updates tag chips and tag listing pages", async ({
   });
 
   // Open the edit page directly
-  await goto(page, `/posts/${post_id}/edit`);
+  await registeredPage(`/posts/${post_id}/edit`);
 
   // Wait for pre-populated chips from posts::get_preview to appear
   await waitForSelector(page, '.j-tag-chip-label:has-text("#xeditc")');
@@ -855,26 +857,28 @@ test("editing a post updates tag chips and tag listing pages", async ({
 });
 
 test("user tag page lists that user's tagged posts", async ({
-  registeredPage: page,
+  page,
+  registeredPage,
 }) => {
   const { permalink } = await createPostViaApi(page, {
     body: "# User Tag Post\n\ncontent",
     tags: ["utaga"],
   });
   const userPath = permalink.match(/^(\/~[^/]+)\//)![1];
-  await goto(page, `${userPath}/tags/utaga`);
+  await registeredPage(`${userPath}/tags/utaga`);
   await waitForSelector(page, ".j-post-body");
   await expect(page.locator(".j-scroll")).toContainText("User Tag Post");
 });
 
 test("TagInput autocomplete suggests existing tags", async ({
-  registeredPage: page,
+  page,
+  registeredPage,
 }) => {
   // Seed the tag corpus with a known tag
   await createPostViaApi(page, { body: "seed post", tags: ["rustlang"] });
 
   // Open the create form and type a prefix that matches "rustlang"
-  await goto(page, "/posts/new");
+  await registeredPage("/posts/new");
   await page.fill(".j-tag-text", "rust");
 
   // Autocomplete dropdown should appear (150 ms debounce + fetch)
@@ -887,9 +891,9 @@ test("TagInput autocomplete suggests existing tags", async ({
 });
 
 test("TagInput: Backspace on empty input removes last chip", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
-  await goto(page, "/posts/new");
+  const page = await registeredPage("/posts/new");
 
   // Add two chips
   await page.fill(".j-tag-text", "alpha");
@@ -910,12 +914,13 @@ test("TagInput: Backspace on empty input removes last chip", async ({
 });
 
 test("TagInput: keyboard navigation selects autocomplete item", async ({
-  registeredPage: page,
+  page,
+  registeredPage,
 }) => {
   // Seed a known tag
   await createPostViaApi(page, { body: "seed post", tags: ["kbdnav"] });
 
-  await goto(page, "/posts/new");
+  await registeredPage("/posts/new");
   await page.fill(".j-tag-text", "kbd");
   await waitForSelector(page, ".j-tag-suggest");
 
@@ -931,11 +936,12 @@ test("TagInput: keyboard navigation selects autocomplete item", async ({
 });
 
 test("TagInput: Escape dismisses autocomplete without adding a chip", async ({
-  registeredPage: page,
+  page,
+  registeredPage,
 }) => {
   await createPostViaApi(page, { body: "seed post", tags: ["esctest"] });
 
-  await goto(page, "/posts/new");
+  await registeredPage("/posts/new");
   await page.fill(".j-tag-text", "esc");
   await waitForSelector(page, ".j-tag-suggest");
 
@@ -946,9 +952,9 @@ test("TagInput: Escape dismisses autocomplete without adding a chip", async ({
 });
 
 test("TagInput: invalid tag text shows an error", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
-  await goto(page, "/posts/new");
+  const page = await registeredPage("/posts/new");
   // "bad tag" has a space — rejected by TagLabel::from_str
   await page.fill(".j-tag-text", "bad tag");
   await page.keyboard.press("Enter");
@@ -962,11 +968,11 @@ test("TagInput: invalid tag text shows an error", async ({
 });
 
 test("authenticated user can delete a draft from the drafts page", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
   test.slow();
   // Create a draft; title embedded as # heading (title input is removed from UI)
-  await goto(page, "/posts/new");
+  const page = await registeredPage("/posts/new");
   await page.fill(SEL.postBody, "# Draft To Delete\n\ndraft content");
   await click(page, SEL.publishButton("false"));
   await waitForSelector(page, SEL.saveSummary);
@@ -984,7 +990,7 @@ test("authenticated user can delete a draft from the drafts page", async ({
 });
 
 test("scheduling a post shows a Scheduled-for badge on the drafts page", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
   test.slow();
   // A fixed far-future wall-clock time keeps the post unambiguously *scheduled*
@@ -995,7 +1001,7 @@ test("scheduling a post shows a Scheduled-for badge on the drafts page", async (
   // "Scheduled for …" badge (`.j-badge-scheduled`) rather than going live.
   const FUTURE_DATETIME_LOCAL = "2999-01-01T09:00";
 
-  await goto(page, "/posts/new");
+  const page = await registeredPage("/posts/new");
   await page.fill(
     SEL.postBody,
     "# Scheduled Draft\n\nbody for a scheduled post",
@@ -1015,7 +1021,7 @@ test("scheduling a post shows a Scheduled-for badge on the drafts page", async (
 });
 
 test("scheduling from the edit page shows a Scheduled-for badge on the drafts page", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
   test.slow();
   // The editor's schedule control had no coverage at all before #863, which is what
@@ -1028,7 +1034,7 @@ test("scheduling from the edit page shows a Scheduled-for badge on the drafts pa
   const FUTURE_DATETIME_LOCAL = "2999-01-01T09:00";
 
   // Create a draft and reach its edit page, the same route the edit test above uses.
-  await goto(page, "/posts/new");
+  const page = await registeredPage("/posts/new");
   await page.fill(SEL.postBody, "# Scheduled From Editor\n\nbody");
   await click(page, SEL.publishButton("false"));
   await waitForSelector(page, SEL.saveSummary);

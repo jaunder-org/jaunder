@@ -113,11 +113,11 @@ test("seeded: re-seed as the same user after logout boots authed", async ({
 });
 
 test("owner: /app cockpit boots straight into the personalized feed", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
   // Directly bookmarkable (D6): a direct hit to /app boots into the feed + composer
   // with zero intermediate clicks (pre-paint html.authed → the client boots authed).
-  await goto(page, "/app");
+  const page = await registeredPage("/app");
 
   await expect(page.locator(".j-topbar .j-sub")).toHaveText("Your home feed");
   await expect(page.locator(SEL.postBody)).toBeVisible();
