@@ -290,10 +290,38 @@ pub(crate) const SELECT_POST_TAGS: &str = "SELECT pt.post_id, pt.tag_id, t.tag_s
      WHERE pt.post_id = $1
      ORDER BY t.tag_slug";
 
-/// Resolves a slug to its `tag_id` after the dialect-specific tag upsert. Only
-/// the upsert itself diverges (`INSERT OR IGNORE` vs `ON CONFLICT DO NOTHING`),
-/// so this lookup is shared here rather than duplicated per ADR-0019.
-pub(crate) const SELECT_TAG_ID_BY_SLUG: &str = "SELECT tag_id FROM tags WHERE tag_slug = $1";
+/// Get-or-create a tag by slug, returning its id in **one** statement.
+///
+/// The no-op `DO UPDATE` is load-bearing: `DO NOTHING` emits no row for
+/// `RETURNING` on the conflict path, which is exactly why a second `SELECT` used
+/// to follow this (#883). Rewriting `tag_slug` to the value it already holds
+/// makes the id come back on both the insert and the conflict path, so there is
+/// no window in which a concurrently deleted tag yields `RowNotFound`. #343
+/// landed the same shape for `subscriptions`; both dialects run it.
+///
+/// Shared rather than per-dialect: `SQLite` accepts `$n` placeholders and
+/// `ON CONFLICT … DO UPDATE … RETURNING`, so the old `INSERT OR IGNORE` was a
+/// spelling difference, not a capability one.
+///
+/// **Takes a row lock on the tag until commit** (unlike the `DO NOTHING` it
+/// replaces), which is why [`post_tag_diff`] hands additions back in slug order.
+///
+/// Bind order: `tag_slug`.
+pub(crate) const UPSERT_TAG_RETURNING_ID: &str = "INSERT INTO tags (tag_slug) VALUES ($1)
+     ON CONFLICT (tag_slug) DO UPDATE SET tag_slug = excluded.tag_slug
+     RETURNING tag_id";
+
+/// Attaches a tag to a post, tolerating the row already being there.
+///
+/// `DO NOTHING`, not `DO UPDATE`: `desired` may carry two labels sharing a slug
+/// ([`post_tag_diff`] does not dedupe) and the first occurrence's casing must
+/// win, so the existing row is left exactly as it is. Nothing reads a value
+/// back, so there is no reason to force a row out of the conflict path here.
+///
+/// Bind order: `post_id, tag_id, tag_display`.
+pub(crate) const INSERT_POST_TAG: &str = "INSERT INTO post_tags
+     (post_id, tag_id, tag_display) VALUES ($1, $2, $3)
+     ON CONFLICT (post_id, tag_id) DO NOTHING";
 
 /// Drops one tag from a post, by slug, inside `set_post_tags`' transaction. The
 /// SQL is identical on both dialects, so it is shared here per ADR-0019.
@@ -327,6 +355,12 @@ pub(crate) fn post_tags_from_rows(rows: Vec<(PostId, TagId, Tag, TagLabel)>) -> 
 /// no caller performs the writes itself (#771).
 pub(crate) struct PostTagDiff<'a> {
     /// Labels to add (their slug is not already present on the post).
+    ///
+    /// **Slug-ordered, contractually.** [`UPSERT_TAG_RETURNING_ID`] locks each
+    /// `tags` row until commit, so applying these in a caller-supplied order lets
+    /// two concurrent reconciles deadlock on Postgres (#876). The order is stable,
+    /// so two labels sharing a slug keep their input order and the first
+    /// occurrence's casing wins. Do not re-sort or re-shuffle at the call site.
     pub to_add: Vec<&'a TagLabel>,
     /// Existing tags to remove (their slug is not in the desired set).
     pub to_remove: Vec<&'a Tag>,
@@ -353,10 +387,20 @@ pub(crate) fn post_tag_diff<'a>(
     let existing_slugs: HashSet<Tag> = existing.iter().map(|t| t.tag_slug.clone()).collect();
     let desired_slugs: HashSet<Tag> = desired.iter().map(TagLabel::slug).collect();
 
-    let to_add = desired
+    let mut to_add: Vec<&'a TagLabel> = desired
         .iter()
         .filter(|label| !existing_slugs.contains(&label.slug()))
         .collect();
+    // Slug order, so every transaction takes `tags` row locks in the same order. The
+    // upsert this feeds holds a row lock on the tag until commit, so two concurrent
+    // reconciles adding overlapping tags in caller-supplied order could otherwise
+    // deadlock on Postgres (#876). `SQLite` is unaffected — `BEGIN IMMEDIATE` is
+    // database-wide — but the ordering is free and applies to both.
+    //
+    // `sort_by_key`, not `sort_unstable_by_key`: `desired` may carry two labels
+    // sharing a slug and the FIRST occurrence's casing must still win, which
+    // `set_post_tags_is_idempotent_and_absorbs_duplicate_slugs` asserts.
+    to_add.sort_by_key(|label| label.slug());
     let to_remove = existing
         .iter()
         .filter(|tag| !desired_slugs.contains(&tag.tag_slug))
@@ -372,18 +416,6 @@ pub enum TaggingError {
     /// The target post does not exist.
     #[error("post not found")]
     PostNotFound,
-    /// A row the tagging path required is not there.
-    ///
-    /// Reading a tag id back is the one step here that is **not** structurally
-    /// guaranteed: the insert before it is `ON CONFLICT DO NOTHING` /
-    /// `INSERT OR IGNORE`, so it may not have written anything and the `SELECT`
-    /// may be reading a pre-existing row. Nothing in the tree deletes a tag
-    /// today, which is the only reason absence is unreachable — a fact about
-    /// the data, not a property of the statement (#883). So it is a named
-    /// error, not an `unreachable!`: if tag deletion ever lands, this reports
-    /// which row went missing instead of panicking a request handler.
-    #[error(transparent)]
-    MissingRow(#[from] crate::error::MissingRow),
     /// An unexpected database error occurred.
     #[error(transparent)]
     Internal(#[from] sqlx::Error),
@@ -867,10 +899,10 @@ pub trait PostStorage: Send + Sync {
 /// [`update_post`][PostDialect::update_post] (Postgres locks the row with
 /// `FOR UPDATE`) and [`set_post_tags`][PostDialect::set_post_tags], which
 /// diverges twice over — the transaction shape (`SQLite` drives a manual
-/// `BEGIN IMMEDIATE`, Postgres locks the post row with `FOR UPDATE`; ADR-0021)
-/// and the upsert dialect (`SQLite` `INSERT OR IGNORE` vs Postgres
-/// `INSERT … ON CONFLICT DO NOTHING`). Everything else is shared on
-/// [`PostStore`]. See ADR-0019.
+/// `BEGIN IMMEDIATE`, Postgres locks the post row with `FOR UPDATE`; ADR-0021).
+/// That transaction shape is now the *only* divergence — the tag write itself is
+/// the shared [`UPSERT_TAG_RETURNING_ID`] and [`INSERT_POST_TAG`] (#876).
+/// Everything else is shared on [`PostStore`]. See ADR-0019.
 #[async_trait]
 pub trait PostDialect: Backend {
     /// Correlated JSON tag-aggregation subquery (on `p.post_id`) spelled in
@@ -910,9 +942,9 @@ pub trait PostDialect: Backend {
     ) -> Result<PostRecord, UpdatePostError>;
 
     /// Reconcile the post's tags to `desired` in one transaction. Monomorphised
-    /// because the serialization differs: `SQLite` opens `BEGIN IMMEDIATE`,
-    /// Postgres locks the post row with `FOR UPDATE` — and the tag upsert is
-    /// `INSERT OR IGNORE` vs `ON CONFLICT DO NOTHING` (ADR-0019, ADR-0021).
+    /// because the **serialization** differs: `SQLite` opens `BEGIN IMMEDIATE`,
+    /// Postgres locks the post row with `FOR UPDATE` (ADR-0019, ADR-0021). The
+    /// statements it issues are shared, not per-dialect (#876).
     async fn set_post_tags(
         pool: &Pool<Self>,
         post_id: PostId,
@@ -2924,6 +2956,34 @@ mod tests {
         assert_eq!(slugs_of(&*env.state.posts, post).await, vec!["gamma"]);
     }
 
+    /// #883: the upsert returns the tag id on its **conflict** path, not just when
+    /// it inserts. A `DO UPDATE` → `DO NOTHING` regression makes `RETURNING` emit
+    /// no row, so `fetch_one` fails — and this is the test that says why.
+    ///
+    /// Cross-post deliberately: the second post's tag already exists in `tags`, so
+    /// the upsert can only take the conflict path.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn set_post_tags_reuses_an_existing_tag_across_posts(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user = SeedUser::new().seed(&env.state).await.user_id;
+        let first = SeedRawPost::new(user).seed(&env.state).await.post_id;
+        let second = SeedRawPost::new(user).seed(&env.state).await.post_id;
+        let posts = &*env.state.posts;
+
+        posts
+            .set_post_tags(first, &[parse_tag_label("rust")])
+            .await
+            .expect("first post takes the insert path");
+        posts
+            .set_post_tags(second, &[parse_tag_label("rust")])
+            .await
+            .expect("second post takes the conflict path");
+
+        assert_eq!(slugs_of(posts, first).await, vec!["rust"]);
+        assert_eq!(slugs_of(posts, second).await, vec!["rust"]);
+    }
+
     #[apply(backends)]
     #[tokio::test]
     async fn set_post_tags_with_unchanged_set_writes_nothing(#[case] backend: Backend) {
@@ -3110,6 +3170,37 @@ mod tests {
         assert_eq!(added, vec!["wasm".to_string()]);
         let removed: Vec<String> = diff.to_remove.iter().map(ToString::to_string).collect();
         assert_eq!(removed, vec!["leptos".to_string()]);
+    }
+
+    /// `to_add` comes back slug-ordered so concurrent reconciles take `tags` row locks
+    /// in a consistent order (#876) — and the sort is **stable**, so two labels sharing
+    /// a slug keep their input order and the first occurrence's casing survives to the
+    /// insert.
+    #[test]
+    fn post_tag_diff_orders_additions_by_slug_stably() {
+        let existing: Vec<PostTag> = vec![];
+        // Deliberately unordered, with a duplicate slug in the middle: if the sort were
+        // unstable, "NIX" could overtake "Nix" and the wrong casing would be stored.
+        let desired: Vec<TagLabel> = vec![
+            parse_tag_label("wasm"),
+            parse_tag_label("Nix"),
+            parse_tag_label("NIX"),
+            parse_tag_label("actix"),
+        ];
+
+        let diff = post_tag_diff(&existing, &desired);
+
+        let added: Vec<String> = diff.to_add.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            added,
+            vec![
+                "actix".to_string(),
+                "Nix".to_string(),
+                "NIX".to_string(),
+                "wasm".to_string(),
+            ],
+            "additions are slug-ordered, and the duplicate slug keeps its input order"
+        );
     }
 
     #[test]
