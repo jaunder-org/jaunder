@@ -355,6 +355,12 @@ pub(crate) fn post_tags_from_rows(rows: Vec<(PostId, TagId, Tag, TagLabel)>) -> 
 /// no caller performs the writes itself (#771).
 pub(crate) struct PostTagDiff<'a> {
     /// Labels to add (their slug is not already present on the post).
+    ///
+    /// **Slug-ordered, contractually.** [`UPSERT_TAG_RETURNING_ID`] locks each
+    /// `tags` row until commit, so applying these in a caller-supplied order lets
+    /// two concurrent reconciles deadlock on Postgres (#876). The order is stable,
+    /// so two labels sharing a slug keep their input order and the first
+    /// occurrence's casing wins. Do not re-sort or re-shuffle at the call site.
     pub to_add: Vec<&'a TagLabel>,
     /// Existing tags to remove (their slug is not in the desired set).
     pub to_remove: Vec<&'a Tag>,
