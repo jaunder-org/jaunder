@@ -14,7 +14,9 @@
 #![expect(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::media::MediaRecord;
-use crate::posts::{CreatePostError, CreatePostInput, SELECT_TAG_ID_BY_SLUG, UpdatePostInput};
+use crate::posts::{
+    CreatePostError, CreatePostInput, INSERT_POST_TAG, UPSERT_TAG_RETURNING_ID, UpdatePostInput,
+};
 use crate::sql::quote_identifier;
 use crate::{AppState, DbConnectOptions, PostFormat, PostRecord};
 use chrono::{DateTime, Utc};
@@ -223,56 +225,42 @@ impl PostWriteLock<'_> {
     /// writer, for tests that must interleave a competing write with a storage
     /// method.
     ///
-    /// Three statements, not one: `post_tags` carries a foreign key to
-    /// `tags(tag_id)`, so the tag row must exist and its id be read back before
-    /// the join row can be inserted. The conflict-tolerant spelling also diverges
-    /// per dialect (`INSERT OR IGNORE` vs `ON CONFLICT DO NOTHING`). Dispatching
-    /// it here is what keeps dialect SQL out of test bodies.
+    /// Two statements, not one: `post_tags` carries a foreign key to
+    /// `tags(tag_id)`, so the tag row must exist before the join row can be
+    /// inserted. Both statements are the shared constants the production
+    /// reconcile uses, so this carries no SQL of its own — the arms differ only
+    /// in which executor the guard is holding.
     ///
     /// # Errors
     ///
-    /// Returns the `sqlx::Error` if any of the three statements fails.
+    /// Returns the `sqlx::Error` if either statement fails.
     pub async fn add_tag(&mut self, label: &TagLabel) -> Result<(), sqlx::Error> {
         let slug = label.slug();
         let post_id = self.post_id;
         match &mut self.held {
             HeldWrite::Sqlite(conn) => {
-                sqlx::query("INSERT OR IGNORE INTO tags (tag_slug) VALUES ($1)")
-                    .bind(&slug)
-                    .execute(&mut **conn)
-                    .await?;
-                let tag_id = sqlx::query_scalar::<_, TagId>(SELECT_TAG_ID_BY_SLUG)
+                let tag_id = sqlx::query_scalar::<_, TagId>(UPSERT_TAG_RETURNING_ID)
                     .bind(&slug)
                     .fetch_one(&mut **conn)
                     .await?;
-                sqlx::query(
-                    "INSERT OR IGNORE INTO post_tags (post_id, tag_id, tag_display) \
-                     VALUES ($1, $2, $3)",
-                )
-                .bind(post_id)
-                .bind(tag_id)
-                .bind(label)
-                .execute(&mut **conn)
-                .await?;
+                sqlx::query(INSERT_POST_TAG)
+                    .bind(post_id)
+                    .bind(tag_id)
+                    .bind(label)
+                    .execute(&mut **conn)
+                    .await?;
             }
             HeldWrite::Postgres(tx) => {
-                sqlx::query("INSERT INTO tags (tag_slug) VALUES ($1) ON CONFLICT DO NOTHING")
-                    .bind(&slug)
-                    .execute(&mut **tx)
-                    .await?;
-                let tag_id = sqlx::query_scalar::<_, TagId>(SELECT_TAG_ID_BY_SLUG)
+                let tag_id = sqlx::query_scalar::<_, TagId>(UPSERT_TAG_RETURNING_ID)
                     .bind(&slug)
                     .fetch_one(&mut **tx)
                     .await?;
-                sqlx::query(
-                    "INSERT INTO post_tags (post_id, tag_id, tag_display) VALUES ($1, $2, $3) \
-                     ON CONFLICT DO NOTHING",
-                )
-                .bind(post_id)
-                .bind(tag_id)
-                .bind(label)
-                .execute(&mut **tx)
-                .await?;
+                sqlx::query(INSERT_POST_TAG)
+                    .bind(post_id)
+                    .bind(tag_id)
+                    .bind(label)
+                    .execute(&mut **tx)
+                    .await?;
             }
         }
         Ok(())

@@ -2,11 +2,10 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{Pool, Sqlite};
 
-use crate::error::RequireRow;
 use crate::helpers::{PostRow, post_record_from_row};
 use crate::posts::{
-    DELETE_POST_TAG_BY_SLUG, SELECT_POST_TAGS, SELECT_TAG_ID_BY_SLUG, post_tag_diff,
-    post_tags_from_rows,
+    DELETE_POST_TAG_BY_SLUG, INSERT_POST_TAG, SELECT_POST_TAGS, UPSERT_TAG_RETURNING_ID,
+    post_tag_diff, post_tags_from_rows,
 };
 use crate::{PostDialect, PostRecord, PostStore, TaggingError, UpdatePostError, UpdatePostInput};
 use common::ids::{PostId, TagId, UserId};
@@ -180,31 +179,19 @@ impl PostDialect for Sqlite {
 
             for label in diff.to_add {
                 let slug = label.slug();
-                sqlx::query("INSERT OR IGNORE INTO tags (tag_slug) VALUES ($1)")
+                // `fetch_one`, not a read-back: the upsert's no-op `DO UPDATE`
+                // returns the id on the conflict path too, so the absence the
+                // old `require_row` guard named cannot occur (#883).
+                let tag_id = sqlx::query_scalar::<_, TagId>(UPSERT_TAG_RETURNING_ID)
                     .bind(&slug)
+                    .fetch_one(&mut *conn)
+                    .await?;
+                sqlx::query(INSERT_POST_TAG)
+                    .bind(post_id)
+                    .bind(tag_id)
+                    .bind(label)
                     .execute(&mut *conn)
                     .await?;
-                // A named absence rather than `fetch_one`'s anonymous
-                // `RowNotFound`: `INSERT OR IGNORE` may not have written
-                // anything, so this can be reading a pre-existing row. It is
-                // unreachable only because nothing deletes a tag today — a fact
-                // about the data, not the statement (#883).
-                let tag_id = sqlx::query_scalar::<_, TagId>(SELECT_TAG_ID_BY_SLUG)
-                    .bind(&slug)
-                    .fetch_optional(&mut *conn)
-                    .await?
-                    .require_row("the tag row read back for its id")?;
-                // OR IGNORE, not a bare INSERT: `desired` may carry two labels
-                // sharing a slug (post_tag_diff does not dedupe), and the first
-                // occurrence's casing must win.
-                sqlx::query(
-                    "INSERT OR IGNORE INTO post_tags (post_id, tag_id, tag_display) VALUES ($1, $2, $3)",
-                )
-                .bind(post_id)
-                .bind(tag_id)
-                .bind(label)
-                .execute(&mut *conn)
-                .await?;
             }
 
             for slug in diff.to_remove {

@@ -331,7 +331,7 @@ mod tests {
     // generic home lives with its dialect code. #891: a slice of a `StrNewtype` binds
     // as a `TEXT[]`, so a typed call site needs no strip. `feed_events` proves the
     // `i64` case (its `= ANY($n)` binds are the only ones in `storage/`); this is the
-    // `String` one, which #876's single-statement tag reconcile depends on.
+    // `String` one, so both halves of the bridge's array support are covered.
     #[apply(postgres_only)]
     #[tokio::test]
     async fn str_newtype_slices_bind_as_a_postgres_array(#[case] backend: Backend) {
