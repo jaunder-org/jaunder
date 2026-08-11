@@ -28,7 +28,7 @@ fetching, parsing, archiving, discovery) is this doc. The boundary decision is
 recorded in `docs/adr/drafts/feed-machinery-hub-boundary.md`.
 
 Consequence for sequencing: issue #282 (RSS/Atom ingestion v1) **ends at the
-archive**; the archive → Item derivation is its own hub-side issue.
+archive**; the archive → Item derivation is its own hub-side issue (#919).
 
 ## 2. The feed machinery (resolved direction; v1 = #282)
 
@@ -79,15 +79,15 @@ v1 polling policy (#282):
 
 Follow-ons:
 
-- **Adaptive polling** _(to file)_ — choose each source's interval from observed
+- **Adaptive polling** _(#920)_ — choose each source's interval from observed
   posting cadence + recorded hints, clamped 15 m–24 h (realizes ADR-0010).
-- **WebSub — subscriber side** _(to file)_ — `rel=hub` discovery,
-  subscribe/renew lease lifecycle, HMAC-verified callback (never trust an
-  unauthenticated push — hub-architecture §5), unsubscribe, automatic poll
-  fallback for hubless feeds. Pure delivery: lands bytes in the same parse →
-  archive pipeline. Note the **publisher** side already exists
-  (`server/src/websub/`, pinging hubs about our own feeds); the two share the
-  spec and the `http.rs` client seam, nothing else.
+- **WebSub — subscriber side** _(#921)_ — `rel=hub` discovery, subscribe/renew
+  lease lifecycle, HMAC-verified callback (never trust an unauthenticated push —
+  hub-architecture §5), unsubscribe, automatic poll fallback for hubless feeds.
+  Pure delivery: lands bytes in the same parse → archive pipeline. Note the
+  **publisher** side already exists (`server/src/websub/`, pinging hubs about
+  our own feeds); the two share the spec and the `http.rs` client seam, nothing
+  else.
 
 ### 2.3 The fetcher — polite and paranoid
 
@@ -195,7 +195,7 @@ outbound, protocol-native keys, the address book) is hub-side work, homed with
 Item derivation — an Item's author-ref points at an actor; the archive's capture
 is its evidence.
 
-### 2.7 Lifecycle & health _(to file)_
+### 2.7 Lifecycle & health _(#924)_
 
 The user's window into "is my feed working": per-source health derived from the
 fetch log — consecutive failures, last success, 410-gone detection, dead-feed
@@ -228,7 +228,7 @@ surfaces, current as of 2026-08-11:
 
 ## 3. Discovery
 
-### 3.1 Feed auto-discovery _(to file)_
+### 3.1 Feed auto-discovery _(#922)_
 
 Naming caution: `web/src/feed_discovery/` already exists and means the
 **outbound** thing — the `<link rel="alternate">` / RSD tags advertising
@@ -240,7 +240,7 @@ Paste any URL, get its feeds: fetch the page (guarded fetcher), probe
 fall back to common paths (`/feed`, `/rss.xml`, `/atom.xml`, `/index.xml`),
 surface multi-feed disambiguation (comments feed vs posts feed) at add time.
 
-### 3.2 Interaction-surface discovery _(to file; cost-aware by design)_
+### 3.2 Interaction-surface discovery _(#923; cost-aware by design)_
 
 Given an article, learn where reactions can land. Comprehensive **in what it
 records**, economical **in when it probes**:
@@ -311,7 +311,7 @@ Priority: **Webmention first** (needs no actor identity — deliverable while th
 AP track is in flight), AP second, comment feeds as read-only context, AT
 documented as open.
 
-- **Webmention** _(to file — the first interaction slice)_: like/reply = a post
+- **Webmention** _(#925 — the first interaction slice)_: like/reply = a post
   with microformats (`u-like-of` / `u-in-reply-to`) targeting the article,
   published outbound, plus a webmention POST to the discovered endpoint;
   delivery outcome surfaced to the user.
@@ -343,22 +343,24 @@ surfaces, are part of the slice.
 
 ## 9. Decomposition & sequencing
 
-**Status 2026-08-11: none of these are filed yet, and #282's own text is still
-unamended** (it still reads "…, Item derivation" and carries the "no UI"
-non-goal). Filing them — with native blocked-by links — plus the #282 body
-amendment remains task 1 of the #282 plan. Read the table as the intended
-decomposition, not as tracker state.
+Filed 2026-08-11, with native blocked-by links; #282's title and body were
+amended to match (it ends at the archive, and its non-goals now point at the
+issues that own them):
 
-| Issue                                                                                                                         | Blocked by                                              |
-| ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| #282 RSS/Atom ingestion v1 _(amended: ends at the archive, proven by JSON endpoints + a minimal add/unfollow UI)_             | —                                                       |
-| archive → Item derivation _(hub-side: Item shape, adapter home, actors entity, sanitization-at-derivation, re-run machinery)_ | #282; blocks #283's Item-upserts, summarization, search |
-| adaptive polling (§2.2)                                                                                                       | #282                                                    |
-| WebSub (§2.2)                                                                                                                 | #282                                                    |
-| feed auto-discovery (§3.1)                                                                                                    | #282                                                    |
-| interaction-surface discovery (§3.2)                                                                                          | #282                                                    |
-| lifecycle & health (§2.7)                                                                                                     | #282                                                    |
-| webmention interactions (§6)                                                                                                  | interaction-surface discovery                           |
+| Issue                                                                                                                              | Blocked by                                          |
+| ---------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| #282 RSS/Atom ingestion v1 _(ends at the archive, proven by server fns + a minimal add/unfollow UI)_                               | —                                                   |
+| #919 archive → Item derivation _(hub-side: Item shape, adapter home, actors entity, sanitization-at-derivation, re-run machinery)_ | #282; blocks #283's Item-upserts, summaries, search |
+| #920 adaptive polling (§2.2)                                                                                                       | #282                                                |
+| #921 WebSub subscriber (§2.2)                                                                                                      | #282                                                |
+| #922 feed auto-discovery (§3.1)                                                                                                    | #282                                                |
+| #923 interaction-surface discovery (§3.2)                                                                                          | #282                                                |
+| #924 lifecycle & health (§2.7)                                                                                                     | #282                                                |
+| #925 webmention interactions (§6)                                                                                                  | #923                                                |
+
+Only #282 and #919 carry a milestone (Inbound v1). The other five are feed
+machinery **past** that epic's arc and are deliberately unmilestoned pending a
+home of their own.
 
 Doc-only until real (file from the section when picked up): JSON Feed (§2.4),
 full-text scraping / LLM summarization / image proxy / enclosures (§4), search
@@ -366,17 +368,17 @@ full-text scraping / LLM summarization / image proxy / enclosures (§4), search
 feeds (§8).
 
 ```
-#282 ──┬── derivation ──┬── #283 Item-upserts ── #285 reader
-       │                ├── LLM summaries
-       │                └── search
-       ├── adaptive polling          ├── JSON Feed
-       ├── WebSub                    ├── lifecycle & health
-       ├── auto-discovery            ├── full-text scraping
-       ├── interaction discovery ──┬── webmention
+#282 ──┬── #919 derivation ─┬── #283 Item-upserts ── #285 reader
+       │                    ├── LLM summaries
+       │                    └── search
+       ├── #920 adaptive polling      ├── JSON Feed
+       ├── #921 WebSub                ├── full-text scraping
+       ├── #922 auto-discovery        ├── OPML
+       ├── #924 lifecycle & health    ├── authenticated feeds
+       ├── #923 interaction disc. ─┬── #925 webmention
        │                           ├── AP interactions (+#286/#287)
        │                           └── comment-feed display
-       ├── authenticated feeds       ├── OPML
-       └── image proxy               └── enclosures/media
+       └── image proxy                └── enclosures/media
 ```
 
 ## 10. Open questions

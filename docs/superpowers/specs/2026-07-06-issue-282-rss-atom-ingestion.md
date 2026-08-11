@@ -4,7 +4,7 @@
   parked for a month; conventions that moved are marked **[2026-08-11]**)
 - Issue: [#282](https://github.com/jaunder-org/jaunder/issues/282) (scope
   amended by this cycle's design interview — see "Scope amendments"; the issue
-  body still carries the pre-amendment text)
+  title and body were updated to match on 2026-08-11)
 - Parent design: `docs/feed-reading.md` (durable, incl. §2.8 house conventions);
   `docs/hub-architecture.md` §5; ADR-0005, ADR-0006, ADR-0009, ADR-0010
 - Decisions recorded: `docs/adr/drafts/feed-machinery-hub-boundary.md`,
@@ -24,8 +24,8 @@ outbound `feed_*` family.
 
 ## Scope amendments vs. the filed issue
 
-Settled in the design interview + reviews; the issue text is updated at plan
-time:
+Settled in the design interview + reviews; **[2026-08-11]** the issue text now
+says the same:
 
 - **Out (moved to a new hub-side "archive → Item derivation" issue):** Item
   derivation, the `jaunder-core` adapter question, the first-class actors
@@ -384,6 +384,9 @@ polling; WebSub (subscriber side); feed auto-discovery; interaction-surface
 discovery; lifecycle & health; webmention interactions — each with native
 blocked-by links. Plus the #282 issue-body amendment.
 
-**[2026-08-11] Still outstanding.** None of these issues exist yet and #282's
-body is still unamended (checked against the tracker on 2026-08-11), so this
-remains genuinely task 1 — nothing here has been quietly done.
+**[2026-08-11] Done ahead of the plan.** All seven are filed — #919 derivation,
+#920 adaptive polling, #921 WebSub subscriber, #922 auto-discovery, #923
+interaction-surface discovery, #924 lifecycle & health, #925 webmention — each
+blocked-by wired (#925 by #923, the rest by #282; #919 blocks #283). #282's
+title and body were amended at the same time. **Drop this from plan task 1**;
+what remains there is only whatever the plan itself adds.
