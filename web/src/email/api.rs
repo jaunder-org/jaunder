@@ -5,8 +5,8 @@
 use {
     crate::auth::require_auth,
     crate::error::InternalError,
-    common::absolute_url::compose,
     common::mailer::{EmailMessage, MailSender},
+    common::tagged_url::{MailConfirmUrl, compose},
     leptos::prelude::*,
     std::sync::Arc,
     storage::{EmailVerificationStorage, SiteConfigStorage, UserStorage},
@@ -42,7 +42,7 @@ pub async fn request_verification(email: Email) -> WebResult<()> {
         .create_email_verification(auth.user_id, &email, expires_at)
         .await?;
 
-    let verify_url = compose(&base_url, "/verify-email");
+    let verify_url: MailConfirmUrl = compose(&base_url, "/verify-email");
     let link = format!("{verify_url}?token={raw_token}");
     let message = EmailMessage {
         from: None,

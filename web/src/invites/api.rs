@@ -6,8 +6,8 @@ use {
     crate::auth::require_auth,
     crate::error::InternalError,
     chrono::Utc,
-    common::absolute_url::compose,
     common::mailer::{EmailMessage, MailSender},
+    common::tagged_url::{MailConfirmUrl, compose},
     leptos::prelude::*,
     std::sync::Arc,
     storage::{InviteStorage, RegistrationPolicy, SiteConfigStorage},
@@ -68,7 +68,7 @@ pub async fn create(
     // Deliberate egress of the secret via `AsRef` (InviteCode has no Display/serde).
     // Compose base + `/register` (correct slash boundary) then append the code as a
     // raw query param, preserving its exact spelling.
-    let register_url = compose(&base_url, "/register");
+    let register_url: MailConfirmUrl = compose(&base_url, "/register");
     let link = format!("{register_url}?invite_code={}", code.as_ref());
     let message = EmailMessage {
         from: None,

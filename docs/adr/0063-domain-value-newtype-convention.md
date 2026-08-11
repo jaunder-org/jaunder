@@ -78,6 +78,16 @@ A value that is genuinely **polymorphic** is modeled as an **enum**, not a
 string newtype. Wrapping a union in a single `String`-newtype hides the very
 distinction the type should expose.
 
+**URLs are an exception to this rule's cost model.** Site URLs are not typed one
+newtype per role; they are `TaggedUrl<T>`, a single generic carrying a
+zero-sized role marker, so a role costs a marker struct and a type alias and
+inherits every trait impl. The balance this rule strikes — weigh a whole new
+type against a demonstrated hazard — does not apply when the type side of it is
+two lines. Do **not** cite "consistency alone is not sufficient justification"
+to argue a URL role out of existence, and do not add a bare `AbsoluteUrl`-style
+catch-all back. See
+[the role-tagged site URLs ADR](0112-role-tagged-site-urls.md) (#875).
+
 `ViewerIdentity` (ADR-0020) is this rule applied, and #6 is what it cost to
 apply it late. A viewer's `subscriber_ref` is a stringified `user_id` for a
 local account and an opaque external reference for a remote one; carried as one

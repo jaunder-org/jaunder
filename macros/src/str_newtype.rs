@@ -1,7 +1,9 @@
 //! Codegen for `#[derive(StrNewtype)]` — the ADR-0063 string-newtype trailer for a
-//! `struct X(String)`. The derive owns the whole trailer except `FromStr` (the one
-//! per-type validating/normalizing chokepoint) and the std `#[derive]`s — except
-//! ordering, which it emits (#761) unless `#[str_newtype(no_ord)]` suppresses it.
+//! `struct X(String)` or, since #875, a phantom-tagged `struct X<T: Bound>(String,
+//! PhantomData<fn() -> T>)`, whose generics are threaded through every emitted impl.
+//! The derive owns the whole trailer except `FromStr` (the one per-type
+//! validating/normalizing chokepoint) and the std `#[derive]`s — except ordering, which
+//! it emits (#761) unless `#[str_newtype(no_ord)]` suppresses it.
 
 use quote::quote;
 use syn::DeriveInput;
@@ -51,7 +53,12 @@ struct Opts {
 /// instead of malformed impls. `#[str_newtype(secret)]` selects the tight secret
 /// surface; `#[str_newtype(secret, serde)]` adds the serde bridge back to it.
 pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
-    if let Err(e) = crate::require_newtype_shape(input, "StrNewtype", "struct X(String)") {
+    if let Err(e) = crate::require_newtype_shape(
+        input,
+        crate::NewtypeShape::PhantomTagged,
+        "StrNewtype",
+        "struct X(String)",
+    ) {
         return e.to_compile_error();
     }
     let opts = match parse_opts(input) {
@@ -59,14 +66,19 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
         Err(e) => return e.to_compile_error(),
     };
     let name = &input.ident;
+    // The user's generics, threaded through every emitted impl (#875). Nothing the derive
+    // emits ever constructs `Self`, so the phantom marker field never has to be named:
+    // `TryFrom`, `Deserialize`, and the sqlx `Decode` all route through the author's
+    // `FromStr`/`From<String>`, which is where the `PhantomData` is supplied.
+    let generics = &input.generics;
 
     // The sqlx storage bridge is a per-kind decision (default-on except secret),
     // computed once here; each trailer is a sibling helper, so the three arms stay
     // short and parallel.
-    let sqlx = sqlx_bridge(&opts, name);
+    let sqlx = sqlx_bridge(&opts, name, generics);
     // The ordering half (#761), suppressed by `no_ord` and never emitted for a secret.
     let ord = if opts.ord {
-        crate::ord_impls(name)
+        crate::ord_impls(name, generics)
     } else {
         quote! {}
     };
@@ -74,9 +86,9 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
         // The tight secret surface; `secret, serde` re-opens the serde bridge for an
         // inbound wire value (its inbound-only role is enforced by an xtask gate).
         Kind::Secret => {
-            let trailer = secret_trailer(name);
+            let trailer = secret_trailer(name, generics);
             let serde = if opts.serde {
-                serde_impls(name)
+                serde_impls(name, generics)
             } else {
                 quote! {}
             };
@@ -89,7 +101,7 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
         // Construction never rejects (a hand-written `From<String>` chokepoint), so the
         // trailer omits `FromStr`/`TryFrom` and the bridges route through `From<String>`.
         Kind::Infallible => {
-            let trailer = infallible_trailer(name);
+            let trailer = infallible_trailer(name, generics);
             quote! {
                 #trailer
                 #ord
@@ -98,8 +110,8 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
         }
         // The full ergonomic trailer plus the validating serde and sqlx bridges.
         Kind::Default => {
-            let trailer = default_trailer(name);
-            let serde = serde_impls(name);
+            let trailer = default_trailer(name, generics);
+            let serde = serde_impls(name, generics);
             quote! {
                 #trailer
                 #serde
@@ -116,13 +128,17 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
 /// decode via `From<String>`; the rest validate via `FromStr`. The `opts` guarantees
 /// from `parse_opts` (no bare `sqlx` off a secret, no `no_sqlx` on a secret) keep the
 /// arms consistent.
-fn sqlx_bridge(opts: &Opts, name: &syn::Ident) -> proc_macro2::TokenStream {
+fn sqlx_bridge(
+    opts: &Opts,
+    name: &syn::Ident,
+    generics: &syn::Generics,
+) -> proc_macro2::TokenStream {
     match opts.kind {
-        Kind::Secret if matches!(opts.sqlx, SqlxMode::Forced) => sqlx_impls(name),
+        Kind::Secret if matches!(opts.sqlx, SqlxMode::Forced) => sqlx_impls(name, generics),
         Kind::Secret => quote! {},
         _ if matches!(opts.sqlx, SqlxMode::Off) => quote! {},
-        Kind::Infallible => sqlx_impls_infallible(name),
-        Kind::Default => sqlx_impls(name),
+        Kind::Infallible => sqlx_impls_infallible(name, generics),
+        Kind::Default => sqlx_impls(name, generics),
     }
 }
 
@@ -130,31 +146,32 @@ fn sqlx_bridge(opts: &Opts, name: &syn::Ident) -> proc_macro2::TokenStream {
 /// `TryFrom<String>` (the fallible door, via `FromStr`), `From<Self> for String`, and
 /// `PartialEq<str>`/`<&str>`. The serde and sqlx bridges are appended by [`expand`], so
 /// this mirrors [`secret_trailer`]/[`infallible_trailer`] as one of the three trailers.
-fn default_trailer(name: &syn::Ident) -> proc_macro2::TokenStream {
+fn default_trailer(name: &syn::Ident, generics: &syn::Generics) -> proc_macro2::TokenStream {
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     quote! {
         #[automatically_derived]
-        impl ::core::fmt::Display for #name {
+        impl #impl_generics ::core::fmt::Display for #name #ty_generics #where_clause {
             fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
                 f.write_str(&self.0)
             }
         }
 
         #[automatically_derived]
-        impl ::core::convert::AsRef<str> for #name {
+        impl #impl_generics ::core::convert::AsRef<str> for #name #ty_generics #where_clause {
             fn as_ref(&self) -> &str {
                 &self.0
             }
         }
 
         #[automatically_derived]
-        impl ::core::borrow::Borrow<str> for #name {
+        impl #impl_generics ::core::borrow::Borrow<str> for #name #ty_generics #where_clause {
             fn borrow(&self) -> &str {
                 &self.0
             }
         }
 
         #[automatically_derived]
-        impl ::core::ops::Deref for #name {
+        impl #impl_generics ::core::ops::Deref for #name #ty_generics #where_clause {
             type Target = str;
             fn deref(&self) -> &str {
                 &self.0
@@ -162,29 +179,33 @@ fn default_trailer(name: &syn::Ident) -> proc_macro2::TokenStream {
         }
 
         #[automatically_derived]
-        impl ::core::convert::TryFrom<::std::string::String> for #name {
-            type Error = <#name as ::core::str::FromStr>::Err;
+        impl #impl_generics ::core::convert::TryFrom<::std::string::String>
+            for #name #ty_generics #where_clause
+        {
+            type Error = <#name #ty_generics as ::core::str::FromStr>::Err;
             fn try_from(s: ::std::string::String) -> ::core::result::Result<Self, Self::Error> {
-                <#name as ::core::str::FromStr>::from_str(&s)
+                <#name #ty_generics as ::core::str::FromStr>::from_str(&s)
             }
         }
 
         #[automatically_derived]
-        impl ::core::convert::From<#name> for ::std::string::String {
-            fn from(v: #name) -> Self {
+        impl #impl_generics ::core::convert::From<#name #ty_generics>
+            for ::std::string::String #where_clause
+        {
+            fn from(v: #name #ty_generics) -> Self {
                 v.0
             }
         }
 
         #[automatically_derived]
-        impl ::core::cmp::PartialEq<str> for #name {
+        impl #impl_generics ::core::cmp::PartialEq<str> for #name #ty_generics #where_clause {
             fn eq(&self, other: &str) -> bool {
                 self.0 == *other
             }
         }
 
         #[automatically_derived]
-        impl ::core::cmp::PartialEq<&str> for #name {
+        impl #impl_generics ::core::cmp::PartialEq<&str> for #name #ty_generics #where_clause {
             fn eq(&self, other: &&str) -> bool {
                 self.0 == **other
             }
@@ -196,10 +217,15 @@ fn default_trailer(name: &syn::Ident) -> proc_macro2::TokenStream {
 /// instead of cloning into a String, and deserialize routes through `FromStr` so invalid
 /// input is rejected on the wire. Shared by the default trailer and the `secret, serde`
 /// variant.
-fn serde_impls(name: &syn::Ident) -> proc_macro2::TokenStream {
+fn serde_impls(name: &syn::Ident, generics: &syn::Generics) -> proc_macro2::TokenStream {
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    // `Deserialize` introduces `'de`, so its header is the user's generics with that
+    // lifetime merged in; `ty_generics`/`where_clause` still come from the original.
+    let de = crate::with_leading_param(generics, syn::parse_quote!('de));
+    let (de_impl_generics, _, _) = de.split_for_impl();
     quote! {
         #[automatically_derived]
-        impl ::serde::Serialize for #name {
+        impl #impl_generics ::serde::Serialize for #name #ty_generics #where_clause {
             fn serialize<S: ::serde::Serializer>(
                 &self,
                 serializer: S,
@@ -209,12 +235,13 @@ fn serde_impls(name: &syn::Ident) -> proc_macro2::TokenStream {
         }
 
         #[automatically_derived]
-        impl<'de> ::serde::Deserialize<'de> for #name {
+        impl #de_impl_generics ::serde::Deserialize<'de> for #name #ty_generics #where_clause {
             fn deserialize<D: ::serde::Deserializer<'de>>(
                 deserializer: D,
             ) -> ::core::result::Result<Self, D::Error> {
                 let s = <::std::string::String as ::serde::Deserialize>::deserialize(deserializer)?;
-                <#name as ::core::str::FromStr>::from_str(&s).map_err(::serde::de::Error::custom)
+                <#name #ty_generics as ::core::str::FromStr>::from_str(&s)
+                    .map_err(::serde::de::Error::custom)
             }
         }
     }
@@ -228,32 +255,33 @@ fn serde_impls(name: &syn::Ident) -> proc_macro2::TokenStream {
 /// `AsRef`/`Borrow`/`Deref<str>`, `From<Self> for String`, `PartialEq<str>`/`<&str>`, and
 /// the infallible serde bridge; deliberately omits `TryFrom<String>` (which would collide
 /// with the hand-written `From<String>` via the std blanket `impl<T, U: Into<T>> TryFrom<U>`).
-fn infallible_trailer(name: &syn::Ident) -> proc_macro2::TokenStream {
-    let serde = serde_impls_infallible(name);
+fn infallible_trailer(name: &syn::Ident, generics: &syn::Generics) -> proc_macro2::TokenStream {
+    let serde = serde_impls_infallible(name, generics);
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     quote! {
         #[automatically_derived]
-        impl ::core::fmt::Display for #name {
+        impl #impl_generics ::core::fmt::Display for #name #ty_generics #where_clause {
             fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
                 f.write_str(&self.0)
             }
         }
 
         #[automatically_derived]
-        impl ::core::convert::AsRef<str> for #name {
+        impl #impl_generics ::core::convert::AsRef<str> for #name #ty_generics #where_clause {
             fn as_ref(&self) -> &str {
                 &self.0
             }
         }
 
         #[automatically_derived]
-        impl ::core::borrow::Borrow<str> for #name {
+        impl #impl_generics ::core::borrow::Borrow<str> for #name #ty_generics #where_clause {
             fn borrow(&self) -> &str {
                 &self.0
             }
         }
 
         #[automatically_derived]
-        impl ::core::ops::Deref for #name {
+        impl #impl_generics ::core::ops::Deref for #name #ty_generics #where_clause {
             type Target = str;
             fn deref(&self) -> &str {
                 &self.0
@@ -261,8 +289,10 @@ fn infallible_trailer(name: &syn::Ident) -> proc_macro2::TokenStream {
         }
 
         #[automatically_derived]
-        impl ::core::convert::From<#name> for ::std::string::String {
-            fn from(v: #name) -> Self {
+        impl #impl_generics ::core::convert::From<#name #ty_generics>
+            for ::std::string::String #where_clause
+        {
+            fn from(v: #name #ty_generics) -> Self {
                 v.0
             }
         }
@@ -271,23 +301,23 @@ fn infallible_trailer(name: &syn::Ident) -> proc_macro2::TokenStream {
         // it (so any normalization still happens in one place) and lets a `&str`/literal
         // construct the newtype with a single `.into()` / `X::from("…")`, no `.to_owned()`.
         #[automatically_derived]
-        impl ::core::convert::From<&str> for #name {
+        impl #impl_generics ::core::convert::From<&str> for #name #ty_generics #where_clause {
             fn from(s: &str) -> Self {
-                <#name as ::core::convert::From<::std::string::String>>::from(
+                <#name #ty_generics as ::core::convert::From<::std::string::String>>::from(
                     ::std::string::String::from(s),
                 )
             }
         }
 
         #[automatically_derived]
-        impl ::core::cmp::PartialEq<str> for #name {
+        impl #impl_generics ::core::cmp::PartialEq<str> for #name #ty_generics #where_clause {
             fn eq(&self, other: &str) -> bool {
                 self.0 == *other
             }
         }
 
         #[automatically_derived]
-        impl ::core::cmp::PartialEq<&str> for #name {
+        impl #impl_generics ::core::cmp::PartialEq<&str> for #name #ty_generics #where_clause {
             fn eq(&self, other: &&str) -> bool {
                 self.0 == **other
             }
@@ -300,10 +330,13 @@ fn infallible_trailer(name: &syn::Ident) -> proc_macro2::TokenStream {
 /// The infallible serde bridge: serialize borrows (as the default); deserialize a `String`
 /// and route it through the type's own `From<String>` (never `FromStr`), so it cannot fail
 /// and normalizes wire input identically to construction.
-fn serde_impls_infallible(name: &syn::Ident) -> proc_macro2::TokenStream {
+fn serde_impls_infallible(name: &syn::Ident, generics: &syn::Generics) -> proc_macro2::TokenStream {
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let de = crate::with_leading_param(generics, syn::parse_quote!('de));
+    let (de_impl_generics, _, _) = de.split_for_impl();
     quote! {
         #[automatically_derived]
-        impl ::serde::Serialize for #name {
+        impl #impl_generics ::serde::Serialize for #name #ty_generics #where_clause {
             fn serialize<S: ::serde::Serializer>(
                 &self,
                 serializer: S,
@@ -313,12 +346,14 @@ fn serde_impls_infallible(name: &syn::Ident) -> proc_macro2::TokenStream {
         }
 
         #[automatically_derived]
-        impl<'de> ::serde::Deserialize<'de> for #name {
+        impl #de_impl_generics ::serde::Deserialize<'de> for #name #ty_generics #where_clause {
             fn deserialize<D: ::serde::Deserializer<'de>>(
                 deserializer: D,
             ) -> ::core::result::Result<Self, D::Error> {
                 let s = <::std::string::String as ::serde::Deserialize>::deserialize(deserializer)?;
-                ::core::result::Result::Ok(<#name as ::core::convert::From<::std::string::String>>::from(s))
+                ::core::result::Result::Ok(
+                    <#name #ty_generics as ::core::convert::From<::std::string::String>>::from(s),
+                )
             }
         }
     }
@@ -334,9 +369,11 @@ fn sqlx_inner() -> proc_macro2::TokenStream {
 /// `String` through `<#name as FromStr>::from_str`, so a corrupted/migrated column is
 /// rejected rather than silently admitted; the `?` folds the `FromStr::Err` (all our
 /// newtype errors derive `thiserror::Error`) into `sqlx::error::BoxDynError`.
-fn sqlx_impls(name: &syn::Ident) -> proc_macro2::TokenStream {
+fn sqlx_impls(name: &syn::Ident, generics: &syn::Generics) -> proc_macro2::TokenStream {
+    let (_, ty_generics, _) = generics.split_for_impl();
     crate::sqlx_bridge::bridge(&crate::sqlx_bridge::BridgeSpec {
         name,
+        generics,
         type_inner: sqlx_inner(),
         encode_inner: sqlx_inner(),
         to_inner: quote! { &self.0 },
@@ -344,7 +381,7 @@ fn sqlx_impls(name: &syn::Ident) -> proc_macro2::TokenStream {
         // decoding an owned one here would allocate it only to drop it (#746 D3).
         decode_inner: quote! { &'r str },
         convert: quote! {
-            ::core::result::Result::Ok(<#name as ::core::str::FromStr>::from_str(v)?)
+            ::core::result::Result::Ok(<#name #ty_generics as ::core::str::FromStr>::from_str(v)?)
         },
         // `String: PgHasArrayType`, so a slice binds as `TEXT[]` (#891).
         pg_array: true,
@@ -353,9 +390,11 @@ fn sqlx_impls(name: &syn::Ident) -> proc_macro2::TokenStream {
 
 /// The **infallible sqlx bridge**: as `sqlx_impls`, but `Decode` wraps the decoded
 /// `String` via the type's infallible `From<String>` (no validation to run).
-fn sqlx_impls_infallible(name: &syn::Ident) -> proc_macro2::TokenStream {
+fn sqlx_impls_infallible(name: &syn::Ident, generics: &syn::Generics) -> proc_macro2::TokenStream {
+    let (_, ty_generics, _) = generics.split_for_impl();
     crate::sqlx_bridge::bridge(&crate::sqlx_bridge::BridgeSpec {
         name,
+        generics,
         type_inner: sqlx_inner(),
         encode_inner: sqlx_inner(),
         to_inner: quote! { &self.0 },
@@ -364,7 +403,7 @@ fn sqlx_impls_infallible(name: &syn::Ident) -> proc_macro2::TokenStream {
         decode_inner: sqlx_inner(),
         convert: quote! {
             ::core::result::Result::Ok(
-                <#name as ::core::convert::From<::std::string::String>>::from(v),
+                <#name #ty_generics as ::core::convert::From<::std::string::String>>::from(v),
             )
         },
         // `String: PgHasArrayType`, so a slice binds as `TEXT[]` (#891).
@@ -377,27 +416,30 @@ fn sqlx_impls_infallible(name: &syn::Ident) -> proc_macro2::TokenStream {
 /// `TryFrom<String>` — and deliberately *none* of `Display`, `Deref`, `Borrow`,
 /// `From<Self> for String`, or `PartialEq`, so a secret cannot leak or be value-compared.
 /// `#[str_newtype(secret, serde)]` layers the serde bridge back on for an inbound value.
-fn secret_trailer(name: &syn::Ident) -> proc_macro2::TokenStream {
+fn secret_trailer(name: &syn::Ident, generics: &syn::Generics) -> proc_macro2::TokenStream {
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     quote! {
         #[automatically_derived]
-        impl ::core::fmt::Debug for #name {
+        impl #impl_generics ::core::fmt::Debug for #name #ty_generics #where_clause {
             fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
                 f.write_str(concat!(stringify!(#name), "([redacted])"))
             }
         }
 
         #[automatically_derived]
-        impl ::core::convert::AsRef<str> for #name {
+        impl #impl_generics ::core::convert::AsRef<str> for #name #ty_generics #where_clause {
             fn as_ref(&self) -> &str {
                 &self.0
             }
         }
 
         #[automatically_derived]
-        impl ::core::convert::TryFrom<::std::string::String> for #name {
-            type Error = <#name as ::core::str::FromStr>::Err;
+        impl #impl_generics ::core::convert::TryFrom<::std::string::String>
+            for #name #ty_generics #where_clause
+        {
+            type Error = <#name #ty_generics as ::core::str::FromStr>::Err;
             fn try_from(s: ::std::string::String) -> ::core::result::Result<Self, Self::Error> {
-                <#name as ::core::str::FromStr>::from_str(&s)
+                <#name #ty_generics as ::core::str::FromStr>::from_str(&s)
             }
         }
     }
@@ -521,7 +563,7 @@ mod tests {
     #[test]
     fn validating_bridge_decodes_a_borrowed_str_without_allocating() {
         let n = quote::format_ident!("Slug");
-        let out = norm(&sqlx_impls(&n));
+        let out = norm(&sqlx_impls(&n, &syn::Generics::default()));
         assert!(out.contains("<&'rstras::sqlx::Decode<'r,DB>>::decode(value)?"));
         assert!(
             out.contains("::from_str(v)?"),
@@ -537,7 +579,7 @@ mod tests {
     #[test]
     fn validating_bridge_keeps_string_for_type_and_encode() {
         let n = quote::format_ident!("Slug");
-        let out = norm(&sqlx_impls(&n));
+        let out = norm(&sqlx_impls(&n, &syn::Generics::default()));
         assert!(out.contains("<::std::string::Stringas::sqlx::Type<DB>>::type_info()"));
         assert!(out.contains("letinner:&::std::string::String=&self.0;"));
     }
@@ -549,7 +591,7 @@ mod tests {
         // boundary. (The identifier is arbitrary — it named `PostBody` until #811 gave
         // that type an invariant; no production type takes `infallible` today.)
         let n = quote::format_ident!("PostBody");
-        let out = norm(&sqlx_impls_infallible(&n));
+        let out = norm(&sqlx_impls_infallible(&n, &syn::Generics::default()));
         assert!(out.contains("<::std::string::Stringas::sqlx::Type<DB>>::type_info()"));
         assert!(out.contains("letinner:&::std::string::String=&self.0;"));
         assert!(out.contains("<::std::string::Stringas::sqlx::Decode<'r,DB>>::decode(value)?"));

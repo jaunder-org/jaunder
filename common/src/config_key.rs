@@ -8,7 +8,6 @@ use std::str::FromStr;
 
 use thiserror::Error;
 
-use crate::absolute_url::AbsoluteUrl;
 use crate::backup::{BackupMode, BackupSchedule, DestinationPath, RetentionCount};
 use crate::feed::{FeedMinDays, FeedMinItems};
 use crate::media::{MaxFileSize, UserQuota};
@@ -21,6 +20,7 @@ use crate::smtp_port::SmtpPort;
 use crate::smtp_sender::SmtpSender;
 use crate::smtp_tls_mode::SmtpTlsMode;
 use crate::smtp_username::SmtpUsername;
+use crate::tagged_url::{BaseUrl, HubUrl};
 use crate::visibility::parse_default_audience;
 
 /// Error returned when a stored or offered value does not parse as its key's type.
@@ -162,11 +162,11 @@ site_config_keys! {
     BackupMode             => "backup.mode"               : BackupMode,                   bad: "sideways";
     FeedsMinItems          => "feeds.min_items"           : FeedMinItems,                 bad: "0";
     FeedsMinDays           => "feeds.min_days"            : FeedMinDays,                  bad: "0";
-    FeedsWebsubHubUrl      => "feeds.websub_hub_url"      : AbsoluteUrl { optional },     bad: "nonsense://x";
+    FeedsWebsubHubUrl      => "feeds.websub_hub_url"      : HubUrl { optional },          bad: "nonsense://x";
     PostsDefaultAudience   => "posts.default_audience"    : (check_default_audience),     bad: "everyone";
     SiteRegistrationPolicy => "site.registration_policy"  : RegistrationPolicy,           bad: "sideways";
     SiteTitle              => "site.title"                : SiteTitle,                    bad: "";
-    SiteBaseUrl            => "site.base_url"             : AbsoluteUrl { optional },     bad: "nonsense://x";
+    SiteBaseUrl            => "site.base_url"             : BaseUrl { optional },         bad: "nonsense://x";
     MediaMaxFileSizeBytes  => "media.max_file_size_bytes" : MaxFileSize,                  bad: "0";
     MediaUserQuotaBytes    => "media.user_quota_bytes"    : UserQuota,                    bad: "0";
     SmtpHost               => "smtp.host"                 : SmtpHost,                     bad: "";

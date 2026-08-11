@@ -5,7 +5,7 @@ use axum::Router;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use common::absolute_url::AbsoluteUrl;
+use common::tagged_url::BaseUrl;
 use common::username::Username;
 use storage::SiteConfigStorage;
 use web::auth::AuthUser;
@@ -117,8 +117,8 @@ pub(crate) fn require_user_match(
 
 /// Returns the site's public base URL (an absolute `http(s)` origin), or `None`
 /// when unconfigured (callers then emit root-relative URLs via
-/// [`common::absolute_url::compose`]).
-pub(crate) async fn base_url(site_config: &dyn SiteConfigStorage) -> Option<AbsoluteUrl> {
+/// [`common::tagged_url::compose`]).
+pub(crate) async fn base_url(site_config: &dyn SiteConfigStorage) -> Option<BaseUrl> {
     site_config
         .get_identity()
         .await
@@ -128,11 +128,11 @@ pub(crate) async fn base_url(site_config: &dyn SiteConfigStorage) -> Option<Abso
 
 /// [`base_url`] as a **required** precondition (#560): maps the unset case to
 /// [`HandlerError::BaseUrlRequired`] (logged as a `500` at the response boundary), so a
-/// composed-URL handler narrows `SiteIdentity.base_url` to an [`AbsoluteUrl`] in one `?`
+/// composed-URL handler narrows `SiteIdentity.base_url` to a [`BaseUrl`] in one `?`
 /// and every downstream `compose` is infallible.
 pub(crate) async fn required_base_url(
     site_config: &dyn SiteConfigStorage,
-) -> Result<AbsoluteUrl, HandlerError> {
+) -> Result<BaseUrl, HandlerError> {
     base_url(site_config)
         .await
         .ok_or(HandlerError::BaseUrlRequired)

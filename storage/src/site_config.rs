@@ -3,7 +3,6 @@
 use crate::backend::Backend;
 use crate::smtp::SmtpConfig;
 use async_trait::async_trait;
-use common::absolute_url::AbsoluteUrl;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, DestinationPath, RetentionCount};
 // The closed registry of site-config keys (#687) — re-exported so
 // `storage::SiteConfigKey` resolves for the call sites that name one.
@@ -20,6 +19,7 @@ use common::smtp_port::SmtpPort;
 use common::smtp_sender::SmtpSender;
 use common::smtp_tls_mode::SmtpTlsMode;
 use common::smtp_username::SmtpUsername;
+use common::tagged_url::{BaseUrl, HubUrl};
 use common::visibility::{AudienceTarget, default_audience_str, parse_default_audience};
 use sqlx::{Database, Pool};
 
@@ -163,7 +163,7 @@ pub trait SiteConfigStorage: Send + Sync {
     /// `http(s)` URL (corruption, or legacy data pre-dating this validation) is
     /// **purged** and read as unset — mirroring the `feed_events` unparseable-`feed_url`
     /// purge, so a bad stored value never hard-fails the read.
-    async fn get_feeds_websub_hub_url(&self) -> sqlx::Result<Option<AbsoluteUrl>> {
+    async fn get_feeds_websub_hub_url(&self) -> sqlx::Result<Option<HubUrl>> {
         let Some(raw) = self
             .get(SiteConfigKey::FeedsWebsubHubUrl)
             .await?
@@ -171,7 +171,7 @@ pub trait SiteConfigStorage: Send + Sync {
         else {
             return Ok(None);
         };
-        if let Ok(url) = raw.parse::<AbsoluteUrl>() {
+        if let Ok(url) = raw.parse::<HubUrl>() {
             Ok(Some(url))
         } else {
             tracing::warn!("purging unparseable stored feeds.websub_hub_url");
@@ -206,7 +206,7 @@ pub trait SiteConfigStorage: Send + Sync {
         {
             None => None,
             Some(raw) => {
-                if let Ok(url) = raw.parse::<AbsoluteUrl>() {
+                if let Ok(url) = raw.parse::<BaseUrl>() {
                     Some(url)
                 } else {
                     // Purge a corrupt/legacy unparseable value and read as unset (as
@@ -223,7 +223,7 @@ pub trait SiteConfigStorage: Send + Sync {
 
     /// Stores the site identity (title and base URL).
     /// For `base_url`, an empty string is stored when `None` is provided; a set
-    /// value is stored in its canonical form (the `AbsoluteUrl` normalized it).
+    /// value is stored in its canonical form (the `BaseUrl` normalized it).
     async fn set_identity(&self, config: &SiteIdentity) -> sqlx::Result<()> {
         self.set(SiteConfigKey::SiteTitle, &config.title).await?;
         let base_url_value = config.base_url.as_deref().unwrap_or("");
@@ -463,10 +463,10 @@ mod tests {
     use common::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
     use common::media::{MaxFileSize, UserQuota};
     use common::registration::RegistrationPolicy;
+    use common::tagged_url::HubUrl;
     use common::test_support::{
-        parse_absolute_url, parse_destination_path, parse_feed_min_days, parse_feed_min_items,
-        parse_max_file_size, parse_retention_count, parse_site_title, parse_smtp_username,
-        parse_user_quota,
+        parse_destination_path, parse_feed_min_days, parse_feed_min_items, parse_max_file_size,
+        parse_retention_count, parse_site_title, parse_smtp_username, parse_url, parse_user_quota,
     };
     use rstest::*;
     use rstest_reuse::*;
@@ -542,7 +542,7 @@ mod tests {
         let config = FeedsConfig {
             min_items: parse_feed_min_items("42"),
             min_days: parse_feed_min_days("7"),
-            websub_hub_url: Some(parse_absolute_url("https://hub.example.com/")),
+            websub_hub_url: Some(parse_url("https://hub.example.com/")),
         };
         storage.set_feeds_config(&config).await.unwrap();
         let loaded = storage.get_feeds_config().await.unwrap();
@@ -926,9 +926,12 @@ mod tests {
             .set(SiteConfigKey::FeedsWebsubHubUrl, "https://hub.example.com/")
             .await
             .unwrap();
+        // Asserted against a typed `HubUrl`, not its bytes: the column carries the
+        // *role*, so a getter retyped to another role would fail here (#875).
+        let want: HubUrl = parse_url("https://hub.example.com/");
         assert_eq!(
-            storage.get_feeds_websub_hub_url().await.unwrap().as_deref(),
-            Some("https://hub.example.com/")
+            storage.get_feeds_websub_hub_url().await.unwrap(),
+            Some(want)
         );
     }
 
@@ -992,7 +995,7 @@ mod tests {
     async fn identity_normalizes_stored_base_url_to_canonical_form(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        // A value stored WITHOUT a trailing slash (e.g. from before the AbsoluteUrl
+        // A value stored WITHOUT a trailing slash (e.g. from before the BaseUrl
         // typing) still parses; the type normalizes it to the canonical slashed form.
         storage
             .set(SiteConfigKey::SiteBaseUrl, "https://example.com")
@@ -1046,7 +1049,7 @@ mod tests {
         let storage = &*env.state.site_config;
         let original = common::site::SiteIdentity {
             title: parse_site_title("Test Site"),
-            base_url: Some(parse_absolute_url("https://test.example.com/")),
+            base_url: Some(parse_url("https://test.example.com/")),
         };
         storage.set_identity(&original).await.expect("set_identity");
         let retrieved = storage.get_identity().await.expect("get_identity");

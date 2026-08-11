@@ -6,9 +6,9 @@ use std::time::Duration;
 
 use crate::websub::WebSubClient;
 use chrono::{DateTime, Utc};
-use common::absolute_url::{AbsoluteUrl, compose};
 use common::feed::{FeedPath, affected_feed_urls};
 use common::ids::FeedEventId;
+use common::tagged_url::{FeedUrl, HubUrl, compose};
 use storage::{
     FeedCacheStorage, FeedEventRecord, FeedEventStorage, PostStorage, SiteConfigStorage,
 };
@@ -168,7 +168,7 @@ impl FeedWorker {
         &self,
         feed_path: FeedPath,
         recs: Vec<FeedEventRecord>,
-        hub_url: Option<&AbsoluteUrl>,
+        hub_url: Option<&HubUrl>,
         identity: Option<&common::site::SiteIdentity>,
     ) {
         let ids: Vec<FeedEventId> = recs.iter().map(|r| r.id).collect();
@@ -216,7 +216,7 @@ impl FeedWorker {
         feed_url: &FeedPath,
         ids: &[FeedEventId],
         attempt: i32,
-        hub_url: Option<&AbsoluteUrl>,
+        hub_url: Option<&HubUrl>,
         identity: Option<&common::site::SiteIdentity>,
     ) {
         if let Some(hub) = hub_url {
@@ -230,7 +230,7 @@ impl FeedWorker {
                 // cov:ignore-stop
             };
             // `compose` joins the required base + the feed path into an absolute URL.
-            let absolute = compose(base, feed_url);
+            let absolute: FeedUrl = compose(base, feed_url);
             tracing::info!(feed_url = %feed_url, hub = %hub, attempt, "feed.websub.ping.attempted");
 
             let result = self.websub.send_publish(hub, &absolute).await;
@@ -529,9 +529,7 @@ mod tests {
         site_config.expect_get_identity().times(0..).returning(|| {
             Ok(SiteIdentity {
                 title: common::test_support::parse_site_title("Jaunder"),
-                base_url: Some(common::test_support::parse_absolute_url(
-                    "https://example.com/",
-                )),
+                base_url: Some(common::test_support::parse_url("https://example.com/")),
             })
         });
         site_config
@@ -589,9 +587,7 @@ mod tests {
         site_config.expect_get_identity().times(0..).returning(|| {
             Ok(SiteIdentity {
                 title: common::test_support::parse_site_title("Jaunder"),
-                base_url: Some(common::test_support::parse_absolute_url(
-                    "https://example.com/",
-                )),
+                base_url: Some(common::test_support::parse_url("https://example.com/")),
             })
         });
         let mut posts = storage::MockPostStorage::new();
@@ -637,9 +633,7 @@ mod tests {
         site_config.expect_get_identity().times(0..).returning(|| {
             Ok(SiteIdentity {
                 title: common::test_support::parse_site_title("Jaunder"),
-                base_url: Some(common::test_support::parse_absolute_url(
-                    "https://example.com/",
-                )),
+                base_url: Some(common::test_support::parse_url("https://example.com/")),
             })
         });
         let mut posts = storage::MockPostStorage::new();

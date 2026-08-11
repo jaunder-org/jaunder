@@ -7,7 +7,6 @@ use std::{
 use crate::cli::{AppTarget, BootstrapDb, Commands, SiteConfigAction, StorageArgs};
 use crate::mailer::LettreMailSender;
 use crate::runtime_file;
-use common::absolute_url::compose;
 use common::backup::BackupMode;
 use common::config_key::SiteConfigKey;
 use common::display_name::DisplayName;
@@ -17,6 +16,7 @@ use common::mailer::{EmailMessage, MailSender};
 use common::password::Password;
 use common::pg_role_password::PgRolePassword;
 use common::session_label::SessionLabel;
+use common::tagged_url::{MailConfirmUrl, compose};
 use common::token::RawToken;
 use common::username::Username;
 use host::capture;
@@ -299,7 +299,7 @@ pub async fn cmd_user_invite(
     // configured base URL, print a ready-to-send invitation link; otherwise the bare code.
     match state.site_config.get_identity().await?.base_url {
         Some(base_url) => {
-            let register_url = compose(&base_url, "/register");
+            let register_url: MailConfirmUrl = compose(&base_url, "/register");
             println!("{register_url}?invite_code={}", code.as_ref());
         }
         None => println!("{}", code.as_ref()),

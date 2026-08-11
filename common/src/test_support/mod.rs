@@ -12,7 +12,6 @@ mod env;
 
 pub use env::{Env, with_env};
 
-use crate::absolute_url::AbsoluteUrl;
 use crate::audience::AudienceName;
 use crate::backup::{DestinationPath, RetentionCount};
 use crate::bio::Bio;
@@ -34,19 +33,26 @@ use crate::slug::Slug;
 use crate::smtp_password::SmtpPassword;
 use crate::smtp_username::SmtpUsername;
 use crate::tag::{Tag, TagLabel};
+use crate::tagged_url::{TaggedUrl, UrlRole};
 use crate::time::{PermalinkDate, UtcInstant};
 use crate::token::{RawToken, TokenHash};
 use crate::username::Username;
 
-/// Parse `s` into a valid [`AbsoluteUrl`] for tests — the single place a test
-/// absolute-URL literal is parsed, so a malformed fixture fails loudly and the parse
-/// isn't re-spelled at every call site across the workspace.
+/// Parse `s` into a valid [`TaggedUrl`] under the ascribed role `T` for tests — the
+/// single place a test absolute-URL literal is parsed, so a malformed fixture fails
+/// loudly and the parse isn't re-spelled at every call site across the workspace.
+///
+/// Unlike [`compose`](crate::tagged_url::compose), whose output role is free and must
+/// therefore be stated, `parse_url`'s role is pinned by the position it is parsed *into*
+/// — the struct field or parameter type — so a fixture cannot stand in for the wrong
+/// role even when the call site is bare. Where no such position exists, ascribe or
+/// turbofish (#875).
 ///
 /// # Panics
 ///
 /// Panics if `s` is not a valid absolute `http(s)` URL.
 #[must_use]
-pub fn parse_absolute_url(s: &str) -> AbsoluteUrl {
+pub fn parse_url<T: UrlRole>(s: &str) -> TaggedUrl<T> {
     s.parse().expect("valid test absolute URL")
 }
 

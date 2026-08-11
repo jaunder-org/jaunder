@@ -119,7 +119,7 @@ async fn update_site_identity_rejects_empty_title(#[case] backend: Backend) {
 #[tokio::test]
 async fn update_site_identity_rejects_non_http_base_url(#[case] backend: Backend) {
     // A non-http(s) `base_url` fails at typed-arg decode — the validating serde
-    // bridge for `Option<AbsoluteUrl>` rejects it, a non-OK server-function error
+    // bridge for `Option<BaseUrl>` rejects it, a non-OK server-function error
     // rather than a specific Validation message (ADR-0065). The client's
     // disable-until-valid gate keeps a real browser from reaching this; a raw POST
     // is the malformed-client path.
@@ -168,7 +168,7 @@ async fn update_site_identity_rejects_malformed_base_url(#[case] backend: Backen
 #[tokio::test]
 async fn update_site_identity_omits_base_url_as_none(#[case] backend: Backend) {
     // Clearing the base URL is the dispatch-`None` path: the typed
-    // `Option<AbsoluteUrl>` wire arg is *omitted* (serde decodes a missing Option
+    // `Option<BaseUrl>` wire arg is *omitted* (serde decodes a missing Option
     // field to `None`); an empty `base_url=` would instead fail to parse.
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_operator_and_session(&state).await.cookie();

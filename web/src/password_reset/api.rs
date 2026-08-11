@@ -5,9 +5,9 @@
 use {
     crate::error::InternalError,
     chrono::Duration,
-    common::absolute_url::compose,
     common::mailer::{EmailMessage, MailSender},
     common::password::Password,
+    common::tagged_url::{MailConfirmUrl, compose},
     leptos::prelude::*,
     std::sync::Arc,
     storage::{AtomicOps, PasswordResetStorage, SiteConfigStorage, UserStorage},
@@ -59,7 +59,7 @@ pub async fn request(username: Username) -> WebResult<()> {
         .create_password_reset(user_id, expires_at)
         .await?;
 
-    let reset_url = compose(&base_url, "/reset-password");
+    let reset_url: MailConfirmUrl = compose(&base_url, "/reset-password");
     let link = format!("{reset_url}?token={raw_token}");
     let message = EmailMessage {
         from: None,

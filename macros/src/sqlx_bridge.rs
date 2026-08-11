@@ -38,8 +38,13 @@ use quote::quote;
 /// `to_inner` must evaluate to `&#encode_inner` and may use `self`; `convert` may use
 /// the bound local **`v`** (of type `decode_inner`, already decoded) and must evaluate
 /// to `Result<Self, ::sqlx::error::BoxDynError>`.
+///
+/// `generics` is the *user's* generics, threaded through all three impls (#875). Each impl
+/// introduces a parameter of its own, so the emitted header is the user's list with `DB`
+/// pushed on and `'q`/`'r` prepended; every caller but `StrNewtype` passes an empty one.
 pub(crate) struct BridgeSpec<'a> {
     pub(crate) name: &'a syn::Ident,
+    pub(crate) generics: &'a syn::Generics,
     pub(crate) type_inner: TokenStream,
     pub(crate) encode_inner: TokenStream,
     pub(crate) to_inner: TokenStream,
@@ -62,6 +67,7 @@ pub(crate) struct BridgeSpec<'a> {
 pub(crate) fn bridge(spec: &BridgeSpec<'_>) -> TokenStream {
     let BridgeSpec {
         name,
+        generics,
         type_inner,
         encode_inner,
         to_inner,
@@ -69,16 +75,27 @@ pub(crate) fn bridge(spec: &BridgeSpec<'_>) -> TokenStream {
         convert,
         pg_array,
     } = spec;
+    // The bound each impl needs on its inner is a `where` predicate rather than a bound on
+    // the parameter, because the inner is a *type*, not a parameter — and folding it into
+    // the merged copy is what lets the user's own `where` clause survive alongside it.
+    // `ty_generics` comes from the user's ORIGINAL generics: the merged copies carry each
+    // impl's own parameters, and splitting one of those would spell the self type
+    // `X<T, DB>` — a bug the `sqlx` feature being off in this crate would otherwise hide.
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     // Postgres-only, and concrete rather than generic over `DB` — so it is emitted
     // only for callers whose `type_inner` is known to implement `PgHasArrayType`
     // (#891). `::sqlx::postgres` is always in scope here: the workspace pins sqlx with
     // both the `sqlite` and `postgres` features, so the enclosing `feature = "sqlx"`
     // gate is the only one needed.
+    //
+    // Unlike the three below it introduces no parameter of its own, so it takes the
+    // user's generics unmerged (#875) — empty for every current `pg_array` caller, and
+    // correct rather than accidentally so if a generic newtype ever opts in.
     let pg_array_impl = if *pg_array {
         quote! {
             #[automatically_derived]
-            impl ::sqlx::postgres::PgHasArrayType for #name {
+            impl #impl_generics ::sqlx::postgres::PgHasArrayType for #name #ty_generics #where_clause {
                 fn array_type_info() -> ::sqlx::postgres::PgTypeInfo {
                     <#type_inner as ::sqlx::postgres::PgHasArrayType>::array_type_info()
                 }
@@ -91,13 +108,40 @@ pub(crate) fn bridge(spec: &BridgeSpec<'_>) -> TokenStream {
         TokenStream::new()
     };
 
+    let mut type_g = (*generics).clone();
+    type_g.params.push(syn::parse_quote!(DB: ::sqlx::Database));
+    type_g
+        .make_where_clause()
+        .predicates
+        .push(syn::parse_quote!(#type_inner: ::sqlx::Type<DB>));
+    let (type_impl_generics, _, type_where) = type_g.split_for_impl();
+
+    let mut encode_g = crate::with_leading_param(generics, syn::parse_quote!('q));
+    encode_g
+        .params
+        .push(syn::parse_quote!(DB: ::sqlx::Database));
+    encode_g
+        .make_where_clause()
+        .predicates
+        .push(syn::parse_quote!(#encode_inner: ::sqlx::Encode<'q, DB>));
+    let (encode_impl_generics, _, encode_where) = encode_g.split_for_impl();
+
+    let mut decode_g = crate::with_leading_param(generics, syn::parse_quote!('r));
+    decode_g
+        .params
+        .push(syn::parse_quote!(DB: ::sqlx::Database));
+    decode_g
+        .make_where_clause()
+        .predicates
+        .push(syn::parse_quote!(#decode_inner: ::sqlx::Decode<'r, DB>));
+    let (decode_impl_generics, _, decode_where) = decode_g.split_for_impl();
+
     quote! {
         #[cfg(feature = "sqlx")]
         const _: () = {
             #[automatically_derived]
-            impl<DB: ::sqlx::Database> ::sqlx::Type<DB> for #name
-            where
-                #type_inner: ::sqlx::Type<DB>,
+            impl #type_impl_generics ::sqlx::Type<DB> for #name #ty_generics
+            #type_where
             {
                 fn type_info() -> <DB as ::sqlx::Database>::TypeInfo {
                     <#type_inner as ::sqlx::Type<DB>>::type_info()
@@ -108,9 +152,8 @@ pub(crate) fn bridge(spec: &BridgeSpec<'_>) -> TokenStream {
             }
 
             #[automatically_derived]
-            impl<'q, DB: ::sqlx::Database> ::sqlx::Encode<'q, DB> for #name
-            where
-                #encode_inner: ::sqlx::Encode<'q, DB>,
+            impl #encode_impl_generics ::sqlx::Encode<'q, DB> for #name #ty_generics
+            #encode_where
             {
                 fn encode_by_ref(
                     &self,
@@ -130,9 +173,8 @@ pub(crate) fn bridge(spec: &BridgeSpec<'_>) -> TokenStream {
             }
 
             #[automatically_derived]
-            impl<'r, DB: ::sqlx::Database> ::sqlx::Decode<'r, DB> for #name
-            where
-                #decode_inner: ::sqlx::Decode<'r, DB>,
+            impl #decode_impl_generics ::sqlx::Decode<'r, DB> for #name #ty_generics
+            #decode_where
             {
                 fn decode(
                     value: <DB as ::sqlx::Database>::ValueRef<'r>,
@@ -163,9 +205,10 @@ pub(crate) mod tests {
         s.chars().filter(|c| !c.is_whitespace()).collect()
     }
 
-    fn spec_for(name: &syn::Ident) -> BridgeSpec<'_> {
+    fn spec_for<'a>(name: &'a syn::Ident, generics: &'a syn::Generics) -> BridgeSpec<'a> {
         BridgeSpec {
             name,
+            generics,
             type_inner: quote! { ::std::string::String },
             encode_inner: quote! { ::std::string::String },
             to_inner: quote! { &self.0 },
@@ -178,7 +221,8 @@ pub(crate) mod tests {
     #[test]
     fn type_impl_delegates_to_type_inner() {
         let n = format_ident!("X");
-        let out = norm(&bridge(&spec_for(&n)));
+        let g = syn::Generics::default();
+        let out = norm(&bridge(&spec_for(&n, &g)));
         assert!(out.contains("<::std::string::Stringas::sqlx::Type<DB>>::type_info()"));
         assert!(out.contains("<::std::string::Stringas::sqlx::Type<DB>>::compatible(ty)"));
     }
@@ -186,7 +230,8 @@ pub(crate) mod tests {
     #[test]
     fn encode_binds_an_annotated_local_and_keeps_size_hint() {
         let n = format_ident!("X");
-        let out = norm(&bridge(&spec_for(&n)));
+        let g = syn::Generics::default();
+        let out = norm(&bridge(&spec_for(&n, &g)));
         assert!(out.contains("letinner:&::std::string::String=&self.0;"));
         assert!(out.contains("::encode_by_ref(inner,buf)"));
         assert!(
@@ -199,7 +244,8 @@ pub(crate) mod tests {
     #[test]
     fn decode_delegates_to_decode_inner_then_converts() {
         let n = format_ident!("X");
-        let out = norm(&bridge(&spec_for(&n)));
+        let g = syn::Generics::default();
+        let out = norm(&bridge(&spec_for(&n, &g)));
         assert!(
             out.contains("letv=<::std::string::Stringas::sqlx::Decode<'r,DB>>::decode(value)?;")
         );
@@ -209,8 +255,10 @@ pub(crate) mod tests {
     #[test]
     fn the_three_inners_are_independent() {
         let n = format_ident!("X");
+        let g = syn::Generics::default();
         let out = norm(&bridge(&BridgeSpec {
             name: &n,
+            generics: &g,
             type_inner: quote! { ::std::string::String },
             encode_inner: quote! { &'q str },
             to_inner: quote! { &"tok" },
@@ -223,10 +271,50 @@ pub(crate) mod tests {
         assert!(out.contains("<&'rstras::sqlx::Decode<'r,DB>>::decode(value)?"));
     }
 
+    /// The user's generics reach all three impl headers, and each impl's own parameter is
+    /// merged in at a position Rust accepts: `DB` pushed on the end, the lifetimes
+    /// prepended (a lifetime after a type parameter is a syntax error, #875).
+    #[test]
+    fn the_users_generics_thread_through_all_three_impls() {
+        let n = format_ident!("X");
+        let g: syn::Generics = syn::parse_quote!(<T: Role>);
+        let out = norm(&bridge(&spec_for(&n, &g)));
+        assert!(
+            out.contains("impl<T:Role,DB:::sqlx::Database>::sqlx::Type<DB>forX<T>"),
+            "{out}"
+        );
+        assert!(out.contains("impl<'q,T:Role,DB:::sqlx::Database>::sqlx::Encode<'q,DB>forX<T>"));
+        assert!(out.contains("impl<'r,T:Role,DB:::sqlx::Database>::sqlx::Decode<'r,DB>forX<T>"));
+    }
+
+    /// The user's own `where` clause survives the merge — the bridge's inner predicate is
+    /// added to it rather than replacing it.
+    #[test]
+    fn a_users_where_clause_survives_the_merge() {
+        let n = format_ident!("X");
+        // `syn::Generics`'s own parser reads only the `<…>` list, so the `where` clause has
+        // to come off a whole item.
+        let item: syn::ItemStruct = syn::parse_quote!(
+            struct X<T>(String)
+            where
+                T: Role;
+        );
+        let g = item.generics;
+        let out = norm(&bridge(&spec_for(&n, &g)));
+        assert_eq!(out.matches("T:Role,").count(), 3, "one per impl: {out}");
+        assert_eq!(
+            out.matches("::std::string::String:::sqlx::Type<DB>")
+                .count(),
+            1,
+            "the bridge's own predicate is still there: {out}"
+        );
+    }
+
     #[test]
     fn output_is_feature_gated_and_marked_derived() {
         let n = format_ident!("X");
-        let out = norm(&bridge(&spec_for(&n)));
+        let g = syn::Generics::default();
+        let out = norm(&bridge(&spec_for(&n, &g)));
         assert!(out.contains("#[cfg(feature=\"sqlx\")]"));
         assert_eq!(out.matches("#[automatically_derived]").count(), 3);
 
@@ -234,7 +322,7 @@ pub(crate) mod tests {
         // rather than bumping the count, since half the callers never emit it (#891).
         let with_array = norm(&bridge(&BridgeSpec {
             pg_array: true,
-            ..spec_for(&n)
+            ..spec_for(&n, &g)
         }));
         assert_eq!(with_array.matches("#[automatically_derived]").count(), 4);
     }
@@ -242,9 +330,10 @@ pub(crate) mod tests {
     #[test]
     fn pg_array_impl_delegates_to_type_inner_when_enabled() {
         let n = format_ident!("X");
+        let g = syn::Generics::default();
         let out = norm(&bridge(&BridgeSpec {
             pg_array: true,
-            ..spec_for(&n)
+            ..spec_for(&n, &g)
         }));
         assert!(out.contains("impl::sqlx::postgres::PgHasArrayTypeforX"));
         assert!(out.contains(
@@ -258,7 +347,8 @@ pub(crate) mod tests {
     #[test]
     fn pg_array_impl_is_absent_when_disabled() {
         let n = format_ident!("X");
-        let out = norm(&bridge(&spec_for(&n)));
+        let g = syn::Generics::default();
+        let out = norm(&bridge(&spec_for(&n, &g)));
         assert!(
             !out.contains("PgHasArrayType"),
             "NumNewtype-style callers must not get the impl: their inner may be u32/usize, \

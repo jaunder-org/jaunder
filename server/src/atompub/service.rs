@@ -6,9 +6,9 @@ use axum::Extension;
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
 
-use common::absolute_url::compose;
 use common::atompub::{CollectionDecl, ServiceDocument, render_service_document};
 use common::pagination::RowLimit;
+use common::tagged_url::{CollectionHref, compose};
 use storage::{PostStorage, SiteConfigStorage};
 use web::auth::AuthUser;
 
@@ -45,13 +45,15 @@ pub async fn service_document(
     let doc = ServiceDocument {
         workspace_title: username.to_string(),
         posts_collection: CollectionDecl {
-            href: compose(&base, &posts_path),
+            // A struct-literal field cannot be ascribed, so the role is spelled as a
+            // turbofish on the tag — the alias rule's stated exception.
+            href: compose::<CollectionHref>(&base, &posts_path),
             title: "Posts".to_string(),
             accept: vec!["application/atom+xml;type=entry".to_string()],
             categories,
         },
         media_collection: CollectionDecl {
-            href: compose(&base, &media_path),
+            href: compose::<CollectionHref>(&base, &media_path),
             title: "Media".to_string(),
             accept: MEDIA_ACCEPT.iter().map(|s| (*s).to_string()).collect(),
             categories: Vec::new(),

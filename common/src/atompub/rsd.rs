@@ -4,7 +4,7 @@
 //! like `MarsEdit` and external blog editors. This module provides [`render_rsd_document`]
 //! to generate an `RSD` document pointing to the `AtomPub` service and home page.
 
-use crate::absolute_url::AbsoluteUrl;
+use crate::tagged_url::{HomepageUrl, ServiceDocUrl};
 
 /// Serializes a Really Simple Discovery (`RSD`) document.
 ///
@@ -12,16 +12,39 @@ use crate::absolute_url::AbsoluteUrl;
 /// service URL and homepage URL embedded. The service URL is the `AtomPub` Service
 /// Document endpoint; the homepage URL is the site's public-facing home.
 ///
-/// Both URLs are XML-escaped to prevent injection. Typing them as [`AbsoluteUrl`]
-/// does not make that escaping redundant: `&` is legal in a query string and
-/// survives URL normalization, so an unescaped hub or homepage URL carrying one
-/// would emit malformed XML.
+/// Both URLs are XML-escaped to prevent injection. Typing them as
+/// [`TaggedUrl`](crate::tagged_url::TaggedUrl)s does not make that escaping redundant:
+/// `&` is legal in a query string and survives URL normalization, so an unescaped hub or
+/// homepage URL carrying one would emit malformed XML.
+///
+/// The two URLs carry distinct roles, so transposing them is a compile error rather
+/// than an `RSD` document that advertises the homepage as the publishing endpoint
+/// (#875):
+///
+/// ```compile_fail
+/// # use common::atompub::rsd::render_rsd_document;
+/// # use common::tagged_url::{HomepageUrl, ServiceDocUrl};
+/// # fn f(service: &ServiceDocUrl, homepage: &HomepageUrl) {
+/// let _ = render_rsd_document(homepage, service);
+/// # }
+/// ```
+///
+/// The correct order compiles — same fixture, so the negative above can only be
+/// failing for the transposition:
+///
+/// ```
+/// # use common::atompub::rsd::render_rsd_document;
+/// # use common::tagged_url::{HomepageUrl, ServiceDocUrl};
+/// # fn f(service: &ServiceDocUrl, homepage: &HomepageUrl) {
+/// let _ = render_rsd_document(service, homepage);
+/// # }
+/// ```
 ///
 /// # Infallible
 ///
 /// This function is infallible — it always returns a `String`.
 #[must_use]
-pub fn render_rsd_document(service_url: &AbsoluteUrl, homepage_url: &AbsoluteUrl) -> String {
+pub fn render_rsd_document(service_url: &ServiceDocUrl, homepage_url: &HomepageUrl) -> String {
     format!(
         r#"<?xml version="1.0"?>
 <rsd version="1.0" xmlns="http://archipelago.phrasewise.com/rsd">
@@ -45,13 +68,13 @@ pub fn render_rsd_document(service_url: &AbsoluteUrl, homepage_url: &AbsoluteUrl
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::parse_absolute_url;
+    use crate::test_support::parse_url;
 
     #[test]
     fn rsd_document_contains_engine_name_and_urls() {
         let out = render_rsd_document(
-            &parse_absolute_url("https://example.com/atompub/service"),
-            &parse_absolute_url("https://example.com/home"),
+            &parse_url("https://example.com/atompub/service"),
+            &parse_url("https://example.com/home"),
         );
         assert!(out.contains("<engineName>Jaunder</engineName>"));
         assert!(out.contains("https://example.com/atompub/service"));
@@ -59,15 +82,15 @@ mod tests {
         assert!(out.contains("apiLink="));
     }
 
-    // `&` is a legal query separator and survives `AbsoluteUrl` normalization, so
+    // `&` is a legal query separator and survives `TaggedUrl` normalization, so
     // escaping it is what keeps the document well-formed XML — not defence in
     // depth. (`<` and `"` are percent-encoded by normalization and can no longer
     // reach this function, which is why the old `&lt;` case is gone.)
     #[test]
     fn rsd_document_escapes_query_ampersand() {
         let out = render_rsd_document(
-            &parse_absolute_url("https://example.com/atompub?foo=1&bar=2"),
-            &parse_absolute_url("https://example.com/home"),
+            &parse_url("https://example.com/atompub?foo=1&bar=2"),
+            &parse_url("https://example.com/home"),
         );
         assert!(out.contains("foo=1&amp;bar=2"));
         assert!(!out.contains("foo=1&bar=2"));

@@ -1,8 +1,9 @@
 //! [`RootRelativeUrl`] — a validated, host-less **root-relative** URL reference (`/…`,
 //! optional query), the type for the web post URLs (permalink / preview / edit) the
 //! browser resolves against the current origin and that are *never* composed against a
-//! base. It is a distinct grammar (ADR-0063, invariant axis) from [`AbsoluteUrl`], which
-//! carries a scheme and host, and from `FeedPath`, a closed feed-endpoint identity set;
+//! base. It is a distinct grammar (ADR-0063, invariant axis) from
+//! [`TaggedUrl`](crate::tagged_url::TaggedUrl), which carries a scheme and host — and a
+//! role — and from `FeedPath`, a closed feed-endpoint identity set;
 //! a `RootRelativeUrl` is any `/…` reference, so it folds onto neither.
 //!
 //! Validation is structural — a single leading slash (host-less, not protocol-relative

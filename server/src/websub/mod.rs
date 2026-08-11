@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use common::absolute_url::AbsoluteUrl;
+use common::tagged_url::{FeedUrl, HubUrl};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -14,11 +14,35 @@ pub enum WebSubError {
 
 #[async_trait]
 pub trait WebSubClient: Send + Sync {
-    async fn send_publish(
-        &self,
-        hub_url: &AbsoluteUrl,
-        feed_url: &AbsoluteUrl,
-    ) -> Result<(), WebSubError>;
+    /// Ping a `WebSub` hub, announcing that `feed_url` has new content.
+    ///
+    /// The two parameters carry distinct roles, so transposing them is a compile
+    /// error rather than a ping sent to the feed about the hub (#875):
+    ///
+    /// ```compile_fail
+    /// # use jaunder::websub::{NoopWebSubClient, WebSubClient};
+    /// # use common::tagged_url::{FeedUrl, HubUrl};
+    /// # async fn f(client: &NoopWebSubClient, hub: &HubUrl, feed: &FeedUrl) {
+    /// let _ = client.send_publish(feed, hub).await;
+    /// # }
+    /// ```
+    ///
+    /// The correct order compiles — same fixture, so the negative above can only be
+    /// failing for the transposition:
+    ///
+    /// ```
+    /// # use jaunder::websub::{NoopWebSubClient, WebSubClient};
+    /// # use common::tagged_url::{FeedUrl, HubUrl};
+    /// # async fn f(client: &NoopWebSubClient, hub: &HubUrl, feed: &FeedUrl) {
+    /// let _ = client.send_publish(hub, feed).await;
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WebSubError`] if the hub is unreachable, times out, or answers
+    /// non-2xx.
+    async fn send_publish(&self, hub_url: &HubUrl, feed_url: &FeedUrl) -> Result<(), WebSubError>;
 }
 
 pub mod file_capture;
@@ -49,7 +73,7 @@ pub fn default_client(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::test_support::parse_absolute_url;
+    use common::test_support::parse_url;
     use rstest::*;
 
     #[fixture]
@@ -58,8 +82,8 @@ mod tests {
     }
 
     /// The feed both arms publish; its value is incidental.
-    fn feed_url() -> AbsoluteUrl {
-        parse_absolute_url("https://example.com/feed.rss")
+    fn feed_url() -> FeedUrl {
+        parse_url("https://example.com/feed.rss")
     }
 
     // The injected path selects the transport — no env, no lock (spec Decision 5).
@@ -71,7 +95,7 @@ mod tests {
         // DNS lookup, no network egress, deterministic offline and in CI.
         let http = default_client(None);
         assert!(
-            http.send_publish(&parse_absolute_url("http://127.0.0.1:1/"), &feed_url())
+            http.send_publish(&parse_url("http://127.0.0.1:1/"), &feed_url())
                 .await
                 .is_err()
         );
@@ -80,7 +104,7 @@ mod tests {
         let path = capture_dir.path().join("websub.jsonl");
         let captured = default_client(Some(path.clone()));
         captured
-            .send_publish(&parse_absolute_url("https://hub.example.com/"), &feed_url())
+            .send_publish(&parse_url("https://hub.example.com/"), &feed_url())
             .await
             .expect("file capture write");
 

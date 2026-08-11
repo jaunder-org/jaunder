@@ -10,14 +10,14 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 
 use super::xml::{write_empty_element, write_text_element};
 use super::{APP_NS, ATOM_NS, J_NS};
-use crate::absolute_url::AbsoluteUrl;
 use crate::tag::Tag;
+use crate::tagged_url::CollectionHrefUrl;
 
 /// Declaration of a single collection (posts or media) in a workspace.
 #[derive(Debug, Clone)]
 pub struct CollectionDecl {
     /// The collection's absolute IRI (#560, require-base).
-    pub href: AbsoluteUrl,
+    pub href: CollectionHrefUrl,
     /// User-facing title of the collection.
     pub title: String,
     /// Media types accepted by the collection (e.g. "application/atom+xml;type=entry").
@@ -108,20 +108,20 @@ fn write_collection(writer: &mut Writer<Vec<u8>>, coll: &CollectionDecl) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::parse_absolute_url;
+    use crate::test_support::parse_url;
 
     /// A representative two-collection service document used by the serializer tests.
     fn sample_doc() -> ServiceDocument {
         ServiceDocument {
             workspace_title: "Alice".into(),
             posts_collection: CollectionDecl {
-                href: parse_absolute_url("https://h/atompub/alice/posts"),
+                href: parse_url("https://h/atompub/alice/posts"),
                 title: "Posts".into(),
                 accept: vec!["application/atom+xml;type=entry".into()],
                 categories: vec!["rust".parse().unwrap(), "leptos".parse().unwrap()],
             },
             media_collection: CollectionDecl {
-                href: parse_absolute_url("https://h/atompub/alice/media"),
+                href: parse_url("https://h/atompub/alice/media"),
                 title: "Media".into(),
                 accept: vec![
                     "image/png".into(),

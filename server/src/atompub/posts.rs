@@ -10,12 +10,12 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
-use common::absolute_url::{AbsoluteUrl, compose};
 use common::atompub::{Entry, FeedMeta, entry_to_xml, render_feed};
 use common::etag::ETag;
 use common::ids::PostId;
 use common::pagination::PageSize;
 use common::tag::TagLabel;
+use common::tagged_url::{BaseUrl, EditUriUrl, FeedUrl, PaginationUrl, compose};
 use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::ViewerIdentity;
@@ -164,9 +164,9 @@ pub async fn collection_get(
 
     let base = required_base_url(site_config.as_ref()).await?;
     let collection_path = format!("/atompub/{username}/posts");
-    let collection_url = compose(&base, &collection_path);
+    let collection_url: FeedUrl = compose(&base, &collection_path);
 
-    let next = if has_more {
+    let next: Option<PaginationUrl> = if has_more {
         records.last().map(|last| {
             // Build the cursor query via `url`'s encoder (#560, D5), not `format!`.
             let updated_before = last.updated_at.to_rfc3339();
@@ -188,11 +188,13 @@ pub async fn collection_get(
     );
 
     let meta = FeedMeta {
-        id: collection_url.clone(),
+        // The collection URL *is* the feed's atom:id.
+        id: collection_url.clone().retag(),
         title: format!("{username}'s posts"),
         updated,
         self_url: collection_url.clone(),
-        first: Some(collection_url),
+        // The collection URL *is* its own first page.
+        first: Some(collection_url.retag()),
         next,
         previous: None,
     };
@@ -388,11 +390,11 @@ pub async fn collection_post(
 fn post_entry_response(
     status: StatusCode,
     post: &PostRecord,
-    base: &AbsoluteUrl,
+    base: &BaseUrl,
     username: &Username,
 ) -> Result<Response, HandlerError> {
     let location_path = format!("/atompub/{username}/posts/{}", post.post_id);
-    let location = compose(base, &location_path);
+    let location: EditUriUrl = compose(base, &location_path);
     let xml = entry_to_xml(&post_to_entry(post, base))?;
     Ok((
         status,

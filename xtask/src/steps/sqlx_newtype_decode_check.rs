@@ -999,6 +999,15 @@ pub(crate) struct ApproveSet {
     /// scoped to composites declared under a root this gate actually reads. One declared
     /// elsewhere has had no field checked, so it stays unrecognised and fails.
     composites: std::collections::HashSet<String>,
+    /// Type aliases, mapping the alias ident to the last path segment of its target
+    /// (`HubUrl` → `TaggedUrl`).
+    ///
+    /// Not an approval of its own: a leaf is resolved through this map once and then has to
+    /// meet the same bar. It exists because a generic newtype carries the bridge on the
+    /// generic type, while every decode names a role alias (#875) — and because the aliases
+    /// are declared in `common/src` while the decodes they name sit in `storage/src`, this
+    /// is collected under **every** declaration root, not the policed one alone.
+    aliases: std::collections::HashMap<String, String>,
 }
 
 /// Whether `attrs` carry a bridge-emitting macro.
@@ -1085,6 +1094,14 @@ fn collect_declarations(source: &str, root: Root, set: &mut ApproveSet) -> Resul
             syn::Item::Type(t) if policed && matches!(&*t.ty, syn::Type::Tuple(_)) => {
                 set.composites.insert(t.ident.to_string());
             }
+            syn::Item::Type(t) => {
+                if let syn::Type::Path(p) = &*t.ty
+                    && let Some(last) = p.path.segments.last()
+                {
+                    set.aliases
+                        .insert(t.ident.to_string(), last.ident.to_string());
+                }
+            }
             _ => {}
         }
     }
@@ -1126,9 +1143,15 @@ fn unapproved_leaves(ty: &syn::Type, set: &ApproveSet) -> Vec<String> {
                     .collect();
             }
             if set.approved.contains(&name) || set.composites.contains(&name) {
+                return Vec::new();
+            }
+            // One hop through the alias map, then the same bar again. Reported under the
+            // resolved name, because that is the type a fix has to put a bridge on.
+            let resolved = set.aliases.get(&name).cloned().unwrap_or(name);
+            if set.approved.contains(&resolved) || set.composites.contains(&resolved) {
                 Vec::new()
             } else {
-                vec![name]
+                vec![resolved]
             }
         }
         syn::Type::Tuple(t) => t
@@ -1731,6 +1754,7 @@ mod tests {
                 "DateTime",
             ]),
             composites: names(&["PostRow", "CacheTuple"]),
+            aliases: std::collections::HashMap::new(),
         }
     }
 
@@ -1978,6 +2002,68 @@ mod tests {
         let mut outside = ApproveSet::default();
         collect_declarations(src, Root::DeclarationsOnly, &mut outside).expect("parses");
         assert!(outside.approved.contains("InviteCode"));
+    }
+
+    #[test]
+    fn resolves_an_alias_to_its_approved_underlying_newtype() {
+        // `pub type HubUrl = TaggedUrl<Hub>;` — the decode names the alias, the bridge is on
+        // the generic type. Without resolution every role alias would false-fail (#875).
+        let mut set = ApproveSet::default();
+        set.approved.insert("TaggedUrl".to_owned());
+        set.aliases
+            .insert("HubUrl".to_owned(), "TaggedUrl".to_owned());
+
+        let ty: syn::Type = syn::parse_quote!(Option<HubUrl>);
+        assert!(unapproved_leaves(&ty, &set).is_empty());
+    }
+
+    #[test]
+    fn rejects_an_alias_to_an_unapproved_type() {
+        // Resolution is not approval: an alias whose target carries no bridge still fails,
+        // and the message names the *underlying* type, which is what must be fixed.
+        let mut set = ApproveSet::default();
+        set.aliases
+            .insert("Mystery".to_owned(), "NotDerived".to_owned());
+
+        let ty: syn::Type = syn::parse_quote!(Option<Mystery>);
+        assert_eq!(unapproved_leaves(&ty, &set), vec!["NotDerived".to_owned()]);
+    }
+
+    #[test]
+    fn still_rejects_a_bare_unapproved_type() {
+        let set = ApproveSet::default();
+        let ty: syn::Type = syn::parse_quote!(Option<Undeclared>);
+        assert_eq!(unapproved_leaves(&ty, &set), vec!["Undeclared".to_owned()]);
+    }
+
+    #[test]
+    fn collects_generic_aliases_from_a_declarations_only_root() {
+        // The cross-crate half: the aliases live in `common/src`, the decodes they name live
+        // in `storage/src`. Collecting them only under the policed root would miss them all.
+        let mut set = ApproveSet::default();
+        collect_declarations(
+            "pub type HubUrl = TaggedUrl<Hub>;",
+            Root::DeclarationsOnly,
+            &mut set,
+        )
+        .expect("parses");
+        assert_eq!(set.aliases.get("HubUrl"), Some(&"TaggedUrl".to_owned()));
+    }
+
+    #[test]
+    fn tuple_alias_collection_is_unchanged() {
+        let mut set = ApproveSet::default();
+        collect_declarations(
+            "pub type MediaRow = (i64, String);",
+            Root::Policed,
+            &mut set,
+        )
+        .expect("parses");
+        assert!(
+            set.aliases.is_empty(),
+            "tuple aliases keep their existing handling"
+        );
+        assert!(set.composites.contains("MediaRow"));
     }
 
     #[test]

@@ -9,23 +9,24 @@
 
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Fields};
+use syn::DeriveInput;
 
 /// Expands `#[derive(SqlxBridge)]`. On the wrong shape it returns a spanned
 /// `compile_error!` instead of malformed impls.
 pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
-    if let Err(e) = crate::require_newtype_shape(input, "SqlxBridge", "struct X(Inner)") {
-        return e.to_compile_error();
-    }
-    // `require_newtype_shape` has already established the single-unnamed-field shape.
-    let Data::Struct(data) = &input.data else {
-        unreachable!("shape guard admits only a tuple struct")
+    // The shape guard returns the data field, so the inner type comes from it directly —
+    // no second, unreachable destructuring of `input.data`.
+    let inner = match crate::require_newtype_shape(
+        input,
+        crate::NewtypeShape::Plain,
+        "SqlxBridge",
+        "struct X(Inner)",
+    ) {
+        Ok(field) => &field.ty,
+        Err(e) => return e.to_compile_error(),
     };
-    let Fields::Unnamed(fields) = &data.fields else {
-        unreachable!("shape guard admits only unnamed fields")
-    };
-    let inner = &fields.unnamed[0].ty;
     let name = &input.ident;
+    let generics = syn::Generics::default();
     let text = match wants_text(&input.attrs) {
         Ok(text) => text,
         Err(e) => return e.to_compile_error(),
@@ -37,6 +38,7 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
         // per-conversion rule in `sqlx_bridge`'s module doc).
         return crate::sqlx_bridge::bridge(&crate::sqlx_bridge::BridgeSpec {
             name,
+            generics: &generics,
             type_inner: quote! { String },
             encode_inner: quote! { String },
             to_inner: quote! { &self.0.to_string() },
@@ -73,6 +75,7 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
     }
     crate::sqlx_bridge::bridge(&crate::sqlx_bridge::BridgeSpec {
         name,
+        generics: &generics,
         type_inner: quote! { #inner },
         encode_inner: quote! { #inner },
         to_inner: quote! { &self.0 },

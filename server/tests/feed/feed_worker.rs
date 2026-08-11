@@ -20,8 +20,8 @@ struct FailingWebSubClient;
 impl jaunder::websub::WebSubClient for FailingWebSubClient {
     async fn send_publish(
         &self,
-        _hub_url: &common::absolute_url::AbsoluteUrl,
-        _feed_url: &common::absolute_url::AbsoluteUrl,
+        _hub_url: &common::tagged_url::HubUrl,
+        _feed_url: &common::tagged_url::FeedUrl,
     ) -> Result<(), jaunder::websub::WebSubError> {
         Err(jaunder::websub::WebSubError::HubRefused { status: 503 })
     }
