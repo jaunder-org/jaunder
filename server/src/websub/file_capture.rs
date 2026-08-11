@@ -3,7 +3,7 @@ use chrono::Utc;
 use std::path::PathBuf;
 
 use super::{WebSubClient, WebSubError};
-use common::absolute_url::AbsoluteUrl;
+use common::tagged_url::{FeedUrl, HubUrl};
 
 /// A [`WebSubClient`] that appends each ping as a JSON line to a file on disk
 /// instead of contacting a hub.  Used for the `websub.jsonl` stream of the
@@ -21,11 +21,7 @@ impl FileCapturingWebSubClient {
 
 #[async_trait]
 impl WebSubClient for FileCapturingWebSubClient {
-    async fn send_publish(
-        &self,
-        hub_url: &AbsoluteUrl,
-        feed_url: &AbsoluteUrl,
-    ) -> Result<(), WebSubError> {
+    async fn send_publish(&self, hub_url: &HubUrl, feed_url: &FeedUrl) -> Result<(), WebSubError> {
         use std::io::Write;
 
         // Value::to_string is infallible for this all-string structure.
@@ -53,16 +49,16 @@ impl WebSubClient for FileCapturingWebSubClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::test_support::parse_absolute_url;
+    use common::test_support::parse_url;
 
     /// The hub every test in this module pings; its value is incidental.
-    fn hub_url() -> AbsoluteUrl {
-        parse_absolute_url("https://hub.example.com/")
+    fn hub_url() -> HubUrl {
+        parse_url("https://hub.example.com/")
     }
 
     /// `user`'s RSS feed — the pings differ only by whose feed regenerated.
-    fn feed_url(user: &str) -> AbsoluteUrl {
-        parse_absolute_url(&format!("https://site/~{user}/feed.rss"))
+    fn feed_url(user: &str) -> FeedUrl {
+        parse_url(&format!("https://site/~{user}/feed.rss"))
     }
 
     #[tokio::test]

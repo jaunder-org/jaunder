@@ -4,7 +4,7 @@ use macros::StrNewtype;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::absolute_url::AbsoluteUrl;
+use crate::tagged_url::BaseUrl;
 
 /// Site-wide identity and configuration.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -14,7 +14,7 @@ pub struct SiteIdentity {
     /// Public-facing base URL (an absolute `http(s)` origin, normalized to its
     /// canonical form with a trailing slash), if set. When absent, callers emit
     /// root-relative URLs.
-    pub base_url: Option<AbsoluteUrl>,
+    pub base_url: Option<BaseUrl>,
 }
 
 /// Default site title when no custom value is configured.

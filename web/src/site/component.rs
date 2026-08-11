@@ -2,8 +2,8 @@ use super::{UpdateIdentity, get_identity};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::topbar::Topbar;
-use common::absolute_url::AbsoluteUrl;
 use common::site::{SiteIdentity, SiteTitle};
+use common::tagged_url::BaseUrl;
 use leptos::prelude::*;
 
 #[component]
@@ -64,7 +64,7 @@ fn site_settings_form(
 ) -> impl IntoView {
     let title_field = Field::<SiteTitle>::prefilled(&identity.title);
     let base_url_field =
-        Field::<AbsoluteUrl>::optional_prefilled(identity.base_url.as_deref().unwrap_or_default());
+        Field::<BaseUrl>::optional_prefilled(identity.base_url.as_deref().unwrap_or_default());
     let submit = move |_| {
         if let Some(title) = title_field.parsed() {
             update_action.dispatch(UpdateIdentity {
@@ -89,7 +89,7 @@ fn site_settings_form(
                     class="j-site-input"
                     field_class="j-site-field j-site-field-wide"
                 />
-                <ValidatedInput<AbsoluteUrl>
+                <ValidatedInput<BaseUrl>
                     label="Base URL"
                     name="base_url"
                     input_type="url"

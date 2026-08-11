@@ -1,6 +1,6 @@
 use crate::error::WebResult;
-use common::absolute_url::AbsoluteUrl;
 use common::site::{SiteIdentity, SiteTitle};
+use common::tagged_url::BaseUrl;
 
 #[cfg(feature = "server")]
 use {
@@ -22,10 +22,10 @@ pub async fn get_identity() -> WebResult<SiteIdentity> {
 }
 
 #[macros::server]
-pub async fn update_identity(title: SiteTitle, base_url: Option<AbsoluteUrl>) -> WebResult<()> {
+pub async fn update_identity(title: SiteTitle, base_url: Option<BaseUrl>) -> WebResult<()> {
     require_operator().await?;
 
-    // `base_url` is a typed `Option<AbsoluteUrl>` wire arg (ADR-0065): the
+    // `base_url` is a typed `Option<BaseUrl>` wire arg (ADR-0065): the
     // validating serde bridge already rejected a malformed/non-http(s) value at
     // decode time, and an omitted field decodes to `None` (clearing-via-omit) —
     // no server-side parse/`non_empty` bridge is needed.

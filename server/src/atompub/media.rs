@@ -10,10 +10,10 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use sha2::{Digest, Sha256};
 
-use common::absolute_url::{AbsoluteUrl, compose};
 use common::atompub::{MediaLinkEntry, render_media_link_entry};
 use common::media::{ContentHash, Filename, MediaRef, MediaSource, ProfferedFilename, media_url};
 use common::root_relative_url::RootRelativeUrl;
+use common::tagged_url::{BaseUrl, EditMediaUriUrl, EditUriUrl, compose};
 use common::time::UtcInstant;
 use common::username::Username;
 use storage::{MediaRecord, MediaStorage, SiteConfigStorage};
@@ -24,13 +24,9 @@ use super::{HandlerError, required_base_url};
 const ENTRY_CONTENT_TYPE: &str = "application/atom+xml;type=entry;charset=utf-8";
 
 /// Builds the media-link entry for a stored media record.
-fn media_link_entry(
-    record: &MediaRecord,
-    base: &AbsoluteUrl,
-    username: &Username,
-) -> MediaLinkEntry {
+fn media_link_entry(record: &MediaRecord, base: &BaseUrl, username: &Username) -> MediaLinkEntry {
     let binary_path = media_url(&MediaSource::Upload, &record.sha256, &record.filename);
-    let binary = compose(base, &binary_path);
+    let binary: EditMediaUriUrl = compose(base, &binary_path);
     // The member URL is a *different* layout from the serve path (it is the AtomPub
     // collection's, not the content-addressed store's), so it is built here rather than by
     // `media_path`. Since #720 the filename needs no encoding at either site: a `Filename`
@@ -52,14 +48,17 @@ fn media_link_entry(
         };
         url
     };
-    let edit = compose(base, &edit_path);
+    let edit: EditUriUrl = compose(base, &edit_path);
     let timestamp = UtcInstant::from(record.created_at);
     MediaLinkEntry {
-        id: edit.clone(),
+        // The member URL *is* the entry's atom:id — the edit URI is the canonical
+        // identifier in the AtomPub member representation.
+        id: edit.clone().retag(),
         title: record.filename.clone(),
         edit_uri: edit,
         edit_media_uri: binary.clone(),
-        content_src: binary,
+        // The content source *is* the media binary; one resource, two link rels.
+        content_src: binary.retag(),
         content_type: record.content_type.clone(),
         published: timestamp,
         updated: timestamp,

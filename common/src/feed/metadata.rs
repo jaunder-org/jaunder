@@ -1,21 +1,43 @@
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 
-use crate::absolute_url::AbsoluteUrl;
 use crate::etag::ETag;
 use crate::ids::PostId;
 use crate::post_summary::PostSummary;
 use crate::post_title::PostTitle;
 use crate::render::RenderedHtml;
 use crate::tag::TagLabel;
+use crate::tagged_url::{CanonicalUrl, FeedUrl, HubUrl, PermalinkUrl};
 
+/// Feed-level metadata: what a rendered feed document says about itself.
+///
+/// `canonical_url` (where the feed's subject lives) and `self_url` (where the feed
+/// document itself lives) carry distinct roles, so transposing them is a compile error
+/// rather than a feed that points at itself as its own subject (#875):
+///
+/// ```compile_fail
+/// # use common::feed::metadata::FeedMetadata;
+/// # fn f(a: FeedMetadata, b: FeedMetadata) -> FeedMetadata {
+/// FeedMetadata { canonical_url: b.self_url, self_url: b.canonical_url, ..a }
+/// # }
+/// ```
+///
+/// The correct assignment compiles — same fixture, so the negative above can only be
+/// failing for the transposition:
+///
+/// ```
+/// # use common::feed::metadata::FeedMetadata;
+/// # fn f(a: FeedMetadata, b: FeedMetadata) -> FeedMetadata {
+/// FeedMetadata { canonical_url: b.canonical_url, self_url: b.self_url, ..a }
+/// # }
+/// ```
 #[derive(Debug, Clone)]
 pub struct FeedMetadata {
     pub title: String,
     pub description: Option<String>,
-    pub canonical_url: AbsoluteUrl,
-    pub self_url: AbsoluteUrl,
-    pub hub_url: Option<AbsoluteUrl>,
+    pub canonical_url: CanonicalUrl,
+    pub self_url: FeedUrl,
+    pub hub_url: Option<HubUrl>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -23,7 +45,7 @@ pub struct FeedMetadata {
 pub struct FeedItem {
     pub id: PostId, // last_post_id input to ETag
     pub title: Option<PostTitle>,
-    pub permalink: AbsoluteUrl,
+    pub permalink: PermalinkUrl,
     pub summary: Option<PostSummary>,
     pub content_html: RenderedHtml,
     pub published_at: DateTime<Utc>,
@@ -60,14 +82,14 @@ pub fn feed_etag(items: &[FeedItem], generated_at: DateTime<Utc>) -> ETag {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{parse_absolute_url, parse_post_title};
+    use crate::test_support::{parse_post_title, parse_url};
     use chrono::TimeZone;
 
     fn item(id: PostId, ts: DateTime<Utc>) -> FeedItem {
         FeedItem {
             id,
             title: Some(parse_post_title("t")),
-            permalink: parse_absolute_url("https://ex.com/p"),
+            permalink: parse_url("https://ex.com/p"),
             summary: None,
             content_html: RenderedHtml::from_trusted("<p>c</p>"),
             published_at: ts,

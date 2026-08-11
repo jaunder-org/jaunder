@@ -10,8 +10,8 @@ use axum::extract::Path;
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
 
-use common::absolute_url::compose;
 use common::atompub::render_rsd_document;
+use common::tagged_url::{HomepageUrl, ServiceDocUrl, compose};
 use common::username::Username;
 use storage::SiteConfigStorage;
 
@@ -33,9 +33,9 @@ pub async fn rsd_document(
 ) -> Result<Response, HandlerError> {
     let base = required_base_url(site_config.as_ref()).await?;
     let service_path = "/atompub/service".to_owned();
-    let service_url = compose(&base, &service_path);
+    let service_url: ServiceDocUrl = compose(&base, &service_path);
     let homepage_path = format!("/~{username}");
-    let homepage_url = compose(&base, &homepage_path);
+    let homepage_url: HomepageUrl = compose(&base, &homepage_path);
     let xml = render_rsd_document(&service_url, &homepage_url);
 
     Ok((

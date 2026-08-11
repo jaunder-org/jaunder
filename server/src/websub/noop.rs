@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
 use super::{WebSubClient, WebSubError};
-use common::absolute_url::AbsoluteUrl;
+use common::tagged_url::{FeedUrl, HubUrl};
 
 pub struct NoopWebSubClient;
 
@@ -9,8 +9,8 @@ pub struct NoopWebSubClient;
 impl WebSubClient for NoopWebSubClient {
     async fn send_publish(
         &self,
-        _hub_url: &AbsoluteUrl,
-        _feed_url: &AbsoluteUrl,
+        _hub_url: &HubUrl,
+        _feed_url: &FeedUrl,
     ) -> Result<(), WebSubError> {
         Ok(())
     }
@@ -19,16 +19,13 @@ impl WebSubClient for NoopWebSubClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::test_support::parse_absolute_url;
+    use common::test_support::parse_url;
 
     #[tokio::test]
     async fn send_publish_returns_ok() {
         let c = NoopWebSubClient;
-        c.send_publish(
-            &parse_absolute_url("https://hub"),
-            &parse_absolute_url("https://feed"),
-        )
-        .await
-        .expect("noop returns ok");
+        c.send_publish(&parse_url("https://hub"), &parse_url("https://feed"))
+            .await
+            .expect("noop returns ok");
     }
 }

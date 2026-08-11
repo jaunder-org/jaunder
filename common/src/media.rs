@@ -698,7 +698,7 @@ pub fn media_url(
         // percent-encoded — so no whitespace, `?` or `#` can survive into it. (Nothing
         // encodes here any more; the guarantee comes from the type, not from a transform.)
         // The hash and source segments are a hex digest and a bounded enum token. Same
-        // shape as `AbsoluteUrl::compose`, and the reason no trusted door is needed here.
+        // shape as `tagged_url::compose`, and the reason no trusted door is needed here.
         unreachable!("media_url builds a valid root-relative path");
     };
     url
@@ -754,7 +754,7 @@ pub struct MediaRef {
 ///
 /// **Why this splits `://` and `?`/`#` by hand rather than using `url`.** ADR-0073 makes
 /// the `url` crate the sanctioned normalizer and rules out hand-rolled URL handling, and
-/// [`AbsoluteUrl`][crate::absolute_url::AbsoluteUrl] is where that rule is kept. This is
+/// [`TaggedUrl`][crate::tagged_url::TaggedUrl] is where that rule is kept. This is
 /// outside it: `url::Url::parse` requires a base, and the input here is overwhelmingly a
 /// *root-relative* href written by a post author, which it rejects outright — and a base
 /// is exactly the site configuration a pure renderer does not have (see the paragraph

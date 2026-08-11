@@ -372,7 +372,7 @@ pub fn make_app(state: &Arc<storage::AppState>, storage: &TempDir) -> axum::Rout
 
 /// Seeds the required `site.base_url` precondition (#560): the `AtomPub` handlers
 /// compose absolute URLs from it, so any handler that emits a URL 500s when it is
-/// unset. `AbsoluteUrl` canonicalizes this to `https://example.com/` (trailing
+/// unset. `BaseUrl` canonicalizes this to `https://example.com/` (trailing
 /// slash), so composed URLs are prefixed with `https://example.com`.
 pub async fn seed_base_url(state: &Arc<storage::AppState>) {
     state

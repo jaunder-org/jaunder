@@ -30,8 +30,11 @@ use atom_syndication::extension::Extension;
 use atom_syndication::{Content, Entry, Feed, Link, Text};
 
 use super::{APP_NS, AtomPubError, J_NS};
-use crate::absolute_url::AbsoluteUrl;
 use crate::media::{ContentType, Filename};
+use crate::tagged_url::{
+    ContentSrcUrl, EditMediaUriUrl, EditUriUrl, EntryIdUrl, FeedUrl, PaginationUrl, TaggedUrl,
+    UrlRole,
+};
 use crate::time::UtcInstant;
 
 // ---------------------------------------------------------------------------
@@ -337,23 +340,26 @@ pub fn entry_to_xml(entry: &Entry) -> Result<String, AtomPubError> {
 #[derive(Debug, Clone)]
 pub struct FeedMeta {
     /// Stable feed id — the absolute collection IRI (#560, require-base).
-    pub id: AbsoluteUrl,
+    pub id: EntryIdUrl,
     /// Human-readable collection title.
     pub title: String,
     /// Feed `updated` timestamp.
     pub updated: UtcInstant,
     /// `rel="self"` href (the absolute collection URL for this page).
-    pub self_url: AbsoluteUrl,
+    pub self_url: FeedUrl,
     /// `rel="first"` href, when paging.
-    pub first: Option<AbsoluteUrl>,
+    pub first: Option<PaginationUrl>,
     /// `rel="next"` href, when a next page exists.
-    pub next: Option<AbsoluteUrl>,
+    pub next: Option<PaginationUrl>,
     /// `rel="previous"` href, when a previous page exists.
-    pub previous: Option<AbsoluteUrl>,
+    pub previous: Option<PaginationUrl>,
 }
 
 /// Builds a `rel`-labelled [`Link`] — feed paging links and entry `edit` links alike.
-fn rel_link(rel: &str, href: &AbsoluteUrl) -> Link {
+///
+/// Generic in the role: a link's `rel` attribute is what states which role the href
+/// plays, so the renderer accepts any of them.
+fn rel_link<T: UrlRole>(rel: &str, href: &TaggedUrl<T>) -> Link {
     Link {
         rel: rel.to_string(),
         href: href.to_string(),
@@ -404,20 +410,41 @@ pub fn render_feed(meta: &FeedMeta, entries: &[Entry]) -> Result<String, AtomPub
 /// an uploaded media resource. Its `<content>` references the binary by `src`
 /// rather than embedding it, and it carries both an `edit` link (the member)
 /// and an `edit-media` link (the binary).
+///
+/// `edit_uri` (the member) and `edit_media_uri` (the binary) carry distinct roles, so
+/// transposing them is a compile error rather than an entry whose `edit` link overwrites
+/// the binary (#875):
+///
+/// ```compile_fail
+/// # use common::atompub::entry::MediaLinkEntry;
+/// # fn f(a: MediaLinkEntry, b: MediaLinkEntry) -> MediaLinkEntry {
+/// MediaLinkEntry { edit_uri: b.edit_media_uri, edit_media_uri: b.edit_uri, ..a }
+/// # }
+/// ```
+///
+/// The correct assignment compiles — same fixture, so the negative above can only be
+/// failing for the transposition:
+///
+/// ```
+/// # use common::atompub::entry::MediaLinkEntry;
+/// # fn f(a: MediaLinkEntry, b: MediaLinkEntry) -> MediaLinkEntry {
+/// MediaLinkEntry { edit_uri: b.edit_uri, edit_media_uri: b.edit_media_uri, ..a }
+/// # }
+/// ```
 #[derive(Debug, Clone)]
 pub struct MediaLinkEntry {
     /// Stable entry id — the absolute member IRI (#560, require-base).
-    pub id: AbsoluteUrl,
+    pub id: EntryIdUrl,
     /// The uploaded media's filename, in its **canonical** (percent-encoded) spelling —
     /// the same value the member URLs carry. The renderer decodes it for the entry's
     /// human-readable `<title>`; it is not stored decoded (#720).
     pub title: Filename,
     /// `rel="edit"` href — the media-link member resource.
-    pub edit_uri: AbsoluteUrl,
+    pub edit_uri: EditUriUrl,
     /// `rel="edit-media"` href — the binary media resource.
-    pub edit_media_uri: AbsoluteUrl,
+    pub edit_media_uri: EditMediaUriUrl,
     /// `<content src=...>` — the absolute URL of the binary.
-    pub content_src: AbsoluteUrl,
+    pub content_src: ContentSrcUrl,
     /// MIME type of the binary.
     pub content_type: ContentType,
     /// Publication timestamp.
@@ -474,9 +501,7 @@ mod tests {
     use super::*;
     use atom_syndication::Category;
 
-    use crate::test_support::{
-        parse_absolute_url, parse_content_type, parse_filename, parse_utc_instant,
-    };
+    use crate::test_support::{parse_content_type, parse_filename, parse_url, parse_utc_instant};
 
     /// The `(type, value)` of an entry's `<content>`. Every caller supplies one, so
     /// an absent element is a broken test rather than a case to report.
@@ -1060,19 +1085,13 @@ mod tests {
         entry2.title = Text::plain("Second");
 
         let meta = FeedMeta {
-            id: parse_absolute_url("https://example.com/atompub/alice/posts"),
+            id: parse_url("https://example.com/atompub/alice/posts"),
             title: "Alice's Posts".to_string(),
             updated: parse_utc_instant("2026-05-31T12:00:00Z"),
-            self_url: parse_absolute_url("https://example.com/atompub/alice/posts"),
-            first: Some(parse_absolute_url(
-                "https://example.com/atompub/alice/posts?page=1",
-            )),
-            next: Some(parse_absolute_url(
-                "https://example.com/atompub/alice/posts?page=2",
-            )),
-            previous: Some(parse_absolute_url(
-                "https://example.com/atompub/alice/posts?page=0",
-            )),
+            self_url: parse_url("https://example.com/atompub/alice/posts"),
+            first: Some(parse_url("https://example.com/atompub/alice/posts?page=1")),
+            next: Some(parse_url("https://example.com/atompub/alice/posts?page=2")),
+            previous: Some(parse_url("https://example.com/atompub/alice/posts?page=0")),
         };
 
         let out = render_feed(&meta, &[entry1, entry2]).expect("serialize");
@@ -1126,10 +1145,10 @@ mod tests {
         entry.title = Text::plain("Single");
 
         let meta = FeedMeta {
-            id: parse_absolute_url("https://example.com/atompub/bob/posts"),
+            id: parse_url("https://example.com/atompub/bob/posts"),
             title: "Bob's Posts".to_string(),
             updated: parse_utc_instant("2026-05-31T13:00:00Z"),
-            self_url: parse_absolute_url("https://example.com/atompub/bob/posts"),
+            self_url: parse_url("https://example.com/atompub/bob/posts"),
             first: None,
             next: None,
             previous: None,
@@ -1154,10 +1173,10 @@ mod tests {
     #[test]
     fn feed_meta_updated_is_serialized_as_rfc3339_utc() {
         let meta = FeedMeta {
-            id: parse_absolute_url("https://example.com/atompub/alice/posts"),
+            id: parse_url("https://example.com/atompub/alice/posts"),
             title: "Alice's Posts".to_string(),
             updated: parse_utc_instant("2026-05-31T12:00:00Z"),
-            self_url: parse_absolute_url("https://example.com/atompub/alice/posts"),
+            self_url: parse_url("https://example.com/atompub/alice/posts"),
             first: None,
             next: None,
             previous: None,
@@ -1170,11 +1189,11 @@ mod tests {
     /// individual tests override where the case calls for it.
     fn sample_media_link_entry() -> MediaLinkEntry {
         MediaLinkEntry {
-            id: parse_absolute_url("https://h/atompub/alice/media/abc/pic.png"),
+            id: parse_url("https://h/atompub/alice/media/abc/pic.png"),
             title: parse_filename("pic.png"),
-            edit_uri: parse_absolute_url("https://h/atompub/alice/media/abc/pic.png"),
-            edit_media_uri: parse_absolute_url("https://h/media/upload/ab/c0/abc/pic.png"),
-            content_src: parse_absolute_url("https://h/media/upload/ab/c0/abc/pic.png"),
+            edit_uri: parse_url("https://h/atompub/alice/media/abc/pic.png"),
+            edit_media_uri: parse_url("https://h/media/upload/ab/c0/abc/pic.png"),
+            content_src: parse_url("https://h/media/upload/ab/c0/abc/pic.png"),
             content_type: parse_content_type("image/png"),
             published: parse_utc_instant("2026-06-01T00:00:00Z"),
             updated: parse_utc_instant("2026-06-01T00:00:00Z"),
@@ -1216,11 +1235,11 @@ mod tests {
         // typed — not the canonical stored spelling the URLs carry (#720). A missed decode
         // here is invisible to type checking, which is why it is asserted directly.
         let out = render_media_link_entry(&MediaLinkEntry {
-            id: parse_absolute_url("https://h/atompub/alice/media/abc/my%20photo.jpg"),
+            id: parse_url("https://h/atompub/alice/media/abc/my%20photo.jpg"),
             title: parse_filename("my%20photo.jpg"),
-            edit_uri: parse_absolute_url("https://h/atompub/alice/media/abc/my%20photo.jpg"),
-            edit_media_uri: parse_absolute_url("https://h/media/upload/ab/c0/abc/my%20photo.jpg"),
-            content_src: parse_absolute_url("https://h/media/upload/ab/c0/abc/my%20photo.jpg"),
+            edit_uri: parse_url("https://h/atompub/alice/media/abc/my%20photo.jpg"),
+            edit_media_uri: parse_url("https://h/media/upload/ab/c0/abc/my%20photo.jpg"),
+            content_src: parse_url("https://h/media/upload/ab/c0/abc/my%20photo.jpg"),
             content_type: parse_content_type("image/jpeg"),
             ..sample_media_link_entry()
         })

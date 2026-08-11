@@ -24,7 +24,7 @@ pub use atom::render_atom;
 pub mod json;
 pub use json::render_json;
 
-use crate::absolute_url::AbsoluteUrl;
+use crate::tagged_url::HubUrl;
 
 /// Aggregate of the feed-generation settings stored in `site_config`
 /// (`feeds.min_items`, `feeds.min_days`, `feeds.websub_hub_url`). Mirrors
@@ -34,5 +34,5 @@ use crate::absolute_url::AbsoluteUrl;
 pub struct FeedsConfig {
     pub min_items: FeedMinItems,
     pub min_days: FeedMinDays,
-    pub websub_hub_url: Option<AbsoluteUrl>,
+    pub websub_hub_url: Option<HubUrl>,
 }

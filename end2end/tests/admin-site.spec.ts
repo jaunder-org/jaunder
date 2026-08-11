@@ -59,14 +59,14 @@ test("admin site settings page loads and allows updating title and base_url", as
   await reenterSiteSettings(page);
 
   // The title round-trips verbatim; the base URL round-trips in its canonical form
-  // (`AbsoluteUrl` adds the root path slash).
+  // (`BaseUrl` adds the root path slash).
   await expect(page.locator('input[name="title"]')).toHaveValue("My Test Site");
   await expect(page.locator('input[name="base_url"]')).toHaveValue(
     "https://example.com/",
   );
 });
 
-// #448: the base URL is a typed `Option<AbsoluteUrl>` wire arg — a valid value
+// #448: the base URL is a typed `Option<BaseUrl>` wire arg — a valid value
 // round-trips in canonical form, clearing it dispatches `None` (omitted on the
 // wire, decoded to `None`), and a malformed value shows an inline client-side
 // error before submit and disables the save button.

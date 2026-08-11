@@ -1,8 +1,8 @@
 use chrono::Utc;
-use common::absolute_url::{AbsoluteUrl, compose};
 use common::feed::{
     FeedFormat, FeedItem, FeedMetadata, FeedPath, FeedSurface, HybridWindow, feed_etag, parse,
 };
+use common::tagged_url::{BaseUrl, CanonicalUrl, FeedUrl, Permalink, compose};
 use storage::{FeedCacheRow, FeedCacheStorage, PostRecord, PostStorage, SiteConfigStorage};
 use thiserror::Error;
 
@@ -21,7 +21,7 @@ pub enum RegenerateError {
 /// into the feed cache.
 ///
 /// Every URL in the returned feed body is absolute, composed from the required
-/// `site.base_url` via [`common::absolute_url::compose`] (#560): the feed self/canonical
+/// `site.base_url` via [`common::tagged_url::compose`] (#560): the feed self/canonical
 /// URLs and each per-item permalink. `site.base_url` is a precondition — regeneration
 /// errors with `RegenerateError::BaseUrlRequired` when it is unset, so no relative
 /// `atom:id` is ever emitted.
@@ -74,7 +74,7 @@ pub async fn regenerate_feed(
 
     let items = build_feed_items(base, &published);
 
-    let self_url = compose(base, feed_path);
+    let self_url: FeedUrl = compose(base, feed_path);
     let canonical_path = match &surface {
         FeedSurface::Site => "/".to_owned(),
         // urlencoding::encode (external) takes &str.
@@ -84,7 +84,7 @@ pub async fn regenerate_feed(
             format!("/~{username}/tags/{}/", urlencoding::encode(tag.as_ref()))
         }
     };
-    let canonical_url = compose(base, &canonical_path);
+    let canonical_url: CanonicalUrl = compose(base, &canonical_path);
 
     let updated_at = items.iter().map(|i| i.updated_at).max().unwrap_or(now);
     let title = compute_title(&identity.title, &surface);
@@ -130,7 +130,7 @@ fn storage_err<E: std::error::Error + Send + Sync + 'static>(e: E) -> Regenerate
 /// this performs **no** storage access at all. That is why it takes no
 /// `PostStorage`, is not `async`, and cannot fail: a per-post tag read cannot be
 /// reintroduced here without changing the signature.
-fn build_feed_items(base: &AbsoluteUrl, records: &[PostRecord]) -> Vec<FeedItem> {
+fn build_feed_items(base: &BaseUrl, records: &[PostRecord]) -> Vec<FeedItem> {
     records
         .iter()
         .map(|p| {
@@ -146,7 +146,9 @@ fn build_feed_items(base: &AbsoluteUrl, records: &[PostRecord]) -> Vec<FeedItem>
                 // Compose the root-relative permalink to an absolute per-item feed URL
                 // (atom Entry.id/link, RSS link/guid, JSON item url) — no relative atom:id
                 // (#560, D1). `base` is the required site origin.
-                permalink: compose(base, &p.permalink()),
+                // A struct-literal field cannot be ascribed, so the role is spelled as a
+                // turbofish on the tag — the alias rule's stated exception.
+                permalink: compose::<Permalink>(base, &p.permalink()),
                 summary: p.summary.clone(),
                 // FeedItem carries the post's RenderedHtml unflattened (#470); the value
                 // is already rendered — no from_trusted rebuild, just propagate it.
@@ -200,9 +202,7 @@ mod tests {
         site_config.expect_get_identity().returning(|| {
             Ok(SiteIdentity {
                 title: common::test_support::parse_site_title("Jaunder"),
-                base_url: Some(common::test_support::parse_absolute_url(
-                    "https://example.com/",
-                )),
+                base_url: Some(common::test_support::parse_url("https://example.com/")),
             })
         });
 

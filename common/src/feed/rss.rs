@@ -65,15 +65,15 @@ mod tests {
     use super::*;
     use crate::ids::PostId;
     use crate::render::RenderedHtml;
-    use crate::test_support::{parse_absolute_url, parse_post_title};
+    use crate::test_support::{parse_post_title, parse_url};
 
     fn meta(hub: Option<&str>) -> FeedMetadata {
         FeedMetadata {
             title: "Site".into(),
             description: Some("A site".into()),
-            canonical_url: parse_absolute_url("https://example.com/"),
-            self_url: parse_absolute_url("https://example.com/feed.rss"),
-            hub_url: hub.map(parse_absolute_url),
+            canonical_url: parse_url("https://example.com/"),
+            self_url: parse_url("https://example.com/feed.rss"),
+            hub_url: hub.map(parse_url),
             updated_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
         }
     }
@@ -82,7 +82,7 @@ mod tests {
         FeedItem {
             id: PostId::from(1),
             title: title.map(parse_post_title),
-            permalink: parse_absolute_url("https://example.com/~alice/posts/1"),
+            permalink: parse_url("https://example.com/~alice/posts/1"),
             summary: None,
             content_html: RenderedHtml::from_trusted("<p>hi</p>"),
             published_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),

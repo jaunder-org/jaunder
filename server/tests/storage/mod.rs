@@ -5,10 +5,10 @@ use common::password::Password;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::test_support::{
-    parse_absolute_url, parse_audience_name, parse_bio, parse_byte_size, parse_content_hash,
-    parse_content_type, parse_display_name, parse_email, parse_etag, parse_filename,
-    parse_page_offset, parse_post_body, parse_post_title, parse_raw_token, parse_row_limit,
-    parse_session_label, parse_slug, permalink_date,
+    parse_audience_name, parse_bio, parse_byte_size, parse_content_hash, parse_content_type,
+    parse_display_name, parse_email, parse_etag, parse_filename, parse_page_offset,
+    parse_post_body, parse_post_title, parse_raw_token, parse_row_limit, parse_session_label,
+    parse_slug, parse_url, permalink_date,
 };
 use common::username::Username;
 use common::visibility::{
@@ -5148,11 +5148,11 @@ async fn media_source_url_round_trips_through_the_typed_column(#[case] backend: 
     let sha256 =
         parse_content_hash("beef1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234");
     let mut record = make_media_record(user_id, &sha256, "cached.jpg", MediaSource::Cached);
-    // Spelled non-canonically on the way in: `AbsoluteUrl`'s `FromStr` lowercases the host
+    // Spelled non-canonically on the way in: `TaggedUrl`'s `FromStr` lowercases the host
     // and strips the default port, so the value stored is already normalized — asserting the
     // canonical form on read-back is what shows the column carries the *newtype*, not the
     // text as typed (#675).
-    record.source_url = Some(parse_absolute_url("https://Example.COM:443/x.png"));
+    record.source_url = Some(parse_url("https://Example.COM:443/x.png"));
 
     state.media.create_media(&record).await.unwrap();
 
@@ -5176,7 +5176,7 @@ async fn media_source_url_round_trips_through_the_typed_column(#[case] backend: 
 #[apply(backends)]
 #[tokio::test]
 async fn media_row_with_an_invalid_source_url_fails_to_decode(#[case] backend: Backend) {
-    // This is what makes `Option<AbsoluteUrl>` a contract rather than documentation: a
+    // This is what makes `Option<MediaSourceUrl>` a contract rather than documentation: a
     // value that is not a valid absolute `http(s)` URL cannot be read back as one. Nothing
     // writes `source_url` yet (the remote-caching ingest does not exist), so a hand-edited
     // or future-buggy writer is exactly the threat, and it is inserted by raw SQL here

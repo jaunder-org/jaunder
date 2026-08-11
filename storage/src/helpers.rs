@@ -9,7 +9,6 @@ use crate::{
     InviteRecord, MediaRecord, PostFormat, PostRecord, PostTag, RenderedHtml, SessionRecord,
     UserRecord,
 };
-use common::absolute_url::AbsoluteUrl;
 use common::bio::Bio;
 use common::display_name::DisplayName;
 use common::email::Email;
@@ -22,6 +21,7 @@ use common::session_label::SessionLabel;
 use common::slug::Slug;
 use common::stored_password_hash::StoredPasswordHash;
 use common::tag::{Tag, TagLabel};
+use common::tagged_url::MediaSourceUrl;
 use common::token::TokenHash;
 use common::username::Username;
 use host::invite::InviteCode;
@@ -321,7 +321,7 @@ pub(crate) type MediaRow = (
     MediaSource,
     ContentType,
     ByteSize,
-    Option<AbsoluteUrl>,
+    Option<MediaSourceUrl>,
     DateTime<Utc>,
 );
 
@@ -329,7 +329,7 @@ pub(crate) fn media_record_from_row(row: MediaRow) -> MediaRecord {
     let (user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at) = row;
     // Every column arrives as its domain type — `sha256`/`filename` through the validating
     // string bridge (#438), `source` through its `MediaSource` text-enum bridge (#607),
-    // `source_url` as an `AbsoluteUrl` (#675), `user_id` through the id bridge and
+    // `source_url` as a `MediaSourceUrl` (#675), `user_id` through the id bridge and
     // `size_bytes` through the *bound-checking* numeric bridge (#686), whose `Decode`
     // re-runs `ByteSize`'s `min` so a negative stored value is still rejected as a
     // column-decode error. Nothing is left to convert, so this build step is infallible.

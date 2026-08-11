@@ -78,7 +78,7 @@ const RECORDABLE_TYPES: &[(&str, &str)] = &[
     // neither, and they are the informative content of these write-path spans.
     ("DestinationPath", "operator-configured backup path"),
     ("SiteTitle", "operator-configured site title"),
-    ("AbsoluteUrl", "operator-configured site base URL"),
+    ("BaseUrl", "operator-configured site base URL"),
     ("BackupSchedule", "operator-configured cron expression"),
     // Already published — a component of a public permalink, so already in any
     // reverse-proxy access log.

@@ -8,8 +8,8 @@
 //! `WebError` directly.
 
 use crate::error::InternalError;
-use common::absolute_url::AbsoluteUrl;
 use common::mailer::{EmailMessage, MailSender};
+use common::tagged_url::BaseUrl;
 use host::metrics::EmailKind;
 use storage::SiteConfigStorage;
 
@@ -18,7 +18,7 @@ use storage::SiteConfigStorage;
 /// rather than mail a dead relative link.
 pub async fn require_base_url(
     site_config: &dyn SiteConfigStorage,
-) -> Result<AbsoluteUrl, InternalError> {
+) -> Result<BaseUrl, InternalError> {
     site_config
         .get_identity()
         .await?

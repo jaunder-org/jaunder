@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use std::time::Duration;
 
 use super::{WebSubClient, WebSubError};
-use common::absolute_url::AbsoluteUrl;
+use common::tagged_url::{FeedUrl, HubUrl};
 
 pub struct HttpWebSubClient {
     client: reqwest::Client,
@@ -35,11 +35,7 @@ impl Default for HttpWebSubClient {
 
 #[async_trait]
 impl WebSubClient for HttpWebSubClient {
-    async fn send_publish(
-        &self,
-        hub_url: &AbsoluteUrl,
-        feed_url: &AbsoluteUrl,
-    ) -> Result<(), WebSubError> {
+    async fn send_publish(&self, hub_url: &HubUrl, feed_url: &FeedUrl) -> Result<(), WebSubError> {
         // reqwest is an external type, so reading both inner values out here is
         // the ADR-0063 §5 carve-out. `IntoUrl` is sealed and has no impl for our
         // newtype, so `post` needs the `&str` explicitly.
@@ -73,13 +69,13 @@ impl WebSubClient for HttpWebSubClient {
 mod tests {
     use super::*;
     use axum::{Router, extract::Form, http::StatusCode, routing::post};
-    use common::test_support::parse_absolute_url;
+    use common::test_support::parse_url;
     use serde::Deserialize;
     use std::net::SocketAddr;
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
-    // Deliberately `String`, not `AbsoluteUrl`: this is the wire decoder on the
+    // Deliberately `String`, not a `TaggedUrl`: this is the wire decoder on the
     // test hub, so it must record exactly what was posted. A validating field
     // would turn a malformed send into an axum form rejection this test never
     // sees, instead of a readable assertion diff. ADR-0063 §5 (wire decoders).
@@ -92,13 +88,13 @@ mod tests {
     }
 
     /// The spawned hub's publish endpoint.
-    fn hub_at(addr: SocketAddr) -> AbsoluteUrl {
-        parse_absolute_url(&format!("http://{addr}/"))
+    fn hub_at(addr: SocketAddr) -> HubUrl {
+        parse_url(&format!("http://{addr}/"))
     }
 
     /// The feed every test in this module publishes; its value is incidental.
-    fn feed_url() -> AbsoluteUrl {
-        parse_absolute_url("https://example.com/feed.rss")
+    fn feed_url() -> FeedUrl {
+        parse_url("https://example.com/feed.rss")
     }
 
     async fn spawn_hub(received: Arc<Mutex<Vec<HubForm>>>, status: StatusCode) -> SocketAddr {
@@ -128,7 +124,7 @@ mod tests {
         let _ = HttpWebSubClient::default();
     }
 
-    // Scheme rejection is `absolute_url::tests::rejects_non_http_schemes`; the
+    // Scheme rejection is `tagged_url::tests::rejects_non_http_schemes`; the
     // `WebSubError::Http(_)` arm is `returns_http_error_on_connection_refused`.
 
     #[tokio::test]

@@ -2,8 +2,8 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use common::absolute_url::AbsoluteUrl;
 use common::media::{ByteSize, ContentHash, ContentType, Filename, MediaRef, MediaSource};
+use common::tagged_url::MediaSourceUrl;
 use sqlx::{Database, FromRow, Pool};
 use thiserror::Error;
 
@@ -29,14 +29,14 @@ pub struct MediaRecord {
     pub size_bytes: ByteSize,
     /// For cached media, the original remote URL; `None` for a local upload.
     ///
-    /// Typed as [`AbsoluteUrl`] ahead of any writer: every construction site currently
+    /// Typed as [`MediaSourceUrl`] ahead of any writer: every construction site currently
     /// passes `None`, because the remote-caching ingest that would populate it does not
     /// exist yet. The type is therefore the **contract for that path** — whoever builds it
     /// must supply a validated, normalized `http(s)` URL rather than whatever a feed handed
     /// them. An unparseable value would be useless by definition, since caching means
     /// fetching this URL, so rejecting it at ingest is strictly better than storing
     /// something no code can act on (#675).
-    pub source_url: Option<AbsoluteUrl>,
+    pub source_url: Option<MediaSourceUrl>,
     /// When the record was created.
     pub created_at: DateTime<Utc>,
 }
@@ -186,11 +186,11 @@ where
     // their newtypes, and the write/lookup binds encode `&ContentHash`/`&Filename`).
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
-    // `source_url` binds as `Option<AbsoluteUrl>` (#675). The newtype's own `Type`/`Encode`
+    // `source_url` binds as `Option<MediaSourceUrl>` (#675). The newtype's own `Type`/`Encode`
     // follow from the `String` bounds above via the generic `StrNewtype` bridge, but the
     // `Option` wrapper has to be named explicitly — same reason the `Option<String>` bound
     // it replaces was spelled out.
-    for<'q> Option<AbsoluteUrl>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<MediaSourceUrl>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `RowLimit`/`PageOffset` bind as themselves via the ADR-0071 sqlx bridge (both
     // delegate to `i64`) — the listing's `LIMIT`/`OFFSET` placeholders (#696).
     for<'q> RowLimit: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
