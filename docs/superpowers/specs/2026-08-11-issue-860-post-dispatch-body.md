@@ -80,7 +80,7 @@ below.
    `<Labelled>` interposes a `<label>`, so each site passes an explicit
    `field_class` and the stylesheet gains rules for it. This is scoped work in
    this cycle, not a side effect to be discovered.
-10. **`Field` gains `set_value(&self, value: &str)`**, writing `value` and
+10. **`Field` gains `set_input(&self, input: &str)`**, writing `value` and
     `error` together, and every programmatic writer in
     `compose_state.rs::seed_from` uses it — the body **and** the summary, whose
     `value.set` at `compose_state.rs:105` has the same stale-error defect today.
@@ -118,7 +118,7 @@ rather than blocked behind this cycle:
 1. **Make `Field::error` derived from `value`** (a `Memo`) so `is_valid()` and
    `parsed()` cannot drift for _any_ field, and bring slug and summary into ADR
    conformance. Note `Field::value` and `Field::error` are `pub`
-   (`web/src/forms/field.rs:23-24`), so `set_value` is a convention, not an
+   (`web/src/forms/field.rs:23-24`), so `set_input` is a convention, not an
    enforcement — this follow-up is what would make the desync inexpressible.
 2. **Unify the two composers' inline button markup with `EditSaveActions`.**
 
@@ -194,9 +194,12 @@ an e2e assertion or a stated inspection — never "review by eyeball".
 - **AC18** `ValidatedTextarea` has an optional `on_input: Option<Callback<()>>`
   prop, invoked after the value and error are written. Omitting it leaves
   existing call sites (profile, summary) compiling and behaving unchanged.
-- **AC19** `Field::set_value(&self, value: &str)` exists, writes both `value`
+- **AC19** `Field::set_input(&self, input: &str)` exists, writes both `value`
   and `error`, and `compose_state.rs::seed_from` uses it for **both** the body
   and the summary — no bare `field.value.set(…)` remains in that function.
+  (Named `set_input`, not `set_value`: leptos's `SetValue` trait puts
+  `set_value` in scope through the prelude, and shadowing a trait method with an
+  inherent one is needlessly fragile.)
 
 ### Layout
 

@@ -36,7 +36,7 @@ rule. Task 1 files the first two as issues.
 | #   | Task                                                                   |
 | --- | ---------------------------------------------------------------------- |
 | 1   | File the two follow-up issues; commit spec + plan                      |
-| 2   | `Field::set_value` — write value and error together                    |
+| 2   | `Field::set_input` — write value and error together                    |
 | 3   | `ValidatedTextarea` gains an `on_input` passthrough                    |
 | 4   | **The atomic change:** `Field<PostBody>` + `submit_gate` + all 3 forms |
 | 5   | CSS for the interposed `<label>` wrapper                               |
@@ -125,7 +125,7 @@ rule. Task 1 files the first two as issues.
       now cite **#907**. The draft is **not** `git add`ed — it is gitignored by
       design.
 
-- [ ] **Step 4: Commit** (spec and plan only)
+- [x] **Step 4: Commit** (spec and plan only) — `bef823ff`
 
 ```bash
 git add docs/superpowers/specs/2026-08-11-issue-860-post-dispatch-body.md docs/superpowers/plans/2026-08-11-issue-860-post-dispatch-body.md
@@ -134,7 +134,7 @@ git commit -m "docs(posts): spec and plan for the submit-gate rule (#860)"
 
 ---
 
-### Task 2: `Field::set_value` — write value and error together
+### Task 2: `Field::set_input` — write value and error together
 
 **Files:**
 
@@ -142,31 +142,36 @@ git commit -m "docs(posts): spec and plan for the submit-gate rule (#860)"
 
 **Interfaces:**
 
-- Produces: `pub fn set_value(&self, value: &str)` on `Field<T>` where
+- Produces: `pub fn set_input(&self, input: &str)` on `Field<T>` where
   `T: FromStr + 'static, T::Err: Display`. Consumed by Task 4's `seed_from`.
 
 This task is additive — no existing caller changes — so it compiles and gates
 clean on its own.
 
-- [ ] **Step 1: Write the failing tests** — append to the `mod tests` block in
+**Renamed during implementation:** originally specified as `set_value`, which
+collides with leptos's `SetValue` trait method (in scope via the prelude). An
+inherent method shadows it, but relying on that is fragile; `set_input` also
+matches `error_for(input)`'s vocabulary. Spec AC19 updated to match.
+
+- [x] **Step 1: Write the failing tests** — append to the `mod tests` block in
       `web/src/forms/field.rs`. It already imports `Slug` (`:155`) and `Owner`
       (`:159`), so no new imports are needed. These pin every branch: required,
       optional, invalid, and the untouched postcondition.
 
 ```rust
-    /// `set_value` is the programmatic writer that cannot desync `value` from `error`.
+    /// `set_input` is the programmatic writer that cannot desync `value` from `error`.
     /// A bare `field.value.set(..)` leaves `error` stale — the defect #860's ADR names.
     #[test]
-    fn set_value_writes_value_and_error_together() {
+    fn set_input_writes_value_and_error_together() {
         let owner = Owner::new();
         owner.set();
 
         let field = Field::<Slug>::new();
-        field.set_value("hello");
+        field.set_input("hello");
         assert_eq!(field.value.get(), "hello");
         assert!(field.is_valid(), "a valid slug leaves no error");
 
-        field.set_value("not a slug");
+        field.set_input("not a slug");
         assert_eq!(field.value.get(), "not a slug");
         assert!(!field.is_valid(), "an invalid slug sets the error");
         assert_eq!(
@@ -179,48 +184,51 @@ clean on its own.
     }
 
     /// Optionality is honored: an empty *optional* field is valid, an empty *required*
-    /// one is not — `set_value` must route through `error_for`, not `field_error`.
+    /// one is not — `set_input` must route through `error_for`, not `field_error`.
     #[test]
-    fn set_value_honors_optionality() {
+    fn set_input_honors_optionality() {
         let owner = Owner::new();
         owner.set();
 
         let optional = Field::<Slug>::optional();
-        optional.set_value("");
+        optional.set_input("");
         assert!(optional.is_valid(), "an empty optional field is valid");
 
         let required = Field::<Slug>::new();
-        required.set_value("");
+        required.set_input("");
         assert!(!required.is_valid(), "an empty required field is not valid");
 
         drop(owner);
     }
 
-    /// `set_value` seeds content, it does not simulate user interaction, so it must not
+    /// `set_input` seeds content, it does not simulate user interaction, so it must not
     /// mark the field touched — otherwise the editor would flash an error on load.
     #[test]
-    fn set_value_does_not_touch_the_field() {
+    fn set_input_does_not_touch_the_field() {
         let owner = Owner::new();
         owner.set();
 
         let field = Field::<Slug>::new();
-        field.set_value("not a slug");
+        field.set_input("not a slug");
         assert!(!field.is_touched(), "seeding is not interaction");
 
         drop(owner);
     }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run:
-`devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-860-post-dispatch-body -- cargo nextest run -p web set_value`
-Expected: FAIL — no method named `set_value` found for struct `Field`
+`devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-860-post-dispatch-body -- cargo nextest run -p web set_input`
+Expected: FAIL — no method named `set_input` found for struct `Field` Actual
+(under the original `set_value` name): FAIL, E0599 — `set_value` resolved to
+leptos's `SetValue` trait method and reported an unsatisfied `WriteValue` bound.
+That collision is what prompted the rename.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 Add to the `impl<T> Field<T>` block in `web/src/forms/field.rs`, to signature
-`pub fn set_value(&self, value: &str)`. Every branch is pinned by Step 1's tests
+`pub fn set_input(&self, input: &str)`. Every branch is pinned by Step 1's tests
 — required vs optional (via `error_for`, not `field_error`), valid vs invalid,
 and the untouched postcondition — so write the body those tests determine.
 Document it as the programmatic counterpart to the components' on-input handler,
@@ -228,17 +236,17 @@ and note that `value` and `error` are `pub`, so this is a convention rather than
 an enforcement (Task 1 Step 1's follow-up is what would make the desync
 inexpressible).
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run:
-`devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-860-post-dispatch-body -- cargo nextest run -p web set_value`
-Expected: PASS — 3 tests
+`devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-860-post-dispatch-body -- cargo nextest run -p web set_input`
+Expected: PASS — 3 tests. Actual: 3 passed, 205 skipped.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add web/src/forms/field.rs
-git commit -m "feat(forms): Field::set_value writes value and error together (#860)"
+git commit -m "feat(forms): Field::set_input writes value and error together (#860)"
 ```
 
 ---
@@ -311,7 +319,7 @@ git commit -m "feat(forms): ValidatedTextarea forwards an optional on_input call
 
 **Interfaces:**
 
-- Consumes: `Field::set_value` (Task 2), `ValidatedTextarea`'s `on_input` (Task
+- Consumes: `Field::set_input` (Task 2), `ValidatedTextarea`'s `on_input` (Task
   3).
 - Produces:
   - `pub body: Field<PostBody>` on `ComposeState` (was `RwSignal<String>`).
@@ -353,13 +361,13 @@ arity. Rewrite each — none is deleted except where noted:
 - `inputs_carry_the_edited_body_and_the_publish_flag` (`:152`) → new `inputs`
   signature.
 - `an_empty_publish_at_schedules_nothing` (`:187`) →
-  `state.body.set_value("body")` and
+  `state.body.set_input("body")` and
   `state.inputs(body, true, None).publish_at.is_none()` with no `.expect(…)`.
 - `seed_from_loads_an_existing_post_into_the_editor_fields` (`:205`) →
   `state.body.value.get()` in place of `state.body.get()` (a `Field` has no
   `get()`).
 - `reset_clears_the_post_body_but_keeps_format_and_audience` (`:224`) →
-  `state.body.set_value(…)` and `state.body.value.get()`.
+  `state.body.set_input(…)` and `state.body.value.get()`.
 
 `a_blank_body_yields_no_payload` (`:174`) is **deleted**: the decision it pinned
 moves to `submit_gate`, where Step 4's tests cover it.
@@ -388,7 +396,7 @@ moves to `submit_gate`, where Step 4's tests cover it.
 - [ ] **Step 3: Write the failing seeding/reset tests**
 
 These pin spec AC6 and AC7 — including the summary half of AC7, which is the
-reason `seed_from` gains a second `set_value`. Reuse the existing
+reason `seed_from` gains a second `set_input`. Reuse the existing
 `crate::posts::render::test_fixtures::sample_post()` fixture (already used at
 `:208`, body `"raw"`, no summary); do **not** hand-build an `AuthoredPost` — it
 holds a full `RenderedPost` (`common/src/seed.rs:108-112`) and has no
@@ -423,7 +431,7 @@ holds a full `RenderedPost` (`common/src/seed.rs:108-112`) and has no
     fn reset_returns_the_body_field_to_pristine() {
         with_owner(|| {
             let state = ComposeState::new();
-            state.body.set_value("some text");
+            state.body.set_input("some text");
             state.body.touch();
 
             state.reset();
@@ -451,10 +459,10 @@ the invariant tying disabled to absent-payload.
 
             assert!(disabled.get(), "an empty body blocks");
 
-            body.set_value("   \n\t ");
+            body.set_input("   \n\t ");
             assert!(disabled.get(), "a whitespace-only body blocks");
 
-            body.set_value("real text");
+            body.set_input("real text");
             assert!(!disabled.get(), "a parsing body with nothing else blocking");
         });
     }
@@ -465,7 +473,7 @@ the invariant tying disabled to absent-payload.
     fn the_gate_blocks_on_the_callers_predicate() {
         with_owner(|| {
             let body = Field::<PostBody>::new();
-            body.set_value("real text");
+            body.set_input("real text");
             let blocked = RwSignal::new(true);
             let (disabled, _) = submit_gate(
                 body,
@@ -484,7 +492,7 @@ the invariant tying disabled to absent-payload.
     fn the_click_hands_through_a_parsed_body() {
         with_owner(|| {
             let body = Field::<PostBody>::new();
-            body.set_value("real text");
+            body.set_input("real text");
             let seen: RwSignal<Vec<(String, bool)>> = RwSignal::new(Vec::new());
             let (_, on_click) = submit_gate(
                 body,
@@ -525,7 +533,7 @@ the invariant tying disabled to absent-payload.
             assert_eq!(ran.get(), 0, "an unparseable body dispatches nothing");
             assert!(disabled.get(), "and the control reporting that is disabled");
 
-            body.set_value("real text");
+            body.set_input("real text");
             on_click.run(true);
             assert_eq!(ran.get(), 1);
             assert!(!disabled.get());
@@ -537,7 +545,7 @@ the invariant tying disabled to absent-payload.
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-860-post-dispatch-body -- cargo nextest run -p web compose_state`
-Expected: FAIL — `submit_gate` not found; `inputs` arity; no `set_value` on
+Expected: FAIL — `submit_gate` not found; `inputs` arity; no `set_input` on
 `RwSignal<String>`.
 
 (Filter on `compose_state`, not `submit_gate`: nextest matches the
@@ -557,8 +565,8 @@ Four edits in `compose_state.rs`, each pinned by Steps 2–3:
    **ADR-0105** and reference the draft by path,
    `docs/adr/drafts/submit-gate-owns-its-parse.md`. (The struct field itself
    carries no doc comment today; there is nothing to update there.)
-3. `seed_from` uses `self.body.set_value(…)` and — per spec decision 10 —
-   `self.summary_field.set_value(…)` in place of the bare `value.set` at `:105`.
+3. `seed_from` uses `self.body.set_input(…)` and — per spec decision 10 —
+   `self.summary_field.set_input(…)` in place of the bare `value.set` at `:105`.
 4. `reset` uses `self.body.reset()` in place of `self.body.set(String::new())`.
 
 - [ ] **Step 7: Write `submit_gate`**
