@@ -262,6 +262,47 @@ mod text_enum;
 /// assert_eq!(serde_json::to_string(&v).unwrap(), "\"x\"");        // serde bridge
 /// let _back: Inf = serde_json::from_str("\"x\"").unwrap();        // deserialize via From<String>
 /// ```
+///
+/// # The phantom-tagged form (#875)
+///
+/// Alone among the newtype derives, `StrNewtype` accepts a **generic** struct carrying a
+/// zero-sized role marker — `struct X<T: Bound>(String, PhantomData<_>)` — and threads the
+/// user's generics through every impl it emits. One trailer is then written once and
+/// inherited by every role, and two roles are distinct types that cannot be transposed.
+///
+/// The marker field never appears in the emitted code: nothing the derive writes
+/// constructs `Self`. `TryFrom`, `Deserialize`, and the sqlx `Decode` all route through the
+/// author's `FromStr`, which is where the `PhantomData` is supplied — so the derive needs
+/// to know only that the field is there, not what to put in it.
+///
+/// The std `#[derive]`s must be hand-written for such a type: `#[derive(Clone)]` would add
+/// a `T: Clone` bound on a marker that is never stored.
+///
+/// ```
+/// use macros::StrNewtype;
+/// use std::marker::PhantomData;
+/// use std::str::FromStr;
+/// pub trait Role {}
+/// pub struct Hub;
+/// impl Role for Hub {}
+///
+/// #[derive(StrNewtype)]
+/// pub struct Tagged<T: Role>(String, PhantomData<fn() -> T>);
+///
+/// impl<T: Role> FromStr for Tagged<T> {
+///     type Err = std::convert::Infallible;
+///     fn from_str(s: &str) -> Result<Self, Self::Err> { Ok(Self(s.to_owned(), PhantomData)) }
+/// }
+/// // `Ord: Eq`, and the trailer emits `Ord` — so these two are required, hand-written.
+/// impl<T: Role> PartialEq for Tagged<T> {
+///     fn eq(&self, other: &Self) -> bool { self.0 == other.0 }
+/// }
+/// impl<T: Role> Eq for Tagged<T> {}
+///
+/// let t: Tagged<Hub> = "https://hub.example.com/".parse().unwrap();
+/// assert_eq!(t.to_string(), "https://hub.example.com/");
+/// assert_eq!(serde_json::to_string(&t).unwrap(), "\"https://hub.example.com/\"");
+/// ```
 #[proc_macro_derive(StrNewtype, attributes(str_newtype))]
 pub fn str_newtype_derive(item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as DeriveInput);
@@ -289,6 +330,31 @@ pub fn str_newtype_derive(item: TokenStream) -> TokenStream {
 /// // `PartialEq, Eq` are required: the trailer emits `Ord`, and `Ord: Eq` (#761).
 /// #[derive(Clone, Copy, PartialEq, Eq, IdNewtype)]
 /// struct Id(i64);
+/// ```
+///
+/// # No generic form
+///
+/// `StrNewtype` learned the phantom-tagged shape `X<T: Bound>(String, PhantomData<_>)`
+/// (#875); `IdNewtype` deliberately did not, because an id carries no role to tag. A
+/// generic struct is rejected by the shape check:
+///
+/// ```compile_fail
+/// # use std::marker::PhantomData;
+/// # use macros::IdNewtype;
+/// # pub trait Role {}
+/// #[derive(IdNewtype)]
+/// pub struct Generic<T: Role>(i64, PhantomData<fn() -> T>);
+/// ```
+///
+/// The non-generic form is what it accepts — the same fixture lines, so the negative
+/// above can only be failing for the generics:
+///
+/// ```
+/// # use std::marker::PhantomData;
+/// # use macros::IdNewtype;
+/// # pub trait Role {}
+/// #[derive(Clone, Copy, PartialEq, Eq, IdNewtype)]
+/// pub struct PostId(i64);
 /// ```
 #[proc_macro_derive(IdNewtype)]
 pub fn id_newtype_derive(item: TokenStream) -> TokenStream {
@@ -477,32 +543,93 @@ pub fn text_enum(attr: TokenStream, item: TokenStream) -> TokenStream {
     text_enum::expand(attr.into(), &item).into()
 }
 
-/// Validates that `input` is a **non-generic** single-field tuple struct (`struct X(T)`) —
-/// the shape both newtype derives require — returning a spanned error (rendered as
-/// `compile_error!`) otherwise. `macro_name`/`example` shape the diagnostic. Generics are
-/// rejected here rather than silently mis-handled: the derives emit `impl … for #name`
-/// with no `impl_generics`/`where_clause`, so a generic newtype would otherwise produce a
-/// confusing "missing generics" error at the user's site instead of this clear one.
-pub(crate) fn require_newtype_shape(
-    input: &DeriveInput,
+/// The field shapes a newtype derive will accept.
+#[derive(Clone, Copy)]
+pub(crate) enum NewtypeShape {
+    /// Exactly one field, and no generics. `IdNewtype`, `NumNewtype`, `SqlxBridge`.
+    Plain,
+    /// One data field, optionally followed by a `PhantomData<_>` marker field, with
+    /// generics permitted. `StrNewtype` only (#875).
+    PhantomTagged,
+}
+
+/// Validates that `input` is a single-field tuple struct (`struct X(T)`) — the shape every
+/// newtype derive requires — returning its **data field** (the first one), or a spanned
+/// error (rendered as `compile_error!`) otherwise. `macro_name`/`example` shape the
+/// diagnostic.
+///
+/// [`NewtypeShape::Plain`] additionally rejects generics, rather than letting them be
+/// silently mis-handled: those derives emit `impl … for #name` with no
+/// `impl_generics`/`where_clause`, so a generic newtype would otherwise produce a confusing
+/// "missing generics" error at the user's site instead of this clear one.
+///
+/// [`NewtypeShape::PhantomTagged`] permits generics *and* a trailing `PhantomData<_>`
+/// field, because `StrNewtype` threads the user's generics through every impl it emits
+/// (#875). The marker field is not the derive's business — nothing it emits constructs
+/// `Self`, so it never has to name it.
+pub(crate) fn require_newtype_shape<'a>(
+    input: &'a DeriveInput,
+    shape: NewtypeShape,
     macro_name: &str,
     example: &str,
-) -> syn::Result<()> {
-    let single_field_tuple = matches!(
-        &input.data,
-        Data::Struct(s) if matches!(&s.fields, Fields::Unnamed(f) if f.unnamed.len() == 1),
-    );
-    let non_generic = input.generics.params.is_empty() && input.generics.where_clause.is_none();
-    if single_field_tuple && non_generic {
-        Ok(())
-    } else {
-        Err(syn::Error::new_spanned(
+) -> syn::Result<&'a syn::Field> {
+    let generics_ok = match shape {
+        NewtypeShape::Plain => {
+            input.generics.params.is_empty() && input.generics.where_clause.is_none()
+        }
+        NewtypeShape::PhantomTagged => true,
+    };
+    let data_field = match &input.data {
+        Data::Struct(s) => match &s.fields {
+            Fields::Unnamed(f) if f.unnamed.len() == 1 => Some(&f.unnamed[0]),
+            // The second field is admitted only under `PhantomTagged`, and only if it
+            // really is a `PhantomData<_>`: an accidental second data field must still be
+            // the clear shape error, not a silently ignored one.
+            Fields::Unnamed(f)
+                if matches!(shape, NewtypeShape::PhantomTagged)
+                    && f.unnamed.len() == 2
+                    && is_phantom_data(&f.unnamed[1].ty) =>
+            {
+                Some(&f.unnamed[0])
+            }
+            _ => None,
+        },
+        _ => None,
+    };
+    match (data_field, generics_ok) {
+        (Some(field), true) => Ok(field),
+        _ => Err(syn::Error::new_spanned(
             input,
-            format!(
-                "{macro_name} requires a non-generic single-field tuple struct like `{example}`"
-            ),
-        ))
+            match shape {
+                NewtypeShape::Plain => format!(
+                    "{macro_name} requires a non-generic single-field tuple struct like `{example}`"
+                ),
+                NewtypeShape::PhantomTagged => format!(
+                    "{macro_name} requires a single-field tuple struct like `{example}`, \
+                     optionally with a trailing `PhantomData<_>` marker field"
+                ),
+            },
+        )),
     }
+}
+
+/// Whether `ty` names `PhantomData` — keyed on the last path segment, so `PhantomData<T>`,
+/// `std::marker::PhantomData<T>`, and any alias-free spelling in between all match.
+fn is_phantom_data(ty: &syn::Type) -> bool {
+    matches!(
+        ty,
+        syn::Type::Path(p) if p.path.segments.last().is_some_and(|s| s.ident == "PhantomData"),
+    )
+}
+
+/// The user's generics with `extra` prepended as the first parameter — the merge an impl
+/// that introduces a parameter of its own needs (serde's `'de`, the sqlx bridge's `'q`/`'r`).
+/// Prepended rather than pushed because Rust requires lifetime parameters to precede type
+/// parameters, and every parameter threaded in this way is a lifetime.
+pub(crate) fn with_leading_param(base: &syn::Generics, extra: syn::GenericParam) -> syn::Generics {
+    let mut merged = base.clone();
+    merged.params.insert(0, extra);
+    merged
 }
 
 /// Validates that `input` is a **non-generic** enum whose variants are all unit variants —
@@ -546,17 +673,21 @@ pub(crate) fn require_enum_shape(
 /// - `cmp` delegates to `self.0`, the wrapped value, **not** to a `str` view. That is what
 ///   keeps the order consistent with the derived `PartialEq` and with `Borrow<str>`, whose
 ///   contract requires `Ord`/`Eq`/`Hash` to agree with the borrowed form.
-pub(crate) fn ord_impls(name: &syn::Ident) -> proc_macro2::TokenStream {
+///
+/// Neither impl introduces a parameter of its own, so `generics` splits straight through
+/// (`IdNewtype`/`NumNewtype` pass an empty one; `StrNewtype` may pass a phantom tag's).
+pub(crate) fn ord_impls(name: &syn::Ident, generics: &syn::Generics) -> proc_macro2::TokenStream {
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     quote::quote! {
         #[automatically_derived]
-        impl ::core::cmp::PartialOrd for #name {
+        impl #impl_generics ::core::cmp::PartialOrd for #name #ty_generics #where_clause {
             fn partial_cmp(&self, other: &Self) -> ::core::option::Option<::core::cmp::Ordering> {
                 ::core::option::Option::Some(self.cmp(other))
             }
         }
 
         #[automatically_derived]
-        impl ::core::cmp::Ord for #name {
+        impl #impl_generics ::core::cmp::Ord for #name #ty_generics #where_clause {
             fn cmp(&self, other: &Self) -> ::core::cmp::Ordering {
                 ::core::cmp::Ord::cmp(&self.0, &other.0)
             }
@@ -577,19 +708,113 @@ mod tests {
     #[test]
     fn require_newtype_shape_rejects_named_struct() {
         let input: DeriveInput = parse_quote! { struct X { a: String } };
-        assert!(require_newtype_shape(&input, "StrNewtype", "struct X(String)").is_err());
+        assert!(
+            require_newtype_shape(
+                &input,
+                NewtypeShape::PhantomTagged,
+                "StrNewtype",
+                "struct X(String)"
+            )
+            .is_err()
+        );
     }
 
     #[test]
-    fn require_newtype_shape_rejects_generic_struct() {
+    fn require_newtype_shape_plain_rejects_generic_struct() {
         let input: DeriveInput = parse_quote! { struct X<T>(T); };
-        assert!(require_newtype_shape(&input, "StrNewtype", "struct X(String)").is_err());
+        assert!(
+            require_newtype_shape(&input, NewtypeShape::Plain, "IdNewtype", "struct X(i64)")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn require_newtype_shape_plain_rejects_a_where_clause() {
+        // The `where`-only spelling of the same rejection: `params` is empty here, so only
+        // the `where_clause` half of the guard can fire.
+        let input: DeriveInput = parse_quote! { struct X(i64) where i64: Copy; };
+        assert!(
+            require_newtype_shape(&input, NewtypeShape::Plain, "IdNewtype", "struct X(i64)")
+                .is_err()
+        );
     }
 
     #[test]
     fn require_newtype_shape_accepts_tuple_struct() {
         let input: DeriveInput = parse_quote! { struct X(String); };
-        assert!(require_newtype_shape(&input, "StrNewtype", "struct X(String)").is_ok());
+        let field = require_newtype_shape(
+            &input,
+            NewtypeShape::PhantomTagged,
+            "StrNewtype",
+            "struct X(String)",
+        )
+        .expect("a plain tuple struct is accepted");
+        assert_eq!(quote::quote!(#field).to_string(), "String");
+    }
+
+    #[test]
+    fn require_newtype_shape_phantom_tagged_accepts_a_generic_marker_struct() {
+        let input: DeriveInput = parse_quote! {
+            struct X<T: Role>(String, PhantomData<fn() -> T>);
+        };
+        let field = require_newtype_shape(
+            &input,
+            NewtypeShape::PhantomTagged,
+            "StrNewtype",
+            "struct X(String)",
+        )
+        .expect("the phantom-tagged shape is accepted");
+        // The *data* field is returned, never the marker.
+        assert_eq!(quote::quote!(#field).to_string(), "String");
+    }
+
+    #[test]
+    fn require_newtype_shape_plain_rejects_the_phantom_tagged_shape() {
+        let input: DeriveInput = parse_quote! {
+            struct X<T: Role>(i64, PhantomData<fn() -> T>);
+        };
+        assert!(
+            require_newtype_shape(&input, NewtypeShape::Plain, "IdNewtype", "struct X(i64)")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn require_newtype_shape_phantom_tagged_rejects_a_second_data_field() {
+        // The relaxation admits a *marker*, not a second value: `PhantomData` is the whole
+        // admission criterion, so a two-field struct is still the clear shape error.
+        let input: DeriveInput = parse_quote! { struct X(String, String); };
+        assert!(
+            require_newtype_shape(
+                &input,
+                NewtypeShape::PhantomTagged,
+                "StrNewtype",
+                "struct X(String)"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn require_newtype_shape_names_the_macro_in_both_shapes() {
+        let named: DeriveInput = parse_quote! { struct X { a: String } };
+        for (shape, macro_name) in [
+            (NewtypeShape::Plain, "IdNewtype"),
+            (NewtypeShape::PhantomTagged, "StrNewtype"),
+        ] {
+            // `syn::Field` is not `Debug`, so `expect_err` is unavailable here.
+            let Err(err) = require_newtype_shape(&named, shape, macro_name, "struct X(String)")
+            else {
+                // cov:ignore-start unreachable: this is the test's own assertion-failure
+                // path, reached only if the shape check wrongly accepts named fields
+                panic!("a named-field struct is rejected under either shape")
+                // cov:ignore-stop
+            };
+            assert!(
+                err.to_string().contains(macro_name),
+                "the diagnostic must name the macro, got: {err}"
+            );
+        }
     }
 
     /// Asserts the rejection *and* that its message names the macro — deliberately
@@ -731,6 +956,68 @@ mod tests {
         };
         assert!(
             str_newtype::expand(&input)
+                .to_string()
+                .contains("compile_error")
+        );
+    }
+
+    /// The generic form's headers, at the token level (#875). The integration fixture
+    /// `macros/tests/str_newtype.rs` proves the emitted code *works*; this pins the two
+    /// merged-generics spellings that a plain `split_for_impl` would get wrong — the
+    /// `Deserialize` lifetime must precede the type parameter, and `Self` must be spelled
+    /// with its type arguments wherever it appears as a type.
+    #[test]
+    fn str_newtype_generic_threads_the_users_generics_through_every_impl() {
+        let input: DeriveInput = parse_quote! {
+            struct X<T: Role>(String, PhantomData<fn() -> T>);
+        };
+        let out = sqlx_bridge::tests::norm(&str_newtype::expand(&input));
+        assert!(!out.contains("compile_error"), "{out}");
+        assert!(out.contains("impl<T:Role>::core::fmt::DisplayforX<T>"));
+        assert!(out.contains("impl<T:Role>::core::convert::From<X<T>>for::std::string::String"));
+        assert!(out.contains("impl<T:Role>::core::cmp::OrdforX<T>"));
+        assert!(
+            out.contains("impl<'de,T:Role>::serde::Deserialize<'de>forX<T>"),
+            "the `'de` must be merged in FRONT of the type parameter: {out}"
+        );
+        assert!(
+            out.contains("<X<T>as::core::str::FromStr>::from_str"),
+            "a qualified `Self` must carry its type arguments: {out}"
+        );
+    }
+
+    #[test]
+    fn str_newtype_rejects_a_second_non_phantom_field() {
+        let input: DeriveInput = parse_quote! { struct X(String, String); };
+        assert!(
+            str_newtype::expand(&input)
+                .to_string()
+                .contains("compile_error")
+        );
+    }
+
+    #[test]
+    fn id_newtype_generic_emits_compile_error() {
+        // The runtime counterpart of the `compile_fail` doctest on the derive: only
+        // `StrNewtype` learned the phantom-tagged shape (#875).
+        let input: DeriveInput = parse_quote! {
+            struct X<T: Role>(i64, PhantomData<fn() -> T>);
+        };
+        assert!(
+            id_newtype::expand(&input)
+                .to_string()
+                .contains("compile_error")
+        );
+    }
+
+    #[test]
+    fn num_newtype_generic_emits_compile_error() {
+        let input: DeriveInput = parse_quote! {
+            #[num_newtype(inner = u32)]
+            struct X<T: Role>(u32, PhantomData<fn() -> T>);
+        };
+        assert!(
+            num_newtype::expand(&input)
                 .to_string()
                 .contains("compile_error")
         );

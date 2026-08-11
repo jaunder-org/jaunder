@@ -15,7 +15,12 @@ use syn::DeriveInput;
 /// Expands `#[derive(IdNewtype)]` on a single-field tuple struct. On the wrong shape it
 /// returns a spanned `compile_error!` instead of malformed impls.
 pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
-    if let Err(e) = crate::require_newtype_shape(input, "IdNewtype", "struct X(i64)") {
+    if let Err(e) = crate::require_newtype_shape(
+        input,
+        crate::NewtypeShape::Plain,
+        "IdNewtype",
+        "struct X(i64)",
+    ) {
         return e.to_compile_error();
     }
     let name = &input.ident;
@@ -24,7 +29,8 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
     // `BTreeMap` keys), and there is no `no_ord` here — this macro has no attribute parser
     // at all, and no id newtype needs the escape. `Ord: Eq` makes `PartialEq`/`Eq`
     // required on every `IdNewtype` rather than merely conventional.
-    let ord = crate::ord_impls(name);
+    // Empty generics: the shape guard above has already rejected a generic id (#875).
+    let ord = crate::ord_impls(name, &syn::Generics::default());
 
     quote! {
         #ord
@@ -99,8 +105,10 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
 /// transposition guarantee (ADR-0063 §2) — so unlike the string bridge it does not route
 /// through a validating `FromStr`, and unlike `NumNewtype`'s it does not re-run a bound.
 fn sqlx_impls(name: &syn::Ident) -> proc_macro2::TokenStream {
+    let generics = syn::Generics::default();
     crate::sqlx_bridge::bridge(&crate::sqlx_bridge::BridgeSpec {
         name,
+        generics: &generics,
         type_inner: quote! { i64 },
         encode_inner: quote! { i64 },
         to_inner: quote! { &self.0 },

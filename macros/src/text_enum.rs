@@ -218,8 +218,11 @@ fn serde_impls(name: &syn::Ident) -> TokenStream {
 /// operator-facing tokens, never a secret, which is why the echo is safe here and is
 /// deliberately *not* done in the `StrNewtype` bridge (that one also carries secrets).
 fn sqlx_bridge(name: &syn::Ident) -> TokenStream {
+    // Empty generics: `require_enum_shape` rejects a generic enum.
+    let generics = syn::Generics::default();
     crate::sqlx_bridge::bridge(&crate::sqlx_bridge::BridgeSpec {
         name,
+        generics: &generics,
         type_inner: quote! { ::std::string::String },
         encode_inner: quote! { &'q str },
         // `AsRef<str>` would tie the borrow to `&self`; the token is `&'static str`, which

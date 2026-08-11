@@ -4,6 +4,7 @@
 
 use macros::StrNewtype;
 use std::collections::{BTreeSet, HashSet};
+use std::marker::PhantomData;
 use std::str::FromStr;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, StrNewtype)]
@@ -294,4 +295,132 @@ fn infallible_no_ord_keeps_the_rest_of_the_trailer() {
     let read: &str = &u;
     assert_eq!(read, "x");
     assert_eq!(serde_json::to_string(&u).unwrap(), "\"x\"");
+}
+
+// --- generic phantom-tagged newtype (#875) --------------------------------------------
+// `StrNewtype` accepts `struct X<T: Bound>(String, PhantomData<fn() -> T>)` and threads
+// the user's generics through every emitted impl. `IdNewtype`/`NumNewtype` still reject
+// generics; the `compile_fail` doctest on the `IdNewtype` derive locks that half.
+
+pub trait Role {}
+pub struct Alpha;
+impl Role for Alpha {}
+pub struct Beta;
+impl Role for Beta {}
+
+#[derive(StrNewtype)]
+pub struct Tagged<T: Role>(String, PhantomData<fn() -> T>);
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct BadTagged;
+
+impl std::fmt::Display for BadTagged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("bad tagged value")
+    }
+}
+
+impl<T: Role> FromStr for Tagged<T> {
+    type Err = BadTagged;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.is_empty() {
+            return Err(BadTagged);
+        }
+        Ok(Self(s.to_owned(), PhantomData))
+    }
+}
+
+// The std `#[derive]`s are hand-written here for the same reason the real type will do
+// so: `#[derive(Clone)]` would add a spurious `T: Clone` bound on a marker that is never
+// stored. The derive under test emits everything below these.
+impl<T: Role> Clone for Tagged<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), PhantomData)
+    }
+}
+impl<T: Role> std::fmt::Debug for Tagged<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Tagged").field(&self.0).finish()
+    }
+}
+impl<T: Role> PartialEq for Tagged<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+impl<T: Role> Eq for Tagged<T> {}
+impl<T: Role> std::hash::Hash for Tagged<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
+#[test]
+fn generic_newtype_displays_inner() {
+    let a: Tagged<Alpha> = "value".parse().expect("parses");
+    assert_eq!(a.to_string(), "value");
+}
+
+#[test]
+fn generic_newtype_derefs_to_str() {
+    let a: Tagged<Alpha> = "value".parse().expect("parses");
+    let s: &str = &a;
+    assert_eq!(s, "value");
+    assert_eq!(a.as_ref(), "value");
+}
+
+#[test]
+fn generic_newtype_probes_a_hashset_with_str() {
+    // `Borrow<str>` plus the hand-written `Hash`, exactly as the non-generic fixture.
+    let mut set: HashSet<Tagged<Alpha>> = HashSet::new();
+    set.insert("value".parse().expect("parses"));
+    assert!(set.contains("value"));
+}
+
+#[test]
+fn generic_newtype_round_trips_through_string() {
+    let a: Tagged<Alpha> = "value".parse().expect("parses");
+    let s = String::from(a.clone());
+    let back = Tagged::<Alpha>::try_from(s).expect("round-trips");
+    assert_eq!(back, a);
+}
+
+#[test]
+fn generic_newtype_compares_against_str() {
+    let a: Tagged<Alpha> = "value".parse().expect("parses");
+    assert_eq!(a, *"value");
+    assert_eq!(a, "value");
+}
+
+#[test]
+fn generic_newtype_orders_by_inner() {
+    let first: Tagged<Alpha> = "a".parse().expect("parses");
+    let second: Tagged<Alpha> = "b".parse().expect("parses");
+    assert!(first < second);
+    let set: BTreeSet<Tagged<Alpha>> = [second, first].into_iter().collect();
+    assert!(set.contains("a"));
+}
+
+#[test]
+fn generic_newtype_serializes_transparently() {
+    let a: Tagged<Alpha> = "value".parse().expect("parses");
+    assert_eq!(serde_json::to_string(&a).expect("serializes"), "\"value\"");
+}
+
+#[test]
+fn generic_newtype_deserializes_through_from_str() {
+    let a: Tagged<Alpha> = serde_json::from_str("\"value\"").expect("deserializes");
+    assert_eq!(a, *"value");
+    assert!(
+        serde_json::from_str::<Tagged<Alpha>>("\"\"").is_err(),
+        "empty string must fail FromStr"
+    );
+}
+
+#[test]
+fn two_tags_carry_the_same_bytes_independently() {
+    let a: Tagged<Alpha> = "value".parse().expect("parses");
+    let b: Tagged<Beta> = "value".parse().expect("parses");
+    assert_eq!(a.as_ref(), b.as_ref());
 }

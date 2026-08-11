@@ -28,7 +28,12 @@ struct Opts {
 /// missing/unknown option, a missing `inner`, or a tuple field whose type differs from
 /// `inner`, it returns a spanned `compile_error!` instead of malformed impls.
 pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
-    if let Err(e) = crate::require_newtype_shape(input, "NumNewtype", "struct X(u32)") {
+    if let Err(e) = crate::require_newtype_shape(
+        input,
+        crate::NewtypeShape::Plain,
+        "NumNewtype",
+        "struct X(u32)",
+    ) {
         return e.to_compile_error();
     }
     let opts = match parse_opts(input) {
@@ -78,7 +83,8 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
     // Ordering is unconditional here (#761): there is no `no_ord` on this macro, because
     // every numeric value orders meaningfully and every `NumNewtype` in the tree already
     // derives `PartialEq`/`Eq` — which `Ord: Eq` now makes a requirement rather than a habit.
-    let ord = crate::ord_impls(name);
+    // Empty generics: the shape guard above has already rejected a generic numeric (#875).
+    let ord = crate::ord_impls(name, &syn::Generics::default());
 
     quote! {
         #error_ty
@@ -107,8 +113,10 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
 ///
 /// Like `IdNewtype`'s, this bridge is unconditional — there is no opt-out attribute.
 fn sqlx_impls(name: &Ident, inner: &Type) -> TokenStream {
+    let generics = syn::Generics::default();
     crate::sqlx_bridge::bridge(&crate::sqlx_bridge::BridgeSpec {
         name,
+        generics: &generics,
         type_inner: quote! { #inner },
         encode_inner: quote! { #inner },
         to_inner: quote! { &self.0 },
