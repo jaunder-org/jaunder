@@ -12,11 +12,18 @@ use super::field::Field;
 ///
 /// Deliberately **not** generic over the field's `T`. Taking `Field<T>` would be the
 /// tidier signature, but it would make this the repo's first generic component *with
-/// children*, and a generic close tag must match its opening generics token-for-token —
-/// while leptosfmt (which `cargo xtask check` runs in fix mode) writes generic tags with
-/// a trailing comma. A formatter pass could then unbalance a hand-matched pair. Taking
-/// the validity as two erased signals keeps the touched-gate in exactly one place with
-/// no such hazard.
+/// children*, and a generic close tag must match its opening generics token-for-token.
+/// Taking the validity as two erased signals keeps the touched-gate in exactly one
+/// place.
+///
+/// **The formatter half of that rationale is spent (#420).** This previously also cited
+/// leptosfmt writing generic tags with a trailing comma, so a fix-mode pass could
+/// unbalance a hand-matched open/close pair. leptosfmt is now pinned past the upstream
+/// fix for exactly that mangling, and the trailing commas are gone tree-wide — so the
+/// hazard no longer argues for anything. The token-for-token matching burden is real and
+/// unchanged; whether it still justifies the erased-signal shape is an open question this
+/// comment deliberately leaves open rather than answers, since #420 only changed the
+/// formatter.
 #[component]
 fn Labelled(
     label: &'static str,

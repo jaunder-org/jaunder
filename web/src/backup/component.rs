@@ -115,9 +115,7 @@ fn backup_settings_form(
             </div>
             <div class="j-backup-form-body">
                 {backup_destination_field(destination)}
-                <ValidatedInput<
-                BackupSchedule,
-            >
+                <ValidatedInput<BackupSchedule>
                     label="Schedule"
                     name="schedule"
                     field=schedule
@@ -125,9 +123,7 @@ fn backup_settings_form(
                     class="j-backup-input"
                     help="Use a six-field cron expression: second minute hour day-of-month month day-of-week. Example: 0 0 0 * * * runs daily at midnight."
                 />
-                <ValidatedInput<
-                RetentionCount,
-            >
+                <ValidatedInput<RetentionCount>
                     label="Retention Count"
                     name="retention_count"
                     field=retention

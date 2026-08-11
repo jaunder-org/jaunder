@@ -44,18 +44,14 @@ pub fn LoginPage() -> impl IntoView {
                         <h2>"Sign in"</h2>
                     </div>
                     <div class="j-form-body">
-                        <ValidatedInput<
-                        Username,
-                    >
+                        <ValidatedInput<Username>
                             label="Username"
                             name="username"
                             autocomplete="username"
                             field=username
                             transform=str::to_lowercase
                         />
-                        <ValidatedInput<
-                        Password,
-                    >
+                        <ValidatedInput<Password>
                             label="Password"
                             name="password"
                             input_type="password"

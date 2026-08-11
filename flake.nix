@@ -410,6 +410,57 @@
           };
         });
 
+        # leptosfmt pinned past its last release (#420). 0.1.33 (2025-01-30)
+        # mangles a generic component tag whenever the tag has to wrap:
+        # `<ValidatedInput<Username>` becomes a three-line stanza with broken
+        # indentation. It is cosmetic (it compiles, and leptosfmt is idempotent
+        # on its own output) but it recurs at every generic-component adoption.
+        #
+        # Upstream fixed it in PR #167 ("fix: don't break generic params into
+        # mulitple lines"), merged 2025-02-02 — three days AFTER 0.1.33 shipped,
+        # and nothing has been released since.
+        #
+        # REMOVE THIS OVERRIDE once a leptosfmt release later than 0.1.33
+        # exists: drop this binding and take `pkgs.leptosfmt` again.
+        #
+        # `version` deliberately stays nixpkgs' "0.1.33": the package runs
+        # `versionCheckHook`, which matches `leptosfmt --version` against it, and
+        # upstream never bumped the version after the release. A consequence
+        # worth knowing: the pinned binary is indistinguishable from the stock
+        # one by `--version`, so only behaviour proves which is in use.
+        leptosfmt = pkgs.leptosfmt.overrideAttrs (_old: rec {
+          src = pkgs.fetchFromGitHub {
+            owner = "bram209";
+            repo = "leptosfmt";
+            rev = "8b4194ba33eee417ababdd15498940014fd6d237";
+            # PR #167 also bumps a `prettyplease` submodule; without this the
+            # tree does not build. nixpkgs sets it too — replacing `src`
+            # wholesale drops it, so it has to be restated here.
+            #
+            # That submodule bump is also why this is a `src` swap rather than
+            # `applyPatches` over nixpkgs' own src — which would have kept its
+            # fetch arguments AND its `cargoHash`, avoiding the override cascade
+            # below. A patch cannot move a submodule pointer: the submodule's
+            # contents are not in the tree the patch would apply to.
+            fetchSubmodules = true;
+            hash = "sha256-F06Ag99rCn3qZywdxyP7ULOgyhbSzWNe+drBDZJWVxo=";
+          };
+          # Overriding `src` alone is not enough: nixpkgs passes `cargoHash`,
+          # which `buildRustPackage` consumes *before* `overrideAttrs` applies,
+          # so the 0.1.33 vendor tree would survive a bare `src` swap.
+          #
+          # `importCargoLock` rather than `fetchCargoVendor`: the latter's
+          # `fetch-cargo-vendor-util` downloads through crates.io's API endpoint,
+          # which answers **403** here — reproducibly, on a different crate each
+          # run (`either`, `crop`, `anstyle-query`), so it is the requester being
+          # rejected, not any one crate. `importCargoLock` uses nix's own
+          # `fetchurl` per crate, the same path crane already vendors this
+          # repo's dependencies through, and it works.
+          cargoDeps = pkgs.rustPlatform.importCargoLock {
+            lockFile = "${src}/Cargo.lock";
+          };
+        });
+
         # The CSR client's wasm bundle (`pkg/*`) + public assets, assembled as a
         # tree. The server no longer serves this from disk — it embeds the bundle
         # + public assets (#237) and the SPA shell (#239) into the binary. `site`
@@ -1149,7 +1200,7 @@
                   nativeBuildInputs = [
                     devtoolBin
                     toolchain
-                    pkgs.leptosfmt
+                    leptosfmt
                     pkgs.prettier
                     pkgs.nodejs
                     pkgs.typescript
@@ -1358,7 +1409,7 @@
               devtoolBin
               emacsForCi
               pkgs.jq
-              pkgs.leptosfmt
+              leptosfmt
               pkgs.nodejs
               pkgs.openssl
               pkgs.pkg-config

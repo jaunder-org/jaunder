@@ -563,9 +563,7 @@ fn CompactComposer(
                 />
                 <MediaUpload show_result=true />
                 <div style="margin-top:10px">
-                    <ValidatedTextarea<
-                    PostSummary,
-                >
+                    <ValidatedTextarea<PostSummary>
                         label="Summary"
                         name="summary"
                         field=state.summary_field
@@ -1253,9 +1251,7 @@ fn ComposeOptions(
                     }
                 })}
             <div style="margin-top:10px">
-                <ValidatedTextarea<
-                PostSummary,
-            >
+                <ValidatedTextarea<PostSummary>
                     label="Summary"
                     name="summary"
                     field=state.summary_field

@@ -24,9 +24,7 @@ pub fn ForgotPasswordPage() -> impl IntoView {
         <div class="j-scroll">
             <div class="j-page">
                 <ActionForm action=request_action>
-                    <ValidatedInput<
-                    Username,
-                >
+                    <ValidatedInput<Username>
                         label="Username"
                         name="username"
                         autocomplete="username"
@@ -84,9 +82,7 @@ pub fn ResetPasswordPage() -> impl IntoView {
             <div class="j-page">
                 <ActionForm action=confirm_action>
                     <input type="hidden" name="token" value=token />
-                    <ValidatedInput<
-                    Password,
-                >
+                    <ValidatedInput<Password>
                         label="New password"
                         name="new_password"
                         input_type="password"
