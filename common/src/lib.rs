@@ -46,6 +46,7 @@ pub mod smtp_tls_mode;
 pub mod smtp_username;
 pub mod stored_password_hash;
 pub mod tag;
+pub mod tagged_url;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 pub mod text;
