@@ -53,6 +53,7 @@ mod steps {
     pub mod thin_components;
     pub mod traced_context_check;
     pub mod wasm_budget;
+    pub mod xlang_literal_check;
 }
 pub use result::{CommandResult, Mode, StepResult};
 
@@ -472,6 +473,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::raw_html_door_check::run(&mut result);
             steps::html_sink_check::run(&mut result);
             steps::e2e_scaffold_check::run(&mut result);
+            steps::xlang_literal_check::run(&mut result);
             steps::host_tests::run(&sh, &mut result);
             if !no_test {
                 steps::nix::coverage(&mut result);
@@ -517,6 +519,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::raw_html_door_check::run(&mut result);
             steps::html_sink_check::run(&mut result);
             steps::e2e_scaffold_check::run(&mut result);
+            steps::xlang_literal_check::run(&mut result);
             // Deliberately in `validate` and not `check`: it costs a
             // `nix build .#site`, which the pre-commit gate should not pay (#836).
             steps::wasm_budget::run(&mut result);

@@ -183,9 +183,14 @@ export type TraceCapture = {
 };
 
 /** Marks are discovered by PREFIX, never by an enumerated list of names. The
- *  names live only in Rust (`client::perf`), so adding one needs no change here —
- *  the property that keeps the two sides from drifting the way `MOUNTED_ATTR`
- *  can. */
+ *  names live only in Rust (`client::perf`), so adding one needs no change here:
+ *  the mark *names* cannot drift, because there is only ever one copy of them.
+ *
+ *  The prefix is the exception — it is spelled here and in
+ *  `client::perf::MARK_PREFIX`, because no import crosses into Node. That one
+ *  duplication is checked by the `xlang-literal` gate
+ *  (`xtask/src/steps/xlang_literal_check.rs`), which also covers `MOUNTED_ATTR`
+ *  and its Rust counterpart (#767). */
 const MARK_PREFIX = "jaunder.";
 
 const TOP_SLOW_RESOURCE_LIMIT = 20;

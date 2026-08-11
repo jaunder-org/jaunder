@@ -136,6 +136,7 @@ convention). See the Status column below for each ADR's current status.
 | [0106](adr/0106-wasm-raw-size-budget.md)                           | The wasm size budget is on raw bytes, not compressed                                                         | accepted   |
 | [0107](adr/0107-web-session-establishment-is-cookie-only.md)       | Web session establishment is cookie-only                                                                     | accepted   |
 | [0108](adr/0108-absence-is-named-at-its-source.md)                 | Absence is named where it can occur                                                                          | accepted   |
+| [0109](adr/0109-cross-language-literal-agreement.md)               | Cross-language literal agreement is enforced by a declared pair table                                        | accepted   |
 
 <!-- adr-table:end -->
 

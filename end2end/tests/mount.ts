@@ -6,6 +6,10 @@ import { withTimedAction } from "./actions";
  * suite's "app is mounted and interactive" signal. Counterpart of the literal in
  * `csr/src/lib.rs`'s `mark_ready` inline JS; the two must agree or every e2e test
  * times out. Declared once here so a rename touches one place (#251).
+ *
+ * The agreement is enforced by the `xlang-literal` gate
+ * (`xtask/src/steps/xlang_literal_check.rs`): renaming this constant's value
+ * without renaming the Rust one fails `cargo xtask check` (#767).
  */
 export const MOUNTED_ATTR = "data-mounted";
 
