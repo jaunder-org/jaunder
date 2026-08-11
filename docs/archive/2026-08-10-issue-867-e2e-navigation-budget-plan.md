@@ -20,7 +20,9 @@ wrapper.
 `traces run` measurement harness.
 
 Spec:
-[`../specs/2026-08-10-issue-867-e2e-navigation-budget.md`](../specs/2026-08-10-issue-867-e2e-navigation-budget.md).
+[`2026-08-10-issue-867-e2e-navigation-budget-spec.md`](2026-08-10-issue-867-e2e-navigation-budget-spec.md).
+(Both were archived here at ship; paths named in the task steps below are the
+working paths they had during the cycle.)
 The spec is "what and why"; this plan is "how". ADR draft:
 `docs/adr/drafts/e2e-one-boot-per-page.md` (already written; Task 10 only
 re-checks it against what shipped).
