@@ -107,3 +107,23 @@ Append-only. Newest last. One line per event.
   `--stop` now signals the process GROUP, then waits and confirms, escalating to
   KILL after 20s. A stop that lies is worse than one that fails loudly. Also
   added `--in <seconds>` for a detached delayed start.
+- 2026-08-11 — discovery finished all five packages with ZERO timeouts, which
+  confirms the --timeout 300 fix. Results: common 351 caught / 30 missed / 126
+  unviable; storage 244 / 35 / 218; host 27 / 23 / 26; jaunder 209 / 10 / 56;
+  macros 23 / 4 / 68. 102 survivors, against the 190 the broken run claimed for
+  the same five.
+- 2026-08-11 — but the totals did not reconcile, and this bug is mine.
+  cargo-mutants shards are ZERO-indexed (`--shard k/n` requires k < n). The loop
+  ran 1..8, so shard 0 was never run and 8/8 died with "shard k must be less
+  than n". Every package is short exactly one shard: common 507 of 580, storage
+  497 of 569, macros 95 of 109, host 76 of 87, jaunder 275 of 315. It was
+  recorded as success because the exit code cannot distinguish it: cargo-mutants
+  uses 2 for "found surviving mutants" (a normal result) and clap also exits 2
+  for an invalid argument. shard-8/ held nothing but the .done marker I wrote.
+  Fixed the loop to 0..SHARDS-1, and .done is now written only when
+  mutants.out/outcomes.json exists — evidence that something was actually
+  tested, never the exit code alone. Removed the bogus shard-8 dirs and the
+  package .done markers; shards 1-7 keep theirs, so the re-run does only shard 0
+  (~1/8 of the work). Sixth silent wrong number in this project, and the first
+  one I introduced rather than inherited. Same shape as all the others: a
+  plausible summary over an unexamined gap.

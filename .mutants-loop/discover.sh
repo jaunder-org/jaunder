@@ -63,8 +63,11 @@ for pkg in $PACKAGES; do
   mkdir -p "$OUT/$pkg"
   pkg_ok=1
 
-  i=1
-  while [ "$i" -le "$SHARDS" ]; do
+  # cargo-mutants shards are ZERO-indexed: --shard k/n requires k < n. Looping
+  # 1..8 skipped shard 0 entirely and errored on 8/8, silently losing an eighth
+  # of every package.
+  i=0
+  while [ "$i" -lt "$SHARDS" ]; do
     shard_dir="$OUT/$pkg/shard-$i"
     if [ -f "$shard_dir/.done" ]; then
       echo "[$pkg $i/$SHARDS] already done, skipping" >>"$LOG"
@@ -80,10 +83,21 @@ for pkg in $PACKAGES; do
       >>"$LOG" 2>&1
     status=$?
     echo "[$pkg $i/$SHARDS] finished status=$status $(date -Is)" >>"$LOG"
-    # cargo-mutants exits non-zero when mutants survive — a result, not a
-    # failure. Exit 4 is different: the unmutated baseline failed, so NOTHING
-    # was tested and the empty result means nothing. Never mark that done.
-    if [ "$status" -eq 4 ]; then
+    # Mark done only on EVIDENCE that mutants were actually tested, never on the
+    # exit code alone.
+    #
+    # The exit code cannot carry this. cargo-mutants uses 2 for "found surviving
+    # mutants" — a normal result — and clap also exits 2 for an invalid argument.
+    # That collision is how `--shard 8/8` ("shard k must be less than n") was
+    # recorded as a finished shard: the directory held nothing but the .done
+    # marker, and an eighth of every package went missing while the summary
+    # looked complete.
+    #
+    # outcomes.json is written only by a run that actually tested something.
+    if [ ! -f "$shard_dir/mutants.out/outcomes.json" ]; then
+      echo "[$pkg $i/$SHARDS] NO OUTCOMES (status=$status) — nothing tested" >>"$LOG"
+      pkg_ok=0
+    elif [ "$status" -eq 4 ]; then
       echo "[$pkg $i/$SHARDS] BASELINE FAILED — nothing tested" >>"$LOG"
       pkg_ok=0
     else
