@@ -14,7 +14,14 @@ import {
 import { createPerfProbe } from "./perf";
 import { seedPostsViaTool } from "./seed";
 import { SEL } from "./selectors";
-import { composePost, createPostViaApi } from "./posts";
+import {
+  composePost,
+  createPostViaApi,
+  expectRenderedFormat,
+  followPermalink,
+  FORMAT_PROBE_BODY,
+  openEditor,
+} from "./posts";
 import { navigateInApp } from "./navigate";
 import { allowSecondBoot } from "./bootBudget";
 
@@ -154,6 +161,35 @@ test("authenticated user can save a draft through the UI", async ({
   await expect(page.locator(SEL.saveSummary)).toContainText("Slug: draft-slug");
 });
 
+test("full composer: format toggle round-trips to the rendered post", async ({
+  registeredPage,
+}) => {
+  test.slow();
+  const page = await registeredPage("/posts/new");
+  await waitForSelector(page, ".j-seg");
+
+  const markdownBtn = page.locator(SEL.formatButton("Markdown"));
+  const orgBtn = page.locator(SEL.formatButton("Org"));
+
+  // Markdown is the default (ComposeState::default, compose_state.rs:54).
+  await expect(markdownBtn).toHaveClass(/is-selected/);
+  await expect(orgBtn).not.toHaveClass(/is-selected/);
+
+  const summary = await composePost(page, {
+    body: FORMAT_PROBE_BODY,
+    publish: true,
+    format: "org",
+  });
+
+  // The toggle moved...
+  await expect(orgBtn).toHaveClass(/is-selected/);
+  await expect(markdownBtn).not.toHaveClass(/is-selected/);
+
+  // ...and the saved post really is Org, not merely highlighted as such.
+  await followPermalink(page, summary);
+  await expectRenderedFormat(page, "org");
+});
+
 test("published post renders at permalink", async ({ registeredPage }) => {
   test.slow();
   // `composePost` fills the composer in place, so the entry is the composer.
@@ -231,6 +267,55 @@ test("authenticated user can edit a draft post", async ({ registeredPage }) => {
   await expect(page.locator(SEL.saveSummary)).toContainText(
     "Draft saved.Slug: original-draftView post",
   );
+});
+
+test("edit page: format toggle prefills from the post and round-trips a change", async ({
+  registeredPage,
+}) => {
+  test.slow();
+  // A *draft*, in *Org*. Draft because the editor renders a permalink link only
+  // for an unpublished post (component.rs:1307); Org because the composer's
+  // default is Markdown, so only a non-default format proves the prefill fired
+  // (compose_state.rs:54 vs :104).
+  const page = await registeredPage("/posts/new");
+  const draftSummary = await composePost(page, {
+    body: FORMAT_PROBE_BODY,
+    publish: false,
+    format: "org",
+  });
+
+  await followPermalink(page, draftSummary);
+  await openEditor(page);
+
+  // Guard: confirm the *body* seeded too. `dispatch_update` silently no-ops on a
+  // blank body (component.rs:1096-1100), so a broken body prefill would surface
+  // far below as a save that never produces a summary — a full-timeout death
+  // with no clue why. Failing here instead names the cause.
+  //
+  // Matched loosely: the stored body is canonicalized on save, which appends a
+  // trailing newline (`normalize_body_whitespace`). This guard is about the body
+  // arriving at all, so pinning the exact whitespace would only make it brittle.
+  await expect(page.locator(SEL.postBody)).toHaveValue(/^\*emphasis\*\s*$/);
+
+  const markdownBtn = page.locator(SEL.formatButton("Markdown"));
+  const orgBtn = page.locator(SEL.formatButton("Org"));
+
+  // Prefill: the toggle shows the *stored* format, which the default cannot
+  // produce.
+  await expect(orgBtn).toHaveClass(/is-selected/);
+  await expect(markdownBtn).not.toHaveClass(/is-selected/);
+
+  // Switch back to Markdown and save.
+  await click(page, SEL.formatButton("Markdown"));
+  await expect(markdownBtn).toHaveClass(/is-selected/);
+  await expect(orgBtn).not.toHaveClass(/is-selected/);
+
+  await click(page, SEL.publishButton("false"));
+  await waitForSelector(page, SEL.saveSummary);
+
+  // Follow the summary this save produced; never reuse the earlier permalink.
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await expectRenderedFormat(page, "markdown");
 });
 
 test("edit page pre-selects the post's current audience", async ({
@@ -792,22 +877,46 @@ test("inline composer: flash clears when user starts typing", async ({
   await expect(page.locator(".j-composer p.success")).toHaveCount(0);
 });
 
-test("inline composer: format toggle switches active button", async ({
+test("inline composer: format toggle round-trips to the rendered post", async ({
   registeredPage,
 }) => {
+  test.slow();
   const page = await registeredPage("/app");
   await waitForSelector(page, ".j-composer");
 
   // Markdown is active by default.
-  const markdownBtn = page.locator('.j-seg button:has-text("Markdown")');
-  const orgBtn = page.locator('.j-seg button:has-text("Org")');
+  const markdownBtn = page.locator(SEL.formatButton("Markdown"));
+  const orgBtn = page.locator(SEL.formatButton("Org"));
   await expect(markdownBtn).toHaveClass(/is-selected/);
   await expect(orgBtn).not.toHaveClass(/is-selected/);
 
   // Click Org to switch.
-  await click(page, '.j-seg button:has-text("Org")');
+  await page.fill(`.j-composer ${SEL.postBody}`, FORMAT_PROBE_BODY);
+  await click(page, SEL.formatButton("Org"));
   await expect(orgBtn).toHaveClass(/is-selected/);
   await expect(markdownBtn).not.toHaveClass(/is-selected/);
+
+  // ...and the choice reaches the saved post, not just the highlight.
+  await click(page, `.j-composer ${SEL.publishButton("true")}`);
+
+  // The compact composer's flash *is* the permalink anchor
+  // (component.rs:717-718) — no `.j-save-summary` here, so this is the one
+  // surface `followPermalink` does not serve. It is also transient: a 30s
+  // set_timeout (:696) plus an on_input reset (:710), so move on it directly.
+  const flashLink = page.locator(".j-composer p.success a");
+  await flashLink.waitFor();
+  const permalinkHref = (await flashLink.getAttribute("href"))!;
+  expect(permalinkHref).toBeTruthy();
+  // `article.j-post` would be a barrier that waits for nothing here: the post we
+  // just published is already on the /app timeline. The permalink page wraps its
+  // article in `.j-page` (component.rs:887-888) and the timeline does not
+  // (timeline/component.rs:150), so that pairing is unique to the destination.
+  await navigateInApp(page, () => flashLink.click(), {
+    url: permalinkHref,
+    ready: ".j-page article.j-post",
+  });
+
+  await expectRenderedFormat(page, "org");
 });
 
 test("create post with tags via UI: tags persist and appear on the post", async ({

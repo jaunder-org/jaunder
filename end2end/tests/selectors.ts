@@ -17,6 +17,13 @@ export const SEL = {
   postSummary: 'textarea[name="summary"]',
   /** Publish/unpublish submit button; `value` is the boolean string. */
   publishButton: (value: string) => `button[name="publish"][value="${value}"]`,
+  /** A `.j-seg` format-toggle button, by its visible label. The label is a
+   * literal union, not `string`: a casing typo (`"org"`) would otherwise
+   * compile and fail as a locator timeout. */
+  formatButton: (label: "Markdown" | "Org") =>
+    `.j-seg button:has-text("${label}")`,
+  /** The "View post" permalink link inside a save-summary panel. */
+  permalinkLink: '[data-test="permalink-link"]',
   /** Generic form error message. */
   error: ".error",
   /** Generic form submit button. */
