@@ -17,16 +17,19 @@
  * The price is that a document replaced before it reaches `DOMContentLoaded` is
  * counted by some engines and not others — measured on the pre-paint `/`→`/app`
  * redirect, which firefox counts and chromium does not. Such a load is declared
- * with `allowEngineDependentBoot`; every other load takes the exact
- * `allowSecondBoot`.
+ * with `allowEngineDependentBoot`, which is scoped to that load's path because it
+ * is the one declaration that can survive unconsumed; every other load takes the
+ * exact, unscoped `allowSecondBoot`.
  *
  * ## Why the page, not the wrapper
  *
  * Counting inside `goto` would leave every raw `page.goto` as a blind spot,
  * including the sites that legitimately cannot use the wrapper (the CLS probe
  * holds the wasm so mount never completes, so `goto`'s `waitForMount` would
- * hang). Subscribing to the page's own event sees every document load however
- * it was issued.
+ * hang). Subscribing to the page's own event sees a document load whoever issued
+ * it — with the engine-dependent caveat above: what it sees is the event, not the
+ * navigation, so a document replaced before `DOMContentLoaded` is invisible to it
+ * on the engines that never fire it.
  *
  * ## How a violation surfaces
  *
@@ -45,10 +48,15 @@
 
 import type { Page } from "@playwright/test";
 
-/** One declared further load. `engineDependent` allowances may go unconsumed. */
+/**
+ * One declared further load. An engine-dependent allowance carries the `path` of
+ * the load it was written for and matches nothing else; an exact allowance has no
+ * path and covers the next load, whatever it is.
+ */
 type Allowance = {
   reason: string;
-  engineDependent: boolean;
+  /** The pathname this allowance is scoped to, or `undefined` for the exact form. */
+  path?: string;
 };
 
 type BudgetState = {
@@ -84,19 +92,42 @@ function isRealDocument(url: string): boolean {
 }
 
 /**
- * Consume one allowance for a load, **exact declarations first**.
+ * The pathname of a load or of a declared path.
  *
- * Order matters and call order is the wrong rule. A page carrying one exact and
- * one engine-dependent declaration takes either one load or two, depending on the
- * engine; consuming in call order would make the outcome depend on which line the
- * test happened to write first (the engine-dependent one could absorb the load
- * that always happens, orphaning the exact one). Spending the exact declarations
- * first makes both engines pass with the same two lines: they are the ones that
- * MUST be consumed, so they are the ones to spend while loads are arriving.
+ * **Pathname, not the whole URL:** the origin is an ephemeral `host:port` chosen
+ * per run (`JAUNDER_E2E_BASE_URL`), so an origin-bearing key could never be
+ * written in a test; and the query string carries per-run salts and tokens, which
+ * would make a declaration match on one run and not the next. The route is what a
+ * declaration is actually about. The dummy base only supplies the parser with an
+ * origin to discard — a declared path is relative by construction.
  */
-function takeAllowance(state: BudgetState): Allowance | undefined {
-  const index = state.allowances.findIndex((a) => !a.engineDependent);
-  const [taken] = state.allowances.splice(index === -1 ? 0 : index, 1);
+function pathOf(url: string): string {
+  return new URL(url, "http://budget.invalid").pathname;
+}
+
+/**
+ * Consume one allowance for a load of `url`, **a matching scoped allowance
+ * first**, then the first exact one.
+ *
+ * Scoped-first is what makes the two forms compose. Take the pre-paint redirect:
+ * an exact declaration for `/app` (which always lands) plus an engine-dependent
+ * one for `/`. On firefox the `/` load must spend the `/` declaration — spending
+ * the exact one there would leave `/app` with nothing to consume and fail the
+ * page. On chromium `/` never arrives, `/app` matches no scoped allowance, and it
+ * spends the exact one, leaving the scoped declaration unconsumed and exempt.
+ *
+ * The exact form stays unscoped: it must be consumed, so an unconsumed one is
+ * already reported and cannot silently absorb anything.
+ */
+function takeAllowance(state: BudgetState, url: string): Allowance | undefined {
+  const path = pathOf(url);
+  const scoped = state.allowances.findIndex((a) => a.path === path);
+  const index =
+    scoped === -1
+      ? state.allowances.findIndex((a) => a.path === undefined)
+      : scoped;
+  if (index === -1) return undefined;
+  const [taken] = state.allowances.splice(index, 1);
   return taken;
 }
 
@@ -119,7 +150,7 @@ export function trackBoots(page: Page): void {
     state.loads.push(url);
     if (state.loads.length === 1) return;
 
-    if (takeAllowance(state) !== undefined) return;
+    if (takeAllowance(state, url) !== undefined) return;
     state.violation ??=
       `second document load on this page: it booted at ${state.loads[0]}, ` +
       `then loaded ${url}. A page boots once (#867) — move within the app ` +
@@ -139,20 +170,26 @@ export function trackBoots(page: Page): void {
  * load whose very existence depends on the browser engine.
  */
 export function allowSecondBoot(page: Page, reason: string): void {
-  declare(page, reason, false, "allowSecondBoot");
+  declare(page, reason, undefined, "allowSecondBoot");
 }
 
 /**
- * Authorise **at most one** further document load on `page` whose occurrence
- * depends on the browser engine, for a stated reason.
+ * Authorise **at most one** further document load of `path` on `page`, for a
+ * stated reason, where whether that load happens depends on the browser engine.
  *
  * Exempt from the orphan rule, and only for that reason: whether the load happens
- * is not the test's choice, so a declaration that goes unconsumed is not an
- * over-declaration. Measured case — the pre-paint `location.replace` off `/`:
- * chromium replaces the document during head parsing, so `/` never reaches
+ * is not the test's choice. Measured case — the pre-paint `location.replace` off
+ * `/`: chromium replaces the document during head parsing, so `/` never reaches
  * `DOMContentLoaded` and the budget counts one load; firefox does fire it, and the
  * budget counts two. No fixed count is right for that flow, which is why this form
  * exists.
+ *
+ * **`path` is not decoration — it is what bounds the exemption.** An unscoped
+ * orphan-exempt allowance survives the load it was written for and is then handed
+ * to whatever loads next, so a genuinely undeclared load passes silently: the one
+ * thing the budget exists to catch. Scoped, it matches only its own pathname (see
+ * {@link pathOf}) and is inert against anything else. Pass a path, not a URL — the
+ * origin is a per-run ephemeral port.
  *
  * **This is not the default and must not become one.** `allowSecondBoot` keeps
  * exact-count semantics and its orphan rule, and that rule is the only thing a
@@ -160,15 +197,23 @@ export function allowSecondBoot(page: Page, reason: string): void {
  * load's existence genuinely varies by engine, and say in the reason *why* it
  * varies — "engine-dependent" on its own records nothing a reader can check.
  */
-export function allowEngineDependentBoot(page: Page, reason: string): void {
-  declare(page, reason, true, "allowEngineDependentBoot");
+export function allowEngineDependentBoot(
+  page: Page,
+  path: string,
+  reason: string,
+): void {
+  declare(page, reason, pathOf(path), "allowEngineDependentBoot");
 }
 
-/** The shared body of the two declaration forms. `by` names the caller in errors. */
+/**
+ * The shared body of the two declaration forms. `path` scopes the allowance (the
+ * engine-dependent form) or is `undefined` (the exact form); `by` names the caller
+ * in errors.
+ */
 function declare(
   page: Page,
   reason: string,
-  engineDependent: boolean,
+  path: string | undefined,
   by: string,
 ): void {
   if (reason.trim() === "") {
@@ -196,7 +241,7 @@ function declare(
     const url = page.url();
     if (isRealDocument(url)) state?.loads.push(url);
   }
-  state?.allowances.push({ reason, engineDependent });
+  state?.allowances.push({ reason, path });
 }
 
 /** Document loads counted on `page` so far. Zero if never armed. */
@@ -228,9 +273,18 @@ export function pendingReasons(page: Page): string[] {
  *    longer exists fails") in runtime form: an exemption nothing re-verifies
  *    must at least be checked to still apply. An `allowEngineDependentBoot`
  *    declaration is deliberately excluded: whether its load happens is the
- *    engine's choice, not the test's, so an unconsumed one is not evidence of
- *    anything. That exclusion is why that form is narrow and its reason must say
- *    what varies.
+ *    engine's choice, not the test's, so an unconsumed one is no evidence that
+ *    the test over-declared.
+ *
+ *    **It is not therefore harmless, and the exclusion has a price this module
+ *    pays rather than solves.** An unconsumed scoped allowance still absorbs a
+ *    later load of the same path, and it blinds this rule by one slot on that
+ *    page: with exact declarations A and B alongside a scoped one, if B's load
+ *    regresses away, A and B are both spent by the loads that remain, the scoped
+ *    allowance survives exempt, and B's disappearance is never reported. Nothing
+ *    here can close that while loads carry no identity of their own — the path
+ *    scope narrows it to same-path loads, which is why the scope is mandatory and
+ *    why this form stays rare.
  *
  * A violation line leads with `undeclared second load —`; an orphan line is
  * `"<entry url>: <reason>"`. Always clears, so a failing test cannot leak either
@@ -249,7 +303,7 @@ export function takeBudgetFailures(): string[] {
     }
     const where = state.loads[0] ?? "(a page that never loaded)";
     for (const allowance of state.allowances) {
-      if (allowance.engineDependent) continue;
+      if (allowance.path !== undefined) continue; // engine-dependent: exempt
       orphans.push(`${where}: ${allowance.reason}`);
     }
     state.allowances.length = 0;

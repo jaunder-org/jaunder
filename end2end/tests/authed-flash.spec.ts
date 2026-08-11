@@ -168,6 +168,7 @@ test("owner: jaunder_home_redirect='app' makes the pre-paint script redirect / �
   );
   allowEngineDependentBoot(
     page,
+    "/",
     "the / document itself: the pre-paint location.replace runs during head parsing, so whether / reaches DOMContentLoaded before being replaced is engine timing — firefox fires it and counts the load, chromium replaces / first and never does",
   );
   // e2e-goto-wrapper:allow `waitUntil: "commit"` plus the `waitForURL` below is the subject — the pre-paint redirect replaces `/` during head parsing, so the wrapper would wait for a mount on a document that never paints

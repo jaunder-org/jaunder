@@ -182,42 +182,70 @@ test("an engine-dependent allowance nothing consumes is not an orphan", async ({
   await goto(page, "/");
   allowEngineDependentBoot(
     page,
+    "/register",
     "a load only some engines produce, and this one did not",
   );
-  // The whole point of the form: unconsumed is not evidence of an
-  // over-declaration, because whether the load happens is not the test's choice.
+  // The whole point of the form: unconsumed is not evidence that the test
+  // over-declared, because whether the load happens is not the test's choice.
   expect(takeBudgetFailures()).toEqual([]);
 });
 
-test("an engine-dependent allowance covers a load that does happen", async ({
+test("an engine-dependent allowance covers a load of its own path", async ({
   page,
 }) => {
   await goto(page, "/");
-  allowEngineDependentBoot(page, "a load some engines produce");
+  allowEngineDependentBoot(page, "/login", "a load some engines produce");
   await goto(page, "/login");
   expect(bootCount(page)).toBe(2);
+  expect(pendingReasons(page)).toEqual([]);
   expect(takeBudgetFailures()).toEqual([]);
 });
 
-test("an exact declaration is spent before an engine-dependent one", async ({
+test("an engine-dependent allowance is inert against a load it does not name", async ({
   page,
 }) => {
   await goto(page, "/");
-  // Declared engine-dependent FIRST, deliberately: consuming in call order would
-  // let it absorb the load that always happens and orphan the exact declaration,
-  // making the outcome depend on which line the test wrote first. This is the
-  // engine that produces only ONE of the two loads.
-  allowEngineDependentBoot(page, "the load this engine did not produce");
+  // The load this declaration describes never happens — the engine that produces
+  // it is not this one. A DIFFERENT load then arrives, undeclared.
+  allowEngineDependentBoot(
+    page,
+    "/register",
+    "the load this engine did not produce",
+  );
+  // Unscoped, this allowance would be handed to `/login` and the undeclared load
+  // would pass silently — the one thing the budget exists to catch. Scoped, it
+  // matches nothing here and `/login` is reported.
+  // e2e-goto-wrapper:allow a raw load keeps the breach out of `goto`, so the assertion reads the recorded failure rather than a thrown error
+  await page.goto(`${BASE_URL}/login`);
+
+  const failures = takeBudgetFailures();
+  expect(failures).toHaveLength(1);
+  expect(failures[0]).toContain("undeclared second load");
+  expect(failures[0]).toContain(`${BASE_URL}/login`);
+});
+
+test("a scoped allowance is spent on its own load, not the exact one", async ({
+  page,
+}) => {
+  await goto(page, "/");
+  // The pre-paint shape, on the engine that produces BOTH loads: an exact
+  // declaration for the load that always lands, and a scoped one for the load
+  // only some engines produce. The scoped load must spend the scoped
+  // declaration — spending the exact one here would leave the other load with
+  // nothing to consume.
   allowSecondBoot(page, "the load that always happens");
+  allowEngineDependentBoot(page, "/register", "the engine-dependent load");
+  await goto(page, "/register");
   await goto(page, "/login");
 
-  expect(pendingReasons(page)).toEqual([
-    "the load this engine did not produce",
-  ]);
+  expect(bootCount(page)).toBe(3);
+  expect(pendingReasons(page)).toEqual([]);
   expect(takeBudgetFailures()).toEqual([]);
 });
 
 test("an engine-dependent allowance still needs a reason", async ({ page }) => {
   await goto(page, "/");
-  expect(() => allowEngineDependentBoot(page, "   ")).toThrow(/reason/);
+  expect(() => allowEngineDependentBoot(page, "/register", "   ")).toThrow(
+    /reason/,
+  );
 });
