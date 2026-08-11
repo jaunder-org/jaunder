@@ -699,7 +699,7 @@ git commit -m "fix(posts): a submit gate owns its parse; no form can present a d
 > so `width:100%` still applies — the breakage is flex participation, not
 > width.)
 
-- [ ] **Step 1: Add the composer field rule**
+- [x] **Step 1: Add the composer field rule**
 
 ```css
 /* The body control's wrapper. `<Labelled>` interposes a `<label>` between the composer
@@ -713,14 +713,14 @@ git commit -m "fix(posts): a submit gate owns its parse; no form can present a d
 }
 ```
 
-- [ ] **Step 2: Confirm the full compose page needs nothing further**
+- [x] **Step 2: Confirm the full compose page needs nothing further**
 
 `.j-compose-body` (`:730-734`) is a plain block with no `display:flex`, and no
 `.j-compose-body > textarea` rule exists, so the wrapper is an ordinary block
 child. Verify with `rg -n 'j-compose-body' server/assets/jaunder.css` before
 concluding.
 
-- [ ] **Step 3: Confirm the editor needs no new class**
+- [x] **Step 3: Confirm the editor needs no new class**
 
 `.j-edit-form-field` (`:1077-1081`,
 `display:flex; flex-direction:column; gap:6px`) and `.j-edit-form-field--body`
@@ -728,13 +728,13 @@ concluding.
 `web/src`. Task 4 passes both, so the editor's body control finally consumes the
 styling that was written for it. No new rule.
 
-- [ ] **Step 4: Verify in a browser**
+- [x] **Step 4: Verify in a browser**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-860-post-dispatch-body -- cargo xtask e2e sqlite chromium`
 Expected: PASS — the composer and editor specs exercise all three surfaces.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add server/assets/jaunder.css
