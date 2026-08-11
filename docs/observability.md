@@ -1186,6 +1186,126 @@ The pre-fetch window (#870's stylesheet question) remains open and is sharpened:
 almost none of it into boot time — because whatever else sits between
 `document_start` and `boot.entry` (the glue, at minimum) is still serial.
 
+## #867 — removing navigations (findings, 2026-08-11)
+
+**Verdict up front: the pre-registered floor is MISSED on the pre-registered
+metric, and the reason is a defect in the pre-registration rather than in the
+change.** Suite wall-clock fell 23.4 s on firefox against a floor of 33.9 s. On
+a like-for-like measure — the tests that exist in both arms — the same change
+saved **77.3 s on firefox**, which _exceeds_ the ceiling the prediction set.
+Both numbers are below, and both belong in the record.
+
+### Method
+
+Deciding set per #818/#836/#866: **single-worker, sqlite**, both browsers, 3
+runs per arm, `before`/`after` interleaved run-by-run, a distinct `e2eSalt` per
+run so nix could not replay a cached suite. `before` is the branch's fork point
+(`606a6399`), `after` is `3b505e6b`, each in its own worktree so no checkout
+switching could contaminate a run. Targets were the single-worker packages
+(`.#e2e-sqlite-{chromium,firefox}-single-worker`), not the gate checks.
+
+`retries` was raised from 0 to 1 **in both arms identically** for the campaign.
+At the config default of 0 a `flaky` count is structurally impossible, so the
+guardrail could not have failed; reverted afterwards.
+
+Corpus: `~/measurements/jaunder/issue-867-navcount/` — 12 runs, per-run trace
+JSONL and Playwright report, README recording salts and host load.
+
+**Certification.** `dropped = 0` on every span of all 12 runs. Navigation counts
+are **byte-identical across all three rounds within each arm**, so the count is
+deterministic and carries no run-to-run variance. Host 1-minute load was
+0.90–1.84 at the start of every run except `after-chromium-1` (5.98, the
+decaying tail of the previous run's teardown) — recorded, not corrected for.
+
+### Suite wall-clock (`.stats.duration`, seconds)
+
+| arm    | chromium              | firefox               |
+| ------ | --------------------- | --------------------- |
+| before | 373.6 / 331.3 / 360.5 | 494.0 / 489.1 / 521.1 |
+| after  | 352.3 / 307.3 / 350.9 | 479.8 / 476.8 / 477.3 |
+| mean Δ | **−18.3 s**           | **−23.4 s**           |
+
+0 failed and 0 flaky in all 12 runs, with retries armed.
+
+### Why that number understates the change
+
+**The two arms do not run the same suite.** `before` runs 138 tests; `after`
+runs 160, because this branch adds `bootBudget.spec.ts` and `navigate.spec.ts`.
+Those tests perform their own document loads and consume their own wall-clock,
+so whole-suite subtraction charges the change for work it added rather than
+measuring the work it removed. All 138 `before` tests are present in `after` —
+nothing was renamed or dropped — so the like-for-like quantity is well defined.
+
+|                                     | chromium   | firefox    |
+| ----------------------------------- | ---------- | ---------- |
+| matched-test body time, before      | 344.3 s    | 486.2 s    |
+| matched-test body time, after       | 287.5 s    | 408.9 s    |
+| **saved on the pre-existing suite** | **56.8 s** | **77.3 s** |
+| cost of the 22 added tests          | 37.5 s     | 53.5 s     |
+| net suite wall-clock                | −18.3 s    | −23.4 s    |
+
+The arithmetic closes: 23.4 + 53.5 ≈ 76.9 ≈ 77.3.
+
+### Document loads
+
+|                             | before  | after         |
+| --------------------------- | ------- | ------------- |
+| test-attributed             | 216     | 182           |
+| secondary-page (`e2e.page`) | 20      | 21            |
+| **total**                   | **236** | **203**       |
+| matched tests only          | 236     | **171** (−65) |
+| added tests                 | —       | 32            |
+
+**The classification's baseline is confirmed exactly.** Subtracting #863's test
+(absent from the #866 corpus, present at the fork point, 5 loads) gives **231
+before** — the corpus figure to the load. Every file's reduction matches the
+pre-registered per-file rows: profile −7, unicode-slug −2, authed-flash −1,
+password_reset −1, visibility −1, posts −49.
+
+### Against the pre-registration
+
+- **Count check: MISSED by one.** Predicted 169, observed 170 corpus-comparable.
+  The discrepancy is entirely in `posts.spec.ts` and traces to Amendment 1,
+  which assumed that deleting a redundant reload of the already-displayed
+  permalink would drop the trace's navigation count by one. It did not — the
+  trace did not count that reload as a navigation in the first place. The
+  deletion was still correct (it removed a real document load), but its effect
+  on _this metric_ was zero, and the amendment claimed otherwise.
+- **Floor: MISSED on the pre-registered metric.** −23.4 s firefox against a 33.9
+  s floor. The floor was computed from a 62-load saving times `commitToMount`,
+  then measured against whole-suite wall-clock — an instrument that does not
+  hold the suite constant.
+- **Ceiling: exceeded on the like-for-like measure.** 65 loads × 911 ms predicts
+  59.2 s for firefox; the matched tests saved 77.3 s. So **a removed navigation
+  is worth more than its `commitToMount`** — that figure omits request time,
+  fixture and context overhead, and teardown. The next cycle to price a
+  navigation should treat `commitToMount` as a lower bound, not a ceiling.
+- **Guardrail: met.** 0 failed, 0 flaky across all 12 runs with retries armed.
+
+### What this cost, stated plainly
+
+The pre-registration was written before the branch existed and assumed the
+change would only _remove_ things. A change that also adds tests cannot be
+measured by whole-suite subtraction, and nothing in the protocol caught that —
+not the spec, not the plan, not two rounds of soundness review. The floor was
+therefore aimed at a quantity that could not answer the question, and it failed
+for that reason rather than because the work underperformed.
+
+Per the spec's abort rule, declared before collection: the idiom and the gate
+land regardless, on test-design grounds independent of wall-clock. What fails is
+the performance claim _as pre-registered_, and it is recorded here as a failure
+rather than rescued by promoting the like-for-like number to the headline after
+the fact.
+
+### Reproducing
+
+```console
+$ git worktree add <base-dir> --detach wt-base-issue-867
+$ # per run: set flake.nix e2eSalt to a unique string, then
+$ nix build .#e2e-sqlite-firefox-single-worker --print-out-paths --no-link
+$ # revert e2eSalt to "" afterwards — the e2e-scaffold check forbids committing it
+```
+
 ## #792 — the per-test warmup A/B (findings, 2026-08-04)
 
 **Verdict: delete the warmup, both browsers.** It costs 113 s/combo (chromium)

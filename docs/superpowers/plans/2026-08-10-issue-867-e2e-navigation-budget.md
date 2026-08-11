@@ -571,7 +571,7 @@ same commit.
 - Produces: `type RegisteredPage = (entry: string) => Promise<Page>`, exported
   from `fixtures.ts`. Tasks 6–8 rely on this name and signature.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `end2end/tests/bootBudget.spec.ts` (which already imports `test` from
 `./fixtures`):
@@ -594,12 +594,12 @@ Deliberately **no** `bootCount` assertion here: the fixture navigates before the
 test body can call `trackBoots`, so counting only works once arming is automatic
 — which is Task 8's deliverable and Task 8's test.
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run: `... cargo xtask e2e-local bootBudget` Expected: FAIL — `registeredPage` is
 a `Page`, not callable.
 
-- [ ] **Step 3: Implement the fixture**
+- [x] **Step 3: Implement the fixture**
 
 Replace `fixtures.ts:483-488` with a fixture that keeps the seeding at
 fixture-setup time and moves only the navigation to call time:
@@ -1176,13 +1176,13 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run them, verify they fail**
+- [x] **Step 2: Run them, verify they fail**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-867-e2e-nav-count -- cargo nextest run -p xtask e2e_goto_wrapper`
 Expected: FAIL — module does not exist.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 Signatures: `fn violations(source: &str) -> Vec<usize>`,
 `fn is_exempt_path(path: &str) -> bool`,
@@ -1206,11 +1206,11 @@ markers (`file:line — reason`) on success, because the exemption population is
 un-recheckable. The failure detail must carry a `recovery:` line pointing at
 `goto` in `helpers.ts`.
 
-- [ ] **Step 4: Run the unit tests, verify they pass**
+- [x] **Step 4: Run the unit tests, verify they pass**
 
 Expected: PASS, 9 tests.
 
-- [ ] **Step 5: Register the step and mark the three raw sites**
+- [x] **Step 5: Register the step and mark the three raw sites**
 
 Add `pub mod e2e_goto_wrapper_check;` at `xtask/src/lib.rs:39` and
 `steps::e2e_goto_wrapper_check::run(&mut result);` beside the existing
@@ -1223,13 +1223,13 @@ Markers, each on the line immediately above its site:
 - `end2end/tests/authed-flash.spec.ts:142` and `:151` —
   `// e2e-goto-wrapper:allow waitUntil "commit" plus waitForURL through the pre-paint redirect; the wrapper would wait on the wrong thing`
 
-- [ ] **Step 6: Run the gate, verify it passes**
+- [x] **Step 6: Run the gate, verify it passes**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-867-e2e-nav-count -- cargo xtask check`
 Expected: PASS, with the marker census printed.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add xtask/src/steps/e2e_goto_wrapper_check.rs xtask/src/lib.rs end2end/tests
@@ -1245,7 +1245,7 @@ git commit -m "feat(xtask): add the e2e-goto-wrapper static check (#867)"
 - Modify: `end2end/tests/helpers.ts:4-38`, `CONTRIBUTING.md`
 - Modify: `docs/adr/drafts/e2e-one-boot-per-page.md` (re-check only)
 
-- [ ] **Step 1: Update the `helpers.ts` usage-rules docblock**
+- [x] **Step 1: Update the `helpers.ts` usage-rules docblock**
 
 It currently encodes the pre-#867 contract — "Always use `goto`" with no mention
 of a budget. Add: a page boots once at the URL under test; move within the app
@@ -1253,18 +1253,18 @@ with `navigateInApp`; a second document load needs
 `allowSecondBoot(page, reason)`; `page.goto` outside this module fails the
 `e2e-goto-wrapper` check. Keep the existing rules that still hold.
 
-- [ ] **Step 2: Update `CONTRIBUTING.md`**
+- [x] **Step 2: Update `CONTRIBUTING.md`**
 
 Add the one-boot-per-page rule to its e2e testing section, pointing at the ADR
 and at `helpers.ts` for the API.
 
-- [ ] **Step 3: Re-check the ADR draft against what shipped**
+- [x] **Step 3: Re-check the ADR draft against what shipped**
 
 Read `docs/adr/drafts/e2e-one-boot-per-page.md` against the implemented code and
 correct anything that drifted during 3–9. Do **not** number it —
 `cargo xtask adr promote` does that at ship.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add end2end/tests/helpers.ts CONTRIBUTING.md docs/adr/drafts/e2e-one-boot-per-page.md
@@ -1283,13 +1283,13 @@ git commit -m "docs(e2e): document the one-boot-per-page rule (#867)"
 
 - Consumes: `PREDICTED_TOTAL` and the ceilings from Task 2.
 
-- [ ] **Step 1: Confirm the pre-registration is already committed**
+- [x] **Step 1: Confirm the pre-registration is already committed**
 
 Task 2's artifact must be in git history **before** the first arm is captured.
 Verify with `git log --oneline -- docs/superpowers/classification-867.md`. If it
 is not, stop: the prediction would be post-hoc and the measurement worthless.
 
-- [ ] **Step 2: Capture the deciding arms**
+- [x] **Step 2: Capture the deciding arms**
 
 Single-worker, sqlite × {chromium, firefox}, 3 runs per arm, `before` and
 `after` interleaved run-by-run, distinct `e2eSalt` per run, `retries` above 0 so
@@ -1298,17 +1298,24 @@ is a long cold run.
 
 The `before` arm is the branch's fork point, `wt-base-issue-867`.
 
-- [ ] **Step 3: Capture the confirming arms**
+- [ ] **Step 3: Capture the confirming arms** — **NOT RUN.** Gate-settings
+      (2-worker) arms were not collected. The spec gives this set no pass
+      criterion — it is reported, not gated — so the verdict does not depend on
+      it, but the gate-time figure the issue quotes ("65 s off the gate") is
+      therefore still unmeasured. The deciding set is single-worker, and
+      `playwright.config.ts:50` ties `fullyParallel` to the worker count, so the
+      single-worker saving does not translate linearly. Left undone
+      deliberately, not overlooked.
 
 Gate settings (2 workers), same shape. Reported only — no pass criterion, per
 the spec.
 
-- [ ] **Step 4: Certify the corpus before analysing**
+- [x] **Step 4: Certify the corpus before analysing**
 
 Confirm `dropped = 0` and a full mark set on every mounted navigation, as #818
 and #836 did. An uncertified corpus is not analysed.
 
-- [ ] **Step 5: Evaluate against the pre-registration**
+- [x] **Step 5: Evaluate against the pre-registration**
 
 Three checks, in order:
 
@@ -1320,7 +1327,7 @@ Three checks, in order:
 3. **Guardrail.** Summed `flaky + unexpected` == 0 across each browser's three
    runs.
 
-- [ ] **Step 6: Write `docs/observability.md`**
+- [x] **Step 6: Write `docs/observability.md`**
 
 A `## #867 — removing navigations` section carrying: the method (deciding and
 confirming sets, and why single-worker decides), the pre-registered prediction
@@ -1334,13 +1341,13 @@ residual — navigations removed but wall-clock not recovered — is investigate
 and filed as its own issue. Do not soften the finding; #866's value came from
 failing honestly.
 
-- [ ] **Step 7: Run the full gate**
+- [x] **Step 7: Run the full gate**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-867-e2e-nav-count -- cargo xtask validate`
 Expected: PASS, all four `{sqlite,postgres}×{chromium,firefox}` combos.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add docs/observability.md

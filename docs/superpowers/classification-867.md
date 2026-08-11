@@ -54,6 +54,19 @@ Nothing else moves. The deletion is safe: the assertions that follow it stash
 document reload, and that sentinel is set after the deleted line, so removing a
 reload strengthens rather than weakens the test.
 
+**Measured afterwards (Task 11), closing this amendment's open item.** The #863
+test's loads are now pinned: **5 in the `before` arm, 1 in the `after` arm.**
+Subtracting its 5 from the fork point's 236 gives **231** — the corpus baseline
+to the load, which confirms the fork point is exactly the corpus plus that test.
+
+**Also measured: this amendment was wrong about its own effect.** Deleting the
+redundant reload of the already-displayed permalink did remove a real document
+load, but it did **not** reduce the trace's navigation count, because the trace
+never counted that reload as a navigation. So `PREDICTED_TOTAL` should have
+stayed at 170; the observed corpus-comparable figure is 170, and the count check
+misses its 169 by exactly this one row. The deletion stands — the reasoning
+about the metric did not.
+
 **Two changes that do NOT move the prediction**, recorded so the count check can
 be read correctly:
 
