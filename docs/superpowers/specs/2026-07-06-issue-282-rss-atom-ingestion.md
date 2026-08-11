@@ -1,10 +1,12 @@
 # Spec: RSS/Atom ingestion v1 — sources, polling, received archive (issue #282)
 
-- Date: 2026-07-06
+- Date: 2026-07-06 · **re-verified against the tree 2026-08-11** (the branch was
+  parked for a month; conventions that moved are marked **[2026-08-11]**)
 - Issue: [#282](https://github.com/jaunder-org/jaunder/issues/282) (scope
-  amended by this cycle's design interview — see "Scope amendments")
-- Parent design: `docs/feed-reading.md` (durable); `docs/hub-architecture.md`
-  §5; ADR-0005, ADR-0006, ADR-0009, ADR-0010
+  amended by this cycle's design interview — see "Scope amendments"; the issue
+  body still carries the pre-amendment text)
+- Parent design: `docs/feed-reading.md` (durable, incl. §2.8 house conventions);
+  `docs/hub-architecture.md` §5; ADR-0005, ADR-0006, ADR-0009, ADR-0010
 - Decisions recorded: `docs/adr/drafts/feed-machinery-hub-boundary.md`,
   `docs/adr/drafts/feed-source-model-and-archive.md`
 
@@ -13,8 +15,8 @@
 The first inbound producer: follow syndication feeds by polling, and archive
 every observed entry state into an append-only, per-entry-versioned raw archive.
 **This slice ends at the archive** — it is the feed machinery of
-`docs/feed-reading.md` §2, proven end-to-end by an inspection surface (JSON
-endpoints + a minimal add/unfollow UI), not by Item derivation.
+`docs/feed-reading.md` §2, proven end-to-end by an inspection surface (server
+fns + a minimal add/unfollow UI over them), not by Item derivation.
 
 Naming: all inbound-syndication identifiers use the **`ajr_*`** family
 (**A**tom/**J**SON Feed/**R**SS — `CONTEXT.md`), deliberately distinct from the
@@ -45,6 +47,25 @@ derivation, actors, read-state, sync, any reader UI. All are homed in
 `docs/feed-reading.md` §9's decomposition.
 
 ## Design
+
+### Typing conventions **[2026-08-11]**
+
+The columns below are described by their meaning; their Rust types follow the
+house rules (`docs/feed-reading.md` §2.8), which moved while this branch was
+parked:
+
+- Every URL column is a **role-tagged newtype** — `TaggedUrl<Role>` (ADR-0112).
+  `AbsoluteUrl`, which this spec's first draft would have used, is **deleted**,
+  and there is no neutral tag. The inbound source URL needs a **new role**
+  distinct from the outbound `FeedUrl` (`TaggedUrl<Feed>` is a feed _we_
+  publish); same for `permanent_redirect_url`, `site_url`, `icon_url`,
+  `comments_feed_url`, `comments_page_url`.
+- Every timestamp is `UtcInstant` (ADR-0072); every id is a newtype with the
+  ADR-0063/0101 trailer, sqlx-bridged per ADR-0071.
+- `id_rule`, `outcome` and `format` are `#[text_enum(sqlx, …)]` closed enums
+  (ADR-0091), not free-text.
+- Nullable columns that mean "genuinely absent" are named as such per ADR-0108
+  rather than defaulted at the read.
 
 ### Storage (all tables dual-backend per ADR-0019; tests per ADR-0053)
 
@@ -111,6 +132,11 @@ Storage traits follow ADR-0019 (trait + dialect where SQL diverges, generic
 store, both-backend aliases), wired into `AppState` per ADR-0016 and exposed via
 `provide_context` / `Extension` as today.
 
+**[2026-08-11]** Archiving a poll writes many rows at once, so the storage call
+that appends a pass's entry versions is **one batched call** (the
+`FeedEventStorage::enqueue_many` template) — per-row write loops are prohibited
+on any path SQLite can execute (ADR-0092).
+
 ### Scheduler + poll pipeline (`server/src/ajr/`)
 
 - A `tokio-cron-scheduler` repeated job (the `FeedWorker` precedent) ticks every
@@ -143,8 +169,10 @@ impl + injectable fake for tests):
   **pin the vetted IP into the connection** (`ClientBuilder::resolve()` / custom
   connector) so a second DNS answer cannot swap the destination (DNS-rebinding
   defense). Auto-redirect **off**; hops followed manually (cap 5), re-running
-  the full resolve-vet-pin per hop. Operator-config allowlist (host/CIDR) as the
-  escape hatch.
+  the full resolve-vet-pin per hop. Operator allowlist (host/CIDR) as the escape
+  hatch — **[2026-08-11]** a deployment setting, so a `JAUNDER_*` env var
+  alongside `JAUNDER_BIND`/`JAUNDER_DB`, **not** a site-config key (the DB
+  registry of ADR-0102 is for per-site values an operator edits in the app).
 - **The allowlist is load-bearing for tests, not just exotic deployments**: the
   Nix e2e sandbox (ADR-0034) and the integration fake-server tests can reach
   **only loopback** — exactly what the guard refuses — so allowlist
@@ -157,7 +185,9 @@ impl + injectable fake for tests):
 ### Parse → archive (the hard kernel — designed, not discovered)
 
 - Detect format (Content-Type, falling back to content sniffing), parse with the
-  read side of `rss`/`atom_syndication` (ADR-0043 forks).
+  read side of `rss`/`atom_syndication` — **[2026-08-11]** the registry crates
+  on quick-xml ≥ 0.41 (ADR-0089); ADR-0043's forks and their whole apparatus are
+  gone and 0043 is superseded.
 - **Fragment extraction is a second pass**: the parsing crates expose no byte
   spans, so a parallel `quick-xml` scan over the decoded document captures each
   top-level `<item>`/`<entry>` element's span (span capture must handle CDATA,
@@ -170,9 +200,12 @@ impl + injectable fake for tests):
   generator adding one root namespace must not churn every entry), in
   deterministic sorted order, plus effective `xml:base` and `xml:lang` where
   inherited. Invariant: a stored fragment re-parses standalone and yields the
-  same model it did in situ — verified via a synthetic-envelope test harness
-  (wrap the fragment in a minimal `<feed>`/`<channel>` and re-parse; the crates
-  don't parse bare elements publicly).
+  same model it did in situ. **[2026-08-11]** Bare-entry I/O is no longer
+  crate-private: `atom_syndication`'s `Entry::from_str` is public and is what
+  `common/src/atompub/entry.rs` parses with today (ADR-0089), so the Atom half
+  of this invariant is a direct standalone re-parse. RSS `<item>` still has no
+  public bare-element reader, so that half keeps the synthetic-envelope harness
+  (wrap the fragment in a minimal `<channel>` and re-parse).
 - **Channel envelope**: the document minus its entry ranges, canonicalized
   deterministically (each removed range collapses with its trailing whitespace)
   so the envelope's hash reflects channel _content_ change, not entry
@@ -187,33 +220,45 @@ impl + injectable fake for tests):
 
 ### Surfaces
 
-- **JSON endpoints** (operator-authenticated via existing session auth; axum
-  handlers with `Extension<Arc<dyn …Storage>>`):
-  - `POST /api/ajr/feeds {url}` → 201 + source. The handler validates the URL
-    **syntactically** (parses as a URL, scheme ∈ {http, https}; rejected
-    otherwise) — cheap string checks are synchronous; everything requiring the
-    network is not. The source is created with `next_poll_at = now`
-    (**prompt-async validation**: reachability and feed-parseability are proven
-    by the normal poll machinery within seconds; no synchronous fetch in the
-    handler). Duplicate URL (under the documented canonicalization) → the
-    existing source (idempotent add + follow).
-  - `DELETE /api/ajr/feeds/:id/follow` → **unfollow**: removes the caller's
-    follow; a fetch unit with zero follows stops being scheduled; the
-    `ajr_feeds` row and the archive are retained. Re-adding the URL re-follows
-    the existing unit.
-  - `GET /api/ajr/feeds` → sources incl. poll state + latest health (derived
-    from `ajr_fetches`).
-  - `GET /api/ajr/feeds/:id/entries` → current entries (each with its latest
+**[2026-08-11] — this section changed shape.** The original spec proposed a
+hand-written axum JSON router (`POST /api/ajr/feeds`, `DELETE …/follow`, …) plus
+a UI over the same service. That is no longer available: the server mounts
+exactly **one** API route, `/api/{*fn_name}`, and ADR-0082 fixes every wire op
+as a `#[server]` fn at `/api/<vertical>/<op>` where the vertical is the first
+path segment under `web/src`. So there are not two surfaces — there is one, and
+the "JSON endpoints" become the vertical's server fns. The op set below is
+unchanged; only its expression is.
+
+- **The vertical**: `web/src/ajr/` (name it for the inbound family, not
+  `feed_*`; note `web/src/feed_discovery/` is the **outbound** discovery
+  vertical and must not be confused with §3.1's inbound work). Host/wasm split
+  at the file level per ADR-0069/0070; markup via maud per ADR-0093; the
+  component stays thin (ADR-0086).
+- **Server fns** (authenticated; verb-led idents with the vertical's noun
+  dropped, per ADR-0082; typed args over the shared newtypes per ADR-0065, so
+  the URL is validated client-side by the same type that validates it on the
+  server):
+  - `ajr::follow(url)` → the source. Validation is **syntactic** (it is the URL
+    newtype's own parse: scheme ∈ {http, https}) — cheap string checks are
+    synchronous, everything needing the network is not. The source is created
+    with `next_poll_at = now` (**prompt-async validation**: reachability and
+    feed-parseability are proven by the normal poll machinery within seconds; no
+    synchronous fetch in the handler). Duplicate URL (under the documented
+    canonicalization) → the existing source (idempotent add + follow).
+  - `ajr::unfollow(id)` — removes the caller's follow; a fetch unit with zero
+    follows stops being scheduled; the `ajr_feeds` row and the archive are
+    retained. Re-following the URL re-attaches to the existing unit.
+  - `ajr::list()` → sources incl. poll state + latest health (derived from
+    `ajr_fetches`).
+  - `ajr::get_entries(id, cursor)` → current entries (each with its latest
     version), paginated per ADR-0004 conventions.
-  - `GET /api/ajr/entries/:id/versions` → the version chain incl. fragments
-    (addressed by the stable `ajr_entry_id`).
-  - (Exact path prefix may be adjusted at plan time to match router conventions;
-    the shape is the contract.)
-- **Minimal UI** (cockpit-side Leptos page, authenticated): an add-feed form + a
+  - `ajr::get_versions(entry_id)` → the version chain incl. fragments (addressed
+    by the stable `ajr_entry_id`).
+- **Minimal UI** (authenticated page in that vertical): an add-feed form + a
   sources list showing url/title, last fetch outcome, next poll, and an
   **unfollow** action — the list is what makes the prompt-async check's result
-  visible. Server fns wrap the same service the JSON handlers use (one
-  add/unfollow pipeline, two thin surfaces).
+  visible. It calls the same server fns; there is one add/unfollow pipeline and
+  no second serialization of it.
 
 ## Acceptance criteria (each observable)
 
@@ -280,20 +325,20 @@ Polling & fetch:
 
 Surfaces:
 
-21. `POST /api/ajr/feeds` responds 201 without blocking on any fetch, and the
-    source's first fetch outcome is observable via `GET` shortly after
-    (prompt-async validation, e2e-testable); posting a duplicate URL (under the
-    documented canonicalization) returns the existing source and adds a follow
-    rather than a second fetch unit.
-22. Unfollow: after `DELETE …/follow`, the fetch unit accrues **no** further
+21. `ajr::follow` returns without blocking on any fetch, and the source's first
+    fetch outcome is observable via `ajr::list` shortly after (prompt-async
+    validation, e2e-testable); following a duplicate URL (under the documented
+    canonicalization) returns the existing source and adds a follow rather than
+    a second fetch unit.
+22. Unfollow: after `ajr::unfollow`, the fetch unit accrues **no** further
     `ajr_fetches` rows across subsequent ticks; its row and archive remain
-    readable; re-adding the URL re-follows the same unit (no duplicate).
-23. All ajr endpoints reject unauthenticated and non-operator callers.
+    readable; re-following the URL re-attaches to the same unit (no duplicate).
+23. All ajr server fns reject unauthenticated and non-operator callers.
 24. The UI page can add a feed, shows its fetch status on refresh/poll, and can
     unfollow it; covered by an e2e spec across the standard backend×browser
-    matrix.
-25. Entries/version endpoints return the archived data (spot-checkable against a
-    fixture), paginated, addressed by stable `ajr_entry_id`.
+    matrix (ADR-0034).
+25. The entries/versions server fns return the archived data (spot-checkable
+    against a fixture), paginated, addressed by stable `ajr_entry_id`.
 
 Conventions:
 
@@ -302,6 +347,12 @@ Conventions:
 28. Naming: all new identifiers use the `ajr_*` family per `CONTEXT.md` (updated
     in this cycle); no `feed_*` naming on inbound machinery; the follows table
     avoids "subscription" naming (the outbound `subscriptions` trap).
+29. **[2026-08-11]** Typing: no `String` URL, no `String` timestamp and no
+    free-text closed enum survives review — role-tagged `TaggedUrl` (ADR-0112),
+    `UtcInstant` (ADR-0072), `#[text_enum]` (ADR-0091), id newtypes
+    (ADR-0063/0101). The tree's own type-safety gates enumerate their
+    populations (ADR-0085/0110), so new code must be added to them, not merely
+    left unflagged.
 
 ## Test strategy notes
 
@@ -315,13 +366,24 @@ Conventions:
   only feed that exists inside the sandbox).
 - Interval/backoff/jitter computation is a pure function, unit-tested
   exhaustively; the worker integration test only proves claim → fetch → archive
-  → reschedule.
+  → reschedule. **[2026-08-11]** The fake is the **HTTP collaborator only** —
+  storage is exercised through the real harness on both backends
+  (`#[apply(backends)]`), never a fake that mirrors backend behaviour
+  (ADR-0103). Server-side integration tests join the single `server` test binary
+  as one `mod` (ADR-0067).
 - e2e: one Playwright spec (add via UI → status visible → unfollow) — the matrix
-  cost is per-spec, so exactly one.
+  cost is per-spec, so exactly one. **[2026-08-11]** It follows the current e2e
+  rules: auth seeded out of band via `test-support` rather than driven through
+  the login UI (ADR-0098), exactly one document load for the page with all
+  subsequent movement in-app (ADR-0111), and no warmup navigation (ADR-0099).
 
 ## Follow-ups this spec commits to filing (plan task 1)
 
 Per `docs/feed-reading.md` §9: archive → Item derivation (hub-side); adaptive
-polling; WebSub; feed auto-discovery; interaction-surface discovery; lifecycle &
-health; webmention interactions — each with native blocked-by links. Plus the
-#282 issue-body amendment.
+polling; WebSub (subscriber side); feed auto-discovery; interaction-surface
+discovery; lifecycle & health; webmention interactions — each with native
+blocked-by links. Plus the #282 issue-body amendment.
+
+**[2026-08-11] Still outstanding.** None of these issues exist yet and #282's
+body is still unamended (checked against the tracker on 2026-08-11), so this
+remains genuinely task 1 — nothing here has been quietly done.

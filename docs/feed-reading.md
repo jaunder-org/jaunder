@@ -4,6 +4,8 @@
   discipline: durable substance lives here; discrete slices spawn issues with
   short-lived spec/plan pairs; settled choices lock as ADRs).
 - **Born:** 2026-07-06, from the issue #282 design interview.
+- **Re-verified against the tree:** 2026-08-11 (ADR corpus 65 → 112; the
+  citations and house conventions below were refreshed then — see §2.8).
 - **Scope:** everything between "the user pastes a URL" and "the user has read,
   kept, or reacted to an article" — for **syndication feeds** (RSS, Atom, JSON
   Feed). The hub machinery (Item derivation, sync engine, annotations) is
@@ -77,12 +79,15 @@ v1 polling policy (#282):
 
 Follow-ons:
 
-- **Adaptive polling** _(filed)_ — choose each source's interval from observed
+- **Adaptive polling** _(to file)_ — choose each source's interval from observed
   posting cadence + recorded hints, clamped 15 m–24 h (realizes ADR-0010).
-- **WebSub** _(filed)_ — `rel=hub` discovery, subscribe/renew lease lifecycle,
-  HMAC-verified callback (never trust an unauthenticated push — hub-architecture
-  §5), unsubscribe, automatic poll fallback for hubless feeds. Pure delivery:
-  lands bytes in the same parse → archive pipeline.
+- **WebSub — subscriber side** _(to file)_ — `rel=hub` discovery,
+  subscribe/renew lease lifecycle, HMAC-verified callback (never trust an
+  unauthenticated push — hub-architecture §5), unsubscribe, automatic poll
+  fallback for hubless feeds. Pure delivery: lands bytes in the same parse →
+  archive pipeline. Note the **publisher** side already exists
+  (`server/src/websub/`, pinging hubs about our own feeds); the two share the
+  spec and the `http.rs` client seam, nothing else.
 
 ### 2.3 The fetcher — polite and paranoid
 
@@ -105,12 +110,13 @@ inherited system-wide:
 
 ### 2.4 Parsing — formats behind a seam
 
-RSS 2.x and Atom in v1 (the in-tree `rss` / `atom_syndication` read side, on the
-ADR-0043 forks); **JSON Feed** as a follow-on _(doc-only until real)_. Parsing
-produces a format-neutral internal view (entries with identity, display fields,
-authors, hints) used for extraction — while the archive stores each entry's
-**native** payload untouched (§2.5). Adding a format touches the parser seam and
-nothing downstream.
+RSS 2.x and Atom in v1 (the read side of registry `rss` / `atom_syndication`, on
+quick-xml ≥ 0.41 — ADR-0089; the ADR-0043 forks this doc first cited are retired
+and 0043 is superseded); **JSON Feed** as a follow-on _(doc-only until real)_.
+Parsing produces a format-neutral internal view (entries with identity, display
+fields, authors, hints) used for extraction — while the archive stores each
+entry's **native** payload untouched (§2.5). Adding a format touches the parser
+seam and nothing downstream.
 
 ### 2.5 The received archive — entry identity + immutable versions
 
@@ -189,7 +195,7 @@ outbound, protocol-native keys, the address book) is hub-side work, homed with
 Item derivation — an Item's author-ref points at an actor; the archive's capture
 is its evidence.
 
-### 2.7 Lifecycle & health _(filed)_
+### 2.7 Lifecycle & health _(to file)_
 
 The user's window into "is my feed working": per-source health derived from the
 fetch log — consecutive failures, last success, 410-gone detection, dead-feed
@@ -198,16 +204,43 @@ flagging and mitigation, and the surfacing UX ("this feed has been failing for a
 week; the site moved here; fix or unfollow?"). v1 records everything this needs;
 this slice adds the policy + presentation.
 
+### 2.8 House conventions this machinery inherits
+
+The feed machinery is designed on its own terms (§1), but it is built in this
+repo and obeys its standing decisions. The ones that shape the schema and the
+surfaces, current as of 2026-08-11:
+
+- **URLs are role-tagged newtypes** — `TaggedUrl<Role>` with a distinct
+  zero-sized role per meaning (ADR-0112); `AbsoluteUrl` is deleted and there is
+  no neutral tag. Inbound source URLs therefore need **their own role**, not the
+  outbound `FeedUrl` (`TaggedUrl<Feed>` = a feed jaunder publishes).
+- **Timestamps** cross boundaries as `UtcInstant` (ADR-0072); **ids** are
+  newtypes with the ADR-0063/0101 trailer, bridged to sqlx per ADR-0071.
+- **Closed string sets** (identity rule, fetch outcome, payload format) are
+  `#[text_enum(sqlx, …)]` (ADR-0091), not free-text columns.
+- **There is no hand-rolled JSON API.** The server mounts exactly one API route,
+  `/api/{*fn_name}`; every wire op is a `#[server]` fn at `/api/<vertical>/<op>`
+  with a verb-led ident (ADR-0082, ADR-0065). An inspection surface for the
+  archive is a web vertical, not a REST router.
+- **Storage** is trait + dialect + generic store (ADR-0019), contract-tested on
+  both backends (ADR-0053, ADR-0103), with SQLite write-lock occupancy bounded —
+  no per-row write loops when archiving a poll's entries (ADR-0092).
+
 ## 3. Discovery
 
-### 3.1 Feed auto-discovery _(filed)_
+### 3.1 Feed auto-discovery _(to file)_
+
+Naming caution: `web/src/feed_discovery/` already exists and means the
+**outbound** thing — the `<link rel="alternate">` / RSD tags advertising
+jaunder's own feeds. Inbound discovery needs a different module name (the
+`ajr_*` reasoning applies to modules, not just tables).
 
 Paste any URL, get its feeds: fetch the page (guarded fetcher), probe
 `<link rel="alternate" type="application/{rss,atom}+xml;application/feed+json">`,
 fall back to common paths (`/feed`, `/rss.xml`, `/atom.xml`, `/index.xml`),
 surface multi-feed disambiguation (comments feed vs posts feed) at add time.
 
-### 3.2 Interaction-surface discovery _(filed; cost-aware by design)_
+### 3.2 Interaction-surface discovery _(to file; cost-aware by design)_
 
 Given an article, learn where reactions can land. Comprehensive **in what it
 records**, economical **in when it probes**:
@@ -278,7 +311,7 @@ Priority: **Webmention first** (needs no actor identity — deliverable while th
 AP track is in flight), AP second, comment feeds as read-only context, AT
 documented as open.
 
-- **Webmention** _(filed — the first interaction slice)_: like/reply = a post
+- **Webmention** _(to file — the first interaction slice)_: like/reply = a post
   with microformats (`u-like-of` / `u-in-reply-to`) targeting the article,
   published outbound, plus a webmention POST to the discovered endpoint;
   delivery outcome surfaced to the user.
@@ -310,7 +343,11 @@ surfaces, are part of the slice.
 
 ## 9. Decomposition & sequencing
 
-Filed now (with native blocked-by links):
+**Status 2026-08-11: none of these are filed yet, and #282's own text is still
+unamended** (it still reads "…, Item derivation" and carries the "no UI"
+non-goal). Filing them — with native blocked-by links — plus the #282 body
+amendment remains task 1 of the #282 plan. Read the table as the intended
+decomposition, not as tracker state.
 
 | Issue                                                                                                                         | Blocked by                                              |
 | ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
