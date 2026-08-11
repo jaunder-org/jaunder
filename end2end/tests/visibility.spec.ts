@@ -16,6 +16,8 @@ import {
   unsubscribeFrom,
 } from "./helpers";
 import { fetchFeedSnapshot } from "./feeds";
+import { navigateInApp } from "./navigate";
+import { allowSecondBoot } from "./bootBudget";
 import { SEL } from "./selectors";
 
 // Content Visibility — Layer A end-to-end (Task 22).
@@ -126,8 +128,13 @@ test("Private post: hidden from anonymous and non-subscriber, visible to author"
     other,
   );
 
-  // The author themselves can see it.
-  await goto(page, permalink);
+  // The author themselves can see it. The subject is that the author is admitted,
+  // not the cold render, so follow the publish flash's own link (#867).
+  await navigateInApp(
+    page,
+    () => page.locator('[data-test="permalink-link"]').click(),
+    { url: permalink, ready: "article.j-post" },
+  );
   await expect(page.locator("article h1")).toHaveText("Private Secret");
 
   // And it is absent from the author's public timeline for an anonymous viewer.
@@ -167,18 +174,34 @@ test("Subscribers post: visible after Subscribe, hidden again after Unsubscribe"
     await expect(viewerPage.locator(SEL.error)).toContainText("Post not found");
 
     // Subscribe via the author's profile page.
+    allowSecondBoot(
+      viewerPage,
+      'the "Post not found" page the viewer is looking at links nowhere; the author\'s profile is where Subscribe lives',
+    );
     await subscribeTo(viewerPage, author.username);
 
     // Now the subscriber can see it.
+    allowSecondBoot(
+      viewerPage,
+      "re-reading the permalink through the server after subscribing is the assertion",
+    );
     await goto(viewerPage, permalink);
     await expect(viewerPage.locator("article h1")).toHaveText(
       "Subscribers Only",
     );
 
     // Unsubscribe via the profile page.
+    allowSecondBoot(
+      viewerPage,
+      "the permalink page links nowhere back to the author's profile, where Unsubscribe lives",
+    );
     await unsubscribeFrom(viewerPage, author.username);
 
     // After unsubscribing the post is hidden again.
+    allowSecondBoot(
+      viewerPage,
+      "re-reading the permalink through the server after unsubscribing is the assertion",
+    );
     await goto(viewerPage, permalink);
     await expect(viewerPage.locator(SEL.error)).toContainText("Post not found");
   } finally {
@@ -237,6 +260,10 @@ test("Named audience: assigned member sees a Friends post; an unassigned non-mem
   );
 
   // Author publishes a post targeted to subscribers + the Friends audience.
+  allowSecondBoot(
+    page,
+    "the app exposes no link to /posts/new anywhere, so the composer cannot be reached by an in-app control",
+  );
   await goto(page, "/posts/new");
   await waitForSelector(page, "#audience-base");
   await page.fill(SEL.postBody, "# Friends Post\n\nBody for Friends Post");
@@ -254,6 +281,10 @@ test("Named audience: assigned member sees a Friends post; an unassigned non-mem
   expect(friendsPermalink).toBeTruthy();
 
   // X (subscriber + Friends member) can see it.
+  allowSecondBoot(
+    xPage,
+    "the author's profile page carries no link to another user's arbitrary permalink; X's admitted read must come from a fresh load",
+  );
   await goto(xPage, friendsPermalink!);
   await expect(xPage.locator("article h1")).toHaveText("Friends Post");
 
@@ -282,6 +313,10 @@ test("Public post is visible to anonymous and appears in the feed; Subscribers p
     page,
     "Public Broadcast",
     "public",
+  );
+  allowSecondBoot(
+    page,
+    "the second post needs the composer again and the app exposes no link to /posts/new",
   );
   await publishWithBaseAudience(page, "Feed Subscribers Only", "subscribers");
 

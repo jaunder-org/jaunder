@@ -1,5 +1,6 @@
 import { test, expect } from "./fixtures";
 import { goto } from "./helpers";
+import { allowSecondBoot } from "./bootBudget";
 import { SEL } from "./selectors";
 
 // The profile "Update Profile" control is a plain button that dispatches the
@@ -11,9 +12,9 @@ const BIO = 'textarea[name="bio"]';
 
 // #401: a valid display name entered on the profile page persists across a reload.
 test("profile update persists a valid display name", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
-  await goto(page, "/profile");
+  const page = await registeredPage("/profile");
 
   await page.fill(DISPLAY_NAME, "Ada Lovelace");
 
@@ -23,7 +24,14 @@ test("profile update persists a valid display name", async ({
   await page.click(UPDATE_BUTTON);
   expect((await updated).ok()).toBe(true);
 
-  // A fresh load reads the persisted value back through profile::get.
+  // Re-read the persisted value from the server. That takes a document load here:
+  // `/profile` is a route with no in-app entry point (checked across `web/src` —
+  // it is in neither `NAV_ITEMS` nor the sidebar footer), and #896's rule is that
+  // a test never invents an affordance the app does not have.
+  allowSecondBoot(
+    page,
+    "nothing in the app links to /profile — no sidebar nav item, no footer avatar link — so there is no in-app move that re-enters the route, and a document load is the only way to remount the page and re-read the value through profile::get",
+  );
   await goto(page, "/profile");
   await expect(page.locator(DISPLAY_NAME)).toHaveValue("Ada Lovelace");
 });
@@ -32,9 +40,9 @@ test("profile update persists a valid display name", async ({
 // DisplayName FromStr — the newtype's own message shows inline once the field is
 // touched, and submit is disabled (ADR-0065 disable-until-valid).
 test("over-long display name shows an inline error and gates submit", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
-  await goto(page, "/profile");
+  const page = await registeredPage("/profile");
 
   const input = page.locator(DISPLAY_NAME);
   await input.fill("a".repeat(256));
@@ -51,9 +59,9 @@ test("over-long display name shows an inline error and gates submit", async ({
 // valid optional value). This is the real-browser form of the former
 // "empty fields set to none" server test.
 test("clearing the display name persists as empty", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
-  await goto(page, "/profile");
+  const page = await registeredPage("/profile");
 
   await page.fill(DISPLAY_NAME, "Temp Name");
   let updated = page.waitForResponse((response) =>
@@ -62,6 +70,10 @@ test("clearing the display name persists as empty", async ({
   await page.click(UPDATE_BUTTON);
   expect((await updated).ok()).toBe(true);
 
+  allowSecondBoot(
+    page,
+    "nothing in the app links to /profile — no sidebar nav item, no footer avatar link — so there is no in-app move that re-enters the route, and a document load is the only way to remount the page and re-read the value through profile::get",
+  );
   await goto(page, "/profile");
   await expect(page.locator(DISPLAY_NAME)).toHaveValue("Temp Name");
 
@@ -73,16 +85,18 @@ test("clearing the display name persists as empty", async ({
   await page.click(UPDATE_BUTTON);
   expect((await updated).ok()).toBe(true);
 
+  allowSecondBoot(
+    page,
+    "the None round-trip needs the cleared display name read back from the server, and with no in-app link to /profile a document load is the only way to re-enter the route",
+  );
   await goto(page, "/profile");
   await expect(page.locator(DISPLAY_NAME)).toHaveValue("");
 });
 
 // #545: a valid bio entered on the profile page persists across a reload — the
 // typed Option<Bio> wire arg round-trips through profile::update/profile::get.
-test("profile update persists a valid bio", async ({
-  registeredPage: page,
-}) => {
-  await goto(page, "/profile");
+test("profile update persists a valid bio", async ({ registeredPage }) => {
+  const page = await registeredPage("/profile");
 
   await page.fill(BIO, "Mathematician and first programmer.");
 
@@ -92,6 +106,10 @@ test("profile update persists a valid bio", async ({
   await page.click(UPDATE_BUTTON);
   expect((await updated).ok()).toBe(true);
 
+  allowSecondBoot(
+    page,
+    "nothing in the app links to /profile — no sidebar nav item, no footer avatar link — so there is no in-app move that re-enters the route, and a document load is the only way to remount the page and re-read the value through profile::get",
+  );
   await goto(page, "/profile");
   await expect(page.locator(BIO)).toHaveValue(
     "Mathematician and first programmer.",
@@ -102,9 +120,9 @@ test("profile update persists a valid bio", async ({
 // shared Bio FromStr — the newtype's own message shows inline once touched, and
 // submit is disabled (ADR-0065 disable-until-valid, gated on bio validity too).
 test("over-long bio shows an inline error and gates submit", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
-  await goto(page, "/profile");
+  const page = await registeredPage("/profile");
 
   const input = page.locator(BIO);
   await input.fill("a".repeat(1001));
@@ -125,31 +143,40 @@ const FORMAT_SELECT = "select#default-post-format";
 const FORMAT_SAVE = 'button:has-text("Save")';
 
 test("default post format round-trips through the typed dispatch", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
-  await goto(page, "/profile");
+  const page = await registeredPage("/profile");
 
-  const saveAndReload = async (value: string) => {
+  // Each flip's reload is a declared second boot, and the two flips are declared
+  // for different reasons, so the reason is a parameter rather than a constant.
+  const saveAndReload = async (value: string, reason: string) => {
     await page.selectOption(FORMAT_SELECT, value);
     const saved = page.waitForResponse((response) =>
       response.url().includes("set_default_post_format"),
     );
     await page.click(FORMAT_SAVE);
     expect((await saved).ok()).toBe(true);
+    allowSecondBoot(page, reason);
     await goto(page, "/profile");
     await expect(page.locator(FORMAT_SELECT)).toHaveValue(value);
   };
 
-  await saveAndReload("org");
-  await saveAndReload("markdown");
+  await saveAndReload(
+    "org",
+    "no in-app link re-enters /profile, so a document load is the only way to read the saved default post format back through get_default_post_format",
+  );
+  await saveAndReload(
+    "markdown",
+    "the second flip proves the persisted value is the selected one and not a constant, and it needs the same load for the same reason: nothing in the app navigates to /profile",
+  );
 });
 
 // #545: clearing the box removes the bio end-to-end. Under the typed Option<Bio>
 // wire arg an empty value is *omitted* (dispatched as None), not sent as an empty
 // string that would fail to decode — so emptying the field and submitting must
 // persist as cleared, and submit stays enabled (empty is a valid optional value).
-test("clearing the bio persists as empty", async ({ registeredPage: page }) => {
-  await goto(page, "/profile");
+test("clearing the bio persists as empty", async ({ registeredPage }) => {
+  const page = await registeredPage("/profile");
 
   await page.fill(BIO, "Temporary bio");
   let updated = page.waitForResponse((response) =>
@@ -158,6 +185,10 @@ test("clearing the bio persists as empty", async ({ registeredPage: page }) => {
   await page.click(UPDATE_BUTTON);
   expect((await updated).ok()).toBe(true);
 
+  allowSecondBoot(
+    page,
+    "nothing in the app links to /profile — no sidebar nav item, no footer avatar link — so there is no in-app move that re-enters the route, and a document load is the only way to remount the page and re-read the value through profile::get",
+  );
   await goto(page, "/profile");
   await expect(page.locator(BIO)).toHaveValue("Temporary bio");
 
@@ -169,6 +200,10 @@ test("clearing the bio persists as empty", async ({ registeredPage: page }) => {
   await page.click(UPDATE_BUTTON);
   expect((await updated).ok()).toBe(true);
 
+  allowSecondBoot(
+    page,
+    "the None round-trip needs the cleared bio read back from the server, and with no in-app link to /profile a document load is the only way to re-enter the route",
+  );
   await goto(page, "/profile");
   await expect(page.locator(BIO)).toHaveValue("");
 });

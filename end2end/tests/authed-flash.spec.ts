@@ -20,6 +20,7 @@ import {
   signInAsNewUser,
   failServerFn,
 } from "./helpers";
+import { allowEngineDependentBoot, allowSecondBoot } from "./bootBudget";
 import { SEL } from "./selectors";
 import { createPostViaApi } from "./posts";
 
@@ -31,6 +32,10 @@ test("owner: pre-paint auth marks html.authed and / stays the enhanced public ti
   const username = await registerViaUi(page, firstNav);
   await createPostViaApi(page, { body: "# Owner Post\n\nBody for Owner Post" });
 
+  allowSecondBoot(
+    page,
+    "the pre-paint `html.authed` marking is observable only on a cold document load, and it is the subject",
+  );
   await goto(page, "/");
 
   // Pre-paint auth detection (D5): only the inline <head> script sets these — the
@@ -87,6 +92,10 @@ test("seeded: logout survives a full navigation (tombstone respected)", async ({
   await click(page, SEL.logoutLink);
   await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
 
+  allowSecondBoot(
+    page,
+    "a full post-logout document load is exactly what pins the tombstone; the pushState logout tests never re-run the init script",
+  );
   await goto(page, "/", { timeout: firstNav });
 
   await expect(page.locator("html")).not.toHaveClass(/\bauthed\b/);
@@ -106,6 +115,10 @@ test("seeded: re-seed as the same user after logout boots authed", async ({
   await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
 
   await signInAs(page, username);
+  allowSecondBoot(
+    page,
+    "the re-seeded marker is re-applied by the init script only on a fresh document load, and booting authed again is the subject",
+  );
   await goto(page, "/", { timeout: firstNav });
 
   await expect(page.locator("html")).toHaveClass(/\bauthed\b/);
@@ -113,11 +126,11 @@ test("seeded: re-seed as the same user after logout boots authed", async ({
 });
 
 test("owner: /app cockpit boots straight into the personalized feed", async ({
-  registeredPage: page,
+  registeredPage,
 }) => {
   // Directly bookmarkable (D6): a direct hit to /app boots into the feed + composer
   // with zero intermediate clicks (pre-paint html.authed → the client boots authed).
-  await goto(page, "/app");
+  const page = await registeredPage("/app");
 
   await expect(page.locator(".j-topbar .j-sub")).toHaveText("Your home feed");
   await expect(page.locator(SEL.postBody)).toBeVisible();
@@ -139,6 +152,26 @@ test("owner: jaunder_home_redirect='app' makes the pre-paint script redirect / �
     localStorage.setItem("jaunder_home_redirect", "app"),
   );
 
+  // How many further loads this produces is ENGINE-DEPENDENT, so it takes both
+  // declaration forms. The `/` document commits and the pre-paint
+  // `location.replace("/app")` fires during head parsing. On chromium `/` is
+  // replaced before it ever reaches DOMContentLoaded, so the budget counts one
+  // load and its URL is `/app`; on firefox `/` does fire the event, so the budget
+  // counts two. (Measured on both — `framenavigated` fires for `/` and `/app`
+  // everywhere; `domcontentloaded` for `/app` everywhere and for `/` on firefox
+  // only.) `/app` always lands, so it is declared exactly; `/` is declared with
+  // the engine-dependent form. Neither can be routed in-app: the redirect is the
+  // script's own, and it is the subject.
+  allowSecondBoot(
+    page,
+    "the /app load the pre-paint location.replace always produces; it is the script's own redirect, not a test-issued navigation, and it is the subject",
+  );
+  allowEngineDependentBoot(
+    page,
+    "/",
+    "the / document itself: the pre-paint location.replace runs during head parsing, so whether / reaches DOMContentLoaded before being replaced is engine timing — firefox fires it and counts the load, chromium replaces / first and never does",
+  );
+  // e2e-goto-wrapper:allow `waitUntil: "commit"` plus the `waitForURL` below is the subject — the pre-paint redirect replaces `/` during head parsing, so the wrapper would wait for a mount on a document that never paints
   await page.goto(`${BASE_URL}/`, { waitUntil: "commit" });
   await page.waitForURL(/\/app$/, {
     timeout: firstNav,
@@ -148,6 +181,7 @@ test("owner: jaunder_home_redirect='app' makes the pre-paint script redirect / �
 test("anonymous: /app bounces to /login", async ({ page, firstNav }) => {
   // No session and no marker → CockpitPage's session-reconcile gate resolves anon
   // and redirects to /login (D6).
+  // e2e-goto-wrapper:allow the subject is the bounce itself, so this waits on the URL and not on the mount — the wrapper would insert a mount barrier on the /app document before the redirect is ever observed
   await page.goto(`${BASE_URL}/app`, { waitUntil: "domcontentloaded" });
   await page.waitForURL(/\/login$/, {
     timeout: firstNav,
@@ -175,6 +209,10 @@ test("operator: admin chrome is seeded flash-free from the marker", async ({
 
   // With get_session() failing, the operator admin nav can only come from the marker.
   await failServerFn(page, "auth/get_session");
+  allowSecondBoot(
+    page,
+    "the pre-paint marker read happens only on a cold boot, and with get_session() failing that boot is the only source of the operator chrome",
+  );
   await goto(page, "/");
 
   await expect(

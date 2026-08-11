@@ -3,10 +3,35 @@
  *
  * ## Usage rules
  *
+ * - **A page boots once, at the URL under test** (#867).  That single document
+ *   load is the page's entry; fixtures take the entry path rather than guessing
+ *   it.  Everything after it moves within the app.
+ *
  * - Always use `goto`, `click`, and `waitForSelector` from this module instead
  *   of `page.goto` / `page.click` / `page.waitForSelector` directly.  The
  *   wrappers record timing via `withTimedAction` so every navigation and
- *   interaction appears in the OTEL trace.
+ *   interaction appears in the OTEL trace.  A `page.goto` anywhere under
+ *   `end2end/tests` other than this module fails the `e2e-goto-wrapper` xtask
+ *   check, unless the site carries a `// e2e-goto-wrapper:allow <reason>`
+ *   marker on the line directly above it (ADR-0094).
+ *
+ * - **Move within the app with `navigateInApp`** (`./navigate`), not with a
+ *   second `goto`: in a CSR SPA the router serves the move, and a document load
+ *   exercises a path no user takes.  Its `ready` selector must not already
+ *   match before the move — a barrier that waits for nothing is rejected, not
+ *   silently accepted.
+ *
+ * - **A second document load on an already-booted page must be declared** with
+ *   `allowSecondBoot(page, reason)` (`./bootBudget`), and the reason must be
+ *   non-empty: it is the record of what was deliberately left alone (the
+ *   destination's cold render being the subject, or a re-load proving
+ *   persistence).  One allowance covers one load.  An allowance nothing
+ *   consumes fails the test as an orphan — it does not expire, so leaving one
+ *   behind would silently absorb the next undeclared load.  For the rare load
+ *   whose very occurrence depends on the browser engine, and only for that,
+ *   declare it with `allowEngineDependentBoot(page, path, reason)`: it covers at
+ *   most one load **of that path** and is exempt from the orphan rule.  The path
+ *   is what keeps an unconsumed one from absorbing some other load.
  *
  * - Pass paths (e.g. `"/login"`, `"/posts/new"`) to `goto` — it always
  *   prepends `BASE_URL` automatically.  Use `BASE_URL` directly only for
@@ -16,6 +41,8 @@
  * - `goto` waits for the CSR mount automatically.  Call
  *   `waitForMount(page)` only after action-triggered navigations (e.g.
  *   redirects from form submits, server-side 302s) where `goto` was not used.
+ *   Do not call it after `navigateInApp` — the app is already mounted, so
+ *   `body[data-mounted]` would pass vacuously.
  *
  * - Never use `page.waitForLoadState("networkidle")` — it fires before ActionForm
  *   AJAX responses arrive under load.  Wait for a specific element instead.
@@ -39,6 +66,7 @@
 
 import { expect, type Page } from "@playwright/test";
 import { withTimedAction } from "./actions";
+import { allowSecondBoot, throwIfViolated } from "./bootBudget";
 import { extractLink, extractToken, type CapturedEmail } from "./mail";
 import { waitForMount } from "./mount";
 import {
@@ -70,12 +98,17 @@ export async function goto(
   options?: Parameters<Page["goto"]>[1],
 ): Promise<void> {
   await withTimedAction(page, "page.goto", () =>
+    // e2e-goto-wrapper:allow this call is the wrapper — the one document load that supplies the mount barrier every other site is required to go through
     page.goto(`${BASE_URL}${path}`, {
       waitUntil: "domcontentloaded",
       ...options,
     }),
   );
   await waitForMount(page, options?.timeout);
+  // The budget's event handler cannot reject this promise, so it records the
+  // breach and we raise it here (#867). Last, so a genuine mount failure — the
+  // more informative error — wins.
+  throwIfViolated(page);
 }
 
 /** Click `selector`, recording timing in the OTEL trace. */
@@ -174,6 +207,11 @@ export async function fillLoginForm(
  * Login redirects via client-side pushState now (#591), so `waitForURL` would be
  * reliable — but `SEL.logoutLink` is the better signal because it confirms auth
  * state (content readiness), not merely the URL.
+ *
+ * **Boots the page** (#867). An ADR-0098 holdout: the subject is the real login
+ * flow, so the document load of `/login` stays. Callers whose page has already
+ * booted must declare it with `allowSecondBoot` before calling — the declaration
+ * belongs to the caller, since only the caller knows whether this is its entry.
  */
 export async function login(
   page: Page,
@@ -241,6 +279,10 @@ export async function signInAs(page: Page, username: string): Promise<void> {
  *
  * After submission the helper races between `a[href='/logout']` (success) and
  * `.error` (failure) for fast failure detection.
+ *
+ * **Boots the page** (#867), on the same terms as {@link login}: an ADR-0098
+ * holdout whose document load of `/register` is the subject. A caller whose page
+ * has already booted declares it with `allowSecondBoot`.
  */
 export async function registerViaUi(
   page: Page,
@@ -295,6 +337,11 @@ export type EmailWaiter = {
  * Was written inline in the `verifiedUser` fixture and again in the email spec.
  * Factored so the phases are delimited in the trace and the sequence has one
  * home (#794).
+ *
+ * **Two document loads** (#867): `/profile/email` is the page's entry for both
+ * current callers, and following the emailed link is a second load this helper
+ * declares itself — it is an arrival from outside the app either way, so the
+ * declaration does not depend on the caller.
  */
 export async function setAndVerifyEmail(
   page: Page,
@@ -308,6 +355,10 @@ export async function setAndVerifyEmail(
     await expectFlash(page, "Check your email");
     const mail = await mailbox.waitForNewEmail();
     const token = extractToken(mail);
+    allowSecondBoot(
+      page,
+      "following the emailed verification link is an arrival from outside the app, exactly as a real recipient does",
+    );
     await goto(page, `/verify-email?token=${token}`);
     await expectFlash(page, "verified");
   });
@@ -320,6 +371,9 @@ export async function setAndVerifyEmail(
  * things about it — the happy path expects a neutral confirmation that does not
  * reveal whether the user exists, while the no-verified-email path expects an
  * error — so the shared part stops at the submit.
+ *
+ * **Boots the page** (#867): `/forgot-password` is reached from outside a
+ * session, and for both current callers it is the page's entry.
  */
 export async function requestPasswordReset(
   page: Page,
@@ -373,6 +427,11 @@ async function toggleSubscription(
 /**
  * Subscribe the current (authenticated) page's user to `authorUsername` via the
  * author's profile page, settling once the button flips to "Unsubscribe".
+ *
+ * **Boots the page** (#867): nothing in the app links to an arbitrary author's
+ * profile from wherever the caller happens to be, so this stays a document load.
+ * For most callers it is a freshly created page's entry; a caller whose page has
+ * already booted declares it with `allowSecondBoot` first.
  */
 export async function subscribeTo(
   page: Page,
@@ -386,6 +445,8 @@ export async function subscribeTo(
 /**
  * Unsubscribe the current page's user from `authorUsername` via the profile
  * page, settling once the button flips back to "Subscribe".
+ *
+ * **Boots the page** (#867), on the same terms as {@link subscribeTo}.
  */
 export async function unsubscribeFrom(
   page: Page,
@@ -431,6 +492,10 @@ export async function followEmailLink(
       new RegExp(`^https://example\\.com${pathPrefix}\\?token=`),
     );
     const { pathname, search } = new URL(link);
+    allowSecondBoot(
+      page,
+      "following the emailed reset link is an arrival from outside the app, exactly as a real recipient does",
+    );
     await goto(page, `${pathname}${search}`);
   });
 }

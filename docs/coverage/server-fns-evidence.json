@@ -342,9 +342,7 @@
       "password reset flow completes successfully",
       "visiting verify-email with invalid token shows error"
     ],
-    "invites::create": [
-      "invite link registration completes end-to-end"
-    ],
+    "invites::create": ["invite link registration completes end-to-end"],
     "invites::list": [
       "invite link registration completes end-to-end",
       "invites page shows not-found fallback when not invite-only"
@@ -524,9 +522,7 @@
       "scheduling a post shows a Scheduled-for badge on the drafts page",
       "unpublishing from a permalink navigates to /drafts without a full reload"
     ],
-    "posts::publish": [
-      "draft lifecycle: create, view, edit, and publish"
-    ],
+    "posts::publish": ["draft lifecycle: create, view, edit, and publish"],
     "posts::unpublish": [
       "unpublishing from a permalink navigates to /drafts without a full reload"
     ],

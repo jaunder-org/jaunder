@@ -1,6 +1,31 @@
+import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import { goto, signInAs, waitForSelector } from "./helpers";
+import { allowSecondBoot } from "./bootBudget";
+import { navigateInApp } from "./navigate";
 import { SEL } from "./selectors";
+
+// The operator sidebar carries both admin routes (`web/src/sidebar/component.rs`),
+// so re-entering this page is an in-app move, not a reload. Leaving and returning
+// remounts `SiteSettingsPage`, whose `Resource` is created at mount — so the form
+// is repopulated from a fresh `site::get`, which is what the round-trip
+// assertions need.
+const BACKUPS_LINK = 'a.j-nav-item[href="/admin/backups"]';
+const SITE_LINK = 'a.j-nav-item[href="/admin/site"]';
+const BACKUPS_READY = 'input[name="destination_path"]';
+const SITE_READY = 'input[name="title"]';
+
+/** Leave `/admin/site` and come back, remounting the page from the server. */
+async function reenterSiteSettings(page: Page): Promise<void> {
+  await navigateInApp(page, () => page.click(BACKUPS_LINK), {
+    url: "/admin/backups",
+    ready: BACKUPS_READY,
+  });
+  await navigateInApp(page, () => page.click(SITE_LINK), {
+    url: "/admin/site",
+    ready: SITE_READY,
+  });
+}
 
 // M8.5: Site settings admin page allows operators to configure site identity.
 test("admin site settings page loads and allows updating title and base_url", async ({
@@ -29,8 +54,9 @@ test("admin site settings page loads and allows updating title and base_url", as
   await submitButton.click();
   await waitForSelector(page, ".j-settings-saved");
 
-  // Reload the page and verify values are persisted
-  await goto(page, "/admin/site");
+  // Re-enter the page in-app and verify the values are persisted: the remount
+  // refetches through site::get, so the form is populated from the server.
+  await reenterSiteSettings(page);
 
   // The title round-trips verbatim; the base URL round-trips in its canonical form
   // (`AbsoluteUrl` adds the root path slash).
@@ -59,8 +85,8 @@ test("site base URL round-trips, clears via omission, and validates inline", asy
   await saveButton.click();
   await waitForSelector(page, ".j-settings-saved");
 
-  // Reload and confirm it round-trips in canonical form.
-  await goto(page, "/admin/site");
+  // Re-enter in-app and confirm it round-trips in canonical form.
+  await reenterSiteSettings(page);
   await expect(page.locator('input[name="base_url"]')).toHaveValue(
     "https://roundtrip.example.com/",
   );
@@ -71,8 +97,8 @@ test("site base URL round-trips, clears via omission, and validates inline", asy
   await page.locator('button:has-text("Save Site Settings")').click();
   await waitForSelector(page, ".j-settings-saved");
 
-  // Reload and confirm the base URL is now empty.
-  await goto(page, "/admin/site");
+  // Re-enter in-app and confirm the base URL is now empty.
+  await reenterSiteSettings(page);
   await expect(page.locator('input[name="base_url"]')).toHaveValue("");
 
   // A malformed URL shows an inline client-side error (once the field is touched)
@@ -120,6 +146,10 @@ test("site base URL warning banner shows when unset and hides once configured", 
   await page.fill('input[name="base_url"]', "https://example.com");
   await saveButton.click();
   await waitForSelector(page, ".j-settings-saved");
+  allowSecondBoot(
+    page,
+    "the warning banner is painted from the boot-time site config, so a fresh load is what proves it hides once configured",
+  );
   await goto(page, "/admin/site");
   await expect(banner).toBeHidden();
 
@@ -127,6 +157,10 @@ test("site base URL warning banner shows when unset and hides once configured", 
   await page.fill('input[name="base_url"]', "");
   await page.locator('button:has-text("Save Site Settings")').click();
   await waitForSelector(page, ".j-settings-saved");
+  allowSecondBoot(
+    page,
+    "the warning banner is painted from the boot-time site config, so a fresh load is what proves it reappears once cleared",
+  );
   await goto(page, "/admin/site");
   await expect(banner).toBeVisible();
 });

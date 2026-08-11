@@ -64,6 +64,7 @@ export async function expectNoShiftAcrossMount(
   });
 
   try {
+    // e2e-goto-wrapper:allow the CLS probe holds the wasm above so `init()` never completes; the wrapper's mount wait would hang, and a frozen pre-mount paint is the thing being measured
     await page.goto(`${BASE_URL}${probe.url}`, {
       waitUntil: "domcontentloaded",
     });

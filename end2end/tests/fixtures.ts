@@ -55,6 +55,7 @@ import {
   setAndVerifyEmail,
   TEST_PASSWORD,
 } from "./helpers";
+import { takeBudgetFailures, trackBoots } from "./bootBudget";
 import { readEmailLines, type CapturedEmail } from "./mail";
 import { pollUntil } from "./polling";
 import { applySeededSession, seedUserViaTool } from "./seed";
@@ -343,6 +344,11 @@ export type Mailbox = {
   waitForNewEmail(timeoutMs?: number): Promise<CapturedEmail>;
 };
 
+/** The `registeredPage` fixture: a one-shot boot. Call it once with the URL the
+ *  test enters at; it returns the signed-in, mounted `page`. A second call
+ *  throws — a page boots once (#867). */
+export type RegisteredPage = (entry: string) => Promise<Page>;
+
 const test = base.extend<{
   _lifecycleStart: number;
   _autoTestTimeout: void;
@@ -351,7 +357,7 @@ const test = base.extend<{
   tracedContext: NewTracedContext;
   bootTiming: () => Promise<DocumentTiming | undefined>;
   firstNav: number;
-  registeredPage: Page;
+  registeredPage: RegisteredPage;
   user: TestUser;
   mailbox: Mailbox;
   verifiedUser: TestUser;
@@ -427,6 +433,17 @@ const test = base.extend<{
       const record: TracedContextRecord = { capture, perf: null };
       opened.push(record);
 
+      // Arm the boot budget on every page this context opens (#867). Wrapping
+      // `newPage` here covers all 15 spec-side `newPage()` sites at once — the
+      // budget's unit is the `Page`, so a second page that is never armed is a
+      // blind spot, not a page exempt from the rule.
+      const newPage = context.newPage.bind(context);
+      context.newPage = async (...args: Parameters<typeof newPage>) => {
+        const page = await newPage(...args);
+        trackBoots(page);
+        return page;
+      };
+
       // Snapshot the client-side perf BEFORE the context closes. `on("close")`
       // fires *after* closing, when `page.evaluate` would throw — and the caller
       // owns this context's lifetime, so wrapping `close` is the only hook that
@@ -473,18 +490,31 @@ const test = base.extend<{
     await use(slowBrowserFirstNavigationTimeoutMs(testInfo, 10_000));
   },
 
-  // The test's own `page`, already signed in with a fresh unique seeded
-  // account and mounted at `/` — collapsing the old register preamble. Seeds
-  // the DEFAULT page's context (not
-  // a new one) so it stays instrumented by `_autoPerfSpan`, and still yields a
-  // mounted page because its consumers assume one (spec D8). For tests that
-  // discard the username; tests that need the username/credentials use
-  // `signInAsNewUser(...)` directly or the `user`/`verifiedUser` fixtures.
+  // Seeds a fresh unique account onto the DEFAULT page's context (not a new
+  // one, so it stays instrumented by `_autoPerfSpan`) and yields a ONE-SHOT
+  // boot function: the test names its own entry URL and gets the signed-in,
+  // mounted `page` back. The fixture itself navigates nowhere — a page boots
+  // once (#867), so a second call throws. Move within the app with
+  // `navigateInApp`, or declare a second document load with `allowSecondBoot`.
+  // For tests that discard the username; tests that need the
+  // username/credentials use `signInAsNewUser(...)` directly or the
+  // `user`/`verifiedUser` fixtures.
   registeredPage: async ({ page, firstNav }, use) => {
     const record = await seedUserViaTool(generateUsername(), TEST_PASSWORD);
     await applySeededSession(page.context(), record);
-    await goto(page, "/", { timeout: firstNav });
-    await use(page);
+    let bootedAt: string | undefined;
+    await use(async (entry: string): Promise<Page> => {
+      if (bootedAt !== undefined) {
+        throw new Error(
+          `registeredPage() called twice: already booted at ${bootedAt}. ` +
+            `A page boots once (#867); move within the app with navigateInApp, ` +
+            `or declare a second load with allowSecondBoot.`,
+        );
+      }
+      bootedAt = entry;
+      await goto(page, entry, { timeout: firstNav });
+      return page;
+    });
   },
   // A uniquely-named account, seeded out-of-band with no browser involvement
   // at all — no throwaway context, no page, no navigation. Lazy: only
@@ -559,6 +589,12 @@ const test = base.extend<{
       const lifecycleStartMs = _lifecycleStart;
       const perfSpanEntryMs = Date.now();
 
+      // Arm the one-boot-per-page budget (#867). This fixture is `auto`, and
+      // Playwright sets auto fixtures up before requested ones, so arming
+      // happens before `registeredPage` navigates — which is what lets the
+      // budget see a test's very first document load rather than only later ones.
+      trackBoots(page);
+
       // Capture attaches before the phase switch below, so any pre-test traffic
       // is measured rather than invisible (#794). Attribution is a separate
       // concern and still waits — fusing the two is what once left the (since
@@ -580,10 +616,16 @@ const test = base.extend<{
       const { requests, navigations } = capture.sinkFor("test");
 
       setCurrentActionTestKey(testKey);
+      let budgetFailures: string[] = [];
       try {
         await use();
       } finally {
         setCurrentActionTestKey(null);
+        // Collect-and-clear unconditionally, so a test that failed cannot leak
+        // its budget state into the next test in this worker. Whether to FAIL on
+        // it is decided at the very end of this fixture, which a failing test
+        // never reaches — a budget failure must never mask the real error.
+        budgetFailures = takeBudgetFailures();
       }
 
       const endMs = Date.now();
@@ -944,6 +986,24 @@ const test = base.extend<{
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.warn(`[e2e-otel] test export failed: ${message}`);
+      }
+
+      // Last, so the trace above is exported either way. Only reached when the
+      // test body passed, so this can never mask a real failure.
+      if (budgetFailures.length > 0) {
+        throw new Error(
+          `the per-page document-load budget failed (#867):\n` +
+            budgetFailures.map((line) => `  - ${line}`).join("\n") +
+            `\nAn undeclared second load either belongs in the app (move within ` +
+            `it with navigateInApp) or is deliberate, and then it is declared ` +
+            `with allowSecondBoot(page, "<reason>") — or, if whether the load ` +
+            `happens at all depends on the browser engine, with ` +
+            `allowEngineDependentBoot(page, "<reason>"). An allowance that nothing ` +
+            `consumed does not expire: it waits and silently absorbs the next ` +
+            `extra document load, disarming the budget. Either the load it ` +
+            `authorised no longer happens — delete the declaration — or it moved, ` +
+            `and the declaration should move with it.`,
+        );
       }
     },
     { auto: true },

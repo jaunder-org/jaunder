@@ -138,6 +138,7 @@ convention). See the Status column below for each ADR's current status.
 | [0108](adr/0108-absence-is-named-at-its-source.md)                 | Absence is named where it can occur                                                                          | accepted   |
 | [0109](adr/0109-cross-language-literal-agreement.md)               | Cross-language literal agreement is enforced by a declared pair table                                        | accepted   |
 | [0110](adr/0110-gate-population-membership-is-structural.md)       | A gate's population membership is structural, and must fail closed                                           | accepted   |
+| [0111](adr/0111-e2e-one-boot-per-page.md)                          | The e2e suite boots each page once                                                                           | accepted   |
 
 <!-- adr-table:end -->
 
