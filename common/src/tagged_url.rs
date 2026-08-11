@@ -13,11 +13,20 @@
 //! `From<Self> for String`, `PartialEq<str>`, ordering, the validating serde + sqlx
 //! bridges) is generated once by `#[derive(StrNewtype)]` and inherited by every role.
 //!
-//! **The alias rule:** every use site outside this module spells the alias (`HubUrl`),
-//! never `TaggedUrl<Hub>` inline. Two gates reduce a type to a bare ident — the
-//! `site_config_keys!` macro's `$ty:ident` slot and `server_fn_tracing_check` — and a
-//! generic spelling matches neither. The only exception is a turbofish mint
-//! (`compose::<Permalink>(…)`), which spells the tag.
+//! **The alias rule:** every use site outside this module that names a *concrete* role
+//! spells the alias (`HubUrl`), never `TaggedUrl<Hub>` inline. Two gates reduce a type
+//! to a bare ident — the `site_config_keys!` macro's `$ty:ident` slot and
+//! `server_fn_tracing_check` — and a generic spelling matches neither.
+//!
+//! Two things are outside the rule rather than exceptions to it, because neither names
+//! a concrete role:
+//!
+//! - **A turbofish mint** (`compose::<Permalink>(…)`) spells the *tag*, for the case
+//!   where the value is consumed inline and there is no binding to ascribe.
+//! - **A signature generic over `UrlRole`** spells `TaggedUrl<T>` because it serves
+//!   every role at once — `atompub::entry::rel_link` renders four, and
+//!   `test_support::parse_url` mints any. Writing an alias there would be wrong, not
+//!   merely unidiomatic.
 
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;

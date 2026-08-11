@@ -220,8 +220,20 @@ disproportionate at four sites.
 
 ## The alias rule
 
-**Every use site spells the alias (`HubUrl`), never `TaggedUrl<Hub>` inline.**
-The tag name appears only in the type's own module and in turbofish exceptions.
+**Every use site that names a concrete role spells the alias (`HubUrl`), never
+`TaggedUrl<Hub>` inline.**
+
+Two forms sit outside the rule rather than breaking it, because neither names a
+concrete role. **Corrected during review:** the first draft of this rule said
+"every use site" flatly, which the implementation contradicts in two places —
+the code is right and the rule was wrong.
+
+- A **turbofish mint** (`compose::<Permalink>(…)`) spells the tag, for a value
+  consumed inline with no binding to ascribe.
+- A **signature generic over `UrlRole`** spells `TaggedUrl<T>` because it serves
+  every role at once: `common/src/atompub/entry.rs`'s `rel_link` renders four
+  roles through one function, and `test_support::parse_url` mints any. An alias
+  in either position would be wrong, not merely unidiomatic.
 
 This is a hard convention, not a style preference. Two gates depend on it:
 
@@ -303,11 +315,15 @@ scheme, so a future reader does not apply §1's per-type cost model to a role.
 Each is observable — a reviewer can check it by reading a diff or running a
 command.
 
-1. No identifier `AbsoluteUrl` remains anywhere in the tree.
-   `rg '\bAbsoluteUrl\b'` returns matches only under `docs/adr/` (historical ADR
-   text that records what was decided at the time). Comments in
+1. No `AbsoluteUrl` **identifier** remains in any source file.
+   `rg -l '\bAbsoluteUrl\b' | rg -v '^docs/'` returns nothing. Comments in
    `end2end/tests/admin-site.spec.ts:36,43` and
-   `common/src/root_relative_url.rs:1` are updated, not carved out.
+   `common/src/root_relative_url.rs:1` are updated, not carved out. **Corrected
+   during review:** this first read "matches only under `docs/adr/`", which was
+   false — the name also survives in `docs/archive/*` (five superseded specs and
+   plans) and in this issue's own spec and plan. Those are historical records of
+   what was decided at the time and must not be rewritten; the property that
+   matters is that no live code names the type.
 2. `common/src/absolute_url.rs` is renamed to `common/src/tagged_url.rs`;
    `InvalidAbsoluteUrl` is renamed to `InvalidUrl`.
 3. `TaggedUrl<T: UrlRole>` exists with a `UrlRole` marker trait, and all fifteen
@@ -327,8 +343,11 @@ command.
    on inference.
 9. `retag` exists, has exactly four call sites, and each carries a comment
    stating the domain identity it asserts.
-10. No use site outside `common/src/tagged_url.rs` spells `TaggedUrl<` inline,
-    except turbofish mints.
+10. No use site outside `common/src/tagged_url.rs` spells a **concrete**
+    `TaggedUrl<Role>` inline. Turbofish mints spell the tag, and signatures
+    generic over `UrlRole` spell `TaggedUrl<T>`; both are outside the rule, per
+    _The alias rule_ above. In this change those signatures are exactly two:
+    `common/src/atompub/entry.rs`'s `rel_link` and `test_support::parse_url`.
 11. `sqlx_newtype_decode_check` resolves type aliases across crates: a storage
     decode into `Option<HubUrl>` passes the gate, and a decode into an
     unapproved type still fails it (a negative test covers the second half).
