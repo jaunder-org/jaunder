@@ -74,7 +74,7 @@ artifact** (issues live in GitHub only, `docs/agents/issue-tracker.md`), so if
 GitHub is unavailable, proceed to Task 2 and file it before ship rather than
 blocking.
 
-- [ ] **Step 1: File it via `jaunder-issues`**
+- [x] **Step 1: File it via `jaunder-issues`**
 
 Type `Task`, label `type-safety`. Title along the lines of "storage: make the
 post-tag write's transaction unforgeable rather than conventional".
@@ -97,7 +97,7 @@ Body must carry, from the spec's "Transaction enforcement" section:
 Cross-reference #874 (prerequisite), #363 (extends the property to the server-fn
 boundary), #876 (this cycle).
 
-- [ ] **Step 2: Wire the dependency and project**
+- [x] **Step 2: Wire the dependency and project**
 
 ```bash
 gh api repos/jaunder-org/jaunder/issues/874 --jq .id
@@ -113,7 +113,7 @@ gh project item-add 1 --owner jaunder-org --url <new-issue-url>
 Read the issue back (`issue_read`) — GitHub strips angle-bracket markup, and
 this body names generic types.
 
-- [ ] **Step 3: No commit** — nothing changed in the tree.
+- [x] **Step 3: No commit** — nothing changed in the tree.
 
 ---
 
@@ -127,7 +127,7 @@ unit test `post_tag_diff_adds_removes_keeps` at `:3098-3113`.
 
 ---
 
-- [ ] **Step 1: Sort in `post_tag_diff`**
+- [x] **Step 1: Sort in `post_tag_diff`**
 
 The binding is currently immutable and untyped
 (`let to_add = desired.iter()…collect()`, its type inferred from the struct
@@ -157,7 +157,7 @@ borrow problem.
 Sorting here rather than in each dialect gives both backends the property from
 one place, and the pure function already has a unit test.
 
-- [ ] **Step 2: Rebuild the diff unit test's fixture**
+- [x] **Step 2: Rebuild the diff unit test's fixture**
 
 `post_tag_diff_adds_removes_keeps` (`:3098-3113`) currently yields a
 **single-element** `to_add`, so it cannot observe ordering — this is a fixture
@@ -166,7 +166,7 @@ plus a duplicate-slug pair, and assert both properties: `to_add` comes back
 slug-ordered, and the two labels sharing a slug keep their **input** order
 (first-casing-wins).
 
-- [ ] **Step 3: Run and gate**
+- [x] **Step 3: Run and gate**
 
 ```bash
 devtool run -- devtool pg run -- cargo nextest run -p storage post_tag_diff set_post_tags
@@ -180,7 +180,7 @@ devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-876-tag-upse
 
 Expected: exit 0.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add storage/src/posts.rs
@@ -210,7 +210,7 @@ four call sites move, so Steps 1-4 land together.
 
 ---
 
-- [ ] **Step 1: Add the two consts, replacing `SELECT_TAG_ID_BY_SLUG`**
+- [x] **Step 1: Add the two consts, replacing `SELECT_TAG_ID_BY_SLUG`**
 
 In `storage/src/posts.rs`, replace `:293-296` (the const and its doc) with:
 
@@ -249,7 +249,7 @@ pub(crate) const INSERT_POST_TAG: &str = "INSERT INTO post_tags
      ON CONFLICT (post_id, tag_id) DO NOTHING";
 ```
 
-- [ ] **Step 2: Convert the SQLite loop body** (`sqlite/posts.rs:183-207`)
+- [x] **Step 2: Convert the SQLite loop body** (`sqlite/posts.rs:183-207`)
 
 ```rust
             for label in diff.to_add {
@@ -272,12 +272,12 @@ on both paths. Update the `use crate::posts::{…}` list (add both consts, drop
 `SELECT_TAG_ID_BY_SLUG`) and delete `use crate::error::RequireRow;` at `:5` — it
 has no other use in this file.
 
-- [ ] **Step 3: Convert the Postgres loop body** (`postgres/posts.rs:170-195`)
+- [x] **Step 3: Convert the Postgres loop body** (`postgres/posts.rs:170-195`)
 
 Identical shape with `&mut *tx`. Same import edits, and delete
 `use crate::error::RequireRow;` at `:5`.
 
-- [ ] **Step 4: Convert both `add_tag` arms**
+- [x] **Step 4: Convert both `add_tag` arms**
 
 `storage/src/test_support.rs:240-256` (SQLite) and `:259-275` (Postgres) — note
 both ranges run to the end of the `post_tags` insert; editing only the first
@@ -285,7 +285,7 @@ half leaves a stray statement. Both arms become the same two statements,
 differing only in the executor (`&mut **conn` vs `&mut **tx`). Drop the
 `SELECT_TAG_ID_BY_SLUG` import; add the two consts.
 
-- [ ] **Step 5: Confirm the sequence is spelled once**
+- [x] **Step 5: Confirm the sequence is spelled once**
 
 ```bash
 rg -n 'SELECT_TAG_ID_BY_SLUG' storage/
@@ -307,7 +307,7 @@ Expected: exactly one hit, the const. (**Not** `rg 'INSERT INTO tags'` — that
 also matches the seed loop at `storage/src/postgres/mod.rs:344`, an unrelated
 test, so it would fail on a correct implementation.)
 
-- [ ] **Step 6: Run the tag suites**
+- [x] **Step 6: Run the tag suites**
 
 ```bash
 devtool run -- devtool pg run -- cargo nextest run -p storage set_post_tags
@@ -318,7 +318,7 @@ Expected: **PASS**, both backends, all nine tests named in spec AC6 — includin
 AC3 (the transactions still serialize) now that code inside both transactions
 has changed.
 
-- [ ] **Step 7: Gate and commit**
+- [x] **Step 7: Gate and commit**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-876-tag-upsert-sql -- cargo xtask check
@@ -341,7 +341,7 @@ Separately committable — Task 3's build is green without this.
 
 ---
 
-- [ ] **Step 1: Remove `TaggingError::MissingRow`**
+- [x] **Step 1: Remove `TaggingError::MissingRow`**
 
 Delete the variant and its `#[from]` (`:375-386`). Its doc describes the
 read-back that no longer exists, and nothing constructs one after Task 3.
@@ -353,7 +353,7 @@ only a blanket `From<TaggingError>` and `TaggingError::PostNotFound`.
 `storage/src/subscriptions.rs:263` still uses them and `lib.rs:55` re-exports
 them.
 
-- [ ] **Step 2: Fix the stale docs**
+- [x] **Step 2: Fix the stale docs**
 
 - `storage/src/posts.rs:866-873` and `:912-915` — say the upsert diverges
   `INSERT OR IGNORE` vs `ON CONFLICT DO NOTHING`. It no longer diverges at all;
@@ -370,7 +370,7 @@ them.
   the capability the test actually pins (a `StrNewtype` slice binds as `TEXT[]`
   without a strip).
 
-- [ ] **Step 3: Gate and commit**
+- [x] **Step 3: Gate and commit**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-876-tag-upsert-sql -- cargo xtask check
@@ -389,7 +389,7 @@ git commit -m "docs(storage): drop the read-back error and its stale narration (
 
 ---
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 Nothing currently names the conflict path. `…absorbs_duplicate_slugs` exercises
 it incidentally (a `DO NOTHING` regression surfaces there as an opaque
@@ -425,7 +425,7 @@ it incidentally (a `DO NOTHING` regression surfaces there as an opaque
     }
 ```
 
-- [ ] **Step 2: Run it, and confirm it is not vacuous**
+- [x] **Step 2: Run it, and confirm it is not vacuous**
 
 ```bash
 devtool run -- devtool pg run -- cargo nextest run -p storage set_post_tags_reuses_an_existing_tag
@@ -438,7 +438,7 @@ Then temporarily change `UPSERT_TAG_RETURNING_ID`'s
 expected **FAIL** on the second `set_post_tags` with a `RowNotFound`-shaped
 error. Revert.
 
-- [ ] **Step 3: Gate and commit**
+- [x] **Step 3: Gate and commit**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-876-tag-upsert-sql -- cargo xtask check
@@ -449,7 +449,7 @@ git add storage/src/posts.rs
 git commit -m "test(storage): pin that the tag upsert returns an id on its conflict path (#883)"
 ```
 
-- [ ] **Step 4: Full local gate (AC10)**
+- [x] **Step 4: Full local gate (AC10)**
 
 ```bash
 devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-876-tag-upsert-sql -- cargo xtask validate --no-e2e
@@ -462,7 +462,7 @@ established that a killed run leaves contending processes and the retry
 succeeds. Do not invent an explanation for a failure that has not been
 diagnosed.
 
-- [ ] **Step 5: Note for ship (AC9)**
+- [x] **Step 5: Note for ship (AC9)**
 
 The PR body must say **`Closes #876`** and **`Closes #883`**. #883's acceptance
 ("resolves a tag id in one statement per dialect, backend parity preserved,
