@@ -121,10 +121,18 @@ _qualifier_ (`use RenderedHtml as ContentType`) handed out the exemption.
 
 It is deleted. A pattern exemption is only ever a bulk discount on writing
 entries, and markers make an entry nearly free, so the discount buys nothing and
-costs a fail-open. The affected sites take ordinary markers like anything else —
-which is also what turns that door's doc-comment instruction ("grep
-`ContentType::from_trusted` to enumerate every mint site") from a request to a
-human into something the gate enforces.
+costs a fail-open. The affected sites took ordinary markers like anything else.
+
+**Amended by [#790](https://github.com/jaunder-org/jaunder/issues/790).**
+Deleting the exemption was right; concluding that the qualifier must therefore
+go _unread_ was not. Reading it decides **membership**, which is structural,
+rather than granting an exemption — see
+[ADR-0110](0110-gate-population-membership-is-structural.md). So the gate now
+resolves the qualifier and those four markers are gone. Note the consequence for
+the sentence this section used to end on: with `ContentType`'s door out of the
+population, the "grep `ContentType::from_trusted` to enumerate every mint site"
+instruction in its doc comment is once again a convention backed by tests, not
+something the gate enforces — and that doc comment now says so.
 
 ### Inferred exemptions are tripwired; written exemptions are keyed
 
@@ -226,12 +234,15 @@ blocked.
 
 **What it creates.** Twelve in-source markers — seven replacing the three
 allowlists' entries, and five more where the deleted qualifier-pattern exemption
-used to cover `ContentType::from_trusted` sites for free. `ident_gate` loses
-`Allowed`, `unjustified`, the multiplicity reconciliation, and
-`Mention::top_level` — the last of which existed only so a nested fn could not
-borrow a fn-name-keyed entry, a problem markers do not have. Deleting the
-qualifier pattern also collapses the custom `Population` impl, so all three
-gates become the same shape.
+used to cover `ContentType::from_trusted` sites for free. (Four of those five
+are gone again since [#790](https://github.com/jaunder-org/jaunder/issues/790),
+which recovered that coverage by _resolving_ the qualifier rather than by
+pattern; the fifth is `RenderedHtml`'s own definition, which is genuinely this
+gate's door and keeps its marker.) `ident_gate` loses `Allowed`, `unjustified`,
+the multiplicity reconciliation, and `Mention::top_level` — the last of which
+existed only so a nested fn could not borrow a fn-name-keyed entry, a problem
+markers do not have. Deleting the qualifier pattern also collapses the custom
+`Population` impl, so all three gates become the same shape.
 
 It collapses a duplication that was live: every sink's justification was written
 twice, once in prose beside the code and once condensed in the gate's allowlist,

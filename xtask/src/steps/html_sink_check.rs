@@ -86,6 +86,10 @@ const GATE: Gate = Gate {
     step: "html-sink",
     roots: POLICED_ROOTS,
     population: SINKS,
+    // `inner_html` is a Leptos macro attribute and `set_inner_html` a `web_sys` method
+    // reached through `.` on a runtime receiver: neither carries a path qualifier to
+    // resolve (#790).
+    owner: None,
     report: Report {
         subject: "an unescaped-HTML sink",
         verdict: "is not marked — whatever string reaches it is parsed as markup (XSS) (#333)",

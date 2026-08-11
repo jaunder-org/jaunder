@@ -26,11 +26,37 @@
 //! defended on exactly that "say what you do not look at" ground. The argument is
 //! sound and is why the property is stated here rather than dropped; what did not
 //! survive was paying a type parameter across four files for a trait with one
-//! implementor and no variation.) A future gate whose membership genuinely depends on
-//! positional context — `TrustedDoor`, removed in #778, read the path qualifier three
-//! tokens to the left — re-introduces a seam in `walk_macro_tokens`, which already
-//! materialises the flat sibling stream (the index is one `.enumerate()` away); it
-//! does not resurrect the trait blind.
+//! implementor and no variation.)
+//!
+//! **Where the ident is not the whole question, the qualifier decides** (#790). A gate
+//! whose population is an associated fn name another type may legitimately share sets
+//! [`Gate::owner`]; the walker then resolves each site's qualifier and **suppresses**
+//! the ones that belong to some other type. Two properties make that safe rather than
+//! a hole:
+//!
+//! - **[`visit_ident`] stays the sole recorder.** Resolution only ever suppresses. A
+//!   `fn` ident is not a [`syn::Path`], nor is a method-call ident or a macro token, so
+//!   recording from a path hook would silently drop every definition site — including
+//!   the guarded door's own. It also means a site cannot be counted twice, and that
+//!   `owner: None` is byte-identical to the pre-#790 scan by construction: the
+//!   suppression set is simply empty.
+//! - **Unresolvable means in-population.** A qualifier the gate cannot pin — glob
+//!   import, generic parameter, unqualified call, macro body — stays policed. Obscuring
+//!   a qualifier buys a gate failure, not an exemption.
+//!
+//! Deciding membership this way is **structural**: it identifies the door rather than
+//! exempting a site from it, so ADR-0085 principle 3 is not in play. #778 conflated the
+//! two and deleted a qualifier check as a pattern exemption, which left the codebase
+//! carrying markers on a provably harmless population. See
+//! `docs/adr/0110-gate-population-membership-is-structural.md`.
+//!
+//! Macro bodies are deliberately **not** resolved — [`walk_macro_tokens`] sees a flat
+//! token stream, and under the rule above not resolving is fail-closed. The old
+//! `TrustedDoor` (removed in #778) read the path qualifier three tokens to the left; that
+//! seam is still available, since `walk_macro_tokens` already materialises the flat
+//! sibling stream (the index is one `.enumerate()` away).
+//!
+//! [`visit_ident`]: syn::visit::Visit::visit_ident
 //!
 //! **Exemptions are markers, not a list** (#778). A site is exempt when the line
 //! *immediately above* it carries `// <gate-step>:allow <reason>`. The key is one
@@ -46,8 +72,18 @@
 //! **Unreadable classes inherent to this scan** (ADR-0085's honesty obligation;
 //! each gate states the ones specific to *its* idents on top of these):
 //!
-//! 1. A `use … as` rename, or a re-export under another name, evades ident matching
-//!    — `syn` has no name resolution.
+//! 1. **Only for an owner-configured gate** (see [`Gate::owner`]), three ways a
+//!    qualifier can mislead resolution, all fail-**open** (#790):
+//!    a rename of a rename — [`owner_aliases`] harvests a single
+//!    `use …Owner as X`, so a rename *of that rename* in a third module evades;
+//!    a renaming re-export living **outside** the gate's roots, which is never
+//!    harvested at all, so a use site inside them resolves to the alias's own name
+//!    and is suppressed; and a free `fn` nested inside another type's `impl` method
+//!    body, which the enclosing-`impl` lookup attributes to that type. None has a
+//!    live instance; the first two are why a gate's roots must cover every tree it
+//!    claims to police. For a gate with no owner there is nothing to resolve, and a
+//!    `use … as` rename simply evades ident matching outright — `syn` has no name
+//!    resolution, and before #790 that was this class's whole content.
 //! 2. Tokens inside an *attribute* macro's argument list are not walked; only
 //!    [`syn::Macro`] invocations are. Macro **expansions** are never seen either,
 //!    which is deliberate: only author-written tokens are in the population.
@@ -67,11 +103,13 @@
 //!    `test` and not `not`. So `#[cfg(feature = "test-utils")]` reads as test code
 //!    and its members are dropped from the population entirely — no marker owed,
 //!    no census row. Nothing under the policed roots currently matches *and*
-//!    encloses a gate ident, so there is no live hole; it is recorded because it
-//!    is structurally the pattern-decided exemption #778 removed on the qualifier
-//!    side (ADR-0085 principle 3), and because the marker work made it
-//!    load-bearing in a second place (`test_ranges`, which suppresses orphan
-//!    reports). Parsing the predicate would close it.
+//!    encloses a gate ident, so there is no live hole; it is recorded because a
+//!    **pattern** on an attribute's text is deciding an exemption, which is what
+//!    ADR-0085 principle 3 forbids — and unlike deciding *membership* from a
+//!    resolved qualifier (#790, which is structural), this really is an exemption
+//!    granted by pattern. The marker work also made it load-bearing in a second
+//!    place (`test_ranges`, which suppresses orphan reports). Parsing the predicate
+//!    would close it.
 //!
 //! A `syn` parse failure is a **hard error** everywhere (ADR-0085 principle 6): a
 //! file we cannot walk could hide a member, and a gate that quietly shrinks its own
@@ -82,6 +120,7 @@
 //! [`html-sink`]: crate::steps::html_sink_check
 //! [`rendered-html-from-trusted`]: crate::steps::rendered_html_from_trusted_check
 
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -160,13 +199,217 @@ pub struct Mention {
     pub function: String,
 }
 
+/// Every ident that can denote `owner` anywhere in the scanned tree.
+///
+/// A renaming re-export in one module (`pub use crate::render::RenderedHtml as Doc;`)
+/// makes `Doc::from_trusted` in *another* module a site on the owner's door, so a gate
+/// that resolved qualifiers per-file alone would miss it (#790).
+///
+/// Deliberately **over-approximates**: an ident lands here on a name match alone, so a
+/// `type ContentType = RenderedHtml;` anywhere in policed code would pull genuine
+/// `ContentType` sites into the population. That is the fail-closed direction — an
+/// over-large owner set costs a marker, an under-large one loses an XSS door.
+///
+/// The harvest is only as wide as the caller's roots: a rename living outside them is
+/// invisible, which is why a gate's roots must cover every tree it claims to police.
+///
+/// A `syn` parse failure is skipped rather than fatal. This is a widening pass, and
+/// [`scan`] already hard-errors on an unparseable file, so a second error path here would
+/// only duplicate that one.
+pub fn owner_aliases(sources: &[(String, String)], owner: &str) -> BTreeSet<String> {
+    let mut set = BTreeSet::new();
+    set.insert(owner.to_string());
+    for (_, source) in sources {
+        let Ok(file) = syn::parse_file(source) else {
+            continue;
+        };
+        collect_owner_aliases_in(&file.items, owner, &mut set);
+    }
+    set
+}
+
+/// Harvest owner aliases from a list of items, **recursing into inline modules**.
+///
+/// Recursing is not tidiness, it closes a fail-open. Miss a
+/// `mod inner { pub use …Owner as Doc; }` here and `Doc` never enters the owner set —
+/// while the file that then writes `use crate::a::inner::Doc;` *does* bind `Doc`, so
+/// [`Resolver::membership`] reads `Doc::from_trusted` as another type and suppresses a
+/// real door. Widening this pass can only move sites into the population, so recursing is
+/// the safe direction; recursing [`Resolver::for_file`] without this would be the unsafe
+/// one.
+fn collect_owner_aliases_in(items: &[syn::Item], owner: &str, set: &mut BTreeSet<String>) {
+    for item in items {
+        match item {
+            syn::Item::Use(u) => collect_owner_renames(&u.tree, owner, set),
+            syn::Item::Type(t) if type_name(&t.ty).is_some_and(|id| id == owner) => {
+                set.insert(t.ident.to_string());
+            }
+            syn::Item::Mod(m) => {
+                if let Some((_, inner)) = &m.content {
+                    collect_owner_aliases_in(inner, owner, set);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Whose door a policed site belongs to.
+///
+/// Named for the question it answers rather than for [`Gate::owner`], which is a type
+/// *name* — this is a verdict about one site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Membership {
+    /// The qualifier denotes the gate's owner type — the real door.
+    Door,
+    /// The qualifier denotes some other, named type. Not this door; no marker owed.
+    OtherType,
+    /// The qualifier could not be determined, so the site stays in the population.
+    ///
+    /// This is what keeps resolution from failing open: obscuring a qualifier buys a
+    /// gate failure, not an exemption (#790).
+    Unknown,
+}
+
+/// One file's answer to "what type does this bare ident denote?".
+///
+/// Only the two things a syntactic pass can know: what the file imports, and what it
+/// defines. Everything else is [`Membership::Unknown`].
+pub struct Resolver {
+    /// Idents bound by a non-glob `use`, mapped to the final segment of their path.
+    imported: BTreeSet<String>,
+    /// Type names defined in this file — `struct`, `enum`, `union`, `type`.
+    defined: BTreeSet<String>,
+}
+
+impl Resolver {
+    /// Collect one file's `use` bindings and type definitions.
+    pub fn for_file(file: &syn::File) -> Self {
+        let mut imported = BTreeSet::new();
+        let mut defined = BTreeSet::new();
+        for item in &file.items {
+            match item {
+                syn::Item::Use(u) => collect_bound_names(&u.tree, &mut imported),
+                syn::Item::Struct(s) => {
+                    defined.insert(s.ident.to_string());
+                }
+                syn::Item::Enum(e) => {
+                    defined.insert(e.ident.to_string());
+                }
+                syn::Item::Union(u) => {
+                    defined.insert(u.ident.to_string());
+                }
+                syn::Item::Type(t) => {
+                    defined.insert(t.ident.to_string());
+                }
+                _ => {}
+            }
+        }
+        Self { imported, defined }
+    }
+
+    /// Classify a path whose leaf is a policed ident.
+    ///
+    /// `impl_self` is the enclosing `impl`'s self-type name, so `Self::` resolves.
+    ///
+    /// The owner set is consulted **first**, so a renamed owner is recognised before any
+    /// other reading of the same ident. Getting that order wrong is what would let a
+    /// cross-file rename (`use …Owner as Doc;` elsewhere, `use crate::a::Doc;` here)
+    /// resolve as another type and be suppressed.
+    pub fn membership(
+        &self,
+        path: &syn::Path,
+        owners: &BTreeSet<String>,
+        impl_self: Option<&str>,
+    ) -> Membership {
+        let segments: Vec<&syn::Ident> = path.segments.iter().map(|s| &s.ident).collect();
+        // The leaf is the policed ident; the segment before it names the type.
+        let Some(qualifier) = segments.len().checked_sub(2).map(|i| segments[i]) else {
+            // A single-segment path is an unqualified call — nothing to resolve.
+            return Membership::Unknown;
+        };
+        let name = qualifier.to_string();
+        if owners.contains(&name) {
+            return Membership::Door;
+        }
+        if name == "Self" {
+            return match impl_self {
+                Some(ty) if owners.contains(ty) => Membership::Door,
+                Some(_) => Membership::OtherType,
+                None => Membership::Unknown,
+            };
+        }
+        // A multi-segment path spells the type out, so it resolves by construction.
+        if segments.len() > 2 || self.imported.contains(&name) || self.defined.contains(&name) {
+            return Membership::OtherType;
+        }
+        Membership::Unknown
+    }
+}
+
+/// Every ident a non-glob `use` tree brings into scope, by the name it is bound to.
+fn collect_bound_names(tree: &syn::UseTree, out: &mut BTreeSet<String>) {
+    match tree {
+        syn::UseTree::Path(p) => collect_bound_names(&p.tree, out),
+        syn::UseTree::Group(g) => {
+            for t in &g.items {
+                collect_bound_names(t, out);
+            }
+        }
+        syn::UseTree::Name(n) => {
+            out.insert(n.ident.to_string());
+        }
+        syn::UseTree::Rename(r) => {
+            out.insert(r.rename.to_string());
+        }
+        syn::UseTree::Glob(_) => {}
+    }
+}
+
+/// Walk a `use` tree, recording the new name of any `… as X` that renames `owner`.
+fn collect_owner_renames(tree: &syn::UseTree, owner: &str, set: &mut BTreeSet<String>) {
+    match tree {
+        syn::UseTree::Path(p) => collect_owner_renames(&p.tree, owner, set),
+        syn::UseTree::Group(g) => {
+            for t in &g.items {
+                collect_owner_renames(t, owner, set);
+            }
+        }
+        syn::UseTree::Rename(r) if r.ident == owner => {
+            set.insert(r.rename.to_string());
+        }
+        syn::UseTree::Rename(_) | syn::UseTree::Name(_) | syn::UseTree::Glob(_) => {}
+    }
+}
+
+/// The final path segment of a type, when it is a plain path — the type's own name.
+fn type_name(ty: &syn::Type) -> Option<&syn::Ident> {
+    match ty {
+        syn::Type::Path(p) => p.path.segments.last().map(|s| &s.ident),
+        _ => None,
+    }
+}
+
 /// Every **non-test** mention of `population` in the source, in line order, plus
 /// the line ranges of the test code that was skipped. `Err` on a `syn` parse
 /// failure (fail-loud). Pure given the source, so gates unit-test through it.
-pub fn scan(source: &str, population: &[&str]) -> Result<Scan, String> {
+/// `owner` opts into qualifier resolution (#790): the owner type's name paired with the
+/// idents that can denote it. They travel as one argument because they are meaningless
+/// apart — the set always contains the owner, and it is only consulted when an owner is
+/// given. `None` polices the bare ident wherever it appears, which is the pre-#790
+/// behaviour and what the two sibling gates keep.
+pub fn scan(
+    source: &str,
+    population: &[&str],
+    owner: Option<(&str, &BTreeSet<String>)>,
+) -> Result<Scan, String> {
     let file = syn::parse_file(source).map_err(|e| format!("cannot parse as Rust: {e}"))?;
     let mut scanner = Scanner {
         population,
+        owner,
+        resolver: Resolver::for_file(&file),
+        impl_stack: Vec::new(),
+        suppressed: std::collections::HashSet::new(),
         test_depth: 0,
         fn_stack: Vec::new(),
         hits: Vec::new(),
@@ -241,6 +484,25 @@ pub fn classify(source: &str, found: &Scan, token: &str) -> Classified {
 
 struct Scanner<'p> {
     population: &'p [&'p str],
+    /// The gate's owner type and the idents that can denote it (#790). `None` leaves
+    /// every occurrence in the population, which is the pre-#790 behaviour and the one
+    /// the two sibling gates keep.
+    ///
+    /// One field carrying both, because they are meaningless apart: with no owner there
+    /// is no alias set to hold.
+    owner: Option<(&'p str, &'p BTreeSet<String>)>,
+    /// Per-file `use` bindings and type definitions, for resolving a bare qualifier.
+    resolver: Resolver,
+    /// Self-types of the enclosing `impl` blocks; `None` for a non-path self-type.
+    /// The last is the nearest, so `Self::` and definition sites read `last()`.
+    impl_stack: Vec<Option<String>>,
+    /// Spans of idents that resolution has determined belong to **another** type.
+    ///
+    /// Resolution suppresses; it never records. `visit_ident` stays the sole recorder,
+    /// which is what keeps definition sites (a `fn` ident is not a `syn::Path`),
+    /// method-call idents and macro tokens in the population, and what makes
+    /// `owner: None` byte-identical to the pre-#790 scan — the set is simply empty.
+    suppressed: std::collections::HashSet<(usize, usize)>,
     /// >0 while inside a `#[cfg(test)]`/`#[test]` item — members there are exempt.
     test_depth: usize,
     /// Names of the enclosing functions; the last is the nearest.
@@ -282,6 +544,41 @@ impl Scanner<'_> {
     /// Whether `id` is one of the names this gate polices.
     fn is_member(&self, id: &proc_macro2::Ident) -> bool {
         self.population.iter().any(|name| id == *name)
+    }
+
+    /// Mark an ident as belonging to another type, so `visit_ident` skips it.
+    ///
+    /// Must be called **before** delegating to `syn::visit::visit_*`: `syn` visits a
+    /// parent before its children, and that ordering is the whole reason one pass
+    /// suffices.
+    fn suppress(&mut self, id: &proc_macro2::Ident) {
+        let at = id.span().start();
+        self.suppressed.insert((at.line, at.column));
+    }
+
+    /// Whether resolution has ruled this occurrence out of the population.
+    fn is_suppressed(&self, id: &proc_macro2::Ident) -> bool {
+        let at = id.span().start();
+        self.suppressed.contains(&(at.line, at.column))
+    }
+
+    /// Classify a definition site: `fn from_trusted` belongs to whichever `impl`
+    /// encloses it.
+    ///
+    /// A definition in another type's `impl` is suppressed. The owner's own `impl`, and a
+    /// free fn with no enclosing `impl`, are both left in the population — the first
+    /// because it *is* the door, the second because there is nothing to rule out.
+    fn suppress_foreign_definition(&mut self, ident: &proc_macro2::Ident) {
+        let Some((_, owners)) = self.owner else {
+            return;
+        };
+        if !self.is_member(ident) {
+            return;
+        }
+        let enclosing = self.impl_stack.last().and_then(Option::as_deref);
+        if enclosing.is_some_and(|ty| !owners.contains(ty)) {
+            self.suppress(ident);
+        }
     }
 
     /// Note that `item` is test code, so a marker inside it is never an orphan.
@@ -342,7 +639,10 @@ impl<'ast> syn::visit::Visit<'ast> for Scanner<'_> {
             self.record_test_range(i);
         }
         self.test_depth += usize::from(test);
+        self.impl_stack
+            .push(type_name(&i.self_ty).map(ToString::to_string));
         syn::visit::visit_item_impl(self, i);
+        self.impl_stack.pop();
         self.test_depth -= usize::from(test);
     }
 
@@ -353,6 +653,7 @@ impl<'ast> syn::visit::Visit<'ast> for Scanner<'_> {
         }
         self.test_depth += usize::from(test);
         self.fn_stack.push(i.sig.ident.to_string());
+        self.suppress_foreign_definition(&i.sig.ident);
         syn::visit::visit_item_fn(self, i);
         self.fn_stack.pop();
         self.test_depth -= usize::from(test);
@@ -365,9 +666,29 @@ impl<'ast> syn::visit::Visit<'ast> for Scanner<'_> {
         }
         self.test_depth += usize::from(test);
         self.fn_stack.push(i.sig.ident.to_string());
+        self.suppress_foreign_definition(&i.sig.ident);
         syn::visit::visit_impl_item_fn(self, i);
         self.fn_stack.pop();
         self.test_depth -= usize::from(test);
+    }
+
+    /// Resolve a policed path's qualifier and suppress it when it names another type.
+    ///
+    /// This is the only place a qualifier is read. It **suppresses, never records** — see
+    /// [`Scanner::suppressed`] — and it does nothing at all when no owner is configured,
+    /// which is what keeps the sibling gates on the pre-#790 behaviour.
+    fn visit_path(&mut self, i: &'ast syn::Path) {
+        if let Some((_, owners)) = self.owner
+            && let Some(leaf) = i.segments.last().map(|s| &s.ident)
+            && self.is_member(leaf)
+        {
+            let enclosing = self.impl_stack.last().and_then(Option::as_deref);
+            if self.resolver.membership(i, owners, enclosing) == Membership::OtherType {
+                let leaf = leaf.clone();
+                self.suppress(&leaf);
+            }
+        }
+        syn::visit::visit_path(self, i);
     }
 
     /// A `use` declaration is the one construct outside every gate's population: it
@@ -380,7 +701,7 @@ impl<'ast> syn::visit::Visit<'ast> for Scanner<'_> {
     fn visit_item_use(&mut self, _i: &'ast syn::ItemUse) {}
 
     fn visit_ident(&mut self, i: &'ast proc_macro2::Ident) {
-        if self.is_member(i) {
+        if self.is_member(i) && !self.is_suppressed(i) {
             self.record(i.span().start().line);
         }
     }
@@ -429,6 +750,19 @@ pub struct Gate {
     /// builder call, a struct field and a bare reference are all inside the
     /// population rather than silently outside it (ADR-0085 principle 3).
     pub population: &'static [&'static str],
+    /// The type whose door this gate guards, when the population is an **associated fn
+    /// name** another type may legitimately share (#790).
+    ///
+    /// With `Some(ty)`, a site whose qualifier resolves to a type other than `ty` is not
+    /// this gate's door and owes no marker; a qualifier that cannot be resolved stays in
+    /// the population, so the narrowing never fails open. Deciding membership this way is
+    /// **structural** — it identifies the door rather than exempting a site from it, so
+    /// ADR-0085 principle 3 is not in play.
+    ///
+    /// `None` polices the bare ident wherever it appears. That is right for a population
+    /// that is a type (`PreEscaped`) or a method reached through `.` (`set_inner_html`),
+    /// where there is no qualifier to read.
+    pub owner: Option<&'static str>,
     pub report: Report,
 }
 
@@ -442,9 +776,15 @@ impl Gate {
     /// drift apart per gate. Orphan markers come back with an empty function name.
     #[cfg(test)]
     pub fn violations(&self, source: &str) -> Result<Vec<(usize, String)>, String> {
+        // Single-file owner set: a fixture is the whole tree as far as this helper is
+        // concerned, so a rename it declares is honored and one it does not is not.
+        let aliases = self
+            .owner
+            .map(|ty| owner_aliases(&[(String::new(), source.to_string())], ty));
+        let owner = self.owner.zip(aliases.as_ref());
         let c = classify(
             source,
-            &scan(source, self.population)?,
+            &scan(source, self.population, owner)?,
             &self.marker_token(),
         );
         let mut out: Vec<(usize, String)> = c
@@ -475,10 +815,14 @@ impl Gate {
     /// pass to keep it honest.
     pub fn problems(&self, scanned: &[(String, String)]) -> Option<String> {
         let token = self.marker_token();
+        // Harvested once, across every scanned file, before any classification: a
+        // renaming re-export in one module decides membership in another (#790, D2).
+        let aliases = self.owner.map(|ty| owner_aliases(scanned, ty));
+        let owner = self.owner.zip(aliases.as_ref());
         let mut lines = Vec::new();
         let mut census = Vec::new();
         for (path, source) in scanned {
-            match scan(source, self.population) {
+            match scan(source, self.population, owner) {
                 Err(msg) => lines.push(format!(
                     "{path}: {msg} — an unparsed file is invisible to this gate, which is exactly \
                      the blind spot it exists to close. Fix the file or the parser; do not skip it."
@@ -576,7 +920,7 @@ pub fn run_scan(
 
 #[cfg(test)]
 mod tests {
-    use super::scan;
+    use super::{owner_aliases, scan};
 
     /// The scan reports mentions in line order regardless of traversal order, which
     /// is what lets the marker rule be a statement about the source rather than
@@ -584,11 +928,395 @@ mod tests {
     #[test]
     fn mentions_come_back_in_line_order() {
         let src = "fn a() { GUARDED; }\nfn b() { let _ = m! { GUARDED }; }\nfn c() { GUARDED; }\n";
-        let found = scan(src, &["GUARDED"]).unwrap().mentions;
+        let found = scan(src, &["GUARDED"], None).unwrap().mentions;
         assert_eq!(
             found.iter().map(|m| m.line).collect::<Vec<_>>(),
             vec![1, 2, 3]
         );
+    }
+
+    fn src(text: &str) -> (String, String) {
+        ("a.rs".to_string(), text.to_string())
+    }
+
+    #[test]
+    fn the_owner_is_always_in_its_own_alias_set() {
+        let set = owner_aliases(&[], "Owner");
+        assert_eq!(
+            set.len(),
+            1,
+            "an empty tree yields the owner alone: {set:?}"
+        );
+        assert!(set.contains("Owner"));
+    }
+
+    #[test]
+    fn a_renaming_use_of_the_owner_contributes_its_new_name() {
+        let set = owner_aliases(&[src("use crate::render::Owner as Doc;\n")], "Owner");
+        assert!(set.contains("Doc"), "a renamed import can denote the owner");
+    }
+
+    #[test]
+    fn a_type_alias_to_the_owner_contributes_its_name() {
+        assert!(owner_aliases(&[src("type Html = Owner;\n")], "Owner").contains("Html"));
+    }
+
+    #[test]
+    fn a_nested_use_group_still_yields_the_rename() {
+        let set = owner_aliases(
+            &[src("use crate::render::{Sanitizer, Owner as Doc};\n")],
+            "Owner",
+        );
+        assert!(set.contains("Doc"));
+    }
+
+    #[test]
+    fn unrelated_renames_and_aliases_are_ignored() {
+        let set = owner_aliases(
+            &[src(
+                "use crate::media::ContentType as Ct;\ntype Bytes = Vec<u8>;\n",
+            )],
+            "Owner",
+        );
+        assert_eq!(set.len(), 1, "only the owner itself: {set:?}");
+    }
+
+    #[test]
+    fn a_plain_non_renaming_import_of_the_owner_adds_nothing() {
+        let set = owner_aliases(&[src("use crate::render::Owner;\n")], "Owner");
+        assert_eq!(set.len(), 1, "already the owner's own name: {set:?}");
+    }
+
+    #[test]
+    fn the_harvest_spans_files_and_is_order_independent() {
+        let a = (
+            "a.rs".to_string(),
+            "use crate::render::Owner as Doc;\n".to_string(),
+        );
+        let b = ("b.rs".to_string(), "type Html = Owner;\n".to_string());
+        let forward = owner_aliases(&[a.clone(), b.clone()], "Owner");
+        let backward = owner_aliases(&[b, a], "Owner");
+        assert_eq!(forward, backward);
+        assert!(forward.contains("Doc") && forward.contains("Html"));
+    }
+
+    #[test]
+    fn an_unparseable_file_is_skipped_rather_than_panicking() {
+        assert_eq!(owner_aliases(&[src("fn (((")], "Owner").len(), 1);
+    }
+
+    /// A rename inside an inline module must be harvested. Missing it is fail-**open**:
+    /// the importing file binds the alias, so the resolver would read the door as another
+    /// type and suppress it. Found by the whole-branch standards review on #790.
+    #[test]
+    fn a_rename_inside_an_inline_module_is_harvested() {
+        let set = owner_aliases(
+            &[src("mod inner { pub use crate::render::Owner as Doc; }\n")],
+            "Owner",
+        );
+        assert!(
+            set.contains("Doc"),
+            "nested renames must widen the set: {set:?}"
+        );
+    }
+
+    #[test]
+    fn a_type_alias_inside_an_inline_module_is_harvested() {
+        let set = owner_aliases(&[src("mod inner { pub type Html = Owner; }\n")], "Owner");
+        assert!(set.contains("Html"), "{set:?}");
+    }
+
+    #[test]
+    fn nesting_is_harvested_to_any_depth() {
+        let set = owner_aliases(
+            &[src(
+                "mod a { mod b { pub use crate::render::Owner as Deep; } }\n",
+            )],
+            "Owner",
+        );
+        assert!(set.contains("Deep"), "{set:?}");
+    }
+}
+
+/// Qualifier resolution (#790): the rule is "prove this is not the owner's door, or
+/// leave it in the population", so every branch that returns [`Membership::Unknown`]
+/// matters as much as the ones that resolve.
+#[cfg(test)]
+mod resolver_tests {
+    use std::collections::BTreeSet;
+
+    use super::{Membership, Resolver};
+
+    /// The first path in `file` whose **last** segment is `leaf`, in visit order.
+    ///
+    /// Returns a single-segment path for an unqualified call — "unqualified" is a verdict
+    /// the resolver produces, not an absence. `use` items are skipped, or a fixture's own
+    /// import would be found before its call site.
+    fn first_policed_path(file: &syn::File, leaf: &str) -> Option<syn::Path> {
+        struct Find<'a> {
+            leaf: &'a str,
+            found: Option<syn::Path>,
+        }
+        impl<'ast> syn::visit::Visit<'ast> for Find<'_> {
+            fn visit_item_use(&mut self, _: &'ast syn::ItemUse) {}
+            fn visit_path(&mut self, p: &'ast syn::Path) {
+                if self.found.is_none() && p.segments.last().is_some_and(|s| s.ident == self.leaf) {
+                    self.found = Some(p.clone());
+                }
+                syn::visit::visit_path(self, p);
+            }
+        }
+        let mut find = Find { leaf, found: None };
+        syn::visit::visit_file(&mut find, file);
+        find.found
+    }
+
+    fn resolve(src: &str, owners: &[&str], impl_self: Option<&str>) -> Membership {
+        let file: syn::File = syn::parse_str(src).expect("fixture parses");
+        let set: BTreeSet<String> = owners.iter().map(|s| (*s).to_string()).collect();
+        let path = first_policed_path(&file, "from_trusted").expect("fixture has a site");
+        Resolver::for_file(&file).membership(&path, &set, impl_self)
+    }
+
+    #[test]
+    fn a_bare_owner_qualifier_is_the_door() {
+        let src = "fn f() { Owner::from_trusted(x); }\n";
+        assert_eq!(resolve(src, &["Owner"], None), Membership::Door);
+    }
+
+    #[test]
+    fn a_renamed_owner_qualifier_is_the_door() {
+        // The #778 hole, closed by resolution rather than by over-approximation.
+        let src = "use crate::render::Owner as Doc;\nfn f() { Doc::from_trusted(x); }\n";
+        assert_eq!(resolve(src, &["Owner", "Doc"], None), Membership::Door);
+    }
+
+    #[test]
+    fn a_fully_qualified_owner_path_is_still_the_door() {
+        // Fails OPEN if ">2 segments" is read as "not the door".
+        let src = "fn f() { crate::render::Owner::from_trusted(x); }\n";
+        assert_eq!(resolve(src, &["Owner"], None), Membership::Door);
+    }
+
+    #[test]
+    fn a_multi_segment_path_names_its_type_and_needs_no_import() {
+        let src = "fn f() { crate::media::ContentType::from_trusted(x); }\n";
+        assert_eq!(resolve(src, &["Owner"], None), Membership::OtherType);
+    }
+
+    #[test]
+    fn self_inside_the_owners_impl_is_the_door() {
+        let src = "fn f() { Self::from_trusted(x); }\n";
+        assert_eq!(resolve(src, &["Owner"], Some("Owner")), Membership::Door);
+    }
+
+    #[test]
+    fn self_inside_another_impl_is_not_the_door() {
+        let src = "fn f() { Self::from_trusted(x); }\n";
+        assert_eq!(
+            resolve(src, &["Owner"], Some("ContentType")),
+            Membership::OtherType
+        );
+    }
+
+    #[test]
+    fn self_with_no_enclosing_impl_is_unknown() {
+        let src = "fn f() { Self::from_trusted(x); }\n";
+        assert_eq!(resolve(src, &["Owner"], None), Membership::Unknown);
+    }
+
+    #[test]
+    fn a_qualifier_defined_in_this_file_resolves_to_itself() {
+        let src = "struct ContentType(String);\nfn f() { ContentType::from_trusted(x); }\n";
+        assert_eq!(resolve(src, &["Owner"], None), Membership::OtherType);
+    }
+
+    #[test]
+    fn a_qualifier_imported_by_a_flat_use_resolves() {
+        let src = "use crate::media::ContentType;\nfn f() { ContentType::from_trusted(x); }\n";
+        assert_eq!(resolve(src, &["Owner"], None), Membership::OtherType);
+    }
+
+    #[test]
+    fn a_qualifier_imported_by_a_nested_use_group_resolves() {
+        // The form `common/src/feed/feed_path.rs:7` actually uses.
+        let src = "use crate::{media::ContentType, tag::Tag};\nfn f() { ContentType::from_trusted(x); }\n";
+        assert_eq!(resolve(src, &["Owner"], None), Membership::OtherType);
+    }
+
+    #[test]
+    fn an_in_file_type_alias_resolves_without_the_owner_set() {
+        // The alias is NOT seeded into `owners`, so this exercises the in-file branch
+        // rather than short-circuiting on the owner set.
+        let src = "type Ct = ContentType;\nfn f() { Ct::from_trusted(x); }\n";
+        assert_eq!(resolve(src, &["Owner"], None), Membership::OtherType);
+    }
+
+    #[test]
+    fn an_unbound_bare_qualifier_is_unknown() {
+        let src = "use foo::*;\nfn f() { Mystery::from_trusted(x); }\n";
+        assert_eq!(resolve(src, &["Owner"], None), Membership::Unknown);
+    }
+
+    #[test]
+    fn a_generic_parameter_qualifier_is_unknown() {
+        let src = "fn f<T>() { T::from_trusted(x); }\n";
+        assert_eq!(resolve(src, &["Owner"], None), Membership::Unknown);
+    }
+
+    #[test]
+    fn an_unqualified_call_is_unknown() {
+        let src = "fn f() { from_trusted(x); }\n";
+        assert_eq!(resolve(src, &["Owner"], None), Membership::Unknown);
+    }
+}
+
+/// Resolution wired through the walker (#790): the same rule as `resolver_tests`, but
+/// reached the way a gate reaches it, so `impl_stack`, the suppression set and the
+/// definition-site path are all exercised.
+#[cfg(test)]
+mod owned_scan_tests {
+    use super::{Classified, Why, classify, owner_aliases, scan};
+
+    const TOKEN: &str = "guard:allow";
+
+    fn classified_owned(src: &str) -> Classified {
+        let owners = owner_aliases(&[("t.rs".to_string(), src.to_string())], "Owner");
+        let s = scan(src, &["from_trusted"], Some(("Owner", &owners))).unwrap();
+        classify(src, &s, TOKEN)
+    }
+
+    fn classified_unowned(src: &str) -> Classified {
+        let s = scan(src, &["from_trusted"], None).unwrap();
+        classify(src, &s, TOKEN)
+    }
+
+    #[test]
+    fn an_owner_qualified_site_still_needs_a_marker() {
+        let c = classified_owned("fn a() { Owner::from_trusted(x); }\n");
+        assert_eq!(c.unexempt.len(), 1);
+    }
+
+    #[test]
+    fn another_types_site_needs_no_marker() {
+        let c = classified_owned("struct ContentType;\nfn a() { ContentType::from_trusted(x); }\n");
+        assert!(c.unexempt.is_empty(), "not this door: {:?}", c.unexempt);
+        assert!(c.marked.is_empty(), "and it earns no census entry either");
+    }
+
+    #[test]
+    fn self_in_the_owners_impl_needs_a_marker() {
+        // Exercises `impl_stack`, which the resolver tests cannot reach.
+        let c = classified_owned("impl Owner { fn f() { Self::from_trusted(x); } }\n");
+        assert_eq!(c.unexempt.len(), 1);
+    }
+
+    #[test]
+    fn self_in_another_impl_needs_no_marker() {
+        let c = classified_owned("impl ContentType { fn f() { Self::from_trusted(x); } }\n");
+        assert!(c.unexempt.is_empty(), "{:?}", c.unexempt);
+    }
+
+    #[test]
+    fn the_owners_definition_site_needs_a_marker() {
+        // A `fn` ident is not a Path: passes only because the fn visitors participate.
+        let c = classified_owned("impl Owner { fn from_trusted(v: V) -> Self { v } }\n");
+        assert_eq!(c.unexempt.len(), 1);
+    }
+
+    #[test]
+    fn another_types_definition_site_needs_no_marker() {
+        let c = classified_owned("impl ContentType { fn from_trusted(v: V) -> Self { v } }\n");
+        assert!(c.unexempt.is_empty(), "{:?}", c.unexempt);
+    }
+
+    #[test]
+    fn a_free_module_scope_definition_is_flagged() {
+        let c = classified_owned("fn from_trusted(v: V) -> V { v }\n");
+        assert_eq!(c.unexempt.len(), 1, "no impl, so no owner to rule out");
+    }
+
+    #[test]
+    fn an_unqualified_call_is_flagged() {
+        let c = classified_owned("fn a() { from_trusted(x); }\n");
+        assert_eq!(c.unexempt.len(), 1);
+    }
+
+    #[test]
+    fn an_unresolvable_qualifier_is_flagged() {
+        let c = classified_owned("use foo::*;\nfn a() { Mystery::from_trusted(x); }\n");
+        assert_eq!(c.unexempt.len(), 1);
+    }
+
+    #[test]
+    fn another_types_site_in_a_macro_body_is_still_flagged() {
+        // D4: macro bodies are not resolved, so they stay in the population.
+        let c = classified_owned(
+            "struct ContentType;\nfn a() { let _ = view! { ContentType::from_trusted(x) }; }\n",
+        );
+        assert_eq!(c.unexempt.len(), 1);
+    }
+
+    #[test]
+    fn a_marker_over_a_now_ignored_site_is_an_orphan() {
+        // The mirror of the marker deletions in production code.
+        let c = classified_owned(
+            "struct ContentType;\n// guard:allow stale\nfn a() { ContentType::from_trusted(x); }\n",
+        );
+        assert_eq!(c.orphans, vec![2]);
+    }
+
+    #[test]
+    fn without_an_owner_every_site_is_in_the_population() {
+        // AC1: the sibling gates' behaviour is unchanged.
+        let c =
+            classified_unowned("struct ContentType;\nfn a() { ContentType::from_trusted(x); }\n");
+        assert_eq!(c.unexempt.len(), 1);
+    }
+
+    #[test]
+    fn a_site_is_recorded_exactly_once() {
+        // AC1a: resolution suppresses, never records. The count is what pins it —
+        // double-recording on an unmarked line yields two `Unmarked` entries, not `Shared`.
+        let c = classified_owned("fn a() { Owner::from_trusted(x); }\n");
+        assert_eq!(c.unexempt.len(), 1, "recorded once, not once per hook");
+        assert!(matches!(c.unexempt[0].why, Why::Unmarked));
+    }
+
+    /// The end-to-end form of the fail-open the standards review found on #790: the alias
+    /// is declared inside an inline module in one file and imported in another. Before the
+    /// harvest recursed into `mod`, `Doc` was absent from the owner set while the importing
+    /// file still bound it — so a real door resolved as another type and was suppressed,
+    /// with no marker owed and no census row.
+    #[test]
+    fn an_owner_alias_declared_inside_a_module_still_puts_a_site_in_the_population() {
+        let reexport = (
+            "a.rs".to_string(),
+            "mod inner { pub use crate::render::Owner as Doc; }\n".to_string(),
+        );
+        let site_src = "use crate::a::inner::Doc;\nfn f() { Doc::from_trusted(x); }\n";
+        let site = ("b.rs".to_string(), site_src.to_string());
+        let owners = owner_aliases(&[reexport, site], "Owner");
+        let s = scan(site_src, &["from_trusted"], Some(("Owner", &owners))).unwrap();
+        assert_eq!(
+            classify(site_src, &s, TOKEN).unexempt.len(),
+            1,
+            "a real door must not be suppressed by an unharvested nested alias"
+        );
+    }
+
+    #[test]
+    fn an_owner_alias_from_another_file_puts_a_site_in_the_population() {
+        // D2's whole reason for existing: must fail if the harvest goes per-file.
+        let reexport = (
+            "a.rs".to_string(),
+            "pub use crate::render::Owner as Doc;\n".to_string(),
+        );
+        let site_src = "use crate::a::Doc;\nfn f() { Doc::from_trusted(x); }\n";
+        let site = ("b.rs".to_string(), site_src.to_string());
+        let owners = owner_aliases(&[reexport, site], "Owner");
+        let s = scan(site_src, &["from_trusted"], Some(("Owner", &owners))).unwrap();
+        assert_eq!(classify(site_src, &s, TOKEN).unexempt.len(), 1);
     }
 }
 
@@ -601,7 +1329,7 @@ mod marker_tests {
     const TOKEN: &str = "guard:allow";
 
     fn classified(src: &str) -> Classified {
-        let s = scan(src, &["GUARDED"]).unwrap();
+        let s = scan(src, &["GUARDED"], None).unwrap();
         classify(src, &s, TOKEN)
     }
 
