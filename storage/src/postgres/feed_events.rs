@@ -24,7 +24,7 @@ async fn purge_corrupt(pool: &Pool<Postgres>, ids: &[FeedEventId]) {
     }
     tracing::warn!("feed_events: purging rows with an unparseable feed_url");
     if let Err(e) = sqlx::query("DELETE FROM feed_events WHERE id = ANY($1)")
-        .bind(raw_ids(ids))
+        .bind(ids)
         .execute(pool)
         .await
     {
@@ -33,19 +33,6 @@ async fn purge_corrupt(pool: &Pool<Postgres>, ids: &[FeedEventId]) {
         tracing::warn!(error = %e, "feed_events: purge of corrupt rows failed");
         // cov:ignore-stop
     }
-}
-
-/// Unwrap an id batch to the raw `i64` slice Postgres binds as a single
-/// `= ANY($n)` array parameter — the sqlx seam takes `&[i64]`, not the newtype.
-///
-/// Forced, not chosen: the ADR-0071 bridge emits `Type`/`Encode`/`Decode` but no
-/// `PgHasArrayType`, so `.bind(&[FeedEventId])` has no array encoding. #715 typed
-/// `purge_corrupt`'s parameter and routed it through here, which added a fourth
-/// caller — so this helper now launders *more* strips past both gates, not fewer.
-/// That is #716's shape (a strip in one function, the bind in another), and closing
-/// it means giving `IdNewtype` a `PgHasArrayType` rather than deleting this helper.
-fn raw_ids(ids: &[FeedEventId]) -> Vec<i64> {
-    ids.iter().map(|id| i64::from(*id)).collect()
 }
 
 #[async_trait]
@@ -88,10 +75,9 @@ impl FeedEventDialect for Postgres {
         ids: &[FeedEventId],
     ) -> Result<(), FeedEventError> {
         let now = Utc::now();
-        let raw = raw_ids(ids);
         sqlx::query("UPDATE feed_events SET regenerated_at = $1 WHERE id = ANY($2)")
             .bind(now)
-            .bind(&raw)
+            .bind(ids)
             .execute(pool)
             .await?;
         Ok(())
@@ -99,10 +85,9 @@ impl FeedEventDialect for Postgres {
 
     async fn mark_pinged(pool: &Pool<Postgres>, ids: &[FeedEventId]) -> Result<(), FeedEventError> {
         let now = Utc::now();
-        let raw = raw_ids(ids);
         sqlx::query("UPDATE feed_events SET status = 'done', pinged_at = $1 WHERE id = ANY($2)")
             .bind(now)
-            .bind(&raw)
+            .bind(ids)
             .execute(pool)
             .await?;
         Ok(())
@@ -114,7 +99,6 @@ impl FeedEventDialect for Postgres {
         error: &str,
         next_attempt_at: DateTime<Utc>,
     ) -> Result<(), FeedEventError> {
-        let raw = raw_ids(ids);
         sqlx::query(
             "UPDATE feed_events \
              SET status = 'pending', attempts = attempts + 1, \
@@ -123,7 +107,7 @@ impl FeedEventDialect for Postgres {
         )
         .bind(error)
         .bind(next_attempt_at)
-        .bind(&raw)
+        .bind(ids)
         .execute(pool)
         .await?;
         Ok(())
@@ -134,10 +118,9 @@ impl FeedEventDialect for Postgres {
         ids: &[FeedEventId],
         error: &str,
     ) -> Result<(), FeedEventError> {
-        let raw = raw_ids(ids);
         sqlx::query("UPDATE feed_events SET status = 'failed', last_error = $1 WHERE id = ANY($2)")
             .bind(error)
-            .bind(&raw)
+            .bind(ids)
             .execute(pool)
             .await?;
         Ok(())

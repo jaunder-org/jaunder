@@ -320,7 +320,47 @@ pub(crate) async fn database_is_empty(options: &PgConnectOptions) -> sqlx::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::test_support::with_env;
+    use crate::test_support::{Backend, CloseablePool, postgres_only};
+    use common::tag::Tag;
+    use common::test_support::{parse_tag, with_env};
+    use rstest::*;
+    use rstest_reuse::*;
+
+    // reason: Postgres-only by nature, not by omission — `SQLite` has no array type,
+    // so there is no parity behaviour to match. Per ADR-0053 a dialect feature with no
+    // generic home lives with its dialect code. #891: a slice of a `StrNewtype` binds
+    // as a `TEXT[]`, so a typed call site needs no strip. `feed_events` proves the
+    // `i64` case (its `= ANY($n)` binds are the only ones in `storage/`); this is the
+    // `String` one, which #876's single-statement tag reconcile depends on.
+    #[apply(postgres_only)]
+    #[tokio::test]
+    async fn str_newtype_slices_bind_as_a_postgres_array(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let CloseablePool::Postgres(pool) = env.base.pool() else {
+            unreachable!("postgres_only yields a Postgres pool")
+        };
+
+        for slug in ["alpha", "beta", "gamma"] {
+            sqlx::query("INSERT INTO tags (tag_slug) VALUES ($1)")
+                .bind(slug)
+                .execute(pool)
+                .await
+                .expect("seed tag");
+        }
+
+        // The point of the test: `&[Tag]` binds directly, with no `Vec<String>` strip.
+        let wanted = vec![parse_tag("alpha"), parse_tag("gamma")];
+
+        let found = sqlx::query_scalar::<_, Tag>(
+            "SELECT tag_slug FROM tags WHERE tag_slug = ANY($1) ORDER BY tag_slug",
+        )
+        .bind(&wanted)
+        .fetch_all(pool)
+        .await
+        .expect("array bind");
+
+        assert_eq!(found, wanted);
+    }
 
     #[test]
     fn postgres_password_prefers_file_over_env() {

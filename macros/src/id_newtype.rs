@@ -106,6 +106,10 @@ fn sqlx_impls(name: &syn::Ident) -> proc_macro2::TokenStream {
         to_inner: quote! { &self.0 },
         decode_inner: quote! { i64 },
         convert: quote! { ::core::result::Result::Ok(#name(v)) },
+        // `i64: PgHasArrayType`, so a slice of ids binds as `INT8[]` — which is what
+        // lets `= ANY($n)` call sites pass the newtype instead of stripping to
+        // `Vec<i64>` first (#891).
+        pg_array: true,
     })
 }
 

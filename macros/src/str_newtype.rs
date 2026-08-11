@@ -346,6 +346,8 @@ fn sqlx_impls(name: &syn::Ident) -> proc_macro2::TokenStream {
         convert: quote! {
             ::core::result::Result::Ok(<#name as ::core::str::FromStr>::from_str(v)?)
         },
+        // `String: PgHasArrayType`, so a slice binds as `TEXT[]` (#891).
+        pg_array: true,
     })
 }
 
@@ -365,6 +367,8 @@ fn sqlx_impls_infallible(name: &syn::Ident) -> proc_macro2::TokenStream {
                 <#name as ::core::convert::From<::std::string::String>>::from(v),
             )
         },
+        // `String: PgHasArrayType`, so a slice binds as `TEXT[]` (#891).
+        pg_array: true,
     })
 }
 

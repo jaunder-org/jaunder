@@ -118,6 +118,10 @@ fn sqlx_impls(name: &Ident, inner: &Type) -> TokenStream {
                 <#name as ::core::convert::TryFrom<#inner>>::try_from(v)?,
             )
         },
+        // Off, and load-bearing: `#inner` is caller-declared, and turning this on
+        // stops `common` compiling on its `u32`/`usize` newtypes. See the `pg_array`
+        // field's doc in `sqlx_bridge` for why a `where` clause cannot rescue it.
+        pg_array: false,
     })
 }
 
