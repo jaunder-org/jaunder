@@ -60,12 +60,16 @@ pub fn ProfilePage() -> impl IntoView {
                                         </div>
                                         <div class="j-form-body">
                                             <p>"Username: " {data.username.to_string()}</p>
-                                            <ValidatedInput<
-                                            DisplayName,
-                                        > label="Display Name" name="display_name" field=dn_field />
-                                            <ValidatedTextarea<
-                                            Bio,
-                                        > label="Bio" name="bio" field=bio_field />
+                                            <ValidatedInput<DisplayName>
+                                                label="Display Name"
+                                                name="display_name"
+                                                field=dn_field
+                                            />
+                                            <ValidatedTextarea<Bio>
+                                                label="Bio"
+                                                name="bio"
+                                                field=bio_field
+                                            />
                                         </div>
                                         <div class="j-form-actions">
                                             <button

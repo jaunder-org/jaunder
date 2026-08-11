@@ -38,9 +38,7 @@ pub fn EmailPage() -> impl IntoView {
                     })}
                 </Suspense>
                 <ActionForm action=request_action>
-                    <ValidatedInput<
-                    Email,
-                >
+                    <ValidatedInput<Email>
                         label="New email address"
                         name="email"
                         input_type="email"

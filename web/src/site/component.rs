@@ -82,18 +82,14 @@ fn site_settings_form(
                 </div>
             </div>
             <div class="j-site-form-body">
-                <ValidatedInput<
-                SiteTitle,
-            >
+                <ValidatedInput<SiteTitle>
                     label="Site Title"
                     name="title"
                     field=title_field
                     class="j-site-input"
                     field_class="j-site-field j-site-field-wide"
                 />
-                <ValidatedInput<
-                AbsoluteUrl,
-            >
+                <ValidatedInput<AbsoluteUrl>
                     label="Base URL"
                     name="base_url"
                     input_type="url"

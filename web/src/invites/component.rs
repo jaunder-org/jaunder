@@ -41,18 +41,14 @@ pub fn InvitesPage() -> impl IntoView {
                             Ok(list) => {
                                 view! {
                                     <ActionForm action=create_action>
-                                        <ValidatedInput<
-                                        Email,
-                                    >
+                                        <ValidatedInput<Email>
                                             label="Invitee email"
                                             name="recipient_email"
                                             input_type="email"
                                             autocomplete="email"
                                             field=recipient
                                         />
-                                        <ValidatedInput<
-                                        InviteTtlHours,
-                                    >
+                                        <ValidatedInput<InviteTtlHours>
                                             label="Expires in hours"
                                             name="expires_in_hours"
                                             input_type="number"
