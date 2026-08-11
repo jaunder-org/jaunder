@@ -883,7 +883,44 @@ live record — the config-key closed registry — and may be cited legitimately
 elsewhere in the repo; this check is scoped to the two crates whose citations
 were wrong.)
 
-- [ ] **Step 3: Review the whole branch against the spec**
+- [x] **Step 3: Review the whole branch against the spec**
+
+Two-axis `code-review` run against `wt-base-issue-860`. Both axes independently
+raised the same two substantive findings; both are fixed:
+
+1. **`textarea_class` restated the prop's own default** at two of three call
+   sites — a breach of "never set a value to its existing default", and of
+   AC20's "no site relies on the default". The default is removed; all three
+   sites name their class. The same pass dropped `CompactComposer`'s
+   `unwrap_or_else(|| Callback::new(|()| {}))` by making `ComposerFields`'
+   `on_input` `optional_no_strip`.
+2. **The ADR contradicted its own realization.** Clause 3 banned a silent
+   `let … else` on a dispatch path absolutely, yet `submit_gate` contains
+   exactly one — unavoidably, since a reactive click handler is a `Fn` and must
+   be total. The clause now states what it actually means: the arm is confined
+   to the gate helper, co-conditioned with `disabled` and directly tested, and a
+   second arm in a form is the defect. `submit_gate` carries a matching comment.
+
+Also taken: **AC5** asked for a body-scoped selector, but the test matched
+`p.error` by message text. It now scopes to `.j-composer-field p.error` and
+asserts the text rather than locating the node by it.
+
+Declined, with reasons:
+
+- **`.j-composer-field` duplicates `.j-edit-form-field`** (plus `min-width: 0`).
+  Merging them couples the composer's and the editor's layout, so a future
+  change to one silently moves the other. Four lines of CSS is the cheaper
+  coupling.
+- **`Callback<(PostBody, bool)>`'s `bool` wants to be a Publish/Draft enum.**
+  Correct, but the same `bool` is `PostInputs.publish` and the `publish` wire
+  arg; typing it properly is its own change, not a rider on this one.
+- **`.j-composer-field` is inert on the full compose page** (`.j-compose-body`
+  is not a flex column). True and harmless — the class is still the right one to
+  name there, and e2e confirms the layout.
+
+AC22's audit result is recorded under Task 6 Step 1.
+
+- [ ] **Step 4: Hand off to `jaunder-ship`**
 
 Run `git diff wt-base-issue-860..HEAD` and walk spec AC1–AC25. Confirm the ADR
 draft is still **uncommitted** (`git status` should show it as ignored, not

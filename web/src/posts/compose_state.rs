@@ -159,6 +159,11 @@ pub fn submit_gate(
     on_submit: Callback<(PostBody, bool)>,
 ) -> (Signal<bool>, Callback<bool>) {
     let disabled = Signal::derive(move || also_blocked.get() || body.parsed().is_none());
+    // A click handler is a `Fn`, so it must be total — some arm has to cover "no value".
+    // This is the *only* place that arm is allowed to exist (ADR clause 3): here it is
+    // co-conditioned with `disabled` above, so reaching it means the control was
+    // disabled, and `a_blocked_gate_dispatches_nothing` pins exactly that. A second such
+    // arm in a form is the defect this helper exists to prevent.
     let on_click = Callback::new(move |publish: bool| {
         if let Some(body) = body.parsed() {
             on_submit.run((body, publish));

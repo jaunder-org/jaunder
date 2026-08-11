@@ -166,15 +166,17 @@ test("a blurred blank body shows the newtype's own message", async ({
 }) => {
   await goto(page, "/posts/new");
 
-  const bodyError = page.locator("p.error", {
-    hasText: "post body must contain at least one non-blank line",
-  });
+  // Scoped to the body field's own wrapper, not matched on message text: a text-coupled
+  // selector would silently start passing against some other field's error.
+  const bodyError = page.locator(".j-composer-field p.error");
   await expect(bodyError).toHaveCount(0);
 
   await page.locator(SEL.postBody).click();
   await page.locator(SEL.postBody).blur();
 
-  await expect(bodyError).toBeVisible();
+  await expect(bodyError).toHaveText(
+    "post body must contain at least one non-blank line",
+  );
 });
 
 // #860: the editor carried the same missing body clause — clearing the textarea left

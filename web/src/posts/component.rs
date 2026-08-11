@@ -117,9 +117,10 @@ pub fn FormatToggle(
 /// the summary and slug already get (#860). When `show_seg` is true (default), also
 /// renders the `.j-seg` format toggle.
 ///
-/// `field_class` has no default on purpose: `ValidatedTextarea` wraps the control in a
-/// `<label>`, which changes what the surrounding flex column lays out, so each caller
-/// must name the class that restores its own layout rather than inheriting one.
+/// Neither `field_class` nor `textarea_class` has a default, on purpose: `ValidatedTextarea`
+/// wraps the control in a `<label>`, which changes what the surrounding flex column lays
+/// out, so each caller must name the classes that suit its own layout rather than
+/// inheriting a default that only one of the three sites actually wanted.
 #[component]
 pub fn ComposerFields(
     body: Field<PostBody>,
@@ -127,12 +128,14 @@ pub fn ComposerFields(
     field_class: &'static str,
     #[prop(default = "Write something\u{2026}")] placeholder: &'static str,
     #[prop(default = 16u32)] rows: u32,
-    #[prop(default = "j-edit-form-textarea")] textarea_class: &'static str,
+    textarea_class: &'static str,
     /// When false, the `.j-seg` format toggle is not rendered (caller places it elsewhere).
     #[prop(default = true)]
     show_seg: bool,
     /// Optional callback fired on every body input event (e.g. to clear a flash message).
-    #[prop(optional)]
+    /// `optional_no_strip`, so a caller holding its own `Option` forwards it as-is rather
+    /// than unwrapping it into a do-nothing callback.
+    #[prop(optional_no_strip)]
     on_input: Option<Callback<()>>,
 ) -> impl IntoView {
     view! {
@@ -569,7 +572,7 @@ fn CompactComposer(
                     field_class="j-composer-field"
                     textarea_class=""
                     show_seg=false
-                    on_input=on_input.unwrap_or_else(|| Callback::new(move |()| {}))
+                    on_input=on_input
                 />
                 <MediaUpload show_result=true />
                 <div style="margin-top:10px">
