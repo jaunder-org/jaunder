@@ -462,6 +462,59 @@ mod tests {
         );
     }
 
+    /// `public/` assets reach the served site — the regression guard #291 asked
+    /// for after `GET /favicon.ico` 404'd on the host loop.
+    ///
+    /// That gap was real and is now closed by the #237 embed: `server/build.rs`
+    /// stages `public/` into `$OUT_DIR/site/` from `JAUNDER_PUBLIC_DIR`, or from
+    /// `<workspace>/public` when that is unset (the host path). Nothing tested
+    /// it, which is how the asset silently stopped being served in the first
+    /// place — the whole cost of #291 was that no build failed, only a 404 no
+    /// spec asserted.
+    ///
+    /// **Deliberately unguarded**, unlike the wasm test below. `pkg/` needs
+    /// `cargo xtask build-csr` to exist, so that test guards its assertions;
+    /// `public/` has no build prerequisite and is always in the tree, so a guard
+    /// here would only let the regression pass silently — the one outcome this
+    /// test exists to prevent.
+    #[tokio::test]
+    async fn serve_site_serves_embedded_public_favicon() {
+        let req = Request::builder()
+            .uri("/favicon.ico")
+            .body(Body::empty())
+            .unwrap();
+        let resp = serve_site(req).await;
+
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "GET /favicon.ico must serve the embedded `public/` asset (#291)"
+        );
+        // An image type, not the exact string: `mime_guess` may answer
+        // `image/x-icon` or `image/vnd.microsoft.icon` for `.ico`, and pinning
+        // one would break on a dependency bump without the served behaviour
+        // having changed (same reasoning as `content_type_resolves_favicon`).
+        // What matters is that it is not the SPA shell's `text/html`, which is
+        // exactly what a fall-through would return.
+        let ct = resp
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .expect("a served favicon has a content type")
+            .to_str()
+            .unwrap()
+            .to_owned();
+        assert!(
+            ct.starts_with("image/"),
+            "the favicon must serve as an image, not fall through to the SPA shell; got {ct} (#291)"
+        );
+
+        let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        assert!(
+            !body.is_empty(),
+            "the embedded favicon must have bytes (#291)"
+        );
+    }
+
     #[tokio::test]
     async fn serve_site_serves_embedded_wasm_negotiated_brotli_and_conditional() {
         // Exercises the live-embed found branch end-to-end. The Nix coverage
