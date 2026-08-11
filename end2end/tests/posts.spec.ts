@@ -139,6 +139,78 @@ test("clearing a post summary on edit persists as empty", async ({
   await expect(page.locator(SEL.postSummary)).toHaveValue("");
 });
 
+// #860: the full compose page's submit controls had NO body clause in their disabled
+// predicate, so an empty body left "Publish" enabled and pressing it did nothing at
+// all — no error, no message, no state change. The gate and the parse are now one
+// call, so a control that cannot dispatch cannot be pressed.
+test("an empty body disables the compose page's submit controls", async ({
+  registeredPage: page,
+}) => {
+  await goto(page, "/posts/new");
+
+  await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
+  await expect(page.locator(SEL.publishButton("false"))).toBeDisabled();
+
+  // Whitespace-only is rejected by PostBody::from_str exactly as empty is.
+  await page.fill(SEL.postBody, "   \n\t ");
+  await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
+
+  await page.fill(SEL.postBody, "real body text");
+  await expect(page.locator(SEL.publishButton("true"))).toBeEnabled();
+});
+
+// #860: a rejected body is now visible, like every other rejection in these forms.
+// Gated on touch, so a composer the author has not yet typed in stays quiet.
+test("a blurred blank body shows the newtype's own message", async ({
+  registeredPage: page,
+}) => {
+  await goto(page, "/posts/new");
+
+  const bodyError = page.locator("p.error", {
+    hasText: "post body must contain at least one non-blank line",
+  });
+  await expect(bodyError).toHaveCount(0);
+
+  await page.locator(SEL.postBody).click();
+  await page.locator(SEL.postBody).blur();
+
+  await expect(bodyError).toBeVisible();
+});
+
+// #860: the editor carried the same missing body clause — clearing the textarea left
+// Save enabled and silently inert.
+test("clearing the body in the editor disables save", async ({
+  registeredPage: page,
+}) => {
+  test.slow();
+  // Create a draft, then reach its editor the way the summary-clearing test does:
+  // permalink → the PostCard's Edit affordance → the post_id.
+  await goto(page, "/posts/new");
+  await page.fill(SEL.postBody, "# Gate Test\n\noriginal body");
+  await click(page, SEL.publishButton("false"));
+  await waitForSelector(page, SEL.saveSummary);
+
+  const permalinkHref = (await page
+    .locator(SEL.saveSummary)
+    .locator('[data-test="permalink-link"]')
+    .getAttribute("href"))!;
+  await goto(page, permalinkHref);
+  const editLink = page.locator('.j-post-acts a:has-text("Edit")');
+  await editLink.waitFor();
+  const postId = (await editLink.getAttribute("href"))!.match(
+    /\/posts\/(\d+)\/edit/,
+  )![1];
+
+  await goto(page, `/posts/${postId}/edit`);
+  await expect(page.locator(SEL.publishButton("true"))).toBeEnabled();
+
+  await page.fill(SEL.postBody, "");
+  await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
+
+  await page.fill(SEL.postBody, "restored body");
+  await expect(page.locator(SEL.publishButton("true"))).toBeEnabled();
+});
+
 test("authenticated user can save a draft through the UI", async ({
   registeredPage,
 }) => {

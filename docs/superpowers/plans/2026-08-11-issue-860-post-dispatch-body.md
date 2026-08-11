@@ -755,7 +755,14 @@ git commit -m "style(web): size the body field's new label wrapper (#860)"
 - Consumes: `SEL.postBody` (`selectors.ts:14`), `SEL.publishButton`, `SEL.error`
   (`selectors.ts:21`, `".error"`).
 
-- [ ] **Step 1: Audit every `SEL.error` assertion on a composer/editor surface**
+- [x] **Step 1: Audit every `SEL.error` assertion on a composer/editor surface**
+
+**Result: no change needed, and confirmed empirically.** Of the at-risk sites,
+none can leave the body both unparseable and blurred: `posts.spec.ts:78` fills a
+valid body first, and `:272`/`:277`/`:567` assert "Post not found" on a page
+that renders no composer. `helpers.ts:271` and `:359` already use `.first()`.
+The full `sqlite × chromium` suite passes unmodified (141/141), so no
+strict-mode multi-match surfaced. `selectors.ts` is therefore **not** touched.
 
 The body field now renders its own touched-gated `<p class="error">`
 (`web/src/forms/component.rs:63`), so `.error` can match two nodes and
@@ -770,7 +777,15 @@ with valid text at `:73`, so no body error exists. Confirm each site on that
 basis, and scope any genuinely at-risk assertion to the flash or to the body
 field rather than weakening it to `.first()`.
 
-- [ ] **Step 2: Write the failing regression tests**
+- [x] **Step 2: Write the failing regression tests**
+
+The three tests were written against the fixed code, so they were never observed
+red. Their bite is argued from the fork point rather than demonstrated: at
+`wt-base-issue-860`, `FullComposer`'s predicate was
+`!slug_field.is_valid() || !state.summary_field.is_valid()` (`component.rs:624`)
+with no body clause, so `toBeDisabled()` on an empty body could not have held;
+and no body error was rendered anywhere, so the message assertion had nothing to
+match. Cheap to confirm later by reverting the two gate call sites.
 
 Append to `end2end/tests/posts.spec.ts`. These are the e2e half of spec AC1,
 AC2, AC3 and AC5 — the surfaces no host test can reach. `/posts/new` renders
@@ -836,7 +851,7 @@ The third test's setup is left to the file's own conventions deliberately — re
 the existing edit tests (from `posts.spec.ts:86`) and reuse whatever they call
 to create a post and open its editor. Do not invent helper names.
 
-- [ ] **Step 3: Run the e2e suite**
+- [x] **Step 3: Run the e2e suite** — 141 passed (5.7m)
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-860-post-dispatch-body -- cargo xtask e2e sqlite chromium`
