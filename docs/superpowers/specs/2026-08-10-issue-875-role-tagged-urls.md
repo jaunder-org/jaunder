@@ -338,7 +338,15 @@ command.
 14. `web/src/site/component.rs:67,94-95` (`Field::<…>` and the `ValidatedInput`
     generic component) use `BaseUrl` and the Leptos `view!` macro compiles.
 15. `common/src/test_support/mod.rs`'s helper is `parse_url<T: UrlRole>`, and
-    every call site names its role.
+    every call site's role is pinned — by turbofish, or by the field/parameter
+    type it is passed to. **Amended during implementation:** the original
+    wording demanded a turbofish at every call site. In a struct literal or
+    argument position the expected type already pins the role and the compiler
+    _checks_ it, so the safety property is identical — unlike `compose`, where
+    inference would _choose_ a role freely. Turbofishing the ~40 fixture sites
+    would also require importing the tag `Feed` into
+    `common/src/atompub/entry.rs`'s tests, where it collides with
+    `atom_syndication::Feed`.
 16. `docs/adr/drafts/role-tagged-site-urls.md` exists and follows the draft
     format (`# ADR-DRAFT:` heading, single-token status line). ADR-0063 carries
     the cross-reference amendment.

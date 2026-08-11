@@ -136,7 +136,7 @@ No behavioural change — every URL produced at runtime stays byte-identical.
   a `NewtypeShape` parameter; `ord_impls` and `sqlx_bridge::BridgeSpec` gain a
   `&syn::Generics`. `IdNewtype` and `NumNewtype` behaviour is unchanged.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `macros/tests/str_newtype.rs`:
 
@@ -286,7 +286,7 @@ ADR-0095 requires:
 /// ```
 ````
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-875-hub-feed-url -- cargo nextest run -p macros`
@@ -294,7 +294,7 @@ Run:
 Expected: FAIL — the `Tagged<T>` derive emits `impl Display for Tagged` without
 generics, so the test crate does not compile.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 In `macros/src/lib.rs`, split the shape check so the relaxation is scoped:
 
@@ -354,7 +354,7 @@ and `From<Self> for String`, both `PartialEq` forms, `Ord`, and both serde
 directions — plus the negative that `IdNewtype` still rejects generics. No impl
 body changes; only the headers gain generics.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-875-hub-feed-url -- cargo nextest run -p macros`
@@ -364,12 +364,19 @@ then:
 Expected: PASS — nine `str_newtype` tests, and the `IdNewtype` negative plus its
 companion.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
+
+The generics thread reached more emitters than this plan anticipated
+(`secret_trailer`, `infallible_trailer`, and the `Plain`-shape call sites in
+`id_newtype`, `num_newtype`, `text_enum`, `sqlx_bridge_derive`), so the commit
+covers `macros/` as a whole.
 
 ```bash
-git add macros/src/lib.rs macros/src/str_newtype.rs macros/src/sqlx_bridge.rs macros/tests/str_newtype.rs
+git add macros/
 git commit -m "feat(macros): let StrNewtype derive generic phantom-tagged newtypes (#875)"
 ```
+
+**Landed as `ba0c35b4`** — 8 files, +678/−115, full `cargo xtask check` green.
 
 ---
 
@@ -387,7 +394,16 @@ git commit -m "feat(macros): let StrNewtype derive generic phantom-tagged newtyp
 - Produces: the gate approves a decode into `Option<HubUrl>` by resolving the
   alias to `TaggedUrl`, and still rejects a decode into an underived type.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
+
+> **Two names below are wrong** and were corrected during implementation: the
+> struct is **`ApproveSet`**, not `ApprovedSet`, and **`collect_declarations`
+> takes source text**, not a parsed `syn::File`
+> (`fn collect_declarations(source: &str, root: Root, set: &mut ApproveSet) -> Result<(), String>`).
+> The five behaviours tested are unchanged.
+> `tuple_alias_collection_is_unchanged` also gained
+> `assert!(set.composites.contains("MediaRow"))` — as written below it would
+> have passed vacuously if the tuple arm were deleted.
 
 ```rust
 #[test]
@@ -433,16 +449,17 @@ fn tuple_alias_collection_is_unchanged() {
 }
 ```
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-875-hub-feed-url -- cargo nextest run --manifest-path xtask/Cargo.toml sqlx_newtype_decode`
 
-Expected: FAIL — `ApprovedSet` has no `aliases` field.
+Expected: FAIL — `ApproveSet` has no `aliases` field. (Observed: exit 101,
+`error[E0609]` ×4.)
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
-Add `aliases: HashMap<String, String>` to `ApprovedSet`. In
+Add `aliases: HashMap<String, String>` to `ApproveSet`. In
 `collect_declarations` (`:1071-1092`), alongside the existing tuple-alias arm,
 collect `syn::Item::Type` whose `ty` is a `Type::Path`, mapping the alias ident
 to the **last path segment ident** of its target (`HubUrl` → `TaggedUrl`). Do
@@ -456,19 +473,25 @@ In `unapproved_leaves` (`:1098-1146`), before reporting a leaf as unapproved,
 resolve it through `aliases` once and re-check `approved`. Report the
 **resolved** name so the failure message names the underlying type.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-875-hub-feed-url -- cargo nextest run --manifest-path xtask/Cargo.toml sqlx_newtype_decode`
 
-Expected: PASS — five tests.
+Expected: PASS — five tests. (Observed: 50 passed, 797 skipped, exit 0.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add xtask/src/steps/sqlx_newtype_decode_check.rs
 git commit -m "feat(xtask): resolve type aliases in the sqlx decode gate (#875)"
 ```
+
+**Landed as `135efff8`** — 1 file, +87/−1, full `cargo xtask check` green.
+
+**Known boundary:** alias resolution is a **single hop**. An alias chain
+(`A = B; B = TaggedUrl<…>`) would not resolve. No such chain exists or is
+planned for #875.
 
 ---
 
@@ -502,7 +525,7 @@ that proves the type itself works.
   - `pub fn compose<U: UrlRole>(base: &BaseUrl, path: &str) -> TaggedUrl<U>`
   - `impl<T: UrlRole> TaggedUrl<T> { pub fn join<U: UrlRole>(&self, path: &str) -> Result<TaggedUrl<U>, InvalidUrl>; pub fn with_query_pairs<U: UrlRole>(&self, pairs: &[(&str, &str)]) -> TaggedUrl<U>; pub fn retag<U: UrlRole>(self) -> TaggedUrl<U>; }`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```rust
 #[test]
@@ -612,14 +635,14 @@ And the proof that `compose` starts only at a `Base`:
 /// ```
 ````
 
-- [ ] **Step 2: Run the tests, verify they fail**
+- [x] **Step 2: Run the tests, verify they fail**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-875-hub-feed-url -- cargo nextest run -p common tagged_url`
 
 Expected: FAIL — `common::tagged_url` does not exist.
 
-- [ ] **Step 3: Implement against the tests**
+- [x] **Step 3: Implement against the tests**
 
 ```rust
 pub trait UrlRole {}
@@ -654,7 +677,7 @@ Declare the fifteen markers and aliases. The tag is `MediaOrigin`, **not**
 `pub enum MediaSource`, and both the sqlx decode gate and
 `server_fn_tracing_check` reduce types to a bare ident.
 
-- [ ] **Step 4: Run the tests, verify they pass**
+- [x] **Step 4: Run the tests, verify they pass**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-875-hub-feed-url -- cargo nextest run -p common`
@@ -662,13 +685,24 @@ then:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-875-hub-feed-url -- cargo test --workspace --doc`
 
 Expected: PASS. `AbsoluteUrl` still exists and every other crate is untouched.
+(Observed: 25 passed; all four new fences ran, the two negatives as
+`- compile fail ... ok`.)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add common/src/tagged_url.rs common/src/lib.rs
 git commit -m "feat(common): add TaggedUrl<T> and the fifteen URL roles (#875)"
 ```
+
+**Landed as `21abf6f9`** — 2 files, +539, full `cargo xtask check` green
+(coverage 26357 executable lines, clean).
+
+**Note for task 4:** inside `tagged_url.rs` the tests use the turbofish form
+(`base.join::<Feed>(…)`) wherever there is no binding to ascribe — the alias
+rule's stated exception. No `// cov:ignore` was needed; the two
+`unreachable!("msg")` lines are structurally exempt, as the identical lines in
+`absolute_url.rs` already are.
 
 ---
 
@@ -718,7 +752,7 @@ retype is viral through every `base: &AbsoluteUrl` parameter.
   - `pub fn parse_url<T: UrlRole>(s: &str) -> TaggedUrl<T>` replacing
     `parse_absolute_url`
 
-- [ ] **Step 1: Write the failing transposition proofs**
+- [x] **Step 1: Write the failing transposition proofs**
 
 These four are the issue's acceptance. Each carries `#`-hidden fixture lines and
 a positive companion in the same doc comment (`CONTRIBUTING.md:469-481`).
@@ -777,7 +811,7 @@ On `FeedMetadata` in `common/src/feed/metadata.rs` and on `MediaLinkEntry` in
 `common/src/atompub/entry.rs`, the same two-fence shape, swapping
 `canonical_url`/`self_url` and `edit_uri`/`edit_media_uri` respectively.
 
-- [ ] **Step 2: Run the doctests, verify they fail**
+- [x] **Step 2: Run the doctests, verify they fail**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-875-hub-feed-url -- cargo test --workspace --doc`
@@ -785,7 +819,13 @@ Run:
 Expected: FAIL — the parameters and fields are still one type, so all four
 `compile_fail` fences compile and the doctests fail.
 
-- [ ] **Step 3: Migrate**
+Observed: FAIL, exit 101, 3 failed. **The failure mode differed from this
+prediction for the RSD pair**: there the negative passed vacuously and its
+_positive companion_ failed, because `&ServiceDocUrl` does not coerce to
+`&AbsoluteUrl`. Red either way, and green after migrating — recorded because it
+is not what this step said would happen.
+
+- [x] **Step 3: Migrate**
 
 Delete `common/src/absolute_url.rs` and its `pub mod` line, then retype every
 site above. The compiler drives this: each error is a value whose role must be
@@ -900,7 +940,7 @@ and in `storage/src/media.rs`'s test module, exercising the `MediaSourceUrl`
 decode through `create_media`, which already binds `record.source_url`
 (`storage/src/media.rs:220`) — no raw-seed helper is needed or exists.
 
-- [ ] **Step 4: Run everything, verify it passes**
+- [x] **Step 4: Run everything, verify it passes**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-875-hub-feed-url -- cargo test --workspace --doc`
@@ -912,12 +952,37 @@ then:
 Expected: PASS — all four transposition proofs now fail to compile as required,
 every backend is green, and rendered feed/XML output is byte-identical.
 
-- [ ] **Step 5: Commit**
+Observed: doctests exit 0 with all four negatives as `- compile fail ... ok`;
+full `cargo xtask check` exit 0, coverage clean at 26220 executable lines. The
+subagent's own `nextest` run showed 52 Postgres `ConnectionRefused` failures (no
+local PostgreSQL); the Nix `nix-coverage` step runs Postgres properly and is
+green, which is the authoritative signal.
+
+- [x] **Step 5: Commit**
 
 ```bash
-git add common storage server web xtask/src/steps/server_fn_tracing_check.rs end2end/tests/admin-site.spec.ts
+git add common storage server web xtask end2end
 git commit -m "feat(common): replace AbsoluteUrl with role-tagged TaggedUrl<T> (#875)"
 ```
+
+**Landed as `e85d5c2b`** — 45 files, +350/−526, `common/src/absolute_url.rs`
+deleted.
+
+**Three deviations, all accepted:**
+
+1. `common/src/atompub/entry.rs`'s `rel_link` became
+   `fn rel_link<T: UrlRole>(rel: &str, href: &TaggedUrl<T>)`. It renders four
+   distinct roles (`Feed`, `Pagination`, `EditUri`, `EditMediaUri`); the
+   alternative was four monomorphic copies. A generic _parameter_ is not a
+   use-site spelling, so the alias rule is intact.
+2. `parse_url` call sites in test fixtures do **not** turbofish. In a struct
+   literal or argument position the field/parameter type pins the role and the
+   compiler **checks** it — unlike `compose`, where inference would _choose_
+   freely. Safety is identical; ~40 sites stay readable; and turbofishing
+   `entry.rs`'s tests would need the tag `Feed` imported where it collides with
+   `atom_syndication::Feed`. Acceptance criterion 15 is amended to match.
+3. The brief listed `server/src/cli.rs:402` as holding an `AbsoluteUrl` mention;
+   it does not. Stale reference, no action.
 
 ---
 
@@ -934,7 +999,7 @@ git commit -m "feat(common): replace AbsoluteUrl with role-tagged TaggedUrl<T> (
 - Produces: the recorded decision. Do **not** number the ADR —
   `cargo xtask adr promote` assigns it at ship (**jaunder-adr**).
 
-- [ ] **Step 1: Write the draft**
+- [x] **Step 1: Write the draft**
 
 `cp docs/adr/template.md docs/adr/drafts/role-tagged-site-urls.md`. Line 1 must
 be exactly `# ADR-DRAFT: Role-tagged site URLs`; leave `- Status: proposed`.
@@ -955,7 +1020,7 @@ _Consequences_ — fifteen roles today and the two-line cost of a sixteenth; the
 four `compile_fail` doctests as the regression surface; `RootRelativeUrl` and
 `FeedPath` stayed out; #751, #827, #879 unaffected.
 
-- [ ] **Step 2: Amend ADR-0063**
+- [x] **Step 2: Amend ADR-0063**
 
 Add a short subsection to §1 cross-referencing
 `docs/adr/drafts/role-tagged-site-urls.md`, stating that URL roles are handled
