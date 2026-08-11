@@ -2,116 +2,112 @@
 
 Read `PROTOCOL.md` first. **The unit of work is one file**, not one mutant.
 
-> **STALE — do not work this queue.** It was built by a discovery run that
-> scoped tests to one package at a time. That disables default-off Cargo
-> features (`common`'s `sanitize`, its `sqlx`), so feature-gated code was never
-> compiled and its mutants were filed as surviving when they are not. 27 of
-> `render.rs`'s 27 are false on this basis alone, and any feature-gated code
-> elsewhere is equally suspect.
->
-> Discovery must be re-run with `--test-workspace true` (already fixed in
-> `discover.sh`) before these numbers mean anything. The counts below are an
-> upper bound on real survivors, not a work list.
+## Provenance
 
-Discovery output is a snapshot. Always re-verify a mutant before working it —
-some listed here are already dead.
+Built 2026-08-11 from a workspace-scoped run over five packages, sharded 8 ways,
+`--timeout 300`. `reconcile.sh` passes:
 
-## Discovery status
+    common: 580/580   storage: 569/569   macros: 109/109
+    host:    87/87    jaunder: 315/315
+    All packages fully examined.
 
-| Package | Mutants | Caught | Unviable | Timeout | Surviving               |
-| ------- | ------- | ------ | -------- | ------- | ----------------------- |
-| common  | 580     | 373    | 139      | 2       | 66                      |
-| storage | 569     | 247    | 237      | 0       | 85                      |
-| web     | 657     | 157    | 139      | 0       | 361                     |
-| host    | 87      | 35     | 28       | 0       | 24                      |
-| macros  | 109     | 54     | 46       | 0       | 9                       |
-| jaunder | 315     | 231    | 72       | 6       | 6                       |
-| client  | 42      | —      | —        | —       | not scanned (WASM-only) |
+**1660 mutants, every one accounted for, zero timeouts.** This is the first
+discovery result in this project that was checked rather than asserted — the
+previous one claimed 190 survivors for these same packages, and most of those
+were artifacts. Do not trust a future queue that lacks a passing reconcile.
 
-Discovery is **complete**. 551 surviving mutants in total. `web` holds 361 of
-them — nearly two thirds — against only 157 caught, so the honest reading is
-that the unit suite hardly reaches it, not that there are 361 good tests to
-write there.
+| Package | Caught | Surviving | Unviable |
+| ------- | ------ | --------- | -------- |
+| common  | 399    | 30        | 151      |
+| storage | 295    | 37        | 237      |
+| host    | 36     | 23        | 28       |
+| jaunder | 232    | 11        | 72       |
+| macros  | 28     | 5         | 76       |
+| **all** | 990    | **106**   | 564      |
+
+Not scanned, both on purpose: `web` (the user's call — 361 reported survivors
+against 157 caught was never credible) and `client` (WASM-only, no host test
+reaches it).
 
 ## Order of work
 
-Work `common` → `storage` → `host` → `macros` → `jaunder`, then `web` last. The
-first four are pure logic with real coverage, so a surviving mutant there
-usually means a genuine gap. `web` has 361 survivors against only 157 caught —
-mostly server-fn and component code the unit suite barely reaches, so expect to
-skip much of it.
+Ordered by how much a survivor there tells you, not by count.
 
-## common — 66 surviving in 10 files
+**`host` first.** 23 survivors against only 36 caught is by far the worst ratio
+in the workspace, and 21 of the 23 sit in one file. That is a genuine hole, not
+a rounding artifact.
 
-- [x] skipped (not compiled) | common/src/render.rs | 27 — all 27 were false.
-      Re-run workspace-scoped: 71 mutants, 50 caught, 20 unviable, **0 missed**.
-      The `sanitize` feature is default-off, so package-scoped none of this file
-      compiled. No test needed; the existing ones were already killing them.
+Then `common` and `jaunder`, which are well covered — a survivor there is
+usually a specific missing assertion, the most useful kind of find. `storage`
+last of the real work, because 17 of its 37 are in test scaffolding.
+
+## host — 23 surviving in 2 files
+
+- [ ] todo | host/src/metrics.rs | 21
+- [ ] todo | host/src/error.rs | 2
+
+`metrics.rs` also holds `login_records_outcome_attribute`, the test that fails
+under plain `cargo test` because a global recorder is shared across tests in one
+process. Keep new tests process-isolated in the style of the existing ones, and
+run the package suite before the gate.
+
+## common — 30 surviving in 7 files
+
 - [ ] todo | common/src/feed/atom.rs | 12
 - [ ] todo | common/src/atompub/entry.rs | 10
 - [ ] todo | common/src/media.rs | 4
-- [ ] todo | common/src/visibility.rs | 4
 - [ ] todo | common/src/pagination.rs | 1
 - [ ] todo | common/src/tag.rs | 1
-- [ ] todo | common/src/atompub/service.rs | 1
-- [ ] todo | common/src/test_support/mod.rs | 5 — test scaffolding, not
-      production code. Judge whether this is worth anything; skipping the whole
-      file is defensible.
-- [x] done | common/src/backup.rs | 1 — `BackupMode::label` text pinned
+- [ ] todo | common/src/visibility.rs | 1
+- [ ] todo | common/src/test_support/mod.rs | 1 — scaffolding, likely skip
 
-## storage — 85 surviving in 17 files
+`render.rs` and `backup.rs` are absent from this list. `render.rs` was the file
+that reported 27 false survivors package-scoped; it is now fully caught.
 
-- [ ] todo | storage/src/posts.rs | 17
-- [ ] todo | storage/src/media_manager.rs | 10
-- [ ] todo | storage/src/audiences.rs | 9
-- [ ] todo | storage/src/sqlite/backup.rs | 6
-- [ ] todo | storage/src/subscriptions.rs | 5
-- [ ] todo | storage/src/backup.rs | 3
-- [ ] todo | storage/src/feed_events.rs | 3
-- [ ] todo | storage/src/users.rs | 3
-- [ ] todo | storage/src/sqlite/feed_events.rs | 3
-- [ ] todo | storage/src/post_service.rs | 2
-- [ ] todo | storage/src/sqlite/posts.rs | 2
-- [ ] todo | storage/src/test_support.rs | 17 — test scaffolding; same judgement
-      call as common's.
-- [ ] todo | (5 more files, 1-2 each) — read `missed.txt` for the rest
+## jaunder — 11 surviving in 5 files
 
-## host — 24 surviving in 2 files
+- [ ] todo | server/src/feed/worker.rs | 5
+- [ ] todo | server/src/commands.rs | 3
+- [ ] todo | server/src/atompub/mapping.rs | 1
+- [ ] todo | server/src/atompub/mod.rs | 1
+- [ ] todo | server/src/cli.rs | 1
 
-- [ ] todo | host/src/metrics.rs | 21
-- [ ] todo | host/src/error.rs | 3
+## macros — 5 surviving in 4 files
 
-Note: `metrics.rs` holds the test that fails under plain `cargo test`
-(`login_records_outcome_attribute`, a shared global recorder). Tread carefully
-and keep new tests process-isolated in the same style as the existing ones.
-
-## macros — 9 surviving in 4 files
-
-- [ ] todo | macros/src/lib.rs | 3
-- [ ] todo | macros/src/num_newtype.rs | 3
 - [ ] todo | macros/src/server_fn.rs | 2
+- [ ] todo | macros/src/lib.rs | 1
+- [ ] todo | macros/src/num_newtype.rs | 1
 - [ ] todo | macros/src/text_enum.rs | 1
 
-## jaunder — 6 surviving in 3 files
+Proc-macro crates mutate badly — 76 of macros' 109 mutants are unviable. Judge
+each survivor on whether a test could meaningfully assert the expansion.
 
-- [ ] todo | server/src/feed/worker.rs | 3
-- [ ] todo | server/src/commands.rs | 2
-- [ ] todo | server/src/atompub/mod.rs | 1
+## storage — 37 surviving in 10 files
 
-This package also had 6 timeouts. A timeout is not a survivor — it usually means
-the mutant made something loop forever. Leave them alone.
+- [ ] todo | storage/src/sqlite/backup.rs | 5
+- [ ] todo | storage/src/media_manager.rs | 4
+- [ ] todo | storage/src/audiences.rs | 2
+- [ ] todo | storage/src/feed_events.rs | 2
+- [ ] todo | storage/src/posts.rs | 2
+- [ ] todo | storage/src/sqlite/feed_events.rs | 2
+- [ ] todo | storage/src/db.rs | 1
+- [ ] todo | storage/src/media.rs | 1
+- [ ] todo | storage/src/users.rs | 1
+- [ ] todo | storage/src/test_support.rs | 17 — scaffolding, likely skip
+      wholesale. It is test-only code; killing these buys assertions about
+      fixtures, not about the product. Decide once, record the decision, move
+      on.
 
-## web — 361 surviving in 30 files (do last)
+If `test_support.rs` is skipped, the real storage work is 20 mutants.
 
-Biggest first: `posts/api.rs` 57, `auth/server.rs` 32, `posts/component.rs` 23,
-`media/api.rs` 22, `timeline/api.rs` 20, `timeline/server.rs` 19,
-`sessions/api.rs` 18, `backup/api.rs` 16, `profile/api.rs` 16, `site/api.rs` 16,
-`subscriptions/api.rs` 15, `invites/api.rs` 14, then 18 more files.
+## Done
 
-Read `out/web/mutants.out/missed.txt` when you get here.
+- [x] done | common/src/backup.rs | 1 — `BackupMode::label` text pinned. The
+      only test written so far, and it stands: the old assertion was
+      `!label().is_empty()`, which `"xyzzy"` satisfies.
 
 ## Counts
 
+- mutants surviving: 106 (89 excluding the two test_support files)
 - mutants killed: 1
-- mutants skipped: 0
-- files done: 1
+- files todo: 28

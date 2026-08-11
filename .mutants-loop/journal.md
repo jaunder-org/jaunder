@@ -135,3 +135,15 @@ Append-only. Newest last. One line per event.
   examined, 14 NEVER EXAMINED", naming the exact mutants. Six wrong numbers, all
   the same shape, all found by noticing totals that did not add up. That is now
   a check rather than an act of vigilance.
+- 2026-08-11 — DISCOVERY COMPLETE AND VERIFIED. reconcile.sh passes on all five
+  packages: common 580/580, storage 569/569, macros 109/109, host 87/87, jaunder
+  315/315. 1660 mutants, every one accounted for, zero timeouts. 990 caught, 564
+  unviable, **106 surviving** — against the 190 the broken run claimed for the
+  same packages. Rebuilt queue.md from these results, ordered by signal rather
+  than count: host first (23 survivors against only 36 caught, the worst ratio
+  in the workspace, 21 of them in metrics.rs), then common and jaunder where a
+  survivor usually means one specific missing assertion, storage last because 17
+  of its 37 are in test scaffolding. Excluding the two test_support files leaves
+  89 mutants worth arguing about. Deleted HANDOFF.md — it described a world
+  three corrections out of date, and a stale handoff is worse than none.
+  PROTOCOL, queue.md and this journal carry everything a restart needs.
