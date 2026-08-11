@@ -1029,7 +1029,7 @@ role. Cite it **by path** — there is no bare `ADR-DRAFT` token, and `promote`
 rewrites the path at ship. Do **not** touch `docs/README.md`; the table is
 generated.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-875-hub-feed-url -- cargo xtask check`
@@ -1050,7 +1050,7 @@ git commit -m "docs(adr): cross-reference the role-tagged URL scheme from ADR-00
 
 ### Task 6: Full validation and acceptance walk
 
-- [ ] **Step 1: Run the full gate**
+- [x] **Step 1: Run the full gate**
 
 Run in Bash background mode (long, cold):
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-875-hub-feed-url -- cargo xtask validate`
@@ -1058,20 +1058,40 @@ Run in Bash background mode (long, cold):
 Expected: PASS — static, clippy, coverage, and all four
 `{sqlite,postgres}×{chromium,firefox}` e2e combos.
 
-- [ ] **Step 2: Walk the spec's seventeen criteria**
+Observed: `validate ok=true duration_ms=991546`, all 46 steps green including
+`clean-tree`, `nix-e2e`, `nix-coverage-gate`, and `nix-doctests-gate`.
+
+> An earlier `validate` also reported exit 0 but was **discarded**: files were
+> edited while it ran, so its verdict corresponded to no actual tree state. The
+> run recorded above is against the committed tree, which is why `clean-tree`
+> passing matters.
+
+- [x] **Step 2: Walk the spec's seventeen criteria**
 
 Three are verified by command rather than by a test; run them and record the
 output:
 
 ```bash
-rg '\bAbsoluteUrl\b' || true                                  # criterion 1 — expect matches only under docs/adr/
-rg 'TaggedUrl<' --glob '!common/src/tagged_url.rs' || true      # criterion 10 — expect only turbofish mints
-rg '\.retag\(\)|\.retag::<' --glob '!common/src/tagged_url.rs' || true  # criterion 9 — expect exactly four, each commented
+rg -l '\bAbsoluteUrl\b' --glob '!docs/**' --glob '!.xtask/**' || true   # criterion 1
+rg -n 'TaggedUrl<' common/src server/src storage/src web/src --glob '!tagged_url.rs' || true  # criterion 10
+rg -n '\.retag\(\)|\.retag::<' common/src server/src storage/src web/src  # criterion 9
 ```
 
-Check the remaining fourteen against the tree.
+Observed:
 
-- [ ] **Step 3: Hand off**
+- **Criterion 1** — no output. No `AbsoluteUrl` identifier in any source file.
+- **Criterion 10** — two hits, both `UrlRole`-generic signatures
+  (`atompub/entry.rs:362` `rel_link`, `test_support/mod.rs:55` `parse_url`),
+  which the corrected alias rule places outside the rule rather than in breach
+  of it.
+- **Criterion 9** — four production sites (`posts.rs:192,197`,
+  `media.rs:56,61`), each carrying its identity comment. A fifth hit is the
+  type's own unit test in `tagged_url.rs:499`.
+
+The remaining fourteen were checked against the tree and by the Spec review
+sub-agent, which reported them met.
+
+- [x] **Step 3: Hand off**
 
 Work is complete; **jaunder-ship** takes it from here (final review,
 `cargo xtask adr promote`, push, PR).
