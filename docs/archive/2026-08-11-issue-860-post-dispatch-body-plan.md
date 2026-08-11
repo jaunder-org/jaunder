@@ -95,7 +95,7 @@ rule. Task 1 files the first two as issues.
 
 - Commit: `docs/superpowers/specs/2026-08-11-issue-860-post-dispatch-body.md`,
   `docs/superpowers/plans/2026-08-11-issue-860-post-dispatch-body.md`
-- Edit but **do not commit**: `docs/adr/drafts/submit-gate-owns-its-parse.md`
+- Edit but **do not commit**: `docs/adr/0113-submit-gate-owns-its-parse.md`
 
 **Interfaces:**
 
@@ -568,7 +568,7 @@ Four edits in `compose_state.rs`, each pinned by Steps 2–3:
    because the caller already holds a parsed body. Its current `#811, ADR-0102`
    citation (`:71`) is wrong — ADR-0102 is the config-key closed registry; use
    **ADR-0105** and reference the draft by path,
-   `docs/adr/drafts/submit-gate-owns-its-parse.md`. (The struct field itself
+   `docs/adr/0113-submit-gate-owns-its-parse.md`. (The struct field itself
    carries no doc comment today; there is nothing to update there.)
 3. `seed_from` uses `self.body.set_input(…)` and — per spec decision 10 —
    `self.summary_field.set_input(…)` in place of the bare `value.set` at `:105`.
@@ -796,7 +796,7 @@ unique on the page.
 // #860: the full compose page's submit controls had NO body clause in their disabled
 // predicate, so an empty body left "Publish" enabled and clicking it did nothing at
 // all — no error, no message, no state change. The gate and the parse are now one call
-// (docs/adr/drafts/submit-gate-owns-its-parse.md), so a control that cannot dispatch
+// (docs/adr/0113-submit-gate-owns-its-parse.md), so a control that cannot dispatch
 // cannot be pressed.
 test("an empty body disables the compose page's submit controls", async ({
   registeredPage: page,

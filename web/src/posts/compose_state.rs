@@ -75,7 +75,7 @@ impl ComposeState {
     /// body is unrepresentable (#811, ADR-0105), and the only way to obtain the
     /// `PostBody` this takes is through [`submit_gate`] — the same call that decides
     /// whether the control is enabled. See
-    /// `docs/adr/drafts/submit-gate-owns-its-parse.md`.
+    /// `docs/adr/0113-submit-gate-owns-its-parse.md`.
     #[must_use]
     pub fn inputs(&self, body: PostBody, publish: bool, slug_override: Option<Slug>) -> PostInputs {
         PostInputs {
@@ -151,7 +151,7 @@ impl Default for ComposeState {
 /// Lives here rather than in the `component` module because that module is
 /// `#[cfg(target_arch = "wasm32")]` (ADR-0070): a gate placed there would be neither
 /// host-testable nor coverage-measured. See
-/// `docs/adr/drafts/submit-gate-owns-its-parse.md`.
+/// `docs/adr/0113-submit-gate-owns-its-parse.md`.
 #[must_use]
 pub fn submit_gate(
     body: Field<PostBody>,

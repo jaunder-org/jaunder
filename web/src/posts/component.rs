@@ -139,9 +139,7 @@ pub fn ComposerFields(
     on_input: Option<Callback<()>>,
 ) -> impl IntoView {
     view! {
-        <ValidatedTextarea<
-        PostBody,
-    >
+        <ValidatedTextarea<PostBody>
             label="Body"
             name="body"
             field=body
