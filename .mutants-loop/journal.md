@@ -127,3 +127,11 @@ Append-only. Newest last. One line per event.
   (~1/8 of the work). Sixth silent wrong number in this project, and the first
   one I introduced rather than inherited. Same shape as all the others: a
   plausible summary over an unexamined gap.
+- 2026-08-11 — stopped finding these by hand. Added `reconcile.sh`: it diffs the
+  mutants `cargo mutants --list` generates for a package against the ones that
+  actually got an outcome, and names anything never examined. discover.sh runs
+  it automatically at the end, and PROTOCOL forbids refilling the queue until it
+  passes. Proved it catches the live gap — "macros: INCOMPLETE — 95/109
+  examined, 14 NEVER EXAMINED", naming the exact mutants. Six wrong numbers, all
+  the same shape, all found by noticing totals that did not add up. That is now
+  a check rather than an act of vigilance.

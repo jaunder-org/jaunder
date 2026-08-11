@@ -20,6 +20,7 @@ Everything lives in `.mutants-loop/`. Nothing lives in your head.
 | `discover.sh`          | the discovery run (never edits code)           |
 | `start-discovery.sh`   | starts discovery detached; `--status`/`--stop` |
 | `verify.sh`            | `verify.sh <pkg> <file>` — did they die?       |
+| `reconcile.sh`         | did discovery examine every mutant? run this   |
 | `discover.log`         | discovery progress                             |
 | `out/<pkg>/missed.txt` | surviving mutants, merged once a package ends  |
 | `queue.md`             | the work queue and its state                   |
@@ -34,9 +35,13 @@ are the live view — `start-discovery.sh --status` sums them for you.
 1. Read `queue.md`. Do not read anything else first. Check whether its results
    are marked stale — a queue built by a discovery run with the wrong flags
    lists mutants that were never really alive.
-2. If the queue has no `todo` files left, refill it from the newest `missed.txt`
-   files. Group the mutants by file, biggest file first — one `todo` line per
-   file.
+2. If the queue has no `todo` files left, refill it — but **run
+   `.mutants-loop/reconcile.sh` first and refuse to refill unless it passes**.
+   It counts the mutants cargo-mutants generates against the ones that actually
+   got an outcome. A discovery run can finish tidily having never examined a
+   large slice of the work; that has happened more than once, and it always
+   looked like a clean result. Only then group the mutants by file, biggest file
+   first — one `todo` line per file.
 3. Take the first `todo` file. Mark it `wip`.
 4. Do the work (below).
 5. Update `queue.md` and append one line to `journal.md`.

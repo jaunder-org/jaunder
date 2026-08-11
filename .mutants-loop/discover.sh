@@ -11,8 +11,9 @@
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT="$ROOT/.mutants-loop/out"
-LOG="$ROOT/.mutants-loop/discover.log"
+LOOP_DIR="$ROOT/.mutants-loop"
+OUT="$LOOP_DIR/out"
+LOG="$LOOP_DIR/discover.log"
 
 # TMPDIR, the nextest filter, and the mandatory flags all live in common.sh, so
 # discovery and verify.sh run the tool identically. They must: if they differ,
@@ -118,5 +119,17 @@ for pkg in $PACKAGES; do
     echo "[$pkg] INCOMPLETE — a shard's baseline failed" >>"$LOG"
   fi
 done
+
+echo "=== discovery finished $(date -Is) ===" >>"$LOG"
+
+# "Finished" is not "complete". Count the mutants before believing the summary —
+# a run can end tidily having never examined a large slice of the work, and that
+# has happened more than once here. reconcile.sh is the only thing that actually
+# answers the question.
+{
+  echo "--- reconciliation ---"
+  "$LOOP_DIR/reconcile.sh" $PACKAGES 2>&1
+  echo "reconcile status=$?"
+} >>"$LOG" 2>&1
 
 echo "=== discovery complete $(date -Is) ===" >>"$LOG"
