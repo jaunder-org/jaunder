@@ -271,7 +271,12 @@ folded into it.
 > `web/src/forms/component.rs` is wasm-only (`web/src/forms/mod.rs:9`), so this
 > task has no host test. Its behavior is settled by Task 6's e2e.
 
-- [ ] **Step 1: Add the prop and fire it**
+- [x] **Step 1: Add the prop and fire it**
+
+Done, with one improvement over the plan: the handler's two lines
+(`field.value.set` + `field.error.set`) were exactly what Task 2's
+`Field::set_input` does, so the handler now calls it. That removes the last
+hand-spelled value+error pair in the forms layer.
 
 Add to the prop list, after `help`:
 
@@ -289,7 +294,7 @@ prop — rename it to `handle_input` and update its use in the `view!` block at
 `field.error.set`, so a consumer reading validity from the callback sees the new
 state.
 
-- [ ] **Step 2: Verify existing call sites still compile — both targets**
+- [x] **Step 2: Verify existing call sites still compile — both targets**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-860-post-dispatch-body -- cargo xtask check --no-test`

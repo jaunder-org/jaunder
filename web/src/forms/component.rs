@@ -173,15 +173,22 @@ pub fn ValidatedTextarea<T>(
     /// `aria-describedby` (id `{name}-help`).
     #[prop(optional)]
     help: Option<&'static str>,
+    /// Optional callback fired on every input event, **after** the value and error are
+    /// written — so a consumer that reads the field's validity from here sees the new
+    /// state. `ComposerFields` forwards the composer's flash-clearing callback through
+    /// it (#860); every other call site omits it.
+    #[prop(optional)]
+    on_input: Option<Callback<()>>,
 ) -> impl IntoView
 where
     T: FromStr + 'static,
     T::Err: Display,
 {
-    let on_input = move |ev| {
-        let v = event_target_value(&ev);
-        field.value.set(v.clone());
-        field.error.set(field.error_for(&v));
+    let handle_input = move |ev| {
+        field.set_input(&event_target_value(&ev));
+        if let Some(cb) = on_input {
+            cb.run(());
+        }
     };
     // Only wire `aria-describedby` when a help line is actually rendered (its id must
     // resolve). Derived once and handed down as `help_id`, per `ValidatedInput`.
@@ -202,7 +209,7 @@ where
                 placeholder=placeholder
                 aria-describedby=describedby
                 prop:value=field.value
-                on:input=on_input
+                on:input=handle_input
                 on:blur=move |_| field.touch()
             ></textarea>
         </Labelled>
