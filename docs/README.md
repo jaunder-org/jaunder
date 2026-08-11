@@ -135,6 +135,7 @@ convention). See the Status column below for each ADR's current status.
 | [0105](adr/0105-post-body-non-blank-invariant.md)                  | A post body has a non-blank invariant, and normalization is format-aware                                     | accepted   |
 | [0106](adr/0106-wasm-raw-size-budget.md)                           | The wasm size budget is on raw bytes, not compressed                                                         | accepted   |
 | [0107](adr/0107-web-session-establishment-is-cookie-only.md)       | Web session establishment is cookie-only                                                                     | accepted   |
+| [0108](adr/0108-absence-is-named-at-its-source.md)                 | Absence is named where it can occur                                                                          | accepted   |
 
 <!-- adr-table:end -->
 
