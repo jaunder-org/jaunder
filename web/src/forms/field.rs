@@ -130,6 +130,22 @@ where
         self.touched.get()
     }
 
+    /// Write `input` and its validity together — the programmatic counterpart to the
+    /// components' on-input handler, for callers that seed a field from fetched data
+    /// rather than from a keystroke (#860).
+    ///
+    /// Writing `value` alone leaves `error` stale, and `is_valid()` reads `error` while
+    /// [`Self::parsed`] re-reads `value` — so the two then disagree about the same
+    /// field. Seeding is not interaction, so `touched` is deliberately left alone: the
+    /// editor must not flash a validation message on load.
+    ///
+    /// This is a convention, not an enforcement — `value` and `error` are `pub`, so the
+    /// desync stays expressible until they are collapsed into one derived source (#907).
+    pub fn set_input(&self, input: &str) {
+        self.value.set(input.to_owned());
+        self.error.set(self.error_for(input));
+    }
+
     pub fn touch(&self) {
         self.touched.set(true);
     }
@@ -339,6 +355,62 @@ mod tests {
         let owner = Owner::new();
         owner.set();
         assert!(!Field::<Slug>::new().is_valid());
+        drop(owner);
+    }
+
+    // `set_input` (#860) is the programmatic counterpart to the components' on-input
+    // handler: the tests above spell that handler by hand (`value.set` then
+    // `error.set`) precisely because a seeding caller had no single door to use.
+    #[test]
+    fn set_input_writes_value_and_error_together() {
+        let owner = Owner::new();
+        owner.set();
+
+        let field = Field::<Slug>::new();
+        field.set_input("hello");
+        assert_eq!(field.value.get(), "hello");
+        assert!(field.is_valid(), "a valid slug leaves no error");
+
+        field.set_input("Bad Slug!");
+        assert_eq!(field.value.get(), "Bad Slug!");
+        assert!(!field.is_valid(), "an invalid slug sets the error");
+        assert_eq!(
+            field.is_valid(),
+            field.parsed().is_some(),
+            "is_valid and parsed must agree after a programmatic write"
+        );
+
+        drop(owner);
+    }
+
+    #[test]
+    fn set_input_honors_optionality() {
+        // Routes through `error_for`, not `field_error`: an empty *optional* field is
+        // "not provided" (valid), while an empty *required* one is not.
+        let owner = Owner::new();
+        owner.set();
+
+        let optional = Field::<Slug>::optional();
+        optional.set_input("");
+        assert!(optional.is_valid(), "an empty optional field is valid");
+
+        let required = Field::<Slug>::new();
+        required.set_input("");
+        assert!(!required.is_valid(), "an empty required field is not valid");
+
+        drop(owner);
+    }
+
+    #[test]
+    fn set_input_does_not_touch_the_field() {
+        // Seeding is not interaction: touching here would flash an error on editor load.
+        let owner = Owner::new();
+        owner.set();
+
+        let field = Field::<Slug>::new();
+        field.set_input("Bad Slug!");
+        assert!(!field.is_touched());
+
         drop(owner);
     }
 }

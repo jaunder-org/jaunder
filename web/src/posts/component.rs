@@ -29,8 +29,8 @@ use crate::posts::{
     ComposeState, Create, Delete, DraftRowDisplay, ListingRoute, PermalinkRoute, Publish,
     SavedPost, Unpublish, UnpublishedPage, UnpublishedPost, draft_row_display, get,
     get_audience_selection, get_default_audience_selection, get_preview, list_drafts, notify,
-    notify_with_fallback, parse_permalink_route, publish_redirect, seeded_page, tag_query,
-    user_query, user_tag_query, with_post_id,
+    notify_with_fallback, parse_permalink_route, publish_redirect, seeded_page, submit_gate,
+    tag_query, user_query, user_tag_query, with_post_id,
 };
 use crate::subscriptions::SubscribeButton;
 use crate::taglist::TagCtx as TagContext;
@@ -43,6 +43,7 @@ use crate::topbar::Topbar;
 use common::feed::FeedSurface;
 use common::ids::PostId;
 use common::pagination::PageSize;
+use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::render::PostFormat;
 use common::root_relative_url::RootRelativeUrl;
@@ -111,36 +112,43 @@ pub fn FormatToggle(
 
 /// Shared body + format fields used by all post editors.
 ///
-/// Renders a `name="body"` textarea. When `show_seg` is true (default), also
+/// Renders a `name="body"` textarea through [`ValidatedTextarea`], so a body that is
+/// not a `PostBody` shows the newtype's own message once touched — the same treatment
+/// the summary and slug already get (#860). When `show_seg` is true (default), also
 /// renders the `.j-seg` format toggle.
+///
+/// Neither `field_class` nor `textarea_class` has a default, on purpose: `ValidatedTextarea`
+/// wraps the control in a `<label>`, which changes what the surrounding flex column lays
+/// out, so each caller must name the classes that suit its own layout rather than
+/// inheriting a default that only one of the three sites actually wanted.
 #[component]
 pub fn ComposerFields(
-    body: RwSignal<String>,
+    body: Field<PostBody>,
     format: RwSignal<PostFormat>,
+    field_class: &'static str,
     #[prop(default = "Write something\u{2026}")] placeholder: &'static str,
     #[prop(default = 16u32)] rows: u32,
-    #[prop(default = "j-edit-form-textarea")] textarea_class: &'static str,
+    textarea_class: &'static str,
     /// When false, the `.j-seg` format toggle is not rendered (caller places it elsewhere).
     #[prop(default = true)]
     show_seg: bool,
     /// Optional callback fired on every body input event (e.g. to clear a flash message).
-    #[prop(optional)]
+    /// `optional_no_strip`, so a caller holding its own `Option` forwards it as-is rather
+    /// than unwrapping it into a do-nothing callback.
+    #[prop(optional_no_strip)]
     on_input: Option<Callback<()>>,
 ) -> impl IntoView {
     view! {
-        <textarea
+        <ValidatedTextarea<PostBody>
+            label="Body"
             name="body"
-            class=textarea_class
+            field=body
             rows=rows
             placeholder=placeholder
-            prop:value=body
-            on:input=move |ev| {
-                body.set(event_target_value(&ev));
-                if let Some(cb) = on_input {
-                    cb.run(());
-                }
-            }
-        ></textarea>
+            field_class=field_class
+            class=textarea_class
+            on_input=on_input
+        />
         {show_seg.then(move || view! { <FormatToggle format=format /> })}
     }
 }
@@ -539,16 +547,18 @@ fn CompactComposer(
     placeholder: &'static str,
     on_input: Option<Callback<()>>,
 ) -> impl IntoView {
-    // A blank body is unrepresentable as a `PostBody` (#811, ADR-0102), so a
-    // non-parsing body drops the dispatch rather than posting: the disabled state
-    // below is an affordance, not a guarantee.
-    let dispatch = move |publish: bool| {
-        if let Some(post) = state.inputs(publish, None) {
-            create_action.dispatch(Create { post });
-        }
-    };
-    let submit_disabled =
-        move || state.body.get().trim().is_empty() || !state.summary_field.is_valid();
+    // The gate and the payload come from one `submit_gate` call (#860, ADR-0105), so a
+    // control that cannot dispatch is disabled rather than inert. No slug in this shape,
+    // so the only other blocker is the summary.
+    let (submit_disabled, dispatch) = submit_gate(
+        state.body,
+        Signal::derive(move || !state.summary_field.is_valid()),
+        Callback::new(move |(body, publish): (PostBody, bool)| {
+            create_action.dispatch(Create {
+                post: state.inputs(body, publish, None),
+            });
+        }),
+    );
     view! {
         <div class="j-composer-row">
             {username.map(|u| view! { <Avatar name=&u size=36 /> })} <div class="j-composer-body">
@@ -557,9 +567,10 @@ fn CompactComposer(
                     format=state.format
                     rows=rows
                     placeholder=placeholder
+                    field_class="j-composer-field"
                     textarea_class=""
                     show_seg=false
-                    on_input=on_input.unwrap_or_else(|| Callback::new(move |()| {}))
+                    on_input=on_input
                 />
                 <MediaUpload show_result=true />
                 <div style="margin-top:10px">
@@ -580,7 +591,7 @@ fn CompactComposer(
                         name="publish"
                         value="false"
                         disabled=submit_disabled
-                        on:click=move |_| dispatch(false)
+                        on:click=move |_| dispatch.run(false)
                     >
                         "Save draft"
                     </button>
@@ -590,7 +601,7 @@ fn CompactComposer(
                         name="publish"
                         value="true"
                         disabled=submit_disabled
-                        on:click=move |_| dispatch(true)
+                        on:click=move |_| dispatch.run(true)
                     >
                         "Publish"
                     </button>
@@ -613,13 +624,18 @@ fn FullComposer(
     placeholder: &'static str,
 ) -> impl IntoView {
     let slug_field = Field::<Slug>::optional();
-    // Same non-blank-body guard as the compact shape; see `ComposeState::inputs`.
-    let dispatch = move |publish: bool| {
-        if let Some(post) = state.inputs(publish, slug_field.parsed()) {
-            create_action.dispatch(Create { post });
-        }
-    };
-    let submit_disabled = move || !slug_field.is_valid() || !state.summary_field.is_valid();
+    // Same one-call gate as the compact shape; see `submit_gate`. Before #860 this
+    // shape's predicate had no body clause at all, so an empty body left both buttons
+    // enabled and clicking them did nothing.
+    let (submit_disabled, dispatch) = submit_gate(
+        state.body,
+        Signal::derive(move || !slug_field.is_valid() || !state.summary_field.is_valid()),
+        Callback::new(move |(body, publish): (PostBody, bool)| {
+            create_action.dispatch(Create {
+                post: state.inputs(body, publish, slug_field.parsed()),
+            });
+        }),
+    );
     view! {
         <div class="j-compose-grid">
             <div class="j-compose-body">
@@ -628,6 +644,8 @@ fn FullComposer(
                     format=state.format
                     rows=rows
                     placeholder=placeholder
+                    field_class="j-composer-field"
+                    textarea_class="j-edit-form-textarea"
                     show_seg=false
                 />
             </div>
@@ -641,7 +659,7 @@ fn FullComposer(
                         name="publish"
                         value="false"
                         prop:disabled=submit_disabled
-                        on:click=move |_| dispatch(false)
+                        on:click=move |_| dispatch.run(false)
                     >
                         "Save draft"
                     </button>
@@ -651,7 +669,7 @@ fn FullComposer(
                         name="publish"
                         value="true"
                         prop:disabled=submit_disabled
-                        on:click=move |_| dispatch(true)
+                        on:click=move |_| dispatch.run(true)
                     >
                         "Publish"
                     </button>
@@ -1090,16 +1108,30 @@ fn EditPostForm(
     is_published: bool,
     action: ServerAction<super::Update>,
 ) -> impl IntoView {
-    // Same non-blank-body guard as the composer; see `ComposeState::inputs`.
-    let dispatch_update = move |publish: bool| {
-        if let Some(post) = state.inputs(publish, slug_field.parsed()) {
-            action.dispatch(super::Update { post_id, post });
-        }
-    };
+    // Same one-call gate as the composer; see `submit_gate`. Before #860 this form's
+    // predicate had no body clause, so clearing the textarea left Save enabled and
+    // silently inert.
+    let (save_disabled, dispatch_update) = submit_gate(
+        state.body,
+        Signal::derive(move || !slug_field.is_valid() || !state.summary_field.is_valid()),
+        Callback::new(move |(body, publish): (PostBody, bool)| {
+            action.dispatch(super::Update {
+                post_id,
+                post: state.inputs(body, publish, slug_field.parsed()),
+            });
+        }),
+    );
     view! {
         <div class="j-edit-form-grid">
             <div class="j-edit-form-body">
-                <ComposerFields body=state.body format=state.format rows=20 show_seg=false />
+                <ComposerFields
+                    body=state.body
+                    format=state.format
+                    rows=20
+                    field_class="j-edit-form-field j-edit-form-field--body"
+                    textarea_class="j-edit-form-textarea"
+                    show_seg=false
+                />
             </div>
             <aside class="j-edit-form-aside">
                 <ComposeOptions state=state slug_field=slug_field is_published=is_published />
@@ -1107,10 +1139,8 @@ fn EditPostForm(
                 <div class="j-edit-form-actions">
                     <EditSaveActions
                         is_published=is_published
-                        disabled=Signal::derive(move || {
-                            !slug_field.is_valid() || !state.summary_field.is_valid()
-                        })
-                        on_save=Callback::new(dispatch_update)
+                        disabled=save_disabled
+                        on_save=dispatch_update
                     />
                 </div>
             </aside>

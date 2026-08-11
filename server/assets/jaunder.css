@@ -379,6 +379,16 @@
 .j-composer-body textarea {
     width: 100%;
 }
+/* The body control's wrapper. `ValidatedTextarea` wraps the control in a `<label>`
+   (#860), so that label — not the textarea — is now the flex item of the composer
+   column. Restate the column layout one level down, or the body field and the format
+   toggle collapse together. */
+.j-composer-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
 .j-composer-toolbar {
     display: flex;
     align-items: center;

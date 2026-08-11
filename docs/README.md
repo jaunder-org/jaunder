@@ -140,6 +140,7 @@ convention). See the Status column below for each ADR's current status.
 | [0110](adr/0110-gate-population-membership-is-structural.md)       | A gate's population membership is structural, and must fail closed                                           | accepted   |
 | [0111](adr/0111-e2e-one-boot-per-page.md)                          | The e2e suite boots each page once                                                                           | accepted   |
 | [0112](adr/0112-role-tagged-site-urls.md)                          | Role-tagged site URLs                                                                                        | accepted   |
+| [0113](adr/0113-submit-gate-owns-its-parse.md)                     | A submit gate owns its parse                                                                                 | accepted   |
 
 <!-- adr-table:end -->
 
