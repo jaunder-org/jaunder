@@ -101,3 +101,9 @@ Append-only. Newest last. One line per event.
   missed" while a third of the package was never actually examined. Re-running
   discovery from scratch — caught results would survive, but a partial re-run
   leaves exactly the kind of mixed state that has caused trouble here already.
+- 2026-08-10 — `--stop` was broken and reported success anyway. setsid puts
+  discover.sh in its own process group, so killing the launcher pid left
+  cargo-mutants orphaned and still building; it had to be killed by PID by hand.
+  `--stop` now signals the process GROUP, then waits and confirms, escalating to
+  KILL after 20s. A stop that lies is worse than one that fails loudly. Also
+  added `--in <seconds>` for a detached delayed start.

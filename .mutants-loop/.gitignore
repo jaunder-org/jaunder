@@ -3,3 +3,4 @@ discover.log
 discover.log.*
 out/
 discovery.pid
+scheduled.log
