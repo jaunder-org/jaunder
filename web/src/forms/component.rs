@@ -177,7 +177,12 @@ pub fn ValidatedTextarea<T>(
     /// written — so a consumer that reads the field's validity from here sees the new
     /// state. `ComposerFields` forwards the composer's flash-clearing callback through
     /// it (#860); every other call site omits it.
-    #[prop(optional)]
+    ///
+    /// `optional_no_strip` (not the usual `optional`), for the reason [`Labelled`]'s
+    /// `help` documents: `ComposerFields` holds its own `on_input` as an `Option` and
+    /// forwards it as-is, and a plain `#[prop(optional)]` on an `Option<_>` generates a
+    /// `strip_option` setter that takes the *inner* type, which would not accept it.
+    #[prop(optional_no_strip)]
     on_input: Option<Callback<()>>,
 ) -> impl IntoView
 where

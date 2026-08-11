@@ -52,7 +52,7 @@ pub use page_state::{
 };
 
 // Same reason again: the composer bundle's only caller is the wasm-only `component`.
-pub use compose_state::ComposeState;
+pub use compose_state::{ComposeState, submit_gate};
 
 // The API surface — re-exported so external call sites and the server-fn
 // registrar keep the stable `crate::posts::…` paths despite living in `api.rs`.

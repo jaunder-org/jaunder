@@ -351,14 +351,14 @@ git commit -m "feat(forms): ValidatedTextarea forwards an optional on_input call
 > `cargo nextest run -p web` is host-only and stays runnable — but nothing is
 > committed until Step 11.
 
-- [ ] **Step 1: Extend the test module's imports**
+- [x] **Step 1: Extend the test module's imports**
 
 `compose_state.rs`'s `mod tests` imports only `use super::ComposeState;`
 (`:137`). Add what the new tests need:
 `use super::{ComposeState, submit_gate};`, `use crate::forms::Field;`,
 `use common::post_body::PostBody;`.
 
-- [ ] **Step 2: Rewrite the four existing tests to the new shapes**
+- [x] **Step 2: Rewrite the four existing tests to the new shapes**
 
 All four use `state.body` as an `RwSignal<String>` and/or the old `inputs`
 arity. Rewrite each — none is deleted except where noted:
@@ -398,7 +398,7 @@ moves to `submit_gate`, where Step 4's tests cover it.
     }
 ```
 
-- [ ] **Step 3: Write the failing seeding/reset tests**
+- [x] **Step 3: Write the failing seeding/reset tests**
 
 These pin spec AC6 and AC7 — including the summary half of AC7, which is the
 reason `seed_from` gains a second `set_input`. Reuse the existing
@@ -448,7 +448,7 @@ holds a full `RenderedPost` (`common/src/seed.rs:108-112`) and has no
     }
 ```
 
-- [ ] **Step 4: Write the failing `submit_gate` tests**
+- [x] **Step 4: Write the failing `submit_gate` tests**
 
 One per branch: blocked-by-body, blocked-by-caller, dispatch-with-payload, and
 the invariant tying disabled to absent-payload.
@@ -546,7 +546,7 @@ the invariant tying disabled to absent-payload.
     }
 ```
 
-- [ ] **Step 5: Run the host tests, verify they fail**
+- [x] **Step 5: Run the host tests, verify they fail**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-860-post-dispatch-body -- cargo nextest run -p web compose_state`
@@ -557,7 +557,7 @@ Expected: FAIL — `submit_gate` not found; `inputs` arity; no `set_input` on
 fully-qualified name `posts::compose_state::tests::<name>`, and none of the four
 test names contains `submit_gate`.)
 
-- [ ] **Step 6: Reshape `ComposeState`**
+- [x] **Step 6: Reshape `ComposeState`**
 
 Four edits in `compose_state.rs`, each pinned by Steps 2–3:
 
@@ -574,7 +574,7 @@ Four edits in `compose_state.rs`, each pinned by Steps 2–3:
    `self.summary_field.set_input(…)` in place of the bare `value.set` at `:105`.
 4. `reset` uses `self.body.reset()` in place of `self.body.set(String::new())`.
 
-- [ ] **Step 7: Write `submit_gate`**
+- [x] **Step 7: Write `submit_gate`**
 
 In `compose_state.rs`, to the signature in **Interfaces**. Step 4's tests pin
 every branch, and the invariant they enforce determines the body: **both outputs
@@ -593,14 +593,14 @@ Then extend `web/src/posts/mod.rs:55`:
 pub use compose_state::{ComposeState, submit_gate};
 ```
 
-- [ ] **Step 8: Run the host tests, verify they pass**
+- [x] **Step 8: Run the host tests, verify they pass**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-860-post-dispatch-body -- cargo nextest run -p web compose_state`
 Expected: PASS. `component.rs` is still broken for wasm at this point — that is
 expected and is fixed next.
 
-- [ ] **Step 9: Rebuild `ComposerFields`**
+- [x] **Step 9: Rebuild `ComposerFields`**
 
 Change the `body` prop to `Field<PostBody>`, add a `field_class: &'static str`
 prop (no default — spec AC20 requires every site to pass one explicitly), and
@@ -617,7 +617,7 @@ Note a cosmetic delta to accept: `Labelled` hardcodes the label span's class as
 will not match its siblings' uppercase `.j-edit-form-label` styling. That is
 acceptable; do not add a prop to fix it in this cycle.
 
-- [ ] **Step 10: Wire all three forms to `submit_gate`**
+- [x] **Step 10: Wire all three forms to `submit_gate`**
 
 Each replaces its `dispatch` closure and its `submit_disabled`/`disabled`
 predicate with one `submit_gate` call, binds the returned pair to the buttons'
@@ -648,7 +648,7 @@ Also fix the stale citation at `:542`: rewrite the comment to describe the new
 shape (the gate and the payload are one call, so there is no dropped dispatch
 left to explain) and cite **ADR-0105** plus the draft path.
 
-- [ ] **Step 11: Verify both targets, and that the swallow is gone**
+- [x] **Step 11: Verify both targets, and that the swallow is gone**
 
 Run:
 `devtool run --cwd /home/mdorman/src/jaunder/.claude/worktrees/issue-860-post-dispatch-body -- cargo xtask check`
@@ -661,6 +661,14 @@ Then run:
 `rg -n 'trim\(\)\.is_empty\(\)|let Ok\(body\)|\.ok\(\)\?|if let Some\(post\)' web/src/posts/component.rs`
 Expected: no matches. (These four patterns currently match exactly `:546`,
 `:551`, `:620` and `:1097` — the lines being removed.)
+
+Two deviations found while implementing, both folded in:
+
+- `ValidatedTextarea`'s new `on_input` needed `#[prop(optional_no_strip)]`, not
+  `#[prop(optional)]` — on an `Option<_>` the latter generates a `strip_option`
+  setter taking the inner type, which will not accept `ComposerFields`'
+  forwarded `Option`. This is the same trap `Labelled`'s `help` prop documents.
+- `submit_gate` needed `#[must_use]` (clippy, `-D warnings`).
 
 - [ ] **Step 12: Commit**
 
