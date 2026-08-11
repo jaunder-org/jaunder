@@ -17,7 +17,7 @@ only by parsing, by composing from a `Base`, or by an explicit `retag()`.
 `serde`, Leptos, `cargo xtask` gates.
 
 Spec:
-[`docs/superpowers/specs/2026-08-10-issue-875-role-tagged-urls.md`](../specs/2026-08-10-issue-875-role-tagged-urls.md).
+[`docs/archive/2026-08-10-issue-875-role-tagged-urls-spec.md`](2026-08-10-issue-875-role-tagged-urls-spec.md).
 This plan is "how"; the spec is "what/why". Read the spec's _Roles_, _Minting a
 role_, and _The alias rule_ sections before starting.
 
