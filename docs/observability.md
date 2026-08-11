@@ -1236,15 +1236,32 @@ so whole-suite subtraction charges the change for work it added rather than
 measuring the work it removed. All 138 `before` tests are present in `after` —
 nothing was renamed or dropped — so the like-for-like quantity is well defined.
 
+**Two different quantities appear here and must not be mixed.** The rows marked
+_body time_ are **summed per-test duration** from the Playwright report; suite
+wall-clock (`stats.duration`) additionally carries fixture and worker overhead
+outside the per-test windows, so the two disagree even within one arm
+(`before`/chromium round 1: 362.2 s summed vs 373.6 s wall-clock). Body time is
+the only one that can be restricted to a subset of tests, which is why the
+like-for-like comparison uses it; the headline verdict uses wall-clock, because
+that is the metric the pre-registration named.
+
 |                                     | chromium   | firefox    |
 | ----------------------------------- | ---------- | ---------- |
-| matched-test body time, before      | 344.3 s    | 486.2 s    |
-| matched-test body time, after       | 287.5 s    | 408.9 s    |
+| matched-test body time, before      | 344.2 s    | 486.3 s    |
+| matched-test body time, after       | 287.4 s    | 409.0 s    |
 | **saved on the pre-existing suite** | **56.8 s** | **77.3 s** |
-| cost of the 22 added tests          | 37.5 s     | 53.5 s     |
+| body time of the 22 added tests     | 37.4 s     | 53.4 s     |
 | net suite wall-clock                | −18.3 s    | −23.4 s    |
 
-The arithmetic closes: 23.4 + 53.5 ≈ 76.9 ≈ 77.3.
+The arithmetic closes: 23.4 + 53.4 ≈ 76.8 ≈ 77.3.
+
+Matching is on `(file, title)`: **138 shared, 22 after-only, 0 before-only** in
+every one of the six browser/round pairs — `before` is a strict subset of
+`after`, nothing was renamed, and every test in a trace appears in the matching
+report and vice versa. Per-test and per-file rollups are in the corpus
+(`pertest-*.json`, `perfile-rollup.csv`). The largest movers are `posts.spec.ts`
+(firefox 171.0 → 114.0 s body time, 95 → 42 test-attributed loads) and
+`profile.spec.ts` (33.0 → 25.6 s, 22 → 15).
 
 ### Document loads
 
