@@ -1298,14 +1298,11 @@ is a long cold run.
 
 The `before` arm is the branch's fork point, `wt-base-issue-867`.
 
-- [ ] **Step 3: Capture the confirming arms** — **NOT RUN.** Gate-settings
-      (2-worker) arms were not collected. The spec gives this set no pass
-      criterion — it is reported, not gated — so the verdict does not depend on
-      it, but the gate-time figure the issue quotes ("65 s off the gate") is
-      therefore still unmeasured. The deciding set is single-worker, and
-      `playwright.config.ts:50` ties `fullyParallel` to the worker count, so the
-      single-worker saving does not translate linearly. Left undone
-      deliberately, not overlooked.
+- [x] **Step 3: Capture the confirming arms** — 12 gate runs, none discarded.
+      Gate saving is **−10.2 s chromium, −9.1 s firefox** per combo, against the
+      issue's projected ~65 s. Navigation counts came back identical to the
+      deciding set in every run and per spec file, which is the check that lets
+      the deciding set's count stand. Written up in `docs/observability.md`.
 
 Gate settings (2 workers), same shape. Reported only — no pass criterion, per
 the spec.

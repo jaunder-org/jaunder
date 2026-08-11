@@ -1314,14 +1314,57 @@ the performance claim _as pre-registered_, and it is recorded here as a failure
 rather than rescued by promoting the like-for-like number to the headline after
 the fact.
 
+### The confirming set — what the gate actually saves
+
+Gate checks (`.#checks.x86_64-linux.e2e-sqlite-{chromium,firefox}`, 2 workers,
+`fullyParallel` on), same shape: 3 runs per arm, interleaved, distinct salts.
+Reported, not gated — the spec gives this set no pass criterion.
+
+| arm    | chromium              | firefox               |
+| ------ | --------------------- | --------------------- |
+| before | 193.0 / 178.1 / 173.8 | 302.9 / 302.1 / 273.5 |
+| after  | 181.0 / 167.1 / 166.3 | 293.7 / 289.0 / 268.6 |
+| mean Δ | **−10.2 s**           | **−9.1 s**            |
+
+0 failed, 0 flaky in all 12. Navigation totals are **identical to the deciding
+set — 236 before, 203 after — in every run and per spec file** (all 24 files
+cross-checked, zero differences). Worker parallelism does not change what the
+suite navigates, which is what lets the deciding set's count check stand.
+
+**The issue's headline estimate was wrong, and this is the number that corrects
+it.** #867 projected "~65 s off the gate". The gate saves **~9–10 s per combo**.
+Two reasons, both structural rather than the change underperforming:
+
+- **Parallelism halves the conversion.** At 2 workers a body-time saving reaches
+  wall-clock at roughly half. Firefox: shared-test body time falls 555.7 s →
+  475.5 s (−80.2 s), the 22 added tests cost 61.0 s, so net body ≈ 19.1 s and ≈
+  9.6 s of wall-clock — against 9.1 s observed. Chromium closes the same way.
+- **The estimate assumed removal only.** It priced ~74 navigations at full
+  `commitToMount` with no parallel discount and no offsetting additions.
+
+**Do not pool these two sets.** At 2 workers summed body time _exceeds_ suite
+wall-clock (firefox `before`: ~521–573 s of body time inside a ~274–303 s suite)
+— the suite finishes sooner while each test's own window grows, because the
+workers contend. Single-worker and gate numbers answer different questions and
+averaging them is meaningless.
+
+Incidental: the gate checks already set `JAUNDER_E2E_RETRIES=1` via `extraEnv`
+(`flake.nix:968`), so the campaign's `retries` edit was redundant for this set.
+It was applied identically to both arms anyway, to keep the protocol identical.
+
 ### Reproducing
 
 ```console
 $ git worktree add <base-dir> --detach wt-base-issue-867
 $ # per run: set flake.nix e2eSalt to a unique string, then
-$ nix build .#e2e-sqlite-firefox-single-worker --print-out-paths --no-link
+$ nix build .#e2e-sqlite-firefox-single-worker --print-out-paths --no-link   # deciding
+$ nix build .#checks.x86_64-linux.e2e-sqlite-firefox --print-out-paths --no-link  # confirming
 $ # revert e2eSalt to "" afterwards — the e2e-scaffold check forbids committing it
 ```
+
+Corpus: `~/measurements/jaunder/issue-867-navcount/`. Deciding-set files are
+unprefixed, confirming-set files carry a `gate-` prefix, and the README opens
+with a table naming both sets and stating that they must not be pooled.
 
 ## #792 — the per-test warmup A/B (findings, 2026-08-04)
 
