@@ -358,9 +358,10 @@ issues that own them):
 | #924 lifecycle & health (§2.7)                                                                                                     | #282                                                |
 | #925 webmention interactions (§6)                                                                                                  | #923                                                |
 
-Only #282 and #919 carry a milestone (Inbound v1). The other five are feed
-machinery **past** that epic's arc and are deliberately unmilestoned pending a
-home of their own.
+Milestones: #282 and #919 sit in **Inbound v1** — they are the producer→hub arc
+that epic exists for. The other five are feed machinery **past** that arc, so
+they have an epic of their own, **Web-feed reading (post-v1)**, created
+2026-08-11 for exactly this section's contents.
 
 Doc-only until real (file from the section when picked up): JSON Feed (§2.4),
 full-text scraping / LLM summarization / image proxy / enclosures (§4), search
