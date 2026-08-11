@@ -15,10 +15,16 @@ test("email verification flow completes successfully", async ({
   // (recipient-scoped, parallel-safe), and follow the emitted link.
   await setAndVerifyEmail(page, user.email, mailbox);
 
-  // Confirm email is shown as verified on the profile page
+  // Confirm email is shown as verified on the profile page. Nothing in the app
+  // links to /profile/email — it is not in the sidebar's NAV_ITEMS nor in the
+  // reactive sidebar — so there is no in-app move that re-enters the route, and
+  // a document load is the only way to remount the page and re-read the
+  // verified state. "A fresh load re-reads from the server" would NOT be a
+  // justification on its own: an in-app re-entry remounts the component and
+  // refetches too (#896's never-invent-an-affordance rule is what decides here).
   allowSecondBoot(
     page,
-    "a fresh load reads the verified state back through the server, proving email::verify persisted",
+    "nothing in the app links to /profile/email, so a document load is the only way to re-enter the route and read the verified state back",
   );
   await goto(page, "/profile/email");
   await expect(page.locator("p")).toContainText("verified");

@@ -696,3 +696,61 @@ named cold-render subjects (permalink render, boot marks, flash/CLS, the
 not-found edit routes), the emailed-link arrivals, and the pre-paint/marker
 boots in `authed-flash.spec.ts` are all doing a job the spec explicitly
 protects.
+
+## Amendment 3 (2026-08-11) — the persistence-reload premise was wrong, and five loads go
+
+This file is archived; the sections above are left as written. This records what
+a PR-time review found and what changed in response.
+
+**The false premise.** Thirteen `kept:declared` rows above justify a reload with
+some form of "a fresh load reads the persisted value back through
+`profile::get` / `site::get` / `backup::get_settings`". The implied claim — that
+only a document load re-reads from the server — is untrue. Each page's
+`Resource` is created **at component mount** (e.g.
+`web/src/profile/component.rs:15`,
+`Resource::new(move || update_action.version().get(), |_| get())`), so an
+**in-app re-entry of the route remounts the page and refetches too**; and the
+resource already refetches on `update_action.version()`, so the value asserted
+straight after a save may itself be a server re-read. The premise came from the
+spec, was inherited by every stage that followed, and survived two soundness
+reviews because nobody tested it.
+
+**The rule that decides each row is unchanged** ([#896](https://github.com/jaunder-org/jaunder/issues/896)): a test never invents an
+affordance the app does not have. So the outcome differs by route, and it was
+checked against the source rather than assumed:
+
+- **`/admin/site` and `/admin/backups` — a real affordance exists.**
+  `web/src/sidebar/component.rs:115-133` renders "Configure Backups" and "Site
+  Settings" nav links for an operator. The five round-trip reloads there are now
+  in-app re-entries (leave to the sibling admin route, come back), and their
+  declarations are deleted. `SiteSettingsPage`/`BackupSettingsPage` create their
+  `Resource` at mount, so the return trip repopulates the form from the server —
+  which is what the assertions need.
+- **`/profile` — no affordance exists.** It is in neither `NAV_ITEMS`
+  (`web/src/sidebar/markup.rs`) nor the sidebar footer, which carries only the
+  avatar and a "Sign out" link, and nothing else in `web/src` links to it. Its
+  seven loads **stay**, and their reasons are rewritten to the true one: there is
+  no in-app control that re-enters the route, so a document load is the only way
+  to remount the page and re-read the value.
+- **The two `/admin/site` banner rows are untouched.** "Painted from the
+  boot-time site config" is a claim about a cold boot and is true as written.
+- **`/profile/email`'s row is left as written.** Its route has no affordance
+  either, so the load stays regardless; only its wording shares the weak shape.
+
+**Proved, not assumed.** Each converted test was checked to still catch the
+regression it exists to catch, by breaking persistence at the server fn
+(`site::update_identity` and `backup::update_settings` returning `Ok(())`
+without writing) and confirming the converted assertion goes red: `backup
+destination round-trips and clears via omission` failed with
+`Expected "/srv/jaunder/backups" / Received ""`, and both converted `admin-site`
+tests failed the same way. Both breaks were then reverted.
+
+**Count.** Five document loads per run go away (three `admin-site`, two
+`backup`), and the declaration census drops from 38 to **33** call sites across
+the product specs (32 exact `allowSecondBoot` plus the one
+`allowEngineDependentBoot`).
+
+**`docs/observability.md` is deliberately not updated.** Its measured numbers
+describe the branch as measured before this change; editing them to match would
+turn a measurement into an assertion. The divergence is five fewer loads per run
+than the arms it reports.

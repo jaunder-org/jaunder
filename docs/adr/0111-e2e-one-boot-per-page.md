@@ -34,8 +34,13 @@ Three causes, all in test code:
   where the app's own router would have served. This exercises a path no user
   takes: in a CSR SPA, arriving at a route by router push and arriving by cold
   load run different code.
-- Some tests re-load the same URL to prove a value persisted. That one is an
-  assertion, not waste.
+- Some tests re-load the same URL to prove a value persisted. That is an
+  assertion rather than waste **only where the app offers no way back to the
+  route**. Where it does, an in-app re-entry remounts the page and its
+  `Resource` refetches from the server, so the reload proves nothing the router
+  would not have proved — a premise this cycle initially got wrong for
+  `/admin/site` and `/admin/backups`, and corrected once it was tested (see the
+  archived classification's Amendment 3).
 
 Two prior cycles tried to make a navigation _cheaper_ and both underdelivered:
 #836 cut the wasm bundle 57.6% for ~60 ms/navigation, and #866's preload removed
@@ -66,8 +71,11 @@ This is the test-side counterpart of ADR-0076.
 3. **That second load is declared with a mandatory reason.** Legitimate cases
    exist and are kept, not smuggled: the destination page's cold render being
    the subject (permalink, boot marks, flash/CLS probes), and re-reading state
-   to prove persistence. The reason string is the record of what was
-   deliberately left alone.
+   to prove persistence **on a route the app offers no way back into**. The
+   reason string is the record of what was deliberately left alone, so it must
+   name the thing that makes the load necessary — "the value is re-read from the
+   server" is not that, since an in-app re-entry re-reads it too; "nothing in
+   the app links to this route" is.
 
 4. **An allowance that nothing consumes fails the test.** A declaration does not
    expire, so one written for a load that never happens sits in the queue and

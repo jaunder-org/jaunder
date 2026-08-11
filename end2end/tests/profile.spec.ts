@@ -24,10 +24,13 @@ test("profile update persists a valid display name", async ({
   await page.click(UPDATE_BUTTON);
   expect((await updated).ok()).toBe(true);
 
-  // A fresh load reads the persisted value back through profile::get.
+  // Re-read the persisted value from the server. That takes a document load here:
+  // `/profile` is a route with no in-app entry point (checked across `web/src` —
+  // it is in neither `NAV_ITEMS` nor the sidebar footer), and #896's rule is that
+  // a test never invents an affordance the app does not have.
   allowSecondBoot(
     page,
-    "a fresh load reads the persisted value back through profile::get",
+    "nothing in the app links to /profile — no sidebar nav item, no footer avatar link — so there is no in-app move that re-enters the route, and a document load is the only way to remount the page and re-read the value through profile::get",
   );
   await goto(page, "/profile");
   await expect(page.locator(DISPLAY_NAME)).toHaveValue("Ada Lovelace");
@@ -69,7 +72,7 @@ test("clearing the display name persists as empty", async ({
 
   allowSecondBoot(
     page,
-    "a fresh load reads the persisted value back through profile::get",
+    "nothing in the app links to /profile — no sidebar nav item, no footer avatar link — so there is no in-app move that re-enters the route, and a document load is the only way to remount the page and re-read the value through profile::get",
   );
   await goto(page, "/profile");
   await expect(page.locator(DISPLAY_NAME)).toHaveValue("Temp Name");
@@ -84,7 +87,7 @@ test("clearing the display name persists as empty", async ({
 
   allowSecondBoot(
     page,
-    "a fresh load reads the cleared display name back through profile::get to prove the None round-trip",
+    "the None round-trip needs the cleared display name read back from the server, and with no in-app link to /profile a document load is the only way to re-enter the route",
   );
   await goto(page, "/profile");
   await expect(page.locator(DISPLAY_NAME)).toHaveValue("");
@@ -105,7 +108,7 @@ test("profile update persists a valid bio", async ({ registeredPage }) => {
 
   allowSecondBoot(
     page,
-    "a fresh load reads the persisted value back through profile::get",
+    "nothing in the app links to /profile — no sidebar nav item, no footer avatar link — so there is no in-app move that re-enters the route, and a document load is the only way to remount the page and re-read the value through profile::get",
   );
   await goto(page, "/profile");
   await expect(page.locator(BIO)).toHaveValue(
@@ -160,11 +163,11 @@ test("default post format round-trips through the typed dispatch", async ({
 
   await saveAndReload(
     "org",
-    "a fresh load reads the saved default post format back through get_default_post_format",
+    "no in-app link re-enters /profile, so a document load is the only way to read the saved default post format back through get_default_post_format",
   );
   await saveAndReload(
     "markdown",
-    "the second flip's fresh load proves the persisted value is the selected one, not a constant",
+    "the second flip proves the persisted value is the selected one and not a constant, and it needs the same load for the same reason: nothing in the app navigates to /profile",
   );
 });
 
@@ -184,7 +187,7 @@ test("clearing the bio persists as empty", async ({ registeredPage }) => {
 
   allowSecondBoot(
     page,
-    "a fresh load reads the persisted value back through profile::get",
+    "nothing in the app links to /profile — no sidebar nav item, no footer avatar link — so there is no in-app move that re-enters the route, and a document load is the only way to remount the page and re-read the value through profile::get",
   );
   await goto(page, "/profile");
   await expect(page.locator(BIO)).toHaveValue("Temporary bio");
@@ -199,7 +202,7 @@ test("clearing the bio persists as empty", async ({ registeredPage }) => {
 
   allowSecondBoot(
     page,
-    "a fresh load reads the cleared bio back through profile::get to prove the None round-trip",
+    "the None round-trip needs the cleared bio read back from the server, and with no in-app link to /profile a document load is the only way to re-enter the route",
   );
   await goto(page, "/profile");
   await expect(page.locator(BIO)).toHaveValue("");

@@ -1,7 +1,29 @@
+import type { Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import { goto, signInAs, waitForSelector } from "./helpers";
-import { allowSecondBoot } from "./bootBudget";
+import { navigateInApp } from "./navigate";
 import { SEL } from "./selectors";
+
+// The operator sidebar carries both admin routes (`web/src/sidebar/component.rs`),
+// so re-entering this page is an in-app move, not a reload. Leaving and returning
+// remounts `BackupSettingsPage`, whose `Resource` is created at mount — so the form
+// is repopulated from a fresh `backup::get_settings`.
+const SITE_LINK = 'a.j-nav-item[href="/admin/site"]';
+const BACKUPS_LINK = 'a.j-nav-item[href="/admin/backups"]';
+const SITE_READY = 'input[name="title"]';
+const BACKUPS_READY = 'input[name="destination_path"]';
+
+/** Leave `/admin/backups` and come back, remounting the page from the server. */
+async function reenterBackupSettings(page: Page): Promise<void> {
+  await navigateInApp(page, () => page.click(SITE_LINK), {
+    url: "/admin/site",
+    ready: SITE_READY,
+  });
+  await navigateInApp(page, () => page.click(BACKUPS_LINK), {
+    url: "/admin/backups",
+    ready: BACKUPS_READY,
+  });
+}
 
 // #453: the schedule field is client-validated (ValidatedInput<BackupSchedule>, ADR-0065) —
 // submit is gated disable-until-valid and a malformed cron shows an inline error, so a bad
@@ -118,12 +140,9 @@ test("backup destination round-trips and clears via omission", async ({
     saveButton.click(),
   ]);
 
-  // Reload and confirm it round-trips.
-  allowSecondBoot(
-    page,
-    "a fresh load reads the persisted destination path back through backup::get_settings",
-  );
-  await goto(page, "/admin/backups");
+  // Re-enter in-app and confirm it round-trips: the remount refetches through
+  // backup::get_settings, so the field is populated from the server.
+  await reenterBackupSettings(page);
   await expect(page.locator('input[name="destination_path"]')).toHaveValue(
     "/srv/jaunder/backups",
   );
@@ -138,11 +157,7 @@ test("backup destination round-trips and clears via omission", async ({
     saveButton.click(),
   ]);
 
-  // Reload and confirm the destination is now empty.
-  allowSecondBoot(
-    page,
-    "a fresh load reads the cleared destination back through backup::get_settings to prove the None round-trip",
-  );
-  await goto(page, "/admin/backups");
+  // Re-enter in-app and confirm the destination is now empty.
+  await reenterBackupSettings(page);
   await expect(page.locator('input[name="destination_path"]')).toHaveValue("");
 });
