@@ -241,30 +241,286 @@ pub fn atompub_request(op: &'static str, result: AtompubResult) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::BTreeSet;
+
     use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
 
+    use super::*;
+
+    /// Every instrument this module owns, paired with the call that emits it.
+    ///
+    /// The list is the contract with the dashboards and alerts that query these
+    /// names, so it is written out literally rather than derived from
+    /// [`Instruments`] — a test that asks the code what it emits agrees with the
+    /// code by construction and can never catch a rename.
+    const EXPECTED_INSTRUMENTS: &[&str] = &[
+        "jaunder.auth.logins",
+        "jaunder.auth.session_validations",
+        "jaunder.auth.registrations",
+        "jaunder.auth.invites",
+        "jaunder.auth.password_resets",
+        "jaunder.errors",
+        "jaunder.email.sent",
+        "jaunder.email.send_duration",
+        "jaunder.media.uploads",
+        "jaunder.media.upload_bytes",
+        "jaunder.media.served",
+        "jaunder.feed.regenerations",
+        "jaunder.feed.regeneration_duration",
+        "jaunder.feed.websub_pings",
+        "jaunder.feed.cache",
+        "jaunder.backup.runs",
+        "jaunder.backup.duration",
+        "jaunder.backup.bytes",
+        "jaunder.backup.pruned",
+        "jaunder.posts",
+        "jaunder.atompub.requests",
+    ];
+
+    /// Calls every emitter once. Kept separate from the assertions so the list of
+    /// calls reads as an inventory: if a new emitter is added here without a name
+    /// in `EXPECTED_INSTRUMENTS`, the round-trip assertion below fails.
+    fn emit_one_of_everything() {
+        login(LoginOutcome::InvalidCredentials);
+        session_validation(SessionOutcome::InvalidToken);
+        registration(
+            RegistrationSource::Web,
+            RegistrationPolicy::InviteOnly,
+            RegistrationResult::Rejected,
+        );
+        invite(InviteEvent::Redeemed);
+        password_reset(PasswordResetEvent::Requested);
+        error("storage", "server");
+        email_sent(EmailKind::Verification, SendResult::Success);
+        email_send_duration_ms(12);
+        media_upload(UploadOutcome::Deduplicated);
+        media_upload_bytes(4096);
+        media_served(ServeResult::NotModified);
+        feed_regeneration(RegenResult::Ok);
+        feed_regen_duration_ms(7);
+        websub_ping(PingOutcome::NoHub);
+        feed_cache(CacheResult::Hit);
+        backup_run(BackupResult::Success);
+        backup_duration_ms(900);
+        backup_bytes(1024);
+        backup_pruned(3);
+        post(PostEvent::Published);
+        atompub_request("POST /feed", AtompubResult::ClientError);
+    }
+
+    /// The attribute sets recorded on a named `u64` counter, one per data point.
+    ///
+    /// Attributes are what make a counter useful — `jaunder.email.sent` alone
+    /// cannot tell you whether sending is failing — so a mutant that drops or
+    /// mislabels one is invisible to a name-only assertion.
+    fn counter_attributes(
+        metrics: &[opentelemetry_sdk::metrics::data::ResourceMetrics],
+        name: &str,
+    ) -> Vec<BTreeSet<(String, String)>> {
+        use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
+
+        metrics
+            .iter()
+            .flat_map(opentelemetry_sdk::metrics::data::ResourceMetrics::scope_metrics)
+            .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+            .filter(|metric| metric.name() == name)
+            .filter_map(|metric| match metric.data() {
+                AggregatedMetrics::U64(MetricData::Sum(sum)) => Some(sum),
+                _ => None,
+            })
+            .flat_map(opentelemetry_sdk::metrics::data::Sum::data_points)
+            .map(|point| {
+                point
+                    .attributes()
+                    .map(|kv| (kv.key.as_str().to_owned(), kv.value.to_string()))
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn attrs(pairs: [(&str, &str); 2]) -> BTreeSet<(String, String)> {
+        pairs
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect()
+    }
+
+    /// One provider install per process, so every assertion that needs an
+    /// exporter lives in this single test.
+    ///
+    /// `global::set_meter_provider` is process-global and install-once in effect.
+    /// Under `cargo nextest` — what the repo's gate runs — each test is its own
+    /// process and this is unremarkable; under plain `cargo test` a second
+    /// installing test in the same process would race this one. Adding emitters
+    /// here rather than adding a second test keeps that hazard at one.
     #[tokio::test]
-    async fn login_records_outcome_attribute() {
+    async fn every_emitter_exports_its_instrument() {
         let exporter = InMemoryMetricExporter::default();
         let reader = PeriodicReader::builder(exporter.clone()).build();
         let provider = SdkMeterProvider::builder().with_reader(reader).build();
         global::set_meter_provider(provider.clone());
 
-        login(LoginOutcome::InvalidCredentials);
-        // Exercise both branches of the email send-result mapping; the emit is a
-        // no-op without a provider, so this only needs the helper to run.
-        email_send_result(EmailKind::Verification, &Ok::<(), ()>(()));
-        email_send_result(EmailKind::PasswordReset, &Err::<(), ()>(()));
+        emit_one_of_everything();
+        // Both branches of the send-result mapping. The kinds are chosen to be
+        // ones `emit_one_of_everything` does not use, so each assertion below can
+        // only be satisfied by `email_send_result` itself — it emits through
+        // `email_sent`, which is already called directly with `verification`.
         email_send_result(EmailKind::Invite, &Ok::<(), ()>(()));
+        email_send_result(EmailKind::PasswordReset, &Err::<(), ()>(()));
         provider.force_flush().expect("flush");
 
         let metrics = exporter.get_finished_metrics().expect("metrics");
-        let found = metrics
+        let instrument_names: BTreeSet<&str> = metrics
             .iter()
             .flat_map(opentelemetry_sdk::metrics::data::ResourceMetrics::scope_metrics)
             .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
-            .any(|metric| metric.name() == "jaunder.auth.logins");
-        assert!(found, "jaunder.auth.logins not exported");
+            .map(opentelemetry_sdk::metrics::data::Metric::name)
+            .collect();
+
+        // Named individually: "21 instruments exported" would pass with the wrong
+        // 21, and the point of the assertion is *which* names reach a collector.
+        for want in EXPECTED_INSTRUMENTS {
+            assert!(
+                instrument_names.contains(want),
+                "{want} was never exported — an emitter is silently dead. \
+                 exported: {instrument_names:?}"
+            );
+        }
+
+        // The other direction: an instrument emitted but not listed above means
+        // the inventory has drifted from the code, which is how a rename ships
+        // unnoticed.
+        let expected: BTreeSet<&str> = EXPECTED_INSTRUMENTS.iter().copied().collect();
+        let unexpected: Vec<&&str> = instrument_names
+            .iter()
+            .filter(|name| !expected.contains(*name))
+            .collect();
+        assert!(
+            unexpected.is_empty(),
+            "instruments exported but not in EXPECTED_INSTRUMENTS: {unexpected:?}"
+        );
+
+        // `email_send_result` is the only branch in this module. If it inverted,
+        // every failed send would be counted a success — a metric that lies in
+        // exactly the situation you consult it. Assert the attributes it derives
+        // actually reach the exporter, on both arms.
+        let email = counter_attributes(&metrics, "jaunder.email.sent");
+        assert!(
+            email.contains(&attrs([("kind", "invite"), ("result", "success")])),
+            "Ok did not record result=success; got {email:?}"
+        );
+        assert!(
+            email.contains(&attrs([("kind", "password_reset"), ("result", "failure")])),
+            "Err did not record result=failure; got {email:?}"
+        );
+
+        // `counter_attributes` reads counters only. Asking it about a histogram
+        // yields nothing rather than panicking — worth pinning, because a silent
+        // empty result is how the two assertions above would go vacuously true if
+        // the instrument were ever changed to a histogram.
+        assert!(
+            counter_attributes(&metrics, "jaunder.email.send_duration").is_empty(),
+            "counter_attributes should ignore histograms"
+        );
+    }
+
+    /// The attribute vocabulary, pinned literally.
+    ///
+    /// These strings are the values dashboards and alert rules match on, so a
+    /// silent rename is a production-visible break that nothing else here would
+    /// catch: `as_str` is private, every caller passes it straight through to a
+    /// `KeyValue`, and no other assertion looks at the value. ADR-0011 asks for
+    /// exactly this ("exhaustive table tests so every attribute mapping is
+    /// exercised regardless of which request paths a given integration test
+    /// happens to hit").
+    ///
+    /// Exhaustive by construction: each row lists every variant of its enum, and
+    /// the `match` in `enum_attr!` means adding a variant without extending the
+    /// row here leaves the new variant unasserted — so extend the row when you
+    /// add one.
+    #[test]
+    fn attribute_values_are_the_documented_vocabulary() {
+        assert_eq!(LoginOutcome::Success.as_str(), "success");
+        assert_eq!(
+            LoginOutcome::InvalidCredentials.as_str(),
+            "invalid_credentials"
+        );
+        assert_eq!(LoginOutcome::InternalError.as_str(), "internal_error");
+
+        assert_eq!(SessionOutcome::Ok.as_str(), "ok");
+        assert_eq!(SessionOutcome::InvalidToken.as_str(), "invalid_token");
+        assert_eq!(
+            SessionOutcome::SessionNotFound.as_str(),
+            "session_not_found"
+        );
+        assert_eq!(SessionOutcome::Internal.as_str(), "internal");
+
+        assert_eq!(RegistrationSource::Web.as_str(), "web");
+        assert_eq!(RegistrationSource::Cli.as_str(), "cli");
+
+        assert_eq!(RegistrationPolicy::Open.as_str(), "open");
+        assert_eq!(RegistrationPolicy::InviteOnly.as_str(), "invite_only");
+        assert_eq!(RegistrationPolicy::Closed.as_str(), "closed");
+        assert_eq!(RegistrationPolicy::CliBypass.as_str(), "cli_bypass");
+
+        assert_eq!(RegistrationResult::Ok.as_str(), "ok");
+        assert_eq!(RegistrationResult::Rejected.as_str(), "rejected");
+
+        assert_eq!(InviteEvent::Created.as_str(), "created");
+        assert_eq!(InviteEvent::Redeemed.as_str(), "redeemed");
+
+        assert_eq!(PasswordResetEvent::Requested.as_str(), "requested");
+        assert_eq!(PasswordResetEvent::Completed.as_str(), "completed");
+
+        assert_eq!(EmailKind::Verification.as_str(), "verification");
+        assert_eq!(EmailKind::PasswordReset.as_str(), "password_reset");
+        assert_eq!(EmailKind::Invite.as_str(), "invite");
+
+        assert_eq!(SendResult::Success.as_str(), "success");
+        assert_eq!(SendResult::Failure.as_str(), "failure");
+
+        assert_eq!(UploadOutcome::Stored.as_str(), "stored");
+        assert_eq!(UploadOutcome::Deduplicated.as_str(), "deduplicated");
+        assert_eq!(UploadOutcome::QuotaExceeded.as_str(), "quota_exceeded");
+        assert_eq!(UploadOutcome::TooLarge.as_str(), "too_large");
+        assert_eq!(UploadOutcome::Invalid.as_str(), "invalid");
+        assert_eq!(UploadOutcome::Error.as_str(), "error");
+
+        assert_eq!(ServeResult::Ok.as_str(), "ok");
+        assert_eq!(ServeResult::NotFound.as_str(), "not_found");
+        assert_eq!(ServeResult::NotModified.as_str(), "not_modified");
+
+        assert_eq!(RegenResult::Ok.as_str(), "ok");
+        assert_eq!(RegenResult::Error.as_str(), "error");
+
+        assert_eq!(PingOutcome::Success.as_str(), "success");
+        assert_eq!(PingOutcome::Failed.as_str(), "failed");
+        assert_eq!(PingOutcome::Exhausted.as_str(), "exhausted");
+        assert_eq!(PingOutcome::NoHub.as_str(), "no_hub");
+
+        assert_eq!(CacheResult::Hit.as_str(), "hit");
+        assert_eq!(CacheResult::Miss.as_str(), "miss");
+
+        assert_eq!(BackupResult::Success.as_str(), "success");
+        assert_eq!(BackupResult::Failure.as_str(), "failure");
+
+        assert_eq!(PostEvent::Created.as_str(), "created");
+        assert_eq!(PostEvent::Updated.as_str(), "updated");
+        assert_eq!(PostEvent::Published.as_str(), "published");
+        assert_eq!(PostEvent::Deleted.as_str(), "deleted");
+
+        assert_eq!(AtompubResult::Ok.as_str(), "ok");
+        assert_eq!(AtompubResult::ClientError.as_str(), "client_error");
+        assert_eq!(AtompubResult::ServerError.as_str(), "server_error");
+    }
+
+    /// `kv` is the one shared shape-builder: every single-attribute emitter goes
+    /// through it, so a mutant that drops the key or value silently strips the
+    /// attribute from a dozen instruments at once.
+    #[test]
+    fn kv_pairs_the_key_with_the_value() {
+        let [pair] = kv("outcome", "success");
+        assert_eq!(pair.key.as_str(), "outcome");
+        assert_eq!(pair.value.to_string(), "success");
     }
 }
