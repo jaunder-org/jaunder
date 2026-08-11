@@ -234,8 +234,7 @@ test**; everything after it moves within the app. This is the test-side
 counterpart of ADR-0076, and it is enforced two ways: a runtime per-`Page`
 budget fails an undeclared second load, and the `e2e-goto-wrapper` static check
 fails a `page.goto` written outside the navigation wrapper. The reasoning is in
-`docs/adr/drafts/e2e-one-boot-per-page.md` (numbered at ship; cited by path
-rather than linked, since a draft is gitignored).
+[ADR-0111](docs/adr/0111-e2e-one-boot-per-page.md).
 
 The API is in `end2end/tests/helpers.ts` (its docblock is the usage rules):
 `goto` to enter, `navigateInApp` to move inside the app, and

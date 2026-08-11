@@ -59,7 +59,7 @@ test; all later movement on that page is in-app.**
 This is the test-side counterpart of ADR-0076. The suite tests a pure-CSR SPA,
 where a user pays a document load once on entry and never again; the suite
 should not exercise a path no user takes. Recorded as an ADR (draft at
-`docs/adr/drafts/e2e-one-boot-per-page.md`, numbered at ship).
+`docs/adr/0111-e2e-one-boot-per-page.md`, numbered at ship).
 
 The budget unit is the **Playwright `Page` object**, not the test. A test
 needing a second identity opens a second page and boots it, with no ceremony.

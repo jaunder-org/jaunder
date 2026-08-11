@@ -24,7 +24,7 @@ Spec:
 (Both were archived here at ship; paths named in the task steps below are the
 working paths they had during the cycle.)
 The spec is "what and why"; this plan is "how". ADR draft:
-`docs/adr/drafts/e2e-one-boot-per-page.md` (already written; Task 10 only
+`docs/adr/0111-e2e-one-boot-per-page.md` (already written; Task 10 only
 re-checks it against what shipped).
 
 ---
@@ -1245,7 +1245,7 @@ git commit -m "feat(xtask): add the e2e-goto-wrapper static check (#867)"
 **Files:**
 
 - Modify: `end2end/tests/helpers.ts:4-38`, `CONTRIBUTING.md`
-- Modify: `docs/adr/drafts/e2e-one-boot-per-page.md` (re-check only)
+- Modify: `docs/adr/0111-e2e-one-boot-per-page.md` (re-check only)
 
 - [x] **Step 1: Update the `helpers.ts` usage-rules docblock**
 
@@ -1262,14 +1262,14 @@ and at `helpers.ts` for the API.
 
 - [x] **Step 3: Re-check the ADR draft against what shipped**
 
-Read `docs/adr/drafts/e2e-one-boot-per-page.md` against the implemented code and
+Read `docs/adr/0111-e2e-one-boot-per-page.md` against the implemented code and
 correct anything that drifted during 3–9. Do **not** number it —
 `cargo xtask adr promote` does that at ship.
 
 - [x] **Step 4: Commit**
 
 ```bash
-git add end2end/tests/helpers.ts CONTRIBUTING.md docs/adr/drafts/e2e-one-boot-per-page.md
+git add end2end/tests/helpers.ts CONTRIBUTING.md docs/adr/0111-e2e-one-boot-per-page.md
 git commit -m "docs(e2e): document the one-boot-per-page rule (#867)"
 ```
 
