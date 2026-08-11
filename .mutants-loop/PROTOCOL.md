@@ -157,6 +157,12 @@ not an error.
 nothing. If a package reports zero caught and zero unviable, suspect the
 baseline before believing the result.
 
+**A timeout is not a result — it is a hole.** A timed-out mutant was neither
+caught nor missed; it was never examined. The summary still reads "0 missed"
+while a third of the package went unmeasured, which is how `storage` looked fine
+at 159 timeouts. Treat a timeout rate above a few percent as a broken
+measurement and fix the cap before reading anything into the numbers.
+
 **The pattern behind every failure so far: this tool reports a plausible number
 instead of an error.** A dead baseline, an uncompiled feature, a filter that
 misses one test — none of them look like failures. They look like results. So

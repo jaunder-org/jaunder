@@ -87,3 +87,17 @@ Append-only. Newest last. One line per event.
     workspace-wide test runs are slower, so cargo-mutants' auto timeout bites
     more often. Timeouts are not survivors, but they are unexamined. If the rate
     holds, the timeout needs raising.
+- 2026-08-10 — the rate did not hold, it got worse, and it is a real defect in
+  the measurement. common finished 298 caught / 126 unviable / **83 timeout**,
+  storage 120 / 218 / **159 timeout** — a third of storage unexamined. Every
+  timeout line reads exactly "20s test": they hit cargo-mutants' auto cap,
+  derived from a 2s baseline. Under two parallel jobs the same builds take
+  49-91s where they take 18-28s clean, and the test phase stretches with them.
+  The mutants timing out are mundane (`replace > with ==` in a FromStr,
+  `NoopMailSender::send_email -> Ok(())`) and cannot hang. Set `--timeout 300`
+  in common.sh. Verified on common/src/mailer.rs, which had timeouts before: now
+  3 caught, 1 unviable, 0 timeout, 0 missed. This is the fifth way this tool has
+  reported a confident wrong number, and the nastiest: the summary still says "0
+  missed" while a third of the package was never actually examined. Re-running
+  discovery from scratch — caught results would survive, but a partial re-run
+  leaves exactly the kind of mixed state that has caused trouble here already.

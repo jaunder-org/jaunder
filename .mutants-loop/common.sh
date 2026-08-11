@@ -55,12 +55,28 @@ MUTANTS_FILTER='not test(/(?i)postgres|backup_interop/)'
 #     one false gate failure (tools-test failed during discovery, passed in 25s
 #     after). A false red is dangerous here: the loop's rules say revert-and-
 #     skip, so it would throw away good work.
+# --timeout 300
+#     cargo-mutants auto-sets the timeout from the unmutated baseline's test
+#     time — 2s here, giving a 20s cap. That is far too tight once mutants run
+#     two at a time: the same builds that take 18-28s clean take 49-91s under
+#     load, and the test phase stretches with them. The result was a flood of
+#     false timeouts — 83 of common's 507 examined mutants and 159 of storage's
+#     497, every one showing exactly "20s test", on mundane mutants like
+#     `replace > with ==` in a FromStr that cannot possibly hang.
+#
+#     This one is worse than a slow run: a timed-out mutant is UNEXAMINED. It is
+#     neither caught nor missed, so it silently shrinks the scan's real coverage
+#     while the summary still reads "0 missed".
+#
+#     300s is deliberately generous. A mutant that genuinely loops forever costs
+#     five minutes once; a false timeout costs a hole in the results.
 run_mutants() {
   cargo mutants \
     --jobs 2 \
     --no-shuffle \
     --test-tool nextest \
     --test-workspace true \
+    --timeout 300 \
     "$@" \
     -- -E "$MUTANTS_FILTER"
 }
