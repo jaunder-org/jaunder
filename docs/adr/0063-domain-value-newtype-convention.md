@@ -86,7 +86,7 @@ type against a demonstrated hazard — does not apply when the type side of it i
 two lines. Do **not** cite "consistency alone is not sufficient justification"
 to argue a URL role out of existence, and do not add a bare `AbsoluteUrl`-style
 catch-all back. See
-[the role-tagged site URLs ADR](drafts/role-tagged-site-urls.md) (#875).
+[the role-tagged site URLs ADR](0112-role-tagged-site-urls.md) (#875).
 
 `ViewerIdentity` (ADR-0020) is this rule applied, and #6 is what it cost to
 apply it late. A viewer's `subscriber_ref` is a stringified `user_id` for a

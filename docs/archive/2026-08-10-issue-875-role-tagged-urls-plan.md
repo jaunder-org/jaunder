@@ -990,7 +990,7 @@ deleted.
 
 **Files:**
 
-- Create: `docs/adr/drafts/role-tagged-site-urls.md` (gitignored — see step 3)
+- Create: `docs/adr/0112-role-tagged-site-urls.md` (gitignored — see step 3)
 - Modify: `docs/adr/0063-domain-value-newtype-convention.md`
 
 **Interfaces:**
@@ -1001,7 +1001,7 @@ deleted.
 
 - [x] **Step 1: Write the draft**
 
-`cp docs/adr/template.md docs/adr/drafts/role-tagged-site-urls.md`. Line 1 must
+`cp docs/adr/template.md docs/adr/0112-role-tagged-site-urls.md`. Line 1 must
 be exactly `# ADR-DRAFT: Role-tagged site URLs`; leave `- Status: proposed`.
 
 _Context_ — the #688 residual and the four measured hazards. _Decision_ records:
@@ -1023,7 +1023,7 @@ four `compile_fail` doctests as the regression surface; `RootRelativeUrl` and
 - [x] **Step 2: Amend ADR-0063**
 
 Add a short subsection to §1 cross-referencing
-`docs/adr/drafts/role-tagged-site-urls.md`, stating that URL roles are handled
+`docs/adr/0112-role-tagged-site-urls.md`, stating that URL roles are handled
 by that scheme and that §1's per-type cost model should not be applied to a
 role. Cite it **by path** — there is no bare `ADR-DRAFT` token, and `promote`
 rewrites the path at ship. Do **not** touch `docs/README.md`; the table is

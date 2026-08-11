@@ -302,7 +302,7 @@ Keeping the derive (rather than hand-writing all thirteen impls) is what keeps
 
 ## Recording the decision
 
-A new ADR draft at `docs/adr/drafts/role-tagged-site-urls.md` records the
+A new ADR draft at `docs/adr/0112-role-tagged-site-urls.md` records the
 scheme: the `UrlRole` marker trait, the three minting doors, the explicit-role
 rule at compose, the alias rule, and the `retag` justification rule. It also
 carries the §1 cost-model argument above.
@@ -366,7 +366,7 @@ command.
     would also require importing the tag `Feed` into
     `common/src/atompub/entry.rs`'s tests, where it collides with
     `atom_syndication::Feed`.
-16. `docs/adr/drafts/role-tagged-site-urls.md` exists and follows the draft
+16. `docs/adr/0112-role-tagged-site-urls.md` exists and follows the draft
     format (`# ADR-DRAFT:` heading, single-token status line). ADR-0063 carries
     the cross-reference amendment.
 17. `cargo xtask validate` is green.
