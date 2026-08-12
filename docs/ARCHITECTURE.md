@@ -181,6 +181,21 @@ Operations that must span multiple traits atomically (`create_user_with_invite`,
   so batch size is capped by construction
   ([ADR-0092](adr/0092-sqlite-bounded-write-lock-occupancy.md)). ADR-0022's
   Argon2-inside-the-claim-window is the one documented exception.
+- **Slug-ordered tag locks.** A transaction that will touch several `tags` rows
+  sorts them by slug before acquiring any lock, so every transaction takes the
+  row locks in one global order and concurrent `set_post_tags` reconciles cannot
+  deadlock on Postgres (`storage/src/posts.rs:397`). The sort is `sort_by_key`,
+  not `sort_unstable_by_key`, because a desired set may carry two labels sharing
+  a slug and the first occurrence's casing must win. SQLite is unaffected
+  (`BEGIN IMMEDIATE` locks database-wide); the rule is shared so the backends
+  stay identical ([ADR-0125](adr/0125-slug-ordered-tag-lock-acquisition.md)).
+- **Blocking in SQLite's busy handler is thread-scoped.** sqlx-sqlite runs each
+  connection on its own OS thread, so a call parked in the busy handler blocks
+  that thread, not the async runtime. Lock-contention tests therefore stay on
+  the current-thread flavor `#[tokio::test]` defaults to
+  (`storage/src/posts.rs:2903`); moving sqlx to an in-runtime SQLite driver
+  would turn those blocks into hangs
+  ([ADR-0126](adr/0126-sqlx-sqlite-busy-handler-threading.md)).
 - **Cost ordering.** When an operation is gated on a high-entropy secret (invite
   code, reset token), the secret is validated with a cheap lookup _before_
   expensive work (Argon2 hashing); enumerable identifiers (usernames) get the
@@ -205,9 +220,12 @@ table in a first pass, then load all rows in a second, with FK enforcement
 suspended for the load — Postgres FKs are `DEFERRABLE` (migration
 `0024_defer_foreign_keys`) and restore issues `SET CONSTRAINTS ALL DEFERRED`;
 SQLite imports under `PRAGMA foreign_keys = OFF` and runs `foreign_key_check`
-before `COMMIT`. The clear-then-load split keeps the two restore shapes
-identical and CASCADE-safe
-([ADR-0064](adr/0064-backup-target-auto-derivation.md)). Restore refuses any
+before `COMMIT`. Clearing every table before loading any is what makes the
+alphabetically-sorted manifest safe: `SET CONSTRAINTS ALL DEFERRED` defers FK
+_checks_ but not `ON DELETE CASCADE` _actions_, so a per-table delete-then-load
+could cascade away rows already loaded for an earlier table. SQLite cannot
+cascade with FKs off, but keeps the split anyway so the two restore shapes stay
+identical ([ADR-0115](adr/0115-clear-then-load-restore.md)). Restore refuses any
 target that is not empty (every table except the migration-seeded lookups;
 `storage::database_is_empty`, enforced by `ensure_restore_target_empty` in
 `server/src/commands.rs`) — there is no force-overwrite mode
@@ -315,10 +333,21 @@ any new use — its allowlist is down to one production call site, the seed-DTO
 wire rebuild. The field is private, so nothing outside the module can mint one:
 there is no `Deserialize` (seed DTOs go through `deserialize_with`), no
 `From<String>` (compile-fail-pinned at `:90`), no `Default`, no `pub(crate)`
-constructor. The derived `sqlx::Decode` is the one in-module path that fills the
-field without passing a door, and that is a **deliberately accepted residual
-risk**, argued in place (`:190`): typing a column as `RenderedHtml` is itself a
-reviewable act, and the static check does not catch it. `ammonia` sits behind a
+constructor. The `sqlx::Decode` from the derived `#[derive(SqlxBridge)]` bridge
+(`common/src/render.rs:93`) is the one in-module path that fills the field
+without passing a door: a `rendered_html` column decodes straight into the type,
+like every other domain column, and deliberately does **not** sanitize on read
+([ADR-0123](adr/0123-rendered-html-storage-decode.md)). That is a decision, not
+an oversight — this is not new outside data, and routing it through
+`from_trusted` would put a gate-policed door on a path the gate cannot inspect.
+Its **blessing risk is real and accepted**: decoding some other text column into
+this type would bless it too, and the `rendered-html-from-trusted` check does
+not catch that (its population is `from_trusted` uses, and a `FromRow` field
+typed `RenderedHtml` names no door). The decision rests on one argument — typing
+a column as `RenderedHtml` is a deliberate, reviewable act — so every new
+`RenderedHtml`-typed row field is a security review point until
+[#701](https://github.com/jaunder-org/jaunder/issues/701) widens the gate
+([ADR-0123](adr/0123-rendered-html-storage-decode.md)). `ammonia` sits behind a
 `sanitize` feature on `common`, off for wasm, enabled by `storage`, and `render`
 itself does not _exist_ without it (`common/src/render.rs:241,605`) — absence
 rather than a weaker guarantee. The allowlist is ammonia's audited default
@@ -753,10 +782,17 @@ split by the **entropy of the value being validated**:
   path" and preserve it through any refactor. The backend dedup is already done:
   `authenticate` is a single generic `UserStore<DB: Backend>` impl
   (`storage/src/users.rs:212`), so SQLite and Postgres cannot drift apart here
-  ([ADR-0018](adr/0018-constant-time-authentication.md)). Parity of the dummy
-  hash's Argon2 parameters with a real one is itself asserted
-  (`storage/src/helpers.rs:864`), since verify cost is derived from the hash
-  string's encoded params.
+  ([ADR-0018](adr/0018-constant-time-authentication.md),
+  [ADR-0114](adr/0114-absent-user-timing-equalization.md)). Verify cost is
+  derived from the hash string's encoded params, so the dummy hash only
+  equalizes if its parameters match a real hash's — asserted by
+  `dummy_password_hash_matches_real_hash_parameters`
+  (`storage/src/helpers.rs:848`). The fallback constant must likewise be a
+  well-formed hash, since a fast `Err` would reintroduce the oracle; it carries
+  _production_ parameters, so under a `cheap-kdf` build its parity is not exact
+  and no parity test asserts it — an accepted limitation of hard-coding, and why
+  the fallback is a last resort
+  ([ADR-0114](adr/0114-absent-user-timing-equalization.md)).
 - **High-entropy secret (invite code, reset token): cheap-reject first.** Both
   operations live on the `AtomicOps` trait (`storage/src/atomic.rs:101`), which
   each backend implements separately (`storage/src/sqlite/mod.rs:185`, `:280`;
@@ -875,7 +911,15 @@ and `server` (the server-side data-API build; renamed from `ssr`)
 (`web::app::SPA_SHELL`, itself `include_str!("csr/index.html")` —
 `web/src/app/render.rs:51`) and falls back to it for anything the projector and
 the static routes do not claim (`server/src/lib.rs:101-111`), keeping
-ADR-0003/ADR-0008's single binary intact.
+ADR-0003/ADR-0008's single binary intact. The bundle is fetched after the JS
+glue and is **not** preloaded: `render_head` carries no `<link rel="preload">`
+(`web/src/app/render.rs:93-95`), a measured decision under a pre-registered
+abort rule rather than an oversight ([ADR-0121](adr/0121-no-wasm-preload.md)) —
+the trial collapsed the serial pre-fetch window but bought no boot total, so it
+was reverted. The `WASM_URL` / `GLUE_URL` constants and their drift guards
+(`web/src/app/render.rs:63-65,284-298`) survive it, because a preload URL
+drifting from the `init()` target would not fail — it would silently
+double-download.
 
 The wasm artifact carries a hard budget
 ([ADR-0106](adr/0106-wasm-raw-size-budget.md)): `cargo xtask validate` fails
@@ -927,12 +971,15 @@ Every `#[server]` fn is written `#[macros::server]`, and the macro derives what
 the source already states: the wire `endpoint` `/<vertical>/<fn ident>` and the
 ADR-0011 span name, both from the file path and identifier, and it **refuses**
 an author-supplied `endpoint` or `name` (`macros/src/server_fn.rs:87-131,176`).
-The wire URL is therefore `/api/<vertical>/<op>`
-([ADR-0082](adr/0082-server-fn-wire-namespace.md)), served by one axum route,
-`/api/{*fn_name}` (`server/src/lib.rs:61`). Because the URL _is_ the ident, the
-naming rule is a wire rule: the vertical's own noun is dropped
-(`audiences::create`, not `create_audience`) and the ident is verb-led. `/api/*`
-is the CSR client's private protocol; the public stable API is AtomPub.
+That refusal is the guard, not a gate: with the hand-written literal gone there
+is no drift left for a static check to find
+([ADR-0120](adr/0120-no-endpoint-drift-check.md)). The wire URL is therefore
+`/api/<vertical>/<op>` ([ADR-0082](adr/0082-server-fn-wire-namespace.md)),
+served by one axum route, `/api/{*fn_name}` (`server/src/lib.rs:61`). Because
+the URL _is_ the ident, the naming rule is a wire rule: the vertical's own noun
+is dropped (`audiences::create`, not `create_audience`) and the ident is
+verb-led. `/api/*` is the CSR client's private protocol; the public stable API
+is AtomPub.
 
 Server fns get their dependencies via per-trait Leptos context, never a bundle —
 `expect_context::<Arc<dyn FooStorage>>()`
@@ -966,10 +1013,17 @@ never a re-implemented rule. The chokepoint is the pure `forms::field_error<T>`
 (`web/src/forms/field.rs:11`) driving a parent-owned `Field<T>`
 (`web/src/forms/field.rs:22`), rendered by `<ValidatedInput<T>>` /
 `<ValidatedTextarea<T>>` (`web/src/forms/component.rs:80,155`) or bound directly
-for a bespoke layout. The visible message is gated on a `touched` flag; submit
-is gated disable-until-valid. Typing the arg moves validation into
-arg-**decode**, so a malformed request from a non-browser client fails before
-the fn body — the defense-in-depth path, not the user path.
+for a bespoke layout. The chrome both shells wrap themselves in, `Labelled`
+(`web/src/forms/component.rs:20`), is deliberately **not** generic over `T`: it
+takes the validity as two erased signals (`error`, `touched`) rather than a
+`Field<T>` ([ADR-0117](adr/0117-labelled-takes-erased-signals.md)), because a
+generic component _with children_ needs its close tag to match the opening
+generics token-for-token at every call site. ADR-0117 records as an open
+question whether that burden alone still justifies the shape. The visible
+message is gated on a `touched` flag; submit is gated disable-until-valid.
+Typing the arg moves validation into arg-**decode**, so a malformed request from
+a non-browser client fails before the fn body — the defense-in-depth path, not
+the user path.
 
 ### Reactive idioms
 
@@ -1571,6 +1625,22 @@ bridge implementation, `macros/src/sqlx_bridge.rs:67`, driven by a `BridgeSpec`;
 the three newtype derives, `#[derive(SqlxBridge)]`, and `#[text_enum(sqlx)]` all
 call it.
 
+Because `Decode` re-validates, a row written under an older grammar or corrupted
+can fail it — and on a bulk read **one bad row must not stop the scan**
+([ADR-0122](adr/0122-one-bad-row-must-not-stop-the-scan.md)). Scans and lists
+decode per row and skip the failures (`list_media` fetches raw rows rather than
+`query_as` for exactly this reason, `storage/src/media.rs:275-325`;
+`feed_urls_needing_catchup` at `storage/src/posts.rs:1918-1937`), so a single
+unusable row costs only itself instead of 500-ing a media list or wedging the
+feed worker's `last_tick` forever. Three guardrails bound it: direct single-row
+lookups (`get_media`, `find_by_hash`) stay strict; the feed-event claim's
+diversion to the purge list is **column-scoped** — only a `feed_url` decode
+failure may divert, since `purge_corrupt` DELETEs and a
+treat-any-error-as-corrupt wrapper would widen a destructive path from one
+column to ten (`storage/src/feed_events.rs:57-79`, #728); and a row whose own id
+will not decode fails the batch. Dual-backend tests assert the skip/purge
+behaviour per site.
+
 **Time.** A timestamp crossing the web boundary is `UtcInstant`
 (`common/src/time.rs:26`), a third instant-backed flavor of the convention
 wrapping `chrono::DateTime<Utc>`
@@ -1674,7 +1744,18 @@ feature. A separate crate is impossible: it must return `storage::AppState`, so
 
 There are four templates, not three: `backends` and `backends_matrix` (both
 dual; the second is the `#[values]`-based variant), plus `sqlite_only` and
-`postgres_only` (`storage/src/test_support.rs:418-448`).
+`postgres_only` (`storage/src/test_support.rs:418-448`). The backend axis of
+`backends_matrix` is `#[values]`-based because a `#[case]`-based axis cannot
+coexist with a test's own named `#[case]` rows; it composes as rows × backends,
+and the attribute order is `#[apply(backends_matrix)]`, then the
+`#[case::name(..)]` rows, then `#[tokio::test]`
+([ADR-0124](adr/0124-rstest-reuse-cross-module-templates.md)). Each template is
+`#[export]`ed, so it expands to a name-mangled `macro_rules!` that a plain
+`use storage::test_support::backends;` brings into scope and
+`#[apply(backends)]` then resolves **by bare name** — no
+`#[apply(path::to::template)]` and no `pub use` re-export (ADR-0124;
+`storage/src/test_support.rs:430-434`). That is why the templates stay in
+`storage::test_support` rather than moving to a consumer.
 
 A storage test is homed by what it proves
 ([ADR-0053](adr/0053-storage-test-homing-and-dual-backend.md)): a backend-common
@@ -1997,7 +2078,16 @@ instrumented rather than skipped (`flake.nix:1288-1293`). The host-side gate
 The coverage source is bounded to cargo sources, enforced by a `drvPath` probe
 in both directions — an excluded file must not change it, an instrumented `.rs`
 must (`xtask/src/coverage/probe.rs`) — run in CI as
-`cargo xtask coverage probe-source` (`.github/workflows/ci.yml:52`).
+`cargo xtask coverage probe-source` (`.github/workflows/ci.yml:52`). Before
+every eval the probe **dirties an excluded tracked file**, `README.md`
+(`xtask/src/coverage/probe.rs:148-155`,
+[ADR-0116](adr/0116-coverage-probe-dirty-tree-workaround.md)): on a clean
+worktree nix's flake git-fetcher walks history for `revCount`, which fails on
+CI's shallow checkout of a merge commit whose parents are grafted away. A dirty
+tree makes nix copy the working directory and read only HEAD. Because the
+dirtied file is filter-excluded, the dirtying is constant and never perturbs the
+`drvPath` the probe measures — a filter that stopped excluding `README.md` would
+fail the probe loudly.
 
 ### Doctest gate
 
@@ -2042,6 +2132,17 @@ The gate has two lanes (`xtask/src/steps/server_fn_coverage_check.rs`): a static
 lane in `check`/`validate --no-e2e` that reads only committed files, and an e2e
 lane (`server-fn-coverage-regenerate` / `-verify`) that runs on the per-combo
 `cargo xtask e2e sqlite chromium` path only.
+
+Neither gate carries an **endpoint-drift check**, and that is deliberate
+([ADR-0120](adr/0120-no-endpoint-drift-check.md)). The retired
+`server-fn-endpoint` gate compared a hand-written `endpoint = "…"` literal
+against the derived `/<vertical>/<ident>`; #714 removed the literal, so the
+inventory now computes the endpoint with the very expression such a check would
+compare it to — a value against itself, which passes for the wrong reason. What
+verifies the computed endpoint instead is `server-fn-coverage`'s seed
+cross-check, which matches it against URIs observed in a real captured run
+(`xtask/src/steps/server_fn_coverage_check.rs:614`). Endpoint correctness is
+therefore asserted only where real traffic exists.
 
 ### Component thinness and cross-language literals
 
@@ -2149,9 +2250,17 @@ correction itself (`:76-83`, #412).
 
 **Dependency patching.** The workspace carries one temporary git
 `[patch.crates-io]` entry: `lettre`, routed to a `jaunder-org` fork pinned by
-rev (`Cargo.toml:134-135`) until the mailbox-parsing fix lands upstream. It is
-pinned by rev rather than branch so a build input changes only when someone
-changes it here. This entry is recorded in no ADR.
+rev (`Cargo.toml:124-125`) until the mailbox-parsing fix lands upstream
+([ADR-0119](adr/0119-lettre-fork-pinned-by-rev.md)) — lettre's own RFC 2822
+mailbox grammar cannot re-parse addresses its `Address` type accepts, so
+`MessageBuilder::build` fails for a legal quoted local part or address literal
+(#297). It is pinned by rev rather than branch so a build input changes only
+when someone changes it here; moving it means pushing the fork, updating the
+rev, and `cargo update -p lettre`, since the lockfile pins the commit either
+way. It is paired with a `deny.toml` `[sources.allow-org]` entry for
+`jaunder-org` (`deny.toml:248-253`): `unknown-git` is only "warn", so that entry
+is not what makes the gate pass — it is what makes the exception deliberate, and
+its removal the signal the patch is gone. Drop both together.
 
 The repository formerly ran a much larger patching apparatus: `atom_syndication`
 and `rss` were routed to forks raising their `quick-xml` requirement, with the
@@ -2163,7 +2272,21 @@ fork bridge was retired and AtomPub Atom document I/O was delegated to
 of the apparatus survives: no fork entries in `[patch.crates-io]`, no
 `flake = false` fork inputs, and no `overrideVendorGitCheckout` in `flake.nix`.
 
-<!-- GAP: the `lettre` fork patch (Cargo.toml:134) is un-ADR'd — the same class of temporary-fork decision ADR-0043 once recorded. -->
+**A pinned formatter.** The devShell's `leptosfmt` is not a released version:
+the flake overrides `pkgs.leptosfmt` to a post-fix upstream rev
+(`flake.nix:413-421`, [ADR-0118](adr/0118-leptosfmt-pinned-past-release.md)),
+because 0.1.33 mangles a generic component tag that has to wrap and upstream's
+fix merged three days after that release, with nothing shipped since. The
+override swaps `src` wholesale rather than patching (the fix also moves a
+submodule pointer, which a patch cannot do), restates `fetchSubmodules`,
+overrides `cargoDeps` via `importCargoLock` — `buildRustPackage` consumes
+`cargoHash` before `overrideAttrs` runs, so a bare `src` swap would keep the
+0.1.33 vendor tree — and deliberately keeps nixpkgs' `version` string, since
+upstream never bumped it and `versionCheckHook` reads it. The consequence is
+that the pinned binary is indistinguishable from the stock one by `--version`:
+only behaviour tells them apart, which is one more reason to invoke the
+devShell's binary rather than re-resolving one. Remove the override once a
+release later than 0.1.33 exists.
 
 **Rust edition and the one `unsafe` seam.** All workspace crates are on edition
 2024 ([ADR-0104](adr/0104-edition-2024-unsafe-env-and-precise-capturing.md)).
