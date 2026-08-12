@@ -513,7 +513,7 @@ crate the same way.
 
 ### AtomPub editing interface
 
-The authenticated Collection (`server/src/atompub/mod.rs:28-44`:
+The authenticated Collection (`server/src/atompub/mod.rs:28-43`:
 `/atompub/service`, the per-user post collection and member routes, the media
 collection and its `{sha}/{filename}` members) serves editing clients — MarsEdit
 and the Emacs front-end — authenticating with HTTP Basic app passwords validated
@@ -555,8 +555,8 @@ and `j:slug` live in the entry's extension map behind `is_draft`/`set_draft` and
 `j_slug`/`set_j_slug`, each helper owning its `xmlns:` prefix so an entry
 declares a namespace only when it actually carries the marker. `quick-xml`
 remains a direct dependency, but only for the non-Atom documents Jaunder still
-writes itself: the service document, RSD, and the shared XML helpers
-(`common/src/atompub/{service,rsd,xml}.rs`).
+writes itself: the service document, RSD, the shared XML helpers, and the
+categories renderer (`common/src/atompub/{service,rsd,xml,categories}.rs`).
 
 `common/src/atompub/categories.rs` is the exception that proves the rule.
 `render_categories_document` (`:20`) is written and re-exported, but no route
@@ -600,11 +600,12 @@ polling as the fallback, everything normalized into the unified content model
 ([ADR-0005](adr/0005-unified-content-model.md)).
 
 **None of it is built.** There is no ActivityPub inbox, no Jetstream consumer,
-no polling scheduler, and no fetcher; all 25 migrations under
-`storage/migrations/` are publishing-side, with no table for fetched content.
-Inbound RSS/Atom ingestion is the first slice (issue #282), with WebSub
-subscription (#921), ActivityPub (#287), and adaptive polling (#920) sequenced
-behind it. Read every sentence in this subsection as intent, not as description.
+no polling scheduler, and no fetcher; all 25 migrations per backend
+(`storage/migrations/{sqlite,postgres}/`) are publishing-side, with no table for
+fetched content. Inbound RSS/Atom ingestion is the first slice (issue #282),
+with WebSub subscription (#921), ActivityPub (#287), and adaptive polling (#920)
+sequenced behind it. Read every sentence in this subsection as intent, not as
+description.
 
 ## Authentication
 
@@ -613,32 +614,64 @@ system: **session cookies** for the web frontend and **Bearer tokens** for API
 clients ([ADR-0007](adr/0007-auth-mechanisms.md)), plus **HTTP Basic** carrying
 app-specific passwords for AtomPub clients such as MarsEdit
 ([ADR-0014](adr/0014-atompub-authentication.md)). All three paths converge on
-the `AuthUser` axum extractor (`web/src/auth/server.rs`), which resolves
+the `AuthUser` axum extractor (`web/src/auth/server.rs:58`), which resolves
 identity through the `SessionStorage` trait
 ([ADR-0007](adr/0007-auth-mechanisms.md)). Header parsing itself lives in the
-target-agnostic `host::auth::resolve_credential`, with precedence: `session=`
-cookie, then `Authorization: Bearer`, then `Authorization: Basic`.
+target-agnostic `host::auth::resolve_credential` (`host/src/auth.rs:39`), pushed
+below `web` as part of the thin-web-shell rollout
+([#334](https://github.com/jaunder-org/jaunder/issues/334)). Precedence is
+`session=` cookie, then `Authorization: Bearer`, then `Authorization: Basic` —
+with one deliberate exception: an **empty** `session=` cookie does not
+short-circuit, so a valid `Authorization` header on the same request still
+authenticates ([#344](https://github.com/jaunder-org/jaunder/issues/344) item 2,
+regression-tested at `host/src/auth.rs:146`).
 
-<!-- un-ADR'd: the cookie > Bearer > Basic precedence order and the host-crate homing of resolve_credential are implementation reality, not decided in an ADR -->
+<!-- un-ADR'd: the cookie > Bearer > Basic precedence order itself. ADR-0007 names cookies and Bearer as the two mechanisms but ranks nothing, and never mentions Basic; #344 amended the cookie branch without deciding the order. -->
 
 Leptos server functions obtain the same identity via `require_auth()`
-(`web/src/auth/server.rs`), which pulls the request `Parts` from context and
+(`web/src/auth/server.rs:113`), which pulls the request `Parts` from context and
 runs the `AuthUser` extractor; failures map to unauthorized/internal errors
-through `AuthRejection` ([ADR-0007](adr/0007-auth-mechanisms.md)).
+through `AuthRejection` ([ADR-0007](adr/0007-auth-mechanisms.md)). The
+operator-only variant `require_operator()` (`web/src/auth/server.rs:117`) layers
+the `is_operator` check on top.
+
+**Session establishment for the web client is cookie-only**
+([ADR-0107](adr/0107-web-session-establishment-is-cookie-only.md)): a
+`#[server]` fn on the auth path sets the `HttpOnly` `session` cookie and returns
+**no session-token material** in its body. Concretely `register` returns `()`
+(`web/src/registration/api.rs:59`) and `login` returns a `LoginResponse`
+carrying only `is_operator` (`web/src/auth/api.rs:38`). The one deliberate
+exception is `create_app_password` (`web/src/sessions/api.rs:62`), which returns
+the raw token because showing it once at creation is the whole point of an app
+password — that endpoint establishes no browser session. There is deliberately
+**no bearer-token API for the web client**, and no machine gate enforces the
+rule: it is held by assertions in `server/tests/web/web_auth.rs` that the
+success bodies do not contain the token recovered from `Set-Cookie`
+([ADR-0107](adr/0107-web-session-establishment-is-cookie-only.md)).
 
 ### Credentials and sessions
 
 - A session token is 32 cryptographically random bytes, base64url-encoded
-  (`storage::auth::generate_token`); only its SHA-256 digest is persisted
-  (`storage::auth::hash_token`) — the raw token is never stored.
-  <!-- un-ADR'd: hashed-at-rest token storage is load-bearing but not recorded in an ADR -->
+  (`host::token::generate`, `host/src/token.rs:28`); only its SHA-256 digest is
+  persisted (`host::token::hash`, `host/src/token.rs:53`, the **sole** path from
+  a raw token to a stored digest) — the raw token is never stored. The two are
+  distinct newtypes, `common::token::{RawToken, TokenHash}`
+  ([#458](https://github.com/jaunder-org/jaunder/issues/458)), and `RawToken`
+  carries `#[str_newtype(no_sqlx, no_ord)]` (`common/src/token.rs:109`) so
+  `.bind(raw_token)` does not compile — that opt-out, not a lint, is what keeps
+  a raw token out of a query. `RawToken`'s `Debug` is hand-written to redact the
+  body ([ADR-0011](adr/0011-unified-observability.md)).
+  <!-- un-ADR'd: hashed-at-rest token storage. #554 proposed encoding hash-before-store in the type system and was closed not-planned, leaving the policy as convention plus the `no_sqlx` guard — security-load-bearing and recorded nowhere in the ADR log. -->
 - An **app password** is just a labelled session: minting calls
-  `SessionStorage::create_session(user_id, label)` — no separate table, no
-  `kind` marker, so tokens are interchangeable across transports (accepted for
-  the self-hosted single-user trust model). Sessions never expire;
-  `sessions.label` is mandatory (browser logins auto-generate a User-Agent/host
-  label, app passwords carry a user-supplied name), and revocation is deleting
-  the session in the Sessions UI
+  `SessionStorage::create_session(user_id, &label)`
+  (`storage/src/sessions.rs:70`) — no separate table, no `kind` column, so
+  tokens are interchangeable across transports (accepted for the self-hosted
+  single-user trust model). Sessions never expire; the `sessions` row is
+  `(token_hash, user_id, label, created_at, last_used_at)`
+  (`storage/src/sessions.rs:164`), and `label` is a mandatory validated newtype,
+  `common::session_label::SessionLabel` — browser logins auto-generate a
+  User-Agent/host label, app passwords carry a user-supplied name. Revocation is
+  deleting the session in the Sessions UI
   ([ADR-0014](adr/0014-atompub-authentication.md)).
 - On the Basic path the supplied username must match the resolved session's user
   (`verify_basic_username` → 401 on mismatch); combined with per-user collection
@@ -650,24 +683,39 @@ through `AuthRejection` ([ADR-0007](adr/0007-auth-mechanisms.md)).
 Cookie management is layered:
 `web::auth::{set_session_cookie, clear_session_cookie}` are leptos adapters over
 the pure header builders
-`host::auth::{session_cookie_header, clear_session_cookie_header}`, which emit
-`session=<token>; HttpOnly; SameSite=Lax; Path=/` (plus `Secure` when the
-deployment's `CookieSettings` say HTTPS); clearing sets `Max-Age=0`
-([ADR-0007](adr/0007-auth-mechanisms.md)).
-
-<!-- un-ADR'd: the concrete cookie attributes are implementation detail under ADR-0007 -->
+`host::auth::{session_cookie_header, clear_session_cookie_header}`
+(`host/src/auth.rs:81`, `:93`), which emit
+`session=<token>; HttpOnly; SameSite=Lax; Path=/` (plus `; Secure` when the
+deployment's `CookieSettings` say HTTPS); clearing sets `Max-Age=0`. `HttpOnly`
+keeps page JavaScript away from the credential — the protection ADR-0107 exists
+to stop the response body from undoing — and `SameSite=Lax` is the XSRF
+mitigation ADR-0007 lists among its decision drivers
+([ADR-0007](adr/0007-auth-mechanisms.md),
+[ADR-0107](adr/0107-web-session-establishment-is-cookie-only.md)). All four
+attribute strings are pinned by exact-string regression tests
+(`host/src/auth.rs:171`–`:198`).
 
 ### Password hashing
 
 Passwords are hashed with **Argon2id** at the crate-default parameters (m=19456,
-t=2) via `common::password::Password::hash`
+t=2) via `common::password::Password::hash` (`common/src/password.rs:117`)
 ([ADR-0018](adr/0018-constant-time-authentication.md)). Test builds may enable
-the `cheap-kdf` feature for fast hashing, and this fails closed twice: a
-`compile_error!` rejects `cheap-kdf` in any release/optimized build, and the
-server binary aborts at startup if `common::CHEAP_KDF_ENABLED` is set
-(`server/src/main.rs`).
+the `cheap-kdf` feature, which swaps in `Params::MIN_M_COST` with t=1
+(`common/src/password.rs:109`) so the suite is not dominated by KDF time;
+`verify()` derives cost from the stored hash, so it needs no branch. The feature
+fails closed twice, at different times:
 
-<!-- un-ADR'd: the cheap-kdf feature and its dual fail-closed guard are load-bearing but not ADR'd -->
+- **Compile time** —
+  `#[cfg(all(feature = "cheap-kdf", not(debug_assertions)))] compile_error!`
+  (`common/src/lib.rs:65`). The guard keys on `debug_assertions`, so an
+  _optimized_ build carrying the feature fails to build rather than producing a
+  weak-hashing artifact; ordinary test builds are unaffected.
+- **Startup** — `server/src/main.rs:11` reads `common::CHEAP_KDF_ENABLED`
+  (`common/src/lib.rs:60`, a `cfg!` constant) and, if set, prints a `FATAL:`
+  line and `std::process::exit(1)`. This catches the debug-build-in-production
+  case the compile-time guard lets through.
+
+<!-- un-ADR'd: the cheap-kdf feature and its two-layer fail-closed guard. No ADR and no GitHub issue mentions it (searched 2026-08-11); it is the only thing standing between a mis-flagged build and production password hashing at minimum Argon2 cost. -->
 
 ### Timing discipline: the entropy dividing line
 
@@ -675,24 +723,34 @@ Two deliberate, opposite orderings govern when the expensive Argon2 work runs,
 split by the **entropy of the value being validated**:
 
 - **Enumerable identifier (username): equalize timing.**
-  `UserStorage::authenticate` performs an Argon2 verification against a fixed
-  dummy hash (`storage::helpers::dummy_password_hash()`, computed once via
-  `OnceLock` through the real `Password::hash` path so it carries production
-  parameters, with a hardcoded valid-hash fallback so initialization is
-  infallible) on the absent-user path before returning `InvalidCredentials`,
-  closing the username-enumeration timing oracle. **Durable invariant: the
-  absent-user path MUST keep this equalizing verification** — do not remove it
-  as a "fast path" and preserve it through any refactor or backend dedup.
-  Applies identically to both SQLite and Postgres backends
-  ([ADR-0018](adr/0018-constant-time-authentication.md)).
-- **High-entropy secret (invite code, reset token): cheap-reject first.**
-  `create_user_with_invite` validates the invite with a cheap lookup before
-  hashing (the SQLite backend takes its write lock up front per ADR-0021, so the
-  hash runs inside the immediate transaction on the success path only), and
-  `confirm_password_reset` atomically claims the reset token before hashing the
-  new password. A ~256-bit secret admits no useful timing oracle, and hashing
-  first would turn bogus-secret requests into a CPU-exhaustion amplifier while
-  destroying invite issuance as a throttle
+  `UserStorage::authenticate` (`storage/src/users.rs:304`) performs an Argon2
+  verification against a fixed dummy hash (`dummy_password_hash()`,
+  `storage/src/helpers.rs:424` — computed once via `OnceLock` through the real
+  `Password::hash` path so it carries production parameters, with a hardcoded
+  valid-hash fallback so initialization is infallible) on the absent-user path
+  before returning `InvalidCredentials` (`storage/src/users.rs:350`), closing
+  the username-enumeration timing oracle. **Durable invariant: the absent-user
+  path MUST keep this equalizing verification** — do not remove it as a "fast
+  path" and preserve it through any refactor. The backend dedup is already done:
+  `authenticate` is a single generic `UserStore<DB: Backend>` impl
+  (`storage/src/users.rs:212`), so SQLite and Postgres cannot drift apart here
+  ([ADR-0018](adr/0018-constant-time-authentication.md)). Parity of the dummy
+  hash's Argon2 parameters with a real one is itself asserted
+  (`storage/src/helpers.rs:864`), since verify cost is derived from the hash
+  string's encoded params.
+- **High-entropy secret (invite code, reset token): cheap-reject first.** Both
+  operations live on the `AtomicOps` trait (`storage/src/atomic.rs:101`), which
+  each backend implements separately (`storage/src/sqlite/mod.rs:185`, `:280`;
+  `storage/src/postgres/mod.rs:89`, `:155`). `create_user_with_invite` validates
+  the invite with a cheap lookup before hashing (the SQLite backend takes its
+  write lock up front per ADR-0021, so the hash runs inside the immediate
+  transaction on the success path only), and `confirm_password_reset` atomically
+  claims the reset token before hashing the new password — it originally hashed
+  first, which ADR-0022 recorded as a violation and
+  [#60](https://github.com/jaunder-org/jaunder/issues/60) fixed. A ~256-bit
+  secret admits no useful timing oracle, and hashing first would turn
+  bogus-secret requests into a CPU-exhaustion amplifier while destroying invite
+  issuance as a throttle
   ([ADR-0022](adr/0022-validate-before-expensive-work.md)).
 
 Do not apply the equalizing-dummy-hash rule to high-entropy-secret paths, or
@@ -703,14 +761,26 @@ the other ([ADR-0018](adr/0018-constant-time-authentication.md),
 ### Username boundary
 
 Usernames are a validated domain newtype, `common::username::Username` (an
-existing exemplar of the proposed
-[ADR-0063](adr/0063-domain-value-newtype-convention.md) convention): `FromStr`
-lowercases the input and rejects anything not matching `[a-z0-9_-]+`, and the
-serde bridge routes wire (de)serialization through the same validation, so
-interior code only ever sees canonical lowercase usernames. Web entry points
-(login, registration, password reset) lowercase before parsing.
+exemplar of the [ADR-0063](adr/0063-domain-value-newtype-convention.md)
+convention): `FromStr` lowercases the input and rejects anything not matching
+`[a-z0-9_-]+` (`common/src/username.rs:26`), and the serde bridge routes wire
+(de)serialization through the same validation, so interior code only ever sees
+canonical lowercase usernames. The parser is the **only** place this happens:
+server-side entry points do not pre-lowercase, and the redundant
+`.to_lowercase()` calls that once preceded `Username::from_str` were removed by
+[#67](https://github.com/jaunder-org/jaunder/issues/67). What remains is a
+client-side convenience — the login, registration, and password-reset forms
+apply `transform=str::to_lowercase` to the live input for display
+(`web/src/auth/component.rs:52` and siblings), not for validation.
 
-<!-- un-ADR'd: the lowercase-canonical username rule itself predates/escapes the ADR log; only the newtype convention is ADR'd -->
+Canonicalization is load-bearing beyond tidiness: because both sides are already
+lowercase, `verify_basic_username`'s exact compare
+(`web/src/auth/server.rs:202`) is effectively case-insensitive, which is what
+closed [#344](https://github.com/jaunder-org/jaunder/issues/344) item 1 — an
+app-password client sending a differently-cased username must not be rejected
+despite a valid token.
+
+<!-- un-ADR'd: the lowercase-canonical rule for usernames specifically. ADR-0063 mandates the validating-newtype shape but not this normalization; #67 and #344 item 1 both act on the rule as already settled without establishing it. -->
 
 ## Web frontend
 
