@@ -4,8 +4,8 @@
 //! MERGES into the run (the same mechanism `server/tests/misc/cli_subprocess.rs`
 //! uses to cover `jaunder`'s `main`). Driving the no-database `reset-mail` and
 //! `capture-path` subcommands here exercises `main`'s entry, `Cli::parse`, the
-//! dispatch `match`, those two arms, and the final `Ok(())` — so those lines no
-//! longer need a `cov:ignore`. The three database-backed arms stay marked (a
+//! dispatch `match`, those two arms, and the final `Ok(())` — so those lines need
+//! no coverage exemption. The three database-backed arms stay marked (a
 //! subprocess can't reach them without a live DB).
 //!
 //! These pass `JAUNDER_CAPTURE_DIR` to the spawned child through `Command::env`,
@@ -38,8 +38,7 @@ fn reset_mail_removes_the_derived_capture_file_and_exits_ok() {
 }
 
 /// An unset `JAUNDER_CAPTURE_DIR` is a misconfiguration, not a silent no-op: the
-/// e2e-only tool must fail loudly (preserving the loud failure the old required
-/// `--path` arg gave).
+/// e2e-only tool must fail loudly.
 #[test]
 fn reset_mail_errors_without_capture_dir() {
     let out = Command::new(env!("CARGO_BIN_EXE_test-support"))

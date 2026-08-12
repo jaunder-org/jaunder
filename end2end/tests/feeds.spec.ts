@@ -65,7 +65,6 @@ test("auto-discovery links are present on site home and user timeline, and resol
   );
   expect(homeStyles).toBe(2);
 
-  // Verify all three formats exist on home
   for (const fmt of FORMATS) {
     const link = homeLinks.find((l) => l.type === fmt.mime);
     expect(link, `${fmt.mime} on /`).toBeTruthy();
@@ -95,7 +94,6 @@ test("auto-discovery links are present on site home and user timeline, and resol
   );
   expect(rsd).toBe(1);
 
-  // Verify all three formats exist on user timeline
   for (const fmt of FORMATS) {
     const link = userLinks.find((l) => l.type === fmt.mime);
     expect(link, `${fmt.mime} on /~${username}`).toBeTruthy();
@@ -252,11 +250,10 @@ test("publishing and editing a post each trigger a WebSub hub ping", async ({
   // Let the first ping wave fully settle before snapshotting for the edit, so
   // leftover publish-wave pings are not mistaken for the edit's ping.
   //
-  // The suite's only `waitForTimeout`. #794 wraps it so the wait is at least
-  // *visible* in the trace (it was ~2 s of the ~18 s this test loses to
-  // uninstrumented waiting); #793 replaces the sleep with a condition. The
-  // duration stays `PING_SETTLE_MS` (#270), which this test's budget derives
-  // from — wrapping changes attribution, not timing.
+  // The suite's only `waitForTimeout`, wrapped so the wait is at least
+  // *visible* in the trace (#794); replacing the sleep with a condition is
+  // #793. The duration stays `PING_SETTLE_MS` (#270), which this test's budget
+  // derives from — wrapping changes attribution, not timing.
   await withTimedAction(page, "wait.settle", () =>
     page.waitForTimeout(PING_SETTLE_MS),
   );

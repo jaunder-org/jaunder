@@ -123,11 +123,11 @@ pub struct AllowlistEntry {
 /// file is not compared, but an unstable rendering would still churn its git diff
 /// on every regenerate with no gate to catch it.
 ///
-/// Fallible rather than lossy. A serialization failure used to fall back to an empty
-/// `{"covered":{},"orphans":{}}`, which `regenerate` would then *write*: the committed
-/// snapshot would say nothing is covered, and the next `verify` would agree with it.
-/// That is the exact false verdict this gate exists to prevent, so the error
-/// propagates.
+/// Fallible rather than lossy. A serialization failure must not fall back to an
+/// empty `{"covered":{},"orphans":{}}` — `regenerate` would *write* it, the
+/// committed snapshot would say nothing is covered, and the next `verify` would
+/// agree. That is the exact false verdict this gate exists to prevent, so the
+/// error propagates.
 pub fn render<T: Serialize>(value: &T) -> Result<String> {
     // Every collection in both artifacts is a `BTreeMap`/`BTreeSet`, so they
     // serialize in key order, and `to_string_pretty` is itself deterministic —
@@ -202,22 +202,10 @@ pub fn verdict(
 
     for f in inventory {
         let qualified = f.qualified();
-        // There is no endpoint-drift check here any more, and its absence is
-        // deliberate rather than an oversight.
-        //
-        // It used to compare each fn's *declared* `endpoint = "…"` against the
-        // derived `<vertical>/<ident>`, which was a real cross-check while an author
-        // wrote that literal by hand. Since #714 nothing declares it: the inventory
-        // computes `endpoint` with the very expression this check compared it to
-        // (`server_fns.rs`), so both arms — a missing endpoint, and a declared one
-        // that disagrees — became unreachable by construction. A comparison of a
-        // value against itself passes for the wrong reason, which is worse than no
-        // comparison at all.
-        //
-        // What replaces it is `server_fn_coverage_check`'s seed cross-check, which
-        // compares the computed endpoint against URIs observed in a real captured
-        // run — ground truth produced by the macro's actual expansion, not a second
-        // restatement of the rule.
+        // There is deliberately no endpoint-drift check here — a comparison of a
+        // computed value against itself would pass for the wrong reason; the seed
+        // cross-check verifies the endpoint against real traffic instead
+        // (docs/adr/0120-no-endpoint-drift-check.md).
         let covered = snapshot.covered.contains(&qualified);
         let entry = allowed.get(qualified.as_str());
 

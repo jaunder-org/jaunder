@@ -88,10 +88,10 @@ pub(crate) fn project(kind: ErrorKind, public_message: &str) -> WebError {
 
 /// Awaits the given future, converting any `InternalError` to its public
 /// `WebError` form. This is a thin error-projection boundary: it owns no leptos
-/// reactive-owner lifetime concerns. (Owner-pinning against context loss across an
-/// `.await` was removed in #594 — see the ADR-0016 retirement addendum; the sole
-/// server-fn invocation path, `leptos_axum`'s `/api` handler, holds the owner strong
-/// for the whole future itself.)
+/// reactive-owner lifetime concerns. (No owner-pinning against context loss across
+/// an `.await` is needed — the sole server-fn invocation path, `leptos_axum`'s
+/// `/api` handler, holds the owner strong for the whole future itself; see the
+/// ADR-0016 retirement addendum, #594.)
 ///
 /// # Errors
 ///
@@ -153,8 +153,7 @@ mod tests {
         // §2.4 regression guard: storage/server failures reach the client only
         // through `InternalError`, which must mask. The raw source chain may
         // appear in the operator message (logged) but never in the public
-        // `WebError` sent to the browser. The leaky `WebError::storage`/`server`
-        // constructors that embedded the chain were removed for this reason.
+        // `WebError` sent to the browser.
         for internal in [
             InternalError::storage(OuterError {
                 source: SourceError,
@@ -451,7 +450,7 @@ mod tests {
             "invalid value for `password`: password must be at least 8 characters".into(),
         ));
 
-        // The response is unchanged: the telemetry is purely additive.
+        // The variant is untouched: the telemetry is purely additive.
         assert!(matches!(error, WebError::ServerFunction { .. }));
 
         let recorded = events.lock().expect("field recorder mutex").clone();
@@ -529,11 +528,10 @@ mod tests {
 
     /// The ADR-0011 span must be in scope when the boundary logs a failure.
     ///
-    /// This was the premise of #714, which deleted the `boundary!` label: it was
-    /// redundant *because* the enclosing `#[tracing::instrument]` span already names
-    /// the failing fn on the very same event — and more precisely, since a bare
-    /// ident like `create` is ambiguous across verticals. If this ever fails, that
-    /// premise is gone and the deletion cost observability.
+    /// There is no `boundary!` label because the enclosing `#[tracing::instrument]`
+    /// span names the failing fn on the very same event — and more precisely, since
+    /// a bare ident like `create` is ambiguous across verticals (#714). If this
+    /// ever fails, that premise is gone and the label's deletion cost observability.
     ///
     /// Deliberately uses a hand-written `#[tracing::instrument]` rather than
     /// `#[macros::server]`: the property under test is `tracing`'s, not the macro's,

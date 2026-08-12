@@ -654,11 +654,7 @@ pub async fn cmd_serve(
     // tests; this only wires them to the prepared server. Mirrors jaunder-uox1.
     //
     // The marker starts at the destructuring, not below it: completing this binding
-    // *is* the prepare_server-succeeded path, so the same rationale covers it. These
-    // lines used to report covered incidentally — the `?` statement's span was
-    // attributed through the early-return case — which made them a coverage result no
-    // test actually earned, and one that moved with unrelated codegen changes (#693
-    // shifted it).
+    // *is* the prepare_server-succeeded path, so the same rationale covers it (#693).
     let PreparedServer {
         listener,
         router,
@@ -685,7 +681,7 @@ pub async fn cmd_serve(
     #[cfg(not(unix))]
     {
         // No signal handling off unix (jaunder targets Linux/NixOS): serve until
-        // the process is otherwise terminated, matching prior behavior.
+        // the process is otherwise terminated.
         serve_with_shutdown(
             listener,
             router,
@@ -852,12 +848,9 @@ mod tests {
         assert_eq!(err.to_string(), expected);
     }
 
-    // `test_require_postgres_options`, `cmd_create_pg_db_rejects_non_postgres_app_db` and
-    // `cmd_create_pg_db_requires_database_name` used to live here. All three tested states
-    // that are now unrepresentable: `PgBootstrapArgs` holds a `PgConnectOptions` and an
-    // `AppTarget`, so a non-PostgreSQL URL or one naming no database is rejected at
-    // argument parsing and `require_postgres_options` has no callers left. The
-    // replacements are `app_target_rejects_*` and
+    // `PgBootstrapArgs` holds a `PgConnectOptions` and an `AppTarget`, so a
+    // non-PostgreSQL URL or one naming no database is rejected at argument parsing;
+    // those rejections are pinned by `app_target_rejects_*` and
     // `create_pg_db_rejects_a_non_postgres_bootstrap_url` in `cli.rs`.
 
     #[test]

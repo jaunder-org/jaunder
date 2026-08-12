@@ -34,11 +34,11 @@ pub struct PageSize(u32);
 /// path (#588): two adjacent bare integers can be swapped silently, and one typed
 /// argument makes that a compile error.
 ///
-/// **Bounded `>= 0` by a declared `min`, not by an unsigned inner.** It carried `u32`
-/// until #696; the bound moved into `min = 0` because `sqlx` has no Postgres `Encode`
-/// for unsigned types, so a `u32` inner is widened away at every bind and its guarantee
-/// does not survive the boundary — while a declared `min` is re-run by `FromStr`, the
-/// serde bridge, and the sqlx `Decode`. `default()` is `0` (the first page).
+/// **Bounded `>= 0` by a declared `min`, not by an unsigned inner** (#696): `sqlx` has
+/// no Postgres `Encode` for unsigned types, so a `u32` inner is widened away at every
+/// bind and its guarantee does not survive the boundary — while a declared `min` is
+/// re-run by `FromStr`, the serde bridge, and the sqlx `Decode`. `default()` is `0`
+/// (the first page).
 ///
 /// **There is deliberately no `max`, and adding one would be a mistake.** An offset's
 /// only meaningful upper bound is *the number of rows that exist*, which is not a
@@ -48,10 +48,10 @@ pub struct PageSize(u32);
 /// into a listing a reader may skip.
 ///
 /// The consequence, stated so it is not mistaken for an oversight: this is a `#[server]`
-/// wire argument, and an offset between `u32::MAX` and `i64::MAX` is now **accepted**
-/// where the old `u32` inner rejected it. It yields an empty page rather than a
-/// validation error. That is a deliberate trade for removing the widening at the bind
-/// (#696); it is not a hole to be closed by inventing a cap.
+/// wire argument, and an offset between `u32::MAX` and `i64::MAX` is **accepted**,
+/// yielding an empty page rather than a validation error. That is a deliberate trade
+/// for removing the widening at the bind (#696); it is not a hole to be closed by
+/// inventing a cap.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, NumNewtype)]
 #[num_newtype(
     inner = i64,
@@ -183,9 +183,9 @@ mod tests {
     #[test]
     fn page_offset_surface() {
         use super::PageOffset;
-        // value()/From<Self>, trim, and no upper bound — including past `u32::MAX`,
-        // which the pre-#696 `u32` inner rejected. See the type's doc: that widening is
-        // deliberate, and `page_offset_rejects_negative` pins the floor that matters.
+        // value()/From<Self>, trim, and no upper bound — including past `u32::MAX`.
+        // See the type's doc: that widening is deliberate (#696), and
+        // `page_offset_rejects_negative` pins the floor that matters.
         assert_eq!("0".parse::<PageOffset>().map(i64::from).ok(), Some(0));
         assert_eq!(
             "  4294967295  "
@@ -233,9 +233,9 @@ mod tests {
     #[test]
     fn page_offset_rejects_negative() {
         use super::PageOffset;
-        // The floor survives the move from `inner = u32` to `inner = i64` (#696).
+        // The floor is declared, not implied by the inner type (#696).
         //
-        // This is the test for the trap in that change: switching the inner type
+        // This is the test for the trap: switching the inner type
         // WITHOUT declaring `min = 0` makes the sqlx bind gate green while silently
         // deleting the only guarantee the type carried — `u32` was the whole of it.
         // With `min = 0` declared, the bound is re-run by `FromStr`, the serde bridge,

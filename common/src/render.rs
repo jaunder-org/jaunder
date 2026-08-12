@@ -46,11 +46,10 @@ pub enum PostFormat {
 }
 
 /// HTML that is **safe to emit unescaped** — the type's invariant is "contains no
-/// active markup", established by scrubbing against an allowlist. Before #445 this
-/// was only a *provenance* marker ("came out of our renderer"), which did not imply
-/// safety because nothing sanitized; it now carries the guarantee its name suggests.
-/// Its structural value is unchanged: the unescaped view sink accepts only
-/// `RenderedHtml`, so a raw `String`/body cannot reach it by accident.
+/// active markup", established by scrubbing against an allowlist (#445). It is a
+/// guarantee, not merely a provenance marker, and it is structural: the unescaped
+/// view sink accepts only `RenderedHtml`, so a raw `String`/body cannot reach it
+/// by accident.
 ///
 /// Two doors, meaning different things:
 ///
@@ -187,43 +186,10 @@ impl PartialEq<&str> for RenderedHtml {
     }
 }
 
-// ## Storage: why the decode does not sanitize
-//
-// The bridge itself is `#[derive(SqlxBridge)]` on the type above (#746) — the shared
-// codegen every stored newtype and enum uses. The reasoning below is why this type may
-// use a *plain* bridge at all, and is the thing to re-read before changing that.
-//
-// Write-side sqlx bridge (#502): `RenderedHtml` is a first-class TEXT bind parameter,
-// delegating to the inner `String` — so storage binds it directly (`.bind(&rendered_html)`)
-// rather than via an `.as_ref()` str-strip. `Type::compatible` delegates to `String`'s
-// rather than taking the trait default, which would accept only the exact `type_info` and
-// reject an equally-valid `VARCHAR` column; the shared bridge does this for every caller.
-//
-// `Decode` (#445) constructs the private field directly — it needs neither door, since
-// the derive expands in the same module as the type. Neither door is involved: this is not
-// new outside data (so not `sanitize`), and routing it through `from_trusted` would put a
-// gate-policed door on a path the gate cannot inspect. So the `rendered_html` column decodes
-// straight into `RenderedHtml`, like every other domain column (#438/#572), and
-// `build_post_record` no longer rebuilds via `from_trusted`.
-//
-// This reverses the previous "deliberately NO `Decode`" stance, so the reasoning is worth
-// keeping rather than deleting. That stance rested on a decode being able to "bless ANY
-// text column decoded into it — e.g. a raw, un-rendered `body`". **That risk is real and
-// is accepted here**: decoding some other column into this type would still bless it.
-//
-// It rests on one argument only — that typing a column as `RenderedHtml` is a deliberate,
-// reviewable act. Note what does *not* back it: the `rendered-html-from-trusted` gate does
-// **not** catch this. That gate's population is `from_trusted` **on this type** — the
-// definition and every use, with the qualifier resolved since #790; a `FromRow` field typed
-// `RenderedHtml` over the wrong column names no door at all and is invisible to it.
-// Widening the gate to flag `RenderedHtml`-typed row fields would close the hole —
-// filed as #701.
-//
-// A *sanitizing* decode would have removed the risk outright and healed any pre-#445 row
-// on read. It was rejected: no deployed instance holds data, so it would guard only
-// against a write path that forgot to sanitize — which the gate already catches — at the
-// cost of an html5ever parse on every post read, forever. Revisit only if an instance ever
-// accumulates rows written by a pre-#445 build.
+// Storage decode: the `rendered_html` column decodes straight into `RenderedHtml`
+// via the plain `#[derive(SqlxBridge)]` bridge — deliberately NOT a sanitizing
+// decode, with an accepted blessing risk the gate cannot see (#701). Re-read
+// docs/adr/0123-rendered-html-storage-decode.md before changing this.
 
 // ---------------------------------------------------------------------------
 // Pure rendering, and the media references in its output (#711)
@@ -609,7 +575,7 @@ pub use sanitized::{INERT_ATTRS, MEDIA_URL_ATTRS, RenderOutput, extract_media_re
 ///
 /// Total: a body with no non-blank line is unrepresentable ([`PostBody`], #811),
 /// so the slug source can always be found and there is no nothing-to-store case
-/// left to report. Named for what it does — it has never derived only a title.
+/// left to report.
 ///
 /// The body is stored by the caller — this function never mutates it, and the
 /// caller derives naming from the *original* body before canonicalizing, because
@@ -1048,8 +1014,7 @@ mod tests {
     #[test]
     fn derive_post_naming_treats_blank_explicit_title_as_absent() {
         // A blank explicit title means "no title supplied", not an error (#830): the
-        // body is consulted instead, exactly as if the field had been omitted. Carried
-        // over from #830 and retargeted at the total signature.
+        // body is consulted instead, exactly as if the field had been omitted.
         let (title, slug) = naming(Some("   "), "body line", PostFormat::Markdown);
         assert_eq!(title, None);
         assert_eq!(slug, "body-line");
@@ -1164,9 +1129,9 @@ mod tests {
 
     // -- canonicalize_org_body tests (ADR-0024; load-bearing, user-flagged) --
     //
-    // Every expectation below gained a terminating "\n" in #811. That is the fix, not
-    // drift: the old `trim_end()` ate the body's final newline, which is significant
-    // inside <pre><code> and inside Org paragraphs.
+    // Every expectation below ends with a terminating "\n" on purpose (#811): the
+    // body's final newline is significant inside <pre><code> and inside Org
+    // paragraphs, so canonicalization must not eat it.
 
     /// Canonicalize a fixture that is expected to survive — the inputs below all keep
     /// some content, so a failure here is a bug rather than the title-only rejection.
@@ -1758,8 +1723,7 @@ mod tests {
             assert!(result.contains("<p>hi</p>"), "{result}");
         }
 
-        // Was `render_html_format_is_identity` before #445: the `Html` format used to be
-        // a verbatim passthrough. It is now sanitized like every other format, so the
+        // The `Html` format is sanitized like every other format (#445), so the
         // guarantee is "safe markup survives unchanged", not "the input survives".
         #[test]
         fn render_html_format_preserves_safe_markup() {
@@ -1829,8 +1793,7 @@ mod tests {
             ));
             assert!(extract_media_refs(render(&video, &PostFormat::Markdown).as_ref()).is_empty());
 
-            // A URL displayed as literal text points nobody at anything (spec D2's deliberate
-            // narrowing away from the old substring search over the source body).
+            // A URL displayed as literal text points nobody at anything (spec D2).
             let fenced = parse_post_body(&format!("```\n{}\n```", media_url_for("photo.jpg")));
             assert!(extract_media_refs(render(&fenced, &PostFormat::Markdown).as_ref()).is_empty());
         }

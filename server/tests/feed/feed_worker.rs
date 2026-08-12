@@ -163,19 +163,18 @@ async fn worker_groups_duplicate_events_into_single_regen(#[case] backend: Backe
     );
 }
 
-// The regen-failure backoff behavior moved to a mock-based worker unit test
+// Regen-failure backoff is covered by a mock-based worker unit test
 // (`worker::tests::tick_reschedules_on_regen_failure_within_backoff`): a
-// `FeedPath` can no longer hold an unparseable value, so the former bad-URL
-// trigger is unrepresentable, and a real backend cannot cheaply inject the only
-// remaining failure (a storage error). The real-backend `mark_failed`
-// scheduling SQL stays covered by the dual-backend `feed_events` storage test.
+// `FeedPath` cannot hold an unparseable value, and a real backend cannot
+// cheaply inject the only representable failure (a storage error). The
+// real-backend `mark_failed` scheduling SQL stays covered by the dual-backend
+// `feed_events` storage test.
 
 #[apply(backends)]
 #[tokio::test]
 async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
-    // WebSub ping-failure backoff is backend-agnostic: run it on both backends
-    // via the shared setup instead of the hand-built SQLite-only AppState this
-    // test used to construct (which left Postgres uncovered).
+    // WebSub ping-failure backoff is backend-agnostic: the shared setup runs it
+    // on both backends so neither is left uncovered.
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
 
     let user = SeedUser::new().seed(&state).await;

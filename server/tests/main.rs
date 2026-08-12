@@ -1,7 +1,5 @@
-// The single server integration-test binary. The six subsystems below were once
-// six separate test crates that each path-cloned a shared `helpers` module into
-// themselves; folding them into one crate lets `helpers` compile once and collapses
-// six crate-level `#![expect]`s into this one (#298).
+// The single server integration-test binary: one crate, so `helpers` compiles
+// once and one crate-level `#![expect]` covers every subsystem (#298).
 //
 // unwrap/expect are permitted in test code (CONTRIBUTING); clippy's
 // allow-{unwrap,expect}-in-tests only exempts #[test]/#[tokio::test] bodies, not the

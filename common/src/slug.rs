@@ -122,7 +122,7 @@ mod tests {
     fn slug_accepts_ascii_and_unicode_lowercasing() {
         assert_eq!("hello-world".parse::<Slug>().unwrap(), "hello-world");
         assert_eq!("my-post-2024".parse::<Slug>().unwrap(), "my-post-2024");
-        // Uppercase is now accepted (lowercased), not rejected.
+        // Uppercase is accepted and lowercased, not rejected.
         assert_eq!("Héllo".parse::<Slug>().unwrap(), "héllo");
         assert_eq!("日本語".parse::<Slug>().unwrap(), "日本語");
         assert_eq!("Москва".parse::<Slug>().unwrap(), "москва");
@@ -131,7 +131,7 @@ mod tests {
 
     #[test]
     fn slug_preserves_indic_conjunct_marks() {
-        // Virama/pulli (Mn, not Alphabetic) were dropped, breaking conjuncts.
+        // Virama/pulli are Mn, not Alphabetic — dropping them breaks conjuncts.
         for word in ["नमस्ते", "हिन्दी", "தமிழ்"] {
             let nfc: String = word.to_lowercase().nfc().collect();
             assert_eq!(

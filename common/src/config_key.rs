@@ -1,8 +1,7 @@
 //! The closed registries of site-wide and per-user configuration keys (#687).
 //!
-//! A key cannot exist here without a validator: both are columns of one table, so the
-//! two lists that used to drift — the `*_KEY` consts and whatever parsed their values —
-//! are now one scannable block. See spec D1.
+//! A key cannot exist here without a validator: both are columns of one table — one
+//! scannable block, so the key list and its validators cannot drift apart. See spec D1.
 
 use std::str::FromStr;
 

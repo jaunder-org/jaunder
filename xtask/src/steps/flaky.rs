@@ -9,8 +9,8 @@
 //! (best-effort, success path included); we read it there, attach the flaky
 //! specs to the sidecar (`CommandResult.flaky`), print a `flaky:` sentinel (a
 //! greppable line mirroring `xtask-done:`), and append a table to the GitHub
-//! Actions run summary. Replaces the former inline `jq` step in `ci.yml` so the
-//! logic is one tested code path rather than shell smeared across the matrix.
+//! Actions run summary — one tested code path rather than shell smeared across
+//! the CI matrix.
 
 use std::io::Write;
 

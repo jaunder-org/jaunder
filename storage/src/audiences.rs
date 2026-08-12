@@ -398,9 +398,7 @@ mod tests {
         );
     }
 
-    // Behavior-preserving translation of the former `web` `map_audience_error`
-    // tests: each variant's `(kind, public_message)` is what the deleted mapper
-    // produced, so the wire projection is unchanged.
+    // Each variant's `(kind, public_message)` is the wire projection; these pin it.
     #[test]
     fn from_audience_error_maps_variants() {
         let duplicate: InternalError = AudienceError::DuplicateName.into();

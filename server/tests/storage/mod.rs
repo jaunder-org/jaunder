@@ -29,11 +29,9 @@ use storage::{
 use tempfile::TempDir;
 
 use rstest::*;
-// `#[template]`/`#[apply]` come from the `rstest_reuse` companion crate (rstest
-// itself only exports `rstest`/`fixture`). The bare `use rstest_reuse;` is
-// required at the crate root because `rstest_reuse::template` expands to code
-// that names the `rstest_reuse` crate; `use rstest_reuse::*;` alone is not
-// enough (it imports the public items but not the crate path).
+// `#[template]`/`#[apply]` come from the `rstest_reuse` companion crate; the
+// glob alone is not enough
+// (docs/adr/0124-rstest-reuse-cross-module-templates.md).
 use rstest_reuse::*;
 
 use crate::helpers::create_session_for;
@@ -708,7 +706,6 @@ async fn audience_add_member_cross_author_rejected(#[case] backend: Backend) {
 // `list_members` / `remove_member` are author-scoped: a different author can
 // neither see nor mutate another author's audience membership (the WHERE clause
 // filters by `author_user_id`, so a cross-author `audience_id` matches nothing).
-// This is the storage guarantee that replaced web's `assert_owns_audience` check.
 #[apply(backends)]
 #[tokio::test]
 async fn audience_members_are_author_scoped(#[case] backend: Backend) {
@@ -1096,7 +1093,7 @@ async fn confirm_password_reset_bogus_token_returns_not_found_without_hashing(
     let state = &env.state;
     // No password_resets row matches this token. A hash-failing new password proves the
     // hash is NOT attempted: the claim rejects the token first -> NotFound, not Internal
-    // (ADR-0022). Before the reorder this would have hashed first and returned Internal.
+    // (ADR-0022).
     let result = state
         .atomic
         .confirm_password_reset(
@@ -1465,7 +1462,6 @@ async fn use_invite_with_expired_code_returns_expired(#[case] backend: Backend) 
 
     let user_id = SeedUser::new().seed(state).await.user_id;
 
-    // expires_at in the past
     let expires_at = Utc::now() - chrono::Duration::hours(1);
     let code = state.invites.create_invite(expires_at).await.unwrap();
 
@@ -1517,7 +1513,6 @@ async fn create_user_with_invite_creates_user_and_marks_invite_used(#[case] back
     assert_eq!(record.username, "alice");
     assert_eq!(record.display_name.as_deref(), Some("Alice"));
 
-    // Invite was marked used
     let list = state.invites.list_invites().await.unwrap();
     assert_eq!(list.len(), 1);
     assert!(list[0].used_at.is_some());
@@ -1559,7 +1554,6 @@ async fn create_user_with_invite_second_call_returns_already_used(#[case] backen
 
     assert!(matches!(err, RegisterWithInviteError::InviteAlreadyUsed));
 
-    // bob was not inserted
     assert!(
         state
             .users
@@ -1641,7 +1635,7 @@ async fn create_user_with_invite_duplicate_username_returns_username_taken(
     let env = backend.setup().await;
     let state = &env.state;
 
-    // Create alice directly (without invite)
+    // alice exists before the invite is used
     let user = SeedUser::new().seed(state).await;
 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
@@ -1661,7 +1655,7 @@ async fn create_user_with_invite_duplicate_username_returns_username_taken(
 
     assert!(matches!(err, RegisterWithInviteError::UsernameTaken));
 
-    // Invite was NOT marked used
+    // A failed registration must not consume the invite.
     let list = state.invites.list_invites().await.unwrap();
     assert_eq!(list.len(), 1);
     assert!(list[0].used_at.is_none());
@@ -3456,7 +3450,7 @@ async fn restating_the_set_without_one_tag_drops_only_that_tag(#[case] backend: 
     let tags = tags_of(state, post_id).await;
     assert_eq!(tags.len(), 3);
 
-    // Dropping one tag is now expressed by restating the desired set without it.
+    // Dropping one tag is expressed by restating the desired set without it.
     state
         .posts
         .set_post_tags(
@@ -3901,9 +3895,9 @@ async fn tag_normalization(#[case] backend: Backend) {
     assert_eq!(tags[0].tag_display, "Rust-Web"); // original preserved
 }
 
-// `clearing_tags_removes_the_row` lived here; `set_post_tags`' add/reconcile/clear
-// contract is a generic-contract test, homed in `storage/src/posts.rs` as
-// `set_post_tags_adds_removes_and_clears` (ADR-0053 §1, #771).
+// `set_post_tags`' add/reconcile/clear contract is a generic-contract test,
+// homed in `storage/src/posts.rs` as `set_post_tags_adds_removes_and_clears`
+// (ADR-0053 §1, #771).
 
 #[apply(backends)]
 #[tokio::test]
@@ -4009,9 +4003,7 @@ async fn tag_not_found_error(#[case] backend: Backend) {
         .await;
 
     match result {
-        Err(ListByTagError::TagNotFound) => {
-            // Expected
-        }
+        Err(ListByTagError::TagNotFound) => {}
         other => panic!("Expected TagNotFound, got {other:?}"),
     }
 }
@@ -4055,8 +4047,8 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
     assert_eq!(posts[0].post_id, post2);
 }
 
-// `set_post_tags_nonexistent_post_error` lived here; the `PostNotFound` contract
-// is a generic-contract test, homed in `storage/src/posts.rs` as
+// The `PostNotFound` contract is a generic-contract test, homed in
+// `storage/src/posts.rs` as
 // `set_post_tags_rejects_missing_post_but_allows_soft_deleted` (ADR-0053 §1, #771).
 
 #[apply(backends)]
@@ -4417,7 +4409,8 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
         .await
         .expect("soft_delete_post failed");
 
-    // Try to update - should fail with NotFound since we're using post_id that doesn't exist in the update logic
+    // The update's outcome on a soft-deleted post is not part of this contract,
+    // so its result is deliberately unasserted.
     let _result = state
         .posts
         .update_post(
@@ -4430,8 +4423,7 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
         )
         .await;
 
-    // Even though the post exists, the update might fail or succeed depending on implementation
-    // The important part is that the post is soft deleted
+    // What is pinned: no update path resurrects a soft-deleted post.
     let post = state
         .posts
         .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
@@ -4479,9 +4471,7 @@ async fn get_post_by_id_nonexistent(#[case] backend: Backend) {
         .get_post_by_id(PostId::from(999_999), &ViewerIdentity::Anonymous)
         .await;
     match result {
-        Ok(None) => {
-            // Expected
-        }
+        Ok(None) => {}
         other => panic!("Expected Ok(None), got {other:?}"),
     }
 }
@@ -4671,9 +4661,7 @@ async fn site_config_operations(#[case] backend: Backend) {
     let state = &env.state;
     let value = state.site_config.get(SiteConfigKey::SiteBaseUrl).await;
     match value {
-        Ok(None) => {
-            // Expected
-        }
+        Ok(None) => {}
         other => panic!("Expected Ok(None), got {other:?}"),
     }
 
@@ -5077,12 +5065,6 @@ async fn perform_post_update_org_renders_and_updates(#[case] backend: Backend) {
         record.rendered_html
     );
 }
-
-// `update_rendered_post_not_found_returns_storage_error` was deleted with
-// `update_rendered_post` itself (#811). Its assertion is reproduced exactly by
-// `post_update_not_found_returns_error` above, which calls the same
-// `PostStorage::update_post` with a nonexistent id and matches the same
-// `UpdatePostError::NotFound`.
 
 // ── MediaStorage tests ────────────────────────────────────────────────────────
 
@@ -6057,12 +6039,11 @@ async fn resolution_matrix(#[case] backend: Backend) {
 //
 // `subscriptions.subscriber_ref` is `TEXT NOT NULL` with no non-empty CHECK, so
 // `''` is schema-legal even though the sole writer (`subscribe_to`) binds an
-// authenticated user id. The anonymous read path used to bind the sentinel pair
-// `(channel_id = -1, subscriber_ref = '')`, which made this row's admission turn
-// on `channel_id = -1` being unstorable — true only because `channels` hands out
-// positive autoincrement keys. The binds are NULL now, so admission is unknown
-// on both columns and cannot depend on that schema accident. The row is forced
-// in with raw SQL because the store's own `subscribe` cannot produce it.
+// authenticated user id. The anonymous read path binds NULL for both identity
+// columns, so admission is unknown on both and cannot lean on a schema
+// accident (e.g. a sentinel `channel_id` no `channels` row can carry). The row
+// is forced in with raw SQL because the store's own `subscribe` cannot produce
+// it.
 #[apply(backends)]
 #[tokio::test]
 async fn anonymous_is_not_admitted_by_an_empty_subscriber_ref(#[case] backend: Backend) {

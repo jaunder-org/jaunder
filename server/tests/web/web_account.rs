@@ -370,8 +370,8 @@ async fn create_invite_large_hours_returns_error(#[case] backend: Backend) {
     )
     .await;
 
-    // The out-of-range expiry is now rejected at typed-arg decode (`Option<InviteTtlHours>`,
-    // #582) — the framework's status, not the old in-body 500 — before the handler runs.
+    // The out-of-range expiry is rejected at typed-arg decode (`Option<InviteTtlHours>`,
+    // #582) — the framework's status, before the handler runs.
     assert_ne!(status, StatusCode::OK);
     // The overflow must be caught before any email is attempted (proves ordering).
     assert!(
@@ -457,8 +457,6 @@ async fn revoke_session_unknown_hash_returns_error(#[case] backend: Backend) {
         Some(&cookie),
     )
     .await;
-
-    // ...
 }
 
 // M2.10.11: revoke_session returns error when target session belongs to another user.

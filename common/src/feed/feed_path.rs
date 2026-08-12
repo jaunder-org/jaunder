@@ -170,9 +170,8 @@ pub fn parse(path: &str) -> Option<(FeedSurface, FeedFormat)> {
     // tags/:tag
     if let Some(tag) = surface_part.strip_prefix("tags/") {
         // `Tag::from_str` rejects empty input and any non-`[a-z0-9-]`
-        // character (including `/`), so it subsumes the prior ad-hoc checks
-        // while also rejecting inputs the old parser wrongly accepted
-        // (uppercase, dots, leading hyphen, non-ASCII).
+        // character (including `/`) — so uppercase, dots, a leading hyphen and
+        // non-ASCII are all refused here.
         let tag = tag.parse::<Tag>().ok()?;
         return Some((FeedSurface::SiteTag { tag }, format));
     }
@@ -278,14 +277,13 @@ mod tests {
         );
     }
 
-    // Previously-divergent inputs: the old ad-hoc parser accepted these
-    // (anything without '/'), but the canonical `Tag`/`Username` validators
-    // reject them, so `parse()` must now refuse them too.
+    // The canonical `Tag`/`Username` validators are the single grammar, so
+    // `parse()` must refuse whatever they refuse.
     #[test]
     fn rejects_inputs_the_canonical_validators_reject() {
-        // `+` is not in the tag/username grammar (old parser accepted "c++").
+        // `+` is not in the tag/username grammar.
         assert!(parse("/tags/c++/feed.rss").is_none());
-        // Non-ASCII (old parser accepted "日本語").
+        // Non-ASCII.
         assert!(parse("/tags/日本語/feed.atom").is_none());
         assert!(parse("/~bob/tags/日本語/feed.json").is_none());
         // Leading hyphen is rejected by `Tag::from_str`.
@@ -295,7 +293,7 @@ mod tests {
     }
 
     // The canonical validators lowercase their input, so a mixed-case path
-    // parses to the normalized newtype (and no longer round-trips verbatim).
+    // parses to the normalized newtype (and does not round-trip verbatim).
     #[test]
     fn normalizes_case_via_canonical_validators() {
         assert_eq!(

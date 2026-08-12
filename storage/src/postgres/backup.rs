@@ -98,12 +98,9 @@ pub(crate) async fn restore_database(
         .execute(&mut *connection)
         .await?;
     let result = async {
-        // Clear every table before loading any. `SET CONSTRAINTS` defers foreign-key
-        // *checks*, not `ON DELETE CASCADE` *actions* — so a per-table DELETE could
-        // fire a cascade that wipes a row already loaded for an earlier table in the
-        // alphabetical manifest. A full clear-then-load avoids that entirely; restore
-        // is an authoritative replace of a database the emptiness preflight already
-        // proved unused.
+        // Clear every table before loading any: `SET CONSTRAINTS` defers foreign-key
+        // *checks*, not `ON DELETE CASCADE` *actions*
+        // (docs/adr/0115-clear-then-load-restore.md).
         for table in &manifest.tables {
             sqlx::query(&format!("DELETE FROM {}", quote_identifier(table)))
                 .execute(&mut *connection)

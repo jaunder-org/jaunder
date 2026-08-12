@@ -25,8 +25,8 @@ pub fn remove_element_by_id(id: &str) {
 }
 
 /// Select the full text of the `<input>` that raised `ev`; no-op when the event has no
-/// target or the target is not an input element. Backs click-to-select readonly fields,
-/// relocated from `web::media` (#520). Typed `&web_sys::Event` rather than a leptos event
+/// target or the target is not an input element. Backs click-to-select readonly fields
+/// (#520). Typed `&web_sys::Event` rather than a leptos event
 /// so this module stays leptos-free and ungated; leptos's `MouseEvent` coerces to it.
 pub fn select_event_target_text(ev: &web_sys::Event) {
     if let Some(input) = ev

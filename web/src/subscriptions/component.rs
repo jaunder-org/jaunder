@@ -109,9 +109,9 @@ fn SubscriptionToggle(
 
 /// A failed subscribe/unsubscribe, rendered where the button is.
 ///
-/// Without this the mutation was silent: only its `version()` bump re-ran the query,
-/// so a failed unsubscribe repainted a Subscribe button and read as success. That is
-/// the other half of #861 — the toggle flipping was never proof the write landed.
+/// Without this the mutation is silent: only its `version()` bump re-runs the query,
+/// so a failed unsubscribe repaints a Subscribe button and reads as success. That is
+/// the other half of #861 — the toggle flipping is never proof the write landed.
 #[component]
 fn SubscriptionActionError(
     subscribe: ServerAction<Subscribe>,

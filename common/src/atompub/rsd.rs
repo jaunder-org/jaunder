@@ -84,8 +84,8 @@ mod tests {
 
     // `&` is a legal query separator and survives `TaggedUrl` normalization, so
     // escaping it is what keeps the document well-formed XML — not defence in
-    // depth. (`<` and `"` are percent-encoded by normalization and can no longer
-    // reach this function, which is why the old `&lt;` case is gone.)
+    // depth. (`<` and `"` are percent-encoded by normalization and cannot reach
+    // this function.)
     #[test]
     fn rsd_document_escapes_query_ampersand() {
         let out = render_rsd_document(

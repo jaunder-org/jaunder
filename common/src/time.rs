@@ -124,8 +124,8 @@ impl fmt::Display for PermalinkDate {
 ///
 /// Lives here beside [`UtcInstant`] (rather than in `web`) because `chrono` is
 /// already wasm-available through `common`; on the browser `chrono::Local` reads the
-/// user's timezone via `wasmbind`, and this replaces the old `js_sys::Date` glue with
-/// a host-testable pure conversion (ADR-0055). The boundary type stays `UtcInstant`,
+/// user's timezone via `wasmbind`, making this a host-testable pure conversion
+/// rather than `js_sys::Date` glue (ADR-0055). The boundary type stays `UtcInstant`,
 /// so no `chrono` type reaches a `#[server]` signature (ADR-0072).
 #[must_use]
 pub fn utc_instant_from_local(local: &str) -> Option<UtcInstant> {

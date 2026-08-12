@@ -1237,8 +1237,8 @@ impl SeedRawPost {
 
 /// Builder for an [`UpdatePostInput`] — the edit-side sibling of [`SeedRawPost`], with the
 /// same defaults-plus-overrides shape. `UpdatePostInput` has nine fields and an update test
-/// typically varies one or two, so every call site used to spell the other seven; this
-/// builder defaults them and a test overrides only what it means.
+/// typically varies one or two; this builder defaults the rest so a test overrides only
+/// what it means.
 ///
 /// Defaults: title `"Updated Title"`, body `"updated body"`, Markdown, no summary, `[Public]`,
 /// and **no change to publication** (`unpublish: false`, `explicit_published_at: None`) — so
@@ -1251,8 +1251,8 @@ impl SeedRawPost {
 /// re-spells the render and no input can carry a reference set that disagrees with its HTML
 /// (#711).
 ///
-/// `Clone` is load-bearing: the audience tests vary one field off a shared base, which is
-/// what their `..base.clone()` struct-update spreads used to express.
+/// `Clone` is load-bearing: the audience tests vary one field off a shared base via
+/// `..base.clone()` struct-update spreads.
 #[derive(Clone)]
 pub struct UpdateRawPost {
     title: Option<PostTitle>,

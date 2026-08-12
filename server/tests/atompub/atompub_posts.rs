@@ -718,10 +718,9 @@ async fn empty_entry_returns_400(backend: Backend, #[case] op: EmptyEntryOp) {
 
 // The boundary twin of `perform_post_creation_rejects_title_only_org_body`.
 //
-// BEHAVIOUR CHANGE (#811 decision 2): an Org entry whose whole content is a title
-// source canonicalizes to nothing (ADR-0024) and is now rejected. It used to be
-// accepted and stored with an empty body. Asserting 400 and not 500 is the point —
-// this is the client's input being wrong, not the server falling over.
+// An Org entry whose whole content is a title source canonicalizes to nothing
+// (ADR-0024) and is rejected (#811 decision 2). Asserting 400 and not 500 is the
+// point — this is the client's input being wrong, not the server falling over.
 #[apply(backends)]
 #[tokio::test]
 async fn create_title_only_org_entry_returns_400(#[case] backend: Backend) {
@@ -1432,8 +1431,7 @@ async fn update_preserves_non_public_targeting(#[case] backend: Backend) {
     // A Subscribers-targeted post is hidden from an anonymous viewer. Editing it
     // via AtomPub must still succeed (the handler loads it as the authenticated
     // owner) AND must preserve the targeting across the edit (AtomPub has no
-    // audience picker). Before owner-viewer threading, owned_post loaded the
-    // post as Anonymous and the PUT 404'd before reaching this preservation.
+    // audience picker).
     let post = session
         .seed_post()
         .audiences(vec![common::visibility::AudienceTarget::Subscribers])

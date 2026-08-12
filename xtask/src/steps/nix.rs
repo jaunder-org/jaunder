@@ -234,15 +234,14 @@ fn copy_e2e_diagnostics_between(
         let from = entry.path();
         let to = dest_dir.join(name);
         // Every lifted artifact is a flat file (journals, the Playwright report, and the
-        // trace/capture tarballs); the otel trace now rides `capture-*.tar.gz`.
+        // trace/capture tarballs); the otel trace rides `capture-*.tar.gz`.
         //
         // Remove first: these come from the nix store, so a previously-copied artifact
-        // is on disk read-only (0444) and `fs::copy` onto it fails EACCES. That error
-        // was swallowed, so a second run silently kept the FIRST run's files — and the
-        // flow-coverage gate (#681) reads `capture-*.tar.gz` from here, so it would
-        // have verified today's build against yesterday's traces. Clear the read-only
-        // bit after copying too, so the next run can overwrite even if the remove
-        // fails.
+        // is on disk read-only (0444) and `fs::copy` onto it fails EACCES. Swallowing
+        // that error keeps the FIRST run's files — and the flow-coverage gate (#681)
+        // reads `capture-*.tar.gz` from here, so it would verify today's build
+        // against yesterday's traces. Clear the read-only bit after copying too, so
+        // the next run can overwrite even if the remove fails.
         let _ = std::fs::remove_file(&to);
         match std::fs::copy(&from, &to) {
             Ok(_) => {

@@ -69,7 +69,7 @@ pub(crate) fn build_user_record(
     // The `username`, `display_name`, and `email` columns decode straight into
     // their domain newtypes via the sqlx bridge (#438), which validates through
     // `FromStr`, so a corrupt/migrated value is rejected as a column-decode error
-    // before we ever get here — this build step is now infallible.
+    // before we ever get here — this build step is infallible.
     UserRecord {
         user_id,
         username,
@@ -255,8 +255,8 @@ pub(crate) fn session_record_from_row(row: SessionRow) -> SessionRecord {
     // The `label` column decodes as a plain `String` and is sanitized into a
     // `SessionLabel` via the lossy constructor rather than a validating decode: a
     // label is a best-effort *display* value, so a pre-existing out-of-range row
-    // (e.g. an empty or over-long label minted by the old unvalidated CLI path) is
-    // repaired on read instead of failing the whole `list_sessions` query.
+    // (empty, over-long) is repaired on read instead of failing the whole
+    // `list_sessions` query.
     build_session_record(
         token_hash,
         user_id,
@@ -287,11 +287,10 @@ pub(crate) fn invite_record_from_row(row: InviteRow) -> InviteRecord {
 /// all 21 `query_as::<_, PostRow>` sites without any column aliasing. The `post_id`/
 /// `user_id`/`username`/`title`/`slug`/`body`/`format` columns decode straight into their
 /// domain types via the sqlx bridge (the string newtypes via #438, the ids via #686,
-/// `format` via its text-enum bridge #572). `rendered_html` (`RenderedHtml`) decodes the
-/// same way since #445 — its bridge was write-only (#502: `Type`/`Encode`, no `Decode`)
-/// until sanitization moved onto the type, so it no longer needs the `from_trusted`
-/// rebuild it used to get in [`build_post_record`]. The **only** column that is not a
-/// decoded domain type is `tags`, the JSON aggregate parsed there.
+/// `format` via its text-enum bridge #572, `rendered_html` via #445 — sanitization
+/// lives on the type, so no `from_trusted` rebuild is needed). The **only** column
+/// that is not a decoded domain type is `tags`, the JSON aggregate parsed in
+/// [`build_post_record`].
 #[derive(sqlx::FromRow)]
 pub(crate) struct PostRow {
     post_id: PostId,
@@ -572,12 +571,10 @@ mod tests {
         assert!(record.tags.is_empty());
     }
 
-    // `build_post_record` no longer parses `username`/`slug`/`format`: they decode
-    // straight into `Username`/`Slug`/`PostFormat` via the sqlx bridge (the newtypes
-    // via #438, `PostFormat` via its text-enum bridge #572), so a malformed stored
-    // value is rejected as a `ColumnDecode` error at the query boundary (covered by
-    // `posts.rs`'s decode-error tests), not here. Only the JSON `tags` still parse in
-    // `build_post_record`, so those rejections stay below.
+    // `build_post_record` parses only the JSON `tags` (those rejections are below);
+    // `username`/`slug`/`format` decode straight into their domain types via the
+    // sqlx bridge (#438, #572), so a malformed stored value is a `ColumnDecode`
+    // error at the query boundary, covered by `posts.rs`'s decode-error tests.
 
     // guard:no-backend — password hashing/verification; no database
     #[tokio::test]
@@ -612,15 +609,10 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::Other);
     }
 
-    // `build_user_record` no longer parses: `username`/`display_name`/`email`
-    // decode straight into their newtypes via the sqlx bridge (#438), so a
-    // malformed stored value is rejected as a `ColumnDecode` error at the query
-    // boundary (covered by `users.rs`'s decode-error tests), not here.
-
-    // `build_session_record` no longer parses: `token_hash`/`username` decode
-    // straight into their newtypes via the sqlx bridge (#438), so a malformed
-    // stored value is rejected as a `ColumnDecode` error at the query boundary
-    // (covered by `sessions.rs`'s decode-error test), not here.
+    // `build_user_record` and `build_session_record` have nothing to parse: their
+    // string columns decode straight into newtypes via the sqlx bridge (#438), so
+    // a malformed stored value is a `ColumnDecode` error at the query boundary,
+    // covered by `users.rs`'s / `sessions.rs`'s decode-error tests.
 
     #[test]
     fn build_post_record_with_valid_tags_json_parses_tags() {
@@ -700,11 +692,10 @@ mod tests {
     /// A canonical 64-char lowercase-hex content hash for row fixtures.
     const ROW_HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
-    // `media_record_from_row` no longer hand-parses `sha256`/`filename`/`source`: those
-    // columns decode straight into `ContentHash`/`Filename`/`MediaSource` via the sqlx
-    // bridge (the newtypes via #438, `source` via its text-enum bridge #607), so a
-    // malformed stored value is rejected as a `ColumnDecode` error at the query boundary
-    // (covered by `media.rs`'s decode-error tests), not here — a `MediaRow` cannot even
+    // `media_record_from_row` has nothing to hand-parse: `sha256`/`filename`/`source`
+    // decode straight into `ContentHash`/`Filename`/`MediaSource` via the sqlx bridge
+    // (#438, #607), so a malformed stored value is a `ColumnDecode` error at the query
+    // boundary (covered by `media.rs`'s decode-error tests) — a `MediaRow` cannot even
     // hold an invalid value.
 
     #[test]
@@ -840,8 +831,8 @@ mod tests {
         // The fallback is only taken if runtime Argon2 hashing fails, so nothing else
         // exercises it — yet it must be a well-formed Argon2 hash for the same reason the
         // runtime one must: a fast `Err` on the absent-user path would reintroduce the
-        // timing oracle this whole mechanism exists to close. Until now, nothing checked
-        // that the constant was still valid.
+        // timing oracle this mechanism exists to close
+        // (docs/adr/0114-absent-user-timing-equalization.md).
         let wrong = parse_password("definitely-not-the-dummy");
         let result = verify_password(wrong, fallback_dummy_password_hash())
             .await
@@ -849,16 +840,9 @@ mod tests {
         assert!(!result, "a non-matching password must verify to false");
     }
 
-    // No parameter-parity test for the fallback, deliberately.
-    //
-    // `dummy_password_hash_matches_real_hash_parameters` can assert parity because it
-    // hashes at runtime, so it picks up whatever Argon2 parameters are active. The
-    // fallback is a *fixed* constant carrying production parameters, so under a
-    // `cheap-kdf` build (which the coverage derivation uses) it cannot match a runtime
-    // hash — asserting it would be asserting something false. The consequence is worth
-    // stating: the fallback's timing equalization is only exact in production builds,
-    // which is inherent to hard-coding it and is why it is a last resort rather than the
-    // primary path.
+    // No parameter-parity test for the fallback, deliberately: the constant carries
+    // production parameters, which a `cheap-kdf` build cannot match
+    // (docs/adr/0114-absent-user-timing-equalization.md).
 
     #[test]
     fn dummy_password_hash_matches_real_hash_parameters() {

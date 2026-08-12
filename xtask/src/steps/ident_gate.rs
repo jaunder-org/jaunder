@@ -22,11 +22,7 @@
 //! **A gate reads idents everywhere, by construction.** A population is a set of
 //! names, and membership is the same question in ordinary code and inside macro
 //! tokens — there is no per-gate hook, so there is no hook a gate can silently fail
-//! to implement. (Until #803 this was a `Population` trait with two required methods,
-//! defended on exactly that "say what you do not look at" ground. The argument is
-//! sound and is why the property is stated here rather than dropped; what did not
-//! survive was paying a type parameter across four files for a trait with one
-//! implementor and no variation.)
+//! to implement ("say what you do not look at", #803).
 //!
 //! **Where the ident is not the whole question, the qualifier decides** (#790). A gate
 //! whose population is an associated fn name another type may legitimately share sets
@@ -38,8 +34,8 @@
 //!   `fn` ident is not a [`syn::Path`], nor is a method-call ident or a macro token, so
 //!   recording from a path hook would silently drop every definition site — including
 //!   the guarded door's own. It also means a site cannot be counted twice, and that
-//!   `owner: None` is byte-identical to the pre-#790 scan by construction: the
-//!   suppression set is simply empty.
+//!   `owner: None` scans with no suppression at all: the suppression set is simply
+//!   empty.
 //! - **Unresolvable means in-population.** A qualifier the gate cannot pin — glob
 //!   import, generic parameter, unqualified call, macro body — stays policed. Obscuring
 //!   a qualifier buys a gate failure, not an exemption.
@@ -51,10 +47,10 @@
 //! `docs/adr/0110-gate-population-membership-is-structural.md`.
 //!
 //! Macro bodies are deliberately **not** resolved — [`walk_macro_tokens`] sees a flat
-//! token stream, and under the rule above not resolving is fail-closed. The old
-//! `TrustedDoor` (removed in #778) read the path qualifier three tokens to the left; that
-//! seam is still available, since `walk_macro_tokens` already materialises the flat
-//! sibling stream (the index is one `.enumerate()` away).
+//! token stream, and under the rule above not resolving is fail-closed. A
+//! path-qualifier read three tokens to the left remains an available seam, since
+//! `walk_macro_tokens` already materialises the flat sibling stream (the index is
+//! one `.enumerate()` away).
 //!
 //! [`visit_ident`]: syn::visit::Visit::visit_ident
 //!
@@ -63,7 +59,7 @@
 //! line, so it cannot absorb a second site the way a fn-keyed entry did; it moves
 //! with the code under rename and refactor; and the exempt set is **derived** from
 //! the tree rather than declared beside the rule, which removes the whole class of
-//! staleness the old multiplicity reconciliation existed to detect.
+//! staleness a declared list creates.
 //!
 //! The position is not a matter of taste: a *trailing* marker is relocated by
 //! `rustfmt` (below an opening brace) and by `leptosfmt` (in a `view!` body), so

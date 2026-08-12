@@ -252,8 +252,8 @@ pub async fn perform_post_update(
 
     // Derive the naming from the *original* body above, then canonicalize what gets
     // stored. Web and AtomPub thus converge on one stored body. A title-only Org post
-    // canonicalizes to nothing, which no longer names a body (#811): there is nothing
-    // left to store, so it is the same rejection an empty post has always earned.
+    // canonicalizes to nothing, which names no body (#811): there is nothing left to
+    // store, so it earns the same rejection as an empty post.
     let body = common::render::canonicalize_body(&body, &format)
         .map_err(|_| PerformUpdateError::EmptyPost)?;
 
@@ -418,8 +418,8 @@ pub async fn perform_post_creation(
 
     // Derive the naming from the *original* body above, then canonicalize what gets
     // stored. Web and AtomPub thus converge on one stored body. A title-only Org post
-    // canonicalizes to nothing, which no longer names a body (#811): there is nothing
-    // left to store, so it is the same rejection an empty post has always earned.
+    // canonicalizes to nothing, which names no body (#811): there is nothing left to
+    // store, so it earns the same rejection as an empty post.
     let body = common::render::canonicalize_body(&body, &format)
         .map_err(|_| PerformCreationError::EmptyPost)?;
 
@@ -606,8 +606,8 @@ mod tests {
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let storage = &*env.state.posts;
         // The override arrives already validated as a `Slug` (the wire/CLI boundary
-        // parses it); an invalid override can no longer reach this layer — that
-        // rejection now lives at the boundary (web `field_error` + the serde bridge).
+        // parses it); an invalid override cannot reach this layer — that rejection
+        // lives at the boundary (web `field_error` + the serde bridge).
         let slug: Slug = parse_slug("my-custom-slug");
         let record = perform_post_creation(
             storage,
@@ -629,11 +629,6 @@ mod tests {
 
         assert_eq!(record.slug, "my-custom-slug");
     }
-
-    // `test_perform_post_creation_empty_body` retired here: a whitespace-only body is
-    // no longer a `PostCreation` the type system will build, so the rejection is
-    // asserted where it now happens — `common::post_body`'s
-    // `post_body_rejects_whitespace_only` (#811).
 
     // guard:no-backend — injects a MockPostStorage whose create_post returns an
     // Internal error; no live database backend
@@ -985,9 +980,8 @@ mod tests {
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let storage = &*env.state.posts;
 
-        // BEHAVIOUR CHANGE (#811 decision 2). ADR-0024 canonicalization treats a leading
-        // `* heading` as the title *source* and strips it, so this body leaves nothing to
-        // store. It used to succeed and store an empty body.
+        // ADR-0024 canonicalization treats a leading `* heading` as the title *source*
+        // and strips it, so this body leaves nothing to store (#811 decision 2).
         let creation = |body: &str, format: PostFormat| PostCreation {
             user_id,
             body: parse_post_body(body),
@@ -1065,8 +1059,7 @@ mod tests {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let storage = &*env.state.posts;
-        // Since #811 every format canonicalizes, so this no longer pins "Markdown is not
-        // canonicalized" — it pins the part that still distinguishes the formats: only Org
+        // Every format canonicalizes (#811); what distinguishes them is that only Org
         // treats its title source as a *header* and strips it. A Markdown `# H1` is
         // content and survives. Whitespace is canonicalized for both, hence the newline.
         let record = perform_post_creation(
@@ -1381,8 +1374,7 @@ mod tests {
         assert!(matches!(err, PerformUpdateError::Storage(_)));
     }
 
-    // Behavior-preserving translation of the former `web` `perform_update_error`
-    // test: each arm maps to the same `(kind, public_message)`.
+    // Each arm maps to a fixed `(kind, public_message)` pair.
     #[test]
     fn from_perform_update_error_maps_variants() {
         use host::error::{ErrorKind, InternalError};
@@ -1407,8 +1399,7 @@ mod tests {
         assert_eq!(storage.public_message(), "storage operation failed");
     }
 
-    // Behavior-preserving translation of the former `web` `perform_creation_error`
-    // test: each arm maps to the same `(kind, public_message)`; the invalid-slug
+    // Each arm maps to a fixed `(kind, public_message)` pair; the invalid-slug
     // arm preserves the typed source.
     #[test]
     fn from_perform_creation_error_maps_variants() {

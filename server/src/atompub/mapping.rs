@@ -373,8 +373,8 @@ mod tests {
 
     #[test]
     fn entry_to_post_fields_no_content_element_is_rejected() {
-        // The absent-content entry used to map to an empty body; a body is now a
-        // non-blank value, so the entry has nothing to describe a post with (#811).
+        // A body is a non-blank value, so an entry with no content element has
+        // nothing to describe a post with (#811).
         let xml = r#"<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom">
   <title>Test</title>

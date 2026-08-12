@@ -84,10 +84,8 @@ pub(crate) async fn restore_database(
         .await?;
 
     let result = async {
-        // Clear every table before loading any (authoritative replace), keeping the
-        // two backends' restore shape identical. FK enforcement is off here, so a
-        // DELETE never cascades; the clear-then-load split matches Postgres, where
-        // deferral does not suppress cascade actions.
+        // Clear every table before loading any, keeping the two backends' restore
+        // shape identical (docs/adr/0115-clear-then-load-restore.md).
         for table in &manifest.tables {
             sqlx::query(&format!("DELETE FROM {}", quote_identifier(table)))
                 .execute(&mut *connection)

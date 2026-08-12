@@ -38,8 +38,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     // held across the whole dispatch, whose Drop flushes the OTLP exporters
     // before exit. For a one-shot command that means before the process returns
     // (on success, `?` error, or panic unwind); for `serve` the guard is simply
-    // held for the process lifetime and flushes at shutdown. `cmd_serve` no
-    // longer inits telemetry itself, so all commands share this one mechanism.
+    // held for the process lifetime and flushes at shutdown. `cmd_serve` does
+    // not init telemetry itself, so all commands share this one mechanism.
     // Bound after command resolution so the no-subcommand `--help` path exits via
     // clap without initializing telemetry it would never use; bound at function
     // scope so the guard outlives the dispatch below.
@@ -172,7 +172,7 @@ mod tests {
         .expect("get of a set key succeeds");
 
         // get of an unset key dispatches and errors (→ non-zero exit). Every key is a
-        // registry variant now, so "unset" means "no row written", not "not a key".
+        // registry variant, so "unset" means "no row written", not "not a key".
         let missing = run(Cli {
             command: Some(Commands::SiteConfig {
                 action: SiteConfigAction::Get {
@@ -330,9 +330,7 @@ mod tests {
             verbose: false,
         };
 
-        // We can't easily run the server indefinitely in a test that expects
-        // completion, but we can spawn it and abort it, similar to theSuccess
-        // test in commands.rs.
+        // Spawn-and-abort: this pins the dispatch arm, not the serve loop.
         let task = tokio::spawn(async move {
             let _ = run(cli).await;
         }); // cov:ignore
@@ -344,12 +342,11 @@ mod tests {
 
     // Covers the `Commands::CreatePgDb` dispatch arm.
     //
-    // This replaces `run_create_pg_db_rejects_non_postgres_urls`, which built a `Cli`
-    // holding a sqlite bootstrap URL — now unrepresentable, since `BootstrapDb` rejects a
-    // non-PostgreSQL scheme at parse time (`create_pg_db_rejects_a_non_postgres_bootstrap_url`
-    // in `cli.rs`). So the arguments here are *valid*; the bootstrap URL simply points at a
-    // closed port, and the command fails fast at the admin connection. That exercises the
-    // dispatch without provisioning anything.
+    // The arguments are *valid* (an invalid bootstrap URL is unrepresentable —
+    // `BootstrapDb` rejects a non-PostgreSQL scheme at parse time, pinned by
+    // `create_pg_db_rejects_a_non_postgres_bootstrap_url` in `cli.rs`); the bootstrap
+    // URL simply points at a closed port, and the command fails fast at the admin
+    // connection. That exercises the dispatch without provisioning anything.
     #[tokio::test]
     async fn run_create_pg_db_dispatches() {
         let cli = Cli {

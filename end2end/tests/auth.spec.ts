@@ -86,8 +86,8 @@ test("login with valid credentials succeeds", async ({
   await perf.log();
 });
 
-// #591: login/logout redirect via client-side pushState now (the SSR-era full-reload
-// hook is gone), so the wasm app is not re-booted. Proof: a value stashed on `window`
+// #591: login/logout redirect via client-side pushState, so the wasm app is not
+// re-booted. Proof: a value stashed on `window`
 // before the action survives across it — a full document load would wipe it.
 test("login navigates client-side without a full document reload", async ({
   page,
@@ -184,7 +184,7 @@ test("sidebar reverts to signed-out state after logout", async ({
   // Logout redirects to "/" via client-side pushState (#591); waitForURL is reliable.
   await page.waitForURL(`${BASE_URL}/`, { timeout: 10_000 });
   await expect(page.locator(".j-sb-foot")).not.toContainText(user.username);
-  // Footer no longer shows a Sign-in link — it renders nothing when unauthenticated.
+  // The footer renders nothing when unauthenticated — no Sign-in link.
   await expect(page.locator(".j-sb-foot a[href='/login']")).toHaveCount(0);
 });
 

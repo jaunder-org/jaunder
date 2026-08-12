@@ -30,8 +30,8 @@ pub async fn enqueue_feed_events(
     tag_slugs: &BTreeSet<Tag>,
 ) -> Result<(), FeedEventError> {
     // One batched write per mutation, not one autocommit write per surface:
-    // this runs synchronously inside every post-mutation server fn, and the
-    // per-row loop was half of the #766 write-lock churn.
+    // this runs synchronously inside every post-mutation server fn, where a
+    // per-row loop churns the write lock (#766).
     events
         .enqueue_many(&affected_feed_urls(username, tag_slugs))
         .await

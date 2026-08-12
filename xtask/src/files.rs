@@ -1,11 +1,10 @@
 //! One recursive source-tree walk, shared by every static gate.
 //!
-//! Each `steps/*_check.rs` gate opens by listing a tree's source files, and that walk
-//! had been copy-pasted per gate — eight byte-identical `rust_files`/`spec_files`
-//! bodies. It is the same argument [`crate::server_fns`] makes for the `#[server]`
+//! Each `steps/*_check.rs` gate opens by listing a tree's source files; sharing
+//! the walk is the same argument [`crate::server_fns`] makes for the `#[server]`
 //! inventory: independent copies of one rule rot apart, and here the rule is
-//! *which files a gate is even allowed to conclude anything about*, so a copy that
-//! drifts silently narrows a guard.
+//! *which files a gate is even allowed to conclude anything about*, so a copy
+//! that drifts silently narrows a guard.
 //!
 //! Exemptions stay the caller's business: this returns *every* matching file, so a
 //! gate that spares one (`steps::traced_context_check`'s `fixtures.ts`) filters the

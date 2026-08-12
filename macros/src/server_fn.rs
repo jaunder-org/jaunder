@@ -1,6 +1,6 @@
 //! The derivation behind `#[macros::server]` (#714).
 //!
-//! A `#[server]` fn used to carry three hand-or-gate-maintained literals that all
+//! A bare `#[server]` fn would carry three hand-maintained literals that all
 //! restate what the source already says: the wire `endpoint`, the ADR-0011 span
 //! `name`, and the `boundary!` label. This module computes all three from the one
 //! thing that cannot drift — the fn's location and identifier.
@@ -78,9 +78,9 @@ fn vertical_of(file: &str, ident: &syn::Ident) -> Result<String, syn::Error> {
 /// an argument this macro does not model cannot silently reach either attribute.
 /// `endpoint` and `name` are refused because they are the macro's to derive —
 /// accepting them would reintroduce exactly the drift #714 removes. `fields(…)` is
-/// refused because the PII allowlist that used to police its value expressions
-/// (`skip(email)` + `fields(who = %email)`) is retired along with it; if it ever
-/// returns, it returns together with that check.
+/// refused because re-admitting it means re-admitting the PII allowlist that
+/// polices its value expressions (`skip(email)` + `fields(who = %email)`); if it
+/// ever returns, it returns together with that check.
 fn route(arg: &syn::Meta, derived: &mut Derived) -> Result<(), syn::Error> {
     let named = |key: &str| arg.path().is_ident(key);
 

@@ -18,9 +18,6 @@
  * });
  * ```
  *
- * A count-based `waitForNewEmail(previousCount)` used to live here. It had no
- * callers — every site uses the fixture — so it was removed rather than carried
- * forward (#794).
  */
 
 import * as fs from "fs";

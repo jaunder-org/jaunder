@@ -9,7 +9,7 @@ use anyhow::{Context, Result, bail};
 
 /// Pull the built store path out of `nix build --print-out-paths` output. Nix may
 /// print warnings interleaved, so we take the *last* `/nix/store/` line (the
-/// realized output), matching the old script's `.at(-1)` selection.
+/// realized output).
 pub fn parse_store_path(text: &str) -> Option<String> {
     text.lines()
         .map(str::trim)
@@ -20,8 +20,7 @@ pub fn parse_store_path(text: &str) -> Option<String> {
 /// Select the store path from a completed `nix build`'s streams. Parses **stdout
 /// only** — `stderr` is used solely for the error message, never parsed — so a
 /// `…-user-environment` (or any other) line nix writes to stderr can never be
-/// selected as the result. This is the #224 fix (the Node script joined stderr
-/// into the parsed text).
+/// selected as the result (#224).
 pub fn store_path_from_streams(stdout: &str, stderr: &str) -> Result<String> {
     parse_store_path(stdout).with_context(|| {
         format!("could not parse a /nix/store path from nix stdout; stderr:\n{stderr}")

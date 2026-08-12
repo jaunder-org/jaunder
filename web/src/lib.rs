@@ -1,6 +1,6 @@
 // Leptos `view!` trees compile to deeply-nested tuple types; the editor's
-// composer view (now carrying the audience picker) exceeds the default type
-// recursion limit, so raise it for this crate.
+// composer view exceeds the default type recursion limit, so raise it for this
+// crate.
 #![recursion_limit = "512"]
 
 #[cfg(feature = "server")]

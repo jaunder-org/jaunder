@@ -196,13 +196,6 @@ mod tests {
         );
     }
 
-    // `first_body_line_declines_a_blank_body` is gone with #811, for the same reason
-    // #830 retired the blank-title case just above it: `PostBody` now rejects a body
-    // with no non-blank line, so the state it tested is unrepresentable and cannot be
-    // constructed. #858 then took the last step and made `first_body_line` total, so
-    // there is no longer a `None` arm to pin — nor the `unreachable!()` that
-    // `PostRecord::fallback_summary_label` needed to absorb it.
-
     #[test]
     fn first_body_line_takes_a_body_with_no_trailing_newline() {
         // The `split_once` `None` arm: the first line runs to the end of the body.

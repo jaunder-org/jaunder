@@ -195,9 +195,8 @@ pub fn PostDisplay<'a>(
         // the SAME `render_post_content` the anonymous arm wraps, injected via
         // `inner_html` so it coincides with the projector's paint (#181); only the
         // reactive action column (`children`, carrying edit/delete handlers that
-        // `inner_html` can't) overlays it as a sibling. This replaces the previously
-        // hand-rebuilt reactive header/title/body markup, which had diverged from
-        // the projector — the divergence that kept the authored path from coinciding.
+        // `inner_html` can't) overlays it as a sibling — hand-rebuilt reactive
+        // markup here would diverge from the projector and reintroduce the flash.
         Some(children) => {
             let inner_content = crate::posts::render::render_post_content(&view).into_string();
             view! {
@@ -253,7 +252,7 @@ pub fn PostCard<'a>(
     let is_author = post.is_author || marker_matches(&post.username);
     let post_id = post.post_id;
     // A draft rendered at its permalink gets a Publish affordance instead of
-    // Unpublish (#23): the fixed Unpublish column was a no-op on an already-
+    // Unpublish (#23): an Unpublish column would be a no-op on an already-
     // unpublished post.
     let is_draft = post.is_draft;
     let edit_url = format!("/posts/{post_id}/edit");
@@ -624,9 +623,9 @@ fn FullComposer(
     placeholder: &'static str,
 ) -> impl IntoView {
     let slug_field = Field::<Slug>::optional();
-    // Same one-call gate as the compact shape; see `submit_gate`. Before #860 this
-    // shape's predicate had no body clause at all, so an empty body left both buttons
-    // enabled and clicking them did nothing.
+    // Same one-call gate as the compact shape; see `submit_gate`. The predicate must
+    // include the body clause (#860): without it an empty body leaves both buttons
+    // enabled and clicking them does nothing.
     let (submit_disabled, dispatch) = submit_gate(
         state.body,
         Signal::derive(move || !slug_field.is_valid() || !state.summary_field.is_valid()),
@@ -741,7 +740,7 @@ pub fn InlineComposer(username: Username, on_publish: WriteSignal<u32>) -> impl 
 }
 
 // ---------------------------------------------------------------------------
-// Routed page components (moved from `pages/posts.rs`, #323).
+// Routed page components (#323).
 // ---------------------------------------------------------------------------
 
 #[component]
@@ -882,8 +881,7 @@ pub fn PostPage() -> impl IntoView {
                 // impossible date, or an unparseable slug — names no post that could
                 // exist, so 404 client-side without a round-trip. The route's
                 // `TildeUsername` segment guarantees the `~`, so a non-`~` server URL
-                // (e.g. /media/…) never reaches this page at all; the old reload escape
-                // hatch is gone (#592).
+                // (e.g. /media/…) never reaches this page at all (#592).
                 return Err(WebError::validation("Invalid permalink"));
             };
             get(route.username, route.date, route.slug).await
@@ -1108,9 +1106,9 @@ fn EditPostForm(
     is_published: bool,
     action: ServerAction<super::Update>,
 ) -> impl IntoView {
-    // Same one-call gate as the composer; see `submit_gate`. Before #860 this form's
-    // predicate had no body clause, so clearing the textarea left Save enabled and
-    // silently inert.
+    // Same one-call gate as the composer; see `submit_gate`. The predicate must
+    // include the body clause (#860): without it, clearing the textarea leaves Save
+    // enabled and silently inert.
     let (save_disabled, dispatch_update) = submit_gate(
         state.body,
         Signal::derive(move || !slug_field.is_valid() || !state.summary_field.is_valid()),
@@ -1210,12 +1208,9 @@ fn EditSaveActions(
 /// The options aside shared by the two full-page compose shapes: slug and schedule
 /// while the post is still a draft, then summary, tags, audience and format.
 ///
-/// Extracted from [`FullComposer`] and [`EditPostForm`] (#863), which rendered
-/// near-identical copies that had to be edited in lockstep. The composer's schedule
-/// control moved up beside its slug as part of that collapse, so both shapes now share
-/// one field order; the two shapes' `compose-`/`edit-` id prefixes were unified, since
-/// they never render on the same page; and the editor's slug input picked up the
-/// `placeholder="auto"` the composer already had, which it had been missing.
+/// Shared by [`FullComposer`] and [`EditPostForm`] (#863): one aside, one field
+/// order, one id prefix — the two shapes never render on the same page, and
+/// separate copies would have to be edited in lockstep.
 ///
 /// Emits a single wrapping `<div>` on purpose: both asides are flex columns with
 /// `gap:18px`, so a bare fragment would put 18px between every field.

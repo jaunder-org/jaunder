@@ -305,9 +305,8 @@ impl InternalError {
     /// render span context unconditionally — the JSON formatter via
     /// `display_current_span`/`display_span_list`, the plain formatter by walking
     /// `event_scope()`. So the span name (`web.<vertical>.<ident>`) already
-    /// identifies it, and more precisely than a bare ident could: after #684 an
-    /// ident like `create` is ambiguous across verticals. The former `server_fn`
-    /// field duplicated it and was removed in #714;
+    /// identifies it, and more precisely than a bare ident could — an ident like
+    /// `create` is ambiguous across verticals (#684, #714).
     /// `web::error::boundary_failure_event_carries_the_enclosing_instrument_span`
     /// pins the span-scope premise.
     pub fn emit_boundary_failure(&self) {
@@ -345,12 +344,11 @@ impl InternalError {
 // Typed `From` conversions (ADR-0017 §3, ADR-0058)
 // ---------------------------------------------------------------------------
 //
-// Each lift reproduces the exact wire `public_message` its call sites produced
-// before, so switching a site to bare `?`/`.into()` is behavior-preserving; the
-// `(kind, class)` is fixed here, at the conversion's home, so a site can never
-// silently move the wire class by switching to `?`. The improvement is purely
-// operator-side: the *typed* source is now preserved on the `anyhow` chain
-// instead of being eagerly stringified (ADR-0017 §3, A19).
+// The `(kind, class)` and wire `public_message` are fixed here, at each
+// conversion's home, so a call site can never silently move the wire class by
+// switching to bare `?`/`.into()`; the *typed* source is preserved on the
+// `anyhow` chain for the operator rather than eagerly stringified
+// (ADR-0017 §3, A19).
 
 impl From<sqlx::Error> for InternalError {
     /// A storage-driver failure: masks as `"storage operation failed"` (kind
@@ -381,9 +379,8 @@ impl From<common::mailer::MailError> for InternalError {
 
 /// Generates `From<T> for InternalError` for each `common` value-object
 /// parse/validation error `T`: kind `Validation`, class `Client`, public
-/// message = the source's `Display` (byte-for-byte what the old
-/// `.map_err(|e| InternalError::validation(e.to_string()))` lifts produced),
-/// with the typed source now preserved on the operator side (A19).
+/// message = the source's `Display`, with the typed source preserved on the
+/// operator side (A19).
 macro_rules! validation_from {
     ($($ty:ty),+ $(,)?) => {$(
         impl From<$ty> for InternalError {
@@ -562,8 +559,8 @@ mod tests {
         let error = InternalError::storage(OuterError {
             source: SourceError,
         });
-        // The operator-facing rendering still walks the cause chain (now via
-        // the preserved anyhow source instead of an eager concatenation).
+        // The operator-facing rendering walks the cause chain via the preserved
+        // anyhow source.
         assert_eq!(error.operator_message(), "outer failure: source context");
     }
 
@@ -668,9 +665,8 @@ mod tests {
     #[test]
     fn from_common_validation_sources_preserve_display_as_public_and_are_client() {
         // Each common value-object parse error lifts to Validation/Client with
-        // the source's `Display` as the wire message (identical to the old
-        // `.map_err(|e| InternalError::validation(e.to_string()))`) and the
-        // typed source preserved on the operator side.
+        // the source's `Display` as the wire message and the typed source
+        // preserved on the operator side.
         macro_rules! check {
             ($value:expr) => {{
                 let display = $value.to_string();

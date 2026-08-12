@@ -17,13 +17,12 @@
 //! A missed exemption is safe (over-measures); a false exemption would silently
 //! drop coverage, so we never risk it.
 //!
-//! **Retired in #520: the `#[component]` / `#[client_only]` structural exemption**
-//! (ADR-0050 Decision 1). It is not merely unused — it is unnecessary. Every
-//! `#[component]` now lives in a wasm-only `component.rs` behind
-//! `#[cfg(target_arch = "wasm32")] mod component;` (ADR-0070), so component lines
-//! never enter the host denominator at all: not-compiled beats measured-but-exempt.
-//! `macros::client_only` is deleted. A test below pins the retirement, so an
-//! accidental reintroduction of the attribute rule fails loudly.
+//! **There is no `#[component]` / `#[client_only]` structural exemption** (#520,
+//! ADR-0050 Decision 1) — it would be unnecessary: every `#[component]` lives in
+//! a wasm-only `component.rs` behind `#[cfg(target_arch = "wasm32")] mod
+//! component;` (ADR-0070), so component lines never enter the host denominator at
+//! all — not-compiled beats measured-but-exempt. A test below pins the absence,
+//! so an accidental introduction of an attribute rule fails loudly.
 
 use std::collections::BTreeSet;
 

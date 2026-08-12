@@ -49,7 +49,7 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
             program: "cargo",
             args: vec!["deny", "check"],
         },
-        // clippy — scripts/verify: cargo clippy --all-targets -- -D warnings (no --workspace)
+        // clippy — --all-targets, no --workspace
         StepSpec {
             name: "clippy",
             program: "cargo",

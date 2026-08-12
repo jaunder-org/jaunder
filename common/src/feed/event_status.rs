@@ -48,9 +48,8 @@ mod tests {
 
     #[test]
     fn an_unrecognised_token_is_rejected_rather_than_coerced() {
-        // The behaviour this type exists to get right. Before #728 a hand-rolled
-        // `parse_status` mapped anything it did not recognise to `Failed` — a value the
-        // code failed to understand, quietly turned into a plausible one.
+        // The behaviour this type exists to get right (#728): a value the code fails
+        // to understand must not be quietly coerced into a plausible one.
         let err = FeedEventStatus::from_str("???").expect_err("must not parse");
         assert!(
             err.to_string().contains("feed event status must be"),

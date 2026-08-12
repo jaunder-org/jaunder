@@ -10,20 +10,8 @@ use rstest_reuse::*;
 use crate::helpers::{body_string, create_user_and_session, make_app};
 use storage::test_support::{Backend, TestEnv, backends_matrix};
 
-// SPIKE (jaunder Task 1):
-// - Shape A below (`rsd_document_advertises_service_url`) confirms cross-module
-//   `#[apply]` resolves a `#[template]` defined in the `helpers` module simply by
-//   importing it into scope (`use storage::test_support::backends;`) and then `#[apply(backends)]`.
-//   No `#[apply(storage::test_support::backends)]` path and no `pub use` re-export are needed:
-//   a `#[template]` expands to a name-mangled `macro_rules!` brought into scope by
-//   the plain `use`, and `#[apply]` resolves it by bare name.
-// - Shape B below (`user_page_includes_rsd_autodiscovery_link`) confirms the
-//   backend×value matrix: the backend axis is supplied by the
-//   `#[apply(backends_matrix)]` template (a `#[values]`-based dual-backend
-//   template, issue #127) and composes with the test's own named `#[case]`
-//   rows. Attribute ordering: `#[apply(backends_matrix)]` first, then the
-//   `#[case::name(..)]` rows, then `#[tokio::test]`.
-//   It generates rows × 2 cases (2 rows × 2 backends = 4).
+// The plain `use` suffices: `#[apply]` resolves a cross-module `#[template]` by
+// bare name (docs/adr/0124-rstest-reuse-cross-module-templates.md).
 use storage::test_support::backends;
 
 // Shape A — non-clustered behavior, backend-parametrized via cross-module apply.
@@ -73,10 +61,9 @@ async fn rsd_document_advertises_service_url(#[case] backend: Backend) {
     assert!(body.contains("https://example.test/~alice"), "{body}");
 }
 
-// Shape B — backend×value matrix. The backend axis comes from the
-// `#[apply(backends_matrix)]` template (a `#[values]`-based axis, because a
-// `#[case]`-based axis can't coexist with the value `#[case]` rows); the value
-// axis is the named `#[case]`s. 2 rows × 2 backends = 4 cases.
+// Shape B — backend×value matrix: `#[apply(backends_matrix)]` supplies the
+// backend axis, the named `#[case]`s the value axis; 2 rows × 2 backends = 4
+// cases (docs/adr/0124-rstest-reuse-cross-module-templates.md).
 #[apply(backends_matrix)]
 #[case::edituri_rel("rel=\"EditURI\"")]
 #[case::rsd_href("/~alice/rsd.xml")]

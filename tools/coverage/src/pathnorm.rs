@@ -1,6 +1,5 @@
 //! Path normalization for the `cargo llvm-cov report --text` output: rewrite the
-//! absolute Nix-sandbox `.rs:` file-header lines to repo-relative ones. Ports
-//! the bash `normalize_report_paths` from the retired `scripts/check-coverage`.
+//! absolute Nix-sandbox `.rs:` file-header lines to repo-relative ones.
 
 /// Strip a leading `"{abs_root}/"` prefix from every file-header line (one
 /// ending in `.rs:`). Non-header lines are passed through verbatim. Idempotent.

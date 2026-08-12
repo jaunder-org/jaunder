@@ -188,8 +188,9 @@ impl FromStr for DbConnectOptions {
             })
         } else {
             // Names the **scheme**, never the URL. `StorageArgs.db` is parsed by clap via
-            // this impl, so `JAUNDER_DB=postgre://user:secret@host/db` — a one-character
-            // typo — used to print the credential straight to stderr (#693).
+            // this impl, so echoing the URL for
+            // `JAUNDER_DB=postgre://user:secret@host/db` — a one-character typo —
+            // would print the credential straight to stderr (#693).
             Err(sqlx::Error::Configuration(
                 format!(
                     "unsupported database URL scheme '{}'; supported schemes are sqlite: and postgres://",
@@ -358,8 +359,8 @@ mod tests {
             .parse::<DbConnectOptions>()
             .unwrap();
         assert!(matches!(pg, DbConnectOptions::Postgres { .. }));
-        // `Display` now redacts (#693); `expose_url` is the door to the real URL. This
-        // assertion previously pinned the unredacted rendering — i.e. it asserted the leak.
+        // `Display` redacts (#693); `expose_url` is the door to the real URL. Pinning
+        // an unredacted rendering here would assert the leak.
         assert_eq!(pg.to_string(), "postgres://user:***@localhost/db");
         assert_eq!(pg.expose_url(), "postgres://user:pass@localhost/db");
 

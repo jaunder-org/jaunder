@@ -1,11 +1,8 @@
 /**
  * Shared post helpers for the e2e suite — creation (#262), plus navigation to
- * and assertions over a saved post (#873).
- *
- * "Create a post" was inlined dozens of times in two styles — a `page.request`
- * API call and a UI-composer flow — plus a half-extracted local `publishPost` in
- * feeds.spec.ts. These promote both into one place with a contextful assertion
- * and typed result.
+ * and assertions over a saved post (#873). One place for both creation styles
+ * (a `page.request` API call and a UI-composer flow), with a contextful
+ * assertion and typed result.
  */
 
 import { expect, type Locator, type Page } from "@playwright/test";
@@ -82,10 +79,10 @@ export async function createPostViaApi(
  *  cover.
  *
  *  **The caller must already be on `/posts/new`** — normally by entering there,
- *  `const page = await registeredPage("/posts/new")`. This used to `goto` the
- *  composer itself, which cost a second document load on a page whose entry was
- *  already the composer (#867). Nothing in the app links to `/posts/new`
- *  (#896), so reaching it is always an entry, never an in-app move. */
+ *  `const page = await registeredPage("/posts/new")`. A `goto` here would cost
+ *  a second document load on a page whose entry was already the composer
+ *  (#867). Nothing in the app links to `/posts/new` (#896), so reaching it is
+ *  always an entry, never an in-app move. */
 export async function composePost(
   page: Page,
   opts: {

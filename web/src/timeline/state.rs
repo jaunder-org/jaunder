@@ -3,8 +3,8 @@
 //! alongside the `common::seed::PageCursor` a page hands back. Everything here is
 //! ungated and coverage-measured; the bundle is exercised under a reactive `Owner`
 //! (the `web::reactive` / `forms::Field` / `tags::input_state` convention), which
-//! is what makes its transitions testable at all — they were invisible to the
-//! coverage gate while the bundle lived in the wasm-only `component.rs` (#671).
+//! is what makes its transitions testable at all — in the wasm-only
+//! `component.rs` they would be invisible to the coverage gate (#671).
 //!
 //! `component.rs` keeps only what cannot run on the host: `Effect::new` and
 //! `spawn_local`.
@@ -17,21 +17,21 @@ use crate::error::{WebError, WebResult};
 use crate::taglist::TagCtx;
 
 /// The load state of a timeline: idle, a load-more in flight, or a failed fetch
-/// carrying the error itself. Replaces the old `loading_more: bool` +
-/// `error: Option<String>` pair, which admitted the illegal "loading *and*
+/// carrying the error itself. One enum, not a `loading_more: bool` +
+/// `error: Option<String>` pair — the pair admits the illegal "loading *and*
 /// errored" combination.
 ///
 /// `Failed` carries the typed [`WebError`], not a pre-rendered `String` (#671):
 /// failure stays on `Result`'s error axis all the way to the render, which is the
-/// only place that decides how to display it. Stringifying at the producer threw
+/// only place that decides how to display it. Stringifying at the producer throws
 /// the error *kind* away for no benefit.
 ///
 /// `NeverLoaded` is the default so "loaded yet?" is a property of the status
-/// rather than a parallel `RwSignal<bool>` each page carried alongside it (#671):
-/// "idle but never loaded" is now unrepresentable, the same way `Failed` already
-/// made "loading *and* errored" unrepresentable. `Unidentified` is the terminal
-/// outcome of a load that resolved to *nobody* — the cockpit's anonymous/expired
-/// session — which is neither a failure nor a page.
+/// rather than a parallel `RwSignal<bool>` per page (#671): "idle but never
+/// loaded" is unrepresentable, the same way `Failed` makes "loading *and*
+/// errored" unrepresentable. `Unidentified` is the terminal outcome of a load
+/// that resolved to *nobody* — the cockpit's anonymous/expired session — which
+/// is neither a failure nor a page.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum LoadStatus {
     #[default]
@@ -50,9 +50,9 @@ impl LoadStatus {
     }
 }
 
-/// What the gate should paint right now — the one decision every timeline page
-/// used to re-derive inside its own view closure, where the coverage gate could
-/// not see it (#671).
+/// What the gate should paint right now — one decision derived here once, not
+/// re-derived per page inside a view closure where the coverage gate cannot see
+/// it (#671).
 ///
 /// Failure is **not** a variant here: it travels on `WebResult`'s error axis, so
 /// the type keeps saying which outcomes are successes. `Unidentified` means there

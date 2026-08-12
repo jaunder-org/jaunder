@@ -74,18 +74,14 @@ pub fn format_bytes(bytes: impl Into<i64>) -> String {
 /// also removes a branch from the component's `Suspend` body, which sits at the
 /// `thin-components` budget.
 ///
-/// **This is not bit-identical to the float version it replaces, deliberately.** That
-/// computed `used as f64 / quota as f64 * 100.0` — two successive binary roundings
-/// against an arbitrary (non-power-of-two) `quota` — so its last digit was an
-/// artifact of the rounding path rather than of the true ratio, and no integer
-/// algorithm reproduces it. This rounds the true ratio once, half-to-even, and can
-/// differ from the old output by one unit in the last place: at most 0.1pp, or about
-/// 0.3px on the 300px bar it feeds (#301).
+/// Integer math, deliberately not `used as f64 / quota as f64 * 100.0`: two
+/// successive binary roundings against an arbitrary (non-power-of-two) `quota`
+/// make the last digit an artifact of the rounding path rather than of the true
+/// ratio. This rounds the true ratio once, half-to-even (#301).
 ///
-/// It also clamps at **both** ends, where the float version clamped only the top.
-/// A negative `used` is not reachable from a byte count today, but the type permits
-/// one and the old expression would have produced a negative width; `0.0` is the
-/// honest floor for a usage bar.
+/// It also clamps at **both** ends. A negative `used` is not reachable from a
+/// byte count today, but the type permits one, and `0.0` is the honest floor for
+/// a usage bar (an unclamped expression would produce a negative width).
 #[must_use]
 pub fn storage_usage_percent(used: i64, quota: i64) -> String {
     if quota <= 0 || used <= 0 {
@@ -162,11 +158,10 @@ mod tests {
         assert_eq!(format_bytes(-4096), "-4096 B");
     }
 
-    /// 2^53 is where the **old** `as f64` conversion stopped being exact, so it is
-    /// the boundary at which integer math legitimately diverges from what shipped
-    /// before. Pinned here because `i64::MAX` — the obvious "large value" test —
-    /// coincidentally agrees between the two implementations and would hide a wrong
-    /// result across the entire petabyte band.
+    /// 2^53 is f64's exactness boundary — where an `as f64` conversion would stop
+    /// being exact. Pinned here because `i64::MAX` — the obvious "large value"
+    /// test — coincidentally agrees between integer and float math and would hide
+    /// a wrong result across the entire petabyte band.
     #[test]
     fn format_bytes_is_exact_past_the_f64_mantissa() {
         const GB: i64 = 1_024 * 1_024 * 1_024;

@@ -2,7 +2,7 @@ use leptos::server_fn::codec::Json;
 
 // `TagLabel` is only named in the server-only `list` body (the client build
 // strips it via the `#[server]` stub), so gate it to match — the wire `TagSummary`
-// it builds now lives in `common::seed`.
+// it builds lives in `common::seed`.
 #[cfg(feature = "server")]
 use {common::tag::TagLabel, leptos::prelude::*, std::sync::Arc, storage::PostStorage};
 
@@ -15,8 +15,8 @@ use crate::error::WebResult;
 /// specify a limit — deliberately fewer than a listing page's 50.
 ///
 /// Private, and gated to the server build: `list`'s `None` branch is its only
-/// consumer now that the dropdown relies on the default rather than restating
-/// the number at the call site, and `#[macros::server]` strips that body from
+/// consumer (the dropdown relies on the default rather than restating the
+/// number at the call site), and `#[macros::server]` strips that body from
 /// the client build (which would leave this dead there).
 #[cfg(feature = "server")]
 const DEFAULT_TAG_LIMIT: PageSize = PageSize::clamped(10);
@@ -31,9 +31,8 @@ const DEFAULT_TAG_LIMIT: PageSize = PageSize::clamped(10);
 ///
 /// `limit` is a [`PageSize`] rather than a tags-specific `TagLimit` newtype
 /// (#691), for two reasons. The `1..=50` bound is `PageSize`'s own and belongs
-/// in one place — the tags-local max constant this change deleted was literally
-/// defined *as* `PageSize::MAX`, so a `TagLimit` would restate two numbers that
-/// can then drift. And a `TagLimit` carrying `clamp` would carry a door nothing
+/// in one place — a `TagLimit` would restate two numbers that can then drift.
+/// And a `TagLimit` carrying `clamp` would carry a door nothing
 /// calls: the `NumNewtype` serde bridge re-runs the bound and rejects, it never
 /// coerces, so `clamped` is reachable only from Rust. That coercing door is for
 /// public params like `AtomPub`'s `?limit=`, not for a `#[server]` wire arg.

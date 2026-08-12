@@ -11,7 +11,7 @@
 //! (interactive IDE support) invokes `devtool provision-node-modules`, and
 //! [`crate::check`] calls [`run`] in-process before `tsc`, so `cargo xtask
 //! check|validate` self-heals in a worktree where the shellHook never fired for that
-//! cwd. Was `end2end/provision-node-modules.sh` until #229.
+//! cwd (#229).
 
 use anyhow::{Context, Result, bail};
 use std::fs;
@@ -84,8 +84,8 @@ fn remove_any(path: &Path) -> Result<()> {
 ///
 /// Idempotent: each target is removed before it is linked, so a re-run overwrites
 /// cleanly and the plain `@playwright` directory can replace an earlier symlink of the
-/// same name. Dot-entries are skipped because the bash glob `"$VAR"/*` never matched
-/// them — linking `.bin` would change what tsc sees, which is a separate decision.
+/// same name. Dot-entries are skipped — linking `.bin` would change what tsc sees,
+/// which is a separate decision.
 pub fn run(root: &Path, paths: &StorePaths) -> Result<()> {
     let types_node_modules = paths.types_node_modules.as_path();
     let dest = root.join("end2end/node_modules");

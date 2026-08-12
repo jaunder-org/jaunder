@@ -29,7 +29,7 @@ fn media_link_entry(record: &MediaRecord, base: &BaseUrl, username: &Username) -
     let binary: EditMediaUriUrl = compose(base, &binary_path);
     // The member URL is a *different* layout from the serve path (it is the AtomPub
     // collection's, not the content-addressed store's), so it is built here rather than by
-    // `media_path`. Since #720 the filename needs no encoding at either site: a `Filename`
+    // `media_path`. The filename needs no encoding at either site (#720): a `Filename`
     // *is* the canonical percent-encoded segment, so this interpolates it verbatim and the
     // two layouts cannot spell one file differently. This URL is also the entry's
     // `atom:id`, so a malformed spelling would be the entry's permanent identity.

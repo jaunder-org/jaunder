@@ -1,7 +1,7 @@
 //! `devtool seed-e2e` — the canonical e2e fixture seed (site-config + users +
 //! mail-reset) applied by BOTH the host loop (`cargo xtask e2e-local`) and the
-//! flake VM `seed_db()`. It used to be three literal copies kept in sync only by
-//! comment; now there is one list, here. Shells each step out to its target
+//! flake VM `seed_db()` — one list, applied by both callers. Shells each step
+//! out to its target
 //! binary (devtool can't link the main-workspace crates): the `site_config`
 //! steps go through the shipped `jaunder` binary (`jaunder site-config set`),
 //! the rest through `test-support`. Every step is fatal: both callers guarantee

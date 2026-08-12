@@ -105,8 +105,7 @@ where
     #[must_use]
     pub fn error_for(&self, input: &str) -> Option<String> {
         // Trim before the empty check so a whitespace-only optional field reads as
-        // "not provided" (valid) — matching the `common::text::non_empty` behavior
-        // the pre-typing `slug_override` form used.
+        // "not provided" (valid) — matching `common::text::non_empty`.
         if self.optional && input.trim().is_empty() {
             None
         } else {
@@ -359,8 +358,8 @@ mod tests {
     }
 
     // `set_input` (#860) is the programmatic counterpart to the components' on-input
-    // handler: the tests above spell that handler by hand (`value.set` then
-    // `error.set`) precisely because a seeding caller had no single door to use.
+    // handler — the single door a seeding caller uses; the tests above spell that
+    // handler by hand (`value.set` then `error.set`) to pin what it must match.
     #[test]
     fn set_input_writes_value_and_error_together() {
         let owner = Owner::new();

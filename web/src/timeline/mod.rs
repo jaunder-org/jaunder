@@ -4,15 +4,14 @@
 //! only.
 //!
 //! The `#[server]` listing fns live in the `api` leaf and their host-only storage
-//! queries in `server` — the vertical owned neither until #714, which moved them
-//! out of `posts/api/listing.rs` so that `(vertical, ident)` could be a key the
-//! compiler enforces. The wire types they exchange
+//! queries in `server` — the vertical owns both so that `(vertical, ident)` is a
+//! key the compiler enforces (#714). The wire types they exchange
 //! (`TimelinePage`/`RenderedPost`) are defined in `common::seed` and
 //! reached through `crate::posts`.
 //!
 //! Alongside them sit the pure host-tested `state` and `render` leaves and the
-//! wasm-only reactive `component`. Since #671 `state` holds the reactive
-//! `TimelineState` signal bundle as well as the pure value model — both
+//! wasm-only reactive `component`. `state` holds the reactive
+//! `TimelineState` signal bundle as well as the pure value model (#671) — both
 //! host-compiled and coverage-measured, the bundle exercised under an `Owner` —
 //! leaving `component` only what cannot run on the host (`spawn_local`, `view!`).
 //!

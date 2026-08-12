@@ -1,6 +1,6 @@
 //! Browser file-picker → multipart upload glue (#520). Raw browser API access plus the
-//! `server_fn` transport type it produces; no domain types (ADR-0069). Relocated from
-//! `web::media::component` so `web` carries no `web-sys` dependency at all.
+//! `server_fn` transport type it produces; no domain types (ADR-0069). Lives here so
+//! `web` carries no `web-sys` dependency at all.
 
 use leptos::html::Input;
 use leptos::prelude::{Get, NodeRef};

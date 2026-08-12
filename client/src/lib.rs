@@ -15,12 +15,11 @@
 //! See docs/adr/0069-client-crate-wasm-only-home.md.
 
 /// Generic browser `localStorage` key/value primitive (#514). Raw string KV, no
-/// domain types — the `web`/`csr` home for what were scattered `web_sys::Storage`
-/// call sites.
+/// domain types — the single `web`/`csr` home for `web_sys::Storage` access.
 #[cfg(target_arch = "wasm32")]
 pub mod storage;
 
-/// Raw browser confirm-dialog primitive (`window.confirm`) relocated from `web` (#516).
+/// Raw browser confirm-dialog primitive (`window.confirm`, #516).
 /// `web-sys` only, no domain types — unconditional (no `csr` gate).
 #[cfg(target_arch = "wasm32")]
 pub mod dialog;
@@ -37,12 +36,12 @@ pub mod dom;
 pub mod perf;
 
 /// Reactive revalidation helpers — the browser-bound `Effect`/`Resource` plumbing behind
-/// `web`'s `Invalidator` idiom, relocated here (#515). Behind the `csr` feature because they
+/// `web`'s `Invalidator` idiom (#515). Behind the `csr` feature because they
 /// need `leptos`; a host/server build of `client` stays leptos-free.
 #[cfg(all(target_arch = "wasm32", feature = "csr"))]
 pub mod reactive;
 
-/// Browser file-picker → `MultipartData` glue (#520), relocated from `web::media` so that
-/// crate names no `web_sys` type. Behind `csr` because it needs leptos's `NodeRef`.
+/// Browser file-picker → `MultipartData` glue (#520), living here so `web` names
+/// no `web_sys` type. Behind `csr` because it needs leptos's `NodeRef`.
 #[cfg(all(target_arch = "wasm32", feature = "csr"))]
 pub mod upload;

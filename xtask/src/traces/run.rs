@@ -3,10 +3,9 @@
 //! Host orchestrator (ADR-0028): nix-builds the `{sqlite,postgres}×{chromium,firefox}`
 //! e2e checks (or their `-single-worker` package variants), extracts each combo's
 //! `capture/otel-traces.jsonl` from its `capture-<backend>.tar.gz` bundle (#332 — the
-//! trace now rides the capture dir, not a standalone artifact), and hands the files to
-//! the in-process `traces::analyze` / `render` seam. Port of
-//! `scripts/run-e2e-trace-analysis`; the pure helpers below are unit-tested, the
-//! nix/filesystem I/O in `collect_trace_files` is manual.
+//! trace rides the capture dir, not a standalone artifact), and hands the files to
+//! the in-process `traces::analyze` / `render` seam. The pure helpers below are
+//! unit-tested; the nix/filesystem I/O in `collect_trace_files` is manual.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};

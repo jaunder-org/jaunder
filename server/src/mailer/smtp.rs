@@ -148,9 +148,6 @@ impl LettreMailSender {
             // encodes. `from` is always set just above, and survives the header
             // round-trip lettre performs in `build()` (the guard again). `to` is
             // non-empty, checked at the top of this function.
-            //
-            // The encoding claim alone used to be this comment, which is how a
-            // parser bug spent a while looking like an encoding concern (#297).
             unreachable!("from is set, to is non-empty, and a String body always encodes")
         };
 
@@ -374,10 +371,9 @@ mod tests {
 
     #[test]
     fn build_message_accepts_recipients_the_display_parser_rejected() {
-        // Was `send_email_rejects_recipient_lettre_cannot_parse`, which asserted
-        // the failure. Driving `build_message` rather than `send_email` matters:
-        // against a dead endpoint `send_email` errors regardless, so the old
-        // shape would pass for the wrong reason.
+        // Driving `build_message` rather than `send_email` matters: against a
+        // dead endpoint `send_email` errors regardless, so a send-based test
+        // would pass for the wrong reason.
         let sender =
             LettreMailSender::from_config(&base_config(SmtpTlsMode::Plain)).expect("build mailer");
         for raw in DIVERGENT {
@@ -393,7 +389,6 @@ mod tests {
 
     #[test]
     fn build_message_accepts_a_from_the_display_parser_rejected() {
-        // Was `send_email_rejects_from_lettre_cannot_parse`.
         let sender =
             LettreMailSender::from_config(&base_config(SmtpTlsMode::Plain)).expect("build mailer");
         for raw in DIVERGENT {
@@ -412,9 +407,8 @@ mod tests {
 
     #[test]
     fn from_config_accepts_a_sender_the_display_parser_rejected() {
-        // Was `from_config_rejects_sender_lettre_cannot_parse`. `SmtpConfig`'s
-        // sender is a `common::mailbox::Mailbox`, so this covers the named form
-        // too — the display name must not disturb the address.
+        // `SmtpConfig`'s sender is a `common::mailbox::Mailbox`, so this covers
+        // the named form too — the display name must not disturb the address.
         for raw in ["user@[192.0.2.1]", "Jaunder <\"has space\"@example.com>"] {
             let config = SmtpConfig {
                 sender: raw.parse().expect("Mailbox accepts it"),

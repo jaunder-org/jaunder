@@ -289,7 +289,6 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost> {
     let auth = require_auth().await?;
     let posts = expect_context::<Arc<dyn PostStorage>>();
 
-    // Load old tags before mutation to union with new tags
     let old = posts
         .get_post_by_id(post_id, &viewer_identity().await)
         .await?;
@@ -458,8 +457,7 @@ pub async fn publish(post_id: PostId) -> WebResult<SavedPost> {
     // Publication is one timestamp, not an edit: `publish_post` applies the
     // ownership and soft-delete guard itself and rewrites nothing else, so the
     // post's body, rendered HTML, audience targeting and media rows all survive
-    // (#711). Routing this through `update_post` used to replay the whole stored
-    // record back through the edit path.
+    // (#711).
     let updated = posts.publish_post(post_id, auth.user_id).await?;
 
     let published_at = updated
@@ -498,7 +496,6 @@ pub async fn delete(post_id: PostId) -> WebResult<()> {
 
     posts.soft_delete_post(post_id).await?;
 
-    // Only enqueue feed events for published posts
     if existing.published_at.is_some() {
         let tag_slugs: BTreeSet<Tag> = existing.tags.iter().map(|t| t.tag_slug.clone()).collect();
         let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();

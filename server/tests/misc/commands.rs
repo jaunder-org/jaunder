@@ -101,9 +101,8 @@ async fn cmd_init_fails_on_invalid_path(#[case] backend: Backend) {
     assert!(result.is_err());
 }
 
-// `cmd_create_pg_db_rejects_non_postgres_urls` used to live here. A non-Postgres
-// bootstrap URL is no longer representable — `PgBootstrapArgs.bootstrap_db` is a
-// `PgConnectOptions`, so clap rejects it at argument parsing. The replacement is
+// A non-Postgres bootstrap URL is unrepresentable — `PgBootstrapArgs.bootstrap_db`
+// is a `PgConnectOptions`, so clap rejects it at argument parsing; pinned by
 // `create_pg_db_rejects_a_non_postgres_bootstrap_url` in `server/src/cli.rs`.
 
 // M1.5.4: cmd_serve fails with an appropriate error when the storage path has
@@ -368,10 +367,10 @@ async fn cmd_user_invite_default_expires_in(#[case] backend: Backend) {
     assert_eq!(invites.len(), 1, "exactly one invite should exist");
 }
 
-// #582: the out-of-range rejection that this test used to exercise (in-body `i64::try_from`)
-// moved into `InviteTtlHours` — an out-of-range `--expires-in` is now refused by clap's
-// `FromStr` parse, upstream of `cmd_user_invite`, and is covered by the newtype's unit test.
-// A valid explicit TTL is covered by `cmd_user_invite_creates_retrievable_invite`.
+// #582: an out-of-range `--expires-in` is refused by `InviteTtlHours`' clap
+// `FromStr` parse, upstream of `cmd_user_invite`, and is covered by the newtype's
+// unit test. A valid explicit TTL is covered by
+// `cmd_user_invite_creates_retrievable_invite`.
 
 // M6.3.2: backup command writes a directory-mode backup.
 #[apply(backends)]

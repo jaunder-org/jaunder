@@ -4,11 +4,9 @@
 //! markup builder (`app::render`, `avatar::markup`, `posts::render`,
 //! `sidebar::markup`, `taglist::markup`, `topbar::markup`, …) returns `Markup`, and
 //! `Markup` is the only thing that composes into a `maud::html!` unescaped. Escaping
-//! is therefore no longer a rule anyone has to remember: text interpolated into
+//! is therefore not a rule anyone has to remember (#333): text interpolated into
 //! `html!` is escaped by the macro, and the one way to emit raw HTML is
 //! [`Markup::from_rendered_html`], which the `raw-html-door` gate pins to this file.
-//! (This replaced a hand-rolled escaper that every builder had to remember to call
-//! at every interpolation — #333.)
 //!
 //! **Non-reactive markup only — no leptos reactivity**, so `reactive_graph` never
 //! sits on the public request path (the #173 escape, ADR-0040). maud preserves that

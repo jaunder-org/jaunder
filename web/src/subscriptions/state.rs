@@ -32,11 +32,10 @@ pub enum SubscribePaint {
 /// error on every anonymous profile view.
 ///
 /// Beyond that, an `Err` is [`SubscribePaint::Failed`] and never
-/// `Toggle(false)`. Collapsing the two is what #861 was: a failed check rendered the
-/// Subscribe button, so "Subscribe is visible" stopped meaning "you are not
-/// subscribed" and started meaning "you are not subscribed, **or** we could not find
-/// out". An e2e helper waited on that button as proof an unsubscribe had committed,
-/// and a user whose check failed was told they had no subscription they in fact had.
+/// `Toggle(false)` (#861). Collapsing the two makes "Subscribe is visible" mean
+/// "you are not subscribed, **or** we could not find out" — an e2e helper waiting
+/// on that button as proof of an unsubscribe, and a user whose check failed being
+/// told they have no subscription they in fact have.
 #[must_use]
 pub fn paint(
     viewer: Option<&Username>,

@@ -4,7 +4,6 @@
 //! (host + wasm); the vertical's one grouped `#[cfg(feature = "server")]` use-block
 //! lives here. Re-exported from `mod.rs` so `crate::profile::…` paths stay stable.
 
-// Shared imports (no cfg needed)
 use crate::error::WebResult;
 use common::bio::Bio;
 use common::display_name::DisplayName;
@@ -13,7 +12,6 @@ use common::render::PostFormat;
 use common::username::Username;
 use serde::{Deserialize, Serialize};
 
-// All server-only imports in one place
 #[cfg(feature = "server")]
 use {
     crate::auth::require_auth,

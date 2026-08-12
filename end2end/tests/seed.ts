@@ -67,7 +67,7 @@ function runSeedTool(args: string[]): SeedRecord {
 
 /** Create a fresh account + session out-of-band (real storage path, genuinely
  *  argon2-hashed password) and return the seed record. Page-less and timed
- *  (spec D7): the `user` fixture no longer owns a page. */
+ *  (spec D7): the `user` fixture owns no page. */
 export async function seedUserViaTool(
   username: string,
   password: string,

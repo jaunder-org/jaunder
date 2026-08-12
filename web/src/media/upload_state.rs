@@ -287,8 +287,8 @@ mod tests {
         with_owner(|| {
             let sinks = Sinks::new();
             // First prove the sinks are writable through `notify` itself, so the
-            // assertions below distinguish "no callback fired" from "nothing here could
-            // ever have been observed" — which is all this test used to say.
+            // assertions below distinguish "no callback fired" from "nothing here
+            // could ever have been observed".
             sinks.callbacks().notify(&UploadOutcome::Uploaded(url()));
             sinks
                 .callbacks()

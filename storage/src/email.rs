@@ -31,8 +31,7 @@ impl From<UseEmailVerificationError> for host::error::InternalError {
     /// Mirrors the sibling [`crate::atomic::ConfirmPasswordResetError`] mapping so
     /// `verify_email` is `?`-liftable: the three token failures are client
     /// validation errors (a stale/used/unknown verification link), and an
-    /// internal failure is a masked storage error. Previously `web` hand-mapped
-    /// every variant to `storage`, masking all three as a 500.
+    /// internal failure is a masked storage error.
     fn from(error: UseEmailVerificationError) -> Self {
         use host::error::InternalError;
         match error {
@@ -169,10 +168,9 @@ where
         // data we need without a second round-trip.
         // The `email` column decodes straight into `Email` via the sqlx bridge
         // (#438), which validates through `FromStr`. A genuine storage fault (e.g.
-        // a closed pool) still maps to `NotFound` as before, but a corrupt/migrated
-        // `email` value is a data-integrity fault, so its `ColumnDecode` error is
-        // surfaced as `Internal` — mirroring the pre-bridge hand-parse, which also
-        // reported a corrupt value as an internal decode error.
+        // a closed pool) maps to `NotFound`, but a corrupt/migrated `email` value
+        // is a data-integrity fault, so its `ColumnDecode` error is surfaced as
+        // `Internal`.
         let claimed = sqlx::query_as::<_, (UserId, Email)>(
             "UPDATE email_verifications SET used_at = $1
              WHERE token_hash = $2 AND used_at IS NULL AND expires_at > $3

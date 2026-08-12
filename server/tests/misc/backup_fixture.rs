@@ -135,8 +135,8 @@ async fn seed_named_audience_post(
     (viewer, named_post)
 }
 
-/// Seeds the previously-unbacked side tables: a `user_config` row, a media-table
-/// row, and a `feed_events` row.
+/// Seeds the side tables: a `user_config` row, a media-table row, and a
+/// `feed_events` row.
 async fn seed_side_tables(state: &AppState, author: UserId) {
     state
         .user_config
@@ -218,7 +218,7 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
         "a Named-audience post must not be visible to anonymous"
     );
 
-    // The previously-unbacked tables survived the round trip.
+    // The side tables (`user_config`, media, `feed_events`) survived the round trip.
     assert_eq!(
         state
             .user_config

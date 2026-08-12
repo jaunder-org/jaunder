@@ -49,8 +49,7 @@ type CacheTuple = (
 // Infallible: the `feed_url` and `content_type` columns decode straight into
 // `FeedPath` / `ContentType` via the sqlx bridge (#438), which validates through
 // `FromStr` at the query boundary — so a corrupt/migrated value is already rejected
-// as a `ColumnDecode` error before this mapper runs (was a hand `FeedPath::try_from`
-// re-parse with a `cov:ignore`).
+// as a `ColumnDecode` error before this mapper runs.
 fn row_from_tuple(t: CacheTuple) -> FeedCacheRow {
     FeedCacheRow {
         feed_path: t.0,

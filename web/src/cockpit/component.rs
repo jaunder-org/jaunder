@@ -3,7 +3,7 @@
 //! first-class, directly-bookmarkable authed-only route — served from the SPA
 //! shell (`no-store`), pre-painted `html.authed`, so a direct hit boots straight
 //! into the feed with zero clicks. An anonymous / expired visitor bounces to
-//! `/login`. This is the former `home.rs` Feed branch moved to its proper home.
+//! `/login`.
 
 use common::pagination::PageSize;
 use leptos::prelude::*;
@@ -60,9 +60,9 @@ pub fn CockpitPage() -> impl IntoView {
 
     view! {
         // Only the CHROME goes in `children` — the gate itself owns the loading
-        // placeholder and the rows. It renders in the loading and rows arms but not
-        // over the error banner or the redirect, which reproduces all four of this
-        // page's previous outcomes exactly.
+        // placeholder and the rows. The chrome renders in the loading and rows arms
+        // but not over the error banner or the redirect: four outcomes, chrome on
+        // exactly two.
         <TimelineGate
             state=state.timeline
             on_mutate=on_mutate

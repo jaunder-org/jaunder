@@ -37,7 +37,7 @@ impl FromStr for ProfferedInviteCode {
 
 /// Hours until an invite code expires — bounded `1..=336` (14 days), default 168 (7 days).
 ///
-/// The bound that `create_invite` (web and CLI) used to enforce in-body now lives in the type.
+/// The bound lives in the type, not in `create_invite`'s body (web and CLI share it).
 /// The `i64` inner feeds `chrono::Duration::hours` directly, and the `max = 336` keeps it far
 /// from overflow; the `NumNewtype` trailer rejects a non-integer, a negative, `0`, `> 336`, and
 /// (at serde/`FromStr`) a `u64::MAX`-shaped value that doesn't fit `i64`.

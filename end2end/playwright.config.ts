@@ -3,9 +3,9 @@ import { devices, defineConfig } from "@playwright/test";
 const traceParent = process.env.JAUNDER_E2E_TRACEPARENT;
 // Worker count is env-driven (#155), default 2: two browser instances per combo
 // stays robust on a small/loaded host and lets all four {backend×browser} combos
-// run concurrently, while still cutting the serial wall-clock (Firefox was the long
-// pole). The host driver (`cargo xtask e2e-local`) overrides this to 1 for its debug
-// wasm build. Measured in docs/observability.md #155.
+// run concurrently, while still cutting the serial wall-clock. The host driver
+// (`cargo xtask e2e-local`) overrides this to 1 for its debug wasm build.
+// Measured in docs/observability.md #155.
 const workers = parseInt(process.env.JAUNDER_E2E_WORKERS || "2", 10);
 
 // Automatic retry of a failed test, env-driven, default 0 (fail-fast — right for

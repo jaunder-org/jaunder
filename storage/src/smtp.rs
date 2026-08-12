@@ -246,12 +246,11 @@ mod tests {
             .unwrap();
 
         let err = load_smtp_config(store).await.unwrap_err();
-        // Asserts the offending value reaches the *message*, deliberately not the error's
-        // variant (#687). There is no longer a variant to name: parsing moved into the
-        // sqlx bridges, so a bad value arrives as a `ColumnDecode` and
-        // `SmtpConfigError::InvalidSender` is gone. The value echo is the property worth
-        // protecting — a `matches!` assertion here would have pinned the implementation
-        // and blocked that change.
+        // Asserts the offending value reaches the *message*, deliberately not the
+        // error's variant (#687): parsing lives in the sqlx bridges, so a bad value
+        // arrives as a `ColumnDecode` with no dedicated variant to name. The value
+        // echo is the property worth protecting — a `matches!` assertion would pin
+        // the implementation instead.
         assert!(
             err.to_string().contains("not-a-valid-email"),
             "the error must echo the offending value; got: {err}"

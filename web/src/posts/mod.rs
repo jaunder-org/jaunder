@@ -30,8 +30,7 @@ mod parse;
 // The listing pages' and the editor's host-tested decision folds (#306, ADR-0083):
 // seed adoption, the route-param guards, the editor's publish redirect / post-id
 // short-circuit, and `PostCard`'s parent-callback plumbing, extracted out of the
-// wasm-only components so the branches they used to carry are assertable and
-// coverage-measured.
+// wasm-only components so the branches are assertable and coverage-measured.
 mod page_state;
 
 // The new-post composer's shared signal bundle and its dispatch payload, extracted
@@ -72,7 +71,7 @@ pub use api::{
 pub use server::{authored_post, rendered_post};
 
 // The wasm-only reactive UI (ADR-0070): the post widgets and the routed page
-// components (moved from `pages/`, #323). Re-exported so the `pages/` router keeps
+// components (#323). Re-exported so the `pages/` router keeps
 // the stable `crate::posts::…` paths; the private helpers (`marker_matches`,
 // `audience_checkbox`, `permalink_first_paint`, the `render_draft_row` builder) and the
 // private `DraftList` subcomponent stay unexported.

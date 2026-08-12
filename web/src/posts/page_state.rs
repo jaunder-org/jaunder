@@ -386,8 +386,7 @@ mod tests {
             user_tag_query(Some(alice()), None),
             Err(WebError::validation("Invalid tag"))
         );
-        // Both broken: the username's error wins, which is the order the two separate
-        // guards had.
+        // Both broken: the username's error wins.
         assert_eq!(
             user_tag_query(None, None),
             Err(WebError::validation("Invalid username"))
@@ -418,8 +417,8 @@ mod tests {
 
     #[test]
     fn a_still_unpublished_update_stays_put() {
-        // The editor must not navigate away when the author saved a draft — the whole
-        // point of the inner `published_at.is_some()` branch this replaced.
+        // The editor must not navigate away when the author saved a draft — the
+        // invariant the `published_at.is_some()` gate exists to keep.
         assert_eq!(
             publish_redirect::<WebError>(Some(Ok(saved_post(None)))),
             None
