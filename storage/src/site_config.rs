@@ -995,8 +995,8 @@ mod tests {
     async fn identity_normalizes_stored_base_url_to_canonical_form(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        // A value stored WITHOUT a trailing slash (e.g. from before the BaseUrl
-        // typing) still parses; the type normalizes it to the canonical slashed form.
+        // A value stored WITHOUT a trailing slash (representable in the column)
+        // still parses; the type normalizes it to the canonical slashed form.
         storage
             .set(SiteConfigKey::SiteBaseUrl, "https://example.com")
             .await

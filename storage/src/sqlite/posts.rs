@@ -117,8 +117,8 @@ impl PostDialect for Sqlite {
             .bind(now)
             // `Option::as_ref` → `Option<&PostSummary>` (a typed newtype bind via the
             // ADR-0071 sqlx bridge, not an `AsRef<str>` strip). Persists a summary
-            // edit/clear — the column was previously omitted from the SET clause, so
-            // an edited summary was silently dropped (surfaced by #545's clear e2e).
+            // edit/clear — omitting the column from the SET clause silently drops an
+            // edited summary (#545's clear e2e).
             .bind(input.summary.as_ref())
             .bind(post_id)
             .fetch_one(&mut *conn)
@@ -152,15 +152,15 @@ impl PostDialect for Sqlite {
     ) -> Result<(), TaggingError> {
         // ADR-0021: BEGIN IMMEDIATE takes the write lock up front, so the read
         // below is not a shared->reserved upgrade — and the whole read-diff-write
-        // is serialized under one acquisition (ADR-0092), which also closes the
-        // TOCTOU the old separate autocommit read left open. sqlx's Transaction
-        // issues its own deferred BEGIN, so drive the transaction manually on a
-        // raw connection, mirroring update_post / create_user_with_invite.
+        // is serialized under one acquisition (ADR-0092), closing the TOCTOU a
+        // separate autocommit read would leave open. sqlx's Transaction issues
+        // its own deferred BEGIN, so drive the transaction manually on a raw
+        // connection, mirroring update_post / create_user_with_invite.
         let mut conn = pool.acquire().await?;
         sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
 
         let result: Result<(), TaggingError> = async {
-            // No `deleted_at` filter: soft-deleted posts stay taggable, as before.
+            // No `deleted_at` filter: soft-deleted posts stay taggable.
             let post_exists: bool =
                 sqlx::query_scalar("SELECT COUNT(*) > 0 FROM posts WHERE post_id = $1")
                     .bind(post_id)
@@ -180,8 +180,8 @@ impl PostDialect for Sqlite {
             for label in diff.to_add {
                 let slug = label.slug();
                 // `fetch_one`, not a read-back: the upsert's no-op `DO UPDATE`
-                // returns the id on the conflict path too, so the absence the
-                // old `require_row` guard named cannot occur (#883).
+                // returns the id on the conflict path too, so a no-row result
+                // cannot occur (#883).
                 let tag_id = sqlx::query_scalar::<_, TagId>(UPSERT_TAG_RETURNING_ID)
                     .bind(&slug)
                     .fetch_one(&mut *conn)

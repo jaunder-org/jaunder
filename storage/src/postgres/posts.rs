@@ -119,8 +119,8 @@ impl PostDialect for Postgres {
         .bind(now)
         // `Option::as_ref` → `Option<&PostSummary>` (a typed newtype bind via the
         // ADR-0071 sqlx bridge, not an `AsRef<str>` strip). Persists a summary
-        // edit/clear — the column was previously omitted from the SET clause, so
-        // an edited summary was silently dropped (surfaced by #545's clear e2e).
+        // edit/clear — omitting the column from the SET clause silently drops an
+        // edited summary (#545's clear e2e).
         .bind(input.summary.as_ref())
         .bind(post_id)
         .fetch_one(&mut *tx)
@@ -145,7 +145,7 @@ impl PostDialect for Postgres {
         // FOR UPDATE locks the post row for the whole read-diff-write, so a
         // concurrent set_post_tags cannot interleave under READ COMMITTED
         // (ADR-0021; mirrors update_post). It doubles as the existence check.
-        // No `deleted_at` filter: soft-deleted posts stay taggable, as before.
+        // No `deleted_at` filter: soft-deleted posts stay taggable.
         let exists = sqlx::query_scalar::<_, PostId>(
             "SELECT post_id FROM posts WHERE post_id = $1 FOR UPDATE",
         )
@@ -167,8 +167,8 @@ impl PostDialect for Postgres {
         for label in diff.to_add {
             let slug = label.slug();
             // `fetch_one`, not a read-back: the upsert's no-op `DO UPDATE`
-            // returns the id on the conflict path too, so the absence the old
-            // `require_row` guard named cannot occur (#883).
+            // returns the id on the conflict path too, so a no-row result
+            // cannot occur (#883).
             let tag_id = sqlx::query_scalar::<_, TagId>(UPSERT_TAG_RETURNING_ID)
                 .bind(&slug)
                 .fetch_one(&mut *tx)

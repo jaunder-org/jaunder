@@ -147,11 +147,10 @@ pub trait MediaStorage: Send + Sync {
 /// [`get_user_upload_usage`][MediaDialect::get_user_upload_usage] diverges
 /// because Postgres requires an explicit `::bigint` cast on the
 /// `COALESCE(SUM(…), 0)` expression while `SQLite` does not support that syntax.
-/// It is the only divergence: the delete used to live here too, because reading
-/// `.rows_affected()` off the generic `DB::QueryResult` associated type needs
-/// monomorphising (the method exists only on the concrete per-backend result
-/// types), but `RETURNING` + `fetch_optional` asks the same question generically,
-/// so [`MediaStorage::try_delete_media`] is shared on [`MediaStore`] (#711).
+/// It is the only divergence: the delete is shared on [`MediaStore`] because
+/// `RETURNING` + `fetch_optional` asks "did a row match" generically, with no
+/// need to monomorphise over `.rows_affected()` on the per-backend
+/// `DB::QueryResult` types ([`MediaStorage::try_delete_media`], #711).
 #[async_trait]
 pub trait MediaDialect: Backend {
     /// Returns the total upload bytes for `user_id` using backend-appropriate SQL.
@@ -274,10 +273,10 @@ where
         offset: PageOffset,
     ) -> sqlx::Result<Vec<MediaRecord>> {
         // Fetch raw rows (not `query_as::<MediaRow>`) so each row decodes
-        // independently: with the sqlx bridge (#438) the `sha256`/`filename` columns
-        // now decode into their newtypes *inside* `MediaRow::from_row`, so a single
-        // corrupt row would fail a whole `query_as` `fetch_all`. Decoding per row (as
-        // the feed-event claim mapper does) lets us skip the bad one and keep the rest.
+        // independently: the `sha256`/`filename` columns decode into their newtypes
+        // *inside* `MediaRow::from_row` (#438), so a single corrupt row would fail a
+        // whole `query_as` `fetch_all`. Decoding per row (as the feed-event claim
+        // mapper does) lets us skip the bad one and keep the rest.
         let rows = if let Some(src) = source {
             sqlx::query(
                 "SELECT user_id, sha256, filename, source, content_type, size_bytes, source_url, created_at
@@ -307,11 +306,9 @@ where
             .await?
         };
 
-        // Skip (don't fail the whole list on) a row that fails to decode — a corrupt
-        // or hand-edited `sha256`/`filename` column that no longer satisfies its
-        // newtype invariant (rejected inside `from_row`), or an invalid `source`.
-        // `get_media`/`find_by_hash` stay strict (a direct lookup surfaces the error),
-        // but a single bad row must not 500 a user's entire media list.
+        // Skip (don't fail the whole list on) a row that fails to decode; direct
+        // lookups (`get_media`/`find_by_hash`) stay strict
+        // (docs/adr/drafts/one-bad-row-must-not-stop-the-scan.md).
         Ok(rows
             .iter()
             .filter_map(|row| {
@@ -344,7 +341,7 @@ where
         // (spec D8). A single statement is atomic in both engines, so this needs no
         // transaction, no locking, and no isolation-level tuning. `RETURNING` is what
         // makes the outcome readable generically — `.rows_affected()` is not callable
-        // on `DB::QueryResult`, which is why the delete used to be a dialect method.
+        // on `DB::QueryResult`.
         //
         // The subquery is `POSTS_REFERENCING_MEDIA_FROM_WHERE`, the one definition of
         // "referenced", shared with `list_posts_referencing_media` — which explains the
@@ -430,7 +427,7 @@ where
 
 // The media site-config keys live in the closed registry
 // (`common::config_key::SiteConfigKey::{MediaMaxFileSizeBytes, MediaUserQuotaBytes}`, #687).
-// The defaults (50 MiB / 1 GiB) now live on the `common::media::MaxFileSize` /
+// The defaults (50 MiB / 1 GiB) live on the `common::media::MaxFileSize` /
 // `UserQuota` newtypes' `#[num_newtype(default = …)]`, applied by the
 // `SiteConfigStorage::get_media_*` getters.
 

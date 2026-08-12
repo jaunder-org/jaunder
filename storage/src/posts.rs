@@ -100,12 +100,9 @@ impl PostRecord {
     /// Generates a fallback summary from the post's first non-blank body line, which
     /// [`PostSummary::truncated`] length-caps into the newtype.
     ///
-    /// This was a body → title → slug preference chain until #811. The lower two rungs
-    /// existed only to cover a blank body, and [`PostBody`]'s invariant is now *exactly*
-    /// the condition [`SummarySeed::first_body_line`] relies on — at least one line
-    /// non-empty after trimming — so they became unreachable and were removed. #830's
-    /// doc anticipated precisely this collapse; #858 finished it by making
-    /// `first_body_line` total, which retired the `unreachable!` that stood here.
+    /// No title/slug fallbacks: [`PostBody`]'s invariant is *exactly* the condition
+    /// [`SummarySeed::first_body_line`] relies on — at least one line non-empty
+    /// after trimming — so the body always answers (#811, #830, #858).
     #[must_use]
     pub fn fallback_summary_label(&self) -> PostSummary {
         PostSummary::truncated(&SummarySeed::first_body_line(&self.body))
@@ -293,18 +290,17 @@ pub(crate) const SELECT_POST_TAGS: &str = "SELECT pt.post_id, pt.tag_id, t.tag_s
 /// Get-or-create a tag by slug, returning its id in **one** statement.
 ///
 /// The no-op `DO UPDATE` is load-bearing: `DO NOTHING` emits no row for
-/// `RETURNING` on the conflict path, which is exactly why a second `SELECT` used
-/// to follow this (#883). Rewriting `tag_slug` to the value it already holds
-/// makes the id come back on both the insert and the conflict path, so there is
-/// no window in which a concurrently deleted tag yields `RowNotFound`. #343
-/// landed the same shape for `subscriptions`; both dialects run it.
+/// `RETURNING` on the conflict path, which would force a second `SELECT` and
+/// open a window in which a concurrently deleted tag yields `RowNotFound`
+/// (#883). Rewriting `tag_slug` to the value it already holds makes the id come
+/// back on both the insert and the conflict path. #343 landed the same shape
+/// for `subscriptions`; both dialects run it.
 ///
 /// Shared rather than per-dialect: `SQLite` accepts `$n` placeholders and
-/// `ON CONFLICT … DO UPDATE … RETURNING`, so the old `INSERT OR IGNORE` was a
-/// spelling difference, not a capability one.
+/// `ON CONFLICT … DO UPDATE … RETURNING`.
 ///
-/// **Takes a row lock on the tag until commit** (unlike the `DO NOTHING` it
-/// replaces), which is why [`post_tag_diff`] hands additions back in slug order.
+/// **Takes a row lock on the tag until commit**, which is why
+/// [`post_tag_diff`] hands additions back in slug order.
 ///
 /// Bind order: `tag_slug`.
 pub(crate) const UPSERT_TAG_RETURNING_ID: &str = "INSERT INTO tags (tag_slug) VALUES ($1)
@@ -391,11 +387,9 @@ pub(crate) fn post_tag_diff<'a>(
         .iter()
         .filter(|label| !existing_slugs.contains(&label.slug()))
         .collect();
-    // Slug order, so every transaction takes `tags` row locks in the same order. The
-    // upsert this feeds holds a row lock on the tag until commit, so two concurrent
-    // reconciles adding overlapping tags in caller-supplied order could otherwise
-    // deadlock on Postgres (#876). `SQLite` is unaffected — `BEGIN IMMEDIATE` is
-    // database-wide — but the ordering is free and applies to both.
+    // Slug order, so every transaction takes `tags` row locks in the same order —
+    // caller-supplied order can deadlock concurrent reconciles on Postgres (#876,
+    // docs/adr/drafts/slug-ordered-tag-lock-acquisition.md).
     //
     // `sort_by_key`, not `sort_unstable_by_key`: `desired` may carry two labels
     // sharing a slug and the FIRST occurrence's casing must still win, which
@@ -871,10 +865,9 @@ pub trait PostStorage: Send + Sync {
     /// The read half of `post_media`'s lifecycle, kept in the same trait and module
     /// as [`replace_post_media`], which writes those rows (#711).
     ///
-    /// **Deliberately unlimited.** This replaces a body scan that paged the user's
-    /// posts and stopped at 1000, so a reference in an older post left the media
-    /// silently deletable; the join answers the question exactly, and capping it
-    /// would reintroduce the bug.
+    /// **Deliberately unlimited.** The join answers the question exactly; any cap
+    /// would let a reference in an old post past the window leave its media
+    /// silently deletable.
     ///
     /// **Deliberately scoped to `user_id`'s own posts.** `media` is keyed per-user,
     /// so another user may hold a row for the same on-disk entry; their posts do not
@@ -900,7 +893,7 @@ pub trait PostStorage: Send + Sync {
 /// `FOR UPDATE`) and [`set_post_tags`][PostDialect::set_post_tags], which
 /// diverges twice over — the transaction shape (`SQLite` drives a manual
 /// `BEGIN IMMEDIATE`, Postgres locks the post row with `FOR UPDATE`; ADR-0021).
-/// That transaction shape is now the *only* divergence — the tag write itself is
+/// That transaction shape is the *only* divergence — the tag write itself is
 /// the shared [`UPSERT_TAG_RETURNING_ID`] and [`INSERT_POST_TAG`] (#876).
 /// Everything else is shared on [`PostStore`]. See ADR-0019.
 #[async_trait]
@@ -1048,8 +1041,7 @@ where
     )]
     async fn create_post(&self, input: &CreatePostInput) -> Result<PostId, CreatePostError> {
         let mut tx = self.pool.begin().await?;
-        // On any error the `?` drops `tx`, which sqlx rolls back — equivalent to
-        // the previous explicit `tx.rollback()` before returning. (`&mut tx`
+        // On any error the `?` drops `tx`, which sqlx rolls back. (`&mut tx`
         // coerces to `&mut DB::Connection` for the helper.)
         let post_id = write_post_in_tx::<DB>(&mut tx, input).await?;
         tx.commit().await?;
@@ -1190,7 +1182,7 @@ where
         now: DateTime<Utc>,
     ) -> sqlx::Result<Option<PostRecord>> {
         // `PermalinkDate`'s Display is ISO `YYYY-MM-DD` — the exact string the
-        // `PERMALINK_DATE_CLAUSE` binds (replacing the old `format!("{y:04}-…")`).
+        // `PERMALINK_DATE_CLAUSE` binds.
         let date_str = date.to_string();
         let (resolution, binds, _) = resolution_where(viewer, 5);
         // `published_at <= $4` hides scheduled (future-dated) posts until due.
@@ -1261,14 +1253,12 @@ where
         .await?;
 
         if published.is_none() {
-            // Nothing matched, so the post is either gone or someone else's. One read
-            // tells the two apart for the caller's error; nothing was written, so
-            // there is no state to unwind. A live row here is necessarily owned by
-            // another user — the UPDATE would have matched otherwise.
-            // Selects `post_id`, not `user_id`: the question is pure existence, and the
-            // owner's identity is never read — a live row is necessarily someone else's,
-            // as argued above. Decoding an id column into its newtype rather than `i64`
-            // is the ADR-0085 convention (#715).
+            // Nothing matched, so the post is either gone or someone else's — a live
+            // row here is necessarily another user's, or the UPDATE would have
+            // matched. One pure-existence read (`post_id`, never the owner's
+            // identity) tells the two apart for the caller's error; nothing was
+            // written, so there is no state to unwind. Decoding an id column into
+            // its newtype rather than `i64` is the ADR-0085 convention (#715).
             let live = sqlx::query_scalar::<_, PostId>(
                 "SELECT post_id FROM posts WHERE post_id = $1 AND deleted_at IS NULL",
             )
@@ -1932,12 +1922,9 @@ where
         let mut needing = Vec::new();
         for row in rows {
             let generated_at: DateTime<Utc> = row.try_get("generated_at")?;
-            // Skip this row rather than failing the scan. A `feed_url` that no longer
-            // parses — a row written under an older grammar, say — is one unusable cache
-            // entry, but this scan runs only while the feed worker's `last_tick` is unset
-            // and the worker never advances it past an error, so returning `Err` here
-            // would retry forever and go-live enqueueing would never resume. One bad row
-            // must not cost every feed.
+            // Skip this row rather than failing the scan: an `Err` here would retry
+            // forever and go-live enqueueing would never resume
+            // (docs/adr/drafts/one-bad-row-must-not-stop-the-scan.md).
             //
             // `parts` is folded into the same skip: it can only fail if `canonicalize`
             // and `parse` disagree, which the decode above has already ruled out, so this
@@ -2167,12 +2154,11 @@ fn audience_target_row(target: &AudienceTarget) -> Option<(&'static str, Option<
 /// [`AudienceTarget::Subscribers`], `named` (with an id) →
 /// [`AudienceTarget::Named`].
 ///
-/// **Still returns `Option`, for one reason only.** A `named` row whose `audience_id` is
-/// NULL has no target to build, so it is dropped — unchanged behaviour, asserted below.
-/// The *other* former drop reason is gone: an unrecognised kind name used to land here as
-/// an `Err` from `TargetKind::try_from` and be silently discarded, shortening the caller's
-/// result with no signal. The column now decodes as `TargetKind` (#728), so that value
-/// never reaches this function — it is a `ColumnDecode` error at the query boundary.
+/// **Returns `Option`, for one reason only.** A `named` row whose `audience_id` is
+/// NULL has no target to build, so it is dropped — asserted below. An unrecognised
+/// kind name never reaches this function: the column decodes as `TargetKind`
+/// (#728), so it is a `ColumnDecode` error at the query boundary rather than a
+/// silent drop here.
 fn audience_target_from_row(
     kind: TargetKind,
     audience_id: Option<AudienceId>,
@@ -2221,8 +2207,7 @@ where
     // `Slug`/`PostBody` bind as themselves and `PostTitle` as `Option<&PostTitle>`
     // via the sqlx bridge (#438), which delegates to `String`; these bounds make
     // that bridge available on the generic backend (the `Option<&…>` pair covers
-    // the nullable `title` bind, mirroring the `Option<&str>` the old `as_deref`
-    // bind required).
+    // the nullable `title` bind).
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
     for<'q> Option<&'q PostTitle>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -2869,7 +2854,7 @@ mod tests {
         assert!(matches!(err, TaggingError::PostNotFound));
 
         // Soft-deleted posts stay taggable: the exists-check deliberately carries
-        // no `deleted_at` filter, matching the previous per-tag behaviour.
+        // no `deleted_at` filter.
         let user = SeedUser::new().seed(&env.state).await.user_id;
         let post = SeedRawPost::new(user).seed(&env.state).await.post_id;
         posts.soft_delete_post(post).await.expect("soft delete");
@@ -2916,11 +2901,8 @@ mod tests {
         // 10 and neither backend overrides it; at 1 this would deadlock, not fail.
         //
         // This is also safe under the current-thread runtime `#[tokio::test]`
-        // defaults to: sqlx-sqlite runs each connection on its own OS thread, so
-        // the spawned call waiting in SQLite's busy handler blocks that thread,
-        // not the runtime. Switching this test to `flavor = "multi_thread"` is
-        // unnecessary; switching sqlx to an in-runtime SQLite driver would make
-        // the block a hang.
+        // defaults to: sqlx-sqlite runs each connection on its own OS thread
+        // (docs/adr/drafts/sqlx-sqlite-busy-handler-threading.md).
         let posts = Arc::clone(&env.state.posts);
         let mut racer =
             tokio::spawn(
@@ -3047,21 +3029,21 @@ mod tests {
             audience_target_from_row(TargetKind::Named, Some(AudienceId::from(7))),
             Some(AudienceTarget::Named(AudienceId::from(7)))
         );
-        // A `named` row missing its id is still dropped — unchanged by #728, and the only
-        // remaining reason this returns `Option`.
+        // A `named` row missing its id is dropped — the only reason this returns
+        // `Option`.
         assert_eq!(audience_target_from_row(TargetKind::Named, None), None);
-        // The former second drop reason — an unrecognised kind name — is no longer
-        // expressible here: the parameter is a `TargetKind`, so a bad name cannot get this
-        // far. `get_post_audiences_rejects_an_unknown_target_kind` covers it at the
-        // boundary where it now surfaces.
+        // An unrecognised kind name is not expressible here: the parameter is a
+        // `TargetKind`, so a bad name cannot get this far.
+        // `get_post_audiences_rejects_an_unknown_target_kind` covers it at the
+        // boundary where it surfaces.
     }
 
     #[apply(backends)]
     #[tokio::test]
     async fn get_post_audiences_rejects_an_unknown_target_kind(#[case] backend: Backend) {
-        // Before #728 the `tk.name` column decoded as `String` and an unrecognised value
-        // was dropped by a `filter_map` — the post silently lost an audience row, with no
-        // error and no log. Decoding as `TargetKind` moves that to the query boundary.
+        // Decoding `tk.name` as `TargetKind` surfaces an unrecognised value as a query
+        // error (#728). It must not be silently dropped — that would lose an audience
+        // row with no error and no log.
         let env = backend.setup().await;
         let state = &env.state;
         let author = SeedUser::new().seed(state).await.user_id;
@@ -3098,10 +3080,8 @@ mod tests {
     async fn feed_urls_needing_catchup_skips_a_row_whose_feed_url_no_longer_parses(
         #[case] backend: Backend,
     ) {
-        // A `feed_url` that will not decode into a `FeedPath` must cost only its own row.
-        // The scan runs only while the feed worker's `last_tick` is unset and the worker
-        // never advances it past an error, so returning `Err` here would retry forever and
-        // go-live enqueueing would never resume — one bad row would stop every feed.
+        // A `feed_url` that will not decode into a `FeedPath` must cost only its own
+        // row (docs/adr/drafts/one-bad-row-must-not-stop-the-scan.md).
         let env = backend.setup().await;
         let state = &env.state;
         let author = SeedUser::new().seed(state).await.user_id;
@@ -3125,7 +3105,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-        // Only reachable by DB tampering or a grammar that has since been tightened:
+        // Only reachable by DB tampering or a row written under a looser grammar:
         // `FeedPath`'s validating bridge rejects this on read.
         env.base
             .pool()
@@ -3261,11 +3241,9 @@ mod tests {
             "The first non-empty line of the body is here."
         );
 
-        // The title and slug rungs this test used to walk are gone (#811): a `PostBody`
-        // always has a non-blank line, so the body rung always answers, and the lower two
-        // were removed from `fallback_summary_label` rather than left as dead
-        // compensation. #830 had already retired the blank-title sub-case for the same
-        // reason, one type earlier — the two issues collapse this chain from both ends.
+        // A `PostBody` always has a non-blank line (#811), so the body rung always
+        // answers and `fallback_summary_label` needs no title/slug fallbacks — they
+        // would be dead compensation.
     }
 
     #[test]
@@ -3315,9 +3293,9 @@ mod tests {
     #[apply(backends)]
     #[tokio::test]
     async fn update_post_persists_and_clears_summary(#[case] backend: Backend) {
-        // `update_post` writes the `summary` column (previously omitted from the SET
-        // clause, so an edited summary was silently dropped). An edit replaces the
-        // value; `None` clears it. The returned record reflects the RETURNING row.
+        // `update_post` writes the `summary` column — omitting it from the SET clause
+        // would silently drop an edited summary. An edit replaces the value; `None`
+        // clears it. The returned record reflects the RETURNING row.
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let posts = &*env.state.posts;
@@ -3364,7 +3342,7 @@ mod tests {
         // Publishing is not an edit (#711): it stamps `published_at` and touches
         // nothing else — body, rendered HTML, format, slug, title, summary, tags and
         // audience targeting all survive. Routing publication through `update_post`
-        // is what used to rewrite the whole row (and would clobber its child rows).
+        // would rewrite the whole row and clobber its child rows.
         let env = backend.setup().await;
         let user = SeedUser::new().seed(&env.state).await;
         let posts = &*env.state.posts;
@@ -3695,7 +3673,7 @@ mod tests {
         assert_eq!(
             found.last(),
             ids.last(),
-            "the reference past the old 1000-row window is returned"
+            "no row-count window truncates the listing"
         );
     }
 
@@ -3760,9 +3738,8 @@ mod tests {
         //
         // This also pins that `PostTitle` is on the *validating* sqlx bridge at all:
         // a blank row can only fail here if `Decode` routes through `FromStr`. That
-        // bridge decodes a borrowed `&'r str` (`macros`'
-        // `validating_bridge_decodes_a_borrowed_str_without_allocating`), so the
-        // double allocation #758 reported is gone as a side effect of the retyping.
+        // bridge decodes a borrowed `&'r str` without allocating (`macros`'
+        // `validating_bridge_decodes_a_borrowed_str_without_allocating`, #758).
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let posts = &*env.state.posts;
@@ -3940,34 +3917,25 @@ mod tests {
             .await
             .unwrap();
 
-        // Should have 2 posts (draft and published, not deleted)
+        // The collection is the author's view: drafts and published in, deleted out,
+        // ordered by updated_at DESC (post2 updated more recently).
         assert_eq!(results.len(), 2);
-
-        // Check they are ordered by updated_at DESC (post2 updated more recently)
         assert_eq!(results[0].post_id, post2_id);
         assert_eq!(results[1].post_id, post1_id);
-
-        // Verify draft is included
         assert!(
             results
                 .iter()
                 .any(|p| p.post_id == post1_id && p.published_at.is_none())
         );
-
-        // Verify published is included
         assert!(
             results
                 .iter()
                 .any(|p| p.post_id == post2_id && p.published_at.is_some())
         );
-
-        // Verify deleted is not included
         assert!(!results.iter().any(|p| p.post_id == post3_id));
     }
 
-    // Behavior-preserving translation of the former inline `web::posts::mod`
-    // `UpdatePostError` mapper: not-found/unauthorized mask as a 404, internal
-    // is a masked storage failure.
+    // Not-found/unauthorized mask as a 404; internal is a masked storage failure.
     #[test]
     fn from_update_post_error_maps_variants() {
         use host::error::{ErrorKind, InternalError};
@@ -3985,9 +3953,9 @@ mod tests {
         assert_eq!(internal.public_message(), "storage operation failed");
     }
 
-    // The `set_post_tags` lift masked as a server error
-    // (`"server operation failed"`, kind `Internal`); the typed `TaggingError`
-    // is now preserved on the operator side rather than stringified.
+    // The `set_post_tags` lift masks as a server error
+    // (`"server operation failed"`, kind `Internal`) while the typed
+    // `TaggingError` is preserved on the operator side rather than stringified.
     #[test]
     fn from_tagging_error_maps_to_server() {
         use host::error::{ErrorKind, InternalError};

@@ -543,7 +543,6 @@ mod tests {
         let dir = temp.path();
         let manager = mock_manager(Arc::new(dir.to_path_buf()));
 
-        // Empty dir
         assert_eq!(manager.first_file_in_dir(dir).await, None);
 
         // Dir with a subdir (should be ignored by is_file())
@@ -551,7 +550,6 @@ mod tests {
         fs::create_dir(&subdir).await.unwrap();
         assert_eq!(manager.first_file_in_dir(dir).await, None);
 
-        // Dir with a file
         let file = dir.join("test.txt");
         fs::write(&file, "hello").await.unwrap();
         assert_eq!(manager.first_file_in_dir(dir).await, Some(file));
@@ -599,7 +597,8 @@ mod tests {
 
         assert!(!tmp_path2.exists());
         assert!(target_path2.exists());
-        // Verify it's a hard link by checking if they are the same file
+        // The target is hard-linked to the existing file; matching length is the
+        // observable proxy.
         let meta1 = fs::metadata(&existing_file).await.unwrap();
         let meta2 = fs::metadata(&target_path2).await.unwrap();
         assert_eq!(meta1.len(), meta2.len());

@@ -54,14 +54,10 @@ pub(crate) enum ClaimedRow {
     Corrupt(FeedEventId),
 }
 
-/// **The diversion is column-scoped, and that is the whole point of this impl.**
-///
-/// A wrapper that treated *any* decode failure as "corrupt" would widen a **destructive**
-/// path from one column to ten: `purge_corrupt` DELETEs, so a schema change or a driver
-/// regression on `created_at` would silently drain the queue. Before #728 only `feed_url`
-/// could divert a row — every other column used an infallible read, so its failure
-/// propagated. That property is preserved here by re-checking `feed_url` specifically and
-/// propagating anything else.
+/// **The diversion is column-scoped, and that is the whole point of this impl**
+/// (docs/adr/drafts/one-bad-row-must-not-stop-the-scan.md): `purge_corrupt`
+/// DELETEs, so only a `feed_url` decode failure may divert a row — re-checked
+/// specifically here — and anything else propagates (#728).
 ///
 /// If `id` itself will not decode there is no third state: the error propagates and the
 /// batch fails. Stated so it is a decision rather than an accident.
@@ -86,8 +82,7 @@ where
 
 /// Splits a claim batch into the records the worker can act on and the ids to purge.
 ///
-/// Shared because both dialects' claim statements differ only in SQL; the row handling was
-/// duplicated line-for-line before #728.
+/// Shared because both dialects' claim statements differ only in SQL (#728).
 pub(crate) fn partition_claimed(rows: Vec<ClaimedRow>) -> (Vec<FeedEventRecord>, Vec<FeedEventId>) {
     let mut records = Vec::with_capacity(rows.len());
     let mut corrupt = Vec::new();
@@ -354,10 +349,8 @@ mod tests {
     use rstest::*;
     use rstest_reuse::*;
 
-    // `parse_status_handles_all_statuses` lived here and is gone with the function: the
-    // token ↔ variant mapping is now the `text_enum` attribute's, tested at the type in
-    // `common/src/feed/event_status.rs`. Its fifth assertion — that an unrecognised token
-    // becomes `Failed` — was not a behaviour worth preserving; see D5.
+    // The token ↔ variant mapping is the `text_enum` attribute's, tested at the type
+    // in `common/src/feed/event_status.rs`.
 
     #[apply(backends)]
     #[tokio::test]

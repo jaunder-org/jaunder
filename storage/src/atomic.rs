@@ -76,9 +76,8 @@ impl From<ConfirmPasswordResetError> for host::error::InternalError {
     /// Mirrors the sibling [`RegisterWithInviteError`] mapping so
     /// `confirm_password_reset` is `?`-liftable in `web`: the three token
     /// failures are client validation errors (a stale/used/unknown reset link,
-    /// not a server fault), and an internal failure is a masked storage error.
-    /// Previously `web` hand-mapped every variant to `storage`, masking all three
-    /// as a 500 (#344).
+    /// not a server fault), and an internal failure is a masked storage error
+    /// (#344).
     fn from(error: ConfirmPasswordResetError) -> Self {
         use host::error::InternalError;
         match error {
@@ -252,8 +251,7 @@ mod tests {
         ));
     }
 
-    // Behavior-preserving translation of the former `web` `register_invite_error`
-    // test: each variant maps to the same `(kind, public_message)`.
+    // Each variant maps to a fixed `(kind, public_message)` pair.
     #[test]
     fn from_register_with_invite_error_maps_variants() {
         use host::error::{ErrorKind, InternalError};

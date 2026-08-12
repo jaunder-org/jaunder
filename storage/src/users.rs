@@ -711,7 +711,7 @@ mod tests {
         #[case] backend: Backend,
     ) {
         // A pre-existing row whose display_name exceeds the DisplayName length
-        // bound (the column was unbounded before #401) must surface as a typed
+        // bound (the column itself is unbounded, #401) must surface as a typed
         // Internal error at the strict read boundary — never a panic. Mirrors the
         // invalid-email-in-db case above.
         let env = backend.setup().await;
@@ -819,8 +819,7 @@ mod tests {
         assert!(matches!(result, Err(UserAuthError::Internal(_))));
     }
 
-    // Behavior-preserving translation of the former `web` `register_open_error`
-    // test: variants map to the same `(kind, public_message)`.
+    // Each variant maps to a fixed `(kind, public_message)` pair.
     #[test]
     fn from_create_user_error_maps_variants() {
         use host::error::{ErrorKind, InternalError};
@@ -834,8 +833,8 @@ mod tests {
         assert_eq!(internal.public_message(), "storage operation failed");
     }
 
-    // Behavior-preserving translation of the former `web` `login_error` test,
-    // including that the boxed cause chain is preserved (not flattened).
+    // Each variant maps to a fixed `(kind, public_message)` pair; the boxed cause
+    // chain is preserved (not flattened).
     #[test]
     fn from_user_auth_error_maps_variants() {
         use host::error::{ErrorKind, InternalError};

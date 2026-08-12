@@ -28,7 +28,7 @@ pub(crate) const TABLES_EXCLUDED_FROM_BACKUP: &[&str] = &["_sqlx_migrations", "f
 /// The set of tables to back up, derived from the live schema: every table
 /// except the `SQLite`-internal `sqlite_%` tables and the explicit
 /// [`TABLES_EXCLUDED_FROM_BACKUP`] denylist, sorted for a reproducible manifest.
-/// Restore no longer depends on the order (foreign keys are deferred on Postgres
+/// Restore does not depend on the order (foreign keys are deferred on Postgres
 /// and off on `SQLite` during import), so alphabetical is sufficient.
 pub(crate) fn backup_table_set(live: impl IntoIterator<Item = String>) -> Vec<String> {
     let mut tables: Vec<String> = live
@@ -254,8 +254,8 @@ pub(crate) fn order_by_clause(
     // keeping successive backups diffable. Ordering by all columns — rather than
     // a hand-maintained per-table key — needs no bespoke entry for a newly added
     // table and works on Postgres, which has no `rowid` to fall back on. (For a
-    // table with a leading unique column, e.g. a primary key, this reproduces the
-    // old key-only order, since ties never reach the trailing columns.)
+    // table with a leading unique column, e.g. a primary key, ties never reach the
+    // trailing columns, so this equals key-only order.)
     columns
         .iter()
         .map(|column| quote_identifier(&column.name))
@@ -895,8 +895,7 @@ mod tests {
         // Structural (root-immune) fs failure: pre-create the destination file
         // path as a *directory* so `fs::copy` into it fails with EISDIR. The
         // error propagates out of `copy_or_link_media_file` and back up through
-        // the recursive `mirror_media_entries` call — both `?` arms that were
-        // previously cov:ignored.
+        // the recursive `mirror_media_entries` call — covering both `?` arms.
         let temp = TempDir::new()?;
         let source = temp.path().join("source");
         let destination = temp.path().join("destination");
@@ -914,8 +913,8 @@ mod tests {
     #[test]
     fn restore_media_skips_non_regular_entries() -> Result<(), BackupError> {
         // A Unix-domain socket is neither a directory nor a regular file, so the
-        // restore walk takes the fallthrough arm (previously cov:ignored) and
-        // silently skips it, while a sibling regular file still copies.
+        // restore walk takes the fallthrough arm and silently skips it, while a
+        // sibling regular file still copies.
         let temp = TempDir::new()?;
         let source = temp.path().join("source");
         let destination = temp.path().join("destination");

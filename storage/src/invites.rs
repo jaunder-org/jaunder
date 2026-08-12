@@ -225,9 +225,8 @@ mod tests {
 
         // The read decodes the `code` column into `InviteCode` via the sqlx bridge,
         // which validates through `FromStr`; the malformed value surfaces as a
-        // column-decode error rather than being silently admitted (covers the bridge's
-        // `Decode` error arm). `query_as` reports a failed column decode as
-        // `ColumnDecode`, not the hand-rolled `Decode` the old re-parse produced.
+        // `ColumnDecode` error rather than being silently admitted (covers the
+        // bridge's `Decode` error arm).
         let err = state.invites.list_invites().await.unwrap_err();
         assert!(
             matches!(err, sqlx::Error::ColumnDecode { .. }),
