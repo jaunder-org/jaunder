@@ -1,6 +1,6 @@
 # Plan — issue #930: comment audit across the codebase
 
-Spec: `docs/superpowers/specs/2026-08-11-issue-930-comment-audit.md` (defect
+Spec: `docs/archive/2026-08-11-issue-930-comment-audit-spec.md` (defect
 classes, scope, protected patterns, deliverables). For agentic workers: drive
 with `jaunder-iterate`; delegate the read-only audit passes via
 `jaunder-dispatch`/Explore subagents, keep edits and gates in the main loop.
@@ -59,7 +59,7 @@ Conventional Commits, no `Co-Authored-By`, stage-then-commit.
 ### Task 1 — Report skeleton + survey
 
 - [x] Create
-      `docs/superpowers/plans/2026-08-11-issue-930-comment-audit-report.md` with
+      `docs/archive/2026-08-11-issue-930-comment-audit-report.md` with
       sections: per defect class (findings/actions), Judgment calls, ADR
       promotions, Left alone deliberately, Verdict on the standard.
 - [x] Seed-discovery read: before any grepping, directly read a sample of files

@@ -3673,7 +3673,7 @@ mod tests {
         assert_eq!(
             found.last(),
             ids.last(),
-            "no row-count window truncates the listing"
+            "the reference past the old 1000-row window is returned"
         );
     }
 

@@ -1,8 +1,17 @@
 # Findings report — issue #930 comment audit
 
 Outcome catalogue for the comment audit, grouped by defect class (spec:
-`docs/superpowers/specs/2026-08-11-issue-930-comment-audit.md`). The raw
-per-area candidate inventory is retained as an appendix at the end.
+`docs/archive/2026-08-11-issue-930-comment-audit-spec.md`). The
+outcome sections summarize at area level; the per-site file:line detail
+is the appendix at the end (the pre-edit inventory, whose entries were
+each verified in context during the edit passes). Cross-check any
+claimed edit against the appendix plus `git log --follow -p` on the
+area commit.
+
+One knowingly reverted edit: an assert *message string* in
+`storage/src/posts.rs` had been retensed along with the comments; a
+failure message is code, so it was restored verbatim (spec non-goal:
+"No code changes beyond comments").
 
 ## 1. Backward-looking
 
@@ -162,7 +171,8 @@ proxy.
 
 ## Left alone deliberately
 
-Seed-discovery observations (to verify during edit passes):
+Confirmed during the edit passes (originally seed-discovery
+observations, each re-verified in context in its area's pass):
 
 - `// Binds: $1 …` placeholder-mapping comments in `storage/src/posts.rs` (~20×)
   — data mapping prose onto runtime-assembled SQL, unreadable from code. Keep.
