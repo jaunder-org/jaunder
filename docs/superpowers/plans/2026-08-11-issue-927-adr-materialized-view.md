@@ -239,7 +239,9 @@ One task and one commit per section, each following **The section brief** above.
 - [x] Task 3 — Workspace. Added the `client` row and the separate `tools/`
       workspace; replaced the "reserved future" framing with the actual
       split-by-compile-target rule. Pass B found no defects.
-- [ ] Task 4 — Storage.
+- [x] Task 4 — Storage. Pass A deleted a nonexistent symbol claim; Pass B then
+      found three more errors in Pass A's own draft. ADR-0006 confirmed unbuilt
+      by both passes independently.
 - [ ] Task 5 — Content model.
 - [ ] Task 6 — Protocols (AtomPub, feeds, WebSub).
 - [ ] Task 7 — Authentication.
@@ -564,15 +566,37 @@ say so.
 - **0112** (role-tagged site URLs) → Protocols, as part of the published URL
   surface.
 
+### Known defects handed forward to later tasks
+
+Found by a section pass but owned by another task. Do not fix them out of order;
+the owning task must verify them itself.
+
+- **Task 8 (Web frontend), around line 602.** The text asserts
+  "`web::server_resource` (raw `Resource::new` is clippy-banned) is the only …".
+  **`server_resource` does not exist in the source tree** — it survives only in
+  `docs/adr/` and `docs/archive/`. It was deleted in #515 (commit `dd7baefb`).
+  This is a live wrong claim about a symbol, the same class as the ADR-0023
+  incident. Verify the clippy-ban half separately; it may still be true of
+  something else.
+- **Task 19 (tense correction), ADR-0016 line ~271.** The ADR attributes the
+  removal of component SSR to **#487**, but #487's only code commit (`ead09db9`)
+  models an edit-page route id as `Option` — nothing to do with SSR. Either the
+  ADR's attribution is wrong or #487 is shorthand for work the commit log does
+  not show. The view no longer repeats the number. Decide whether the ADR earns
+  a past-tense correction note (metadata/navigation edits to an ADR are
+  permitted) or whether this becomes a follow-up. Cross-check ADR-0041 and the
+  #178/#180 CSR-cutover work before concluding.
+
 ### CONTEXT.md vocabulary worksheet
 
 Accumulated by the section passes (brief step 6). This seeds the `CONTEXT.md`
 backfill issue filed at task 16 — it is **not** edited in this branch. Append as
 each section completes; do not deduplicate until task 16.
 
-| Section   | Terms `CONTEXT.md` does not define                                                                      |
-| --------- | ------------------------------------------------------------------------------------------------------- |
-| Workspace | host crate; client crate; target-agnostic crate; wasm-only crate; proc-macro home; CSR performance mark |
+| Section   | Terms `CONTEXT.md` does not define                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Workspace | host crate; client crate; target-agnostic crate; wasm-only crate; proc-macro home; CSR performance mark                                                                                                                                                                                                                                                                                                                                                       |
+| Storage   | `Backend` (marker trait — distinct from "backend", the deployment word); `Dialect` / per-trait `XDialect`; generic store `XStore<DB>`; composition root; `AtomicOps`; write-lock occupancy (hold duration vs acquisition count); write-first transaction; `BEGIN IMMEDIATE` / deferred-upgrade hazard; keyset cursor; shared ingestion layer and private user content layer (ADR-0006, unbuilt); idempotency key; backup target set; restore target emptiness |
 
 ### Inherited `un-ADR'd` flags by section
 

@@ -84,18 +84,22 @@ by URL scheme: `DbConnectOptions` (`storage/src/db.rs`) parses `sqlite:` vs
 `postgres://` and `open_database`/`open_existing_database` dispatch accordingly.
 Each backend has its own migration tree under
 `storage/migrations/{sqlite,postgres}`; the two trees carry identical numbered
-filenames (currently `0001`–`0024`), and maintaining that parity — same
+filenames (currently `0001`–`0025`), and maintaining that parity — same
 migrations, same behavior — is the accepted cost of the pluggable strategy
 ([ADR-0001](adr/0001-storage-backends.md)).
 
 ### Crate layout and the generic store pattern
 
-The `storage` crate is organized by domain: each root module (`users.rs`,
-`posts.rs`, `sessions.rs`, `invites.rs`, `media.rs`, `subscriptions.rs`,
-`audiences.rs`, `site_config.rs`, `user_config.rs`, `email.rs`, `password.rs`,
-`feed_cache.rs`, `feed_events.rs`) is the home of one object-safe `XStorage`
-trait plus its record and input structs (e.g. `PostRecord`, `PostCursor`). The
-trait bodies are implemented once by a generic `XStore<DB>` bounded on a
+The `storage` crate is organized by domain: each trait-home root module
+(`users.rs`, `posts.rs`, `sessions.rs`, `invites.rs`, `media.rs`,
+`subscriptions.rs`, `audiences.rs`, `site_config.rs`, `user_config.rs`,
+`email.rs`, `password.rs`, `feed_cache.rs`, `feed_events.rs`) holds one
+object-safe `XStorage` trait plus its record and input structs (e.g.
+`PostRecord`, `PostCursor`). The crate also hosts orchestration that is
+persistence work rather than a trait — `post_service.rs` (post create/update
+over `PostStorage`, shared by the web and AtomPub front-ends) and
+`media_manager.rs` (content-addressed upload, relocated from `server` in #517).
+The trait bodies are implemented once by a generic `XStore<DB>` bounded on a
 `Backend: sqlx::Database` marker trait (`storage/src/backend.rs`, implemented
 for `Sqlite` and `Postgres`, carrying only the `db.system` span constant);
 backend-specific SQL is isolated in per-trait `XDialect` impls under
@@ -115,17 +119,33 @@ be a thin shell over a near-total dialect
 
 ### Dependency injection and AppState
 
-`storage::AppState` (`storage/src/app_state.rs`) is a bundle of fourteen
-`Arc<dyn *Storage>` handles built by `open_database` at the composition root. It
-holds storage only — services (mailer, WebSub client, background workers) are
-constructed in `server` and injected per-consumer as constructor parameters;
-there is no services bundle. The durable invariant: no type may be both a
-heterogeneous dependency holder and passed beyond the composition root
-([ADR-0016](adr/0016-dependency-injection-and-appstate.md)). The web layer takes
-its dependencies per-trait via Leptos context
-(`expect_context::<Arc<dyn UserStorage>>()`), which is reliable regardless of
-`.await` ordering because `server_boundary` and `server_resource` pin the full
-reactive-owner ancestry across polls
+`storage::AppState` (`storage/src/app_state.rs`) is a bundle of fourteen trait
+handles — thirteen `Arc<dyn *Storage>` plus `Arc<dyn AtomicOps>` — built by
+`open_database` at the composition root. It holds storage only; services
+(mailer, WebSub client, background workers) are constructed in `server` and
+injected per-consumer as constructor parameters, and there is no services
+bundle. The durable invariant: no type may be both a heterogeneous dependency
+holder and passed beyond the composition root
+([ADR-0016](adr/0016-dependency-injection-and-appstate.md)).
+
+The web layer takes its dependencies per-trait via Leptos context.
+`server::provide_app_state_contexts` (`server/src/context.rs:25`) publishes
+thirteen of the handles (all but `feed_cache`, which no `#[server]` fn needs),
+and each server fn fetches exactly what it uses —
+`expect_context::<Arc<dyn UserStorage>>()`. The helper lives in `server`, not
+`storage`, because using Leptos context as the DI mechanism is an
+application-wiring decision
+([ADR-0016](adr/0016-dependency-injection-and-appstate.md)). Nothing in the
+codebase now pins reactive-owner lifetime for this: `server_boundary`
+(`web/src/error/server.rs:99`) is a thin error-projection wrapper that awaits
+the body and maps `InternalError → WebError`. The owner-pinning machinery was
+dismantled in two steps: `server_resource` went in #515, then
+`owner_ancestry_strong` and the `owner_lifetime` tests in #594. Dropping
+component SSR left only one server-fn invocation path —
+`leptos_axum::handle_server_fns_with_context` on `POST /api/…`, which holds a
+parentless root owner strong for the whole future by itself. The ADR-0016
+#89/#124/#138 addenda that described that pinning are explicitly marked
+superseded-and-historical inside the ADR
 ([ADR-0016](adr/0016-dependency-injection-and-appstate.md)).
 
 Operations that must span multiple traits atomically (`create_user_with_invite`,
@@ -145,7 +165,22 @@ Operations that must span multiple traits atomically (`create_user_with_invite`,
   `SQLITE_BUSY` under WAL concurrency): "read to validate, then write" is
   expressed as a single autocommit `UPDATE/INSERT/DELETE … WHERE … RETURNING`,
   and genuinely multi-statement transactions open with `BEGIN IMMEDIATE`
+  (`storage/src/sqlite/posts.rs:53`, `storage/src/sqlite/mod.rs:203`). Where the
+  same operation is generic, Postgres reaches the same serialization with
+  `SELECT … FOR UPDATE` instead
   ([ADR-0021](adr/0021-sqlite-transaction-discipline.md)).
+- **Bounded write-lock occupancy.** SQLite has one write lock and `busy_timeout`
+  polls rather than queues, so churn — not hold length — is what starves a
+  writer. Two further rules therefore hold on any path SQLite can execute: no
+  per-row write loops (a fan-out issues **one** batched storage call), and no
+  CPU-heavy or foreign-I/O work between a write transaction's first write and
+  its commit. `FeedEventStorage::enqueue_many`
+  (`storage/src/feed_events.rs:260`) is the reference implementation — one
+  write-first transaction around the single-row INSERT — and the feed worker
+  calls it in `ENQUEUE_CHUNK`-bounded batches (`server/src/feed/worker.rs:108`)
+  so batch size is capped by construction
+  ([ADR-0092](adr/0092-sqlite-bounded-write-lock-occupancy.md)). ADR-0022's
+  Argon2-inside-the-claim-window is the one documented exception.
 - **Cost ordering.** When an operation is gated on a high-entropy secret (invite
   code, reset token), the secret is validated with a cheap lookup _before_
   expensive work (Argon2 hashing); enumerable identifiers (usernames) get the
@@ -159,10 +194,11 @@ portable dump: a `manifest.json` plus one NDJSON file per table under `db/`,
 together with the media tree, written either as a directory or as a gzipped tar
 archive built in-process with the `tar` and `flate2` crates. The backed-up table
 set is auto-derived from the live schema — every table minus the explicit
-`TABLES_EXCLUDED_FROM_BACKUP` denylist (`_sqlx_migrations`, `feed_cache`) and
-SQLite-internal tables, sorted for a reproducible manifest — so a migration that
-adds a table needs no backup code change; a golden guardrail test pins the exact
-set ([ADR-0064](adr/0064-backup-target-auto-derivation.md)).
+`TABLES_EXCLUDED_FROM_BACKUP` denylist (`_sqlx_migrations`, `feed_cache`;
+`storage/src/backup.rs:26`) and SQLite-internal tables, sorted for a
+reproducible manifest — so a migration that adds a table needs no backup code
+change; a golden guardrail test pins the exact set (`storage/src/backup.rs:677`)
+([ADR-0064](adr/0064-backup-target-auto-derivation.md)).
 
 Restore is authoritative and order-independent: both backends clear every target
 table in a first pass, then load all rows in a second, with FK enforcement
@@ -187,15 +223,19 @@ not canonicalized across backends
 
 ### Idempotent post creation
 
-<!-- un-ADR'd: idempotency-key mechanism for post creation (migration 0023_create_idempotency_keys); ADR-0047 names it only as follow-on issue #79 -->
-
-Post creation accepts an optional client-supplied idempotency key. The
-`idempotency_keys` table (migration `0023_create_idempotency_keys`, unique per
-`(user_id, key)`) is written in the same transaction as the post; a duplicate
-key surfaces as `CreatePostError::IdempotencyKeyConflict` rather than a
-slug-collision retry, and `PostStorage::post_id_for_idempotency_key` lets
-callers (the AtomPub surface, `storage/src/post_service.rs`) map a replayed key
-back to the post it originally created.
+Post creation accepts an optional client-supplied idempotency key, so a retried
+AtomPub POST does not create a duplicate post — the mechanism decided in issue
+[#79](https://github.com/jaunder-org/jaunder/issues/79) as a follow-on to
+ADR-0047, not in an ADR of its own. The `idempotency_keys` table (migration
+`0023_create_idempotency_keys`, `UNIQUE(user_id, key)`) is written in the same
+transaction as the post (`storage/src/posts.rs:2274`); a duplicate key surfaces
+as `CreatePostError::IdempotencyConflict` and is deliberately _not_ retried as a
+slug collision (`storage/src/post_service.rs:466`), and
+`PostStorage::post_id_for_idempotency_key` maps a replayed key back to the post
+it originally created. AtomPub is its only caller
+(`server/src/atompub/posts.rs:366`); the web composer passes
+`idempotency_key: None` (`web/src/posts/api.rs:188`), so the mechanism is a
+machine-client contract, not a browser one.
 
 ### Testing (summary)
 
@@ -212,48 +252,117 @@ Details in the testing section.
 ### Committed direction
 
 - **Tiered storage isolation.** A shared ingestion layer (raw fetched content,
-  feed metadata) feeding per-user private content copies — every user-layer
-  table carrying `user_id`, queries never crossing user boundaries — is the
-  decided architecture for multi-user feed following
-  ([ADR-0006](adr/0006-storage-isolation.md)). The shared-ingestion/fan-out
-  layer is not yet built; today `feed_cache` and `subscriptions` exist without
-  the per-user copy tier.
+  feed metadata, actor caches) feeding per-user private content copies — every
+  user-layer table carrying `user_id`, queries never crossing user boundaries —
+  is the decided architecture for multi-user feed following
+  ([ADR-0006](adr/0006-storage-isolation.md)). **Neither tier exists.** Jaunder
+  today is a publisher, not a reader: `feed_cache` stores jaunder's _own_
+  rendered feed bodies keyed by feed path (`storage/src/feed_cache.rs`, no
+  `user_id`), and `subscriptions` records who follows a local author's channel
+  (`storage/migrations/sqlite/0019_create_subscriptions.sql`) — outbound WebSub
+  delivery, not inbound ingestion. There is no table of fetched external items
+  and no fan-out path.
 - **`Backend` handle factory (ADR-0016 Phase B).** A factory that mints
   `Arc<dyn *Storage>` handles on demand — held only at the composition root,
   never injected — is decided but not built
-  ([ADR-0016](adr/0016-dependency-injection-and-appstate.md)); non-serve CLI
-  commands still construct the full `AppState` via `open_existing_database`.
+  ([ADR-0016](adr/0016-dependency-injection-and-appstate.md)); no such type
+  exists in `storage`, and every non-serve CLI command still constructs the full
+  `AppState` via `open_existing_database` (`server/src/commands.rs`).
 
 ## Content model
 
-A post stores its **source**: a raw `body` in an author-chosen `PostFormat`
-(`Markdown` | `Org` | `Html`, `common/src/render.rs`), from which
+A post stores its **source**: a `PostBody` in an author-chosen `PostFormat`
+(`Markdown` | `Org` | `Html`, `common/src/render.rs:35`), from which
 `common::render::render` derives the stored `rendered_html`. The two forms feed
 two deliberately separate serialization surfaces — syndication feeds emit HTML,
 the AtomPub Collection the native source — detailed in the Protocols section
 ([ADR-0015](adr/0015-atompub-serialization-surfaces.md)).
-`storage/src/posts.rs::PostRecord` carries both plus title, `Slug`, summary,
+`storage/src/posts.rs:42::PostRecord` carries both plus title, `Slug`, summary,
 tags, and `created_at`/`updated_at`/`published_at`/`deleted_at`.
 
-<!-- un-ADR'd: write-time stored rendering (rendered_html); local soft delete (soft_delete_post stamps deleted_at, public reads filter it). -->
+<!-- un-ADR'd: local soft delete (soft_delete_post stamps deleted_at, every public read filters `deleted_at IS NULL`). -->
 
-Every ingestion path converges on **one canonical stored body**
-([ADR-0024](adr/0024-server-side-org-canonicalization.md)): the server
-normalizes Org bodies at the `derive_post_metadata` / `canonicalize_org_body`
-seam (`common/src/render.rs`, called from `storage/src/post_service.rs`'s
-`PostCreation`/`PostUpdate` paths), stripping only headers it stores
-structurally (today `#+TITLE:`); unrecognized `#+FOO:` lines round-trip
-verbatim, and clients synthesize their own header block on the way out.
+**A body has at least one non-blank line, and normalization is format-aware**
+([ADR-0105](adr/0105-post-body-non-blank-invariant.md)). `PostBody::from_str` is
+the one door — the `StrNewtype` derive routes serde and sqlx through it, and
+there is no `from_trusted` bypass, so a blank row would fail to decode
+(`common/src/post_body.rs:67-78`). The constructor stores **verbatim**; a
+separate format-aware seam,
+`canonicalize_body(&PostBody, &PostFormat) -> Result<PostBody, InvalidPostBody>`
+(`common/src/render.rs:857`), does the normalizing: `Html` is exempt (verbatim
+passthrough), `Markdown` and `Org` drop leading all-whitespace lines,
+`trim_end()`, then re-append one newline. Interior blank lines and leading
+horizontal whitespace are never touched — both are significant to CommonMark.
+
+Every write path converges on **one canonical stored body**
+([ADR-0024](adr/0024-server-side-org-canonicalization.md)): `canonicalize_body`
+additionally strips the Org title source, so headers the server stores
+structurally (today `#+TITLE:`) do not survive in the body while unrecognized
+`#+FOO:` lines round-trip verbatim; clients synthesize their own header block on
+the way out. `perform_post_creation` and `perform_post_update`
+(`storage/src/post_service.rs:251-267,417-423`) derive naming from the
+_original_ body via `derive_post_naming` (`common/src/render.rs:618`) before
+canonicalizing, because canonicalization removes the Org title line.
+
+**`RenderedHtml` guarantees "contains no active markup", through two named
+doors** ([ADR-0079](adr/0079-rendered-html-sanitization.md)).
+`RenderedHtml::sanitize` **establishes** the invariant by scrubbing through a
+single module-level `ammonia` `SANITIZER` (`common/src/render.rs:274,311`);
+`RenderedHtml::from_trusted` (`:112`) only **inherits** it from an earlier
+sanitize, and the `rendered-html-from-trusted` static check fails the build on
+any new use — its allowlist is down to one production call site, the seed-DTO
+wire rebuild. The field is private, so there is no third door; `sqlx::Decode`
+constructs it directly. `ammonia` sits behind a `sanitize` feature on `common`,
+off for wasm, enabled by `storage`, and `render` itself does not _exist_ without
+it (`common/src/render.rs:241,605`) — absence rather than a weaker guarantee.
+The allowlist is ammonia's audited default widened only to keep a `language-*`
+`class` on `<pre>`/`<code>`.
+
+**A post's media references are derived from that sanitized HTML, never
+supplied** ([ADR-0090](adr/0090-media-references-extracted-at-render.md)).
+`RenderOutput` (`common/src/render.rs:554`) holds the HTML and a `Vec<MediaRef>`
+with **both fields private** and `RenderOutput::render` as its only constructor,
+so a value whose reference set disagrees with its HTML is unrepresentable;
+`into_html` consumes the pair. `CreatePostInput`/`UpdatePostInput` carry that
+type in place of a bare HTML field (`storage/src/posts.rs:212-215`), and the
+rows land in the post's own transaction (`post_media`, migration
+`0025_create_post_media.sql` — keyed `(post_id, source, sha256, filename)`, no
+FK to `media`). Publication therefore gets its **own** storage operation,
+`publish_post` (`storage/src/posts.rs:1241`, called from
+`web/src/posts/api.rs:463`), which sets the publication timestamp and touches
+nothing else — that is what lets rendering stay the sole constructor.
+
+**Media is content-addressed, and the layout is spelled once.** `media_path`
+(`common/src/media.rs:671`) is the single definition of
+`<source>/<p1>/<p2>/<sha256>/<filename>`, and `media_url` (`:689`) is that path
+under the `/media/` prefix, returning `RootRelativeUrl` infallibly
+([ADR-0080](adr/0080-media-path-naming-correspondence.md)). The filename segment
+is percent-encoded with `NON_ALPHANUMERIC` minus the RFC 3986 unreserved marks
+`-._~` (`MEDIA_SEGMENT_ENCODE_SET`, `common/src/media.rs:623`), so ordinary
+names stay byte-identical and only `?`, `#`, space and friends encode — the
+class of bug where a URL validates cleanly but addresses a different file. **The
+encoded form is canonical**
+([ADR-0084](adr/0084-media-filename-encoded-canonical.md)): a `Filename` _is_
+the encoded segment, so the database column, the on-disk name and the URL
+segment are the same bytes and nothing encodes at a call site;
+`Filename::from_str` enforces `s == encode(decode(s))` plus the safe-leaf oracle
+run on the _decoded_ form (`common/src/media.rs:303`), and `Filename::decoded()`
+(`:376`) is the single explicit opt-out, for display. Byte equality is what lets
+[ADR-0090](adr/0090-media-references-extracted-at-render.md)'s comparison
+against names extracted from rendered HTML avoid a transform at a comparison
+point, and it is what makes
+[ADR-0024](adr/0024-server-side-org-canonicalization.md)'s publish-time link
+substitution content-derived.
 
 **Slugs never fail and preserve Unicode**
 ([ADR-0025](adr/0025-unicode-slug-generation.md)). The charset is per extended
 grapheme cluster — kept iff the base scalar is alphanumeric, carrying its
-combining marks (`base_is_alphanumeric`, shared by `slugify_title` and
-`Slug::from_str` in `common/src/slug.rs`). `Slug::from_str` is the single
-chokepoint — NFC normalization, Unicode lowercasing, the `MAX_SLUG_CHARS`
-(80-scalar) cap; an unusable title falls back to a synthesized slug. Once
-`published_at` is set the slug is frozen
-([ADR-0027](adr/0027-scheduled-publishing-time-gated-visibility.md)).
+combining marks (`base_is_alphanumeric`, `common/src/slug.rs:72`, shared by
+`slugify_title` and `Slug::from_str`). `Slug::from_str` is the single chokepoint
+— NFC normalization, Unicode lowercasing, the `MAX_SLUG_CHARS` (80-scalar) cap;
+an unusable title falls back to a synthesized slug. Once `published_at` is set
+the storage layer freezes the slug (`storage/src/post_service.rs:230`,
+[ADR-0027](adr/0027-scheduled-publishing-time-gated-visibility.md)).
 
 **Visibility is two orthogonal predicates on the same reads.** _Time_: a post is
 draft (`published_at` NULL), scheduled (future), or live (past); every public
@@ -271,39 +380,72 @@ is zero rows); subscriptions route through the admission seam
 (`SubscriptionPolicy`, wired to the auto-approving `OpenSubscriptionPolicy`)
 ([ADR-0020](adr/0020-content-visibility-and-subscription-model.md)).
 
-**Local edits are never destructive**: every update writes an immutable
-`post_revisions` row (`PostRevisionRecord` — title, slug, body, format, rendered
-HTML at that moment) — the local half of the retention policy
-([ADR-0009](adr/0009-edit-delete-policy.md)). Cross-cutting values are validated
-newtypes whose `FromStr` is the single chokepoint: `Username`, `Slug`, `Tag`,
-`Password` (`common/src/{username,slug,tag,password}.rs`). Tagging is keyed on
-the `Tag` slug (`PostTag`, `post_tag_diff` in `storage/src/posts.rs`). Media is
-content-addressed: `MediaRecord` keys on the file's SHA-256, served at
-`/media/<source>/<p1>/<p2>/<sha256>/<filename>`
-(`common/src/media.rs::media_url`), which makes
-[ADR-0024](adr/0024-server-side-org-canonicalization.md)'s publish-time link
-substitution content-derived.
+**Local edits are never destructive**: every update snapshots the pre-edit row
+into an immutable `post_revisions` row — title, slug, body, format, rendered
+HTML at that moment (`storage/src/sqlite/posts.rs:73`,
+`storage/src/postgres/posts.rs:75`; table created in migration
+`0008_create_posts.sql`). This is the local half of the retention policy
+([ADR-0009](adr/0009-edit-delete-policy.md)). The rows are write-only today:
+`PostRevisionRecord` (`storage/src/posts.rs:119`) has no read query, so no
+surface exposes edit history yet. Cross-cutting values are validated newtypes
+whose `FromStr` is the single chokepoint: `Username`, `Slug`, `Tag`, `Password`
+(`common/src/{username,slug,tag,password}.rs`). Tagging is keyed on the `Tag`
+slug (`PostTag`, `post_tag_diff` in `storage/src/posts.rs`).
 
-<!-- un-ADR'd: the content-addressed media store itself (sha256 pathing) — assumed by ADR-0024, never decided in an ADR. -->
+**Post-shaped wire types are named for the content weight they carry**, not for
+the transaction that produced them
+([ADR-0097](adr/0097-post-dto-content-weight-axis.md)). Three tiers: metadata
+only (`UnpublishedPost`, `web/src/posts/api.rs:103`), plus the rendered form
+(`RenderedPost`, `common/src/seed.rs:39`), plus the authored source
+(`AuthoredPost`, `:108`, which _nests_ a `RenderedPost` and adds `PostBody` +
+`PostFormat`). One type, `SavedPost` (`web/src/posts/api.rs:78`), serves all
+four post mutations. Merging two types is viable only _within_ a tier — a
+cross-tier union ships the heavier payload to consumers of the lighter one — and
+structural overlap alone does not justify it; the discriminator is whether the
+code converts between them.
+
+**Timelines paginate by keyset cursor, not offset**
+([ADR-0004](adr/0004-pagination-strategy.md)). `PostCursor`
+(`storage/src/posts.rs:187` — `created_at` + `post_id`, for stable ordering) and
+`CollectionCursor` (`:197`, `updated_at` + `post_id`, for the editor-facing
+collection) are the storage-side cursors; the wire carries an opaque
+`PageCursor`, and a listing returns `next_cursor` exactly when another page
+exists (`web/src/posts/api.rs:117,425`). `PageSize`
+(`common/src/pagination.rs:29`) is clamped 1..=50 with a default of 50. The
+offset type `PageOffset` (`:62`) exists only for the media listing, where the
+reader may skip.
 
 ### Committed direction
 
+Nothing below is built. **There is no ingestion tier**: all 25 migrations
+(`storage/migrations/{sqlite,postgres}/`) are publishing-side, and no table
+holds fetched remote content.
+
 - **Unified content model for ingested content**
-  ([ADR-0005](adr/0005-unified-content-model.md)): consumed protocol items kept
-  as raw payload plus a normalized processed form the UI reads; no ingestion
-  pipeline or dual store exists yet.
+  ([ADR-0005](adr/0005-unified-content-model.md)): a consumed protocol item is
+  to be stored twice at write time — the raw payload unaltered as the source of
+  truth, plus a normalized processed form (core fields + a protocol-specific
+  extension blob) that the API and UI read, so logic changes can be applied
+  retrospectively by re-processing the raw payloads.
 - **High-fidelity retention for inbound changes**
-  ([ADR-0009](adr/0009-edit-delete-policy.md)): remote edits become new
-  immutable revisions, remote deletes hide but never purge; unimplemented.
+  ([ADR-0009](adr/0009-edit-delete-policy.md)): a received update stores the
+  revised item as a new immutable revision alongside all prior versions, and an
+  inbound delete may hide content from active views but never purges it. Only
+  the local-edit half of this policy exists today (the `post_revisions` snapshot
+  above).
+- **Sanitization of foreign HTML** on arrival
+  ([ADR-0079](adr/0079-rendered-html-sanitization.md)): `RenderedHtml::sanitize`
+  is already the door any future inbound producer must use, and the static check
+  enforces that, but no inbound producer exists yet.
 - **Visibility Layers B/C**
   ([ADR-0020](adr/0020-content-visibility-and-subscription-model.md)):
   federation/email delivery channels and authenticated browsing for non-local
   visitors; only Layer A (`local` channel) is built.
 - **Domain-value newtype convention**
-  ([ADR-0063](adr/0063-domain-value-newtype-convention.md), proposed): a
-  criterion for when a value earns a newtype plus a generated standard trailer
-  (`StrNewtype`/`IdNewtype` in `macros/`, shipped #413); adoption open (#17,
-  #14).
+  ([ADR-0063](adr/0063-domain-value-newtype-convention.md)): a criterion for
+  when a value earns a newtype plus a generated standard trailer
+  (`StrNewtype`/`IdNewtype` in `macros/`, shipped #413); adoption is still
+  rolling out (#17, #14).
 
 ## Protocols (AtomPub, feeds, WebSub)
 
