@@ -156,10 +156,9 @@ where
     (AudienceId, AudienceName, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    // `AudienceName` binds and decodes as itself via the sqlx bridge (#438), which
-    // delegates to `String`; these bounds make that bridge available on the generic
-    // backend (the `name` column decodes into `AudienceName`, and the create/rename
-    // binds encode `&AudienceName`).
+    // `AudienceName` binds and decodes as itself via the ADR-0071 sqlx bridge
+    // (the `name` column decodes into `AudienceName`, and the create/rename binds
+    // encode `&AudienceName`).
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,

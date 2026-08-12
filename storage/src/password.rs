@@ -78,8 +78,7 @@ where
     (UserId,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (Option<DateTime<Utc>>, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    // `TokenHash` binds as itself via the sqlx bridge (#438), which delegates to
-    // `String`; these bounds make that bridge available on the generic backend.
+    // `TokenHash` binds as itself via the ADR-0071 sqlx bridge.
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,

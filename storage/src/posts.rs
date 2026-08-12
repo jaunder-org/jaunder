@@ -1002,9 +1002,8 @@ where
     for<'r> FeedPath: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
     for<'r> DateTime<Utc>: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
     for<'r> &'r str: sqlx::ColumnIndex<DB::Row>,
-    // Not residue: the ADR-0071 bridge *delegates* to `i64`, so `i64: Encode`/`Type` is
-    // what makes every id newtype bind on a generic backend. Removing it breaks the
-    // typed binds, not just the untyped ones.
+    // Not residue: the ADR-0071 bridge *delegates* to `i64`, so this pair is what
+    // makes every id newtype bind on a generic backend.
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -1012,17 +1011,15 @@ where
     // The viewer-resolution binds are NULL-able (`ResolutionBinds::bind_onto`).
     for<'q> Option<UserId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<ChannelId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    // `Slug`/`Tag`/`Username` bind and decode as themselves via the sqlx bridge
-    // (#438), which delegates to `String`; this pair makes that bridge available
-    // on the generic backend (the reads decode the `slug`/`tag_slug`/`username`
-    // columns straight into their newtypes). The `Option<&PostTitle>` bound is the
-    // nullable `title` bind, forwarded from `write_post_in_tx` (create paths).
+    // `Slug`/`Tag`/`Username` bind and decode as themselves via the ADR-0071 sqlx
+    // bridge (the reads decode the `slug`/`tag_slug`/`username` columns straight
+    // into their newtypes). The `Option<&PostTitle>` bound is the nullable `title`
+    // bind, forwarded from `write_post_in_tx` (create paths).
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
     for<'q> Option<&'q PostTitle>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    // `summary` binds as `Option<&PostSummary>` via the ADR-0071 sqlx bridge
-    // (delegates to `String`) on the create paths, mirroring the
-    // `Option<&PostTitle>` bound above.
+    // `summary` binds as `Option<&PostSummary>` via the ADR-0071 sqlx bridge on
+    // the create paths, mirroring the `Option<&PostTitle>` bound above.
     for<'q> Option<&'q PostSummary>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<AudienceId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `RowLimit` binds as itself via the ADR-0071 sqlx bridge (delegates to `i64`) —
@@ -2205,15 +2202,13 @@ where
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<DateTime<Utc>>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `Slug`/`PostBody` bind as themselves and `PostTitle` as `Option<&PostTitle>`
-    // via the sqlx bridge (#438), which delegates to `String`; these bounds make
-    // that bridge available on the generic backend (the `Option<&…>` pair covers
-    // the nullable `title` bind).
+    // via the ADR-0071 sqlx bridge (the `Option<&…>` pair covers the nullable
+    // `title` bind).
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
     for<'q> Option<&'q PostTitle>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    // `summary` binds as `Option<&PostSummary>` via the ADR-0071 sqlx bridge
-    // (delegates to `String`) on the create paths, mirroring the
-    // `Option<&PostTitle>` bound above.
+    // `summary` binds as `Option<&PostSummary>` via the ADR-0071 sqlx bridge on
+    // the create paths, mirroring the `Option<&PostTitle>` bound above.
     for<'q> Option<&'q PostSummary>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     (PostId,): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
@@ -2377,9 +2372,8 @@ where
     for<'q> Option<UserId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<ChannelId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    // `Username`/`Tag` bind as themselves via the sqlx bridge (#438), which
-    // delegates to `String`; this pair makes that bridge available on the generic
-    // backend for the surface `username`/`tag` binds.
+    // `Username`/`Tag` bind as themselves via the ADR-0071 sqlx bridge, for the
+    // surface `username`/`tag` binds.
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
@@ -2556,9 +2550,8 @@ where
     (DateTime<Utc>,): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    // `Username`/`Tag` bind as themselves via the sqlx bridge (#438), which
-    // delegates to `String`; this pair makes that bridge available on the generic
-    // backend for the surface `username`/`tag` binds.
+    // `Username`/`Tag` bind as themselves via the ADR-0071 sqlx bridge, for the
+    // surface `username`/`tag` binds.
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,

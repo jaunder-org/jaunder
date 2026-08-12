@@ -179,10 +179,9 @@ where
     crate::helpers::MediaRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    // `ContentHash`/`Filename` bind and decode as themselves via the sqlx bridge
-    // (#438), which delegates to `String`; these bounds make that bridge available on
-    // the generic backend (the `sha256`/`filename` columns in `MediaRow` decode into
-    // their newtypes, and the write/lookup binds encode `&ContentHash`/`&Filename`).
+    // `ContentHash`/`Filename` bind and decode as themselves via the ADR-0071 sqlx
+    // bridge (the `sha256`/`filename` columns in `MediaRow` decode into their
+    // newtypes, and the write/lookup binds encode `&ContentHash`/`&Filename`).
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
     // `source_url` binds as `Option<MediaSourceUrl>` (#675). The newtype's own `Type`/`Encode`

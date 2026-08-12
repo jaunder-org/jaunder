@@ -229,15 +229,13 @@ where
     // ADR-0071 bridge (#686), so the id never exists as a bare `i64` here (#715).
     for<'r> UserId: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
     usize: sqlx::ColumnIndex<DB::Row>,
-    // Not residue: the ADR-0071 bridge *delegates* to `i64`, so `i64: Encode`/`Type` is
-    // what makes every id newtype bind on a generic backend. Removing it breaks the
-    // typed binds, not just the untyped ones.
+    // Not residue: the ADR-0071 bridge *delegates* to `i64`, so this pair is what
+    // makes every id newtype bind on a generic backend.
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    // `Username`/`DisplayName`/`Bio`/`Email` bind/decode as themselves via the sqlx
-    // bridge (#438), which delegates to `String`; these bounds make that bridge
-    // available on the generic backend (the `String` pair covers the by-value
-    // newtype impls; the `Option<&…>` pairs cover the nullable profile binds).
+    // `Username`/`DisplayName`/`Bio`/`Email` bind/decode as themselves via the
+    // ADR-0071 sqlx bridge (the `String` pair covers the by-value newtype impls;
+    // the `Option<&…>` pairs cover the nullable profile binds).
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
     for<'q> Option<&'q DisplayName>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
