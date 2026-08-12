@@ -14,7 +14,7 @@ use super::field::Field;
 /// tidier signature, but it would make this the repo's first generic component *with
 /// children*, and a generic close tag must match its opening generics token-for-token.
 /// Taking the validity as two erased signals keeps the touched-gate in exactly one
-/// place (docs/adr/drafts/labelled-takes-erased-signals.md — including the open
+/// place (docs/adr/0117-labelled-takes-erased-signals.md — including the open
 /// question of whether that burden still justifies this shape).
 #[component]
 fn Labelled(

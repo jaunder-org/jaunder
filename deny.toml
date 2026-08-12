@@ -246,7 +246,7 @@ allow-git = []
 # github.com organizations to allow git sources for
 #
 # `jaunder-org` carries the `[patch.crates-io]` entry for lettre (#297;
-# docs/adr/drafts/lettre-fork-pinned-by-rev.md). `unknown-git` is only "warn"
+# docs/adr/0119-lettre-fork-pinned-by-rev.md). `unknown-git` is only "warn"
 # above, so this entry is not what makes the gate pass — it is what makes the
 # exception deliberate, and its removal the signal that the patch is gone. Drop
 # both together once the fix is released upstream.

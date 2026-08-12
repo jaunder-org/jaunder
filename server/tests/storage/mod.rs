@@ -31,7 +31,7 @@ use tempfile::TempDir;
 use rstest::*;
 // `#[template]`/`#[apply]` come from the `rstest_reuse` companion crate; the
 // glob alone is not enough
-// (docs/adr/drafts/rstest-reuse-cross-module-templates.md).
+// (docs/adr/0124-rstest-reuse-cross-module-templates.md).
 use rstest_reuse::*;
 
 use crate::helpers::create_session_for;

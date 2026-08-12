@@ -138,7 +138,7 @@ proxy.
   change with identical semantics, accepted as the mechanical knock-on of
   deleting the comment.
 - server: the rstest_reuse spike prose (atompub_rsd.rs, storage/mod.rs) was
-  promoted to `docs/adr/drafts/rstest-reuse-cross-module-templates.md` and the
+  promoted to `docs/adr/0124-rstest-reuse-cross-module-templates.md` and the
   three sites now point there.
 - server: `tests/storage/mod.rs:4433` rewrite also fixed a factually wrong
   sibling comment (":4420 said the post id doesn't exist; it is soft-deleted").

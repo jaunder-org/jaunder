@@ -148,7 +148,7 @@ fn run_probe() -> Result<()> {
     // Dirty an EXCLUDED tracked file so *every* eval runs against a dirty tree:
     // a clean tree makes nix's flake fetcher walk grafted-away history on CI's
     // shallow checkout and fail
-    // (docs/adr/drafts/coverage-probe-dirty-tree-workaround.md).
+    // (docs/adr/0116-coverage-probe-dirty-tree-workaround.md).
     let readme = tmp.join("README.md");
     let mut readme_bytes = fs::read(&readme).context("reading README.md to dirty it")?;
     readme_bytes.push(b'\n');

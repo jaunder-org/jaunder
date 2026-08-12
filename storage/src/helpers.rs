@@ -832,7 +832,7 @@ mod tests {
         // exercises it — yet it must be a well-formed Argon2 hash for the same reason the
         // runtime one must: a fast `Err` on the absent-user path would reintroduce the
         // timing oracle this mechanism exists to close
-        // (docs/adr/drafts/absent-user-timing-equalization.md).
+        // (docs/adr/0114-absent-user-timing-equalization.md).
         let wrong = parse_password("definitely-not-the-dummy");
         let result = verify_password(wrong, fallback_dummy_password_hash())
             .await
@@ -842,7 +842,7 @@ mod tests {
 
     // No parameter-parity test for the fallback, deliberately: the constant carries
     // production parameters, which a `cheap-kdf` build cannot match
-    // (docs/adr/drafts/absent-user-timing-equalization.md).
+    // (docs/adr/0114-absent-user-timing-equalization.md).
 
     #[test]
     fn dummy_password_hash_matches_real_hash_parameters() {

@@ -466,7 +466,7 @@ pub fn server(args: TokenStream, item: TokenStream) -> TokenStream {
 /// its own door, or not use this derive.
 ///
 /// `RenderedHtml` (`common/src/render.rs`) is the motivating case;
-/// docs/adr/drafts/rendered-html-storage-decode.md documents exactly why a
+/// docs/adr/0123-rendered-html-storage-decode.md documents exactly why a
 /// sanitizing decode was rejected there and when to revisit that.
 #[proc_macro_derive(SqlxBridge, attributes(sqlx_bridge))]
 pub fn sqlx_bridge_derive(item: TokenStream) -> TokenStream {

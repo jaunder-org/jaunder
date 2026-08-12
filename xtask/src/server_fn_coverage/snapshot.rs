@@ -205,7 +205,7 @@ pub fn verdict(
         // There is deliberately no endpoint-drift check here — a comparison of a
         // computed value against itself would pass for the wrong reason; the seed
         // cross-check verifies the endpoint against real traffic instead
-        // (docs/adr/drafts/no-endpoint-drift-check.md).
+        // (docs/adr/0120-no-endpoint-drift-check.md).
         let covered = snapshot.covered.contains(&qualified);
         let entry = allowed.get(qualified.as_str());
 

@@ -85,7 +85,7 @@ pub(crate) async fn restore_database(
 
     let result = async {
         // Clear every table before loading any, keeping the two backends' restore
-        // shape identical (docs/adr/drafts/clear-then-load-restore.md).
+        // shape identical (docs/adr/0115-clear-then-load-restore.md).
         for table in &manifest.tables {
             sqlx::query(&format!("DELETE FROM {}", quote_identifier(table)))
                 .execute(&mut *connection)

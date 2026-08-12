@@ -58,7 +58,7 @@ pub const SPA_SHELL: &str = include_str!("../../../csr/index.html");
 /// `import`, and the projector's boot script are asserted against them by the
 /// drift guards in this module's tests. Hand-written copies with nothing tying
 /// them together are the hazard (see
-/// docs/adr/drafts/no-wasm-preload.md for the double-download failure a
+/// docs/adr/0121-no-wasm-preload.md for the double-download failure a
 /// drifted copy causes).
 pub const WASM_URL: &str = "/pkg/jaunder.wasm";
 /// The wasm-bindgen JS glue's URL. See [`WASM_URL`].
@@ -91,7 +91,7 @@ pub fn render_head(seed: &PageSeed) -> Markup {
         meta charset="utf-8";
         meta name="viewport" content="width=device-width, initial-scale=1";
         // NO wasm preload here — a measured decision with a fired abort rule, not
-        // an oversight (#866; docs/adr/drafts/no-wasm-preload.md). Do not re-add
+        // an oversight (#866; docs/adr/0121-no-wasm-preload.md). Do not re-add
         // without reading that draft; `crossorigin` would be mandatory.
         link rel="stylesheet" href="/style/jaunder.css";
         link rel="stylesheet" href="/style/jaunder-themes.css";

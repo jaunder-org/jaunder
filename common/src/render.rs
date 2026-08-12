@@ -189,7 +189,7 @@ impl PartialEq<&str> for RenderedHtml {
 // Storage decode: the `rendered_html` column decodes straight into `RenderedHtml`
 // via the plain `#[derive(SqlxBridge)]` bridge — deliberately NOT a sanitizing
 // decode, with an accepted blessing risk the gate cannot see (#701). Re-read
-// docs/adr/drafts/rendered-html-storage-decode.md before changing this.
+// docs/adr/0123-rendered-html-storage-decode.md before changing this.
 
 // ---------------------------------------------------------------------------
 // Pure rendering, and the media references in its output (#711)

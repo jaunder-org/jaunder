@@ -118,7 +118,7 @@ proc-macro2 = "1"
 # Our lettre fork, until the mailbox-grammar fix lands upstream; pinned by rev,
 # not branch, and paired with a deny.toml allow entry — the why, the removal
 # condition, and how to move the rev are in
-# docs/adr/drafts/lettre-fork-pinned-by-rev.md (#297).
+# docs/adr/0119-lettre-fork-pinned-by-rev.md (#297).
 #
 # rev cb9e574 = fix/mailbox-quoted-local-part-and-domain-literal
 [patch.crates-io]

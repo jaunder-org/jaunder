@@ -11,7 +11,7 @@ use crate::helpers::{body_string, create_user_and_session, make_app};
 use storage::test_support::{Backend, TestEnv, backends_matrix};
 
 // The plain `use` suffices: `#[apply]` resolves a cross-module `#[template]` by
-// bare name (docs/adr/drafts/rstest-reuse-cross-module-templates.md).
+// bare name (docs/adr/0124-rstest-reuse-cross-module-templates.md).
 use storage::test_support::backends;
 
 // Shape A — non-clustered behavior, backend-parametrized via cross-module apply.
@@ -63,7 +63,7 @@ async fn rsd_document_advertises_service_url(#[case] backend: Backend) {
 
 // Shape B — backend×value matrix: `#[apply(backends_matrix)]` supplies the
 // backend axis, the named `#[case]`s the value axis; 2 rows × 2 backends = 4
-// cases (docs/adr/drafts/rstest-reuse-cross-module-templates.md).
+// cases (docs/adr/0124-rstest-reuse-cross-module-templates.md).
 #[apply(backends_matrix)]
 #[case::edituri_rel("rel=\"EditURI\"")]
 #[case::rsd_href("/~alice/rsd.xml")]

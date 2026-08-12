@@ -389,7 +389,7 @@ pub(crate) fn post_tag_diff<'a>(
         .collect();
     // Slug order, so every transaction takes `tags` row locks in the same order —
     // caller-supplied order can deadlock concurrent reconciles on Postgres (#876,
-    // docs/adr/drafts/slug-ordered-tag-lock-acquisition.md).
+    // docs/adr/0125-slug-ordered-tag-lock-acquisition.md).
     //
     // `sort_by_key`, not `sort_unstable_by_key`: `desired` may carry two labels
     // sharing a slug and the FIRST occurrence's casing must still win, which
@@ -1924,7 +1924,7 @@ where
             let generated_at: DateTime<Utc> = row.try_get("generated_at")?;
             // Skip this row rather than failing the scan: an `Err` here would retry
             // forever and go-live enqueueing would never resume
-            // (docs/adr/drafts/one-bad-row-must-not-stop-the-scan.md).
+            // (docs/adr/0122-one-bad-row-must-not-stop-the-scan.md).
             //
             // `parts` is folded into the same skip: it can only fail if `canonicalize`
             // and `parse` disagree, which the decode above has already ruled out, so this
@@ -2902,7 +2902,7 @@ mod tests {
         //
         // This is also safe under the current-thread runtime `#[tokio::test]`
         // defaults to: sqlx-sqlite runs each connection on its own OS thread
-        // (docs/adr/drafts/sqlx-sqlite-busy-handler-threading.md).
+        // (docs/adr/0126-sqlx-sqlite-busy-handler-threading.md).
         let posts = Arc::clone(&env.state.posts);
         let mut racer =
             tokio::spawn(
@@ -3081,7 +3081,7 @@ mod tests {
         #[case] backend: Backend,
     ) {
         // A `feed_url` that will not decode into a `FeedPath` must cost only its own
-        // row (docs/adr/drafts/one-bad-row-must-not-stop-the-scan.md).
+        // row (docs/adr/0122-one-bad-row-must-not-stop-the-scan.md).
         let env = backend.setup().await;
         let state = &env.state;
         let author = SeedUser::new().seed(state).await.user_id;

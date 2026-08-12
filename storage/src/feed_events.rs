@@ -55,7 +55,7 @@ pub(crate) enum ClaimedRow {
 }
 
 /// **The diversion is column-scoped, and that is the whole point of this impl**
-/// (docs/adr/drafts/one-bad-row-must-not-stop-the-scan.md): `purge_corrupt`
+/// (docs/adr/0122-one-bad-row-must-not-stop-the-scan.md): `purge_corrupt`
 /// DELETEs, so only a `feed_url` decode failure may divert a row — re-checked
 /// specifically here — and anything else propagates (#728).
 ///

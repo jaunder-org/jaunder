@@ -308,7 +308,7 @@ where
 
         // Skip (don't fail the whole list on) a row that fails to decode; direct
         // lookups (`get_media`/`find_by_hash`) stay strict
-        // (docs/adr/drafts/one-bad-row-must-not-stop-the-scan.md).
+        // (docs/adr/0122-one-bad-row-must-not-stop-the-scan.md).
         Ok(rows
             .iter()
             .filter_map(|row| {

@@ -417,7 +417,7 @@
         # override mechanics (src swap not applyPatches, the cargoDeps
         # cascade, importCargoLock vs a 403ing fetchCargoVendor, and why
         # `version` stays "0.1.33") are in
-        # docs/adr/drafts/leptosfmt-pinned-past-release.md.
+        # docs/adr/0118-leptosfmt-pinned-past-release.md.
         leptosfmt = pkgs.leptosfmt.overrideAttrs (_old: rec {
           src = pkgs.fetchFromGitHub {
             owner = "bram209";

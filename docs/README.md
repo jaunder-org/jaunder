@@ -141,6 +141,19 @@ convention). See the Status column below for each ADR's current status.
 | [0111](adr/0111-e2e-one-boot-per-page.md)                          | The e2e suite boots each page once                                                                           | accepted   |
 | [0112](adr/0112-role-tagged-site-urls.md)                          | Role-tagged site URLs                                                                                        | accepted   |
 | [0113](adr/0113-submit-gate-owns-its-parse.md)                     | A submit gate owns its parse                                                                                 | accepted   |
+| [0114](adr/0114-absent-user-timing-equalization.md)                | Absent-user timing equalization via a dummy Argon2 hash                                                      | accepted   |
+| [0115](adr/0115-clear-then-load-restore.md)                        | Restore clears every table before loading any                                                                | accepted   |
+| [0116](adr/0116-coverage-probe-dirty-tree-workaround.md)           | The coverage probe dirties an excluded file to defeat shallow-clone eval failures                            | accepted   |
+| [0117](adr/0117-labelled-takes-erased-signals.md)                  | `Labelled` takes erased validity signals, not `Field<T>`                                                     | accepted   |
+| [0118](adr/0118-leptosfmt-pinned-past-release.md)                  | leptosfmt is pinned past its last release                                                                    | accepted   |
+| [0119](adr/0119-lettre-fork-pinned-by-rev.md)                      | lettre is patched to a jaunder-org fork, pinned by rev                                                       | accepted   |
+| [0120](adr/0120-no-endpoint-drift-check.md)                        | The server-fn snapshot gate carries no endpoint-drift check                                                  | accepted   |
+| [0121](adr/0121-no-wasm-preload.md)                                | No `<link rel="preload">` for the wasm bundle                                                                | accepted   |
+| [0122](adr/0122-one-bad-row-must-not-stop-the-scan.md)             | One bad row must not stop the scan                                                                           | accepted   |
+| [0123](adr/0123-rendered-html-storage-decode.md)                   | RenderedHtml decodes via a plain sqlx bridge, without sanitizing                                             | accepted   |
+| [0124](adr/0124-rstest-reuse-cross-module-templates.md)            | rstest_reuse templates resolve cross-module by bare name                                                     | accepted   |
+| [0125](adr/0125-slug-ordered-tag-lock-acquisition.md)              | Slug-ordered tag lock acquisition                                                                            | accepted   |
+| [0126](adr/0126-sqlx-sqlite-busy-handler-threading.md)             | sqlx-sqlite busy-handler blocking is thread-scoped, not runtime-scoped                                       | accepted   |
 
 <!-- adr-table:end -->
 
