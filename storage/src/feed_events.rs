@@ -220,10 +220,9 @@ impl<DB> FeedEventStorage for FeedEventStore<DB>
 where
     DB: FeedEventDialect,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    // `FeedPath` binds and decodes as itself via the sqlx bridge (#438), which
-    // delegates to `String`; these bounds make that bridge available on the generic
-    // backend (the `enqueue` bind encodes `&FeedPath`; the per-dialect claim
-    // row-mappers decode the `feed_url` column into `FeedPath`).
+    // `FeedPath` binds and decodes as itself via the ADR-0071 sqlx bridge (the
+    // `enqueue` bind encodes `&FeedPath`; the per-dialect claim row-mappers
+    // decode the `feed_url` column into `FeedPath`).
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
