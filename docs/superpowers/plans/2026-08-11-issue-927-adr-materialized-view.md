@@ -624,6 +624,11 @@ follow-up issue covers them all.
   verify-only.
 - `web/src/audiences/component.rs:48` — names `Invalidator::patched`, which does
   not exist (see the drift table).
+- `elisp/jaunder-publish.el` — `jaunder--create-with-retry`'s docstring says it
+  retries transport errors and 5xx, but the handler is a bare `(error …)`, so it
+  retries any signalled error. A missing auth-source entry gets retried twice
+  with sleeps before surfacing. Either narrow the handler or correct the
+  docstring; the current behaviour is probably not intended.
 
 ### Known defects handed forward to later tasks
 

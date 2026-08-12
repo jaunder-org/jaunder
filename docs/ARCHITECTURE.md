@@ -1327,10 +1327,12 @@ handling (`jaunder-datetime.el`), the wire encoder/response harvester
 ### Transport and auth
 
 `jaunder--http-request` (`elisp/jaunder-transport.el:94`) is built on `plz`,
-which drives the `curl` binary. `url.el` itself is not used for requests — only
-`url-parse` for host extraction. 4xx/5xx return as a `(:status :headers :body)`
-plist, unsignalled; a transport-level `plz-error` carrying a response is
-converted to the same plist, and one carrying none re-signals
+which drives the `curl` binary. `url.el` itself is not used for requests; only
+`url-parse` is pulled in, to extract the host for the auth-source lookup
+(`transport.el:54`) and to validate a configured base URL
+(`config.el:25,118-120`). 4xx/5xx return as a `(:status :headers :body)` plist,
+unsignalled; a transport-level `plz-error` carrying a response is converted to
+the same plist, and one carrying none re-signals
 ([ADR-0038](adr/0038-emacs-http-transport-plz-not-url-el.md)). Because `plz`
 writes headers into a curl `--config` file without escaping,
 `jaunder--curl-header-value` (`elisp/jaunder-transport.el:84`) backslash-escapes
@@ -1369,7 +1371,8 @@ and are never reconstructed client-side, so the server stays authoritative about
 URL layout ([ADR-0045](adr/0045-emacs-media-content-src.md)). Only local image
 links (`png`/`jpg`/`jpeg`/`gif`/`webp`/`svg`, `file:` or `attachment:`) qualify
 for upload; the extension table is the qualification predicate shared by
-detection and substitution (`elisp/jaunder-media.el:31`).
+detection and substitution (`jaunder--media-link-p`,
+`elisp/jaunder-media.el:48`, over the extension table at `:31`).
 
 The client also probes the AtomPub service document for the
 `<j:extension features="…">` capability list that
@@ -1410,14 +1413,15 @@ including a `412` stale-ETag, is recoverable by a plain re-publish
 applies to the sent body only; the authoring buffer is never modified.
 
 Creates go through `jaunder--create-with-retry`
-(`elisp/jaunder-publish.el:151`), which retries a signalled transport error or a
-5xx up to three attempts (≈1s then ≈2s backoff) under **one** `Idempotency-Key`,
-so the server dedups the replay. The key is ephemeral, not stable across
-invocations: it is a fresh md5 of local entropy per call, so a later re-publish
-gets a new key and an edit is never mistaken for a retry. The server side of
-that contract was decided in issue
-[#79](https://github.com/jaunder-org/jaunder/issues/79) as a follow-on to
-ADR-0047 — see the Storage section.
+(`elisp/jaunder-publish.el:151`), which retries a 5xx or **any** signalled error
+— the handler is a bare `(error …)` (`:165`), so a non-transport failure such as
+a missing auth-source entry is also retried twice before re-signalling — up to
+three attempts (≈1s then ≈2s backoff) under **one** `Idempotency-Key`, so the
+server dedups the replay. The key is ephemeral, not stable across invocations:
+it is a fresh md5 of local entropy per call, so a later re-publish gets a new
+key and an edit is never mistaken for a retry. The server side of that contract
+was decided in issue [#79](https://github.com/jaunder-org/jaunder/issues/79) as
+a follow-on to ADR-0047 — see the Storage section.
 
 ### Committed direction
 
@@ -1428,10 +1432,16 @@ stub that signals "not yet implemented"
 ([ADR-0042](adr/0042-emacs-org-atom-mapping-struct-seam.md),
 [ADR-0047](adr/0047-emacs-publish-orchestration.md)).
 
-## Testing & verification gates
+## Testing
 
 `CONTRIBUTING.md` remains the how-to; this section records the architecture of
-the gates.
+the test suites. The gates that run them are the next section.
+
+### Backend-parity & test homing
+
+PLACEHOLDER_TESTING_BODY
+
+## Verification gates
 
 ### The verify ladder & git-enforced gate
 
@@ -1480,96 +1490,6 @@ per-function CRAP threshold T = 30, overridable only by
 inside an exempt span, enforcing the "native tests never render components"
 assumption. The coverage source is bounded to cargo sources, enforced by a
 `drvPath` probe (`cargo xtask coverage probe-source`, run in CI).
-
-### Backend-parity & test homing
-
-The dual-backend harness — `Backend`, `TestEnv`, per-test DB provisioning, the
-`backends`/`sqlite_only`/`postgres_only` rstest templates — lives _inside_
-`storage` as the feature-gated `storage::test_support` module
-([ADR-0033](adr/0033-shared-db-test-harness-crate.md)); a separate crate is
-impossible (dev-dependency cycle), and the feature gate keeps it out of release
-builds. A storage test is homed by what it proves, and placement is
-coverage-neutral under the single PG-live instrumented pass
-([ADR-0053](adr/0053-storage-test-homing-and-dual-backend.md)): backend-common
-contracts are written `#[apply(backends)]` in the generic home module; a
-single-backend test is _presumed_ a Postgres coverage gap unless it has a
-decisive backend-exclusive reason. The `test-backend-pattern` guard
-(`xtask/src/steps/test_pattern_check.rs`) verifies that every `#[tokio::test]`
-under `storage/src/**` carries a backend template or a
-`// guard:no-backend — <reason>` marker. Fault-injection hooks are gated on
-`#[cfg(any(test, feature = "test-utils"))]`, not bare `#[cfg(test)]`, so
-cross-crate integration tests can drive them dual-backend
-([ADR-0026](adr/0026-test-fault-injection-hooks-feature.md)). Backup is a
-cross-backend _contract_ (a portable dump): its fidelity and negative tests live
-in `server/tests/misc/`, including a four-hop `postgres→sqlite→postgres→sqlite`
-cycle, and a constraint-violating restore fails uniformly —
-`BackupError::ConstraintViolation`, target unmodified — on both backends
-([ADR-0054](adr/0054-backup-test-homing-and-uniform-restore-failure.md)).
-
-### E2E architecture
-
-Each e2e check is a NixOS-test VM running Playwright against a real served
-instance, one derivation per `{backend}×{browser}` combo (`mkE2eCombo` in
-`flake.nix`). CI runs `cargo xtask validate --no-e2e` in one job plus a
-`{sqlite,postgres}×{chromium,firefox}` matrix, each job
-`cargo xtask e2e <backend> <browser>`, aggregated by an `e2e-gate` job so branch
-protection needs two stable names
-([ADR-0034](adr/0034-ci-e2e-matrix-distribution.md)); local
-`cargo xtask validate` builds the `e2e-checks` aggregate — same derivations,
-distributed vs. one machine.
-
-<!-- un-ADR'd: e2e-gate also `needs:` the CI elisp-integration job
-(.github/workflows/ci.yml). --> One Playwright config,
-
-`end2end/playwright.config.ts`, is loaded verbatim by both the VM and the host
-loop; host/VM differences are invocation flags only
-([ADR-0051](adr/0051-single-playwright-config.md)). The host loop is
-`cargo xtask e2e-local`, which owns the whole lifecycle — build, spawn
-`jaunder serve` on an ephemeral port, seed, run Playwright, tear down. Specs are
-parallel-safe via per-test identity fixtures (`user`/`mailbox`/`verifiedUser` in
-`end2end/tests/fixtures.ts`); the suite runs at `workers=2`, with the lone
-global-singleton spec `admin-site` quarantined in per-browser serial projects
-([ADR-0039](adr/0039-e2e-parallelism-via-per-test-identity-fixtures.md)).
-Timeout budgets are stated for Chromium and scaled per browser
-([ADR-0012](adr/0012-environment-aware-timeouts.md); `slowBrowserTimeoutMs`).
-
-The suite is a zero-panic gate ([ADR-0032](adr/0032-e2e-zero-panic-gate.md)):
-each VM testScript asserts the server journal contains no `panicked at` line,
-default-deny via an explicit `allowed_panics` list (empty today), so a panic
-fails the _derivation_ and can never be cached green. Diagnostics are captured
-before the check may fail
-([ADR-0037](adr/0037-e2e-failure-diagnostics-capture.md)):
-`trace: 'retain-on-failure'`, `screenshot: 'only-on-failure'`, and the shared
-`e2eRunAndCapture` helper streams the line-reporter output to `build.log`,
-copies all artifacts unconditionally, then asserts the Playwright exit; on a
-failed build xtask rescues them from the `--keep-failed` outPath into
-`.xtask/diagnostics/<check>/`. Out-of-process state manipulation (seeding,
-fixture users, mail reset) goes through the dedicated `test-support` workspace
-binary, which links the real `storage` code paths — never a production CLI/HTTP
-seed surface or hand-written per-backend SQL
-([ADR-0046](adr/0046-test-support-seed-binary.md)). Capture streams write
-well-known filenames under one `JAUNDER_CAPTURE_DIR`, lifted per combo as a
-tarball ([ADR-0057](adr/0057-e2e-capture-dir-contract.md) — see observability).
-
-### Elisp testing
-
-`elisp/` is a first-class, separately-tested subproject
-([ADR-0031](adr/0031-elisp-separately-tested-subproject.md)): host `ert` and
-`elisp-fmt` steps run in both `check` (Fix) and `validate` (Check), with the
-hermetic mirror now the `static-checks` derivation via `devtool check`
-([ADR-0052](adr/0052-devtool-unifies-static-checks.md)); one `emacsForCi`
-toolchain serves both. Elisp is exempt from the Rust coverage gate
-(cargo-llvm-cov cannot instrument it; the stated expectation is a unit test per
-pure function). Live client behavior — transport, auth, publish/reconcile
-round-trips — runs against a real server via the self-booting harness
-([ADR-0035](adr/0035-elisp-live-integration-harness.md)):
-`jaunder-test--with-live-server` spawns `jaunder serve --bind 127.0.0.1:0`,
-discovers the port race-free from the `runtime.json` file `serve` always writes
-(which doubles as a startup mutex), and provisions credentials via
-`jaunder app-password-create`. The suite (`elisp/test/*-integration.el`, via
-`elisp/scripts/run-integration-tests.el`) runs hermetically as the
-`e2e-elisp-integration` nixosTest in the `validate` tier and as its own CI job,
-and host-side via `JAUNDER_TEST_BINARY` for fast iteration.
 
 ## Development tooling
 
