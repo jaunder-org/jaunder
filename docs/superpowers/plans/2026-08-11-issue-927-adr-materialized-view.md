@@ -30,18 +30,28 @@ also listed individually further down.
 - [x] **2** — Build the ADR-to-section assignment worksheet for all accepted
       ADRs. _(108 assigned, validated as an exact partition; grew to 14
       sections)_
-- [ ] **3–14b** — Re-verify and rebuild each of the 14 view sections (one task,
-      one commit each).
-- [ ] **15** — Parity sweep: place every straggler ADR the section pass missed.
-- [ ] **16** — File the ADR-gap follow-up issues (their numbers are needed by
-      task 17).
-- [ ] **17** — Add the "Un-ADR'd reality" section.
-- [ ] **18** — Annotate ADR-0052's drifted check inventory.
-- [ ] **19** — Tense-correct the 13 ADRs carrying present-tense addenda.
-- [ ] **20** — Amend the draft ADR (status, issue link, un-ADR'd wording).
-- [ ] **21** — Re-derive the `CONTRIBUTING.md` trim against today's file.
-- [ ] **22** — Add the `jaunder-adr-projection` skill and wire its two pointers.
-- [ ] **23** — Add the `adr-view-parity` step — **final commit, lands green**.
+- [x] **3–14b** — All 14 sections rebuilt and independently verified. Pass B
+      found defects in the FRESH draft in most sections, not just in inherited
+      text.
+- [x] **15** — Parity sweep. Reached 0 uncited, then 13 new ADRs landed on main
+      and it was re-reached after the fold.
+- [x] **16** — Three grouped issues filed: #936 (security), #937 (protocol and
+      content), #938 (infrastructure). All Task / P2.
+- [x] **17** — `## Un-ADR'd reality` added: 15 inline flags consolidated to 14
+      bullets, each with its issue.
+- [x] **18** — Nine ADRs annotated (the eight drifts plus ADR-0036), each dated
+      and past-tense, no Decision touched.
+- [x] **19** — Tense pass. The population was 23, not 13: a heading-only search
+      misses blockquote and inline addenda. 22 files edited, no reasoning lost.
+- [x] **20** — Draft ADR amended: `proposed`, dated, `Issue:` line, and two of
+      its own claims corrected against what the branch actually did.
+- [x] **21** — `CONTRIBUTING.md` trimmed, plus the #930 audit's two proposed
+      comment-standard bullets adopted.
+- [ ] **22** — Skill written and staged, **install blocked**: the harness
+      refuses writes to the main checkout from a worktree session. Three `cp`
+      commands handed to the user; not routed around.
+- [x] **23** — `adr-view-parity` added. Verified in both directions: green on
+      the real tree, exit 1 naming the ADR when one citation is removed.
 
 **Key risks and decisions.**
 
@@ -655,6 +665,9 @@ follow-up issue covers them all.
   verify-only.
 - `web/src/audiences/component.rs:48` — names `Invalidator::patched`, which does
   not exist (see the drift table).
+- `flake.nix:1146` — "The **7** non-compiling static checks (#188)". There are
+  eight (`tools/devtool/src/check.rs:18-25`). Same stale count as ADR-0052's, in
+  a third place. Left alone: `flake.nix` is outside this issue's docs scope.
 - `elisp/jaunder-publish.el` — `jaunder--create-with-retry`'s docstring says it
   retries transport errors and 5xx, but the handler is a bare `(error …)`, so it
   retries any signalled error. A missing auth-source entry gets retried twice

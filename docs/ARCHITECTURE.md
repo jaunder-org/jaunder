@@ -298,8 +298,6 @@ the AtomPub Collection the native source — detailed in the Protocols section
 `storage/src/posts.rs:42::PostRecord` carries both plus title, `Slug`, summary,
 tags, and `created_at`/`updated_at`/`published_at`/`deleted_at`.
 
-<!-- un-ADR'd: local soft delete (soft_delete_post stamps deleted_at, every public read filters `deleted_at IS NULL`). -->
-
 **A body has at least one non-blank line, and normalization is format-aware**
 ([ADR-0105](adr/0105-post-body-non-blank-invariant.md)). `PostBody::from_str` is
 the one door — the `StrNewtype` derive routes serde and sqlx through it, and
@@ -423,17 +421,10 @@ HTML at that moment (`storage/src/sqlite/posts.rs:73`,
 (`storage/src/posts.rs:119`) has no read query, so no surface exposes edit
 history yet.
 
-<!-- un-ADR'd: local revision snapshots. No ADR decides them. ADR-0009 is about
-CONSUMED content only ("for followed sources", "when an update is received"),
-so it does not cover this despite the resemblance. Same class as soft delete. -->
-
 **Local deletion is soft and un-ADR'd**: `soft_delete_post`
 (`storage/src/posts.rs:689,1308`) stamps `deleted_at`, and public reads filter
 `deleted_at IS NULL` (26 sites in `storage/src/posts.rs`). Whether a hard delete
 ever happens is undecided.
-
-<!-- un-ADR'd: local soft delete. No ADR mentions deletion policy at all, and no
-GitHub issue decides it either (searched open and closed). -->
 
 Cross-cutting values are validated newtypes whose `FromStr` is the single
 chokepoint: `Username`, `Slug`, `Tag`, `Password`
@@ -535,11 +526,6 @@ assembles an `atom_syndication::Feed` and lets the crate emit the XML
 ([ADR-0089](adr/0089-upstream-atom-document-io.md)). RSS goes through the `rss`
 crate the same way.
 
-<!-- un-ADR'd (GAP): `HybridWindow` item selection (`feeds.min_items` /
-`feeds.min_days`, `common/src/feed/window.rs`) and `feed_etag` conditional GET
-(`common/src/feed/metadata.rs:66`, consumed at
-`server/src/feed/handlers.rs:61-81`) are load-bearing feed policy with no ADR. -->
-
 ### AtomPub editing interface
 
 The authenticated Collection (`server/src/atompub/mod.rs:28-43`:
@@ -616,10 +602,6 @@ with bounded retries and a `websub_ping` metric whose outcome distinguishes
 not a silent one. `HttpWebSubClient` runs in production; noop and file-capture
 implementations back the tests.
 
-<!-- un-ADR'd (GAP): publisher-side WebSub is built and exercised by e2e specs,
-but no ADR decides it. ADR-0010 names WebSub only as a future *ingestion*
-channel (that leg is issue #921). -->
-
 ### Committed direction — inbound federation
 
 [ADR-0010](adr/0010-protocol-integration.md) commits Jaunder to becoming a
@@ -654,8 +636,6 @@ with one deliberate exception: an **empty** `session=` cookie does not
 short-circuit, so a valid `Authorization` header on the same request still
 authenticates ([#344](https://github.com/jaunder-org/jaunder/issues/344) item 2,
 regression-tested at `host/src/auth.rs:146`).
-
-<!-- un-ADR'd: the cookie > Bearer > Basic precedence order itself. ADR-0007 names cookies and Bearer as the two mechanisms but ranks nothing, and never mentions Basic; #344 amended the cookie branch without deciding the order. -->
 
 Leptos server functions obtain the same identity via `require_auth()`
 (`web/src/auth/server.rs:113`), which pulls the request `Parts` from context and
@@ -701,7 +681,6 @@ pass.
   `.bind(raw_token)` does not compile — that opt-out, not a lint, is what keeps
   a raw token out of a query. `RawToken`'s `Debug` is hand-written to redact the
   body ([ADR-0011](adr/0011-unified-observability.md)).
-  <!-- un-ADR'd: hashed-at-rest token storage. #554 proposed encoding hash-before-store in the type system and was closed not-planned, leaving the policy as convention plus the `no_sqlx` guard — security-load-bearing and recorded nowhere in the ADR log. -->
 - An **app password** is just a labelled session: minting calls
   `SessionStorage::create_session(user_id, &label)`
   (`storage/src/sessions.rs:70`) — no separate table, no `kind` column, so
@@ -762,8 +741,6 @@ fails closed twice, at different times:
   (`common/src/lib.rs:60`, a `cfg!` constant) and, if set, prints a `FATAL:`
   line and `std::process::exit(1)`. This catches the debug-build-in-production
   case the compile-time guard lets through.
-
-<!-- un-ADR'd: the cheap-kdf feature and its two-layer fail-closed guard. No ADR and no GitHub issue mentions it (searched 2026-08-11); it is the only thing standing between a mis-flagged build and production password hashing at minimum Argon2 cost. -->
 
 ### Timing discipline: the entropy dividing line
 
@@ -838,8 +815,6 @@ lowercase, `verify_basic_username`'s exact compare
 closed [#344](https://github.com/jaunder-org/jaunder/issues/344) item 1 — an
 app-password client sending a differently-cased username must not be rejected
 despite a valid token.
-
-<!-- un-ADR'd: the lowercase-canonical rule for usernames specifically. ADR-0063 mandates the validating-newtype shape but not this normalization; #67 and #344 item 1 both act on the rule as already settled without establishing it. -->
 
 ## Web frontend
 
@@ -1343,8 +1318,6 @@ load-bearing in two places: it sets the `secure_cookies` flag passed to
 disables the dev-only auto-initialization of a missing database on `serve`
 (`server/src/commands.rs:501-512`).
 
-<!-- un-ADR'd (GAP): the CLI subcommand surface and the whole JAUNDER_* process-configuration surface have no ADR. ADR-0102 governs site_config database keys only, a different surface. No issue exists. -->
-
 **What the flake ships.** `flake.nix` exports `packages.jaunder` (the server
 binary), `packages.site`, and `nixosModules.jaunder` (`flake.nix:247-249`,
 `1059-1062`). `packages.site` is **no longer a deployment artifact** — the
@@ -1359,8 +1332,6 @@ is set (`flake.nix:95-101`), runs
 (`flake.nix:105`), and starts `jaunder serve`. There is no site symlink; the
 module comment names #237 as the reason. Two `nixosConfigurations` test VMs
 (interactive, PostgreSQL) exist for development only.
-
-<!-- un-ADR'd (GAP): the NixOS module and package outputs are load-bearing deployment reality with no ADR beyond ADR-0008's single-binary framing. No issue exists. -->
 
 ## Emacs client
 
@@ -1408,8 +1379,6 @@ password through Emacs `auth-source`, keyed on the active blog's URL **host**
 (port excluded) and username, and errors when no entry matches.
 `jaunder--basic-auth-header` UTF-8-encodes `user:password` before base64 per
 RFC 7617.
-
-<!-- un-ADR'd (GAP): `auth-source` as the client-side credential store. ADR-0014 decides the app-password scheme and the wire header but says nothing about where a client keeps the secret; ADR-0038 and ADR-0047 do not mention it. ADR-0035 already treats it as settled (the harness provisions a temporary `auth-source` entry), and open issue #76 (emacs: self-provision an app password) builds on it without establishing it. Searched GitHub 2026-08-11. -->
 
 ### Org → Atom mapping
 
@@ -1980,10 +1949,19 @@ Nix never invokes it back ([ADR-0034](adr/0034-ci-e2e-matrix-distribution.md)).
 
 ### What the ladder actually runs
 
-In order, after `static-checks` (`fmt`, `leptosfmt`, `prettier`, `tsc`,
-`elisp-fmt`, `ert`, `byte-compile`, `cargo-deny`, `clippy`, `wasm-clippy`,
-`tools-fmt`/`tools-clippy`, `xtask-fmt`/`xtask-clippy`), both rungs run the same
-host steps (`xtask/src/lib.rs:457`-`:479`):
+In order, after the host `static-checks` step (`fmt`, `leptosfmt`, `prettier`,
+`tsc`, `elisp-fmt`, `ert`, `byte-compile`, `cargo-deny`, `clippy`,
+`wasm-clippy`, `tools-fmt`/`tools-clippy`, `xtask-fmt`/`xtask-clippy`), both
+rungs run the same host steps (`xtask/src/lib.rs:457`-`:479`):
+
+**Two different things are called `static-checks`, and conflating them is
+easy.** The host _step_ above runs fourteen sub-steps, compiling and
+non-compiling alike. The Nix `static-checks` _derivation_ (`flake.nix:1146`) is
+narrower: only the eight non-compiling checks, behind one `devtool check --all`,
+because none of them compiles and so none needs vendored dependencies. The
+compiling checks — `clippy`, `wasm-clippy`, `deny` and the two workspace-local
+clippy runs — keep their own crane derivations, which is what makes the cheap
+`runCommand` over a broad source tree viable for the rest.
 
 | Step                                                       | Guards                                                    |
 | ---------------------------------------------------------- | --------------------------------------------------------- |
@@ -2005,8 +1983,6 @@ host steps (`xtask/src/lib.rs:457`-`:479`):
 | `rendered-html-from-trusted`, `raw-html-door`, `html-sink` | the three XSS doors                                       |
 | `xlang-literal`                                            | Rust/TypeScript literal agreement                         |
 | `xtask-tests`, `tools-test`                                | xtask's and `tools/`'s own unit tests                     |
-
-<!-- un-ADR'd: `host_tests` (`xtask-tests`, `tools-test`) is recorded in no ADR. -->
 
 ### How a gate is built
 
@@ -2227,8 +2203,6 @@ All three manifests pin `resolver = "3"` explicitly, because the two virtual
 manifests would otherwise default to resolver 1
 ([ADR-0104](adr/0104-edition-2024-unsafe-env-and-precise-capturing.md)).
 
-<!-- GAP: the cargo-workspace exclusions themselves (root `exclude = ["xtask"]`, the separate `tools/` workspace) are stated only in flake.nix comments and ADR asides, never decided in their own ADR. No GitHub issue tracks it (searched jaunder-org/jaunder, all states, 2026-08-11); the nearest is #276, which assumes the tools workspace rather than deciding it. -->
-
 **Workspace layering.** The root workspace's shared crates are target-scoped
 ([ADR-0058](adr/0058-host-crate-layering.md)): `common` is target-agnostic
 (host + wasm, zero host-only cfg carve-outs); `host` holds strictly-host-focused
@@ -2440,11 +2414,68 @@ assigned number before the branch is pushed
 path is therefore not a convention but a prerequisite — a link written any other
 way survives promotion pointing at nothing.
 
-<!-- un-ADR'd (DECIDED-ELSEWHERE, issue #682): the `doc-links` gate itself has
-no ADR; xtask/src/steps/doc_links.rs:1 cites only the issue. -->
-
 Committed direction: this document becomes a gated artifact of the same kind. A
 planned `adr-view-parity` check will require every `accepted` ADR to be cited
 here, closing the loop that today depends on the replay audit
 ([the materialized-view ADR](adr/drafts/architecture-view-materialized-from-adrs.md)).
 It does not exist yet.
+
+## Un-ADR'd reality
+
+The claims below are true of the system, but no ADR establishes them. Each is
+either a decision worth recording or detail not worth an ADR; the tracking issue
+decides which. Three issues hold the current set:
+[#936](https://github.com/jaunder-org/jaunder/issues/936) (security-shaped),
+[#937](https://github.com/jaunder-org/jaunder/issues/937) (protocol and content
+lifecycle), and [#938](https://github.com/jaunder-org/jaunder/issues/938)
+(infrastructure and process).
+
+- **The `cheap-kdf` feature and its two-layer fail-closed guard.** It is the
+  only thing between a mis-flagged build and production password hashing at
+  minimum Argon2 cost, and no ADR names it.
+  [#936](https://github.com/jaunder-org/jaunder/issues/936)
+- **Hashed-at-rest token storage.** The policy is convention plus the `no_sqlx`
+  opt-out on `RawToken`; #554 proposed encoding hash-before-store in the type
+  system and was closed as not planned, so the decline itself is unrecorded.
+  [#936](https://github.com/jaunder-org/jaunder/issues/936)
+- **The cookie > Bearer > Basic credential precedence order.** ADR-0007 names
+  cookies and Bearer but ranks nothing and never mentions Basic; #344 amended
+  the cookie branch without deciding the order.
+  [#936](https://github.com/jaunder-org/jaunder/issues/936)
+- **The lowercase-canonical rule for usernames.** ADR-0063 mandates the
+  validating-newtype shape, not this normalization; #67 and #344 act on the rule
+  as already settled. [#936](https://github.com/jaunder-org/jaunder/issues/936)
+- **Publisher-side WebSub.** It is built and exercised by e2e specs, but
+  ADR-0010 names WebSub only as a future _ingestion_ channel.
+  [#937](https://github.com/jaunder-org/jaunder/issues/937)
+- **Feed item selection and conditional GET.** `HybridWindow` (`feeds.min_items`
+  / `feeds.min_days`, `common/src/feed/window.rs`) and `feed_etag`
+  (`common/src/feed/metadata.rs:66`) are load-bearing feed policy with no ADR.
+  [#937](https://github.com/jaunder-org/jaunder/issues/937)
+- **Local soft delete.** `soft_delete_post` stamps `deleted_at` and every public
+  read filters `deleted_at IS NULL`; no ADR mentions deletion policy, and
+  whether a hard delete ever happens is undecided.
+  [#937](https://github.com/jaunder-org/jaunder/issues/937)
+- **Local revision snapshots.** `post_revisions` is written on every edit and
+  read by nothing. ADR-0009 covers consumed content only, so it does not reach
+  this despite the resemblance.
+  [#937](https://github.com/jaunder-org/jaunder/issues/937)
+- **The CLI subcommand surface and the `JAUNDER_*` process configuration.**
+  ADR-0102 governs `site_config` database keys, a different surface.
+  [#938](https://github.com/jaunder-org/jaunder/issues/938)
+- **The NixOS module and the package outputs.** Load-bearing deployment reality
+  with no ADR beyond ADR-0008's single-binary framing.
+  [#938](https://github.com/jaunder-org/jaunder/issues/938)
+- **The cargo-workspace exclusions.** The root `exclude = ["xtask"]` and the
+  separate `tools/` workspace are stated in `flake.nix` comments and ADR asides
+  only; #276 assumes the tools workspace rather than deciding it.
+  [#938](https://github.com/jaunder-org/jaunder/issues/938)
+- **The `host_tests` gate steps** (`xtask-tests`, `tools-test`) are recorded in
+  no ADR. [#938](https://github.com/jaunder-org/jaunder/issues/938)
+- **`auth-source` as the Emacs client credential store.** ADR-0014 decides the
+  app-password scheme and the wire header but not where a client keeps the
+  secret; ADR-0035 and issue #76 both build on the rule as settled.
+  [#938](https://github.com/jaunder-org/jaunder/issues/938)
+- **The `doc-links` gate itself** has no ADR — `xtask/src/steps/doc_links.rs:1`
+  cites issue [#682](https://github.com/jaunder-org/jaunder/issues/682), which
+  is where the decision lives. Not covered by #936/#937/#938.
