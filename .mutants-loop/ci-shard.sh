@@ -4,7 +4,7 @@
 #   .mutants-loop/ci-shard.sh <package> <k> <n> <output-dir>
 #   .mutants-loop/ci-shard.sh common 0 4 .mutants-ci/common-0
 #
-# Differences from discover.sh, all of them because this runs unattended on a
+# Differences from verify.sh, all of them because this runs unattended on a
 # hosted runner rather than on a workstation:
 #
 #   --iterate     Skips mutants that a PREVIOUS run recorded as caught or

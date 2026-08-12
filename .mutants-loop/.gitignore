@@ -1,6 +1,11 @@
-# Discovery run artifacts — regenerated, never reviewed.
+# Scratch from local runs — regenerated, never reviewed. The scan artifacts
+# themselves live in CI now; next-work.sh downloads them to a temp dir and
+# deletes them, so nothing here is a work list.
+out/
+scheduled.log
+
+# Left by the retired local discovery scripts. Kept so an old checkout that
+# still has these files does not offer them for commit.
 discover.log
 discover.log.*
-out/
 discovery.pid
-scheduled.log

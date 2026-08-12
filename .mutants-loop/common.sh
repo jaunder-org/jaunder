@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Shared cargo-mutants invocation for this repo. Sourced by discover.sh and
-# verify.sh so discovery and verification cannot disagree — they must run the
-# tool identically or they answer different questions about the same mutant.
+# Shared cargo-mutants invocation for this repo. Sourced by ci-shard.sh (the
+# scheduled scan) and verify.sh (the local per-file check) so CI and a laptop
+# cannot disagree — they must run the tool identically or they answer different
+# questions about the same mutant.
 #
 # Every setting here was learned by getting a wrong answer, not an error.
 # Do not drop one because a run "seems to work without it".
