@@ -196,16 +196,32 @@ jobs:
           restore-keys: |
             xtask-${{ runner.os }}-
 
-      # The mutants.out directory IS the --iterate state: cargo-mutants reads the
-      # previous run's caught/unviable list from it (rotating it to
-      # mutants.out.old) and skips those mutants. Restoring it is what makes a
-      # steady-state run cheap.
+      # The mutants.out directory IS the --iterate state. There is no separate
+      # database: cargo-mutants rotates the restored mutants.out to
+      # mutants.out.old, reads the previous outcomes from it, and writes a fresh
+      # one. Restoring it is the whole of what makes a steady-state run cheap.
       #
-      # `save-always` because the run legitimately ends non-zero when mutants
-      # survive — that is the result we want, and losing the cache on it would
-      # mean every run started from scratch.
+      # It only ever accumulates mutants proven CAUGHT or UNVIABLE — measured
+      # here as "Iteration excludes 9 previously caught or unviable mutants".
+      # Survivors and timeouts are deliberately absent from that list, so both
+      # are retested every run. A timeout therefore cannot leave stale or
+      # misleading state behind: the mutant is simply left unresolved. Nor can a
+      # half-finished run — what it wrote is still true of the mutants it
+      # actually got to; you just get fewer skips next time.
       #
-      # The key is date-stamped so each run writes a fresh entry and the
+      # The one thing this state IS unsound about is regressions: it records
+      # "was caught", not "is still caught", so a test later deleted leaves its
+      # mutant skipped forever. Only the monthly full run notices that, which is
+      # why it ignores this cache entirely.
+      #
+      # No `save-always`: it is deprecated, and the premise it was added on is
+      # not true here. ci-shard.sh exits 0 whenever it tested anything — judging
+      # on artifacts and never on the exit code is the point of it — so the
+      # ordinary save already covers every run that produced results. The only
+      # case it would change is a shard that genuinely broke, and that run's
+      # partial state is not worth persisting.
+      #
+      # The key is run-stamped so each run writes a fresh entry and the
       # restore-keys prefix picks up the most recent one. Keying on the commit
       # would miss constantly; keying on nothing would never update.
       - name: Restore mutation results
@@ -220,7 +236,6 @@ jobs:
             matrix.shard }}-${{ github.run_id }}
           restore-keys: |
             mutants-v1-${{ matrix.package }}-${{ matrix.shards }}-${{ matrix.shard }}-
-          save-always: true
 
       - name: Run mutants
         env:
@@ -254,11 +269,25 @@ jobs:
             if [ ! -f "$out/outcomes.json" ]; then
               echo "**No outcomes** — nothing was tested. Check the log."
             else
+              # These count what THIS run tested. Under --iterate the mutants a
+              # previous run proved caught or unviable are excluded up front and
+              # so appear in none of them — which is why `caught` shrinks toward
+              # zero as a package is burned down, and why `skipped` is reported
+              # beside it rather than left to be inferred from a falling number.
+              # `missed` is unaffected: survivors are never skipped.
               for f in caught missed unviable timeout; do
                 n=0
                 [ -s "$out/$f.txt" ] && n=$(wc -l <"$out/$f.txt")
-                echo "- $f: $n"
+                echo "- $f (this run): $n"
               done
+              skipped=0
+              [ -s "$out/previously_caught.txt" ] && skipped=$(wc -l <"$out/previously_caught.txt")
+              echo "- skipped (already caught or unviable): $skipped"
+              if [ -s "$out/timeout.txt" ]; then
+                echo
+                echo "> **$(wc -l <"$out/timeout.txt") mutant(s) timed out and were never examined.**"
+                echo "> Neither caught nor missed — a hole in the scan, not a result."
+              fi
               if [ -s "$out/missed.txt" ]; then
                 echo
                 echo "<details><summary>Surviving mutants</summary>"
@@ -283,6 +312,7 @@ jobs:
             .mutants-ci/*/mutants.out/unviable.txt
             .mutants-ci/*/mutants.out/timeout.txt
             .mutants-ci/*/mutants.out/outcomes.json
+            .mutants-ci/*/mutants.out/previously_caught.txt
           # `.mutants-ci` is a DOT directory, and upload-artifact skips hidden
           # paths by default. Without this every shard uploads nothing, the
           # report job counts zero survivors, and the whole workflow is green
@@ -307,7 +337,7 @@ jobs:
           # NOT merge-multiple: each shard's files keep their own directory, so
           # one shard's missed.txt cannot overwrite another's.
           path: results
-      - name: Fail if any mutant survived
+      - name: Judge the scan
         env:
           EXPECTED_SHARDS: ${{ needs.plan.outputs.jobs }}
         run: |
@@ -341,12 +371,22 @@ jobs:
 
           count() { find results -name "$1.txt" -exec cat {} + | grep -c . || true; }
           missed=$(count missed)
-          echo "shards=${#outcomes[@]} caught=$(count caught) missed=$missed unviable=$(count unviable) timeout=$(count timeout)"
+          timeout=$(count timeout)
+          echo "shards=${#outcomes[@]} caught=$(count caught) missed=$missed unviable=$(count unviable) timeout=$timeout skipped=$(count previously_caught)"
 
           # Which package a survivor is in is the first thing anyone asks, and
           # the run now spans five of them. The artifact directory carries it.
+          #
+          # `caught` and `unviable` count what this run TESTED. Under --iterate
+          # the mutants a previous run proved caught or unviable are excluded up
+          # front, so they appear in neither — `caught` falls toward zero as a
+          # package is burned down, and that is success, not regression. Only the
+          # monthly full run reports totals. `missed` is a complete survivor list
+          # either way, because survivors are never skipped.
           {
-            echo "### mutants: $missed surviving, $(count caught) caught, $(count unviable) unviable"
+            echo "### mutants: $missed surviving"
+            echo
+            echo "$(count caught) caught, $(count unviable) unviable, $(count previously_caught) skipped (all counts for mutants tested this run)"
             echo
             for dir in results/mutants-*; do
               pkg=${dir#results/mutants-}
@@ -356,6 +396,29 @@ jobs:
               echo "- \`$pkg\`: $n surviving"
             done
           } >>"$GITHUB_STEP_SUMMARY"
+
+          # A timeout is not a result, it is a hole. The mutant was neither caught
+          # nor missed, so it went unexamined while the totals above still read
+          # like an answer — the same defect as a missing shard, which is already
+          # fatal here. Reported separately from survivors because the fix is
+          # different: a survivor is a missing test, a timeout is the timeout
+          # value or the runner. Locally these came in floods (83 of common's 507)
+          # whenever two mutant jobs shared a box; CI runs MUTANTS_JOBS=1 to avoid
+          # exactly that, so a timeout here means the assumption has broken.
+          if [ "$timeout" -gt 0 ]; then
+            echo "::error::$timeout mutant(s) timed out and were never examined — the scan is incomplete"
+            {
+              echo
+              echo "> **Incomplete scan: $timeout mutant(s) timed out.**"
+              echo "> Neither caught nor missed — they went unexamined. This is a"
+              echo "> measurement failure, not a finding: check MUTANTS_JOBS and the"
+              echo "> \`--timeout\` in .mutants-loop/common.sh, not the tests."
+              echo
+              echo '```'
+              find results -name timeout.txt -exec cat {} +
+              echo '```'
+            } >>"$GITHUB_STEP_SUMMARY"
+          fi
 
           if [ "$missed" -gt 0 ]; then
             {
@@ -368,6 +431,11 @@ jobs:
               echo
               echo "</details>"
             } >>"$GITHUB_STEP_SUMMARY"
+          fi
+
+          # One exit, after both have had their say: a run with survivors AND
+          # timeouts must report both, not stop at whichever was checked first.
+          if [ "$missed" -gt 0 ] || [ "$timeout" -gt 0 ]; then
             exit 1
           fi
-          echo "No surviving mutants." >>"$GITHUB_STEP_SUMMARY"
+          echo "No surviving mutants, no timeouts." >>"$GITHUB_STEP_SUMMARY"
