@@ -226,18 +226,18 @@ and it lives next to the rule that would otherwise flag it. That co-location
 also discharges the recurring "record why these sites are fine so nobody
 re-audits them" requirement without a separate prose document to go stale.
 
-**Amended by #778 on _which_ co-location.** The requirement stands; the claim
-that the **gate file** is where it is discharged does not. The reader who needs
-the justification is reading the **code**, not the gate — and the three XSS
-gates were carrying every reason twice, once in prose beside the site and once
-condensed in the allowlist, with nothing keeping the two in sync. Where a site
-is a source line, the reason belongs on it, and the exempt set is then _derived_
-from the tree rather than declared beside the rule: a derived set cannot go
-stale, which is exactly what the multiplicity reconciliation existed to detect.
-See [the marker ADR](0094-gate-exemptions-in-source-markers.md) for the
-discriminator. It does not displace `sqlx-newtype-decode`'s central list, whose
-entries carry a rationale category and a tracking issue that no single site
-could hold.
+**Amended by #778 on _which_ co-location.** The requirement stood; as of #778
+the claim that the **gate file** is where it is discharged did not. The reader
+who needs the justification is reading the **code**, not the gate — and the
+three XSS gates were carrying every reason twice, once in prose beside the site
+and once condensed in the allowlist, with nothing keeping the two in sync. Where
+a site is a source line, the reason belongs on it, and the exempt set is then
+_derived_ from the tree rather than declared beside the rule: a derived set
+cannot go stale, which is exactly what the multiplicity reconciliation existed
+to detect. See [the marker ADR](0094-gate-exemptions-in-source-markers.md) for
+the discriminator. It does not displace `sqlx-newtype-decode`'s central list,
+whose entries carry a rationale category and a tracking issue that no single
+site could hold.
 
 **What it creates.** #716 is re-framed from an acknowledged gap into scheduled
 work. Rebuilding `sqlx-newtype-bind` to enumerate will require an allowlist for

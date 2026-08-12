@@ -107,37 +107,40 @@ different-DOM reactive article than the projector painted). Both must go.
 
 ## Addendum (2026-07-22): shared session context + operator in the marker (#591)
 
-Decision 1's marker was `{username}`; it now carries `{username, is_operator}`.
-The extra field is additive — the pre-paint `<head>` script (Decision 2) reads
-only `.username`, so `username` stays the top-level key and the script, its
-`csr/index.html` twin, and the drift guard are unchanged. Decode treats an
-absent `is_operator` as `false`, so a marker written before this change decodes
-as a (non-operator) logged-in session rather than anonymous — no flash for
-in-flight sessions. The value type is `web::auth::SessionUser`.
+Decision 1's marker was `{username}`; as of 2026-07-22 it carried
+`{username, is_operator}`. The extra field was additive — the pre-paint `<head>`
+script (Decision 2) reads only `.username`, so `username` stayed the top-level
+key and the script, its `csr/index.html` twin, and the drift guard were
+unchanged. Decode treated an absent `is_operator` as `false`, so a marker
+written before this change decoded as a (non-operator) logged-in session rather
+than anonymous — no flash for in-flight sessions. The value type was
+`web::auth::SessionUser`.
 
-**Operator chrome is now flash-free too.** Previously the operator-only sidebar
+**Operator chrome became flash-free too.** Previously the operator-only sidebar
 links were gated on an async `current_user_is_operator()` fetch (a
 paint-then-add flash for operators). With `is_operator` in the marker the
-sidebar seeds it synchronously at boot, like the username. It stays advisory:
-the operator-gated `#[server]` fns still call `require_operator()` against the
-DB, so a hand-edited marker only reveals a link that rejects on use.
+sidebar seeded it synchronously at boot, like the username. It stayed advisory:
+the operator-gated `#[server]` fns still called `require_operator()` against the
+DB, so a hand-edited marker only revealed a link that rejects on use.
 
-**Decision 3's reconcile is lifted to one app-level context.** The per-component
-`current_user()` fetches (sidebar, cockpit, create-post, subscribe-button) and
-the reactive `current_user_is_operator()` are retired in favour of a single
-`get_session()` `#[server]` fn returning `Option<SessionUser>`, exposed through
-a shared `SessionContext` provided in `AppShell`: a marker-seeded
-`RwSignal<Option<SessionUser>>` plus a per-navigation reconcile `Resource` that
-confirms the marker against the live session and rewrites both the signal and
-the marker. Components read the context (synchronous seed for chrome; awaited
-reconcile for server-confirmed gates) rather than each spinning their own fetch
-— the "boot from marker, reconcile in the background, correct toward anon"
-mechanism of Decision 3 is unchanged, just consolidated into the single source.
+**Decision 3's reconcile was lifted to one app-level context.** The
+per-component `current_user()` fetches (sidebar, cockpit, create-post,
+subscribe-button) and the reactive `current_user_is_operator()` were retired in
+favour of a single `get_session()` `#[server]` fn returning
+`Option<SessionUser>`, exposed through a shared `SessionContext` provided in
+`AppShell`: a marker-seeded `RwSignal<Option<SessionUser>>` plus a
+per-navigation reconcile `Resource` that confirmed the marker against the live
+session and rewrote both the signal and the marker. Components read the context
+(synchronous seed for chrome; awaited reconcile for server-confirmed gates)
+rather than each spinning their own fetch — the "boot from marker, reconcile in
+the background, correct toward anon" mechanism of Decision 3 was unchanged, just
+consolidated into the single source.
 
-**The full-reload write path is gone.** Decision 3 says the marker is "written
+**The full-reload write path went away.** Decision 3 says the marker is "written
 on login, cleared on logout." That write used to ride a `set_redirect_hook`
 override that forced every server-fn redirect into a full `location.replace()`
 document load (an SSR-era vestige — SSR was later removed, ADR-0041/#180). #591
-deletes the override: login/logout/register now update the shared context
-(signal + marker) directly and navigate via `leptos_router`'s client-side
-pushState hook — no wasm re-boot. See the #591 spec for the full rationale.
+deleted the override: login/logout/register thereafter updated the shared
+context (signal + marker) directly and navigated via `leptos_router`'s
+client-side pushState hook — no wasm re-boot. See the #591 spec for the full
+rationale.

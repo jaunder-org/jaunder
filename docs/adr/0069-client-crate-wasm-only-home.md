@@ -65,9 +65,9 @@ boundary ADR-0056 said could come later.
   gating the **`mod`/`use` items** for the wasm and host implementations, which
   is also what the `target-arch-placement` check (#520) permits.
 
-  The charter is unchanged in substance: the wasm-only code is still wasm-only,
+  The charter was unchanged in substance: the wasm-only code stayed wasm-only,
   still behind one gate per module rather than per item, and pure logic still
-  does not move here. What is now admitted is a **host-compiled constant table
+  did not move here. What #794 admitted was a **host-compiled constant table
   plus its no-op counterpart**, which carries a real host test obligation rather
   than escaping one. The "empty on host" phrasing above is the mechanism that
   was chosen in #520, not the principle; the principle is that `client` holds

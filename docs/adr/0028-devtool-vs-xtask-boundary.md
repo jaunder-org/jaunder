@@ -95,22 +95,22 @@ The #29/#30 placements are unchanged.
 
 ## Supplement (#158): `devtool run`
 
-`devtool` gains a `run` subcommand: a no-shell single-command runner. It runs
-exactly one program via `exec` (never `sh -c`), parks stdout/stderr under
-`.xtask/run/`, and returns a JSON result (`exit_code`, `ok`, `signal`,
-`duration_ms`, per-stream `{path, bytes, lines}`); its own exit status equals
+In #158 `devtool` gained a `run` subcommand: a no-shell single-command runner.
+It ran exactly one program via `exec` (never `sh -c`), parked stdout/stderr
+under `.xtask/run/`, and returned a JSON result (`exit_code`, `ok`, `signal`,
+`duration_ms`, per-stream `{path, bytes, lines}`); its own exit status equalled
 the child's, so a caller's pass/fail signal is honest without shell scaffolding
 (`; echo $?`, `2>&1 | tail`, `| rg` — all of which silently overwrite the exit
-status). It refuses shell re-entry (`bash -c`, `nix develop`, …), so an
+status). It refused shell re-entry (`bash -c`, `nix develop`, …), so an
 allowlist entry for it is narrower than one for `bash`.
 
-This fits the litmus on both sides: it is the in-sandbox process runner, and it
+This fit the litmus on both sides: it is the in-sandbox process runner, and it
 is also useful on the host as the gate-execution surface for humans and agents.
-`devtoolBin` is therefore exposed in **both devShells** — it sits in `ciInputs`,
-so `nix develop` (direnv) and `nix develop .#ci` alike have it — in addition to
-the coverage sandbox's `nativeBuildInputs`. (#229 is why it is in `ciInputs`
+`devtoolBin` was therefore exposed in **both devShells** — it sat in `ciInputs`,
+so `nix develop` (direnv) and `nix develop .#ci` alike had it — in addition to
+the coverage sandbox's `nativeBuildInputs`. (#229 is why it was in `ciInputs`
 rather than the interactive-only list: the `shellHook` is shared by both shells
-and invokes `devtool provision-node-modules`.) No git-revision build stamp is
+and invokes `devtool provision-node-modules`.) No git-revision build stamp was
 added: `devtoolBin` is a build input to the coverage check, so stamping it with
 the repo revision would bust the coverage cache on every commit;
 `devtool --version` reports the crate version, and staleness while developing

@@ -84,14 +84,15 @@ default; #180 made it the **only** path.
   projector never renders it) — full authed-flash handling is #181.
   `render_head` gained the feed + RSD autodiscovery `<link>`s the reactive
   components used to inject via SSR.
-- **#180 removed the reactive SSR render (closes #173).** `create_router`'s
-  projector arm is now unconditional; the `leptos_axum`
+- **#180 removed the reactive SSR render (closes #173).** As of 2026-07-01
+  `create_router`'s projector arm became unconditional; the `leptos_axum`
   `leptos_routes_with_context` / `generate_route_list` /
   `file_and_error_handler(shell)` arm, `web::shell()`, the `hydrate` crate +
   `web/hydrate` feature, and `server`'s `csr` feature are gone. `flake.nix`
-  builds only the CSR client (`site`), and the standard `{backend}×{browser}`
-  e2e matrix now exercises the CSR build (the manual `csr-e2e-postgres-chromium`
-  check is retired). KEPT: `handle_server_fns_with_context` (the `/api` data
-  API), `leptos/ssr` (server-fn impls), `server_boundary`/`server_resource`.
-- The `web` feature is named `server` (it compiles the server-side data-API
+  built only the CSR client (`site`), and the standard `{backend}×{browser}` e2e
+  matrix thereafter exercised the CSR build (the manual
+  `csr-e2e-postgres-chromium` check was retired). KEPT:
+  `handle_server_fns_with_context` (the `/api` data API), `leptos/ssr`
+  (server-fn impls), `server_boundary`/`server_resource`.
+- The `web` feature was named `server` (it compiles the server-side data-API
   build, no page render); renamed from `ssr` in #197.

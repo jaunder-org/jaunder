@@ -50,12 +50,12 @@ Playwright against an already-running dev server. cargo-leptos owns the server
 lifecycle (it invokes the driver as `end2end-cmd`); a standalone
 `cargo xtask e2e-local` assumes a server is already serving (fast re-runs).
 
-> **Update (#249 / #268):** the server-ownership described in the paragraph
-> above no longer holds. `cargo xtask e2e-local` now owns the whole loop — it
-> builds the bundle, spawns its own `jaunder serve` on an ephemeral port, seeds,
-> runs Playwright, and tears the server down; `end2end-cmd` and cargo-leptos
-> have been removed entirely. The single-Playwright-config decision this ADR
-> records is unaffected.
+> **Update (#249 / #268):** as of #249/#268 the server-ownership described in
+> the paragraph above no longer held. `cargo xtask e2e-local` took over the
+> whole loop — it built the bundle, spawned its own `jaunder serve` on an
+> ephemeral port, seeded, ran Playwright, and tore the server down;
+> `end2end-cmd` and cargo-leptos were removed entirely. The
+> single-Playwright-config decision this ADR records was unaffected.
 
 ## Consequences
 

@@ -63,20 +63,21 @@ pointed at the default `.git/hooks`.
 
 ## Supplement (#103): merge-driver self-heal
 
-The keep-ours merge driver for the generated coverage artifacts
+In #103 the keep-ours merge driver for the generated coverage artifacts
 (`coverage-baseline.json`, `crap-manifest.json`; `.gitattributes` →
-`merge=coverage-keepours`) now self-heals on the same path as `core.hooksPath`:
-every `cargo xtask` run calls `ensure_merge_driver_installed()`, which
-idempotently registers `merge.coverage-keepours.driver=true` in the clone's
-local git config when unset/wrong. This closes the last gap where local git
-config — not version-controlled — depended on an operator remembering a manual
-one-shot: a fresh clone now wires the driver on first gate run, and because the
-config is shared per-clone it covers all worktrees. The manual
-`cargo xtask install-merge-driver` subcommand is removed as redundant; the
-reusable `register_keepours()` helper remains and is the call the self-heal
-makes.
+`merge=coverage-keepours`) was made to self-heal on the same path as
+`core.hooksPath`: every `cargo xtask` run called
+`ensure_merge_driver_installed()`, which idempotently registered
+`merge.coverage-keepours.driver=true` in the clone's local git config when
+unset/wrong. This closed the last gap where local git config — not
+version-controlled — depended on an operator remembering a manual one-shot: a
+fresh clone thereafter wired the driver on first gate run, and because the
+config is shared per-clone it covered all worktrees. The manual
+`cargo xtask install-merge-driver` subcommand was removed as redundant; the
+reusable `register_keepours()` helper remained and was the call the self-heal
+made.
 
-No `post-merge` re-heal hook is added (deliberately). Re-healing the
+No `post-merge` re-heal hook was added (deliberately). Re-healing the
 baseline/manifest to the merged tree requires a full Nix-instrumented
 `cargo xtask check` — there is no cheap re-heal — and a `post-merge` hook fires
 on every `git merge`/`git pull`, including merges that touch nothing

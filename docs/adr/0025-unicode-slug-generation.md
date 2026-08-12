@@ -71,10 +71,10 @@ that forms Indic conjuncts — so `नमस्ते` → `नमस-ते`, `
 signs and Arabic harakat carry `Other_Alphabetic`, so they already survived —
 the original "preserve Unicode letters/digits" framing was imprecise here.)
 
-Refined rule: the charset is defined **per extended grapheme cluster** — a
-cluster is kept iff its base scalar is `is_alphanumeric()`, carrying its
-attached combining marks. `slugify_title` and `Slug::from_str` share the one
-predicate (`base_is_alphanumeric`), and truncation is cluster-aligned. This
-remains a strict superset of the old charset (ASCII/CJK/precomposed-Latin
-clusters are single scalars → unchanged), so **no data migration**. (#120,
-`unicode-segmentation`.)
+Refined rule, adopted 2026-07-10: the charset was redefined **per extended
+grapheme cluster** — a cluster is kept iff its base scalar is
+`is_alphanumeric()`, carrying its attached combining marks. `slugify_title` and
+`Slug::from_str` shared the one predicate (`base_is_alphanumeric`), and
+truncation was cluster-aligned. This remained a strict superset of the old
+charset (ASCII/CJK/precomposed-Latin clusters are single scalars → unchanged),
+so **no data migration**. (#120, `unicode-segmentation`.)

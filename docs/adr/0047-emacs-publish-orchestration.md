@@ -6,35 +6,36 @@
 
 ## Amendment — 2026-07-10 (#366, emacs interface cleanup)
 
-Reviewing the shipped code, the single-blog globals `jaunder-base-url` /
-`jaunder-username` were removed and the transport's dynamic-binding channel was
-made private. This revises the specifics below; the **core shape stands** —
-directory→blog resolution, dynamic binding in preference to threading a `blog`
-argument, and ID-first safe-to-resume write-back are all unchanged.
+Reviewing the shipped code, on 2026-07-10 the single-blog globals
+`jaunder-base-url` / `jaunder-username` were removed and the transport's
+dynamic-binding channel was made private. This revised the specifics below; the
+**core shape stood** — directory→blog resolution, dynamic binding in preference
+to threading a `blog` argument, and ID-first safe-to-resume write-back were all
+unchanged.
 
 - **Decision Driver "a single-blog user who only sets the two globals must keep
   working" — dropped.** A directory-less global resolves _any_ buffer anywhere
   to one server and cannot feed the per-directory reconcile design (Unit D); it
-  modelled a placeless blog, not a simpler one. `jaunder-blogs` already carries
-  the same fields plus the directory join key, so it is now the **sole** config;
+  modelled a placeless blog, not a simpler one. `jaunder-blogs` already carried
+  the same fields plus the directory join key, so it became the **sole** config;
   a single-blog user writes a one-entry alist.
-- **D1 fallback step (2) — removed.** `jaunder--resolve-blog` resolves _only_
-  via `jaunder-blogs` (longest-prefix) and now also **validates**: a matched
-  entry whose `:base-url` is not an absolute URL (scheme + host), or whose
-  `:username` is empty, is a loud error, never a half-configured request; the
-  resolved `:base-url` is normalized (trailing slash stripped). An unmatched
-  directory errors loudly as before.
+- **D1 fallback step (2) — removed.** `jaunder--resolve-blog` thereafter
+  resolved _only_ via `jaunder-blogs` (longest-prefix) and also **validated**: a
+  matched entry whose `:base-url` is not an absolute URL (scheme + host), or
+  whose `:username` is empty, was a loud error, never a half-configured request;
+  the resolved `:base-url` was normalized (trailing slash stripped). An
+  unmatched directory errored loudly as before.
 - **D2 mechanism — a private special, not the user customs.** The commands still
-  dynamically bind rather than thread a `blog` argument (D2's core choice
-  holds), but the bound value is a private `jaunder--active-blog` plist, read
+  dynamically bound rather than threading a `blog` argument (D2's core choice
+  held), but the bound value became a private `jaunder--active-blog` plist, read
   only through the `jaunder--active-base-url` / `jaunder--active-username`
-  accessors. Those accessors are the sole read path and **error when no blog is
-  active**, so a transport call made outside `jaunder--with-blog` fails loudly
-  instead of silently reading a user `defcustom` (or `nil`). This stops the
-  client from rebinding a user-facing config variable behind the user's back and
-  closes the silent `nil`-username footgun (a dropped URL segment +
+  accessors. Those accessors were the sole read path and **errored when no blog
+  was active**, so a transport call made outside `jaunder--with-blog` failed
+  loudly instead of silently reading a user `defcustom` (or `nil`). This stopped
+  the client from rebinding a user-facing config variable behind the user's back
+  and closed the silent `nil`-username footgun (a dropped URL segment +
   `":password"` Basic credentials).
-- **Verification — the "globals fallback" ERT case is replaced** by
+- **Verification — the "globals fallback" ERT case was replaced** by
   incomplete-entry and no-active-blog error cases.
 
 ## Context and Problem Statement
