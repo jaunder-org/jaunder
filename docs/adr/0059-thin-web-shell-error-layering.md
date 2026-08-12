@@ -125,18 +125,18 @@ half (`ScopedFuture`, ancestor-owner hold — ADR-0016 #89/#124/#138) stays in
 `WebError`, the projection, and the owner-pinning.
 
 > **Update (#594):** the owner-pinning half was later retired. With no component
-> SSR, the owner-pinning was vestigial, so `server_boundary` no longer holds any
-> owner — `web` now keeps only `WebError` and the projection. See the ADR-0016
-> #594 addendum.
+> SSR, the owner-pinning was vestigial, so from #594 `server_boundary` held no
+> owner — `web` kept only `WebError` and the projection. See the ADR-0016 #594
+> addendum.
 
-> **Update (#714):** the `boundary!` macro that invoked `server_boundary` is
-> deleted; `#[macros::server]` emits the wrap itself, so no body can skip it.
-> The split above is unchanged, but the `host` carrier method
-> (`emit_boundary_failure`) loses its `server_fn` parameter and log field —
-> redundant with the enclosing `web.<vertical>.<ident>` span, which both
+> **Update (#714):** in #714 the `boundary!` macro that invoked
+> `server_boundary` was deleted; `#[macros::server]` emitted the wrap itself, so
+> no body could skip it. The split above was unchanged, but the `host` carrier
+> method (`emit_boundary_failure`) lost its `server_fn` parameter and log field
+> — redundant with the enclosing `web.<vertical>.<ident>` span, which both
 > configured formatters render. The five error fields (`error.kind`,
-> `error.class`, `error.public`, `error.source`, `error.context`) are unchanged.
-> See the ADR-0011 #714 addendum.
+> `error.class`, `error.public`, `error.source`, `error.context`) were
+> unchanged. See the ADR-0011 #714 addendum.
 
 ### `host` floor invariant (extends ADR-0058)
 

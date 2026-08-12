@@ -14,6 +14,14 @@ Jaunder has two error "ladders":
   **operator-side** error used inside `#[server]` functions; it never crosses
   the wire.
 
+> **Annotation (2026-08-12).** The two locations above were accurate at decision
+> time. `InternalError` now lives in `host/src/error.rs` (re-exported through
+> `web::error`), and its flat `operator_message: String` has been replaced by
+> the structured carrier described under "Forthcoming" below. See
+> [ADR-0059](0059-thin-web-shell-error-layering.md), which picks this ADR's
+> forthcoming carrier up and records the decision. Current inventory:
+> [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 Beneath them, the storage and `common` crates define typed domain error enums
 (`UserAuthError`, `UpdatePostError`, `PerformCreationError`, `MailError`,
 `RegenerateError`, …) with `thiserror`.
@@ -102,6 +110,13 @@ The structured internal carrier — replacing `InternalError`'s flat
 them as discrete fields at the boundary, with `anyhow` as the operator-context
 carrier — is analysis §3.1-B/C and is tracked as `jaunder-kq8w.16`. It extends
 this ADR; the typed sources preserved per #3 are exactly what it will classify.
+
+> **Annotation (2026-08-12).** This is no longer forthcoming. The bead-tracker
+> id `jaunder-kq8w.16` is dead (the project moved to GitHub issues), and the
+> structured carrier landed — `host/src/error.rs`, with `kind`/`ErrorClass`/
+> `context`. [ADR-0059](0059-thin-web-shell-error-layering.md) records that
+> decision, stating that it extends ADR-0017 and picks up its forthcoming
+> carrier.
 
 ## Consequences
 

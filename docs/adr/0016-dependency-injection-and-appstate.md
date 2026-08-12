@@ -182,17 +182,17 @@ had only worked around this by an unwritten convention of reading context
 **before** any await; three fns that violated it were the bugs.
 
 **Resolution.** Every server-fn body routes through `server_boundary` (then via
-the `boundary!` macro; since #714 via the wrap `#[macros::server]` emits).
-`server_boundary` now runs the body inside a `reactive_graph` `ScopedFuture`
-(`new_untracked`) **when an owner is current** — which holds a _strong_ owner
-reference (keeping the context alive) and re-applies it on each poll. This makes
-`expect_context` in a server function reliable **regardless of await ordering**,
-so the per-trait Leptos-context DI is sound as written, and the "read context
-first" convention is retired (its explanatory comments are corrected, not its
-code). The wrap is guarded on `Owner::current().is_some()`:
+the `boundary!` macro; since #714 via the wrap `#[macros::server]` emits). As of
+2026-06-27 `server_boundary` ran the body inside a `reactive_graph`
+`ScopedFuture` (`new_untracked`) **when an owner is current** — which held a
+_strong_ owner reference (keeping the context alive) and re-applied it on each
+poll. This made `expect_context` in a server function reliable **regardless of
+await ordering**, so the per-trait Leptos-context DI was sound as written, and
+the "read context first" convention was retired (its explanatory comments were
+corrected, not its code). The wrap was guarded on `Owner::current().is_some()`:
 `ScopedFuture::new_untracked` captures `Owner::current().unwrap_or_default()`,
 so wrapping with no current owner would capture an _empty_ owner and lose
-context deterministically — strictly worse than the race. The guarantee is
+context deterministically — strictly worse than the race. The guarantee was
 proven by the deterministic `owner_lifetime` tests in `web/src/error.rs` (the
 mechanism, the fix, and the empty-owner trap), not by the flaky e2e.
 
@@ -214,18 +214,19 @@ The owner is alive only at **fetcher invocation**, and an `async fn` body has no
 synchronous prologue, so the capture cannot live in the handler — it must be at
 the `Resource` layer.
 
-**Resolution.** A single constructor `server_resource(source, fetcher)` (`web`)
-wraps the fetcher's future in `ScopedFuture::new_untracked` at invocation —
-capturing the live owner and holding a strong ref across every poll, exactly
-#89's mechanism applied one layer out. It is the **only** sanctioned way to
-create a `Resource` in `web`; a static guard (clippy `disallowed-methods` if it
-binds, else a scanning test) fails the gate on any raw `Resource::new` in
-`web/src`, so the wrapper is non-optional with **zero per-handler boilerplate**
-— server fns keep their error boundary + `expect_context` unchanged. Proven by
-deterministic `owner_lifetime`-style tests (context survives an owner strong-ref
-drop before first poll via `server_resource`; the raw constructor loses it), not
-by the flaky e2e. `Action::new` is assessed for the same exposure and given a
-sibling wrapper if it shares it.
+**Resolution.** As of 2026-06-28 a single constructor
+`server_resource(source, fetcher)` (`web`) wrapped the fetcher's future in
+`ScopedFuture::new_untracked` at invocation — capturing the live owner and
+holding a strong ref across every poll, exactly #89's mechanism applied one
+layer out. It was the **only** sanctioned way to create a `Resource` in `web`; a
+static guard (clippy `disallowed-methods` if it binds, else a scanning test)
+failed the gate on any raw `Resource::new` in `web/src`, so the wrapper was
+non-optional with **zero per-handler boilerplate** — server fns kept their error
+boundary + `expect_context` unchanged. Proven by deterministic
+`owner_lifetime`-style tests (context survives an owner strong-ref drop before
+first poll via `server_resource`; the raw constructor loses it), not by the
+flaky e2e. `Action::new` was assessed for the same exposure and given a sibling
+wrapper if it shared it.
 
 ## Addendum (2026-06-28): ancestor-owner contexts across an SSR `await` (#138)
 
@@ -244,17 +245,18 @@ page-render SSR while the ~75 sibling sites that read storage **before** their
 first await did not: a pre-await read copies the `Arc` out while the ancestry is
 still alive.
 
-**Resolution.** `server_boundary` now holds the **full owner ancestry** strong
-for the future's lifetime: at entry it walks `Owner::current()` to the root via
-`Owner::parent()` (which upgrades the weak parent link to a strong `Owner`) and
-keeps the resulting handles alive alongside the `ScopedFuture`. With the whole
-ancestry pinned, every post-await reactive-context read resolves — **independent
-of read ordering**, so server-fn bodies need no read-before-await discipline and
-keep their error boundary + `expect_context` unchanged (**zero per-handler
-boilerplate**). This _eliminates_ the post-await-read failure class structurally
-rather than policing it with a lint. Proven by deterministic `owner_lifetime`
-tests (`server_boundary_keeps_ancestor_context_alive_across_await` is red before
-the fix, green after;
+**Resolution.** As of 2026-06-28 `server_boundary` held the **full owner
+ancestry** strong for the future's lifetime: at entry it walked
+`Owner::current()` to the root via `Owner::parent()` (which upgrades the weak
+parent link to a strong `Owner`) and kept the resulting handles alive alongside
+the `ScopedFuture`. With the whole ancestry pinned, every post-await
+reactive-context read resolved — **independent of read ordering**, so server-fn
+bodies needed no read-before-await discipline and kept their error boundary +
+`expect_context` unchanged (**zero per-handler boilerplate**). This _eliminated_
+the post-await-read failure class structurally rather than policing it with a
+lint. Proven by deterministic `owner_lifetime` tests
+(`server_boundary_keeps_ancestor_context_alive_across_await` is red before the
+fix, green after;
 `post_await_read_loses_ancestor_context_when_parent_owner_dropped` characterizes
 the underlying leaf-only loss) and by the #93 e2e zero-panic gate (ADR-0032) on
 authenticated `/` and `/posts/new`.
@@ -279,12 +281,13 @@ owner strong for the entire `.await` — a stack local plus leptos_axum's own
 `ScopedFuture` merely duplicated leptos_axum's — dead weight on the only path
 that exists.
 
-**Resolution.** `server_boundary` no longer touches reactive-owner lifetime: it
-awaits the body once and projects `InternalError → WebError` (the
-error-projection half is unrelated to SSR and is retained, along with
-`emit_boundary_failure`). `owner_ancestry_strong` and the deterministic
-`owner_lifetime` tests are removed. **The #89, #124, and #138 addenda above are
-superseded and retained for history only** — their described owner-pinning no
-longer exists, and their test citations (including #138's
+**Resolution.** As of 2026-07-22 `server_boundary` no longer touched
+reactive-owner lifetime: it awaited the body once and projected
+`InternalError → WebError` (the error-projection half is unrelated to SSR and
+was retained, along with `emit_boundary_failure`). `owner_ancestry_strong` and
+the deterministic `owner_lifetime` tests were removed. **The #89, #124, and #138
+addenda above are superseded and retained for history only** — their described
+owner-pinning no longer exists, and their test citations (including #138's
 `post_await_read_loses_ancestor_context_when_parent_owner_dropped`, already
-stale) should not be treated as live.
+stale) should not be treated as live. Current state: see
+[ARCHITECTURE.md](../ARCHITECTURE.md).

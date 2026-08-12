@@ -9,19 +9,24 @@
 //!   malformed ADR can't be projected into a table row.
 //! - **`adr-readme-parity`** — the README table's number/link/status cells and
 //!   row set match `docs/adr/`. Titles are hand-owned and not compared.
+//! - **`adr-view-parity`** — every accepted ADR is cited at least once in
+//!   `docs/ARCHITECTURE.md`. No allowlist, no exemptions: an ADR nobody can
+//!   describe in the view is an ADR the view is lying about.
 //!
-//! Neither mutates the tree; resolution is a guided manual fix (format) or
-//! `cargo xtask adr sync-readme` (parity).
+//! None mutates the tree; resolution is a guided manual fix (format), `cargo
+//! xtask adr sync-readme` (README parity), or writing prose (view parity — there
+//! is no mechanical recovery).
 
 use std::path::Path;
 
 use crate::adr_readme;
 use crate::result::{CommandResult, StepResult};
 
-/// Push the `adr-format` and `adr-readme-parity` steps.
+/// Push the `adr-format`, `adr-readme-parity` and `adr-view-parity` steps.
 pub fn run(result: &mut CommandResult) {
     result.push(format_step());
     result.push(parity_step());
+    result.push(view_parity_step());
 }
 
 fn format_step() -> StepResult {
@@ -40,5 +45,17 @@ fn parity_step() -> StepResult {
         Ok(problems) => StepResult::fail("adr-readme-parity")
             .detail(format!("{}\n{RECOVERY}", problems.join("\n"))),
         Err(e) => StepResult::fail("adr-readme-parity").detail(format!("{e:#}\n{RECOVERY}")),
+    }
+}
+
+fn view_parity_step() -> StepResult {
+    const RECOVERY: &str = "  recovery: none mechanical — describe each ADR above in the \
+        relevant section of docs/ARCHITECTURE.md and cite it there, as a link to \
+        `adr/NNNN-<slug>.md` or a bare `ADR-NNNN` token. There is no exemption list.";
+    match adr_readme::view_parity_problems(Path::new(".")) {
+        Ok(problems) if problems.is_empty() => StepResult::ok("adr-view-parity"),
+        Ok(problems) => StepResult::fail("adr-view-parity")
+            .detail(format!("{}\n{RECOVERY}", problems.join("\n"))),
+        Err(e) => StepResult::fail("adr-view-parity").detail(format!("{e:#}\n{RECOVERY}")),
     }
 }

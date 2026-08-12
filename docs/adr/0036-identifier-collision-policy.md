@@ -58,27 +58,36 @@ table's visible bare `[NNNN]` number cell, so a renumber (and the planned
 always-`0000` authoring flow, where every new ADR is written `0000-slug.md` and
 `renumber` assigns the real number) would leave that cell stale.
 
-The table is now a **generated projection** of `docs/adr/`, extending this
-policy:
+In #196 the table became a **generated projection** of `docs/adr/`, extending
+this policy:
 
 - **Generated cells, hand-owned titles.** `cargo xtask adr sync-readme`
-  regenerates the number, link-target, and status cells of the table (delimited
+  regenerated the number, link-target, and status cells of the table (delimited
   by `<!-- adr-table:begin -->` / `<!-- adr-table:end -->` markers) from the ADR
-  files. The **title** cell stays hand-curated: a new row is seeded from the ADR
-  heading, then never overwritten. `sync-readme` is folded into `adr renumber`,
-  so a collision bump refreshes the table in the same run.
-- **Canonical ADR style.** Each ADR's line-1 heading is `# ADR-NNNN: <title>`
-  (with `NNNN` matching the filename) and its status is a single token from
-  `{proposed, accepted, superseded, deprecated, rejected}` on a `- Status:`
-  line. Choosing `# ADR-NNNN:` (over the legacy `# NNNN.`) means the heading
-  itself carries an `ADR-NNNN` token, so `renumber`'s existing `rewrite_bare`
-  fixes a bumped ADR's own heading number for free.
-- **Two read-only gates**, siblings of `identifier-collisions`: `adr-format`
-  (every ADR matches the canonical heading + status style) and
+  files. The **title** cell stayed hand-curated: a new row was seeded from the
+  ADR heading, then never overwritten. `sync-readme` was folded into
+  `adr renumber`, so a collision bump refreshed the table in the same run.
+- **Canonical ADR style.** Each ADR's line-1 heading was fixed as
+  `# ADR-NNNN: <title>` (with `NNNN` matching the filename) and its status a
+  single token from `{proposed, accepted, superseded, deprecated, rejected}` on
+  a `- Status:` line. Choosing `# ADR-NNNN:` (over the legacy `# NNNN.`) means
+  the heading itself carries an `ADR-NNNN` token, so `renumber`'s existing
+  `rewrite_bare` fixes a bumped ADR's own heading number for free.
+
+  > **Annotation (2026-08-12).** That five-token status set has since been
+  > narrowed. [ADR-0088](0088-promotion-is-the-acceptance-event.md) made
+  > promotion the acceptance event, so a numbered ADR carries one of **four**
+  > tokens — `accepted`, `superseded`, `deprecated`, `rejected`
+  > (`NUMBERED_STATUS_VOCAB` in `xtask/src/adr_readme.rs`) — and `adr-format`
+  > now rejects `proposed` outright. Current inventory:
+  > [ARCHITECTURE.md](../ARCHITECTURE.md).
+
+- **Two read-only gates** were added, siblings of `identifier-collisions`:
+  `adr-format` (every ADR matches the canonical heading + status style) and
   `adr-readme-parity` (the table's mechanical cells and row set match
   `docs/adr/`, compared semantically so prettier's column padding and curated
-  titles never trip it). Recovery for parity drift is
-  `cargo xtask adr sync-readme`; format is a guided manual fix.
+  titles never trip it). Recovery for parity drift was
+  `cargo xtask adr sync-readme`; format was a guided manual fix.
 
 ## Addendum: enforce the check against the merged tree (require up to date)
 
@@ -95,18 +104,19 @@ same incident, a struct literal a concurrent PR left missing a field the other
 PR added — first existed only in merged `main`, which was then broken until
 repaired by hand.
 
-The fix is to gate on the **combined** tree, not either branch alone:
+The fix was to gate on the **combined** tree, not either branch alone:
 
-- **Require branches to be up to date before merging.** The ruleset now sets
-  `strict_required_status_checks_policy = true`. A PR can merge only after it is
-  brought up to date with `main`, which re-runs the required checks
+- **Require branches to be up to date before merging.** The ruleset was changed
+  to set `strict_required_status_checks_policy = true`. A PR could merge only
+  after it was brought up to date with `main`, which re-ran the required checks
   (`Validate (no e2e)` + `e2e gate`) against the PR merged onto current `main`.
   A collision, a compile-level semantic conflict, or any other breakage that
-  exists only in the merged tree now surfaces there and blocks the merge, so it
-  cannot reach `main`.
+  existed only in the merged tree then surfaced there and blocked the merge, so
+  it could not reach `main`.
 
-Consequence: when several PRs are in flight, each merge invalidates the others'
-up-to-date status, so they must update and re-run the full required suite in
+Consequence: when several PRs were in flight, each merge invalidated the others'
+up-to-date status, so they had to update and re-run the full required suite in
 turn — the cost of testing every merge against the real post-merge tree. A merge
-queue would remove that serialization, but at this repo's PR volume the
-up-to-date requirement is the simpler mechanism and was chosen deliberately.
+queue would remove that serialization, but at this repo's PR volume at the time
+the up-to-date requirement was the simpler mechanism and was chosen
+deliberately. (ADR-0077 later adopted a merge queue.)

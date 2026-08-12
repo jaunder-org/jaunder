@@ -54,8 +54,8 @@ This ADR uses text identity _only_ to excuse line failures the diff already
 explains as moves (the `appeared ⊆ structural` check above). A later attempt
 (#112) to promote it to the **primary** classifier — keying pass/fail on
 uncovered-line text instead of mapping lines through the diff, to make the gate
-robust to a pre-PR rebase — was **rejected as unsound for a ratchet**, and the
-classifier deliberately stays line-identity.
+robust to a pre-PR rebase — was **rejected as unsound for a ratchet**, and as of
+2026-06-28 the classifier deliberately stayed line-identity.
 
 Why it cannot work: after a rebase the gap's move is _invisible_ to the gate.
 The working tree equals the anchor commit's tree, so
@@ -78,40 +78,41 @@ we _know_ was removed — a verifiable move. Without that removed-set evidence
 **Therefore:** rebase-robustness comes from a sound **re-heal**, not the
 classifier — after a rebase, `cargo xtask check` regenerates the baseline from
 _actual_ coverage (no guessing), and #110 made that re-heal consistent (load the
-baseline from the anchor commit, not the working tree). The classifier remains
+baseline from the anchor commit, not the working tree). The classifier remained
 line-identity with this text check as its diff-visible safety net.
 
 ## Supplement (#88) — the explicit reanchor command
 
-ADR-0030 anticipated "the explicit reanchor command (#88)". It lands as
-`cargo xtask coverage reanchor`, and it does **not** introduce a second, weaker
-safety notion: it reuses this ADR's `reanchor_is_safe` predicate (diff-based,
-`appeared ⊆ structural`), so it refuses a genuine lowering exactly when the gate
-does. The issue's original "uncovered-text-set unchanged/shrank" wording — a
+ADR-0030 anticipated "the explicit reanchor command (#88)". It landed as
+`cargo xtask coverage reanchor`, and it did **not** introduce a second, weaker
+safety notion: it reused this ADR's `reanchor_is_safe` predicate (diff-based,
+`appeared ⊆ structural`), so it refused a genuine lowering exactly when the gate
+did. The issue's original "uncovered-text-set unchanged/shrank" wording — a
 naive multiset check — is **not** what shipped; that is the text-primary
 approach the #112 supplement above rejected as unsound.
 
-The command is **candidate-promotion only**: a safe move re-anchors
-`coverage-baseline.json` in place; a genuine lowering is refused (non-zero exit)
-and the would-be baseline is written to
+The command was **candidate-promotion only**: a safe move re-anchored
+`coverage-baseline.json` in place; a genuine lowering was refused (non-zero
+exit) and the would-be baseline written to
 `.xtask/coverage-baseline.candidate.json` (under the gitignored `/.xtask/`),
-never the committed file. There is deliberately **no accept-all path** — the
+never the committed file. There was deliberately **no accept-all path** — the
 removed `__regen-baseline` was exactly that footgun. Accepting an approved
-lowering is a manual `cp` of the candidate, so it always lands as a reviewable
-diff under the coverage-baseline policy. The failing coverage gate prints
+lowering was a manual `cp` of the candidate, so it always landed as a reviewable
+diff under the coverage-baseline policy. The failing coverage gate printed
 `cargo xtask coverage reanchor` as the recovery for a lowering; the symmetric
 CRAP-manifest refresh path is tracked separately (the #88 CRAP follow-on, #131).
 
 ## Supplement (#131) — the symmetric CRAP refresh path
 
 The #88 supplement noted "the symmetric CRAP-manifest refresh path is tracked
-separately (#131)". It lands as `cargo xtask coverage refresh-crap`, mirroring
-the baseline `reanchor` model exactly: a no-regression refresh rewrites
+separately (#131)". It landed as `cargo xtask coverage refresh-crap`, mirroring
+the baseline `reanchor` model exactly: a no-regression refresh rewrote
 `crap-manifest.json` in place (a no-op on a pure line-shift, keyed on the same
 line-independent canonical form the Fix-mode heal uses); a CRAP **regression**
-is refused (non-zero exit) with the would-be manifest written to
-`.xtask/crap-manifest.candidate.json` — never the committed file. There is **no
-accept-all path**; promoting approved drift is a manual `cp` of the candidate,
-so it always lands as a reviewable diff. The failing coverage gate now prints
-`cargo xtask coverage refresh-crap` as the CRAP recovery, the category-split
-companion to the lowering branch's `cargo xtask coverage reanchor`.
+was refused (non-zero exit) with the would-be manifest written to
+`.xtask/crap-manifest.candidate.json` — never the committed file. There was **no
+accept-all path**; promoting approved drift was a manual `cp` of the candidate,
+so it always landed as a reviewable diff. From #131 the failing coverage gate
+printed `cargo xtask coverage refresh-crap` as the CRAP recovery, the
+category-split companion to the lowering branch's
+`cargo xtask coverage reanchor`.

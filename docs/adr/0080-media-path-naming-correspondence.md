@@ -56,18 +56,19 @@ definition of the layout.**
   exactly that reason. This is the one place a filename becomes a path segment
   outside `media_path`, and it is typed `RootRelativeUrl` too, so the two cannot
   drift in kind.
-  - **Amended by `docs/adr/0084-media-filename-encoded-canonical.md` (#720):** a
-    `Filename` now _is_ the canonical percent-encoded segment, so neither site
-    encodes — both interpolate — and `encode_filename_segment` is deleted,
-    returning the encode set to a private const with no public escape hatch.
+  - **Amended by `docs/adr/0084-media-filename-encoded-canonical.md` (#720):**
+    as of #720 a `Filename` _was_ the canonical percent-encoded segment, so
+    neither site encoded — both interpolated — and `encode_filename_segment` was
+    deleted, returning the encode set to a private const with no public escape
+    hatch.
 - **The database `filename` column keeps the raw name.** It is the display name
   shown in the media list and returned as `UploadResponse.filename`.
   - **Reversed by `docs/adr/0084-media-filename-encoded-canonical.md` (#720).**
-    The column now holds the **encoded** form, byte-identical to the on-disk
-    name and the URL segment; display surfaces decode. The motivating reason is
-    #711's post→media reference table, whose comparison against names extracted
-    from rendered HTML becomes byte equality instead of a transform at a
-    comparison point.
+    As of #720 the column held the **encoded** form, byte-identical to the
+    on-disk name and the URL segment; display surfaces decode. The motivating
+    reason is #711's post→media reference table, whose comparison against names
+    extracted from rendered HTML becomes byte equality instead of a transform at
+    a comparison point.
 - `media_url` returns `RootRelativeUrl` **infallibly**. Every segment is a hex
   digest, a bounded enum token, or percent-encoded, so the parse cannot fail;
   the `unreachable!` arm follows `AbsoluteUrl::compose`. **No trusted-minting

@@ -19,13 +19,15 @@ denial-of-service amplifier.
 
 - `create_user_with_invite` and `confirm_password_reset` gate on a
   **high-entropy secret** — an invite code or password-reset token, each 32
-  cryptographically random bytes (`auth::generate_token`, ~256 bits). The
-  enumeration concern does not apply: a timing oracle gives no usable advantage
-  against a 2^256 space. But hashing _before_ validating the secret turns every
-  request bearing a bogus secret into wasted Argon2 work — a CPU-exhaustion
-  amplifier — and, for invite-gated registration, destroys the one
-  capability-based throttle available (stop issuing invites ⇒ the hashing
-  surface drops to zero).
+  cryptographically random bytes (`auth::generate_token`, ~256 bits — as of
+  2026-08-12 that symbol no longer exists; it was removed by #458 and the live
+  equivalents are `host::token::generate_hashed` for session and reset tokens
+  and `host::invite::generate` for invite codes). The enumeration concern does
+  not apply: a timing oracle gives no usable advantage against a 2^256 space.
+  But hashing _before_ validating the secret turns every request bearing a bogus
+  secret into wasted Argon2 work — a CPU-exhaustion amplifier — and, for
+  invite-gated registration, destroys the one capability-based throttle
+  available (stop issuing invites ⇒ the hashing surface drops to zero).
 
 ## Decision
 

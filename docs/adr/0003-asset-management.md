@@ -30,6 +30,12 @@ into the server binary.
 - User-uploadable stylesheets remain architecturally distinct and are served
   from the storage layer.
 
+> **Annotation (2026-08-12).** User-uploadable stylesheets (also named as a
+> decision driver above) were an anticipated feature and were never built: there
+> is no CSS handling in `storage/`, no config key, and no route in `server/src`.
+> The embedding decision itself — `rust-embed` for the built-in CSS — is live
+> and unchanged. Current inventory: [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 ## Consequences
 
 - Good: No external asset files needed for deployment.

@@ -75,29 +75,29 @@ function of `(coverage report, source tree)`:
    `#[server]`/helper code stays measured.
 
    **Amendment (#292) — a second structural exemption: `unreachable!("msg")`.**
-   The same `syn` visitor also drops the span of any literal `unreachable!`
-   invocation carrying a **non-empty message**. It mirrors `#[component]`'s
-   properties, so no marker is needed: _self-enforcing_ (reaching the line
-   panics ⇒ the test fails ⇒ `cargo llvm-cov` exits non-zero ⇒ no report — you
-   cannot silently cheat coverage on live code, unlike a `cov:ignore` on a
-   reachable line), _message-required_ (a bare `unreachable!()` stays measured,
-   mirroring `crap:allow`'s required reason), and _fail-closed_ (recognition is
-   `mac.path.is_ident("unreachable")` — `std::unreachable!`, aliases, and
-   macro-generated forms are not matched and stay measured). Scope is
-   deliberately narrow: `panic!` (often a reachable error path) and
-   `todo!`/`unimplemented!` (unfinished-work reminders that _should_ fail
-   coverage) stay measured. This is the self-re-flagging alternative to a
-   permanent `cov:ignore` for provably-dead lines (see Consequence on
-   `cov:ignore` permanence), and the exemption #245's dead-line burn-down
-   depends on.
+   As of #292 the same `syn` visitor also dropped the span of any literal
+   `unreachable!` invocation carrying a **non-empty message**. It mirrored
+   `#[component]`'s properties, so no marker was needed: _self-enforcing_
+   (reaching the line panics ⇒ the test fails ⇒ `cargo llvm-cov` exits non-zero
+   ⇒ no report — you cannot silently cheat coverage on live code, unlike a
+   `cov:ignore` on a reachable line), _message-required_ (a bare
+   `unreachable!()` stays measured, mirroring `crap:allow`'s required reason),
+   and _fail-closed_ (recognition is `mac.path.is_ident("unreachable")` —
+   `std::unreachable!`, aliases, and macro-generated forms are not matched and
+   stay measured). Scope is deliberately narrow: `panic!` (often a reachable
+   error path) and `todo!`/`unimplemented!` (unfinished-work reminders that
+   _should_ fail coverage) stay measured. This is the self-re-flagging
+   alternative to a permanent `cov:ignore` for provably-dead lines (see
+   Consequence on `cov:ignore` permanence), and the exemption #245's dead-line
+   burn-down depends on.
 
 2. **A1-guard tripwire.** The gate **fails** if any _covered_ report line falls
    inside a recognized exempt span. _(#520: with the `#[component]` arm retired,
-   the guard now protects the `unreachable!("msg")` exemption only — a covered
-   `unreachable!` line means the assertion was actually reached, so its premise
-   is violated. The guard itself is retained.)_ It was introduced to turn the
-   original design's load-bearing assumption — "native tests never render
-   components, so exempting their bodies discards no coverage" — into an
+   the guard thereafter protected the `unreachable!("msg")` exemption only — a
+   covered `unreachable!` line means the assertion was actually reached, so its
+   premise is violated. The guard itself is retained.)_ It was introduced to
+   turn the original design's load-bearing assumption — "native tests never
+   render components, so exempting their bodies discards no coverage" — into an
    enforced invariant, and was proven green on a real instrumented build before
    any deletion. (Per #292 the guard treats every exempt line identically, so it
    also covers a covered `unreachable!("msg")` line — near-dead in practice,

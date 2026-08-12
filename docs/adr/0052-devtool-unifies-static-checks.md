@@ -52,6 +52,14 @@ arguments (moved out of the host `StepSpec`s), and **both** callers invoke it:
 Each of those 7 checks' tool + args therefore live **exactly once**; the #185
 divergence class is structurally impossible.
 
+> **Annotation (2026-08-12).** The count of 7 above (and the list in Context)
+> was the inventory at decision time. The set has since grown to **8** —
+> `byte-compile` was added, and a former standalone tsc-deps step folded into
+> `devtool check tsc`. The live list is `pub const ALL` in
+> `tools/devtool/src/check.rs`; current inventory:
+> [ARCHITECTURE.md](../ARCHITECTURE.md). The decision itself — devtool is the
+> single implementation, invoked by both callers — is unchanged.
+
 **The compiling checks stay where cargo has its deps.** `clippy` and `deny` keep
 their crane derivations (untouched); `tools-clippy` stays a host-only `StepSpec`
 (the `tools/` workspace has no vendoring infra and building it isn't worth it);

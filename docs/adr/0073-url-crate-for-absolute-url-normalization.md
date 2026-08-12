@@ -35,6 +35,14 @@ parser.
 `AbsoluteUrl`'s `FromStr` chokepoint (and its `join` composer) parse/normalize
 through `url::Url`.
 
+> **Annotation (2026-08-12).** `AbsoluteUrl` — named here and throughout this
+> ADR as the type that holds the chokepoint — was deleted (commit `bd7bb847`)
+> and replaced by the role-tagged `TaggedUrl<T>` (`common/src/tagged_url.rs`)
+> under [ADR-0112](0112-role-tagged-site-urls.md). This decision is intact:
+> `url` remains the sanctioned normalizer, it remains in the `common`/wasm
+> graph, and the chokepoint is still single — only the type carrying it was
+> renamed. Current inventory: [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 We **accept** that `url` (and its `idna` unicode tables) are compiled for wasm
 and reachable in the client binary. We do **not** hand-roll URL normalization,
 and we do **not** repurpose `urlencoding` for parsing. The bundle cost is judged
