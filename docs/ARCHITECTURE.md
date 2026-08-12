@@ -1259,12 +1259,6 @@ harness reads the same file for port discovery.
   `server/build.rs` stages that tree at compile time from
   `JAUNDER_CSR_BUNDLE_DIR` (Nix) or `target/site/pkg` (host build).
 
-<!-- DRIFT vs ADR-0003: ADR-0003 (accepted) asserts at :17 and :30-31 that
-user-uploadable stylesheets "remain architecturally distinct and are served from
-the storage layer". No such feature exists — no stylesheet handling in storage/,
-no CSS config key, no CSS path in server/src. The ADR states an unimplemented
-feature as though it were built. -->
-
 Only the two base stylesheets are embedded. ADR-0003 also anticipated
 **user-uploadable** stylesheets served from the storage layer; that was never
 built, and nothing in `storage/` or the config-key registry handles CSS.
@@ -1631,8 +1625,6 @@ normalization and repurposing `urlencoding` as a parser are ruled out. The
 chokepoint is `TaggedUrl<T>`'s `FromStr` (`common/src/tagged_url.rs:106-110`),
 which parses through `url::Url`.
 
-<!-- DRIFT vs ADR-0073: ADR-0073 (accepted, unamended) names `AbsoluteUrl` as the type holding that chokepoint. `AbsoluteUrl` is deleted — ADR-0112 replaced it with `TaggedUrl<T>`, one generic string newtype carrying a zero-sized role marker (`common/src/tagged_url.rs:73`), 15 roles and 15 aliases at `:211-287`. ADR-0073's `url`-crate decision survives verbatim; only the type name is stale, and it carries no amendment marker pointing at ADR-0112. -->
-
 Because a URL role costs only a marker struct and a type alias, URLs are an
 express exception to ADR-0063 §1's cost model: "consistency alone is not
 sufficient justification" must not be cited to argue a role out of existence
@@ -1690,8 +1682,6 @@ storage and server failures with is fixed (`"storage operation failed"` /
 T2 layers of the one-way error pipeline the Web frontend section describes; that
 section covers the T2→T3 projection and why the boundary cannot leak by
 discipline failure, and is not repeated here.
-
-<!-- DRIFT vs ADR-0017: ADR-0017 places `InternalError` in `web/src/error.rs` under `#[cfg(feature = "ssr")]` with a flat `operator_message: String`, and records the `kind`/`ErrorClass`/`context` carrier as "Forthcoming … tracked as jaunder-kq8w.16". That carrier has landed and the type moved to `host/src/error.rs:94` (`ErrorKind` at `:19`, `ErrorClass` at `:50`). ADR-0059 explicitly extends ADR-0017 and picks up the forthcoming-carrier scope, so the decision is recorded — but ADR-0017's own file paths and Forthcoming section are stale and carry no amendment marker. -->
 
 ## Testing
 
@@ -1816,9 +1806,6 @@ that mutate the global site-config singleton are quarantined in per-browser
 serial `*-admin` projects that run after the main projects — today that is
 **two** specs, `admin-site` and `invite`
 (`end2end/playwright.config.ts:72-105`).
-
-<!-- DRIFT vs ADR-0039: §3 calls `admin-site` "the lone global-singleton spec".
-`invite.spec.ts` has since joined the quarantine, so the ADR's "lone" is stale. -->
 
 The config also carries a `webkit` project, but the gate never runs it: both
 `flake.nix:963-966` and the CI matrix enumerate chromium and firefox only.
@@ -2189,7 +2176,6 @@ host-side subcommands are therefore chartered, not drift.
   ([ADR-0052](adr/0052-devtool-unifies-static-checks.md)). Compiling checks
   (`clippy`, `cargo-deny`) stay in crane derivations plus host StepSpecs
   ([ADR-0052](adr/0052-devtool-unifies-static-checks.md)).
-  <!-- DRIFT vs ADR-0052: the ADR says "7 non-compiling static checks" twice (`:41`, `:52`); `tools/devtool/src/check.rs:17` `pub const ALL` holds 8. `byte-compile` was added, and the standalone tsc-deps step folded into `devtool check tsc` — see the comment at `xtask/src/steps/static_checks.rs:41-43` and the regression test at `:276-277` asserting no step named tsc-deps survives. The host side calls devtool_check eight times (`static_checks.rs:38-46`, `:98`), and its own doc comment at `:17-18` already says 8. The count in ADR-0052 is stale; the view carries the current inventory. ADR-0052 is edited by a separate task, not here. -->
 
 **xtask is host-only — an enforced invariant.** Nix derivations never invoke
 xtask; the flow is strictly one-directional (host `cargo xtask` → `nix build`).
@@ -2342,15 +2328,6 @@ as amended by
 - `docs/archive/` — shipped specs, plans, and milestone documents, kept as dated
   `YYYY-MM-DD-<slug>.md` files and kept there rather than deleted
   (`docs/README.md:149-152`).
-  <!-- DRIFT vs ADR-0000: ADR-0000 ("Transient Documentation", Status:
-  accepted) says milestone/plan/spec documents "should be committed to git
-  during development but deleted once the work is complete", with git history
-  as the authoritative record. Practice since issue #39 archives them instead:
-  docs/archive/ holds 664 dated files, added continuously through 2026-08-11,
-  and CONTRIBUTING.md treats the tree as a frozen record excluded from the
-  doc-links and formatting gates. ADR-0000 has never been amended or superseded
-  to say so. Recorded here, not fixed here: the fix is an ADR, not an edit to
-  this view. -->
 
 New ADRs are drafted **out of git** in `docs/adr/drafts/` — the directory is
 gitignored except its `README.md`, so a premature number cannot be committed
@@ -2403,6 +2380,9 @@ enumeration rule — non-recursive `read_dir` over `docs/adr/`, then `is_file` �
 `.md` → leading number — which excludes a numberless file in a subdirectory
 twice over. `doc-links` enumerates tracked files instead, and an uncommitted
 draft is not tracked ([ADR-0048](adr/0048-adr-out-of-git-draft-workflow.md)).
+The `doc-links` gate has no ADR of its own; its decision lives in issue
+[#682](https://github.com/jaunder-org/jaunder/issues/682), cited from
+`xtask/src/steps/doc_links.rs:1`.
 
 A draft is **not** invisible as a link _target_, and the asymmetry has teeth.
 `doc-links` resolves a target with `.exists()` against the working tree
@@ -2489,6 +2469,11 @@ lifecycle), and [#938](https://github.com/jaunder-org/jaunder/issues/938)
   app-password scheme and the wire header but not where a client keeps the
   secret; ADR-0035 and issue #76 both build on the rule as settled.
   [#938](https://github.com/jaunder-org/jaunder/issues/938)
-- **The `doc-links` gate itself** has no ADR — `xtask/src/steps/doc_links.rs:1`
-  cites issue [#682](https://github.com/jaunder-org/jaunder/issues/682), which
-  is where the decision lives. Not covered by #936/#937/#938.
+
+Two gaps a reader might expect here are absent because the system closed them.
+The content-addressed media store is no longer un-ADR'd: ADR-0080 decides the
+`<source>/<p1>/<p2>/<sha256>/<filename>` layout, ADR-0084 makes the encoded
+filename canonical, and ADR-0090 decides what a media reference is. The
+embedded-shell versus on-disk-wasm split no longer exists to document: #239
+embedded the SPA shell and #237 embedded the CSR bundle, both closed, so "single
+binary" needs no qualification.
