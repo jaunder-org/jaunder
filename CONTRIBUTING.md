@@ -7,28 +7,26 @@ instead of duplicating project policy.
 ## Project guides
 
 - `docs/DESIGN.md`: project goals
-- `docs/ARCHITECTURE.md`: project architecture
+- `docs/ARCHITECTURE.md`: the authoritative statement of the current
+  architecture — the materialized view of the ADR log, covering the workspace
+  layout and every subsystem
 - `docs/ROADMAP.md`: project roadmap
 
 ## Repository layout
 
-- `flake.nix`: development environment, comprehensive test environment, and
-  PostgreSQL testing
-- `common/`: code shared between other packages
-- `end2end/`: Playwright end-to-end tests
-- `elisp/`: Emacs blogging client (`jaunder.el`), ERT-tested
-- `csr/`: WASM frontend entry (the client-side-rendered bundle)
-- `storage/`: storage traits, records, migrations, and backend-specific storage
-  support
-- `server/`: backend, CLI, server runner, and integration tests
-- `web/`: Leptos frontend as co-located verticals — each `web/src/<vertical>/`
-  splits into `mod.rs` (wiring/re-exports), `api.rs` (`#[server]` fns + wire
-  types), optional `server.rs` (host-only support), and a wasm-only
-  `component.rs` (`#[component]` UI); pure host-tested render twins live in an
-  extra leaf (`render.rs`) per ADR-0070. **A vertical's `#[server]` fns live in
-  its `api.rs` and never in a submodule** — `#[macros::server]` derives the wire
-  endpoint and the span name from `(vertical, ident)` and hard-errors anywhere
-  else, which is what makes that pair a key **rustc** enforces (ADR-0082)
+See [Workspace](docs/ARCHITECTURE.md#workspace) in the architecture view for the
+crate map, each crate's responsibility, and the sibling trees outside the root
+workspace (`xtask/`, `tools/`, `elisp/`, `end2end/`). The remaining top-level
+entries are:
+
+- `flake.nix`: development environment, the hermetic Nix checks, and the
+  PostgreSQL and interactive testing VMs
+- `docs/`: guides, ADRs (`docs/adr/`), and the frozen `docs/archive/`
+- `.githooks/`: the `pre-commit`/`pre-push` hooks (see Git hooks below)
+- `.github/`: CI workflows
+- `public/`: static assets (the favicon), staged into the embedded asset set by
+  `server/build.rs`
+- `scripts/`: small shell helpers not part of any build
 
 ## Development setup
 
@@ -99,8 +97,8 @@ they run in CI, or locally via `cargo xtask validate`. Bypass with
 
 ## Development workflow
 
-- Track development work with `beads` (`bd`) rather than ad-hoc markdown TODO
-  lists. Use beads for durable memory items when possible.
+- Track development work in GitHub issues (`jaunder-org/jaunder`) rather than
+  ad-hoc markdown TODO lists; issues are the durable work memory.
 - Prefer focused, atomic changes. The system should remain in a working state at
   each commit.
 - Write and commit preparatory refactors before the behavior changes that use
@@ -183,13 +181,12 @@ For tests requiring a database, use the shared harness: `#[apply(backends)]`
 with `backend.setup().await`, which returns a `TestEnv { state, base }` carrying
 a fully migrated `AppState` (ADR-0033). Do **not** hand-roll a pool.
 
-**Not `sqlite::memory:`.** This instruction used to say so, and it was wrong
-twice over. Each _connection_ to `sqlite::memory:` gets its own separate
-database, so a multi-connection `SqlitePool` over it is not a coherent shared
-store; and WAL — which both production and the harness set — is unavailable for
-it. The harness therefore uses a temp-file SQLite database. ADR-0033 exists
-precisely to retire the hardcoded `sqlite::memory:` pools that ran SQLite-only
-and left Postgres unexercised.
+**Never `sqlite::memory:`.** It fails twice over. Each _connection_ to
+`sqlite::memory:` gets its own separate database, so a multi-connection
+`SqlitePool` over it is not a coherent shared store; and WAL — which both
+production and the harness set — is unavailable for it. The harness uses a
+temp-file SQLite database instead. ADR-0033 exists precisely to retire hardcoded
+`sqlite::memory:` pools, which ran SQLite-only and left Postgres unexercised.
 
 **Tests that spawn `git` must scrub the repo-redirecting `GIT_*` env.** When git
 runs a hook it exports `GIT_DIR`/`GIT_INDEX_FILE` (and
@@ -524,8 +521,10 @@ reachable PostgreSQL**: the postgres cases connect to `JAUNDER_PG_TEST_URL`
 is listening. Each test creates its own database — a clone of a once-migrated
 template (see `storage::test_support`) — so the cases run **in parallel**; no
 `--test-threads=1` is needed. (The `#[template]`/`#[apply]` macros come from the
-`rstest_reuse` dev-dependency, which requires the bare `use rstest_reuse;`
-import at the top of any test file that uses them.)
+`rstest_reuse` dev-dependency, a companion crate to `rstest`: every module that
+uses them needs its own `use rstest_reuse::*;` — a `use rstest::*;` glob alone
+does not bring them in. See
+[ADR-0124](docs/adr/0124-rstest-reuse-cross-module-templates.md).)
 
 The simplest way to run them against a throwaway PostgreSQL is `devtool pg run`,
 which starts an ephemeral cluster, exports the connection env, runs the command,
@@ -758,14 +757,20 @@ request; it is deliberately **not** part of per-commit `check`/`validate`
 
 `nix flake check` runs the full Nix-backed validation matrix, including:
 
-- `checks.x86_64-linux.nextest` — Rust nextest suite
-- `checks.x86_64-linux.clippy` — clippy
+- `checks.x86_64-linux.clippy` and `.wasm-clippy` — clippy for the host and wasm
+  targets
 - `checks.x86_64-linux.static-checks` — the 8 non-compiling static checks
   (`fmt`, `leptosfmt`, `prettier`, `tsc`, `elisp-fmt`, `ert`, `byte-compile`,
   `tools-fmt`) run in one derivation via `devtool check --all` — the same
   implementation the host verify ladder runs, so there is no hand-duplicated
   sibling to drift (#188)
 - `checks.x86_64-linux.deny` — cargo-deny
+- `checks.x86_64-linux.coverage` and `.coverage-gate` — the instrumented test
+  suite (SQLite and PostgreSQL together under an ephemeral PostgreSQL) and the
+  verdict over its report. **This is where the Rust test suite runs**; there is
+  no separate `nextest` check.
+- `checks.x86_64-linux.doctests` and `.doctests-gate` — the root workspace's
+  doctests and the fence reconciliation over them
 - `checks.x86_64-linux.e2e-sqlite-chromium` — Playwright end-to-end flow against
   SQLite on Chromium
 - `checks.x86_64-linux.e2e-sqlite-firefox` — Playwright end-to-end flow against
@@ -774,9 +779,11 @@ request; it is deliberately **not** part of per-commit `check`/`validate`
   against PostgreSQL on Chromium
 - `checks.x86_64-linux.e2e-postgres-firefox` — Playwright end-to-end flow
   against PostgreSQL on Firefox
-- `checks.x86_64-linux.postgres-integration` — every `server/tests/*.rs`
-  integration binary against PostgreSQL (including the ignored PostgreSQL-only
-  cases), all in one VM
+- `checks.x86_64-linux.e2e-elisp-integration` — the live elisp integration suite
+  in a NixOS VM with Emacs and the `jaunder` binary
+  ([ADR-0035](docs/adr/0035-elisp-live-integration-harness.md))
+- `checks.x86_64-linux.e2e` — the aggregate `cargo xtask validate` builds; it
+  fans out to every `e2e-*` check above
 
 Additional Nix-backed checks available as packages (not run by default):
 
@@ -785,10 +792,10 @@ Additional Nix-backed checks available as packages (not run by default):
   timings carry no worker contention. Built on demand by
   `cargo xtask traces run --single-worker`; not part of the gate.
 
-All PostgreSQL integration binaries run in a **single** VM
-(`postgres-integration`): per-test databases isolate the tests, so they run with
-libtest's normal in-process parallelism rather than one VM per binary. This is
-much faster and far lighter on memory than the former per-binary matrix.
+The PostgreSQL-backed integration tests need no VM of their own: they run inside
+the `coverage` derivation alongside the SQLite ones, against an ephemeral
+cluster started for the whole run. Per-test databases isolate them, so they run
+with libtest's normal in-process parallelism.
 
 #### `e2eSalt` — the measurement cache-buster (#792)
 
@@ -830,7 +837,7 @@ nix build .#checks.x86_64-linux.e2e-sqlite-chromium
 nix build .#checks.x86_64-linux.e2e-postgres-firefox
 nix build .#packages.x86_64-linux.e2e-sqlite-firefox-single-worker
 nix build .#packages.x86_64-linux.e2e-postgres-firefox-single-worker
-nix build .#checks.x86_64-linux.postgres-integration
+nix build .#checks.x86_64-linux.e2e-elisp-integration
 ```
 
 ## Code conventions
@@ -841,10 +848,11 @@ nix build .#checks.x86_64-linux.postgres-integration
   `leptosfmt` (run it first, then `cargo fmt`).
 - Follow Conventional Commits: `<type>: <imperative summary, ≤72 chars>`, where
   `<type>` is one of `feat`, `fix`, `refactor`, `perf`, `docs`, `test`, `build`,
-  `ci`, `chore` (optional scope, e.g. `fix(storage): …`). Reference the beads
-  issue the commit addresses with a `Refs: <bead-id>` trailer (the bead carries
-  milestone/epic context, so the subject needs no `M`/`§` prefix), and keep the
-  `Co-Authored-By` trailer required of agent commits.
+  `ci`, `chore` (optional scope, e.g. `fix(storage): …`). Reference the GitHub
+  issue the commit addresses inline in the subject or body, e.g.
+  `docs(adr): promote the role-tagged site URLs ADR to 0112 (#875)`; the issue
+  carries milestone/epic context, so the subject needs no `M`/`§` prefix. **No
+  commit trailers.**
 - Every commit that changes behavior must include appropriate tests, unless the
   user explicitly waives this requirement. (Docs/build/chore commits with no
   behavior change are out of scope, not waivers.)
@@ -877,47 +885,73 @@ nix build .#checks.x86_64-linux.postgres-integration
   // and reaping here keeps the auth check the single source of truth.
   ```
 
+- **Comment against the present, not the past.** State intent and why as claims
+  about the tree as it stands, so a reader can check them by reading it. Do not
+  argue with a previous implementation, a deleted test, or a removed file ("used
+  to", "no longer", "replaces `old_fn`"): the other half of that contrast lives
+  only in `git log`, so the comment is unverifiable the day it is written and
+  archaeology a year later. Keep the issue number; drop the narrative. Two
+  carve-outs: a present-tense fact that happens to use past-shaped words ("a
+  blank title is no longer expressible — the type forbids it") is fine, and
+  backward _compatibility_ with live data ("markers written before #591 lack
+  `is_operator`") describes the present world, not code history.
+- **A comment that outgrows a few sentences is usually a decision record.** If
+  it carries a rejected alternative, a measured trade, a workaround's root
+  cause, or an accepted risk, promote it to an ADR — draft it in
+  [`docs/adr/drafts/`](docs/adr/drafts/README.md) per "Adding an ADR" above —
+  and leave a one-line pointer. Module-level `//!` docs are comprehensive by
+  design and exempt from this pressure; an inline comment should be as short as
+  a true statement of intent allows.
+
 ## Storage and web conventions
 
 - Use `sqlx` for database access.
 - Support SQLite and PostgreSQL, dynamically selected at runtime.
-- Store SQL migrations in `storage/migrations` using the `000x_description.sql`
-  numbering convention.
+- Store SQL migrations in `storage/migrations/{sqlite,postgres}` using the
+  `000x_description.sql` numbering convention, one per backend for the same
+  change.
 - Define storage traits such as `UserStorage` and `SessionStorage`, plus their
   record types, in `storage/src/*.rs`. This lets `web` and `server` use them
   without circular dependencies.
-- Keep concrete SQLite/PostgreSQL implementations in the `server` crate, for
-  example `server/src/storage/sqlite.rs`, and re-export them from
-  `server/src/storage/mod.rs` for the CLI and server runner.
-- Use specialized storage error enums in `common::storage`, such as
-  `UserAuthError` and `CreateUserError`, with `thiserror`.
+- Keep backend-specific SQL in the `storage` crate's per-trait dialect modules
+  under `storage/src/{sqlite,postgres}/`, behind the shared generic store — see
+  [Crate layout and the generic store pattern](docs/ARCHITECTURE.md#crate-layout-and-the-generic-store-pattern)
+  in the architecture view
+  ([ADR-0019](docs/adr/0019-generic-storage-backend-via-dialect.md)).
+- Use specialized storage error enums from the `storage` crate, such as
+  `UserAuthError` and `CreateUserError` (`storage/src/users.rs`), with
+  `thiserror`.
 - Use `sqlx` unique violation checks (`is_unique_violation()`) to handle
   "already exists" errors gracefully.
-- Use the `AppState` struct from `common::storage` to bundle storage handles. In
-  web server functions, retrieve it with `expect_context::<Arc<AppState>>()`.
+- In web server functions, retrieve the per-trait handle you need
+  (`expect_context::<Arc<dyn UserStorage>>()`), never the whole `AppState`
+  bundle — `AppState` (in the `storage` crate) belongs to the composition root.
 - **Dependency injection / composition-root invariant (see
   [ADR-0016](docs/adr/0016-dependency-injection-and-appstate.md)):** No type may
   be both (a) a heterogeneous dependency holder and (b) passed beyond the
   composition root. Declare a component's dependencies as constructor parameters
   on the component that uses them — do not add a field to a shared bundle to
-  make a dependency reachable. A storage `Backend` factory may mint storage
-  handles, but only the composition root may hold it; it is never injected into
-  a subsystem (that would be a service locator). Services (mailer, WebSub
-  client, background workers) are constructed at the root and injected
-  per-consumer; there is no "services bundle."
+  make a dependency reachable. How the wiring is actually built is in
+  [Dependency injection and AppState](docs/ARCHITECTURE.md#dependency-injection-and-appstate).
 - The web framework is Leptos in CSR (client-side-rendering) mode (ADR-0040);
   the wasm bundle is built by `cargo xtask build-csr` and served by
   `jaunder serve` (no cargo-leptos).
 - Leptos components should only render data; business logic belongs in server
   functions or pure transformation functions.
 - API methods are automatically prefixed with `/api`.
+- `web` is organized as co-located verticals; put each new file in the leaf its
+  role dictates. The split is described in
+  [Module layout — the per-vertical file split](docs/ARCHITECTURE.md#module-layout--the-per-vertical-file-split)
+  (ADR-0070).
 - Define `#[server]` functions in their vertical's `api.rs`
   (`web/src/<vertical>/api.rs`, e.g. `web/src/auth/api.rs`) and declare them
   `#[macros::server]` — spelled fully-qualified, never `use`d. It derives the
   wire endpoint, the ADR-0011 span name, and the error-boundary wrap, and
-  hard-errors on any other file. Use a single grouped
+  hard-errors on any other file, which is what makes the `(vertical, ident)`
+  pair a key **rustc** enforces (ADR-0082). Use a single grouped
   `#[cfg(feature = "server")]` block for server-only imports; the bodies
-  themselves carry no cfgs.
+  themselves carry no cfgs. See
+  [Server-fn surface, DI, and errors](docs/ARCHITECTURE.md#server-fn-surface-di-and-errors).
 - Convert storage errors to `leptos::prelude::ServerFnError` using
   `.map_err(|e| ServerFnError::new(e.to_string()))`.
 - Use `require_auth().await?` at the start of any server function that requires
