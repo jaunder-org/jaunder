@@ -33,8 +33,8 @@ test("password reset flow completes successfully", async ({
   await page.waitForURL("**/login");
 
   // Login with the OLD password should fail. The router has already landed on
-  // /login above, so the assertions run where it landed — the full `goto` that
-  // used to sit here reloaded the page the app had just navigated to (#867).
+  // /login above, so the assertions run where it landed — a full `goto` here
+  // would reload the page the app just navigated to (#867).
   await waitForSelector(page, SEL.username);
   // Holdout (spec D6): a reset password logs in through the real form (and the
   // old one fails) — the form IS the subject here.

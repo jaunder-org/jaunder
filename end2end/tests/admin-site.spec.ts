@@ -34,7 +34,6 @@ test("admin site settings page loads and allows updating title and base_url", as
   // Log in as operator user
   await signInAs(page, "testoperator");
 
-  // Navigate to site settings page
   await goto(page, "/admin/site");
 
   // Wait for the form to be visible
@@ -46,7 +45,6 @@ test("admin site settings page loads and allows updating title and base_url", as
   const submitButton = page.locator('button:has-text("Save Site Settings")');
   await expect(submitButton).toBeVisible();
 
-  // Fill in the form
   await page.fill('input[name="title"]', "My Test Site");
   await page.fill('input[name="base_url"]', "https://example.com");
 

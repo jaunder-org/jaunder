@@ -410,61 +410,36 @@
           };
         });
 
-        # leptosfmt pinned past its last release (#420). 0.1.33 (2025-01-30)
-        # mangles a generic component tag whenever the tag has to wrap:
-        # `<ValidatedInput<Username>` becomes a three-line stanza with broken
-        # indentation. It is cosmetic (it compiles, and leptosfmt is idempotent
-        # on its own output) but it recurs at every generic-component adoption.
-        #
-        # Upstream fixed it in PR #167 ("fix: don't break generic params into
-        # mulitple lines"), merged 2025-02-02 — three days AFTER 0.1.33 shipped,
-        # and nothing has been released since.
-        #
+        # leptosfmt pinned past its last release (#420): 0.1.33 mangles wrapping
+        # generic component tags; the fix is merged upstream but unreleased.
         # REMOVE THIS OVERRIDE once a leptosfmt release later than 0.1.33
-        # exists: drop this binding and take `pkgs.leptosfmt` again.
-        #
-        # `version` deliberately stays nixpkgs' "0.1.33": the package runs
-        # `versionCheckHook`, which matches `leptosfmt --version` against it, and
-        # upstream never bumped the version after the release. A consequence
-        # worth knowing: the pinned binary is indistinguishable from the stock
-        # one by `--version`, so only behaviour proves which is in use.
+        # exists: drop this binding and take `pkgs.leptosfmt` again. The
+        # override mechanics (src swap not applyPatches, the cargoDeps
+        # cascade, importCargoLock vs a 403ing fetchCargoVendor, and why
+        # `version` stays "0.1.33") are in
+        # docs/adr/drafts/leptosfmt-pinned-past-release.md.
         leptosfmt = pkgs.leptosfmt.overrideAttrs (_old: rec {
           src = pkgs.fetchFromGitHub {
             owner = "bram209";
             repo = "leptosfmt";
             rev = "8b4194ba33eee417ababdd15498940014fd6d237";
-            # PR #167 also bumps a `prettyplease` submodule; without this the
-            # tree does not build. nixpkgs sets it too — replacing `src`
-            # wholesale drops it, so it has to be restated here.
-            #
-            # That submodule bump is also why this is a `src` swap rather than
-            # `applyPatches` over nixpkgs' own src — which would have kept its
-            # fetch arguments AND its `cargoHash`, avoiding the override cascade
-            # below. A patch cannot move a submodule pointer: the submodule's
-            # contents are not in the tree the patch would apply to.
+            # PR #167 bumps a `prettyplease` submodule; replacing `src`
+            # wholesale drops nixpkgs' own `fetchSubmodules`, so it is restated.
             fetchSubmodules = true;
             hash = "sha256-F06Ag99rCn3qZywdxyP7ULOgyhbSzWNe+drBDZJWVxo=";
           };
           # Overriding `src` alone is not enough: nixpkgs passes `cargoHash`,
           # which `buildRustPackage` consumes *before* `overrideAttrs` applies,
           # so the 0.1.33 vendor tree would survive a bare `src` swap.
-          #
-          # `importCargoLock` rather than `fetchCargoVendor`: the latter's
-          # `fetch-cargo-vendor-util` downloads through crates.io's API endpoint,
-          # which answers **403** here — reproducibly, on a different crate each
-          # run (`either`, `crop`, `anstyle-query`), so it is the requester being
-          # rejected, not any one crate. `importCargoLock` uses nix's own
-          # `fetchurl` per crate, the same path crane already vendors this
-          # repo's dependencies through, and it works.
           cargoDeps = pkgs.rustPlatform.importCargoLock {
             lockFile = "${src}/Cargo.lock";
           };
         });
 
         # The CSR client's wasm bundle (`pkg/*`) + public assets, assembled as a
-        # tree. The server no longer serves this from disk — it embeds the bundle
+        # tree. The server does not serve this from disk — it embeds the bundle
         # + public assets (#237) and the SPA shell (#239) into the binary. `site`
-        # is retained because `cargo xtask audit-wasm` builds `.#site` and inspects
+        # exists because `cargo xtask audit-wasm` builds `.#site` and inspects
         # `$out/pkg/jaunder.{wasm,js}` for bundle-size analysis (ADR-0028).
         site = pkgs.runCommand "jaunder-site" { } ''
           mkdir -p $out/pkg
@@ -473,8 +448,8 @@
         '';
 
         # --- leptos-CSR client (#177/#180) --------------------------------------
-        # The client-side-render wasm binary — the only client (#180 removed the
-        # reactive SSR render). `csrWasmBundle` runs wasm-bindgen over it; `site`
+        # The client-side-render wasm binary — the only client (#180).
+        # `csrWasmBundle` runs wasm-bindgen over it; `site`
         # (above) bundles it with the public assets + the CSR SPA shell.
         csrWasm = craneLib.buildPackage (
           commonArgs
@@ -510,7 +485,7 @@
               # Post-process the crane-built csr.wasm into the served bundle
               # (pkg/jaunder.{js,wasm}) via the shared `devtool csr-bundle` — the
               # SAME implementation the host build (`cargo xtask build-csr`) runs, so
-              # host and Nix can no longer drift (#236). devtool shells out to
+              # host and Nix cannot drift (#236). devtool shells out to
               # `wasm-bindgen` (on PATH here) and does the rename + js wasm-ref fix.
               devtool csr-bundle --wasm ${csrWasm}/lib/csr.wasm --out $out
             '';
@@ -625,11 +600,9 @@
         # `e2ePlaywrightTimeout` < `e2eGlobalTimeout`.
         #
         # Playwright runs under `machine.execute`, whose driver default is
-        # `timeout=900`. Passing no `timeout=` therefore capped the Playwright step
-        # at 15 min *silently*, below the 20 min `globalTimeout` chosen in #130 — so
-        # the "~1.9x headroom" that comment claims was never actually available, and
-        # a loaded host reached the undeclared 900 s instead. Both budgets are named
-        # here so the cap is explicit and the ordering is checkable.
+        # `timeout=900` — passing no `timeout=` silently caps the Playwright step
+        # at 15 min. Both budgets are named here so the cap is explicit and the
+        # ordering is checkable (#130).
         #
         # The ordering is load-bearing, not cosmetic: when Playwright is the thing
         # that expires, `machine.execute` returns 124 and the artifact copies below
@@ -900,7 +873,6 @@
               machine.wait_for_unit("otel-collector.service", timeout=60)
               machine.wait_for_unit("postgresql.service", timeout=60)
 
-              # Exercise create-pg-db
               machine.succeed(
                 "${jaunderBin}/bin/jaunder create-pg-db"
                 + " --bootstrap-db postgres://postgres@127.0.0.1/postgres"
@@ -908,7 +880,6 @@
                 + " --app-role-password testpassword"
               )
 
-              # Now start and wait for jaunder.service
               machine.succeed("systemctl start jaunder.service")
               machine.wait_for_unit("jaunder.service", timeout=60)
               machine.wait_for_open_port(3000, timeout=30)
@@ -1027,12 +998,9 @@
         # Single-worker variants: same combos as the gate checks but pinned to
         # workers=1, so per-navigation timings are free of worker contention.
         # That isolation is their whole purpose — use them when the question is
-        # "what does one navigation cost", not "what does the suite cost".
-        #
-        # These were the `-cold` family until #792. That name meant "no warmup",
-        # which distinguished them from a gate that warmed every test; now that the
-        # warmup is gone the gate's first navigation is cold too, so the only
-        # remaining difference is the worker count — and the name says so.
+        # "what does one navigation cost", not "what does the suite cost". The
+        # worker count is the ONLY difference from the gate combos (#792), and the
+        # name says so.
         #
         # NOT part of the gate — built on demand by
         # `cargo xtask traces run --single-worker` (see docs/observability.md).
@@ -1124,7 +1092,7 @@
                 name = "jaunder-e2e-elisp-integration";
                 nodes.machine = _: {
                   # #628: headroom so the server boots fast enough for the one
-                  # remaining readiness gate under CI load (was 2048 / 1 core).
+                  # remaining readiness gate under CI load.
                   virtualisation.memorySize = 4096;
                   virtualisation.cores = 2;
                   environment.systemPackages = [
@@ -1157,8 +1125,7 @@
             # (#519). Lint them on the wasm target (mirrors the host xtask `wasm-clippy`
             # step). The remaining `-A` flag is TEMPORARY and must stay in sync with
             # xtask/src/steps/static_checks.rs — remove `too_many_arguments` when #299
-            # restructures the #[server] args. (`unfulfilled_lint_expectations` was the
-            # other one; #301 decomposed the components whose #[expect]s needed it.)
+            # restructures the #[server] args.
             wasm-clippy = craneLib.cargoClippy (
               commonArgs
               // {

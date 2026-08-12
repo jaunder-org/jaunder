@@ -124,9 +124,8 @@ pub async fn create_user(
 }
 
 /// Reset the mail-capture file: delete `path` if it exists. A missing file is
-/// success (`rm -f` semantics — matching the shell the script used); any other
-/// error propagates. The one fixture step that is not storage-linked; folding it
-/// here lets the shell script be retired in full.
+/// success (`rm -f` semantics); any other error propagates. The one fixture
+/// step that is not storage-linked.
 ///
 /// # Errors
 ///

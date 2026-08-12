@@ -1,10 +1,10 @@
 /**
  * Named selector constants for the e2e suite (#263).
  *
- * The same high-frequency CSS selector strings were literaled across many spec
- * files, so a markup rename or a typo touched N files with no compiler help.
- * Route those through `SEL` for a single source of truth and a uniform quote
- * style. One-off / rarely-repeated selectors stay inline at their call sites.
+ * High-frequency CSS selector strings route through `SEL` — a single source of
+ * truth and a uniform quote style, so a markup rename or a typo touches one
+ * file with compiler help. One-off / rarely-repeated selectors stay inline at
+ * their call sites.
  */
 
 export const SEL = {

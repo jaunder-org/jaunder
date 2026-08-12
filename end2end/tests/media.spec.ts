@@ -77,10 +77,9 @@ test.describe("Media upload and serving", () => {
     page,
   }) => {
     // The media library is a CSR view, so this is the only surface that can observe both
-    // spellings of one filename (#720). `component.rs` used to derive a single String for
-    // the link text and the hidden delete field; they diverge now, and getting it wrong is
-    // invisible to type checking — the label would show `my%20holiday%20photo.jpg`, or the
-    // delete would fail at the wire door.
+    // spellings of one filename (#720). The link text and the hidden delete field
+    // diverge, and getting it wrong is invisible to type checking — the label would
+    // show `my%20holiday%20photo.jpg`, or the delete would fail at the wire door.
     await signInAsNewUser(page);
     await goto(page, "/");
 
@@ -274,7 +273,7 @@ test.describe("Media delete guard", () => {
   }) => {
     // The #675 symptom, proved through the guard rather than the parser. The upload
     // returns the canonical percent-encoded URL; the post embeds the *raw* spelling,
-    // which the old exact-substring scan could not see.
+    // which an exact-substring scan cannot see.
     await signInAsNewUser(page);
     const { url } = await uploadMedia(page, "my holiday photo.jpg");
     const rawUrl = url.replace(/%20/g, " ");
@@ -290,8 +289,8 @@ test.describe("Media delete guard", () => {
   test("a post embedding the AtomPub member URL blocks deletion", async ({
     page,
   }) => {
-    // The member URL shares no prefix with the serve URL, so the old exact-URL match
-    // could never have matched it however the filename was spelled.
+    // The member URL shares no prefix with the serve URL, so an exact-URL match
+    // could never see it however the filename was spelled.
     const username = await signInAsNewUser(page);
     const { url } = await uploadMedia(page, "linked.jpg");
     // "/media/upload/<p1>/<p2>/<sha>/<name>" splits to 7 parts with a leading "".

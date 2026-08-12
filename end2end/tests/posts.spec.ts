@@ -108,7 +108,7 @@ test("clearing a post summary on edit persists as empty", async ({
   await waitForSelector(page, SEL.saveSummary);
 
   const summary = page.locator(SEL.saveSummary);
-  // Preview is gone (#24): reach the post at its canonical permalink, then read
+  // The canonical permalink is the only route (#24): reach the post at its canonical permalink, then read
   // the post_id off the PostCard's Edit affordance.
   const permalinkHref = (await summary
     .locator('[data-test="permalink-link"]')
@@ -315,7 +315,7 @@ test("authenticated user can edit a draft post", async ({ registeredPage }) => {
   await waitForSelector(page, SEL.saveSummary);
 
   const summary = page.locator(SEL.saveSummary);
-  // Preview is gone (#24): reach the draft at its canonical permalink, then read
+  // The canonical permalink is the only route (#24): reach the draft at its canonical permalink, then read
   // the post_id off the PostCard's Edit affordance.
   const permalinkHref = (await summary
     .locator('[data-test="permalink-link"]')
@@ -332,7 +332,6 @@ test("authenticated user can edit a draft post", async ({ registeredPage }) => {
     /\/posts\/(\d+)\/edit/,
   )![1];
 
-  // Navigate to edit page
   await navigateInApp(page, () => editLink.click(), {
     url: `/posts/${postId}/edit`,
     ready: SEL.postBody,
@@ -503,7 +502,7 @@ test("editing a published post freezes the slug", async ({
     .getAttribute("data-slug");
   expect(originalSlug).toBeTruthy();
 
-  // Preview is gone (#24): reach the published post at its permalink, then read
+  // The canonical permalink is the only route (#24): reach the published post at its permalink, then read
   // the post_id off the PostCard's Edit affordance.
   const permalinkHref = (await summary
     .locator('[data-test="permalink-link"]')
@@ -520,7 +519,6 @@ test("editing a published post freezes the slug", async ({
     /\/posts\/(\d+)\/edit/,
   )![1];
 
-  // Navigate to edit page
   await navigateInApp(page, () => editLink.click(), {
     url: `/posts/${postId}/edit`,
     ready: SEL.postBody,
@@ -551,8 +549,8 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   await click(page, SEL.publishButton("false"));
   await waitForSelector(page, SEL.saveSummary);
 
-  // Preview is gone (#24): the drafts listing links only the canonical permalink
-  // and carries the Edit affordance — derive both from the row (AC5).
+  // The drafts listing links only the canonical permalink (#24) and carries the
+  // Edit affordance — derive both from the row (AC5).
   await navigateInApp(page, () => click(page, '.j-nav a[href="/drafts"]'), {
     url: "/drafts",
     ready: '.j-topbar h1:has-text("Drafts")',
@@ -622,8 +620,8 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   // Publish from the post's own permalink via the draft-aware PostCard (#23/#24):
   // Publish sits behind a confirm and, on success, navigates to the canonical
   // published permalink — where the post renders without the draft banner.
-  // `page` never left the permalink — only `guestPage` navigated — so the reload
-  // that used to sit here was a document load of the URL already displayed (#867).
+  // `page` never left the permalink — only `guestPage` navigated — so no reload
+  // is needed here (#867).
   // Same-day create+publish → the permalink does not move, so `use_navigate` is a
   // router no-op and the draft→published flip comes from the in-place resource
   // refetch (#592, spec AC2). A stashed sentinel proves it happens WITHOUT a full
@@ -772,7 +770,7 @@ test("authenticated user can delete a published post", async ({
   registeredPage,
 }) => {
   test.slow();
-  // Create a published post; title embedded as # heading (title input is removed from UI)
+  // Create a published post; title embedded as # heading (there is no title input in the UI)
   const page = await registeredPage("/posts/new");
   await page.fill(SEL.postBody, "# Post To Delete\n\nthis will be deleted");
   await click(page, SEL.publishButton("true"));
@@ -793,13 +791,11 @@ test("authenticated user can delete a published post", async ({
   // Delete button should be visible for the author
   await expect(page.locator('button:has-text("Delete")')).toBeVisible();
 
-  // Accept the confirm dialog and click delete
   page.once("dialog", (dialog) => dialog.accept());
   await click(page, 'button:has-text("Delete")');
   await waitForSelector(page, ".success");
   await expect(page.locator(".success")).toContainText("Post deleted.");
 
-  // Verify the permalink now returns a not-found error
   allowSecondBoot(
     page,
     "after the delete succeeds the app offers no control back to the deleted permalink; the fresh load is what proves it now serves Post not found",
@@ -807,7 +803,6 @@ test("authenticated user can delete a published post", async ({
   await goto(page, permalinkUrl);
   await expect(page.locator(SEL.error)).toContainText("Post not found");
 
-  // Verify excluded from user timeline
   const username = permalinkUrl.match(/\/~([^/]+)\//)?.[1];
   expect(username).toBeTruthy();
   allowSecondBoot(
@@ -1122,8 +1117,7 @@ test("editing a post updates tag chips and tag listing pages", async ({
 
   // /tags/xeditd should list it. The post's own #xeditd chip is the in-app route
   // there, and it exists only while we are still on the permalink — so this check
-  // now runs BEFORE the /tags/xeditc one it used to follow (#867). Both
-  // assertions are unchanged; only their order is.
+  // must run BEFORE the /tags/xeditc one (#867).
   await navigateInApp(
     page,
     () => page.locator('.j-tag-list .j-tag[href="/tags/xeditd"]').click(),
@@ -1259,7 +1253,7 @@ test("authenticated user can delete a draft from the drafts page", async ({
   registeredPage,
 }) => {
   test.slow();
-  // Create a draft; title embedded as # heading (title input is removed from UI)
+  // Create a draft; title embedded as # heading (there is no title input in the UI)
   const page = await registeredPage("/posts/new");
   await page.fill(SEL.postBody, "# Draft To Delete\n\ndraft content");
   await click(page, SEL.publishButton("false"));
@@ -1318,10 +1312,9 @@ test("scheduling from the edit page shows a Scheduled-for badge on the drafts pa
   registeredPage,
 }) => {
   test.slow();
-  // The editor's schedule control had no coverage at all before #863, which is what
-  // made its id unverifiable when both shapes' controls were unified into
-  // `ComposeOptions` — the editor now renders the same `#options-publish-at` the
-  // composer does. Mirrors the composer-side test above, with one deliberate
+  // The editor renders the same `#options-publish-at` the composer does
+  // (`ComposeOptions`, #863); this pins the editor side's id and behavior.
+  // Mirrors the composer-side test above, with one deliberate
   // difference in the settle step: a *scheduled* publish sets `published_at` to a
   // future instant, so `EditSaveOutcome` takes its `Ok(_)` "Redirecting…" arm rather
   // than rendering the `.j-save-summary` block the draft-save path renders.
@@ -1378,9 +1371,9 @@ test("scheduling from the edit page shows a Scheduled-for badge on the drafts pa
 
 // #671: `/` is the one timeline whose Loading arm is reachable ONLY by a client-side
 // nav — a full load of it is always projector-seeded (`site_timeline` has no shell
-// fallback, unlike the profile/tag routes), so it never paints Loading. Before #671 an
-// unseeded arrival flashed `TimelineRows`' "No posts yet." empty state; the gate now
-// paints `.j-loading` until the fetch resolves. This is the ONE visible change in #671.
+// fallback, unlike the profile/tag routes), so it never paints Loading. An unseeded
+// arrival must paint `.j-loading` until the fetch resolves — not flash
+// `TimelineRows`' "No posts yet." empty state (#671).
 test("unseeded client-nav to / paints Loading with the masthead intact", async ({
   page,
 }) => {

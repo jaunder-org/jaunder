@@ -1,30 +1,23 @@
 /**
  * Client-side trace capture, attached once per browser context (#794).
  *
- * This was inlined in `fixtures.ts`'s `_autoPerfSpan` and bound to the default
- * `page`, which is why extra contexts a spec opened via `tracedContext` had no
- * client-side instrumentation at all — their server requests were attributed via
- * traceparent, but their navigation, resource and long-task cost was invisible.
  * Attaching at the *context* level, from one place, means every page in every
- * context is instrumented through one code path, including pages a spec opens
- * later via `context.newPage()`. There is no per-page opt-in left to forget.
+ * context is instrumented through one code path — including extra contexts a
+ * spec opens via `tracedContext` and pages opened later via
+ * `context.newPage()`. There is no per-page opt-in left to forget; page-bound
+ * instrumentation leaves those pages' navigation, resource and long-task cost
+ * invisible.
  *
  * ## Capture is not attribution
  *
- * `_autoPerfSpan` used to attach this instrumentation *after* the per-test warmup
- * (removed in #792). The reason recorded in the comment there was about the
- * **traceparent**: pre-test traffic must stay unattributed, per #681's
- * orphan-bucket design. Capture had no such constraint — it simply inherited the
- * ordering, and that incidental fusion is why the warmup's duration was measured
- * nowhere, which is what #794 separated.
- *
- * The two remain separate: capture attaches at context creation, the traceparent
- * is applied only once the test proper begins. #681's contract is untouched.
+ * Capture attaches at context creation; the traceparent is applied only once
+ * the test proper begins — pre-test traffic must stay unattributed, per #681's
+ * orphan-bucket design. The two are deliberately separate concerns (#794).
  *
  * ## Why records are phase-tagged at `request`, not at completion
  *
  * The `pretest` phase covers everything between context creation and the
- * traceparent switch. Since #792 removed the warmup that phase is normally empty,
+ * traceparent switch. That phase is normally empty (#792),
  * but it is not vestigial: it is what guarantees that anything a fixture does
  * before the test body cannot silently land in `e2e.test`'s arrays, where it
  * would shift `e2e.request_count` / `e2e.navigation_count` and the top-N blobs
@@ -522,10 +515,9 @@ export async function attachTraceCapture(
     async settle() {
       // Drain until the queue stops growing, rather than awaiting one snapshot of
       // it. `Promise.all` captures the array's contents synchronously, so anything
-      // pushed WHILE we await is never awaited. That was harmless while every
-      // harvest came from a `load` handler that had already fired; the mount-ready
-      // harvest arrives via async binding dispatch and can land after settling has
-      // begun, and a harvest missed here reads as a navigation with no boot
+      // pushed WHILE we await is never awaited — and the mount-ready harvest
+      // arrives via async binding dispatch, so it can land after settling has
+      // begun. A harvest missed here reads as a navigation with no boot
       // decomposition — indistinguishable from the bug this all fixes (#818).
       let drained = 0;
       while (drained < pendingHarvests.length) {

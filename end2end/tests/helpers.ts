@@ -48,7 +48,7 @@
  *   AJAX responses arrive under load.  Wait for a specific element instead.
  *
  * - Whole-test timeout scaling is ambient (see `fixtures.ts`): every test gets a
- *   scaled `DEFAULT_TEST_BUDGET_MS` automatically, so tests no longer hand-roll
+ *   scaled `DEFAULT_TEST_BUDGET_MS` automatically, so tests do not hand-roll
  *   `test.setTimeout(slowBrowserTimeoutMs(...))`.  That budget covers every test
  *   in the suite (#270), so needing more is a signal, not a routine: measure the
  *   test first, and only then add a `setTestBudget(ms)` derived from whatever

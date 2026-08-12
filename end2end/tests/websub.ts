@@ -19,9 +19,8 @@
  * const ping = await waitForPingMatching(pingsBefore, isUserFeed);
  * ```
  *
- * A count-only `waitForNewPing` used to live here. It had no callers — one
- * publish enqueues events for several feeds, so every site needs the predicate
- * form — and was removed rather than carried forward (#794).
+ * There is deliberately no count-only waiter: one publish enqueues events for
+ * several feeds, so every site needs the predicate form (#794).
  */
 
 import * as fs from "fs";

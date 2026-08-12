@@ -28,16 +28,16 @@ const FEED_POLL_INTERVAL_MS = 500;
  *
  *  Exported because `feeds.spec.ts` derives its whole-test budget from this and
  *  `FORMATS.length` (#270): adding a format or changing this value must carry
- *  the budget with it, which is the coupling that had silently drifted before.
- *  One definition, imported — not restated at the call site. */
+ *  the budget with it — a restated number at the call site silently drifts.
+ *  One definition, imported. */
 export const FEED_POLL_TIMEOUT_MS = 25_000;
 
 /**
  * Poll `url` until its body contains `marker`, returning what was last seen
  * either way.
  *
- * The last body is retained deliberately. The loops this replaced kept it, and
- * both kinds of call site need it on failure: the throwing one puts it in the
+ * The last body is retained deliberately:
+ * both kinds of call site need it on failure — the throwing one puts it in the
  * timeout message, and the asserting one diffs against it. Returning only
  * `undefined` on timeout would leave a caller asserting against an empty string,
  * where a `not.toContain(...)` check passes *vacuously* — a green assertion that

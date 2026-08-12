@@ -6,7 +6,7 @@
  *
  * Timeout scaling is ambient (#261): a second auto fixture (`_autoTestTimeout`)
  * gives every test a scaled `DEFAULT_TEST_BUDGET_MS` whole-test budget, so tests
- * no longer name `testInfo` or a raw budget just to set a timeout. That budget
+ * never name `testInfo` or a raw budget just to set a timeout. That budget
  * covers every test in the suite (#270) — reaching for `setTestBudget(ms)` is not
  * the default move. The two tests that do call it poll for eventually-consistent
  * state — one the feed cache, one the WebSub hub-ping capture — on deadlines that
@@ -426,7 +426,7 @@ const test = base.extend<{
       const context = await browser.newContext(options);
       await applyTestTraceparent(context, traceId, testSpanId);
       // Same instrumentation the default page gets, through the same code path —
-      // extra contexts used to have none, so a multi-context test under-reported
+      // an uninstrumented extra context makes a multi-context test under-report
       // its own client cost (#794).
       const capture = await attachTraceCapture(context);
       capture.setPhase("test");
@@ -468,8 +468,8 @@ const test = base.extend<{
 
   // Ambient whole-test timeout. `auto`, so it applies to EVERY test; Playwright
   // sets up auto fixtures before any requested fixture, so this budget is in
-  // force before `user`/`verifiedUser`/`registeredPage` setup runs (covering the
-  // out-of-band flows that used to hand-roll their own `setTimeout`). The default
+  // force before `user`/`verifiedUser`/`registeredPage` setup runs (covering
+  // their out-of-band flows too). The default
   // covers every test; the rare test whose own deadlines exceed it derives a
   // budget with `setTestBudget(ms)` (#270).
   _autoTestTimeout: [
@@ -585,7 +585,7 @@ const test = base.extend<{
     async ({ page, testSpanId, _lifecycleStart }, use, testInfo) => {
       // `_lifecycleStart` was stamped before the browser context and page were
       // built; this fixture's body runs after both, so the gap between them is
-      // the context-mint cost that used to be invisible.
+      // the context-mint cost — otherwise invisible to the trace.
       const lifecycleStartMs = _lifecycleStart;
       const perfSpanEntryMs = Date.now();
 

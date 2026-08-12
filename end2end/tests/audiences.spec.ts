@@ -56,8 +56,8 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
   await expect(family).toBeVisible();
 
   // Stable handle on the *Family* name node. Adding a member to *Friends* must not
-  // remount Family; with the old single-signal coupling the whole list rebuilt and
-  // this node would detach.
+  // remount Family — single-signal coupling would rebuild the whole list and
+  // detach this node.
   const familyName = await family.locator("h3.j-audience-name").elementHandle();
 
   // X is an addable candidate in BOTH audiences (a subscriber, member of neither).
@@ -238,7 +238,7 @@ test("Audiences: a failed subscriber-roster fetch surfaces an error, not an empt
   // Let the checklist settle past its own members-loading state before asserting.
   await expect(page.getByText("Loading members")).toHaveCount(0);
 
-  // AC2: the empty-roster lie is gone — no "No active subscribers yet." and no add/remove
+  // AC2: no empty-roster lie — no "No active subscribers yet." and no add/remove
   // list, despite X being a real subscriber.
   await expect(page.getByText("No active subscribers yet")).toHaveCount(0);
   await expect(page.locator(".j-audience-members")).toHaveCount(0);
