@@ -15,9 +15,21 @@ export TMPDIR="${TMPDIR_MUTANTS:-$HOME/.cache/cargo-mutants-tmp}"
 mkdir -p "$TMPDIR"
 
 # --- Which tests count -------------------------------------------------------
-# Everything excluded needs a live PostgreSQL that is not running here. Every
-# excluded test has a sqlite twin covering the same code, so no mutant goes
-# unexamined.
+# The postgres tests need a live PostgreSQL. Whether one is running is the only
+# thing that decides this, so it is a variable rather than a fact:
+#
+#   MUTANTS_WITH_POSTGRES=1  a cluster is provisioned (CI runs the shard under
+#                            `devtool pg run`, which exports JAUNDER_PG_TEST_URL
+#                            for a throwaway one). Every test counts, and
+#                            storage/src/postgres is mutated like any other code.
+#   unset / 0                a bare workstation. The postgres tests are filtered
+#                            out AND storage/src/postgres is excluded from
+#                            mutation — the two must move together, because
+#                            mutating code whose only tests were just filtered
+#                            away reports every mutant as MISSED. That is not a
+#                            finding, it is noise with a survivor's name on it.
+#
+# What gets filtered in the no-cluster case:
 #
 #   postgres       — the case_2_postgres / Backend__Postgres twins. The (?i) is
 #                    load-bearing: plain `postgres` misses
@@ -27,11 +39,17 @@ mkdir -p "$TMPDIR"
 #                    postgres. Name-based filtering cannot find it; it must be
 #                    named.
 #
-# One un-excluded postgres test out of 898 fails the unmutated baseline, and a
-# failed baseline makes cargo-mutants exit 4 having tested nothing — which looks
-# like an empty result, not an error. That cost three whole packages once and
-# the jaunder package three times.
-MUTANTS_FILTER='not test(/(?i)postgres|backup_interop/)'
+# One un-excluded postgres test out of 898 fails the unmutated baseline without a
+# cluster, and a failed baseline makes cargo-mutants exit 4 having tested nothing
+# — which looks like an empty result, not an error. That cost three whole
+# packages once and the jaunder package three times.
+if [ "${MUTANTS_WITH_POSTGRES:-0}" = "1" ]; then
+  MUTANTS_FILTER='all()'
+  MUTANTS_PATH_EXCLUDES=()
+else
+  MUTANTS_FILTER='not test(/(?i)postgres|backup_interop/)'
+  MUTANTS_PATH_EXCLUDES=(--exclude 'storage/src/postgres/**')
+fi
 
 # --- How to run it -----------------------------------------------------------
 # --test-tool nextest
@@ -70,13 +88,19 @@ MUTANTS_FILTER='not test(/(?i)postgres|backup_interop/)'
 #
 #     300s is deliberately generous. A mutant that genuinely loops forever costs
 #     five minutes once; a false timeout costs a hole in the results.
+#
+# MUTANTS_JOBS overrides the parallelism. It exists for CI: a hosted runner has
+# far fewer cores than a workstation, and two jobs there means two builds and two
+# workspace test runs competing for the same handful of cores — which is how the
+# timeout problem above was created in the first place. Leave it alone locally.
 run_mutants() {
   cargo mutants \
-    --jobs 2 \
+    --jobs "${MUTANTS_JOBS:-2}" \
     --no-shuffle \
     --test-tool nextest \
     --test-workspace true \
     --timeout 300 \
+    "${MUTANTS_PATH_EXCLUDES[@]}" \
     "$@" \
     -- -E "$MUTANTS_FILTER"
 }

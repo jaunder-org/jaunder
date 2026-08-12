@@ -1,20 +1,25 @@
 # .cargo/mutants.toml
 
-# Skip files that are structurally untestable:
-# - main.rs: binary entry point, no unit tests possible
-# - hydrate/src/lib.rs: WASM client-side hydration, never runs in test harness
-# - server/src/observability.rs: logging/tracing setup, no logic to mutate
-# - server/src/assets.rs: static asset serving setup
-# - storage/src/postgres/**:  cargo nextest uses sqlite::memory:, so mutations
-#   to postgres code are never exercised by any test — every postgres mutant
-#   would survive, producing pure noise. Postgres coverage lives in the Nix
-#   VM e2e tests, which cargo mutants cannot drive.
+# One exclusion, and it is a property of the code rather than of the machine
+# running the scan:
+#
+# - server/src/assets.rs: a RustEmbed derive and nothing else. There is no logic
+#   to mutate.
+#
+# What is deliberately NOT excluded, and why the earlier list was wrong:
+#
+# - server/src/main.rs was excluded as a "binary entry point, no unit tests
+#   possible". It has a test module. `run()` is dispatch that tests do drive, and
+#   excluding the file to avoid `fn main` threw that away too.
+# - server/src/observability.rs was excluded as "no logic to mutate". It is over
+#   a thousand lines of filter/threshold/parsing code with its own tests — some
+#   of the best mutation targets in the tree.
+# - storage/src/postgres/** cannot be settled here at all: whether it is
+#   mutatable depends on whether a PostgreSQL cluster is running, which a static
+#   config file cannot know. .mutants-loop/common.sh decides it, together with
+#   the test filter that must move with it. See MUTANTS_WITH_POSTGRES there.
 exclude_globs = [
-    "server/src/main.rs",
-    "hydrate/src/lib.rs",
-    "server/src/observability.rs",
     "server/src/assets.rs",
-    "storage/src/postgres/**",
 ]
 
 # Auto-set timeout relative to baseline; add 20% headroom

@@ -28,8 +28,10 @@ mkdir -p "$OUT"
 # Two packages are left out on purpose:
 #
 # `client` — WASM-only. All 42 of its mutants survived with nothing caught, so
-#   no host test reaches any of it. Same reasoning as .cargo/mutants.toml's
-#   exclusion of storage/src/postgres.
+#   no host test reaches any of it. Note this is NOT the reasoning that keeps
+#   storage/src/postgres out of a local scan: that code has tests, they just need
+#   a cluster this script does not start, and CI does scan it. Nothing reaches
+#   `client` anywhere.
 #
 # `web` — dropped by the user's call after the first pass reported 361
 #   survivors against only 157 caught. That ratio was never credible, and the
