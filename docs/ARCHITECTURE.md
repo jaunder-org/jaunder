@@ -1204,8 +1204,12 @@ binds plain HTTP (`--bind`, default `127.0.0.1:3000`, `server/src/cli.rs:267`)
 and production exposure is a proxy-configuration concern, not an application
 feature.
 
-**What is inside the executable.** Two `rust-embed` trees, and nothing on disk
-is needed to serve a request ([ADR-0003](adr/0003-asset-management.md)):
+**What is inside the executable.** Two `rust-embed` trees, so **no external file
+is needed to serve the client** ([ADR-0003](adr/0003-asset-management.md)).
+Request handling still touches disk for user data — media blobs are opened per
+request from the storage path (`server/src/media.rs:116,147`) — and the process
+may also write a runtime-info JSON file and read a PostgreSQL password file; see
+"Outside the binary" below.
 
 - `StaticAssets` (`server/src/assets.rs:3-5`, `#[folder = "assets/"]`) carries
   the base stylesheets `jaunder.css` and `jaunder-themes.css`, mounted at
@@ -1213,9 +1217,21 @@ is needed to serve a request ([ADR-0003](adr/0003-asset-management.md)):
   supplies ETag and conditional-request handling.
 - `Site` (`server/src/site.rs:33-35`, `#[folder = "$OUT_DIR/site"]`) carries the
   CSR client: `pkg/jaunder.{js,wasm}`, their precompressed `.br`/`.gz` siblings,
-  the wasm-bindgen `snippets/`, and the `public/` assets. `server/build.rs`
-  stages that tree at compile time from `JAUNDER_CSR_BUNDLE_DIR` (Nix) or
-  `target/site/pkg` (host build).
+  the wasm-bindgen `snippets/`, and the `public/` assets flattened to the site
+  root (`public/favicon.ico` → `favicon.ico`, `server/build.rs:125-127`).
+  `server/build.rs` stages that tree at compile time from
+  `JAUNDER_CSR_BUNDLE_DIR` (Nix) or `target/site/pkg` (host build).
+
+<!-- DRIFT vs ADR-0003: ADR-0003 (accepted) asserts at :17 and :30-31 that
+user-uploadable stylesheets "remain architecturally distinct and are served from
+the storage layer". No such feature exists — no stylesheet handling in storage/,
+no CSS config key, no CSS path in server/src. The ADR states an unimplemented
+feature as though it were built. -->
+
+Only the two base stylesheets are embedded. ADR-0003 also anticipated
+**user-uploadable** stylesheets served from the storage layer; that was never
+built, and nothing in `storage/` or the config-key registry handles CSS.
+
 - The SPA shell is the compile-time constant `web::app::SPA_SHELL`
   (`web/src/app/render.rs:51`, `include_str!` of `csr/index.html`), served as
   the fallback for unknown paths (`server/src/site.rs:126-128`).
@@ -1251,16 +1267,21 @@ every stored row, flagging keys outside the registry as `UNKNOWN KEY` and
 recognised keys holding unparseable values as `INVALID`, so legacy rows stay
 visible.
 
-Three environment variables configure a deployment, each a clap `env` fallback
-for a flag: `JAUNDER_BIND` (listen address), `JAUNDER_DB` (database URL, default
-`sqlite:./data/jaunder.db`, `server/src/cli.rs:41`), and `JAUNDER_ENV` (`dev` |
-`prod`, `server/src/cli.rs:271`). `prod` is load-bearing in two places: it sets
-the `secure_cookies` flag passed to `create_router`
-(`server/src/commands.rs:546`, `server/src/lib.rs:32`), and it disables the
-dev-only auto-initialization of a missing database on `serve`
+Deployment is configured by environment variables, each a clap `env` fallback
+for a flag (`server/src/cli.rs`). The process-shape ones are `JAUNDER_BIND`
+(listen address, `:267`), `JAUNDER_DB` (database URL, default
+`sqlite:./data/jaunder.db`, `:41`), `JAUNDER_STORAGE_PATH` (the data directory,
+default `./data`, `:33`), `JAUNDER_ENV` (`dev` | `prod`, `:271`),
+`JAUNDER_RUNTIME_FILE` (`:276`) and `JAUNDER_VERBOSE` (`:25`). PostgreSQL takes
+its secret by either `JAUNDER_DB_PASSWORD` or `JAUNDER_DB_PASSWORD_FILE`
+(`:39-40`, read at `storage/src/postgres/mod.rs:249,253`). The observability
+variables are covered under [Observability](#observability). `prod` is
+load-bearing in two places: it sets the `secure_cookies` flag passed to
+`create_router` (`server/src/commands.rs:546`, `server/src/lib.rs:32`), and it
+disables the dev-only auto-initialization of a missing database on `serve`
 (`server/src/commands.rs:501-512`).
 
-<!-- un-ADR'd (GAP): the CLI subcommand surface and the JAUNDER_BIND / JAUNDER_DB / JAUNDER_ENV environment variables have no ADR. ADR-0102 governs site_config keys only, not process configuration. No issue exists. -->
+<!-- un-ADR'd (GAP): the CLI subcommand surface and the whole JAUNDER_* process-configuration surface have no ADR. ADR-0102 governs site_config database keys only, a different surface. No issue exists. -->
 
 **What the flake ships.** `flake.nix` exports `packages.jaunder` (the server
 binary), `packages.site`, and `nixosModules.jaunder` (`flake.nix:247-249`,
@@ -1270,11 +1291,12 @@ build `.#site` and inspect the bundle for size analysis (`flake.nix:464-473`,
 [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)). The `services.jaunder`
 module (`flake.nix:44-118`) creates a dedicated `jaunder` user/group, runs under
 systemd from `StateDirectory=jaunder` with `WorkingDirectory=%S/jaunder`, passes
-`bind`/`db`/`prod` options through as the three environment variables, runs
-`jaunder init --skip-if-exists` in `preStart`, and starts `jaunder serve`. There
-is no site symlink; the module comment names #237 as the reason. Two
-`nixosConfigurations` test VMs (interactive, PostgreSQL) exist for development
-only.
+`bind` and `db` through unconditionally and `JAUNDER_ENV=prod` only when `prod`
+is set (`flake.nix:95-101`), runs
+`jaunder init --db "$JAUNDER_DB" --skip-if-exists` in `preStart`
+(`flake.nix:105`), and starts `jaunder serve`. There is no site symlink; the
+module comment names #237 as the reason. Two `nixosConfigurations` test VMs
+(interactive, PostgreSQL) exist for development only.
 
 <!-- un-ADR'd (GAP): the NixOS module and package outputs are load-bearing deployment reality with no ADR beyond ADR-0008's single-binary framing. No issue exists. -->
 
