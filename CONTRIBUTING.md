@@ -150,9 +150,19 @@ to `accepted` as it assigns the number. They are indexed in the table in
 that has drifted from the directory (recovery: `cargo xtask adr sync-readme`,
 which is also folded into `adr promote`/`renumber`). Table titles are
 hand-curated — a new row is seeded from the ADR heading, then owned by you
-(ADR-0036 §#196 addendum). A numberless draft under `docs/adr/drafts/` is
-invisible to all three ADR gates by construction: their shared `is_file` → `.md`
-→ leading-number enumeration is non-recursive over `docs/adr/`.
+(ADR-0036 §#196 addendum).
+
+A third step, `adr-view-parity`, requires every `accepted` ADR to be cited in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the materialized view is where
+current truth lives, so an ADR nothing describes there is a decision with no
+visible consequence. It fails by number and title and has no exemption list:
+describe the ADR in the relevant section and cite it. Project the decision while
+your draft is still numberless and `adr promote` rewrites the citation to the
+assigned number for free.
+
+A numberless draft under `docs/adr/drafts/` is invisible to all three ADR gates
+by construction: their shared `is_file` → `.md` → leading-number enumeration is
+non-recursive over `docs/adr/`.
 
 The `identifier-collisions` step fails if two _committed_ ADRs — or two
 migrations, per backend — share a number, or if the sqlite/postgres migration

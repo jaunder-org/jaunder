@@ -1967,6 +1967,7 @@ clippy runs — keep their own crane derivations, which is what makes the cheap
 | ---------------------------------------------------------- | --------------------------------------------------------- |
 | `identifier-collisions`                                    | duplicate ADR/migration number prefixes, migration parity |
 | `adr-format`, `adr-readme-parity`                          | ADR front-matter shape and the README table               |
+| `adr-view-parity`                                          | every accepted ADR is cited in this document              |
 | `doc-links`                                                | intra-doc link targets                                    |
 | `test-backend-pattern`                                     | dual-backend storage test shape                           |
 | `server-fn-registrar`                                      | every `web` `#[server]` fn is in the test registrar       |
@@ -2414,11 +2415,23 @@ assigned number before the branch is pushed
 path is therefore not a convention but a prerequisite — a link written any other
 way survives promotion pointing at nothing.
 
-Committed direction: this document becomes a gated artifact of the same kind. A
-planned `adr-view-parity` check will require every `accepted` ADR to be cited
-here, closing the loop that today depends on the replay audit
+This document is itself a gated artifact. The `adr-view-parity` step requires
+every `accepted` ADR to be cited here, and fails the ladder by name and title
+when one is not
 ([the materialized-view ADR](adr/drafts/architecture-view-materialized-from-adrs.md)).
-It does not exist yet.
+There is no allowlist and no exemption file: when the step names an ADR, the fix
+is to describe it here. That closes the loop which otherwise depends entirely on
+the replay audit remembering to run.
+
+What the step does **not** see is worth stating plainly, per
+[ADR-0085](adr/0085-static-type-safety-gates-enumerate.md). It tests that an ADR
+is **cited**, not that the prose around the citation is true, and not that the
+citation is in a sensible place — any occurrence of the link or of a bare
+`ADR-NNNN` token satisfies it, including one inside a code fence, an HTML
+comment, or a "superseded by" aside. It also cannot catch a `superseded` ADR
+cited as though current, because the citation still counts. Those blind spots
+are why the replay audit and the `jaunder-adr-projection` skill exist rather
+than being replaced by the gate.
 
 ## Un-ADR'd reality
 

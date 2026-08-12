@@ -18,11 +18,17 @@ use crate::result::StepResult;
 
 pub const README: &str = "docs/README.md";
 pub const ADR_DIR: &str = "docs/adr";
-/// The materialized view of the architecture: the one document every accepted
-/// ADR must be described in and cited from.
+/// The materialized view of the architecture. Every accepted ADR must be *cited*
+/// here — `view_parity_problems` checks exactly that, and no more.
 pub const VIEW: &str = "docs/ARCHITECTURE.md";
 pub const BEGIN: &str = "<!-- adr-table:begin -->";
 pub const END: &str = "<!-- adr-table:end -->";
+
+/// The link target for an ADR as written from `docs/` — the form the README table
+/// renders and the view cites. Spelled once so the three call sites cannot drift.
+fn adr_link(filename: &str) -> String {
+    format!("adr/{filename}")
+}
 
 /// The status tokens legal on a **numbered** ADR (the canonical status cell is
 /// exactly one of these).
@@ -293,7 +299,7 @@ fn resolved_rows(entries: &[AdrEntry], existing: &[TableRow]) -> Vec<TableRow> {
                 .to_string();
             TableRow {
                 num: e.num,
-                target: format!("adr/{}", e.filename),
+                target: adr_link(&e.filename),
                 title,
                 status: e.status.clone(),
             }
@@ -436,7 +442,7 @@ pub fn parity_problems(entries: &[AdrEntry], existing: &[TableRow]) -> Vec<Strin
         match row_by_num.get(&e.num) {
             None => problems.push(format!("ADR {:04} has no README table row", e.num)),
             Some(r) => {
-                let want = format!("adr/{}", e.filename);
+                let want = adr_link(&e.filename);
                 if r.target != want {
                     problems.push(format!(
                         "ADR {:04} row link is `{}`, expected `{want}`",
@@ -500,6 +506,17 @@ pub fn parity_report(repo: &Path) -> Result<Vec<String>> {
 ///
 /// Errors when the view is unreadable: a gate that silently passes because its
 /// input vanished would be retired by a `rm`.
+///
+/// **What this cannot see** (ADR-0085's honesty obligation). It is a substring
+/// test over the whole file, so a citation counts wherever it appears —  inside a
+/// fenced code block, an HTML comment, or a "superseded by ADR-NNNN" aside. It
+/// therefore proves that an ADR is *mentioned*, not that the surrounding prose is
+/// true, not that the mention is anywhere sensible, and not that a `superseded`
+/// ADR has stopped being cited as current. Those are the replay audit's job, and
+/// the reason it is not replaced by this step. The failure direction is
+/// deliberate: a deliberately odd view can produce a false pass, but nothing
+/// produces a false alarm, which is the right way round for a step that blocks
+/// every commit.
 pub fn view_parity_problems(repo: &Path) -> Result<Vec<String>> {
     let view_path = repo.join(VIEW);
     let view = std::fs::read_to_string(&view_path)
@@ -509,7 +526,7 @@ pub fn view_parity_problems(repo: &Path) -> Result<Vec<String>> {
         if e.status != "accepted" {
             continue;
         }
-        let link = format!("adr/{}", e.filename);
+        let link = adr_link(&e.filename);
         let token = format!("ADR-{:04}", e.num);
         if !view.contains(&link) && !view.contains(&token) {
             problems.push(format!(
