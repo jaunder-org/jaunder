@@ -22,5 +22,5 @@ the ubiquitous language changes) in the same change — the view is the home
 of current truth. Later addenda to a shipped ADR are written in past tense
 ("as of <date>, Y held; current state: ARCHITECTURE.md §Z"), never as
 present-tense patches: an ADR is an immutable event. See
-docs/adr/drafts/architecture-view-materialized-from-adrs.md.
+docs/adr/0127-architecture-view-materialized-from-adrs.md.
 -->

@@ -154,6 +154,7 @@ convention). See the Status column below for each ADR's current status.
 | [0124](adr/0124-rstest-reuse-cross-module-templates.md)            | rstest_reuse templates resolve cross-module by bare name                                                     | accepted   |
 | [0125](adr/0125-slug-ordered-tag-lock-acquisition.md)              | Slug-ordered tag lock acquisition                                                                            | accepted   |
 | [0126](adr/0126-sqlx-sqlite-busy-handler-threading.md)             | sqlx-sqlite busy-handler blocking is thread-scoped, not runtime-scoped                                       | accepted   |
+| [0127](adr/0127-architecture-view-materialized-from-adrs.md)       | ADRs are immutable decision events; ARCHITECTURE.md is the materialized view                                 | accepted   |
 
 <!-- adr-table:end -->
 

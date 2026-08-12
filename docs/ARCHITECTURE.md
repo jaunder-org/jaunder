@@ -3,7 +3,7 @@
 This document is the **materialized view** of the repository's architectural
 decision log: the single authoritative statement of the architecture as it is
 _now_, folded from the ADRs in [docs/adr/](adr/) (see
-[the materialized-view ADR](adr/drafts/architecture-view-materialized-from-adrs.md)).
+[the materialized-view ADR](adr/0127-architecture-view-materialized-from-adrs.md)).
 The ADRs are the immutable events — each records why a decision was made, pinned
 to its moment; this view records what is currently true, and every claim cites
 the decision(s) that established it. Read this to learn the system; open a cited
@@ -2294,7 +2294,7 @@ deliberately distinct from `watcher-error` ("we could not tell").
 The documentation architecture is event-sourced: ADRs in `docs/adr/` are
 append-only decision events, and this document — `docs/ARCHITECTURE.md` — is the
 materialized view folded from them
-([the materialized-view ADR](adr/drafts/architecture-view-materialized-from-adrs.md)).
+([the materialized-view ADR](adr/0127-architecture-view-materialized-from-adrs.md)).
 An ADR's Decision text is never edited to track the present; when a decision
 changes, a new ADR supersedes it with reciprocal pointers. In-place ADR edits
 are limited to metadata and navigation (status lines, moved pointers, short
@@ -2304,11 +2304,11 @@ kept current by two disciplines: shipping an ADR updates `ARCHITECTURE.md` (and
 `CONTEXT.md` when the ubiquitous language changes) in the same change, and a
 periodic replay audit re-derives the view from the log plus the code to catch
 un-ADR'd drift
-([the materialized-view ADR](adr/drafts/architecture-view-materialized-from-adrs.md)).
+([the materialized-view ADR](adr/0127-architecture-view-materialized-from-adrs.md)).
 
 The documentation landscape, per [ADR-0000](adr/0000-documentation-strategy.md)
 as amended by
-[the materialized-view ADR](adr/drafts/architecture-view-materialized-from-adrs.md):
+[the materialized-view ADR](adr/0127-architecture-view-materialized-from-adrs.md):
 
 - `docs/adr/` — the decision log (MADR-style, the "why"). Each ADR's line-1
   heading is `# ADR-NNNN: <title>` and its status is a single token on a
@@ -2398,7 +2398,7 @@ way survives promotion pointing at nothing.
 This document is itself a gated artifact. The `adr-view-parity` step requires
 every `accepted` ADR to be cited here, and fails the ladder by name and title
 when one is not
-([the materialized-view ADR](adr/drafts/architecture-view-materialized-from-adrs.md)).
+([the materialized-view ADR](adr/0127-architecture-view-materialized-from-adrs.md)).
 There is no allowlist and no exemption file: when the step names an ADR, the fix
 is to describe it here. That closes the loop which otherwise depends entirely on
 the replay audit remembering to run.

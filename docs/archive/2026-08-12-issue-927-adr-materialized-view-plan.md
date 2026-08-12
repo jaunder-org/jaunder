@@ -82,7 +82,7 @@ also listed individually further down.
   `/home/mdorman/src/jaunder/.parked-backup-927/`. Do not delete that directory
   until the PR merges.
 - **SHIP BLOCKER — `promote` MUST run before the branch is pushed.** The view
-  links to `adr/drafts/architecture-view-materialized-from-adrs.md` in several
+  links to `adr/0127-architecture-view-materialized-from-adrs.md` in several
   places. `doc-links` resolves targets with `.exists()` on disk
   (`xtask/src/doc_links.rs:209`), and the drafts pen is gitignored — so those
   links pass locally, where the file is present, and would **fail in a CI clone,
@@ -385,7 +385,7 @@ the relevant section — an addition, not a replacement.
 
 ### Task 20 — amend the draft ADR
 
-**Files:** `docs/adr/drafts/architecture-view-materialized-from-adrs.md`
+**Files:** `docs/adr/0127-architecture-view-materialized-from-adrs.md`
 (gitignored; backup at `/home/mdorman/src/jaunder/.parked-backup-927/`).
 
 1. `- Status: accepted` becomes `- Status: proposed`. The pen _is_ the proposed
