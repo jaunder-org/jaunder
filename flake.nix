@@ -1473,6 +1473,14 @@
           {
             # Lean shell used by CI (`nix develop .#ci -c cargo xtask validate`).
             ci = pkgs.mkShell (shellEnv // { buildInputs = ciInputs; });
+            # The scheduled mutation-testing job, and nothing else. `cargo-mutants`
+            # stays out of `ciInputs` on purpose: every PR job enters `.#ci`, and
+            # none of them run mutants. This shell is `ciInputs` plus that one
+            # tool, so the weekly job gets it without the pull-request path paying
+            # for it. See .github/workflows/mutants.yml.
+            mutants = pkgs.mkShell (
+              shellEnv // { buildInputs = ciInputs ++ [ pkgs.cargo-mutants ]; }
+            );
             # Full interactive shell for local development.
             default = pkgs.mkShell (shellEnv // { buildInputs = ciInputs ++ devOnly; });
           };

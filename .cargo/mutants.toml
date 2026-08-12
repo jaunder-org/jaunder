@@ -2,7 +2,6 @@
 
 # Skip files that are structurally untestable:
 # - main.rs: binary entry point, no unit tests possible
-# - hydrate/src/lib.rs: WASM client-side hydration, never runs in test harness
 # - server/src/observability.rs: logging/tracing setup, no logic to mutate
 # - server/src/assets.rs: static asset serving setup
 # - storage/src/postgres/**:  cargo nextest uses sqlite::memory:, so mutations
@@ -11,7 +10,6 @@
 #   VM e2e tests, which cargo mutants cannot drive.
 exclude_globs = [
     "server/src/main.rs",
-    "hydrate/src/lib.rs",
     "server/src/observability.rs",
     "server/src/assets.rs",
     "storage/src/postgres/**",

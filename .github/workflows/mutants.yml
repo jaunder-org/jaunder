@@ -1,0 +1,308 @@
+name: Mutants
+
+# Scheduled mutation testing. Deliberately NOT on pull_request.
+#
+# Cost is why. Each mutant needs its own build and its own workspace test run —
+# you cannot test two mutations at once and still attribute the result — so time
+# is linear in mutant count, measured at ~42s per mutant on a 16-core
+# workstation. Diff-scoping does not bound that: a 20-line refactor in this repo
+# generated 49 mutants (~34 min) while an 872-line change generated 34. A
+# per-PR gate would therefore cost anywhere from zero to forty minutes with no
+# way to predict which before pushing, and a check that unpredictable is one
+# people learn to route around.
+#
+# So this runs on its own schedule, blocks nobody, and reports what it finds.
+# The results are a finite work list to burn down, not a score to maintain.
+
+on:
+  schedule:
+    # Weekly, incremental. Sundays 04:17 UTC — off-peak, and the odd minute
+    # avoids the top-of-hour stampede that delays scheduled jobs on GitHub's
+    # shared runners. Uses --iterate, so it re-tests only mutants no previous
+    # run has caught.
+    - cron: "17 4 * * 0"
+    # Monthly, FULL. 1st at 03:17 UTC. --iterate is unsound against regressions:
+    # it skips anything previously caught, so a test that is later deleted or
+    # weakened leaves its mutant skipped forever while the weekly run stays
+    # green. The cache records "was caught", not "is still caught". This run
+    # ignores the cache and re-tests everything, and is the only thing that
+    # notices a test having rotted away.
+    #
+    # Roughly one month in seven this lands on a Sunday and both crons fire. The
+    # concurrency group below serializes them rather than letting them corrupt
+    # each other's cache; the full run subsumes the weekly one, so the extra
+    # cost is one redundant scan a year or so.
+    - cron: "17 3 1 * *"
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Cargo package to scan"
+        type: choice
+        default: common
+        options: [common, storage, host, jaunder, macros]
+      shards:
+        description:
+          "How many shards to split it into (blank uses the default 16)"
+        type: choice
+        # Blank => the plan job's default, which both schedules share. Overriding
+        # this for a one-off run means its results land under a different cache
+        # key and will not be seen by the scheduled runs.
+        default: ""
+        options: ["", "1", "2", "4", "8", "16", "32"]
+      full:
+        description: >-
+          Re-test mutants that a previous run already caught (slow, but the only
+          way to notice a test that has rotted away)
+        type: boolean
+        default: false
+
+# One scan at a time. Two concurrent runs would race on the same result cache
+# and each would persist a partial view of the other's work.
+concurrency:
+  group: mutants-${{ inputs.package || 'common' }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    # Builds the shard matrix from the input, because a GitHub matrix cannot be
+    # computed inline. Without this the `shards` input would be accepted and
+    # silently ignored — a knob that lies about what it does.
+    name: mutants plan
+    # `seq` and `jq`, nothing else. ubuntu-slim is 1 vCPU / 5 GB in a container
+    # rather than a VM, with a hard 15-minute cap — useless for the shards below,
+    # right for this.
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      shards: ${{ steps.plan.outputs.shards }}
+      package: ${{ steps.plan.outputs.package }}
+      full: ${{ steps.plan.outputs.full }}
+    steps:
+      - id: plan
+        env:
+          # Which cron fired, empty for a manual run. A scheduled event cannot
+          # carry inputs, so this is the only way to tell the monthly full run
+          # from the weekly incremental one.
+          SCHEDULE: ${{ github.event.schedule }}
+          INPUT_FULL: ${{ inputs.full }}
+          INPUT_SHARDS: ${{ inputs.shards }}
+          INPUT_PACKAGE: ${{ inputs.package }}
+        run: |
+          set -euo pipefail
+          package="${INPUT_PACKAGE:-common}"
+
+          # Monthly cron (1st of the month) => full audit. Keep this string in
+          # step with the `on.schedule` entry above; they are one decision
+          # expressed twice, and only this comment ties them together.
+          full=0
+          if [ "${INPUT_FULL:-false}" = "true" ] || [ "$SCHEDULE" = "17 3 1 * *" ]; then
+            full=1
+          fi
+
+          # The weekly and monthly runs use the SAME shard count on purpose. The
+          # result cache is keyed by it, because `--shard k/n` slices differently
+          # for a different n — so if the monthly full audit ran at a different
+          # width, its freshly-verified outcomes would land in a cache the weekly
+          # run never reads, and the weekly would go on skipping mutants the
+          # audit had just re-tested. Same width, same cache, one shared state.
+          #
+          # 16 is sized for the full run, which re-tests everything and is the
+          # one at risk of the 6-hour job limit. The weekly run is far cheaper
+          # and merely finishes sooner.
+          shards="${INPUT_SHARDS:-16}"
+
+          # Shards are ZERO-indexed: cargo-mutants requires k < n in
+          # `--shard k/n`. Emitting 1..n instead silently skipped shard 0 and
+          # errored on n/n — and because its invalid-argument exit code (2) is
+          # the same one it uses for "found surviving mutants", that looked like
+          # a clean run and cost an eighth of every package.
+          matrix=$(seq 0 $((shards - 1)) | jq -R . | jq -sc .)
+
+          {
+            echo "matrix=$matrix"
+            echo "shards=$shards"
+            echo "package=$package"
+            echo "full=$full"
+          } >>"$GITHUB_OUTPUT"
+          echo "package=$package shards=$shards full=$full schedule='${SCHEDULE:-manual}'"
+          echo "### mutants plan" >>"$GITHUB_STEP_SUMMARY"
+          echo "package \`$package\`, $shards shards, full=$full (trigger: ${SCHEDULE:-manual})" \
+            >>"$GITHUB_STEP_SUMMARY"
+
+  shard:
+    # Start with one package rather than the workspace. 1660 mutants at ~42s is
+    # ~19 hours on the workstation and more on a hosted runner, which does not
+    # fit GitHub's 6-hour job limit at any sensible shard count. Prove the cost
+    # on one package before widening.
+    name:
+      mutants ${{ needs.plan.outputs.package }} ${{ matrix.shard }}/${{
+      needs.plan.outputs.shards }}
+    runs-on: ubuntu-latest
+    needs: [plan]
+    timeout-minutes: 330 # under GitHub's 360 hard kill, so the upload steps still run
+    strategy:
+      fail-fast: false # one shard's survivors must not hide another's
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: cachix/cachix-action@v17
+        with:
+          name: jaunder-org
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          pushFilter: "jaunder-coverage|jaunder-e2e"
+
+      - name: Cache xtask host build
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            xtask/target
+          key:
+            xtask-${{ runner.os }}-${{ hashFiles('xtask/Cargo.lock',
+            'flake.lock') }}
+          restore-keys: |
+            xtask-${{ runner.os }}-
+
+      # The mutants.out directory IS the --iterate state: cargo-mutants reads the
+      # previous run's caught/unviable list from it (rotating it to
+      # mutants.out.old) and skips those mutants. Restoring it is what makes a
+      # steady-state run cheap.
+      #
+      # `save-always` because the run legitimately ends non-zero when mutants
+      # survive — that is the result we want, and losing the cache on it would
+      # mean every run started from scratch.
+      #
+      # The key is date-stamped so each run writes a fresh entry and the
+      # restore-keys prefix picks up the most recent one. Keying on the commit
+      # would miss constantly; keying on nothing would never update.
+      - name: Restore mutation results
+        uses: actions/cache@v6
+        with:
+          # The shard count is part of the key: --shard k/n slices differently for
+          # a different n, so outcomes from a 4-way split describe different
+          # mutants than an 8-way one and must not be restored across them.
+          path:
+            .mutants-ci/${{ needs.plan.outputs.package }}-${{ matrix.shard }}
+          key:
+            mutants-v1-${{ needs.plan.outputs.package }}-${{
+            needs.plan.outputs.shards }}-${{ matrix.shard }}-${{ github.run_id
+            }}
+          restore-keys: |
+            mutants-v1-${{ needs.plan.outputs.package }}-${{ needs.plan.outputs.shards }}-${{ matrix.shard }}-
+          save-always: true
+
+      - name: Run mutants
+        env:
+          # A hosted runner has ~4 cores. Two parallel jobs each running a
+          # workspace test suite is what produced 242 false timeouts locally on a
+          # 16-core box; do not raise this without re-checking the timeout counts.
+          MUTANTS_JOBS: "1"
+          MUTANTS_FULL: ${{ needs.plan.outputs.full }}
+        run: |
+          nix develop .#mutants --accept-flake-config -c \
+            .mutants-loop/ci-shard.sh \
+            "${{ needs.plan.outputs.package }}" \
+            "${{ matrix.shard }}" "${{ needs.plan.outputs.shards }}" \
+            ".mutants-ci/${{ needs.plan.outputs.package }}-${{ matrix.shard }}"
+
+      - name: Summarize
+        if: always()
+        run: |
+          out=".mutants-ci/${{ needs.plan.outputs.package }}-${{ matrix.shard }}/mutants.out"
+          {
+            echo "### mutants ${{ needs.plan.outputs.package }} shard ${{ matrix.shard }}/${{ needs.plan.outputs.shards }}"
+            echo
+            if [ ! -f "$out/outcomes.json" ]; then
+              echo "**No outcomes** — nothing was tested. Check the log."
+            else
+              for f in caught missed unviable timeout; do
+                n=0
+                [ -s "$out/$f.txt" ] && n=$(wc -l <"$out/$f.txt")
+                echo "- $f: $n"
+              done
+              if [ -s "$out/missed.txt" ]; then
+                echo
+                echo "<details><summary>Surviving mutants</summary>"
+                echo
+                echo '```'
+                cat "$out/missed.txt"
+                echo '```'
+                echo
+                echo "</details>"
+              fi
+            fi
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutants-${{ needs.plan.outputs.package }}-${{ matrix.shard }}
+          path: |
+            .mutants-ci/*/mutants.out/missed.txt
+            .mutants-ci/*/mutants.out/caught.txt
+            .mutants-ci/*/mutants.out/unviable.txt
+            .mutants-ci/*/mutants.out/timeout.txt
+            .mutants-ci/*/mutants.out/outcomes.json
+          # `.mutants-ci` is a DOT directory, and upload-artifact skips hidden
+          # paths by default. Without this every shard uploads nothing, the
+          # report job counts zero survivors, and the whole workflow is green
+          # while testing nothing.
+          include-hidden-files: true
+          # An empty upload is the failure mode above wearing a disguise. The
+          # shard script already refuses to exit 0 without outcomes.json, so
+          # reaching here with no files means something else went wrong.
+          if-no-files-found: error
+          retention-days: 90
+
+  report:
+    name: mutants report
+    # Downloads artifacts and counts lines. Same reasoning as `plan`.
+    runs-on: ubuntu-slim
+    needs: [plan, shard]
+    if: always()
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: mutants-*
+          # NOT merge-multiple. upload-artifact roots each artifact at the least
+          # common ancestor of the files it matched, which here is the shard's
+          # own `mutants.out` — so every shard's artifact holds a `missed.txt` at
+          # its top, and merging them into one directory would have each shard
+          # overwrite the last. One directory per artifact keeps them apart, and
+          # `results/*/missed.txt` then names all of them.
+          path: results
+      - name: Fail if any mutant survived
+        run: |
+          # Judge on artifacts, never on cargo-mutants' exit code: it uses 2 both
+          # for "found surviving mutants" and for an invalid argument.
+          #
+          # A glob that matches nothing must not read as "no survivors" — that is
+          # a silent pass on an empty result set. Prove the shards reported first.
+          shopt -s nullglob
+          outcomes=(results/*/outcomes.json)
+          if [ "${#outcomes[@]}" -eq 0 ]; then
+            echo "::error::no shard artifacts — nothing was tested"
+            echo "**No shard results.** Nothing was tested." >>"$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          missed=$(cat results/*/missed.txt 2>/dev/null | grep -c . || true)
+          echo "surviving mutants across all shards: $missed"
+          if [ "$missed" -gt 0 ]; then
+            {
+              echo "### $missed surviving mutant(s)"
+              echo
+              echo '```'
+              cat results/*/missed.txt
+              echo '```'
+            } >>"$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "No surviving mutants." >>"$GITHUB_STEP_SUMMARY"

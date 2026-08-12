@@ -70,9 +70,14 @@ MUTANTS_FILTER='not test(/(?i)postgres|backup_interop/)'
 #
 #     300s is deliberately generous. A mutant that genuinely loops forever costs
 #     five minutes once; a false timeout costs a hole in the results.
+#
+# MUTANTS_JOBS overrides the parallelism. It exists for CI: a hosted runner has
+# far fewer cores than a workstation, and two jobs there means two builds and two
+# workspace test runs competing for the same handful of cores — which is how the
+# timeout problem above was created in the first place. Leave it alone locally.
 run_mutants() {
   cargo mutants \
-    --jobs 2 \
+    --jobs "${MUTANTS_JOBS:-2}" \
     --no-shuffle \
     --test-tool nextest \
     --test-workspace true \
