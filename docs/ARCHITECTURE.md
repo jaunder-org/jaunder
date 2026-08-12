@@ -286,7 +286,7 @@ tags, and `created_at`/`updated_at`/`published_at`/`deleted_at`.
 ([ADR-0105](adr/0105-post-body-non-blank-invariant.md)). `PostBody::from_str` is
 the one door — the `StrNewtype` derive routes serde and sqlx through it, and
 there is no `from_trusted` bypass, so a blank row would fail to decode
-(`common/src/post_body.rs:67-78`). The constructor stores **verbatim**; a
+(`common/src/post_body.rs:70-82`). The constructor stores **verbatim**; a
 separate format-aware seam,
 `canonicalize_body(&PostBody, &PostFormat) -> Result<PostBody, InvalidPostBody>`
 (`common/src/render.rs:857`), does the normalizing: `Html` is exempt (verbatim
@@ -299,10 +299,11 @@ Every write path converges on **one canonical stored body**
 additionally strips the Org title source, so headers the server stores
 structurally (today `#+TITLE:`) do not survive in the body while unrecognized
 `#+FOO:` lines round-trip verbatim; clients synthesize their own header block on
-the way out. `perform_post_creation` and `perform_post_update`
-(`storage/src/post_service.rs:251-267,417-423`) derive naming from the
-_original_ body via `derive_post_naming` (`common/src/render.rs:618`) before
-canonicalizing, because canonicalization removes the Org title line.
+the way out. `perform_post_update` (`storage/src/post_service.rs:236`, naming
+block `:251-267`) and `perform_post_creation` (`:401`, block `:417-424`) derive
+naming from the _original_ body via `derive_post_naming`
+(`common/src/render.rs:618`) before canonicalizing, because canonicalization
+removes the Org title line.
 
 **`RenderedHtml` guarantees "contains no active markup", through two named
 doors** ([ADR-0079](adr/0079-rendered-html-sanitization.md)).
@@ -311,12 +312,17 @@ single module-level `ammonia` `SANITIZER` (`common/src/render.rs:274,311`);
 `RenderedHtml::from_trusted` (`:112`) only **inherits** it from an earlier
 sanitize, and the `rendered-html-from-trusted` static check fails the build on
 any new use — its allowlist is down to one production call site, the seed-DTO
-wire rebuild. The field is private, so there is no third door; `sqlx::Decode`
-constructs it directly. `ammonia` sits behind a `sanitize` feature on `common`,
-off for wasm, enabled by `storage`, and `render` itself does not _exist_ without
-it (`common/src/render.rs:241,605`) — absence rather than a weaker guarantee.
-The allowlist is ammonia's audited default widened only to keep a `language-*`
-`class` on `<pre>`/`<code>`.
+wire rebuild. The field is private, so nothing outside the module can mint one:
+there is no `Deserialize` (seed DTOs go through `deserialize_with`), no
+`From<String>` (compile-fail-pinned at `:90`), no `Default`, no `pub(crate)`
+constructor. The derived `sqlx::Decode` is the one in-module path that fills the
+field without passing a door, and that is a **deliberately accepted residual
+risk**, argued in place (`:190`): typing a column as `RenderedHtml` is itself a
+reviewable act, and the static check does not catch it. `ammonia` sits behind a
+`sanitize` feature on `common`, off for wasm, enabled by `storage`, and `render`
+itself does not _exist_ without it (`common/src/render.rs:241,605`) — absence
+rather than a weaker guarantee. The allowlist is ammonia's audited default
+widened only to keep a `language-*` `class` on `<pre>`/`<code>`.
 
 **A post's media references are derived from that sanitized HTML, never
 supplied** ([ADR-0090](adr/0090-media-references-extracted-at-render.md)).
@@ -384,11 +390,24 @@ is zero rows); subscriptions route through the admission seam
 into an immutable `post_revisions` row — title, slug, body, format, rendered
 HTML at that moment (`storage/src/sqlite/posts.rs:73`,
 `storage/src/postgres/posts.rs:75`; table created in migration
-`0008_create_posts.sql`). This is the local half of the retention policy
-([ADR-0009](adr/0009-edit-delete-policy.md)). The rows are write-only today:
-`PostRevisionRecord` (`storage/src/posts.rs:119`) has no read query, so no
-surface exposes edit history yet. Cross-cutting values are validated newtypes
-whose `FromStr` is the single chokepoint: `Username`, `Slug`, `Tag`, `Password`
+`0008_create_posts.sql`). The rows are write-only today: `PostRevisionRecord`
+(`storage/src/posts.rs:119`) has no read query, so no surface exposes edit
+history yet.
+
+<!-- un-ADR'd: local revision snapshots. No ADR decides them. ADR-0009 is about
+CONSUMED content only ("for followed sources", "when an update is received"),
+so it does not cover this despite the resemblance. Same class as soft delete. -->
+
+**Local deletion is soft and un-ADR'd**: `soft_delete_post`
+(`storage/src/posts.rs:689,1308`) stamps `deleted_at`, and public reads filter
+`deleted_at IS NULL` (26 sites in `storage/src/posts.rs`). Whether a hard delete
+ever happens is undecided.
+
+<!-- un-ADR'd: local soft delete. No ADR mentions deletion policy at all, and no
+GitHub issue decides it either (searched open and closed). -->
+
+Cross-cutting values are validated newtypes whose `FromStr` is the single
+chokepoint: `Username`, `Slug`, `Tag`, `Password`
 (`common/src/{username,slug,tag,password}.rs`). Tagging is keyed on the `Tag`
 slug (`PostTag`, `post_tag_diff` in `storage/src/posts.rs`).
 
@@ -430,9 +449,10 @@ holds fetched remote content.
 - **High-fidelity retention for inbound changes**
   ([ADR-0009](adr/0009-edit-delete-policy.md)): a received update stores the
   revised item as a new immutable revision alongside all prior versions, and an
-  inbound delete may hide content from active views but never purges it. Only
-  the local-edit half of this policy exists today (the `post_revisions` snapshot
-  above).
+  inbound delete may hide content from active views but never purges it. None of
+  this exists. ADR-0009 speaks only of consumed content — "for followed
+  sources", "when an update is received" — so the local `post_revisions`
+  snapshot above implements nothing it decided, despite the resemblance.
 - **Sanitization of foreign HTML** on arrival
   ([ADR-0079](adr/0079-rendered-html-sanitization.md)): `RenderedHtml::sanitize`
   is already the door any future inbound producer must use, and the static check
@@ -449,80 +469,142 @@ holds fetched remote content.
 
 ## Protocols (AtomPub, feeds, WebSub)
 
-Jaunder speaks two outbound XML surfaces — public syndication feeds and an
-authenticated AtomPub (RFC 5023) editing interface — plus publisher-side WebSub
-pings. The two are deliberately separate serializers, distinguished by endpoint,
-never user-agent sniffing
-([ADR-0015](adr/0015-atompub-serialization-surfaces.md)).
+Every protocol leg that exists today is **outbound**: public syndication feeds,
+an authenticated AtomPub (RFC 5023) editing interface, and publisher-side WebSub
+pings. Nothing is ingested. The feed and the AtomPub Collection are two
+deliberately separate serializers, told apart by endpoint and never by
+user-agent sniffing ([ADR-0015](adr/0015-atompub-serialization-surfaces.md)).
+
+Every URL that crosses a protocol boundary carries a **role** in its type —
+`FeedUrl`, `HubUrl`, `CanonicalUrl`, `ServiceDocUrl`, `HomepageUrl`,
+`PermalinkUrl`, … , each a `TaggedUrl<Role>` alias in `common/src/tagged_url.rs`
+(roles at `tagged_url.rs:212-287`;
+[ADR-0112](adr/0112-role-tagged-site-urls.md)). This is what stops two adjacent
+same-typed URLs being transposed: `send_publish(hub, feed)`,
+`render_rsd_document(service, homepage)`, and the `FeedMetadata`
+`canonical_url`/`self_url`/`hub_url` fields
+(`common/src/feed/metadata.rs:38-40`) were all live hazards before the roles
+existed.
 
 ### Syndication feeds
 
 Public read-only feeds serve arbitrary feed readers, so every item carries the
 post's `rendered_html` — Atom `type="html"` and the RSS/JSON Feed equivalents
 ([ADR-0015](adr/0015-atompub-serialization-surfaces.md)). Rendering lives in
-`common/src/feed/` (`render_atom`/`render_rss`/`render_json`; URL grammar in
-`feed_path.rs`: `FeedSurface::{Site, SiteTag, User, UserTag}` times three
-formats), served by `server/src/feed/handlers.rs` and rebuilt by
-`regenerate_feed` (the forked `atom_syndication`/`rss` crates are a security
-patch, not a protocol decision — [ADR-0043](adr/0043-quick-xml-fork-patch.md)).
-Scheduled posts reach feeds via `FeedWorker::go_live_pass`
-(`server/src/feed/worker.rs`), which enqueues regeneration for feeds whose posts
-crossed their publish time
+`common/src/feed/`: `render_atom` (`atom.rs:6`), `render_rss` (`rss.rs:16`), and
+`render_json` (`json.rs:6`). The URL grammar is `common/src/feed/feed_path.rs` —
+`FeedSurface::{Site, SiteTag, User, UserTag}` (`feed_path.rs:102-107`)
+canonicalized against three `FeedFormat`s. `server/src/feed/handlers.rs` serves
+the cached bytes; `regenerate_feed` (`server/src/feed/regenerate.rs:35`)
+rebuilds them. Scheduled posts reach feeds via `FeedWorker::go_live_pass`
+(`server/src/feed/worker.rs:84`), which enqueues regeneration for feeds whose
+posts crossed their publish time
 ([ADR-0027](adr/0027-scheduled-publishing-time-gated-visibility.md)).
 
-<!-- un-ADR'd: the surface-by-format matrix, HybridWindow item selection
-(`feeds.min_items`/`feeds.min_days`), and `feed_etag` conditional GET. -->
+The Atom feed document is built by upstream `atom_syndication` — `render_atom`
+assembles an `atom_syndication::Feed` and lets the crate emit the XML
+([ADR-0089](adr/0089-upstream-atom-document-io.md)). RSS goes through the `rss`
+crate the same way.
+
+<!-- un-ADR'd (GAP): `HybridWindow` item selection (`feeds.min_items` /
+`feeds.min_days`, `common/src/feed/window.rs`) and `feed_etag` conditional GET
+(`common/src/feed/metadata.rs:66`, consumed at
+`server/src/feed/handlers.rs:61-81`) are load-bearing feed policy with no ADR. -->
 
 ### AtomPub editing interface
 
-The authenticated Collection (`server/src/atompub/mod.rs`: `/atompub/service`,
-per-user post and media collections under `/atompub/{username}/…`) serves
-editing clients — MarsEdit and the Emacs front-end — authenticating with HTTP
-Basic app passwords validated through the ordinary session-token path
+The authenticated Collection (`server/src/atompub/mod.rs:28-44`:
+`/atompub/service`, the per-user post collection and member routes, the media
+collection and its `{sha}/{filename}` members) serves editing clients — MarsEdit
+and the Emacs front-end — authenticating with HTTP Basic app passwords validated
+through the ordinary session-token path
 ([ADR-0014](adr/0014-atompub-authentication.md); details in the auth section).
-Unlike the syndication feed, it serializes each post in its native source form,
-so a `GET` round-trips losslessly through `PUT`
+The same router serves the RSD autodiscovery document at `/~{username}/rsd.xml`
+(`server/src/atompub/rsd.rs`), which is how MarsEdit finds the service document.
+Unlike the syndication feed, the Collection serializes each post in its native
+source form, so a `GET` round-trips losslessly through `PUT`
 ([ADR-0015](adr/0015-atompub-serialization-surfaces.md)).
 
 Format travels in the standard `atom:content` `type` attribute as a media type
 ([ADR-0023](adr/0023-atompub-jaunder-wire-extensions.md)): Org is `text/org`,
-Markdown is `text/markdown`, Html is the `html` token. Parsing is lenient (bare
-`text` or an unrecognized/absent type falls back to the account
-`default_post_format`; `xhtml`/`text/html` defensively map to Html); the whole
-mapping is the pure-function pair `wire_to_format`/`format_to_wire` in
-`server/src/atompub/mapping.rs`, revertible in one line (the namespace and
-`j:slug` extension definitions it consumes live in `common/src/atompub`).
+Markdown is `text/markdown`, Html is the `html` token. Reading is lenient — a
+bare `text`, an unrecognized type, or an absent one falls back to the account
+`default_post_format`, and `xhtml`/`text/html` defensively map to Html. The
+whole policy is the `format_wire` seam: the two private pure functions
+`format_to_wire` (`server/src/atompub/mapping.rs:41`) and `wire_to_format`
+(`mapping.rs:51`), revertible in one line. The seam has always lived in the
+server crate; only the namespace and `j:slug` definitions it works against live
+in `common/src/atompub`.
 
 Two Jaunder wire extensions ride the namespace `https://jaunder.org/ns/atompub`
-(`J_NS`, `common/src/atompub/mod.rs`;
+(`J_NS`, `common/src/atompub/mod.rs:51`;
 [ADR-0023](adr/0023-atompub-jaunder-wire-extensions.md)): a read-only `j:slug`
-on every entry — drafts and scheduled included, incoming values ignored — and
+on every entry — drafts and scheduled included, incoming values ignored
+(`mapping.rs:123`) — and
 `<j:extension version="1" features="format-media-type slug"/>` in the service
-document, so clients feature-detect once and degrade gracefully.
+document (`common/src/atompub/service.rs:68-70`), so clients feature-detect once
+and degrade gracefully.
 
-<!-- un-ADR'd: the RSD autodiscovery document (`/~{username}/rsd.xml`) and the
-categories document are served with no ADR. -->
+Atom document I/O is upstream's, not ours
+([ADR-0089](adr/0089-upstream-atom-document-io.md)). `atom_syndication` 0.12.10
+made bare-`<entry>` I/O public, so the hand-rolled reader and writers are gone:
+parsing is `Entry::from_str` at the call site and serialization is
+`Entry::write_to` / `Feed::write_to` (`common/src/atompub/entry.rs:334`, `:406`,
+`:483`). Jaunder's own foreign markup stays Jaunder's — `app:control/app:draft`
+and `j:slug` live in the entry's extension map behind `is_draft`/`set_draft` and
+`j_slug`/`set_j_slug`, each helper owning its `xmlns:` prefix so an entry
+declares a namespace only when it actually carries the marker. `quick-xml`
+remains a direct dependency, but only for the non-Atom documents Jaunder still
+writes itself: the service document, RSD, and the shared XML helpers
+(`common/src/atompub/{service,rsd,xml}.rs`).
+
+`common/src/atompub/categories.rs` is the exception that proves the rule.
+`render_categories_document` (`:20`) is written and re-exported, but no route
+and no server caller reaches it — the AtomPub categories document is **not
+served**. Whether the module survives is
+[#928](https://github.com/jaunder-org/jaunder/issues/928).
+
+The crates come from the registry — `atom_syndication` 0.12.10 and `rss` 2.1
+(`common/Cargo.toml:25-27`). Earlier,
+[ADR-0043](adr/0043-quick-xml-fork-patch.md) (now **superseded**) had cleared
+two RUSTSEC advisories by forking both crates onto `quick-xml` 0.41 and wiring
+the forks in through `[patch.crates-io]`, flake inputs, and a crane vendor
+override. **That apparatus was deleted outright** — the only surviving
+`[patch.crates-io]` entry is an unrelated `lettre` fork (`Cargo.toml:134-135`),
+`flake.nix` has no syndication inputs and no vendor override, and `deny.toml`
+keeps `allow-git = []`. The advisories stay cleared by the same single mechanism
+as before: `quick-xml` ≥ 0.41.
 
 ### WebSub publishing
 
-WebSub is publisher-side only: after regenerating a feed, the feed worker pings
-the configured hub (the `feeds.websub_hub_url` setting) via
-`WebSubClient::send_publish(hub_url, feed_url)` (`server/src/websub/`) with
-bounded retries and a `websub_ping` metric; no configured hub is a recorded
-no-op (`HttpWebSubClient` in production; noop/file-capture variants for tests).
+WebSub is publisher-side only. After regenerating a feed, the feed worker pings
+the configured hub (the `feeds.websub_hub_url` setting,
+`common/src/config_key.rs:165`) through
+`WebSubClient::send_publish(&HubUrl, &FeedUrl)` (`server/src/websub/mod.rs:45`)
+with bounded retries and a `websub_ping` metric whose outcome distinguishes
+`Success`, `Exhausted`, `Failed`, and `NoHub`
+(`server/src/feed/worker.rs:239-266`) — an unconfigured hub is a recorded no-op,
+not a silent one. `HttpWebSubClient` runs in production; noop and file-capture
+implementations back the tests.
 
-<!-- un-ADR'd: publisher-side WebSub has no ADR — ADR-0010 names WebSub only as
-a future ingestion channel. -->
+<!-- un-ADR'd (GAP): publisher-side WebSub is built and exercised by e2e specs,
+but no ADR decides it. ADR-0010 names WebSub only as a future *ingestion*
+channel (that leg is issue #921). -->
 
-### Committed direction
+### Committed direction — inbound federation
 
 [ADR-0010](adr/0010-protocol-integration.md) commits Jaunder to becoming a
 unified reader across ActivityPub, AT Protocol, and web feeds: push-first
-ingestion (ActivityPub inbox delivery, WebSub subscriptions, AT Jetstream),
-adaptive polling as fallback, all normalized into the unified content model
-([ADR-0005](adr/0005-unified-content-model.md)). None of that is built — no
-ActivityPub inbox, no Jetstream consumer, no polling scheduler. Inbound RSS/Atom
-ingestion is the first slice, in flight as issue #282 (active worktree).
+delivery (ActivityPub inbox, WebSub subscriptions, AT Jetstream), adaptive
+polling as the fallback, everything normalized into the unified content model
+([ADR-0005](adr/0005-unified-content-model.md)).
+
+**None of it is built.** There is no ActivityPub inbox, no Jetstream consumer,
+no polling scheduler, and no fetcher; all 25 migrations under
+`storage/migrations/` are publishing-side, with no table for fetched content.
+Inbound RSS/Atom ingestion is the first slice (issue #282), with WebSub
+subscription (#921), ActivityPub (#287), and adaptive polling (#920) sequenced
+behind it. Read every sentence in this subsection as intent, not as description.
 
 ## Authentication
 

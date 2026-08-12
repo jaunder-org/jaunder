@@ -566,6 +566,44 @@ say so.
 - **0112** (role-tagged site URLs) → Protocols, as part of the published URL
   surface.
 
+### Running findings — gaps, drift, and disposals
+
+Accumulated by the section passes. Tasks 16 and 17 consume the GAP rows; task 18
+consumes the DRIFT rows. Append as each section reports.
+
+**GAPs — real, architecturally significant, no ADR.**
+
+| Gap                                                                                                                                                                                                                                                                                                                               | Section   |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| **Local soft delete.** `soft_delete_post` stamps `deleted_at`; ~30 read sites filter it. `rg` over `docs/adr/` finds nothing. It is the local counterpart of ADR-0009's inbound never-purge rule, and no ADR states the policy or whether a hard delete ever happens. _(Pass B checking the issue tracker before this is final.)_ | Content   |
+| **Local revision snapshots.** Every update writes an immutable `post_revisions` row, but no ADR decides it. ADR-0009 looks like the governing decision and is not: it speaks only of consumed content ("for followed sources", "when an update is received"). Write-only today — no read query, no surface.                       | Content   |
+| **Publisher-side WebSub.** Built (`server/src/websub/{mod,http,noop,file_capture}.rs`) and exercised by e2e, yet no ADR decides it — ADR-0010 names WebSub only as a future _ingestion_ channel.                                                                                                                                  | Protocols |
+| **Feed item-selection and cache validation.** `HybridWindow` (`common/src/feed/window.rs`, defaults 20 items / 30 days) and `feed_etag` conditional GET are real architecture with no ADR.                                                                                                                                        | Protocols |
+
+**DRIFT — an ADR reality has outrun.**
+
+| Drift                                                                                                                                                                                                                                                 | Owner   |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| **ADR-0052**: chartered 7 non-compiling checks, the set is now 8.                                                                                                                                                                                     | Task 18 |
+| **ADR-0089 §1** said the `[sources.allow-org]` `deny.toml` entry would be dropped with the fork apparatus. It could not be — the unrelated `lettre` patch (#297) still needs it (`deny.toml:248,254`). The ADR asserts a removal that did not happen. | Task 18 |
+| **ADR-0016 ~line 271** attributes component-SSR removal to #487, whose only commit is unrelated. See below.                                                                                                                                           | Task 19 |
+
+**Disposed without a new ADR** — evidence for the "the gap list shrinks under
+scrutiny" expectation:
+
+- Idempotency key → decided-elsewhere, issue #79, closed and shipped.
+- Content-addressed media store → no longer a gap; ADR-0080, ADR-0084 and
+  ADR-0090 have since decided the layout, the encoding, and reference semantics.
+- Write-time stored rendering → decided in substance by ADR-0090 plus ADR-0079.
+- RSD autodiscovery → noise; it is served, and a fixed discovery envelope needs
+  no ADR. Promoted to body text.
+- AtomPub categories document → **not served at all**; no route, no caller.
+  Recorded as fact citing #928 (which mdorman had already opened independently).
+- `rendered_html` "sanitized" doc-comment defect from the 2026-07 handoff →
+  **retired**. ADR-0079 is built (`sanitize` establishes, `from_trusted`
+  inherits, private field, static-check-pinned call site) and the code comment
+  was corrected under #445.
+
 ### Known defects handed forward to later tasks
 
 Found by a section pass but owned by another task. Do not fix them out of order;
