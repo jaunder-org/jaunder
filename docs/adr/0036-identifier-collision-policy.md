@@ -73,6 +73,15 @@ this policy:
   a `- Status:` line. Choosing `# ADR-NNNN:` (over the legacy `# NNNN.`) means
   the heading itself carries an `ADR-NNNN` token, so `renumber`'s existing
   `rewrite_bare` fixes a bumped ADR's own heading number for free.
+
+  > **Annotation (2026-08-12).** That five-token status set has since been
+  > narrowed. [ADR-0088](0088-promotion-is-the-acceptance-event.md) made
+  > promotion the acceptance event, so a numbered ADR carries one of **four**
+  > tokens — `accepted`, `superseded`, `deprecated`, `rejected`
+  > (`NUMBERED_STATUS_VOCAB` in `xtask/src/adr_readme.rs`) — and `adr-format`
+  > now rejects `proposed` outright. Current inventory:
+  > [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 - **Two read-only gates** were added, siblings of `identifier-collisions`:
   `adr-format` (every ADR matches the canonical heading + status style) and
   `adr-readme-parity` (the table's mechanical cells and row set match

@@ -42,6 +42,13 @@ config-only change:
    can't be self-served via `register()`), so the quarantine is by config, not
    de-seeding.
 
+> **Annotation (2026-08-12).** `admin-site` was the lone quarantined spec at
+> decision time; there are now **two**. `end2end/playwright.config.ts`
+> quarantines `admin-site` and `invite` together in the per-browser serial
+> projects (`testMatch: /(admin-site|invite)\.spec\.ts/`). The quarantine
+> mechanism is unchanged — the roster grew, exactly as the rule below allows.
+> Current inventory: [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 New specs follow the fixture-first pattern; a spec needs quarantine only if it
 mutates a genuine global singleton.
 

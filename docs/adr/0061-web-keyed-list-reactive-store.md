@@ -70,6 +70,14 @@ component state to preserve** across a refetch is rendered from a
   editable inputs stay uncontrolled (initial value only) so a background refetch
   cannot clobber in-progress edits.
 
+> **Annotation (2026-08-12).** The name `Invalidator::patched` (used here and
+> twice under Consequences) does not exist as a method. The helper lives as a
+> free function, `client::reactive::patched` (`client/src/reactive.rs`);
+> `Invalidator` (`web/src/reactive/mod.rs`) carries only `new`, `notify`, and
+> `track`. Read every `Invalidator::patched` below as that free function; the
+> decision is unaffected. Current inventory:
+> [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 `patch`-on-resolve provides the sticky-retention behavior (web-style-guide §9)
 for such a list: it retains prior rows and never blanks to a _loading_
 placeholder, subsuming a separate sticky signal for the keyed collection. (A

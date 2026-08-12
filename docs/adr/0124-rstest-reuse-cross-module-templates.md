@@ -28,6 +28,15 @@ Rely on these verified properties, and keep the matrix templates in
   composes as rows × backends. Attribute order: `#[apply(backends_matrix)]`,
   then the `#[case::name(..)]` rows, then `#[tokio::test]` (#127).
 
+> **Annotation (2026-08-12).** The second bullet's extra requirement does not
+> hold in this tree. No bare `use rstest_reuse;` exists anywhere in `server/` or
+> `storage/` — every site uses `use rstest_reuse::*;` (or
+> `use rstest_reuse::template;`) alone, and `server/tests/main.rs` imports the
+> crate not at all. The rule appears to have been hoisted from a stale test-file
+> comment. The rest of this ADR — bare-name resolution and the `#[values]`-based
+> backend axis — is unaffected. Current inventory:
+> [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 ## Consequences
 
 - Test files reference this draft instead of re-deriving the resolution rules in
