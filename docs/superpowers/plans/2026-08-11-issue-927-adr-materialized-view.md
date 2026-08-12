@@ -25,11 +25,12 @@ themselves.
 This is the authoritative progress list — tick here as you go. Tasks 3–14 are
 also listed individually further down.
 
-- [ ] **1** — Restore the parked starting texts onto the current base; repair
-      dead links.
-- [ ] **2** — Build the ADR-to-section assignment worksheet for all accepted
-      ADRs.
-- [ ] **3–14** — Re-verify and rebuild each of the 12 view sections (one task,
+- [x] **1** — Restore the parked starting texts onto the current base; repair
+      dead links. _(no repair needed — all 161 links resolved)_
+- [x] **2** — Build the ADR-to-section assignment worksheet for all accepted
+      ADRs. _(108 assigned, validated as an exact partition; grew to 14
+      sections)_
+- [ ] **3–14b** — Re-verify and rebuild each of the 14 view sections (one task,
       one commit each).
 - [ ] **15** — Parity sweep: place every straggler ADR the section pass missed.
 - [ ] **16** — File the ADR-gap follow-up issues (their numbers are needed by
@@ -44,18 +45,23 @@ also listed individually further down.
 
 **Key risks and decisions.**
 
-- **The corpus moves under this branch.** It was 114 ADRs when #927 was filed;
-  `0113` landed during planning, so it is 115. Re-derive counts at task 2 and
-  again at task 15; never trust a number written in this plan or the issue body.
+- **The corpus moves under this branch, and the main checkout lags the
+  worktree.** Task 2 derived **114 files, 108 accepted, highest 0113** from the
+  _worktree_. An earlier count taken from the main checkout was already stale by
+  a commit — always read the worktree. Re-derive again at task 15; never trust a
+  number written in this plan or the issue body. (The issue says "highest 0112,
+  114 files"; 0113 has since landed and 0074 became `superseded`, so the totals
+  coincide by accident.)
 - **A sloppy fan-out agent produces confident wrong prose that reads exactly
   like correct prose.** This already happened once — a wrong "seam moved" claim
   landed in ADR-0023. Every section gets a second pass by a different agent.
   Task 15's probe catches missing citations but _cannot_ catch a false claim;
   the second pass is the only thing that does.
-- **Seven post-park ADRs form a type-safety cluster with no home** in the parked
-  12 sections: 0072, 0073, 0074, 0075, 0091, 0101, 0108. Task 2 decides whether
-  they get a 13th section ("Domain types and invariants") or distribute.
-  Recommend the 13th section; flag to the human if task 2 concludes otherwise.
+- **The view grew from 12 sections to 14** — resolved at task 2. A cross-cutting
+  type-safety cluster got its own "Domain types and invariants" section (10
+  ADRs), and "Testing and verification gates" split into the suite (17) and the
+  ladder (10), because at 27 it was more than twice any other section. Task 14b
+  writes new prose; every other section task rewrites parked text.
 - **The gate must land last and green.** Any earlier ordering red-lights every
   commit on the branch.
 - **The skill is not a PR deliverable.** `.claude/` is untracked in jaunder, so
@@ -211,10 +217,12 @@ One task and one commit per section, each following **The section brief** above.
 - [ ] Task 9 — Observability.
 - [ ] Task 10 — Deployment.
 - [ ] Task 11 — Emacs client.
-- [ ] Task 12 — Testing and verification gates. Largest post-park ADR load.
+- [ ] Task 12 — Testing: harness, suites, e2e (17 ADRs).
+- [ ] Task 12b — Verification gates: the ladder (10 ADRs).
 - [ ] Task 13 — Development tooling.
 - [ ] Task 14 — Documentation and decision process.
-- [ ] Task 14b — Domain types and invariants, if task 2 created it.
+- [ ] Task 14b — Domain types and invariants. Task 2 created this section; it is
+      new prose, not a rewrite, so there is no parked text to start from.
 
 ### Task 15 — parity sweep
 
@@ -466,4 +474,77 @@ design.
 
 ## Appendix — ADR-to-section worksheet
 
-Filled in by task 2.
+Derived from the **worktree** tree (not the main checkout, which lags) at task
+2: **114 ADR files, 108 `accepted`, 6 `superseded` (0013 0030 0043 0055 0056
+0074), highest 0113.** 48 accepted ADRs are uncited by the restored view — the
+gap task 23 closes.
+
+Validated mechanically: every accepted ADR appears **exactly once**, no
+duplicates, no strays. That property is what makes task 23 green by
+construction. Re-run the check if you move anything.
+
+Two structural decisions taken here:
+
+- **A 14th section, "Domain types and invariants"**, for the ten cross-cutting
+  newtype/invariant ADRs that have no subsystem home. Without it, 0072
+  (UtcInstant), 0073 (`url`), 0091 (`#[text_enum]`), 0101 (infallible kind) and
+  0108 (absence named at its source) each get filed under whichever subsystem
+  happens to use them, which is how they became invisible in the first place.
+- **"Testing and verification gates" splits in two.** At 27 ADRs it was more
+  than twice any other section. The suite and the ladder are different subjects
+  with different readers: one is "how we test", the other is "what blocks a
+  commit".
+
+| Section                            | Task | n   | Accepted ADRs                                                                        |
+| ---------------------------------- | ---- | --- | ------------------------------------------------------------------------------------ |
+| Workspace                          | 3    | 3   | 0058 0062 0069                                                                       |
+| Storage                            | 4    | 7   | 0001 0006 0016 0019 0021 0064 0092                                                   |
+| Content model                      | 5    | 13  | 0004 0005 0009 0020 0024 0025 0027 0079 0080 0084 0090 0097 0105                     |
+| Protocols (AtomPub, feeds, WebSub) | 6    | 5   | 0010 0015 0023 0089 0112                                                             |
+| Authentication                     | 7    | 5   | 0007 0014 0018 0022 0107                                                             |
+| Web frontend                       | 8    | 16  | 0002 0040 0041 0044 0059 0060 0061 0065 0070 0076 0078 0082 0083 0093 0106 0113      |
+| Observability                      | 9    | 4   | 0011 0049 0096 0100                                                                  |
+| Deployment                         | 10   | 3   | 0003 0008 0102                                                                       |
+| Emacs client                       | 11   | 6   | 0031 0035 0038 0042 0045 0047                                                        |
+| Testing (harness, suites, e2e)     | 12   | 17  | 0012 0026 0032 0033 0034 0037 0039 0046 0051 0053 0054 0057 0067 0098 0099 0103 0111 |
+| Verification gates (the ladder)    | 12b  | 10  | 0029 0050 0066 0081 0085 0086 0094 0095 0109 0110                                    |
+| Development tooling                | 13   | 5   | 0028 0052 0077 0087 0104                                                             |
+| Documentation and decision process | 14   | 4   | 0000 0036 0048 0088                                                                  |
+| Domain types and invariants        | 14b  | 10  | 0017 0063 0068 0071 0072 0073 0075 0091 0101 0108                                    |
+
+**Judgement calls worth a second opinion during the section passes.** Each is
+defensible either way; if the section agent disagrees on evidence, move it and
+say so.
+
+- **0016** (DI / `AppState` / composition root) → Storage, following the pointer
+  `CONTRIBUTING.md` already makes. It is arguably a Workspace-wide invariant.
+- **0086** (component thinness enforced) → Verification gates, not Web frontend:
+  the ADR is about the enforcement, not the components.
+- **0106** (wasm size budget) → Web frontend, as a bundle-delivery concern,
+  though it is enforced as a gate and could sit in Deployment.
+- **0082** (server-fn wire URLs) → Web frontend rather than Protocols: it is the
+  internal RPC surface, not a published protocol.
+- **0071** (sqlx newtype bridge) → Domain types, not Storage: the subject is the
+  newtype, and storage is where it happens to cross.
+- **0112** (role-tagged site URLs) → Protocols, as part of the published URL
+  surface.
+
+### Inherited `un-ADR'd` flags by section
+
+The 25 flags in the restored text, for the section passes to classify. Section
+names as above; the parked text carried no flags in Workspace or the new
+sections.
+
+| Section             | Flags                                                                                                                                                                                                       |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Storage             | idempotency-key mechanism (migration `0023_create_idempotency_keys`; ADR-0047 names it only as follow-on #79)                                                                                               |
+| Content model       | write-time stored rendering and local soft delete; the content-addressed media store (sha256 pathing), assumed by ADR-0024                                                                                  |
+| Protocols           | surface-by-format matrix, HybridWindow selection, `feed_etag` conditional GET; the RSD autodiscovery and categories documents; publisher-side WebSub                                                        |
+| Authentication      | cookie/Bearer/Basic precedence and `resolve_credential` homing; hashed-at-rest token storage; concrete cookie attributes; `cheap-kdf` and its dual fail-closed guard; the lowercase-canonical username rule |
+| Web frontend        | the cargo-leptos-free wasm bundling pipeline                                                                                                                                                                |
+| Observability       | `with_http_observability` request-id propagation; e2e VMs copying out `playwright-report-<backend>.json`                                                                                                    |
+| Deployment          | the embedded-shell / on-disk-wasm split (#239); the CLI subcommand surface and `JAUNDER_BIND` / `JAUNDER_DB` / `JAUNDER_ENV`; the NixOS module and package outputs                                          |
+| Emacs client        | service-document probe module; auth-source as credential store; client `Idempotency-Key` on create (#79, since built)                                                                                       |
+| Verification gates  | the ladder also carries `sequence_check` and `host_tests`; `e2e-gate` also needs the CI elisp-integration job                                                                                               |
+| Development tooling | ADR-0052 chartered 7 non-compiling checks, the set is now 8; the cargo-workspace exclusions (root `exclude`, the separate `tools/` workspace)                                                               |
+| Docs and process    | ADR-0000 says transient docs are deleted; practice (#39) archives them as dated files                                                                                                                       |
