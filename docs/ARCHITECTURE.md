@@ -632,7 +632,7 @@ Leptos server functions obtain the same identity via `require_auth()`
 (`web/src/auth/server.rs:113`), which pulls the request `Parts` from context and
 runs the `AuthUser` extractor; failures map to unauthorized/internal errors
 through `AuthRejection` ([ADR-0007](adr/0007-auth-mechanisms.md)). The
-operator-only variant `require_operator()` (`web/src/auth/server.rs:117`) layers
+operator-only variant `require_operator()` (`web/src/auth/server.rs:128`) layers
 the `is_operator` check on top.
 
 **Session establishment for the web client is cookie-only**
@@ -643,19 +643,30 @@ the `is_operator` check on top.
 carrying only `is_operator` (`web/src/auth/api.rs:38`). The one deliberate
 exception is `create_app_password` (`web/src/sessions/api.rs:62`), which returns
 the raw token because showing it once at creation is the whole point of an app
-password — that endpoint establishes no browser session. There is deliberately
-**no bearer-token API for the web client**, and no machine gate enforces the
-rule: it is held by assertions in `server/tests/web/web_auth.rs` that the
-success bodies do not contain the token recovered from `Set-Cookie`
-([ADR-0107](adr/0107-web-session-establishment-is-cookie-only.md)).
+password — that endpoint establishes no browser session. **No web endpoint hands
+the browser a bearer token** — though endpoints will still _accept_ one, as
+logout does. No machine gate enforces the rule: it is held by
+`assert_body_carries_no_token` (`server/tests/web/web_auth.rs:34`), which checks
+the success body against the token recovered from `Set-Cookie`, called for
+register (`:83`) and login (`:332`)
+([ADR-0107](adr/0107-web-session-establishment-is-cookie-only.md)). Two limits
+worth knowing: it covers those two endpoints only, so a new auth `#[server]` fn
+inherits no protection, and it is a substring check, so a re-encoded token would
+pass.
 
 ### Credentials and sessions
 
-- A session token is 32 cryptographically random bytes, base64url-encoded
-  (`host::token::generate`, `host/src/token.rs:28`); only its SHA-256 digest is
-  persisted (`host::token::hash`, `host/src/token.rs:53`, the **sole** path from
-  a raw token to a stored digest) — the raw token is never stored. The two are
-  distinct newtypes, `common::token::{RawToken, TokenHash}`
+- A session token is 32 cryptographically random bytes, base64url-encoded, and
+  is minted already-digested by `host::token::generate_hashed`
+  (`host/src/token.rs:64`, called at `storage/src/sessions.rs:160`): the raw
+  token and its SHA-256 digest are returned together and only the digest is
+  persisted, so the raw value is never stored. On the lookup side
+  `host::token::hash` (`:53`) is the **sole** `RawToken → TokenHash` conversion
+  (`storage/src/sessions.rs:185`, `password.rs:116`, `email.rs:161`,
+  `sqlite/mod.rs:286`, `postgres/mod.rs:161`). The neighbouring
+  `host::token::generate` (`:28`) mints invite codes, not session tokens
+  (`host/src/invite.rs:59` is its only caller). The two are distinct newtypes,
+  `common::token::{RawToken, TokenHash}`
   ([#458](https://github.com/jaunder-org/jaunder/issues/458)), and `RawToken`
   carries `#[str_newtype(no_sqlx, no_ord)]` (`common/src/token.rs:109`) so
   `.bind(raw_token)` does not compile — that opt-out, not a lint, is what keeps
@@ -673,17 +684,25 @@ success bodies do not contain the token recovered from `Set-Cookie`
   User-Agent/host label, app passwords carry a user-supplied name. Revocation is
   deleting the session in the Sessions UI
   ([ADR-0014](adr/0014-atompub-authentication.md)).
-- On the Basic path the supplied username must match the resolved session's user
-  (`verify_basic_username` → 401 on mismatch); combined with per-user collection
-  URIs this scopes a token for user X to `/atompub/X/*`
-  ([ADR-0014](adr/0014-atompub-authentication.md)). Basic sends the token on
+- A token for user X reaches only `/atompub/X/*`. The enforcer is
+  `server::atompub::require_user_match` (`server/src/atompub/mod.rs:107`), which
+  returns 403 on mismatch and guards every per-user route — directly at
+  `posts.rs:135,313` and `media.rs:85,152,181`, and through `owned_post`
+  (`posts.rs:227`) at `:253,282,435`. It applies whichever credential was used
+  ([ADR-0014](adr/0014-atompub-authentication.md)). Separately, on the Basic
+  path `verify_basic_username` (`web/src/auth/server.rs:202`) ties the supplied
+  username to the resolved session's user; cookie and Bearer requests pass
+  `expected: None` and skip that check, which is why the route guard rather than
+  the credential check is what does the scoping. `/atompub/service`
+  (`mod.rs:28`) is authenticated but sits outside the per-user tree, and RSD is
+  deliberately unauthenticated (`atompub/rsd.rs:22`). Basic sends the token on
   every request, so the TLS-terminating reverse proxy is load-bearing for
   AtomPub ([ADR-0014](adr/0014-atompub-authentication.md)).
 
 Cookie management is layered:
-`web::auth::{set_session_cookie, clear_session_cookie}` are leptos adapters over
-the pure header builders
-`host::auth::{session_cookie_header, clear_session_cookie_header}`
+`web::auth::server::{set_session_cookie, clear_session_cookie}`
+(`web/src/auth/server.rs:216`, `:230`) are leptos adapters over the pure header
+builders `host::auth::{session_cookie_header, clear_session_cookie_header}`
 (`host/src/auth.rs:81`, `:93`), which emit
 `session=<token>; HttpOnly; SameSite=Lax; Path=/` (plus `; Secure` when the
 deployment's `CookieSettings` say HTTPS); clearing sets `Max-Age=0`. `HttpOnly`
@@ -698,7 +717,7 @@ attribute strings are pinned by exact-string regression tests
 ### Password hashing
 
 Passwords are hashed with **Argon2id** at the crate-default parameters (m=19456,
-t=2) via `common::password::Password::hash` (`common/src/password.rs:117`)
+t=2) via `common::password::Password::hash` (`common/src/password.rs:97`)
 ([ADR-0018](adr/0018-constant-time-authentication.md)). Test builds may enable
 the `cheap-kdf` feature, which swaps in `Params::MIN_M_COST` with t=1
 (`common/src/password.rs:109`) so the suite is not dominated by KDF time;
@@ -766,9 +785,13 @@ convention): `FromStr` lowercases the input and rejects anything not matching
 `[a-z0-9_-]+` (`common/src/username.rs:26`), and the serde bridge routes wire
 (de)serialization through the same validation, so interior code only ever sees
 canonical lowercase usernames. The parser is the **only** place this happens:
-server-side entry points do not pre-lowercase, and the redundant
-`.to_lowercase()` calls that once preceded `Username::from_str` were removed by
-[#67](https://github.com/jaunder-org/jaunder/issues/67). What remains is a
+server-side entry points do not pre-lowercase. The redundant `.to_lowercase()`
+calls that once preceded `Username::from_str` fell out of the typed-wire-arg
+work — login under [#414](https://github.com/jaunder-org/jaunder/issues/414),
+registration and forgot-password under
+[#407](https://github.com/jaunder-org/jaunder/issues/407);
+[#67](https://github.com/jaunder-org/jaunder/issues/67) had identified the
+redundancy and was later closed as already resolved. What remains is a
 client-side convenience — the login, registration, and password-reset forms
 apply `transform=str::to_lowercase` to the live input for display
 (`web/src/auth/component.rs:52` and siblings), not for validation.
@@ -788,94 +811,213 @@ The web UI is Leptos ([ADR-0002](adr/0002-frontend-framework.md)), rendered
 **client-side only** ([ADR-0040](adr/0040-web-rendering-leptos-csr.md)): no SSR,
 no hydration, a UI-free server — no reactive page render in the request path,
 which structurally eliminates the concurrent-SSR disposal class; server
-rendering a reactive component to string is the prohibited trap door back.
+rendering a reactive component to string is the prohibited trap door back. The
+`web` crate does not enable `leptos/ssr`; the feature reaches the build only
+because `leptos_axum` requires it (`web/Cargo.toml:53-64`), and shedding that
+stack is tracked, not done.
 
 ### Rendering model: projector + CSR client
 
 The mechanism is "SSR the data, not the components"
 ([ADR-0041](adr/0041-public-projector-and-csr-client.md)): a thin non-reactive
-**public projector** (`server/src/projector/`) renders the anonymous shell for
-public routes via the pure render fns in `web/src/render/`, fetching through
-explicit-viewer `fetch_*` seams as `ViewerIdentity::Anonymous`, so its output is
-byte-identical per URL (CDN-cacheable). It embeds a `PageSeed` JSON blob
-(`id="jaunder-seed"`) the CSR client reads on boot to seed first paint;
+**public projector** (`server/src/projector/mod.rs`) renders the anonymous
+document for public routes, fetching through explicit-viewer `fetch_*` seams as
+`ViewerIdentity::Anonymous` (`server/src/projector/mod.rs:173-329`), so its
+output is byte-identical per URL and therefore CDN-cacheable. The document is
+assembled from `web::app::render_head` / `render_shell`
+(`server/src/projector/mod.rs:41,77-93`), which compose the pure per-vertical
+render fns; those live beside the vertical they serve —
+`web/src/posts/render.rs`, `timeline/render.rs`, `home/render.rs`,
+`sidebar/markup.rs`, `taglist/markup.rs`, `topbar/markup.rs`,
+`avatar/markup.rs`, `icon/markup.rs` — not in a central render module. The
+document embeds a `PageSeed` JSON blob (`common/src/seed.rs`,
+`id="jaunder-seed"`) that the CSR client reads on boot, drops the
+projector-painted `#app` container, and mounts over (`csr/src/lib.rs:29-47`);
 client-side navigation falls back to the `#[server]` fns, still the data API on
 `/api`. Reactive components render their anonymous DOM via `inner_html` of the
-_same_ pure fns the projector uses, so the CSR mount causes no reflow:
-flash-free by coincidence, not markup twins. The authenticated owner stays
-flash-free by _enhancement_
+_same_ pure fns the projector uses (`web/src/home/component.rs:70`,
+`sidebar/component.rs:60-70`, `posts/component.rs:185-208`), so the CSR mount
+causes no reflow: flash-free by coincidence, not markup twins.
+
+Markup is built with **maud's `html!`**
+([ADR-0093](adr/0093-web-render-html-macro.md)), and the trusted-HTML invariant
+is carried by one crate-local newtype, `web::html::Markup` (`web/src/html.rs`),
+which shadows `maud::Markup` inside `web`. The single raw door is
+`Markup::from_rendered_html`; two xtask gates — `html_sink_check` and
+`raw_html_door_check` — read inside macro bodies so a hand-built `String` cannot
+reach a sink unescaped.
+
+The authenticated owner stays flash-free by _enhancement_
 ([ADR-0044](adr/0044-authenticated-owner-flash-free-enhancement.md)): an
 advisory localStorage auth marker, read by an inline blocking `<head>` script
-(`web::render::PREPAINT_SCRIPT`, identical on both HTML surfaces), sets
-`<html class="authed">` before first paint; `current_user()` is only a
-background reconcile; owner affordances are additive decoration in CSS-reserved
-slots on the untouched DOM, never a branch switch. The personalized cockpit is
-its own route, `/app`; `/` stays public.
+(`web::app::PREPAINT_SCRIPT`, `web/src/app/render.rs:40`), sets
+`<html class="authed">` before first paint. The same constant is emitted by the
+projector (`server/src/projector/mod.rs:93`) and embedded verbatim in
+`csr/index.html`, with a host test guarding the drift
+(`web/src/app/render.rs:284`). `current_user()` is only a background reconcile;
+owner affordances are additive decoration in CSS-reserved slots on the untouched
+DOM, never a branch switch. The personalized cockpit is its own route, `/app`;
+`/` stays public.
 
 ### Crates, features, and the build
 
 `web` is one crate compiling two ways by cargo feature — `csr` (the wasm client)
 and `server` (the server-side data-API build; renamed from `ssr`)
-([ADR-0041](adr/0041-public-projector-and-csr-client.md),
-[ADR-0056](adr/0056-web-canonical-colocated-leptos.md)). The `csr` crate is a
-thin wasm entry point calling `web::mount_csr()`. `cargo xtask build-csr` builds
-the wasm bundle without cargo-leptos (via `devtool csr-bundle` + wasm-bindgen)
-into `target/site/pkg/`, which `jaunder serve` serves alongside the compiled-in
-SPA-shell fallback.
+([ADR-0041](adr/0041-public-projector-and-csr-client.md)) — declared at
+`web/Cargo.toml:50-64`. The `csr` crate is the wasm entry point and owns its own
+`main()`/`mount()` (`csr/src/lib.rs:34,54`); there is no `web::mount_csr`.
+`cargo xtask build-csr` compiles `csr` to wasm and hands the artifact to
+`devtool csr-bundle` (wasm-bindgen + `wasm-opt -Oz`), landing
+`jaunder.{js,wasm}` in `target/site/pkg/`
+(`xtask/src/steps/build_csr.rs:42-53`). The server compiles in the SPA shell
+(`web::app::SPA_SHELL`, itself `include_str!("csr/index.html")` —
+`web/src/app/render.rs:51`) and falls back to it for anything the projector and
+the static routes do not claim (`server/src/lib.rs:101-111`), keeping
+ADR-0003/ADR-0008's single binary intact.
 
-<!-- un-ADR'd: the cargo-leptos-free wasm bundling pipeline (xtask build-csr → devtool csr-bundle → target/site/pkg) -->
+The wasm artifact carries a hard budget
+([ADR-0106](adr/0106-wasm-raw-size-budget.md)): `cargo xtask validate` fails
+when the **raw** byte count of `pkg/jaunder.wasm` exceeds
+`WASM_RAW_CEILING_BYTES` (2 340 000 today, `xtask/src/wasm_budget.rs:39`). Raw,
+not compressed, because the artifact is a compiler input rather than a download;
+the ceiling keeps explicit headroom that sits below what the next weaker
+optimisation level would produce, and a unit test asserts that relationship so
+widening it is deliberate.
 
-### Module layout — in-flight migration to co-location
+### Module layout — the per-vertical file split
 
-The target layout is the **canonical co-located Leptos CSR shape**
-([ADR-0056](adr/0056-web-canonical-colocated-leptos.md)): each feature's
-`#[component]` UI, `#[server]` fns, and wire types live together in one module,
-split by cargo feature — never `target_arch` — with `#[component]` UI ungated
-(dead but coverage-exempt on the host). This migration is **in flight**, one
-per-vertical cleanup issue at a time: `web/src/pages/` still holds 17 files
-behind the module-level `#[cfg(target_arch = "wasm32")] pub mod pages` gate from
-[ADR-0055](adr/0055-web-host-wasm-boundary-module-level.md) (superseded by
-ADR-0056, but live until the verticals migrate; `audiences/` is the converted
-reference). ADR-0055's surviving rules hold: pure logic keeps a host-tested,
+Each vertical splits host and wasm code at the **file** level inside the single
+`web` crate ([ADR-0070](adr/0070-web-vertical-wasm-only-component-files.md),
+which supersedes the module-level gating of ADR-0055 and the
+feature-gated-but-ungated-UI shape of ADR-0056):
+
+- `mod.rs` — module wiring and re-exports only, no items of its own;
+- `api.rs` — the vertical's wire types and **every** `#[server]` fn,
+  dual-compiled;
+- `server.rs` — `#[cfg(feature = "server")]` host-only helpers;
+- `component.rs` — the `#[component]` UI, declared
+  `#[cfg(target_arch = "wasm32")]`;
+- plus ungated, host-tested, coverage-measured state/logic files
+  (`compose_state.rs`, `input_state.rs`, `state.rs`, `render.rs`, …).
+
+`web/src/pages/` is gone. Of the 29 directories under `web/src/`, all have
+`mod.rs`, 25 carry a `component.rs`, 15 carry an `api.rs`, and 6 (`audiences`,
+`auth`, `error`, `posts`, `subscriptions`, `timeline`) need a `server.rs`. The
+remaining files are the ungated logic homes, which is the point of the split —
+not lag. Two mechanisms enforce it: the `target-arch-placement` xtask check
+(`xtask/src/steps/target_arch_placement_check.rs`), which rejects a
+`target_arch` gate anywhere but a `mod.rs` module declaration or a
+`component.rs` file header, and `#[macros::server]`, which hard-errors on any
+`#[server]` fn outside `web/src/<vertical>/api.rs`
+(`macros/src/server_fn.rs:22,69`). ADR-0070 carries forward the two rules the
+earlier module-level split established: pure logic keeps a host-tested,
 coverage-measured home, and no fake-value host stubs, ever.
 
 ### Server-fn surface, DI, and errors
 
-Feature modules follow the server-submodule pattern
-([ADR-0013](adr/0013-server-submodule-pattern.md)): shared DTOs and `#[server]`
-fns in `mod.rs`, server-only helpers in a feature-gated `server.rs`, every
-`#[server]` body wrapped in `boundary!("name", { … })`. Server fns get their
-dependencies via per-trait Leptos context, never a bundle —
+Every `#[server]` fn is written `#[macros::server]`, and the macro derives what
+the source already states: the wire `endpoint` `/<vertical>/<fn ident>` and the
+ADR-0011 span name, both from the file path and identifier, and it **refuses**
+an author-supplied `endpoint` or `name` (`macros/src/server_fn.rs:87-131,176`).
+The wire URL is therefore `/api/<vertical>/<op>`
+([ADR-0082](adr/0082-server-fn-wire-namespace.md)), served by one axum route,
+`/api/{*fn_name}` (`server/src/lib.rs:61`). Because the URL _is_ the ident, the
+naming rule is a wire rule: the vertical's own noun is dropped
+(`audiences::create`, not `create_audience`) and the ident is verb-led. `/api/*`
+is the CSR client's private protocol; the public stable API is AtomPub.
+
+Server fns get their dependencies via per-trait Leptos context, never a bundle —
 `expect_context::<Arc<dyn FooStorage>>()`
-([ADR-0016](adr/0016-dependency-injection-and-appstate.md)). The owner-pinning
-from ADR-0016's SSR-era addenda remains in force: `server_boundary` runs each
-body in a `ScopedFuture` holding the full owner ancestry strong, and
-`web::server_resource` (raw `Resource::new` is clippy-banned) is the only
-sanctioned `Resource` constructor — `expect_context` stays reliable regardless
-of await ordering, though the SSR races that motivated the addenda cannot occur
-post-CSR.
+([ADR-0016](adr/0016-dependency-injection-and-appstate.md)), e.g.
+`web/src/audiences/api.rs:66`. The macro also wraps each body in
+`crate::error::server_boundary` (`macros/src/server_fn.rs:166`); there is no
+hand-written `boundary!` call. ADR-0016's SSR-era owner-pinning addenda have
+been retired: the sole server-fn invocation path, `leptos_axum`'s `/api`
+handler, holds the owner strong for the whole call, so no `ScopedFuture` wrapper
+and no sanctioned `Resource` constructor exist — components call `Resource::new`
+directly (13 files across `web/src`), and no clippy `disallowed-methods` entry
+bans it (`clippy.toml` denies only `unwrap`/`expect` outside tests).
 
 `web/` is a **thin shell**
 ([ADR-0059](adr/0059-thin-web-shell-error-layering.md)): it keeps only the
 leptos UI, the `#[server]` surface, and the wire types. Errors flow through the
 one-way T1→T2→T3 pipeline — typed domain errors (`storage`/`common`) → the
-operator carrier `host::error::InternalError` → the wire type `WebError`, via
-the lossy projection `web/src/error.rs::project`; the masked public boundary
-([ADR-0017](adr/0017-error-handling-and-the-public-boundary.md)) means internal
-detail structurally cannot reach a client.
+operator carrier `host::error::InternalError` (`host/src/error.rs:94`) → the
+wire type `WebError` (`web/src/error/mod.rs:26`), via the lossy projection
+`project` in `web/src/error/server.rs:108`. T2→T3 is a security boundary made
+structural: the operator payload is absent from the type that crosses the wire,
+so the masked public boundary
+([ADR-0017](adr/0017-error-handling-and-the-public-boundary.md)) cannot leak by
+discipline failure.
+
+Wire args are **domain newtypes, validated client-side against the same
+newtype's `FromStr`** ([ADR-0065](adr/0065-client-side-domain-validation.md)) —
+never a re-implemented rule. The chokepoint is the pure `forms::field_error<T>`
+(`web/src/forms/field.rs:11`) driving a parent-owned `Field<T>`
+(`web/src/forms/field.rs:22`), rendered by `<ValidatedInput<T>>` /
+`<ValidatedTextarea<T>>` (`web/src/forms/component.rs:80,155`) or bound directly
+for a bespoke layout. The visible message is gated on a `touched` flag; submit
+is gated disable-until-valid. Typing the arg moves validation into
+arg-**decode**, so a malformed request from a non-browser client fails before
+the fn body — the defense-in-depth path, not the user path.
 
 ### Reactive idioms
 
 Revalidation goes through one primitive, `web::reactive::Invalidator`
-([ADR-0060](adr/0060-web-invalidator-revalidation-idiom.md)): committed
-mutations `notify()`, resources `track()`; `action::<A>()` is success-gated;
-cross-component scopes are per-vertical `invalidator_scope!` newtypes. Keyed
-lists whose rows mutate in place or hold nested state render from a
-`reactive_stores::Store` (`#[store(key: …)]`) fed by `Invalidator::patched` (→
-`Signal<ListState>`) plus a keyed `<For>` mounted unconditionally; flat lists
+(`web/src/reactive/mod.rs:33`,
+[ADR-0060](adr/0060-web-invalidator-revalidation-idiom.md)): committed mutations
+`notify()`, resources `track()`; `action::<A>()` is success-gated;
+cross-component scopes are per-vertical `invalidator_scope!` newtypes
+(`web/src/reactive/scope.rs:28`). Keyed lists whose rows mutate in place or hold
+nested state render from a `reactive_stores::Store` (`#[store(key: …)]`) fed by
+`Invalidator::patched` plus a keyed `<For>` mounted unconditionally; flat lists
 stay plain `map`/`collect`
-([ADR-0061](adr/0061-web-keyed-list-reactive-store.md)). The style companion is
-`docs/web-style-guide.md`.
+([ADR-0061](adr/0061-web-keyed-list-reactive-store.md)). `audiences` is the sole
+adopter so far (`web/src/audiences/component.rs`). A domain newtype used as a
+**leaf** field of such a store row is declared as itself and given the derive's
+per-field escape hatch, `#[patch(|this, new| *this = new)]`
+(`web/src/audiences/api.rs`,
+[ADR-0078](adr/0078-reactive-store-domain-newtype-fields.md)) — which keeps
+`common` free of a `reactive_stores` dependency. The attribute is for leaves
+only; a field wrapping a nested `Store` needs granular descent instead.
+
+A reactive widget splits into a host-compiled state module and a wasm-only view,
+and the render decision is a **fold, not a closure**
+([ADR-0083](adr/0083-reactive-paint-fold.md)): the state exposes
+`paint(context) -> WebResult<Paint>` and the component body is a `Memo` plus a
+bare `match`, one arm per variant. Failure travels on `Result`'s error axis;
+per-caller variation travels as a data enum
+(`NoIdentity { Blank, Redirect(_) }`), never a `ViewFn` prop; chrome that must
+survive a transition is emitted from its own memo-gated sibling region rather
+than repeated inside each arm. The first instance is
+`web/src/timeline/state.rs:62,88,226`. Everything except `Effect::new` and
+`spawn_local` lands host-side, so transitions and the decision are
+coverage-measured.
+
+A form control's `disabled` state and the payload it dispatches must come from
+**one call** ([ADR-0113](adr/0113-submit-gate-owns-its-parse.md)): the dispatch
+closure receives an already-validated value and has no error arm to swallow.
+`posts::compose_state::submit_gate` (`web/src/posts/compose_state.rs:156`) is
+the realization — a plain function, not a component — and it owns the single
+`if let Some(body) = body.parsed()` arm so form authors never write one. Gating
+on `is_valid()` while taking the payload from `parsed()` is two sources and is
+prohibited; the composer's and editor's `slug_override` and `summary` fields are
+the named outstanding debt against that target state (#907).
+
+Within a live SPA session there are **no full document loads**
+([ADR-0076](adr/0076-no-full-load-spa-navigation.md)): navigation is
+`leptos_router` (`use_navigate()` / `<a>`), and raw `window.location` navigation
+is forbidden in `web/src` and `client/src`, enforced by the `no-full-reload`
+xtask source scan (`xtask/src/steps/no_full_reload_check.rs`) because those call
+sites are wasm-gated and invisible to the default clippy pass. The SPA user
+namespace is `~`-prefixed: the permalink route's leading segment is a custom
+`TildeUsername` route match (`web/src/route_segments.rs:13`, wired at
+`web/src/app/component.rs:151`) that matches only a `~`-leading segment,
+mirroring the server's literal-`~` projector routes. The tightening is
+deliberately partial — the other username-first routes stay plain param
+segments.
+
+The style companion is `docs/web-style-guide.md`.
 
 ## Observability
 
