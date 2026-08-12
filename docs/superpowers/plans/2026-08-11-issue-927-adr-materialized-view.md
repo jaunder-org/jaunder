@@ -610,6 +610,20 @@ scrutiny" expectation:
   inherits, private field, static-check-pinned call site) and the code comment
   was corrected under #445.
 
+### Code defects found by the doc work — file at task 16
+
+Not doc problems. Stale comments in source, found while verifying the view. One
+follow-up issue covers them all.
+
+- `host/src/metrics.rs:4` — "Helper arguments are bounded enums". Not true of
+  `atompub_request`, whose `op` is a matched-route-plus-method lookup.
+- `xtask/src/server_fn_coverage/extract.rs:72,110,457` — three comments saying
+  "`server-fn-tracing` writes `web.<vertical>.<ident>`". It no longer writes
+  anything; #714 moved derivation into `#[macros::server]` and left the gate
+  verify-only.
+- `web/src/audiences/component.rs:48` — names `Invalidator::patched`, which does
+  not exist (see the drift table).
+
 ### Known defects handed forward to later tasks
 
 Found by a section pass but owned by another task. Do not fix them out of order;

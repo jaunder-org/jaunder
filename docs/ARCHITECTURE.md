@@ -1056,14 +1056,16 @@ carry user PII or secrets — stable identifiers (`user_id`, `error.kind`) only.
 Every `#[server]` fn in `web/src` is written as `#[macros::server]`, which emits
 the `#[tracing::instrument]` attribute itself with the name
 `web.<vertical>.<ident>` computed from the file path and identifier
-(`macros/src/server_fn.rs`) — so no span name exists in the source and none can
-drift ([ADR-0011](adr/0011-unified-observability.md), amended 2026-07-30). The
-macro rejects `fields(…)`, `level`, `err`, and `ret` outright. What the author
-still writes is `skip(…)` / `skip_all`, and the `server-fn-tracing` gate holds a
-default-deny `RECORDABLE_TYPES` allowlist over every unskipped parameter type:
-an unlisted type fails the gate until someone classifies it. A type is
-admissible only if it is bounded by its own type, is operator configuration, is
-already published in a permalink, or is `Username`.
+(`macros/src/server_fn.rs`) — so no `#[server]` fn's span name is written in the
+source, and none can drift ([ADR-0011](adr/0011-unified-observability.md),
+amended 2026-07-30). Hand-written `instrument` names do still exist outside that
+set — `require_auth` carries one (`web/src/auth/server.rs:112`) — because they
+are not server fns. The macro rejects `fields(…)`, `level`, `err`, and `ret`
+outright. What the author still writes is `skip(…)` / `skip_all`, and the
+`server-fn-tracing` gate holds a default-deny `RECORDABLE_TYPES` allowlist over
+every unskipped parameter type: an unlisted type fails the gate until someone
+classifies it. A type is admissible only if it is bounded by its own type, is
+operator configuration, is already published in a permalink, or is `Username`.
 
 The earlier arrangement — the gate writing the `name = "…"` literal into
 `web/src`, and a `server_fn` field on the boundary log event — was retired with
@@ -1142,8 +1144,10 @@ An OTLP `MeterProvider` is installed next to the tracer (`build_otel_meter` in
 Cargo feature — because `host` is native-only and therefore keeps
 `opentelemetry` out of the wasm closure by crate structure
 ([ADR-0058](adr/0058-host-crate-layering.md)). Helper arguments are bounded
-enums, or a `&'static str` derived from one, so no call site can attach
-caller-supplied text as a label. `init_tracing` returns a `#[must_use]`
+enums, or a `&'static str` drawn from a closed set the call site cannot widen —
+`atompub_request`'s `op` comes from a matched-route-plus-method lookup
+(`server/src/atompub/mod.rs:56`), not from an enum. Either way no call site can
+attach caller-supplied text as a label. `init_tracing` returns a `#[must_use]`
 `TelemetryGuard` whose `Drop` force-flushes both providers on every exit path,
 so one-shot CLI commands export buffered telemetry instead of silently dropping
 it; one binding at the `run()` dispatch boundary covers every command, and
@@ -1287,71 +1291,118 @@ live-server integration harness, `jaunder-test--with-live-server`
 owns both. The floor is `Package-Requires: ((emacs "29.1"))`
 ([ADR-0042](adr/0042-emacs-org-atom-mapping-struct-seam.md)).
 
-`elisp/jaunder.el` is the umbrella entry point over the feature modules:
-transport (`jaunder-transport.el`, plus the `jaunder-service.el`
-service-document capability probe
-
-<!-- un-ADR'd: service-document probe module -->), atom (`jaunder-entry.el`,
-
-`jaunder-atom.el`), org mapping (`jaunder-org.el`, `jaunder-datetime.el`), and
-commands (`jaunder-publish.el`, `jaunder-media.el`, `jaunder-config.el`,
-`jaunder-warn.el`).
+`elisp/jaunder.el` is the umbrella entry point — it holds the package headers
+and nothing but `require` forms for the feature modules (`elisp/jaunder.el:30`):
+the format-neutral entry IR (`jaunder-entry.el`, the
+`cl-defstruct jaunder-entry`), blog config and request context
+(`jaunder-config.el`), soft authoring warnings (`jaunder-warn.el`), timezone
+handling (`jaunder-datetime.el`), the wire encoder/response harvester
+(`jaunder-atom.el`), the org document interface (`jaunder-org.el`), HTTP
+(`jaunder-transport.el`), the service-document capability probe
+(`jaunder-service.el`), media (`jaunder-media.el`), and the user commands
+(`jaunder-publish.el`).
 
 ### Transport and auth
 
-`jaunder--http-request` is built on `plz`, which drives the `curl` binary;
-`url.el` is not used anywhere in the client — headers ride in the curl argv, so
-the Basic auth header is sent deterministically, and 4xx/5xx return as a
-`(:status :headers :body)` plist, unsignalled
-([ADR-0038](adr/0038-emacs-http-transport-plz-not-url-el.md)). Authentication is
-the server's app-password Basic scheme
-([ADR-0014](adr/0014-atompub-authentication.md); the auth section owns details);
-`jaunder--auth-secret` retrieves the app password from Emacs `auth-source`,
-keyed on the active blog's host and username.
+`jaunder--http-request` (`elisp/jaunder-transport.el:94`) is built on `plz`,
+which drives the `curl` binary. `url.el` itself is not used for requests — only
+`url-parse` for host extraction. 4xx/5xx return as a `(:status :headers :body)`
+plist, unsignalled; a transport-level `plz-error` carrying a response is
+converted to the same plist, and one carrying none re-signals
+([ADR-0038](adr/0038-emacs-http-transport-plz-not-url-el.md)). Because `plz`
+writes headers into a curl `--config` file without escaping,
+`jaunder--curl-header-value` (`elisp/jaunder-transport.el:84`) backslash-escapes
+`\` and `"` — without it a strong `ETag` echoed back as `If-Match` is truncated
+to nothing and the precondition never reaches the server.
 
-<!-- un-ADR'd: auth-source as the client-side credential store -->
+Authentication is the server's app-password Basic scheme
+([ADR-0014](adr/0014-atompub-authentication.md); the auth section owns details).
+`jaunder--auth-secret` (`elisp/jaunder-transport.el:72`) resolves the app
+password through Emacs `auth-source`, keyed on the active blog's URL **host**
+(port excluded) and username, and errors when no entry matches.
+`jaunder--basic-auth-header` UTF-8-encodes `user:password` before base64 per
+RFC 7617.
+
+<!-- un-ADR'd (GAP): `auth-source` as the client-side credential store. ADR-0014 decides the app-password scheme and the wire header but says nothing about where a client keeps the secret; ADR-0038 and ADR-0047 do not mention it. ADR-0035 already treats it as settled (the harness provisions a temporary `auth-source` entry), and open issue #76 (emacs: self-provision an app password) builds on it without establishing it. Searched GitHub 2026-08-11. -->
 
 ### Org → Atom mapping
 
-`jaunder--org->atom` returns an abstract `cl-defstruct jaunder-entry`; a
-separate `jaunder--atom-entry->xml` renders the wire `<entry>` via built-in
-`dom.el`/`dom-print` — the struct seam keeps the mapping pure-data-testable,
-catches field-name typos at byte-compile time, and confines all wire knowledge
-to one serializer ([ADR-0042](adr/0042-emacs-org-atom-mapping-struct-seam.md)).
-The shared `jaunder--harvest-response-fields` parses response entries (XML →
-alist); media URLs are harvested from the response `<content src>`, never
-reconstructed client-side — the server is authoritative about URL layout
-([ADR-0045](adr/0045-emacs-media-content-src.md)).
+`jaunder--org->atom` (`elisp/jaunder-org.el:125`) takes no arguments: it maps
+the current org buffer, non-mutatingly, to a `jaunder-entry` struct. A separate
+`jaunder--atom-entry->xml` (`elisp/jaunder-atom.el:34`) renders the wire
+`<entry>` by building a `dom` node and calling built-in `dom-print` — the struct
+seam keeps the mapping pure-data-testable, catches field-name typos at
+byte-compile time, and confines all wire knowledge (namespaces, media types,
+element order, the `app:control`/`app:draft` marker) to that one serializer
+([ADR-0042](adr/0042-emacs-org-atom-mapping-struct-seam.md)). Per-entry content
+carries the `text/org` media type and the server canonicalizes
+([ADR-0023](adr/0023-atompub-jaunder-wire-extensions.md); the Protocols section
+owns it).
+
+`jaunder--harvest-response-fields` (`elisp/jaunder-atom.el:69`) is the one
+response reader — a metadata harvest, not a full entry parse — returning
+`content-src`, `content-type`, `slug`, and `published` from a response entry via
+`libxml-parse-xml-region`. Media URLs come from that harvested `<content src>`
+and are never reconstructed client-side, so the server stays authoritative about
+URL layout ([ADR-0045](adr/0045-emacs-media-content-src.md)). Only local image
+links (`png`/`jpg`/`jpeg`/`gif`/`webp`/`svg`, `file:` or `attachment:`) qualify
+for upload; the extension table is the qualification predicate shared by
+detection and substitution (`elisp/jaunder-media.el:31`).
+
+The client also probes the AtomPub service document for the
+`<j:extension features="…">` capability list that
+[ADR-0023](adr/0023-atompub-jaunder-wire-extensions.md) defines; the probe is
+cached per base URL and, when `format-media-type` is absent, emits one
+suppressible warning per session per blog rather than blocking the publish
+(`elisp/jaunder-service.el:32`, `:69`).
 
 ### Publish orchestration
 
-The `jaunder-blogs` defcustom is the sole configuration: it maps directories to
-`(:base-url :username …)` plists, resolved by longest-prefix match on the
-buffer's directory and validated loudly (absolute base URL, non-empty username;
-an unmatched directory errors)
-([ADR-0047](adr/0047-emacs-publish-orchestration.md)). Commands bind the private
-`jaunder--active-blog` special via `jaunder--with-blog`; the transport reads it
-only through `jaunder--active-base-url` / `jaunder--active-username`, which
-error when no blog is active
-([ADR-0047](adr/0047-emacs-publish-orchestration.md)).
+The `jaunder-blogs` defcustom (`elisp/jaunder-config.el:32`) is the sole blog
+configuration: it maps directories to `(:base-url :username [:format])` plists,
+resolved by longest-prefix match on the buffer's directory
+(`jaunder--blog-entry-for`, shared by publish and `jaunder-new-post`) and
+validated loudly by `jaunder--resolve-blog` — absolute base URL with a non-empty
+host, non-empty username, unmatched directory errors, trailing slashes stripped
+([ADR-0047](adr/0047-emacs-publish-orchestration.md)). Alongside it sit three
+`jaunder-warn-*` toggles for the soft authoring-hygiene warnings (zone mismatch,
+untracked media, missing `format-media-type`), none of which ever block a
+publish. Commands bind the private `jaunder--active-blog` special via the
+`jaunder--with-blog` macro; the transport reads it only through
+`jaunder--active-base-url` / `jaunder--active-username`, which error when no
+blog is active ([ADR-0047](adr/0047-emacs-publish-orchestration.md)).
 
 The user-facing commands are `jaunder-new-post`, `jaunder-publish`, and
-`jaunder-save-draft` (publish forced to draft). Publish performs all network
-mutation before any destructive local change: validate → media upload
-(sha256-deduped, idempotent) → entry send (`POST` create, or `PUT`+`If-Match`
-when `JAUNDER_ID` is present) → write-back, persisting `JAUNDER_ID` first (from
-the `Location` header) before slug/synced/rename — so any failure, including a
-`412` stale-ETag, is recoverable by a plain re-publish
-([ADR-0047](adr/0047-emacs-publish-orchestration.md)). Creates carry a stable
-`Idempotency-Key` header so the server dedups a retried `POST`.
+`jaunder-save-draft` (publish forced to `app:draft`). Publish performs all
+network mutation before any destructive local change
+(`elisp/jaunder-publish.el:178`): map → validate (non-empty body; a `scheduled`
+post needs a future `#+DATE:`) → record the machine zone → media upload
+(sha256-deduped server-side, pre-flighted so a missing file uploads nothing) →
+entry send → write-back → rename to `<slug>.org`. The send is a `POST` create,
+or a `PUT` when `JAUNDER_ID` is present, carrying `If-Match` only when the
+buffer also records a `JAUNDER_SYNCED` ETag. Write-back persists `JAUNDER_ID`
+first, from the `Location` header, before `JAUNDER_SLUG`, `JAUNDER_SYNCED`,
+`JAUNDER_SYNCED_AT`, the resolved publish time, and the rename — so any failure,
+including a `412` stale-ETag, is recoverable by a plain re-publish
+([ADR-0047](adr/0047-emacs-publish-orchestration.md)). Media substitution
+applies to the sent body only; the authoring buffer is never modified.
 
-<!-- un-ADR'd: client Idempotency-Key on create (#79 follow-on in ADR-0047, since built) -->
+Creates go through `jaunder--create-with-retry`
+(`elisp/jaunder-publish.el:151`), which retries a signalled transport error or a
+5xx up to three attempts (≈1s then ≈2s backoff) under **one** `Idempotency-Key`,
+so the server dedups the replay. The key is ephemeral, not stable across
+invocations: it is a fresh md5 of local entropy per call, so a later re-publish
+gets a new key and an edit is never mistaken for a retry. The server side of
+that contract was decided in issue
+[#79](https://github.com/jaunder-org/jaunder/issues/79) as a follow-on to
+ADR-0047 — see the Storage section.
 
 ### Committed direction
 
 Unit D — the reverse atom→org mapping and per-directory reconcile — is designed
-around the same seams (the shared response parser, the directory-keyed blog
-config) but unbuilt; `jaunder--atom->org` is a stub
+around the same seams (the shared response harvester, the directory-keyed blog
+config) but unbuilt: `jaunder--atom->org` (`elisp/jaunder-publish.el:238`) is a
+stub that signals "not yet implemented"
 ([ADR-0042](adr/0042-emacs-org-atom-mapping-struct-seam.md),
 [ADR-0047](adr/0047-emacs-publish-orchestration.md)).
 
