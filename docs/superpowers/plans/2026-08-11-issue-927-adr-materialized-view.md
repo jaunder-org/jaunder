@@ -175,6 +175,15 @@ case especially: it is not merely a stale citation, it describes a
 Pass B's disagreements are resolved before the commit, by reading the code
 yourself.
 
+**Deletion is not the safe default — learned at task 12.** A section pass
+deleted three claims it could not verify. Two were true and sourced: ADR-0031:83
+states "a test per pure function" verbatim, and `runtime.json` really is a
+startup mutex (`check_startup_mutex` makes `serve` refuse against a live writer,
+#141). A third was true but belonged elsewhere. "I could not verify it" is a
+reason to _investigate_ or to hand the claim to the owning section — deleting it
+silently loses content just as surely as asserting a falsehood adds it. Say what
+you removed and why, always.
+
 **Operational note, learned at task 3.** Both agents finished their work and
 went idle **without sending their report**, costing a round-trip each. End every
 section brief with an explicit instruction: _"When you are done, you MUST call

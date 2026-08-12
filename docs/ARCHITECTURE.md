@@ -1211,6 +1211,14 @@ request from the storage path (`server/src/media.rs:116,147`) — and the proces
 may also write a runtime-info JSON file and read a PostgreSQL password file; see
 "Outside the binary" below.
 
+That runtime file is not only informational: it is a **startup mutex**.
+`check_startup_mutex` (`server/src/runtime_file.rs:104`, called from
+`server/src/commands.rs:487`) makes `serve` **refuse to start** when the file
+names a live writer process, and an unreadable file refuses too rather than
+serving with a broken guard (`runtime_file.rs:61`). A `RuntimeFileGuard` removes
+it on graceful exit and on SIGTERM/SIGINT (`commands.rs:1227-1234`). The e2e
+harness reads the same file for port discovery.
+
 - `StaticAssets` (`server/src/assets.rs:3-5`, `#[folder = "assets/"]`) carries
   the base stylesheets `jaunder.css` and `jaunder-themes.css`, mounted at
   `/style` by `axum_embed::ServeEmbed` (`server/src/lib.rs:54,57`), which
@@ -1680,11 +1688,13 @@ written in one dialect" are explicitly not decisive reasons.
 
 The `test-backend-pattern` guard (`xtask/src/steps/test_pattern_check.rs`)
 enforces this over **both** `storage/src/` and `server/tests/`: every
-`#[tokio::test]` must carry a backend template or an exemption marker
-(`// guard:no-backend — <reason>`). It also checks placement — a dual template
-inside a dialect directory, or a mismatched single template, is an error — and
-requires a `// reason:` on a single-backend keep. Plain synchronous `#[test]`
-units are never flagged.
+`#[tokio::test]` must carry a backend template or one of two exemption markers,
+`// guard:no-backend` or `// guard:low-level-db`, each with a reason
+(`test_pattern_check.rs:83`). The second also exempts a low-level test from the
+dialect-homing rule. It also checks placement — a dual template inside a dialect
+directory, or a mismatched single template, is an error — and requires a
+`// reason:` on a single-backend keep. Plain synchronous `#[test]` units are
+never flagged.
 
 The same reasoning governs test doubles
 ([ADR-0103](adr/0103-prefer-real-harness-over-mirroring-fake.md)): when a fake
@@ -1797,7 +1807,7 @@ on every run, fresh or cached.
 Diagnostics are captured before the check is allowed to fail
 ([ADR-0037](adr/0037-e2e-failure-diagnostics-capture.md)):
 `trace: "retain-on-failure"` and `screenshot: "only-on-failure"`
-(`end2end/playwright.config.ts:62`), and the shared `e2eRunAndCapture` helper
+(`end2end/playwright.config.ts:62-63`), and the shared `e2eRunAndCapture` helper
 (`flake.nix:650`) runs Playwright capturing its exit, streams the line-reporter
 output into `build.log`, copies every artifact out of the VM unconditionally,
 and only then asserts the exit. On a failed build xtask rescues the bundle from
@@ -1824,13 +1834,15 @@ rather than failing the check, with the JSON report still recording it
 ### Elisp testing
 
 `elisp/` is a first-class, separately-tested subproject
-([ADR-0031](adr/0031-elisp-separately-tested-subproject.md)): host `ert` and
-`elisp-fmt` steps run in both `check` (Fix) and `validate` (Check), the latter
-as a `devtool check` step in the `static-checks` derivation
-([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
-`xtask/src/steps/static_checks.rs:44`); one `emacsForCi` toolchain
+([ADR-0031](adr/0031-elisp-separately-tested-subproject.md)): three elisp steps
+— `ert`, `elisp-fmt` and `byte-compile` — run in both `check` (Fix) and
+`validate` (Check), each as a `devtool check` step in the `static-checks`
+derivation ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
+`xtask/src/steps/static_checks.rs:17-18`); one `emacsForCi` toolchain
 (`flake.nix:563`) serves both. Elisp is exempt from the Rust coverage gate,
-which cannot instrument it.
+which cannot instrument it — so ADR-0031 rests correctness on ERT discipline, "a
+test per pure function" (`:83`). Nothing enforces that: it is a stated
+expectation, not a gate.
 
 Live client behavior — transport, auth, publish and media round-trips — runs
 against a real server through the self-booting harness
@@ -1958,7 +1970,9 @@ The coverage verdict is **stateless** — a pure function of
 driver ([ADR-0050](adr/0050-stateless-coverage-gate.md)). It replaced an earlier
 stateful ratchet that re-anchored a committed baseline by text identity
 ([ADR-0030](adr/0030-coverage-reanchor-text-identity.md), superseded). The Nix
-`coverage` derivation produces the instrumented report; the host-side gate
+`coverage` derivation produces the instrumented report, running the whole suite
+under an ephemeral PostgreSQL via `devtool pg` so `storage/src/postgres/*` is
+instrumented rather than skipped (`flake.nix:1288-1293`). The host-side gate
 (`xtask/src/coverage/`) then applies:
 
 - **One structural exemption**: a literal `unreachable!("msg")` with a non-empty
