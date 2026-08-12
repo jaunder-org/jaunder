@@ -95,9 +95,9 @@ wire_contract! {
     web::subscriptions::Subscribe => "subscriptions" / "subscribe",
     web::subscriptions::Unsubscribe => "subscriptions" / "unsubscribe",
     web::tags::List => "tags" / "list",
-    // The five that moved out of `posts` in #714. Their vertical is the whole
-    // reason these assertions exist: nothing in source says `timeline`, only the
-    // file path does.
+    // The five timeline listings (#714). Their vertical is the whole reason
+    // these assertions exist: nothing in source says `timeline`, only the file
+    // path does.
     web::timeline::ListByTag => "timeline" / "list_by_tag",
     web::timeline::ListByUser => "timeline" / "list_by_user",
     web::timeline::ListByUserAndTag => "timeline" / "list_by_user_and_tag",

@@ -19,7 +19,7 @@ use rstest_reuse::*;
 #[apply(backends)]
 #[tokio::test]
 async fn request_email_verification_creates_row_and_sends_email(#[case] backend: Backend) {
-    // The verification email now composes an absolute link, so the flow requires a
+    // The verification email composes an absolute link, so the flow requires a
     // seeded `site.base_url` (canonicalized to `https://example.com/`).
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let mailer = Arc::new(CapturingMailSender::new());
@@ -39,7 +39,7 @@ async fn request_email_verification_creates_row_and_sends_email(#[case] backend:
     assert_one_absolute_link_email(&mailer, "alice@example.com", "/verify-email");
 }
 
-// The verification email now composes an absolute link, so without a seeded
+// The verification email composes an absolute link, so without a seeded
 // `site.base_url` the request fails rather than emailing a dead relative link.
 #[apply(backends)]
 #[tokio::test]

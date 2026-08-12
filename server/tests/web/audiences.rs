@@ -318,9 +318,8 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
 
 // AUTHORIZATION: every store method is author-scoped, so a client-supplied
 // audience_id owned by another author matches nothing — the request succeeds but
-// sees/changes none of the other author's data. (This replaced web's
-// `assert_owns_audience` NotFound gate; the storage-layer guarantee is covered by
-// `audience_members_are_author_scoped`.)
+// sees/changes none of the other author's data. (The storage-layer guarantee is
+// covered by `audience_members_are_author_scoped`.)
 #[apply(backends)]
 #[tokio::test]
 async fn cross_author_audience_id_is_scoped_away(#[case] backend: Backend) {
@@ -457,8 +456,8 @@ async fn audience_endpoints_require_authentication(#[case] backend: Backend) {
 // A cross-author ADD is asymmetric with the scoped-away reads/removes: `add_member`
 // writes `author_user_id = bob`, so the composite FK `(audience_id, author_user_id)`
 // rejects a pairing with Alice's audience and it surfaces as a Storage error — NOT
-// a silent no-op. This is the write path the deleted `assert_owns_audience` used to
-// guard, so it must be refused at the boundary.
+// a silent no-op. A cross-author write must be refused at the boundary, not merely
+// scoped away.
 #[apply(backends)]
 #[tokio::test]
 async fn cross_author_add_member_is_rejected(#[case] backend: Backend) {
@@ -508,7 +507,7 @@ async fn cross_author_add_member_is_rejected(#[case] backend: Backend) {
 // NotFound (a non-OK error, name untouched); delete is a silent author-scoped
 // no-op (OK, audience intact). Complements `cross_author_audience_id_is_scoped_away`
 // (reads/removes) and `cross_author_add_member_is_rejected` (add) so every mutation
-// path is pinned now that `assert_owns_audience` is gone.
+// path is pinned.
 #[apply(backends)]
 #[tokio::test]
 async fn cross_author_rename_and_delete_are_scoped(#[case] backend: Backend) {

@@ -94,8 +94,8 @@ async fn get_post_form(
     slug: &str,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
-    // `get_post` now takes a single `date: PermalinkDate` wire arg (serde-transparent →
-    // the ISO `YYYY-MM-DD` field), replacing the old loose `year/month/day` triple (#583).
+    // `get_post` takes a single `date: PermalinkDate` wire arg (serde-transparent →
+    // the ISO `YYYY-MM-DD` field, #583).
     let body = format!("username={username}&date={year:04}-{month:02}-{day:02}&slug={slug}");
     post_form(state, <web::posts::Get as ServerFn>::PATH, body, cookie).await
 }
@@ -288,7 +288,7 @@ async fn create_post_accepts_slug_override_and_saves_draft(#[case] backend: Back
     let created: SavedPost = serde_json::from_str(&body).unwrap();
     assert_eq!(created.slug, "custom-slug");
     assert!(created.published_at.is_none());
-    // A draft now carries its canonical (created_at-based) permalink; the permalink
+    // A draft carries its canonical (created_at-based) permalink; the permalink
     // view renders the draft for the author (#24).
     assert!(
         created
@@ -343,7 +343,7 @@ async fn create_post_accepts_titleless_body(#[case] backend: Backend) {
         .unwrap()
         .expect("post should exist");
     assert_eq!(record.title, None);
-    // A stored Markdown body now ends with exactly one newline: canonicalization applies
+    // A stored Markdown body ends with exactly one newline: canonicalization applies
     // to every format except HTML (#811). Rendering is unaffected — CommonMark treats a
     // trailing newline as insignificant — but the stored bytes are canonical, not raw.
     assert_eq!(record.body, "Titleless note\n");
@@ -395,12 +395,11 @@ Body text",
 
 // Shape B — create_post rejection cluster. Identical setup (author + session)
 // and assertion structure (INTERNAL_SERVER_ERROR + body substring); only the
-// request body/format and the expected error message vary. (An invalid
-// `slug_override` is no longer an in-handler validation error: the typed
-// `Option<Slug>` wire arg rejects it at the serde boundary — client
-// pre-validation is the user-facing path, per ADR-0065; the serde-bridge
-// rejection is unit-tested in `common::slug`.) A blank body joined that same
-// arg-decode family in #811: the message is now `PostBody`'s, not the handler's.
+// request body/format and the expected error message vary. An invalid
+// `slug_override` and a blank body are both typed-wire-arg decode rejections
+// (`Option<Slug>`, `PostBody` — ADR-0065, #811), so the expected messages are
+// the types', not the handler's; client pre-validation is the user-facing path,
+// and the serde-bridge rejection is unit-tested in `common::slug`.
 #[apply(backends_matrix)]
 #[case::empty_post(
     "",
@@ -928,7 +927,7 @@ async fn update_post_rejects_non_author(#[case] backend: Backend) {
 // a freshly created draft) and assertion structure (INTERNAL_SERVER_ERROR +
 // body substring); only the update body/format and expected message vary. The
 // initial draft body is immaterial to the assertion, so it is fixed. As on the
-// create side, a blank body is now an arg-decode rejection carrying `PostBody`'s
+// create side, a blank body is an arg-decode rejection carrying `PostBody`'s
 // message rather than the handler's (#811).
 #[apply(backends_matrix)]
 #[case::empty_post("", "markdown", "post body must contain at least one non-blank line")]
@@ -1311,17 +1310,16 @@ async fn publish_post_rejects_non_author(#[case] backend: Backend) {
 // Shape B — invalid-cursor cluster across the four cursor-paginated endpoints.
 // Each fires two requests: a half-specified cursor (a `cursor` object carrying a
 // valid instant but no `post_id`) and an unparseable timestamp inside an
-// otherwise complete cursor. Both are now rejected at arg-decode, before the
+// otherwise complete cursor. Both are rejected at arg-decode, before the
 // handler body: the cursor is one `PageCursor` field (ADR-0065 typing all the
-// way down), so a half cursor is a missing struct field rather than the
-// handler's old "must be provided together" pairing check — which survives as a
-// `parse_post_cursor` unit test, its only remaining reachable caller shape. We
-// assert the half cursor names the component it is missing, and otherwise only
-// that the request is rejected, rather than pinning the decode-layer wording.
-// Only the endpoint URI and the (username-carrying where required) request
-// bodies vary. An author session is always created and passed — the public
-// endpoints ignore it but still run the same cursor decode, so a single setup
-// serves every row without branching.
+// way down), so a half cursor is a missing struct field (the pairing rule
+// itself is pinned by a `parse_post_cursor` unit test). We assert the half
+// cursor names the component it is missing, and otherwise only that the
+// request is rejected, rather than pinning the decode-layer wording. Only the
+// endpoint URI and the (username-carrying where required) request bodies vary.
+// An author session is always created and passed — the public endpoints ignore
+// it but still run the same cursor decode, so a single setup serves every row
+// without branching.
 #[apply(backends_matrix)]
 #[case::list_drafts(
     <web::posts::ListDrafts as ServerFn>::PATH,
@@ -1727,7 +1725,6 @@ async fn delete_post_soft_deletes_post(#[case] backend: Backend) {
     let (status, body) = delete_post_form(&state, created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
 
-    // The post should now be gone from storage (deleted_at is set)
     let post = state
         .posts
         .get_post_by_id(
@@ -1816,7 +1813,7 @@ body",
     let created: SavedPost = serde_json::from_str(&body).unwrap();
     let permalink = String::from(created.permalink);
 
-    // Verify post appears in user timeline before deletion
+    // Presence before deletion proves the exclusions below are the delete's doing.
     let (status, body) = list_user_posts(&state, &session.username, None, 10, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(body.contains("Deletable Post"), "expected post in timeline");
@@ -1824,7 +1821,6 @@ body",
     let (status, body) = delete_post_form(&state, created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "delete body: {body}");
 
-    // Verify excluded from user timeline
     let (status, body) = list_user_posts(&state, &session.username, None, 10, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(
@@ -1832,7 +1828,6 @@ body",
         "expected post excluded from timeline: {body}"
     );
 
-    // Verify excluded from local timeline
     let (status, body) = list_local_timeline(&state, None, 10, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
     assert!(
@@ -1840,10 +1835,8 @@ body",
         "expected post excluded from local timeline: {body}"
     );
 
-    // Extract year/month/day/slug from permalink for get_post call
     // permalink format: /~username/year/month/day/slug
     let parts: Vec<&str> = permalink.trim_start_matches('/').split('/').collect();
-    // parts: ["~author", "year", "month", "day", "slug"]
     let year: i32 = parts[1].parse().unwrap();
     let month: u32 = parts[2].parse().unwrap();
     let day: u32 = parts[3].parse().unwrap();
@@ -2162,9 +2155,8 @@ async fn create_post_rejects_invalid_tag_token(#[case] backend: Backend) {
     )
     .await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    // The invalid token is now rejected at the wire→TagLabel parse, surfacing
-    // InvalidTagLabel's own message (the single validation source) rather than the
-    // retired TagValidationError::Invalid.
+    // The invalid token is rejected at the wire→TagLabel parse, surfacing
+    // InvalidTagLabel's own message — the single validation source.
     assert!(body.contains("tag must be non-empty"), "body: {body}");
 }
 

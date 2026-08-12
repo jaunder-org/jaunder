@@ -121,8 +121,8 @@ fn variant_path(logical: &str, encoding: Encoding) -> String {
     }
 }
 
-/// The SPA-shell fallthrough: the same embedded `index.html` boot document the
-/// old `ServeDir(...).fallback(spa_shell)` served for unknown paths.
+/// The SPA-shell fallthrough: the embedded `index.html` boot document, served
+/// for unknown paths.
 fn spa_shell() -> Response {
     Html(web::app::SPA_SHELL).into_response()
 }
@@ -252,9 +252,9 @@ pub async fn serve_site(req: Request) -> Response {
         span.record("site.status", response.status().as_u16());
         response
     } else {
-        // The SPA-shell fall-through. Recorded so an asset that silently stopped
-        // being embedded is visible as `embedded=false` on a path that used to
-        // serve bytes, rather than as an unexplained shell response.
+        // The SPA-shell fall-through. Recorded so an asset that silently stops
+        // being embedded is visible as `embedded=false`, rather than as an
+        // unexplained shell response.
         span.record("site.embedded", false);
         let response = spa_shell();
         span.record("site.status", response.status().as_u16());
@@ -344,9 +344,6 @@ mod tests {
             "application/octet-stream"
         );
     }
-
-    // `etag_for`'s old hex+quote unit tests moved to the `ETag::from_sha256` door tests
-    // in `common::etag` (#634) — the format now lives there, not here.
 
     #[test]
     fn not_modified_true_on_exact_match() {
@@ -465,12 +462,10 @@ mod tests {
     /// `public/` assets reach the served site — the regression guard #291 asked
     /// for after `GET /favicon.ico` 404'd on the host loop.
     ///
-    /// That gap was real and is now closed by the #237 embed: `server/build.rs`
-    /// stages `public/` into `$OUT_DIR/site/` from `JAUNDER_PUBLIC_DIR`, or from
-    /// `<workspace>/public` when that is unset (the host path). Nothing tested
-    /// it, which is how the asset silently stopped being served in the first
-    /// place — the whole cost of #291 was that no build failed, only a 404 no
-    /// spec asserted.
+    /// The #237 embed is the mechanism: `server/build.rs` stages `public/` into
+    /// `$OUT_DIR/site/` from `JAUNDER_PUBLIC_DIR`, or from `<workspace>/public`
+    /// when that is unset (the host path). Without this test, a staging break
+    /// surfaces as a 404 no spec asserts, not a build failure.
     ///
     /// **Deliberately unguarded**, unlike the wasm test below. `pkg/` needs
     /// `cargo xtask build-csr` to exist, so that test guards its assertions;

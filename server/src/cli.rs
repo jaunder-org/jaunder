@@ -476,8 +476,8 @@ mod tests {
         assert_eq!(target.database().to_string(), "jaunder_db");
     }
 
-    // Replaces `cmd_create_pg_db_rejects_non_postgres_app_db`: the rejection moved to the
-    // parse boundary, so a non-PostgreSQL `--app-db` can no longer reach the command.
+    // The rejection lives at the parse boundary: a non-PostgreSQL `--app-db` cannot
+    // reach the command.
     //
     // The scheme check this drives is **not** redundant with sqlx. `PgConnectOptions`
     // parses "sqlite:/tmp/jaunder.db" *successfully* — with no authority it defaults the
@@ -506,7 +506,6 @@ mod tests {
         );
     }
 
-    // Replaces `cmd_create_pg_db_requires_database_name`, for the same reason.
     #[test]
     fn app_target_rejects_a_url_with_no_database() {
         let err = "postgres://app@localhost".parse::<AppTarget>().unwrap_err();
@@ -516,9 +515,9 @@ mod tests {
         );
     }
 
-    // Replaces `run_create_pg_db_rejects_non_postgres_urls` in main.rs: `bootstrap_db` is
-    // a `PgConnectOptions`, so a non-PostgreSQL bootstrap URL cannot be constructed —
-    // clap rejects it during argument parsing rather than the command rejecting it later.
+    // `bootstrap_db` is a `PgConnectOptions`, so a non-PostgreSQL bootstrap URL cannot
+    // be constructed — clap rejects it during argument parsing rather than the command
+    // rejecting it later.
     #[test]
     fn create_pg_db_rejects_a_non_postgres_bootstrap_url() {
         let result = Cli::try_parse_from([
@@ -828,9 +827,8 @@ mod tests {
     fn app_password_create_malformed_label_is_clap_error() {
         with_env(|_env| {
             // The `SessionLabel` value parser rejects at parse time, before any handler
-            // opens the database. Until #690 this was a `String` and the rejection lived
-            // in `app_password_create`, one call *after* `open_existing_database` — so a
-            // typo'd label paid a database connection before being told it was invalid.
+            // opens the database — a typo'd label must not pay a database connection
+            // before being told it is invalid (#690).
             let over = "a".repeat(MAX_SESSION_LABEL_CHARS + 1);
             for bad in ["", over.as_str()] {
                 let result = Cli::try_parse_from([

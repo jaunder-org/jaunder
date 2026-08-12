@@ -394,7 +394,7 @@ async fn operator_can_update_backup_settings_omits_destination_as_none(#[case] b
 
 // The other clear form: an empty `destination_path=` value (present, not omitted) also decodes
 // the optional arg to `None` — so submitting the form with a blanked-out destination clears it
-// rather than erroring, preserving the pre-typing behavior for non-omitting callers.
+// rather than erroring.
 #[apply(backends)]
 #[tokio::test]
 async fn operator_can_update_backup_settings_clears_via_empty_destination(
@@ -446,8 +446,7 @@ async fn backup_warning_visible_propagates_storage_error_during_auth(#[case] bac
 }
 
 // #591: `session()` is the single reconcile fetch behind the shared session context
-// — it reports the viewer's username + operator flag, or `null` when anonymous. This
-// replaces the retired `current_user` / `current_user_is_operator` endpoint coverage.
+// — it reports the viewer's username + operator flag, or `null` when anonymous.
 #[apply(backends)]
 #[tokio::test]
 async fn session_reports_username_and_operator(#[case] backend: Backend) {

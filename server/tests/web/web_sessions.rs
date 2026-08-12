@@ -199,9 +199,9 @@ async fn create_app_password_rejects_blank_label(#[case] backend: Backend) {
     )
     .await;
 
-    // A blank/whitespace label is now rejected at the typed-wire-arg decode
-    // (SessionLabel's FromStr), not a server-side check; it still fails, surfacing
-    // as 500 (the existing session-fn convention).
+    // A blank/whitespace label is rejected at the typed-wire-arg decode
+    // (SessionLabel's FromStr), not a server-side check; it surfaces as 500 (the
+    // session-fn convention).
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
 

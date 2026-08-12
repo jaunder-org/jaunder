@@ -21,8 +21,8 @@ use web::auth::AuthUser;
 
 use crate::soft_path::SoftPath;
 
-/// Builds the media routes (content-addressed serve, remote proxy). Upload moved to
-/// the `web::media::upload` `#[server]` fn (#517).
+/// Builds the media routes (content-addressed serve, remote proxy). Upload lives
+/// in the `web::media::upload` `#[server]` fn (#517).
 ///
 /// The handlers read shared state via `Extension`, so the routes are generic
 /// over the application's router state type.
@@ -156,8 +156,7 @@ async fn serve_response(
     headers.insert(
         axum::http::header::CONTENT_TYPE,
         // A `ContentType` is always a valid header value (its invariant), so — like the
-        // sibling etag/disposition inserts below — the `Err` arm is unreachable (#495,
-        // retiring the former octet-stream fallback).
+        // sibling etag/disposition inserts below — the `Err` arm is unreachable (#495).
         HeaderValue::from_str(content_type.as_ref())
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?,
     );
@@ -260,12 +259,13 @@ fn resolve_media_path(
     // it too, so the two cannot disagree; a hand-rolled read path would miss the file
     // whenever the name needs percent-encoding.
     //
-    // The re-encode still happens and is still not redundant (#675), but since #720 it
-    // lives in `ProfferedFilename`'s door, not here: axum has already *decoded* the
-    // incoming segment, that door re-encodes it to recover the stored spelling, and
-    // `media_path` then merely interpolates a value that already is the path segment.
-    // Deleting that door — or "simplifying" it to `Filename` — breaks serving for every
-    // name needing encoding, and axum offers no un-decoded extractor to avoid it with.
+    // The re-encode is not redundant (#675), and it lives in `ProfferedFilename`'s
+    // door, not here (#720, ADR-0080): axum has already *decoded* the incoming
+    // segment, that door re-encodes it to recover the stored spelling, and
+    // `media_path` merely interpolates a value that already is the path segment.
+    // Deleting that door — or "simplifying" it to `Filename` — breaks serving for
+    // every name needing encoding, and axum offers no un-decoded extractor to avoid
+    // it with.
     //
     // The parsed values are used, not the raw `params.*`: `p1`/`p2` are re-derived from
     // the validated hash, having already been checked against it in
@@ -477,7 +477,8 @@ mod tests {
 
     #[test]
     fn resolve_media_path_rejects_short_hash() {
-        // The historical panic input: shorter than 2 bytes.
+        // A hash shorter than 2 bytes cannot be sliced at [..2]; it must reject,
+        // not panic.
         let p = params("upload", "a", "a", "a", "photo.jpg");
         assert_eq!(
             resolve_media_path(Path::new("/data"), &p),
@@ -687,8 +688,8 @@ mod tests {
 
     #[test]
     fn every_accepted_content_type_is_header_constructible() {
-        // The D4 invariant the retired `:178` octet-stream fallback relied on, observed
-        // against the real `HeaderValue::from_str` oracle (#495).
+        // The D4 invariant — every accepted content type is header-constructible —
+        // observed against the real `HeaderValue::from_str` oracle (#495).
         for s in [
             "image/png",
             "text/html; charset=utf-8",

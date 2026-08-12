@@ -31,7 +31,7 @@ async fn create_user_with_verified_email(state: &Arc<AppState>, email: &str) -> 
 #[apply(backends)]
 #[tokio::test]
 async fn request_password_reset_sends_email_for_verified_user(#[case] backend: Backend) {
-    // The reset email now composes an absolute link, so the flow requires a seeded
+    // The reset email composes an absolute link, so the flow requires a seeded
     // `site.base_url` (canonicalized to `https://example.com/`).
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let mailer = Arc::new(CapturingMailSender::new());
@@ -51,7 +51,7 @@ async fn request_password_reset_sends_email_for_verified_user(#[case] backend: B
     assert_one_absolute_link_email(&mailer, "alice@example.com", "/reset-password");
 }
 
-// The reset email now composes an absolute link, so an eligible request still
+// The reset email composes an absolute link, so an eligible request still
 // fails (after confirming the user) without a seeded `site.base_url`, rather than
 // emailing a dead relative link.
 #[apply(backends)]

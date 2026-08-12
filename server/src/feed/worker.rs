@@ -616,8 +616,8 @@ mod tests {
     // guard:no-backend — mock store
     #[tokio::test]
     async fn tick_reschedules_on_regen_failure_within_backoff() {
-        // Replaces the former integration test whose bad-URL trigger a FeedPath
-        // makes impossible: a valid path plus a forced storage failure inside
+        // A bad-URL trigger is unrepresentable (a `FeedPath` is always valid), so
+        // the failure is a valid path plus a forced storage error inside
         // regenerate_feed. attempts = 0 keeps the next attempt inside the backoff
         // table, so the batch is rescheduled (mark_failed), the cache is never
         // written, and no hub ping is attempted.

@@ -366,11 +366,6 @@ async fn login_returns_is_operator_flag(#[case] backend: Backend) {
     assert!(!is_operator, "a freshly registered user is not an operator");
 }
 
-// (Removed `authenticated_home_page_shows_logged_in_indicator`: under #180 the
-// server renders the anonymous projector view for `/`, never authed page content
-// — the logged-in indicator now appears client-side after the CSR client boots,
-// which is exercised by the e2e suite, not a server-response test.)
-
 #[apply(backends)]
 #[tokio::test]
 async fn login_unknown_user_returns_error(#[case] backend: Backend) {
@@ -476,7 +471,7 @@ async fn login_rejects_whitespace_only_label(#[case] backend: Backend) {
     .await;
 
     // A whitespace-only label is rejected at the typed-wire-arg decode
-    // (SessionLabel's FromStr trims, then rejects empty) — it no longer falls
+    // (SessionLabel's FromStr trims, then rejects empty) — it must not fall
     // through to the User-Agent branch. Surfaces as 500, the session-fn convention.
     let (status, _, body) = post_form_with_secure_flag(
         &state,
@@ -546,7 +541,7 @@ async fn login_bounds_long_user_agent_at_session_label_cap(#[case] backend: Back
     )
     .await;
 
-    // 250 < 255, so this UA survives intact — under the old 200-char cap it did not.
+    // 250 < 255, so this UA survives intact rather than being truncated.
     let long_ua = "a".repeat(250);
 
     let (status, set_cookie, _body) = post_form_with_ua(
@@ -926,9 +921,6 @@ async fn logout_clears_cookie_without_secure_attribute_when_disabled(#[case] bac
     assert!(clear_cookie.contains("Max-Age=0"));
     assert!(!clear_cookie.contains("Secure"));
 }
-
-// (`current_user` endpoint retired in #591 — session identity, authed + anonymous,
-// is now covered by `web_backup::session_reports_username_and_operator`.)
 
 #[apply(backends)]
 #[tokio::test]

@@ -84,10 +84,9 @@ pub(crate) fn etag_for(post: &PostRecord) -> ETag {
         body: &post.body,
         format: post.format.to_string(),
         summary: post.summary.as_deref(),
-        // Tags are folded in iteration order, which `TAGS_SUBQUERY`'s `ORDER BY` now
-        // makes deterministic across query plans and backends (#772). Entry ETags for
-        // posts tagged before that change shift once; an ETag change costs a re-fetch,
-        // never staleness.
+        // Tags are folded in iteration order, which `TAGS_SUBQUERY`'s `ORDER BY`
+        // makes deterministic across query plans and backends (#772). An ETag change
+        // costs a re-fetch, never staleness.
         tags: post.tags.iter().map(|t| &t.tag_display).collect(),
         draft: post.published_at.is_none(),
     };
@@ -150,9 +149,7 @@ pub async fn collection_get(
     };
 
     // `fetch_limit` over-fetches one row and `has_more` reads that row back — the two
-    // halves of the rule, both from `PageSize` so neither is spelled here (#696). This
-    // was a third hand-rolled copy of the convention, in a crate the audit for #696 did
-    // not sweep; it also dropped two `usize::try_from(...).unwrap_or(usize::MAX)` casts.
+    // halves of the rule, both from `PageSize` so neither is spelled here (#696).
     let mut records = posts
         .list_collection_by_user(auth_user.user_id, cursor.as_ref(), limit.fetch_limit())
         .await?;

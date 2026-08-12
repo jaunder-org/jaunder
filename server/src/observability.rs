@@ -416,10 +416,10 @@ fn init_tracing_impl(verbose: bool) -> TelemetryGuard {
 #[must_use]
 pub fn init_tracing(verbose: bool) -> TelemetryGuard {
     // Called once per process from `run` (production), for every command —
-    // `serve` included. The previous `Once` guard is gone because returning an
-    // owned guard is incompatible with `call_once`; repeat installs (only seen in
-    // tests that dispatch twice in one process) are already reported non-fatally
-    // by `try_init`/`LogTracer::init`.
+    // `serve` included. No `Once` guard: returning an owned guard is incompatible
+    // with `call_once`, and repeat installs (only seen in tests that dispatch twice
+    // in one process) are already reported non-fatally by
+    // `try_init`/`LogTracer::init`.
     init_tracing_impl(verbose)
 }
 
@@ -868,8 +868,7 @@ mod tests {
             // Point JAUNDER_CAPTURE_DIR at a regular FILE: `capture::file` can't create
             // the dir and opening `<file>/diag.log` fails, exercising the non-fatal
             // `Err`/`eprintln` arm without taking down startup. (Pointing at a directory
-            // would now succeed — `capture::file` create_dir_all's it and joins
-            // `diag.log`.)
+            // succeeds — `capture::file` create_dir_all's it and joins `diag.log`.)
             let file = tempfile::NamedTempFile::new().expect("temp file");
             env.set(host::capture::DIR_ENV, file.path());
             let previous = std::panic::take_hook();

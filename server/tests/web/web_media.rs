@@ -329,8 +329,7 @@ async fn upload_media_stores_file_and_returns_metadata(#[case] backend: Backend)
     )
     .await;
 
-    // The server fn returns 200 with the bare `UploadResponse` JSON — not the old
-    // `/media/upload` handler's 201.
+    // The server fn returns 200 with the bare `UploadResponse` JSON.
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let resp: UploadResponse = serde_json::from_str(&body).expect("response should be valid JSON");
     assert_eq!(resp.filename, "photo.jpg");
@@ -346,8 +345,8 @@ async fn upload_then_serve_round_trips_a_filename_needing_encoding(#[case] backe
     let storage = TempDir::new().unwrap();
 
     // A space is a *legal* `Filename` — `sanitize_filename` permits it — so this is an
-    // ordinary upload, not a hostile one. Before #675 the derived URL carried the raw
-    // space, which `RootRelativeUrl` cannot even represent.
+    // ordinary upload, not a hostile one. The derived URL must carry it encoded:
+    // `RootRelativeUrl` cannot even represent a raw space (#675).
     let (status, body) = post_multipart(
         &state,
         &storage,
@@ -363,7 +362,7 @@ async fn upload_then_serve_round_trips_a_filename_needing_encoding(#[case] backe
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let resp: UploadResponse = serde_json::from_str(&body).expect("response should be valid JSON");
 
-    // Since #720 the wire field carries the *canonical* encoded spelling, because it is a
+    // The wire field carries the *canonical* encoded spelling (#720), because it is a
     // lookup key rather than a display value — `atompub::media::collection_post` passes it
     // straight to `get_media`. Rendering surfaces decode it; this one does not.
     assert_eq!(resp.filename, "my%20photo.jpg");
@@ -425,8 +424,8 @@ async fn upload_then_serve_survives_a_name_too_long_to_store(#[case] backend: Ba
     let storage = TempDir::new().unwrap();
 
     // 200 `ä` is 400 raw bytes and ~1200 once percent-encoded — far past the filesystem's
-    // 255-byte per-component limit. Before #708 this reached the file write and failed with
-    // an opaque 500; the name is otherwise perfectly legal.
+    // 255-byte per-component limit. It must be rejected before the file write, not fail
+    // there with an opaque 500 (#708); the name is otherwise perfectly legal.
     let long_name = format!("{}.jpg", "ä".repeat(200));
     let (status, body) = post_multipart(
         &state,
@@ -648,7 +647,7 @@ async fn media_serve_get(state: &Arc<storage::AppState>, uri: &str) -> StatusCod
 // on `params.hash[2..]`, not accept non-hex). Identical setup + assertion; only
 // the malformed URI varies.
 //
-// `short_hash`: a 1-byte hash historically panicked because the prefix check
+// `short_hash`: a 1-byte hash would panic — the prefix check
 // (`hash.starts_with(p1)`) passes and the slice runs off the end of the string.
 // `non_hex`: 64 characters but not lowercase hex — not a canonical content hash.
 #[apply(backends_matrix)]
