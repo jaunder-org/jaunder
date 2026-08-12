@@ -1432,6 +1432,220 @@ stub that signals "not yet implemented"
 ([ADR-0042](adr/0042-emacs-org-atom-mapping-struct-seam.md),
 [ADR-0047](adr/0047-emacs-publish-orchestration.md)).
 
+## Domain types and invariants
+
+The rules in this section are cross-cutting: they govern `common`, `host`,
+`storage`, `web`, and the CLI alike, so they have no single subsystem home. Ten
+accepted ADRs decide them. Filed under whichever subsystem happened to use them
+first, several went undocumented for months; they are collected here.
+
+### What earns a newtype, and the trailer it gets
+
+A domain value earns a newtype when at least one of three axes applies
+([ADR-0063](adr/0063-domain-value-newtype-convention.md) §1): an **invariant** a
+bare primitive cannot express, a **transposition hazard** (another value of the
+same primitive type is a plausible mis-pass), or a **trust boundary** (a
+semantic guarantee that must not be forged). Consistency alone is not sufficient
+justification for introducing one — but §5 makes _adopting_ an existing newtype
+mandatory on every field, argument, return, and DTO that carries its value;
+flattening it back to a primitive takes express owner approval. A genuinely
+polymorphic value is an enum, not a string newtype.
+
+The trailer is generated, never hand-written. Three derives live in the `macros`
+crate — `StrNewtype` (`macros/src/str_newtype.rs`), `IdNewtype`
+(`macros/src/id_newtype.rs`), `NumNewtype` (`macros/src/num_newtype.rs`). For a
+string newtype the derive emits the serde bridge, `Display`,
+`AsRef`/`Borrow`/`Deref<str>`, `PartialEq<str>`, owned conversions, and
+`PartialOrd`/`Ord`; only the validating `FromStr` stays hand-written, because
+the rule is the one per-type part. `Deref<Target = str>` is the single
+sanctioned use of deref polymorphism in the repo — it retires the `.as_str()`
+tax that made the pre-derive newtypes too thin to propagate. Attribute options
+select the profiles (`macros/src/str_newtype.rs:464-479`): `secret` tightens the
+surface to a redacting `Debug` plus `AsRef<str>` (`Password`,
+`common/src/password.rs:19`), `secret, serde` re-opens only the validating serde
+bridge for an inbound twin (`common/src/password.rs:64`,
+`common/src/invite.rs:26`), `secret, sqlx` re-adds storability
+(`host/src/invite.rs:27`), and `no_sqlx, no_ord` gives the bearer-token
+`RawToken` the full ergonomic trailer minus storability and ordering
+(`common/src/token.rs:109`). Numeric IDs take the fixed `IdNewtype` trailer
+(eight of them, `common/src/ids.rs:15-44`); bounded numeric values take the
+parameterized `NumNewtype` one, whose bound is declarative and re-run by
+`FromStr`, serde, and the column (`PageSize`, `PageOffset`, `RowLimit` —
+`common/src/pagination.rs:29,62,81`), with an opt-in `clamp` flag
+(`macros/src/num_newtype.rs:430`) for a public bound that should coerce rather
+than reject.
+
+There are two kinds of newtype, and the choice is **invariant-first**
+([ADR-0101](adr/0101-infallible-kind-is-invariant-first.md)). The reviewer's
+question is "is there a string this type should refuse?", not "does the
+constructor reject?" — the latter is a property of code already written, and
+reading it as evidence about the value is what mislabelled `PostTitle` and
+`PostBody`. Both now hand-write a validating `FromStr`
+(`common/src/post_title.rs:34`, `common/src/post_body.rs:70`), and no production
+type takes `#[str_newtype(infallible)]` today. The diagnostic ADR-0063 §3 draws
+from this: a type declared infallible that needs a downstream gate to reject
+some of its values was mis-declared — the gate is the invariant, displaced.
+
+ADR-0101 also replaces the trusted door with a typed proof wherever a caller can
+supply one. `PostSummary::truncated` takes a `SummarySeed`
+(`common/src/post_summary.rs:63,114`) whose three constructors — from a `Slug`,
+a `PostTitle`, or the first non-blank line of a `PostBody` — are each infallible
+because their source is already non-blank. What remains is a plain length-cap,
+the one half of the invariant the door genuinely coerces. The trusted door
+survives only where no caller can supply a proof.
+
+### Identity and label are two types, not one
+
+A domain value that carries a canonical identity _and_ a preserved presentation
+variant at different cardinalities is two composable newtypes, paired only where
+both travel ([ADR-0068](adr/0068-tag-identity-label-split.md), which amends
+ADR-0063's one-type-per-value shape). Tags are the applied case: `Tag`
+(`common/src/tag.rs:19`) is the lowercased canonical slug — one interned row,
+the browse key, the dedup key, the SQL key — while `TagLabel`
+(`common/src/tag.rs:61`) is the case-preserving label, one per _tagging_.
+`TagLabel::slug` (`common/src/tag.rs:86`) is infallible by construction, because
+`TagLabel`'s `FromStr` validates through `Tag`'s rule: one validity source
+(`TagValidationError`, `common/src/tag.rs:105`), no re-implemented validator.
+Equality and dedup on labels go by slug, never by raw casing. The pattern
+generalizes; tags are its only adopter so far.
+
+### Closed string enums
+
+A closed string-backed enum is declared with one attribute, `#[text_enum(…)]`
+([ADR-0091](adr/0091-text-enum-closed-string-enum-convention.md),
+`macros/src/text_enum.rs`). It injects `strum`'s
+`AsRefStr`/`Display`/`EnumString`/`IntoStaticStr` and the
+`parse_err_ty`/`parse_err_fn` pair, and generates the named parse error, its
+parse fn, `Serialize`/`Deserialize`, and — with the opt-in `sqlx` flag
+(`macros/src/text_enum.rs:302`) — the storage bridge. It is an attribute rather
+than a derive because a derive cannot add attributes to its item, and it must be
+the item's first attribute, since an attribute macro sees only what is written
+below it. Twelve enums adopt it, seven of them with `sqlx`: `PostFormat`
+(`common/src/render.rs:26`), `TargetKind` (`common/src/visibility.rs:43`),
+`MediaSource` (`common/src/media.rs:601`), `SmtpTlsMode`
+(`common/src/smtp_tls_mode.rs:18`), the two config-key enums
+(`common/src/config_key.rs:103,221`), and `FeedEventStatus`
+(`common/src/feed/event_status.rs:17`).
+
+The attribute owns the _convention_; `strum` owns the _engine_ — token mapping,
+`Display`, `FromStr`, `VariantArray`, `EnumMessage`
+([ADR-0075](adr/0075-adopt-strum-retire-str-enum.md)). ADR-0075 established that
+by retiring the bespoke `StrEnum` derive, which had duplicated ~300 lines of a
+crate already in the tree on the false premise that `strum` could not produce a
+named, host-registrable parse error. `StrEnum` is deleted: `macros/src/` carries
+no `str_enum.rs`. The named `Invalid<Name>` unit error it produced is preserved,
+now generated without `thiserror` so an adopting crate needs no dependency
+beyond `strum` — its unit-struct shape is load-bearing for `host`'s
+`validation_from!`.
+
+### How a typed value crosses a boundary
+
+Values are parsed at the **outermost** boundary — `#[server]` argument and
+return types, CLI argument types, storage record fields and trait signatures —
+and held inward (ADR-0063 §4).
+
+**The database.** Every derive-based newtype is a first-class column type: the
+derives emit a transparent, feature-gated `sqlx::Type`/`Encode`/`Decode` bridge
+delegating to the inner value, plus an opt-in Postgres `PgHasArrayType`
+([ADR-0071](adr/0071-sqlx-string-newtype-bridge.md)). `.bind(newtype)` binds
+directly and `query_as` decodes straight into the newtype, so
+`query_as::<_, (PostId, TagId, …)>` makes a swapped destructuring a compile
+error where two adjacent bare `i64`s made it invisible. `Decode` re-validates
+for a string newtype and re-runs the bound for a `NumNewtype`; it is an
+infallible wrap for an `IdNewtype`, which has no value invariant. `Encode` is a
+storability capability, not a conversion — which is why `secret` drops the
+bridge by default and `no_sqlx` exists. Feature isolation keeps `sqlx` out of
+the wasm build, guarded by a `compile_error!` in `common`. Two xtask gates keep
+the bridge from being bypassed — `xtask/src/steps/sqlx_newtype_bind_check.rs` on
+the write side and `xtask/src/steps/sqlx_newtype_decode_check.rs` (syn-parsed,
+allowlist-with-reason) on the read side. Since ADR-0091 there is exactly one
+bridge implementation, `macros/src/sqlx_bridge.rs:67`, driven by a `BridgeSpec`;
+the three newtype derives, `#[derive(SqlxBridge)]`, and `#[text_enum(sqlx)]` all
+call it.
+
+**Time.** A timestamp crossing the web boundary is `UtcInstant`
+(`common/src/time.rs:26`), a third instant-backed flavor of the convention
+wrapping `chrono::DateTime<Utc>`
+([ADR-0072](adr/0072-timestamps-cross-boundary-as-utcinstant.md)). Its trailer
+is hand-written: the wire form is RFC 3339 via chrono's own serde, and `FromStr`
+canonicalizes any offset to UTC, making it the single validation chokepoint and
+the hook for the client-side `Field<T>` path. The premise that unblocked it is
+that `chrono` is already in the wasm bundle through the unconditional
+`web → common → chrono` chain — the `web`-level server-only gate never kept the
+crate out. Storage and `common`/`host` internals still carry raw
+`DateTime<Utc>`; the newtype is a boundary type.
+
+**URLs.** The `url` crate is the sanctioned absolute-URL parser and normalizer,
+and it is a direct dependency of `common` (`common/Cargo.toml:24`) — which means
+it is compiled for wasm and reachable in the client binary, a cost accepted in
+exchange for one correct normalization chokepoint no boundary can bypass
+([ADR-0073](adr/0073-url-crate-for-absolute-url-normalization.md)). Hand-rolled
+normalization and repurposing `urlencoding` as a parser are ruled out. The
+chokepoint is `TaggedUrl<T>`'s `FromStr` (`common/src/tagged_url.rs:106-110`),
+which parses through `url::Url`.
+
+<!-- DRIFT vs ADR-0073: ADR-0073 (accepted, unamended) names `AbsoluteUrl` as the type holding that chokepoint. `AbsoluteUrl` is deleted — ADR-0112 replaced it with `TaggedUrl<T>`, one generic string newtype carrying a zero-sized role marker (`common/src/tagged_url.rs:73`), 15 roles and 15 aliases at `:211-287`. ADR-0073's `url`-crate decision survives verbatim; only the type name is stale, and it carries no amendment marker pointing at ADR-0112. -->
+
+Because a URL role costs only a marker struct and a type alias, URLs are an
+express exception to ADR-0063 §1's cost model: "consistency alone is not
+sufficient justification" must not be cited to argue a role out of existence
+([ADR-0112](adr/0112-role-tagged-site-urls.md)). A host-less root-relative
+reference is a distinct grammar, not a `TaggedUrl` — it is `RootRelativeUrl`
+(`common/src/root_relative_url.rs`), decided under #560 rather than by an ADR.
+
+### Absence is named where it can occur
+
+Where a row can genuinely be absent, the code names it; everywhere else it is
+left alone ([ADR-0108](adr/0108-absence-is-named-at-its-source.md)).
+`MissingRow { what }` (`storage/src/error.rs:28`) is a standalone error naming
+an absent required row, and `RequireRow::require_row`
+(`storage/src/error.rs:53,62`) is its one-line partner on an `Option`. It still
+pages — a required row that is absent is a real invariant violation — but the
+operator learns _which_ row instead of reading `"storage operation failed"` with
+`"no rows returned"` buried in the source chain
+(`From<MissingRow> for InternalError` routes through `InternalError::server`,
+`storage/src/error.rs:34-43`). `fetch_one` stays correct and is not discouraged
+where the row is structurally guaranteed — a bare aggregate, `SELECT EXISTS(…)`,
+`INSERT … RETURNING` with no `ON CONFLICT` — and the blanket
+`From<sqlx::Error> for InternalError` stays, so a `RowNotFound` arriving there
+marks a caller defect. This is deliberately **not enforced**: a mechanical ban
+on `fetch_one` was built and removed, because it cannot read SQL and so forced
+~17 correct calls into `fetch_optional` plus a panic path. Whether a row can be
+absent is a per-query judgement.
+
+### The error model
+
+Expected failures are typed, not collapsed into an opaque carrier: discrete
+`thiserror` variants in `storage`/`common` enums — `UserAuthError`
+(`storage/src/users.rs:60`), `PerformCreationError`
+(`storage/src/post_service.rs:292`), `UpdatePostError`
+(`storage/src/posts.rs:158`), `MailError` (`common/src/mailer.rs:45`), and some
+two dozen more — so matching on `NotFound` versus `Unauthorized` versus
+`SlugConflict` remains possible
+([ADR-0017](adr/0017-error-handling-and-the-public-boundary.md) §1).
+
+At the point of failure a cause is never flattened to a `String` (§3). A single
+concrete source travels via `#[from]`/`#[source]`; a variant that legitimately
+wraps unrelated error types carries `#[source] Box<dyn Error + Send + Sync>`,
+which stays `downcast_ref`-able so the boundary can still classify a
+`sqlx::Error` by SQLSTATE or pool timeout; and where there is genuinely no
+underlying error object, the offending _value_ is carried as context rather than
+a source being invented.
+
+Internal detail reaches a client only through the masking boundary (§2). The
+leaky public constructors `WebError::storage`/`WebError::server` are removed —
+`WebError` (`web/src/error/mod.rs:26`) exposes no constructor that serializes a
+raw source chain. The operator carrier is `InternalError`
+(`host/src/error.rs:94`), which holds `kind`, `class`, `context`, the exact
+public message, and the preserved `anyhow` source; the public message it masks
+storage and server failures with is fixed (`"storage operation failed"` /
+`"server operation failed"`, `host/src/error.rs:161-179`). These are the T1 and
+T2 layers of the one-way error pipeline the Web frontend section describes; that
+section covers the T2→T3 projection and why the boundary cannot leak by
+discipline failure, and is not repeated here.
+
+<!-- DRIFT vs ADR-0017: ADR-0017 places `InternalError` in `web/src/error.rs` under `#[cfg(feature = "ssr")]` with a flat `operator_message: String`, and records the `kind`/`ErrorClass`/`context` carrier as "Forthcoming … tracked as jaunder-kq8w.16". That carrier has landed and the type moved to `host/src/error.rs:94` (`ErrorKind` at `:19`, `ErrorClass` at `:50`). ADR-0059 explicitly extends ADR-0017 and picks up the forthcoming-carrier scope, so the decision is recorded — but ADR-0017's own file paths and Forthcoming section are stale and carry no amendment marker. -->
+
 ## Testing
 
 `CONTRIBUTING.md` remains the how-to; this section records the architecture of
