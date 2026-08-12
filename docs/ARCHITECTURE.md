@@ -2175,7 +2175,8 @@ as amended by
 - `docs/DESIGN.md` — functional behavior and operational model;
   `docs/ROADMAP.md` — strategic vision and milestones.
 - `docs/archive/` — shipped specs, plans, and milestone documents, kept as dated
-  `YYYY-MM-DD-<slug>.md` files and moved there at ship rather than deleted.
+  `YYYY-MM-DD-<slug>.md` files and kept there rather than deleted
+  (`docs/README.md:149-152`).
   <!-- DRIFT vs ADR-0000: ADR-0000 ("Transient Documentation", Status:
   accepted) says milestone/plan/spec documents "should be committed to git
   during development but deleted once the work is complete", with git history
@@ -2231,12 +2232,23 @@ correctness: the check compares two artifacts and stays green when both are
 wrong in the same way, which is why the status rule is enforced at the file, not
 at the table ([ADR-0088](adr/0088-promotion-is-the-acceptance-event.md)).
 
-Four gates guard the log, and drafts are invisible to all of them.
-`identifier-collisions`, `adr-format`, and `adr-readme-parity` share one
+Four gates guard the log, and a draft is invisible to all of them **as a gated
+file**. `identifier-collisions`, `adr-format`, and `adr-readme-parity` share one
 enumeration rule — non-recursive `read_dir` over `docs/adr/`, then `is_file` →
 `.md` → leading number — which excludes a numberless file in a subdirectory
 twice over. `doc-links` enumerates tracked files instead, and an uncommitted
 draft is not tracked ([ADR-0048](adr/0048-adr-out-of-git-draft-workflow.md)).
+
+A draft is **not** invisible as a link _target_, and the asymmetry has teeth.
+`doc-links` resolves a target with `.exists()` against the working tree
+(`xtask/src/doc_links.rs:207-210`), not against the tracked set — so a tracked
+document linking a gitignored draft passes locally, where the pen is populated,
+and fails in a fresh clone, where it is not. `adr promote` is what closes the
+window: it rewrites every `drafts/<slug>` path-form reference repo-wide to the
+assigned number before the branch is pushed
+([ADR-0048](adr/0048-adr-out-of-git-draft-workflow.md)). Referencing a draft by
+path is therefore not a convention but a prerequisite — a link written any other
+way survives promotion pointing at nothing.
 
 <!-- un-ADR'd (DECIDED-ELSEWHERE, issue #682): the `doc-links` gate itself has
 no ADR; xtask/src/steps/doc_links.rs:1 cites only the issue. -->
