@@ -122,18 +122,32 @@ not an error.
   tests share one process and a global recorder, so the **unmutated baseline
   fails** and cargo-mutants skips the entire package. nextest runs each test in
   its own process, which is what the repo's own gate uses.
-- `-- -E 'not test(/(?i)postgres|backup_interop/)'`. Everything it excludes
-  needs a live PostgreSQL that is not running. Every excluded test has a sqlite
-  twin covering the same code, so no mutant goes unexamined.
+- `-- -E "$MUTANTS_FILTER"`, and what that expands to depends on whether a
+  PostgreSQL cluster is running. `MUTANTS_WITH_POSTGRES` in `common.sh` is the
+  one switch, and it moves **two** things together:
+
+  | `MUTANTS_WITH_POSTGRES`          | test filter                                | `storage/src/postgres` |
+  | -------------------------------- | ------------------------------------------ | ---------------------- |
+  | unset / `0` (a laptop)           | `not test(/(?i)postgres\|backup_interop/)` | excluded from mutation |
+  | `1` (CI, under `devtool pg run`) | `all()`                                    | mutated                |
+
+  They move together because they are one decision. Filtering the postgres tests
+  away while still mutating the code they test reports every one of those
+  mutants as MISSED — noise wearing a survivor's name. The old config excluded
+  the postgres code unconditionally and so never tested it anywhere; CI now
+  provisions a throwaway cluster (`devtool pg run` exports
+  `JAUNDER_PG_TEST_URL`) and scans it properly.
   - **Keep the `(?i)`.** A plain `test(postgres)` matches `case_2_postgres` but
     not `backend_2_Backend__Postgres`.
   - **Keep `backup_interop`.** `backup_round_trips_full_cycle_across_backends`
     calls `unique_postgres_url()` directly, so its name never says postgres.
-  - The one copy of this expression is `$MUTANTS_FILTER` in `common.sh`, which
-    both scripts source. There is deliberately nowhere else to change it.
+  - The one copy of both is `common.sh`, which every script sources. There is
+    deliberately nowhere else to change it.
 
   One surviving postgres test out of 898 is enough to fail the baseline and lose
-  a whole 315-mutant package. That has now happened twice.
+  a whole 315-mutant package. That has now happened twice — which is why
+  `ci-shard.sh` asks `pg_isready` before it starts rather than discovering a
+  missing cluster forty minutes in.
 
 - `--test-workspace true`. **Without this the tool reports mutants as surviving
   in code that was never compiled.** Several crates gate real functionality

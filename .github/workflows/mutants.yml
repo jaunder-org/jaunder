@@ -205,8 +205,16 @@ jobs:
           # 16-core box; do not raise this without re-checking the timeout counts.
           MUTANTS_JOBS: "1"
           MUTANTS_FULL: ${{ needs.plan.outputs.full }}
+          # CI is the environment that CAN have PostgreSQL, so it is the one
+          # place the postgres code gets mutated at all. A workstation scan
+          # filters those tests out and excludes storage/src/postgres with them;
+          # here `devtool pg run` provisions a throwaway cluster and exports
+          # JAUNDER_PG_TEST_URL, so both come back into scope. See
+          # .mutants-loop/common.sh.
+          MUTANTS_WITH_POSTGRES: "1"
         run: |
           nix develop .#mutants --accept-flake-config -c \
+            devtool pg run -- \
             .mutants-loop/ci-shard.sh \
             "${{ needs.plan.outputs.package }}" \
             "${{ matrix.shard }}" "${{ needs.plan.outputs.shards }}" \

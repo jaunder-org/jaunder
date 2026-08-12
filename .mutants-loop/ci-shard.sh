@@ -54,6 +54,18 @@ if [ "${MUTANTS_FULL:-0}" = "1" ]; then
   echo "MUTANTS_FULL=1 — ignoring cached outcomes, re-testing every mutant"
 fi
 
+# A cluster that is asked for and not there is the expensive failure: the
+# postgres tests fail the unmutated baseline, cargo-mutants exits 4 having tested
+# nothing, and the run looks empty rather than broken. Ask now — one round trip —
+# rather than after forty minutes of build.
+if [ "${MUTANTS_WITH_POSTGRES:-0}" = "1" ]; then
+  if ! pg_isready -d "${JAUNDER_PG_TEST_URL:?MUTANTS_WITH_POSTGRES=1 but JAUNDER_PG_TEST_URL is unset — run this under \`devtool pg run\`}" >/dev/null; then
+    echo "::error::MUTANTS_WITH_POSTGRES=1 but no cluster answered at $JAUNDER_PG_TEST_URL"
+    exit 1
+  fi
+  echo "postgres: $JAUNDER_PG_TEST_URL (postgres tests and storage/src/postgres are IN scope)"
+fi
+
 echo "package=$pkg shard=$k/$n jobs=${MUTANTS_JOBS:-2} full=${MUTANTS_FULL:-0}"
 echo "filter=$MUTANTS_FILTER"
 
