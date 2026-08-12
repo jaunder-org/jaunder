@@ -154,7 +154,7 @@ mod tests {
     #[test]
     fn marker_in_string_literal_does_not_suppress() {
         // The marker text lives inside a string literal, not a real comment —
-        // it must NOT drop the line (inverts the old bare-`contains` behavior).
+        // it must NOT drop the line (a bare `contains` would).
         let report = "\
 /repo/a.rs:
     1|     0|    let s = \"// cov:ignore\";

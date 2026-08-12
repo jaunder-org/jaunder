@@ -103,7 +103,7 @@ pub struct Filters {
 
 /// Read a string attribute from a span's `attributes[]` list: `stringValue` if
 /// present, else the stringified `intValue` (OTel encodes int64 as either a JSON
-/// number or a string), else `""`. Mirrors Node `getAttr` (:70-83).
+/// number or a string), else `""`.
 pub fn get_attr(span: &Value, key: &str) -> String {
     let Some(attrs) = span.get("attributes").and_then(Value::as_array) else {
         return String::new();
@@ -150,8 +150,8 @@ pub fn parse_duration_ms(span: &Value) -> f64 {
 }
 
 /// Parse a JSON-string attribute (the `e2e.*_json` blobs) into a `Value`.
-/// `Value::Null` when the attribute is absent or the JSON is malformed — the
-/// silent fallback (Node `parseJsonAttr` :85-95); callers treat `Null` as empty.
+/// `Value::Null` when the attribute is absent or the JSON is malformed — a
+/// silent fallback; callers treat `Null` as empty.
 pub fn parse_json_attr(span: &Value, key: &str) -> Value {
     let raw = get_attr(span, key);
     if raw.is_empty() {
@@ -160,7 +160,7 @@ pub fn parse_json_attr(span: &Value, key: &str) -> Value {
     serde_json::from_str(&raw).unwrap_or(Value::Null)
 }
 
-/// Normalize a URL to `host[:port]/path`, matching Node `toUrlPath` (:306-316):
+/// Normalize a URL to `host[:port]/path`:
 /// a parseable URL → `host_str` + the non-default `:port` + `path` (always at
 /// least `/`); an unparseable value → the raw string; empty → `""`.
 pub fn to_url_path(value: &str) -> String {
@@ -179,7 +179,7 @@ pub fn to_url_path(value: &str) -> String {
 
 /// Whether `span` passes the filters. Trace filter: drop when `traceId` differs.
 /// Project filter: drop **only** an `e2e.`-named span whose `e2e.project` differs
-/// — HTTP/server spans always pass (Node `readSpans` :131-142).
+/// — HTTP/server spans always pass.
 fn passes(span: &Value, name: &str, project: &str, filters: &Filters) -> bool {
     if let Some(trace) = &filters.trace
         && span.get("traceId").and_then(Value::as_str).unwrap_or("") != trace
@@ -197,7 +197,7 @@ fn passes(span: &Value, name: &str, project: &str, filters: &Filters) -> bool {
 
 /// Parse JSONL `content` into spans, applying `filters`. `source` labels both the
 /// parse-error context and each resulting `Span.source`. A malformed line is a
-/// hard error (Node :113-117); blank lines are skipped.
+/// hard error; blank lines are skipped.
 pub fn parse_spans(content: &str, filters: &Filters, source: &str) -> Result<Vec<Span>> {
     let mut spans = Vec::new();
     for line in content.lines() {

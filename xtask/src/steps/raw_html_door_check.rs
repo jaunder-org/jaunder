@@ -154,7 +154,7 @@ mod tests {
         assert_eq!(violations(src).unwrap().len(), 1);
     }
 
-    /// The fn name bought the old exemption; it buys nothing now.
+    /// A fn name buys nothing: only a per-site marker exempts.
     #[test]
     fn a_formerly_allowlisted_fn_name_grants_nothing() {
         let src = r#"
@@ -297,8 +297,8 @@ mod tests {
         assert!(detail.contains("web/src/posts/render.rs:1"), "{detail}");
     }
 
-    /// An empty tree has no doors and no markers, so there is nothing to fail — the
-    /// staleness class the declared list created is gone with the list.
+    /// An empty tree has no doors and no markers, so there is nothing to fail —
+    /// no declared list means no staleness to report.
     #[test]
     fn an_empty_tree_is_clean() {
         assert_eq!(problems(&[]), None);

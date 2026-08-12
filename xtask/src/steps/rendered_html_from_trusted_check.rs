@@ -23,21 +23,13 @@
 //! whose qualifier cannot be determined — in ordinary code and inside macro token
 //! streams.
 //!
-//! That population has moved twice. Until #778 the gate skipped any
-//! `ContentType::from_trusted` by matching the path's qualifier against a list — a
-//! pattern-decided exemption (ADR-0085 principle 3, *"Grants no automatic exemption
-//! from a pattern. Nothing self-exempts"*) that failed **open** asymmetrically: an
-//! aliased *leaf* stayed guarded, but an aliased *qualifier*
-//! (`use RenderedHtml as ContentType`) handed out the exemption. #778 deleted the
-//! list, correctly, and fell back to the bare leaf ident — which put every other
-//! type's `from_trusted` in the population, costing a marker apiece.
-//!
-//! #790 separated the two questions #778 had run together. Deciding *membership* is
-//! structural — it identifies the door — and is not the same act as *exempting* a
-//! site from it, which is what principle 3 governs. So the gate resolves the
-//! qualifier again, but now by reading what the AST plainly says rather than by
-//! pattern, and it **fails closed** on anything it cannot resolve. See
-//! `docs/adr/0110-gate-population-membership-is-structural.md`.
+//! Deciding *membership* is structural — it identifies the door — and is not the
+//! same act as *exempting* a site from it (ADR-0085 principle 3 governs only the
+//! latter; see `docs/adr/0110-gate-population-membership-is-structural.md`, #790).
+//! The gate resolves the qualifier by reading what the AST plainly says, never by
+//! pattern-matching a name list — a list fails **open** asymmetrically (an aliased
+//! qualifier like `use RenderedHtml as ContentType` hands out the exemption) — and
+//! it **fails closed** on anything it cannot resolve.
 //!
 //! Two consequences follow:
 //!
@@ -61,10 +53,9 @@
 //!
 //! **Macro bodies are scanned** (#333). `syn` itself does not descend into a macro
 //! invocation, so the shared scan walks [`syn::Macro`]'s `.tokens` directly,
-//! recursing through nested `Group`s. That was an accepted limitation until #333
-//! rebuilt `web`'s render layer out of `html!`/`view!` bodies, which is exactly
-//! where the unescaped sink lives — the residual gap the old doc called "the most
-//! plausible" became the ordinary case, so it is no longer acceptable.
+//! recursing through nested `Group`s — `web`'s render layer is built out of
+//! `html!`/`view!` bodies, which is exactly where the unescaped sink lives, so
+//! skipping macros would skip the ordinary case.
 //!
 //! **Unreadable classes** (ADR-0085's honesty obligation) specific to this gate:
 //! resolution reads names, not types, so it can be misled by a chain of renames. The

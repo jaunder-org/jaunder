@@ -513,10 +513,10 @@ mod tests {
         }
 
         // Indentation and the bare `Status:` form are THE discriminating cases:
-        // they are the only two spellings where the old gate parse (column-0
-        // `- Status:` only) and the old `status_token` parse disagreed. Trailing
-        // whitespace is *not* discriminating — the gate already trimmed — so an
-        // implementation that only handled it would pass a weaker test than this.
+        // the only two spellings where a column-0-only parse and a token parse
+        // can disagree. Trailing whitespace is *not* discriminating — the gate
+        // already trims — so an implementation that only handled it would pass a
+        // weaker test than this.
         assert_eq!(
             parsed("# T\n\n- Status: accepted\n"),
             Some(("- Status: accepted", "accepted", true))
@@ -683,10 +683,9 @@ mod tests {
 
     #[test]
     fn out_of_vocab_message_no_longer_advertises_proposed() {
-        // Teeth: with the old five-token constant this message rendered `"proposed"`
-        // verbatim (it formats the vocab with `{:?}`), so a numbered ADR would be
-        // told `proposed` is legal by this rule while the rule above rejected it.
-        // Restore STATUS_VOCAB here and this fails.
+        // Teeth: the message formats the vocab with `{:?}`, so a vocab constant
+        // carrying `proposed` would tell a numbered ADR it is legal while the
+        // rule above rejects it. Restore STATUS_VOCAB here and this fails.
         let problems =
             file_format_problems("0007-a.md", 7, "# ADR-0007: Auth\n\n- Status: accpeted\n");
         assert!(

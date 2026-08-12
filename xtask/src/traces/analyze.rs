@@ -146,7 +146,7 @@ pub struct SpanCoverageRow {
     pub uncovered_pct: f64,
 }
 
-/// One row of the "slowest spans" table (Node `printSlowest` :189-214).
+/// One row of the "slowest spans" table.
 #[derive(Debug, Clone)]
 pub struct SlowSpanRow {
     pub duration_ms: f64,
@@ -159,7 +159,7 @@ pub struct SlowSpanRow {
     pub source: String,
 }
 
-/// One row of "slowest e2e.test spans" (Node `printSlowestE2eTests` :216-249).
+/// One row of "slowest e2e.test spans".
 #[derive(Debug, Clone)]
 pub struct E2eTestRow {
     pub duration_ms: f64,
@@ -170,7 +170,7 @@ pub struct E2eTestRow {
     pub test: String,
 }
 
-/// One row of "E2E test duration by project" (Node `printE2eByProject` :1017-1067).
+/// One row of "E2E test duration by project".
 #[derive(Debug, Clone)]
 pub struct ByProjectRow {
     pub project: String,
@@ -196,7 +196,7 @@ pub struct BootCoverageRow {
     pub dropped: u64,
 }
 
-/// One row of "Trace totals" (Node `printTraceTotals` :1070-1096).
+/// One row of "Trace totals".
 #[derive(Debug, Clone)]
 pub struct TraceTotalRow {
     pub trace_id: String,

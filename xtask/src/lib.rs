@@ -321,9 +321,8 @@ pub enum CoverageCommand {
 pub enum TracesCommand {
     /// Analyze OpenTelemetry JSONL traces exported by the e2e VM collector and
     /// print the report tables (slowest spans, per-test/-project hotspots, trace
-    /// totals). Faithful Rust port of `scripts/analyze-otel-traces`. A manual
-    /// tool — not part of `check`/`validate`. Prints human tables only;
-    /// `--json` is rejected.
+    /// totals). A manual tool — not part of `check`/`validate`. Prints human
+    /// tables only; `--json` is rejected.
     #[command(after_help = "EXAMPLES:\n  \
         # trace files extracted from an e2e capture-<backend>.tar.gz bundle (capture/otel-traces.jsonl):\n  \
         cargo xtask traces analyze sqlite-otel-traces.jsonl postgres-otel-traces.jsonl\n  \
@@ -353,9 +352,8 @@ pub enum TracesCommand {
     },
     /// Build the `{sqlite,postgres}×{chromium,firefox}` e2e VM checks and analyze
     /// their exported OTel traces in one step — the `nix build` orchestration that
-    /// feeds `traces analyze`. Faithful Rust port of `scripts/run-e2e-trace-analysis`.
-    /// A manual tool — not part of `check`/`validate`. Prints human tables only;
-    /// `--json` is rejected.
+    /// feeds `traces analyze`. A manual tool — not part of `check`/`validate`.
+    /// Prints human tables only; `--json` is rejected.
     #[command(after_help = "EXAMPLES:\n  \
         cargo xtask traces run\n  \
         cargo xtask traces run --top 40\n  \

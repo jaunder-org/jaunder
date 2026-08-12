@@ -43,9 +43,8 @@ pub struct BreakdownReport {
     pub crates: Vec<crate::wasm_symbols::CrateBytes>,
 }
 
-/// Human-readable byte size. Mirrors the old Node script's rounding exactly:
-/// whole numbers for bytes and for any value ≥ 10 in its unit, one decimal
-/// otherwise — so the rendered size table stays comparable with the old script.
+/// Human-readable byte size: whole numbers for bytes and for any value ≥ 10 in
+/// its unit, one decimal otherwise.
 pub fn format_bytes(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
     let mut value = bytes as f64;

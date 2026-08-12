@@ -1812,8 +1812,8 @@ mod tests {
 
     #[test]
     fn ascribed_row_get_is_collected() {
-        // Both feed-events mappers had this shape before #715 swept them, so only a
-        // synthetic source can still prove the gate bites here.
+        // No live instance of this shape remains (#715), so only a synthetic
+        // source can prove the gate bites here.
         let src = r#"fn f() { let id: i64 = r.get("id"); }"#;
         assert_eq!(targets(src), vec!["i64"]);
     }
@@ -1907,10 +1907,9 @@ mod tests {
 
     #[test]
     fn every_unapproved_target_is_collected_with_no_special_casing() {
-        // This replaces `bool_and_string_targets_are_not_collected`, which asserted the
-        // opposite. Under #715's rule those were out of population — invisible, and
-        // recorded nowhere. That invisibility is the defect #728 exists to close, so they
-        // are now in population and need a written reason like anything else.
+        // `bool`/`String` targets are in population and need a written reason like
+        // anything else — leaving them invisible and recorded nowhere is the defect
+        // #728 exists to close.
         //
         // Note there is no primitive list anywhere in the rule: `bool`, `String`, `i64`,
         // `u32`, `char` and `Uuid` fail for one reason — nothing approved them.
@@ -2090,11 +2089,10 @@ mod tests {
 
     #[test]
     fn an_unturbofished_struct_literal_field_is_a_failure() {
-        // This test replaces `struct_literal_row_get_is_not_collected`, which asserted the
-        // opposite on the strength of a claim that only holds for `#[derive(FromRow)]`
-        // structs: that the destination field's declaration polices the decode. `Rec` here
-        // is a plain struct, so nothing polices it — the exact shape that hid
-        // `FeedEventRecord.attempts` and `ColumnInfo.name` (#728).
+        // "The destination field's declaration polices the decode" only holds for
+        // `#[derive(FromRow)]` structs. `Rec` here is a plain struct, so nothing
+        // polices it — the exact shape that hid `FeedEventRecord.attempts` and
+        // `ColumnInfo.name` (#728).
         let src = r#"fn f() { Rec { id: r.get("id"), attempts: r.get("attempts") }; }"#;
         assert_eq!(field_failures(src).len(), 2);
         // …and it is NOT also recorded as a decode against some enclosing type.
@@ -2478,8 +2476,7 @@ mod tests {
 
     #[test]
     fn leaf_recursion_reaches_through_wrappers_without_over_matching() {
-        // Replaces `is_i64_family_recurses_without_over_matching`. Same shapes, new rule:
-        // the question is no longer "is any leaf i64" but "is any leaf unapproved".
+        // The question is "is any leaf unapproved", not "is any leaf i64".
         let set = approve();
         let ty: syn::Type = syn::parse_quote!(Vec<(String, Option<PostId>)>);
         assert_eq!(unapproved_leaves(&ty, &set), vec!["String".to_string()]);

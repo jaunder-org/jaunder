@@ -106,7 +106,7 @@ pub fn ensure_hooks_path(dir: &Path) -> Result<bool> {
 }
 
 /// Trimmed stdout of a git command in `dir`; bail on any non-zero exit. The one
-/// place the capture-and-check plumbing (formerly `adr::git_out`) lives.
+/// place the capture-and-check plumbing lives.
 pub(crate) fn output(dir: &Path, args: &[&str]) -> Result<String> {
     let out = at(dir)
         .args(args)

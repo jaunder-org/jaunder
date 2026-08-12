@@ -22,10 +22,9 @@
 //! is **not** policed.
 //!
 //! **The hoisted form is policed too (#696).** Assigning the conversion to a local and
-//! binding that — `let x = i64::from(y); … .bind(x)` — used to evade the scan entirely,
-//! because it only ever looked at the text *after* `.bind(`. `violations` now also
-//! tracks locals bound to a stripping conversion within the enclosing item, so the
-//! evasion closes. Scope resets at a column-0 `}`.
+//! binding that — `let x = i64::from(y); … .bind(x)` — would evade a scan that only
+//! looked at the text *after* `.bind(`, so `violations` also tracks locals bound to
+//! a stripping conversion within the enclosing item. Scope resets at a column-0 `}`.
 //!
 //! **What it still cannot see: a strip laundered through a function parameter.** If the
 //! conversion happens in one function and the `.bind` in another, the binding function
@@ -66,14 +65,11 @@ struct Allowed {
 
 /// The exempt bind-expressions. The `as_ref()` pair each appears in `posts.rs`,
 /// `sqlite/posts.rs`, and `postgres/posts.rs`, and the substring match covers all
-/// three. (`RenderedHtml` was also exempt until #502 gave it a sqlx `Encode` bridge
-/// and its binds became `.bind(&input.rendered_html)`, so it is now policed like any
-/// newtype.)
+/// three.
 ///
-/// **Nothing numeric is exempt.** #686 added two entries for forced `u32 → i64`
-/// widenings (`i64::from(limit)`, `i64::from(offset.value())`); #696 gave those values
-/// `i64`-backed newtypes with declared bounds, so the widenings — and their exemptions —
-/// are gone. The numeric half of this rule is now absolute, not absolute-with-footnotes.
+/// **Nothing numeric is exempt** — the numeric half of this rule is absolute, not
+/// absolute-with-footnotes (#686, #696: bounded `i64`-backed newtypes leave no
+/// widening to exempt).
 ///
 /// **A needle exempts every matching line under [`POLICED_ROOT`], not one site.** That
 /// is what makes it reflow-proof, and it is also the cost: a needle like

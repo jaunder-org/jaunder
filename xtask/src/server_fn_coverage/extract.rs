@@ -11,13 +11,12 @@
 //! 2. its **`uri`** path resolves to an inventory fn's *derived endpoint* (the
 //!    complement).
 //!
-//! **Signal 2 is now masked in practice, and that is worth being explicit about.**
+//! **Signal 2 is masked in practice, and that is worth being explicit about.**
 //! `identify` returns as soon as signal 1 hits, falling through to `uri` only on a
-//! miss — and since #714 *every* server fn carries a span, because the attribute
-//! that declares it also emits the `#[tracing::instrument]`. Signal 2 was once the
-//! only signal for a fn with no instrument attribute; that case can no longer
-//! exist. So a wrong computed endpoint would **not** show up as lost coverage
-//! here: signal 1 would have already claimed the span.
+//! miss — and *every* server fn carries a span, because the attribute that
+//! declares it also emits the `#[tracing::instrument]` (#714). So a wrong
+//! computed endpoint would **not** show up as lost coverage here: signal 1 would
+//! have already claimed the span.
 //!
 //! It is kept anyway, for the reason ADR-0081 records — a single silently
 //! unmatched signal is exactly how this module failed before, and a union of two
@@ -277,9 +276,8 @@ mod tests {
     use crate::traces::parse::{Filters, parse_spans};
 
     // The hand-authored fixture mirrors the span shapes a real capture contains —
-    // notably `__server_<ident>` instrument spans, not bare idents. It once carried
-    // the bare form, which occurs nowhere, so every span-name assertion below was
-    // pinning a fiction while the signal was dead on real data. The reduced real
+    // notably `__server_<ident>` instrument spans, not bare idents (a bare form
+    // occurs nowhere, so asserting on it would pin a fiction). The reduced real
     // capture (`otel-traces-seed.jsonl`, exercised from
     // `steps::server_fn_coverage_check`) is what keeps these shapes honest.
     const SAMPLE: &str = include_str!("testdata/coverage-sample.jsonl");

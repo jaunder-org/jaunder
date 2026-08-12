@@ -13,12 +13,12 @@ use super::analyze::{
     SlowSpanRow, SpanCoverageRow, TargetRow, TraceTotalRow,
 };
 
-/// Format a millisecond value the way the Node reports did — three decimals.
+/// Format a millisecond value with three decimals.
 fn ms(value: f64) -> String {
     format!("{value:.3}")
 }
 
-/// A string column: empty renders as `-` (Node's `value || "-"`).
+/// A string column: empty renders as `-`.
 fn dash(value: &str) -> String {
     if value.is_empty() {
         "-".to_string()
@@ -454,7 +454,7 @@ mod tests {
             ),
             25,
         );
-        // Node main() (:1139-1150) fixes this section order.
+        // The section order is fixed and asserted.
         let order = [
             "Top 25 slowest spans",
             "slowest e2e.test spans",

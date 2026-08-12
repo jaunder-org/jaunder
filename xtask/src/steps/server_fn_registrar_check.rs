@@ -490,8 +490,8 @@ mod tests {
 
     #[test]
     fn registered_entries_takes_the_outer_leaf_of_a_generic_type() {
-        // A turbofish with nested generics must reduce to the OUTER type's leaf,
-        // not `Bar<Baz` (the old first-`>` text scan's bug).
+        // A turbofish with nested generics must reduce to the OUTER type's leaf —
+        // a first-`>` text scan would yield `Bar<Baz`.
         let reg = wrap_reg("server_fn::axum::register_explicit::<web::m::Bar<Baz>>();");
         assert_eq!(
             entries_of(&reg),

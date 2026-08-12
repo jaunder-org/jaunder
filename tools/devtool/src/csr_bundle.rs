@@ -6,10 +6,8 @@
 //!
 //! This is the single implementation of the bundle post-processing, shared by
 //! the host build (`cargo xtask build-csr`) and the Nix `csrWasmBundle`
-//! derivation (#236) — replacing the inline `wasm-bindgen` + `mv` + `sed` the
-//! flake ran, so host and Nix can no longer drift. Byte-identical to those
-//! steps. Wasm-only: the served CSS is committed + rust-embedded
-//! (`server/assets/`), not part of this bundle.
+//! derivation (#236) — so host and Nix cannot drift. Wasm-only: the served CSS
+//! is committed + rust-embedded (`server/assets/`), not part of this bundle.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

@@ -77,11 +77,9 @@ const SINKS: &[&str] = &["inner_html", "set_inner_html"];
 /// maud, never a string that arrived from outside. A marker that cannot say that is
 /// a sink that should not exist.
 ///
-/// (Until #778 the reasons lived here, keyed by enclosing fn with a multiplicity.
-/// `PostDisplay` was the case that forced the count: its two sinks are the anonymous
-/// and authored layouts of the same article, indistinguishable to any key a human
-/// would keep correct. Each now carries its own marker and its own reason, which is
-/// what the count was standing in for.)
+/// (Each sink carries its own marker and its own reason (#778) — a reason list
+/// keyed by enclosing fn cannot distinguish `PostDisplay`'s two sinks, the
+/// anonymous and authored layouts of the same article.)
 const GATE: Gate = Gate {
     step: "html-sink",
     roots: POLICED_ROOTS,
@@ -146,8 +144,7 @@ mod tests {
         assert_eq!(violations(src).unwrap(), vec![]);
     }
 
-    /// The old fn-keyed list exempted `PostDisplay` wholesale at count 2. A name
-    /// buys nothing now.
+    /// A fn name buys nothing: only a per-sink marker exempts.
     #[test]
     fn a_formerly_allowlisted_fn_name_grants_nothing() {
         let src = r#"
@@ -352,8 +349,7 @@ mod tests {
     }
 
     /// An empty tree has no sinks and no markers, so there is nothing to reconcile
-    /// and nothing to fail — the staleness class the old declared list created is
-    /// gone with the list.
+    /// and nothing to fail — no declared list means no staleness to report.
     #[test]
     fn an_empty_tree_is_clean() {
         assert_eq!(problems(&[]), None);

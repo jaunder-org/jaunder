@@ -145,15 +145,10 @@ fn run_probe() -> Result<()> {
         path: tmp.clone(),
     };
 
-    // Dirty an EXCLUDED tracked file so *every* eval runs against a dirty tree.
-    // Rationale (verified against a shallow clone): on a CLEAN worktree nix's flake
-    // git-fetcher walks history (revCount) to resolve the rev, which fails on CI's
-    // shallow checkout — the PR is a merge commit whose parents are grafted away
-    // ("getting Git object <parent>: object not found"). A dirty tree makes nix copy
-    // the working dir and read only HEAD (present), skipping the parent walk.
-    // README.md is filter-excluded (`.md`), so the dirtying is constant and never
-    // perturbs the coverage drvPath. (This is orthogonal to the `git add` staging,
-    // which exists so the *new* probe files are visible at all.)
+    // Dirty an EXCLUDED tracked file so *every* eval runs against a dirty tree:
+    // a clean tree makes nix's flake fetcher walk grafted-away history on CI's
+    // shallow checkout and fail
+    // (docs/adr/drafts/coverage-probe-dirty-tree-workaround.md).
     let readme = tmp.join("README.md");
     let mut readme_bytes = fs::read(&readme).context("reading README.md to dirty it")?;
     readme_bytes.push(b'\n');
