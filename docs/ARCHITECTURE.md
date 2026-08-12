@@ -2085,11 +2085,12 @@ placed by a single litmus test — _where must this code execute?_
 - **`tools/coverage`** — a pure-logic library shared by both sides, with no I/O
   policy of its own ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)).
 
-ADR-0028's original "devtool = in-sandbox, xtask = host" charter has been
-deliberately softened: devtool is now the **shared host/sandbox tool**, and two
-of its subcommands (`run`, `check`) run host-side by design.
-
-<!-- DRIFT vs ADR-0028: the ADR describes devtool as the crate that "runs inside the Nix coverage/e2e build" (adr/0028, Context). `devtool run` and `devtool check` are invoked on the host — by the verify ladder and by humans/agents — so the in-sandbox-only framing no longer matches the code. The litmus test itself (where must this code execute?) still holds. -->
+The "devtool = in-sandbox, xtask = host" split is a litmus test about where code
+_must_ execute, not a ban on running devtool from a shell. ADR-0028's own
+Supplement (#158) extends `devtool run` to the host as the gate-execution
+surface for humans and agents, and exposes `devtoolBin` in the devShell; the
+host verify ladder's use of `devtool check <name>` is ADR-0052's Decision. Both
+host-side subcommands are therefore chartered, not drift.
 
 - **`devtool run -- <cmd>`** is a no-shell single-command runner used both
   in-sandbox and on the host as the gate-execution surface for humans and
@@ -2110,7 +2111,7 @@ of its subcommands (`run`, `check`) run host-side by design.
   ([ADR-0052](adr/0052-devtool-unifies-static-checks.md)). Compiling checks
   (`clippy`, `cargo-deny`) stay in crane derivations plus host StepSpecs
   ([ADR-0052](adr/0052-devtool-unifies-static-checks.md)).
-  <!-- DRIFT vs ADR-0052: the ADR's Decision says "the 7 non-compiling static checks"; the set is now 8 (`tools/devtool/src/check.rs:17` `ALL`). `byte-compile` was added, and the former standalone tsc-deps step folded into `devtool check tsc` (`xtask/src/steps/static_checks.rs:41`, `tools/devtool/src/check.rs:110`). The count in ADR-0052 is stale; the view carries the current inventory. ADR-0052 is edited by a separate task, not here. -->
+  <!-- DRIFT vs ADR-0052: the ADR says "7 non-compiling static checks" twice (`:41`, `:52`); `tools/devtool/src/check.rs:17` `pub const ALL` holds 8. `byte-compile` was added, and the standalone tsc-deps step folded into `devtool check tsc` — see the comment at `xtask/src/steps/static_checks.rs:41-43` and the regression test at `:276-277` asserting no step named tsc-deps survives. The host side calls devtool_check eight times (`static_checks.rs:38-46`, `:98`), and its own doc comment at `:17-18` already says 8. The count in ADR-0052 is stale; the view carries the current inventory. ADR-0052 is edited by a separate task, not here. -->
 
 **xtask is host-only — an enforced invariant.** Nix derivations never invoke
 xtask; the flow is strictly one-directional (host `cargo xtask` → `nix build`).
@@ -2130,23 +2131,21 @@ manifests would otherwise default to resolver 1
 **Workspace layering.** The root workspace's shared crates are target-scoped
 ([ADR-0058](adr/0058-host-crate-layering.md)): `common` is target-agnostic
 (host + wasm, zero host-only cfg carve-outs); `host` holds strictly-host-focused
-shared code; a `client` crate is the reserved future peer for wasm-only shared
-code. `host`'s load-bearing invariant is that it depends on no workspace crate
-except `common` — it may take external infrastructure deps (today `anyhow`,
-`http`, `opentelemetry`, `sqlx`, `tracing` in `host/Cargo.toml`) but never our
-domain/storage abstractions ([ADR-0058](adr/0058-host-crate-layering.md)). The
-`macros` proc-macro crate is orthogonal to that runtime trio — build-time
-tooling compiled for the compiler host, home to all workspace proc-macros: the
-`#[client_only]` identity attribute that `xtask/src/coverage/exempt.rs`
-recognizes and exempts alongside `#[component]`
-([ADR-0062](adr/0062-macros-crate-proc-macro-home.md)), and the
-`StrNewtype`/`IdNewtype` derives
-([ADR-0063](adr/0063-domain-value-newtype-convention.md)). ADR-0062's claim that
-the crate "contributes no gate-measured lines" is out of date: only the expanded
-output in consumer crates escapes measurement — `macros` itself is a workspace
-member, so the coverage source filter auto-admits it and its expansion logic
-(including derive error paths) is measured via in-crate `syn::parse_quote!` unit
-tests in `macros/src/lib.rs`.
+shared code; and `client` is the wasm-only peer
+([ADR-0069](adr/0069-client-crate-wasm-only-home.md)). `host`'s load-bearing
+invariant is that it depends on no workspace crate _above_ it — `common` and the
+build-time `macros` are permitted — and it may take external infrastructure deps
+(`anyhow`, `base64`, `http`, `opentelemetry`, `rand`, `sha2`, `sqlx`, `tracing`)
+but never our domain or storage abstractions
+([ADR-0058](adr/0058-host-crate-layering.md)). The `macros` proc-macro crate is
+orthogonal to that runtime trio — build-time tooling compiled for the compiler
+host, home to all workspace proc-macros including the three newtype derives
+`StrNewtype`, `IdNewtype` and `NumNewtype`
+([ADR-0062](adr/0062-macros-crate-proc-macro-home.md),
+[ADR-0063](adr/0063-domain-value-newtype-convention.md)). `macros` is itself a
+workspace member, so the coverage source filter admits it and its expansion
+logic is measured by in-crate `syn::parse_quote!` tests — ADR-0062 records that
+correction itself (`:76-83`, #412).
 
 **Dependency patching.** The workspace carries one temporary git
 `[patch.crates-io]` entry: `lettre`, routed to a `jaunder-org` fork pinned by
