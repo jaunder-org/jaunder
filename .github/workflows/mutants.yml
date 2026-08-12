@@ -36,17 +36,17 @@ on:
   workflow_dispatch:
     inputs:
       package:
-        description: "Cargo package to scan"
+        description: "Cargo package to scan (`all` is what the schedules use)"
         type: choice
-        default: common
-        options: [common, storage, host, jaunder, macros]
+        default: all
+        options: [all, common, storage, host, jaunder, macros]
       shards:
         description:
-          "How many shards to split it into (blank uses the default 16)"
+          "Override the per-package shard count (blank uses the sized defaults)"
         type: choice
-        # Blank => the plan job's default, which both schedules share. Overriding
-        # this for a one-off run means its results land under a different cache
-        # key and will not be seen by the scheduled runs.
+        # Blank => the per-package defaults below, which both schedules share.
+        # Overriding this for a one-off run means its results land under a
+        # different cache key and will not be seen by the scheduled runs.
         default: ""
         options: ["", "1", "2", "4", "8", "16", "32"]
       full:
@@ -59,12 +59,12 @@ on:
 # One scan at a time. Two concurrent runs would race on the same result cache
 # and each would persist a partial view of the other's work.
 concurrency:
-  group: mutants-${{ inputs.package || 'common' }}
+  group: mutants-${{ inputs.package || 'all' }}
   cancel-in-progress: false
 
 jobs:
   plan:
-    # Builds the shard matrix from the input, because a GitHub matrix cannot be
+    # Builds the package × shard matrix, because a GitHub matrix cannot be
     # computed inline. Without this the `shards` input would be accepted and
     # silently ignored — a knob that lies about what it does.
     name: mutants plan
@@ -74,22 +74,45 @@ jobs:
     runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
-      shards: ${{ steps.plan.outputs.shards }}
-      package: ${{ steps.plan.outputs.package }}
+      jobs: ${{ steps.plan.outputs.jobs }}
       full: ${{ steps.plan.outputs.full }}
     steps:
       - id: plan
         env:
           # Which cron fired, empty for a manual run. A scheduled event cannot
-          # carry inputs, so this is the only way to tell the monthly full run
-          # from the weekly incremental one.
+          # carry inputs — which is exactly why `all` has to be the DEFAULT and
+          # not just an option. When this defaulted to `common`, both crons
+          # resolved to `common` forever and the other four packages were never
+          # scanned on any schedule.
           SCHEDULE: ${{ github.event.schedule }}
           INPUT_FULL: ${{ inputs.full }}
           INPUT_SHARDS: ${{ inputs.shards }}
           INPUT_PACKAGE: ${{ inputs.package }}
         run: |
           set -euo pipefail
-          package="${INPUT_PACKAGE:-common}"
+
+          # Shard counts sized to each package's mutant population, measured by
+          # the discovery loop (.mutants-loop/queue.md): common 580, storage 569,
+          # jaunder 315, macros 109, host 87 — 1660 in all. A flat width would
+          # either split `host` into shards of five mutants, each paying a full
+          # Nix build for a minute of work, or leave `common` in slices too long
+          # for the 6-hour job limit on a full audit.
+          #
+          # Change a number here and that package's result cache is invalidated:
+          # the key includes the width, because `--shard k/n` slices differently
+          # for a different n. That is deliberate — outcomes from a 4-way split
+          # describe different mutants than an 8-way one and must not be mixed —
+          # but it does mean the next run re-tests that package from scratch.
+          declare -A SIZED=(
+            [common]=16 [storage]=16 [jaunder]=8 [macros]=4 [host]=4
+          )
+
+          selected="${INPUT_PACKAGE:-all}"
+          if [ "$selected" = "all" ]; then
+            packages=(common storage jaunder macros host)
+          else
+            packages=("$selected")
+          fi
 
           # Monthly cron (1st of the month) => full audit. Keep this string in
           # step with the `on.schedule` entry above; they are one decision
@@ -99,51 +122,54 @@ jobs:
             full=1
           fi
 
-          # The weekly and monthly runs use the SAME shard count on purpose. The
-          # result cache is keyed by it, because `--shard k/n` slices differently
-          # for a different n — so if the monthly full audit ran at a different
-          # width, its freshly-verified outcomes would land in a cache the weekly
-          # run never reads, and the weekly would go on skipping mutants the
-          # audit had just re-tested. Same width, same cache, one shared state.
-          #
-          # 16 is sized for the full run, which re-tests everything and is the
-          # one at risk of the 6-hour job limit. The weekly run is far cheaper
-          # and merely finishes sooner.
-          shards="${INPUT_SHARDS:-16}"
-
           # Shards are ZERO-indexed: cargo-mutants requires k < n in
           # `--shard k/n`. Emitting 1..n instead silently skipped shard 0 and
           # errored on n/n — and because its invalid-argument exit code (2) is
           # the same one it uses for "found surviving mutants", that looked like
           # a clean run and cost an eighth of every package.
-          matrix=$(seq 0 $((shards - 1)) | jq -R . | jq -sc .)
+          entries=""
+          for pkg in "${packages[@]}"; do
+            n="${INPUT_SHARDS:-${SIZED[$pkg]}}"
+            for k in $(seq 0 $((n - 1))); do
+              entries="$entries$(jq -nc --arg p "$pkg" --argjson k "$k" --argjson n "$n" \
+                '{package:$p, shard:$k, shards:$n}')"$'\n'
+            done
+          done
+          matrix=$(printf '%s' "$entries" | jq -sc '{include: .}')
+          jobs=$(printf '%s' "$entries" | jq -s 'length')
 
           {
             echo "matrix=$matrix"
-            echo "shards=$shards"
-            echo "package=$package"
+            echo "jobs=$jobs"
             echo "full=$full"
           } >>"$GITHUB_OUTPUT"
-          echo "package=$package shards=$shards full=$full schedule='${SCHEDULE:-manual}'"
-          echo "### mutants plan" >>"$GITHUB_STEP_SUMMARY"
-          echo "package \`$package\`, $shards shards, full=$full (trigger: ${SCHEDULE:-manual})" \
-            >>"$GITHUB_STEP_SUMMARY"
+          echo "packages='${packages[*]}' jobs=$jobs full=$full schedule='${SCHEDULE:-manual}'"
+          {
+            echo "### mutants plan"
+            echo
+            echo "packages \`${packages[*]}\` — $jobs shard job(s), full=$full (trigger: ${SCHEDULE:-manual})"
+          } >>"$GITHUB_STEP_SUMMARY"
 
   shard:
     # Start with one package rather than the workspace. 1660 mutants at ~42s is
-    # ~19 hours on the workstation and more on a hosted runner, which does not
-    # fit GitHub's 6-hour job limit at any sensible shard count. Prove the cost
-    # on one package before widening.
-    name:
-      mutants ${{ needs.plan.outputs.package }} ${{ matrix.shard }}/${{
-      needs.plan.outputs.shards }}
+    # ~19 hours of wall clock on the workstation, and more on a hosted runner —
+    # which is why this is sharded across packages rather than run as one
+    # workspace scan that could not fit GitHub's 6-hour job limit at any sensible
+    # width. `web` and `client` stay out: `client` is WASM-only and no host test
+    # reaches it, and `web`'s first pass reported 361 survivors against 157
+    # caught, a ratio that was never credible. See .mutants-loop/queue.md.
+    name: mutants ${{ matrix.package }} ${{ matrix.shard }}/${{ matrix.shards }}
     runs-on: ubuntu-latest
     needs: [plan]
     timeout-minutes: 330 # under GitHub's 360 hard kill, so the upload steps still run
     strategy:
       fail-fast: false # one shard's survivors must not hide another's
-      matrix:
-        shard: ${{ fromJSON(needs.plan.outputs.matrix) }}
+      # Every job here is a fresh Nix build plus its slice of mutants, so the
+      # whole matrix would otherwise saturate the account's runner allowance and
+      # starve the PR checks that people are actually waiting on. This is a
+      # scheduled job that blocks nobody; it can take the extra waves.
+      max-parallel: 16
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@v31
@@ -188,14 +214,12 @@ jobs:
           # The shard count is part of the key: --shard k/n slices differently for
           # a different n, so outcomes from a 4-way split describe different
           # mutants than an 8-way one and must not be restored across them.
-          path:
-            .mutants-ci/${{ needs.plan.outputs.package }}-${{ matrix.shard }}
+          path: .mutants-ci/${{ matrix.package }}-${{ matrix.shard }}
           key:
-            mutants-v1-${{ needs.plan.outputs.package }}-${{
-            needs.plan.outputs.shards }}-${{ matrix.shard }}-${{ github.run_id
-            }}
+            mutants-v1-${{ matrix.package }}-${{ matrix.shards }}-${{
+            matrix.shard }}-${{ github.run_id }}
           restore-keys: |
-            mutants-v1-${{ needs.plan.outputs.package }}-${{ needs.plan.outputs.shards }}-${{ matrix.shard }}-
+            mutants-v1-${{ matrix.package }}-${{ matrix.shards }}-${{ matrix.shard }}-
           save-always: true
 
       - name: Run mutants
@@ -216,16 +240,16 @@ jobs:
           nix develop .#mutants --accept-flake-config -c \
             devtool pg run -- \
             .mutants-loop/ci-shard.sh \
-            "${{ needs.plan.outputs.package }}" \
-            "${{ matrix.shard }}" "${{ needs.plan.outputs.shards }}" \
-            ".mutants-ci/${{ needs.plan.outputs.package }}-${{ matrix.shard }}"
+            "${{ matrix.package }}" \
+            "${{ matrix.shard }}" "${{ matrix.shards }}" \
+            ".mutants-ci/${{ matrix.package }}-${{ matrix.shard }}"
 
       - name: Summarize
         if: always()
         run: |
-          out=".mutants-ci/${{ needs.plan.outputs.package }}-${{ matrix.shard }}/mutants.out"
+          out=".mutants-ci/${{ matrix.package }}-${{ matrix.shard }}/mutants.out"
           {
-            echo "### mutants ${{ needs.plan.outputs.package }} shard ${{ matrix.shard }}/${{ needs.plan.outputs.shards }}"
+            echo "### mutants ${{ matrix.package }} shard ${{ matrix.shard }}/${{ matrix.shards }}"
             echo
             if [ ! -f "$out/outcomes.json" ]; then
               echo "**No outcomes** — nothing was tested. Check the log."
@@ -252,7 +276,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: mutants-${{ needs.plan.outputs.package }}-${{ matrix.shard }}
+          name: mutants-${{ matrix.package }}-${{ matrix.shard }}
           path: |
             .mutants-ci/*/mutants.out/missed.txt
             .mutants-ci/*/mutants.out/caught.txt
@@ -280,36 +304,69 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           pattern: mutants-*
-          # NOT merge-multiple. upload-artifact roots each artifact at the least
-          # common ancestor of the files it matched, which here is the shard's
-          # own `mutants.out` — so every shard's artifact holds a `missed.txt` at
-          # its top, and merging them into one directory would have each shard
-          # overwrite the last. One directory per artifact keeps them apart, and
-          # `results/*/missed.txt` then names all of them.
+          # NOT merge-multiple: each shard's files keep their own directory, so
+          # one shard's missed.txt cannot overwrite another's.
           path: results
       - name: Fail if any mutant survived
+        env:
+          EXPECTED_SHARDS: ${{ needs.plan.outputs.jobs }}
         run: |
           # Judge on artifacts, never on cargo-mutants' exit code: it uses 2 both
           # for "found surviving mutants" and for an invalid argument.
           #
-          # A glob that matches nothing must not read as "no survivors" — that is
-          # a silent pass on an empty result set. Prove the shards reported first.
-          shopt -s nullglob
-          outcomes=(results/*/outcomes.json)
+          # Collect with `find`, NOT a glob. upload-artifact roots an artifact at
+          # the non-wildcard prefix of its search pattern — `.mutants-ci/` — and
+          # not at the least common ancestor of the files it matched. So an
+          # artifact arrives as results/<artifact>/<pkg>-<shard>/mutants.out/,
+          # two levels deeper than the obvious guess. A glob has to hard-code that
+          # depth, and when it guesses wrong it does not error: it matches nothing
+          # and reports zero survivors. That already happened once, in run
+          # 31554388604, where 32 real survivors counted as none. `find` does not
+          # care how deep the tree is.
+          mapfile -t outcomes < <(find results -name outcomes.json)
           if [ "${#outcomes[@]}" -eq 0 ]; then
             echo "::error::no shard artifacts — nothing was tested"
             echo "**No shard results.** Nothing was tested." >>"$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          missed=$(cat results/*/missed.txt 2>/dev/null | grep -c . || true)
-          echo "surviving mutants across all shards: $missed"
+
+          # A missing shard is a hole, not a clean result: the survivors it would
+          # have reported are simply absent, and the count below still looks like
+          # an answer.
+          if [ "${#outcomes[@]}" -ne "$EXPECTED_SHARDS" ]; then
+            echo "::error::${#outcomes[@]} of $EXPECTED_SHARDS shards reported — the rest were never examined"
+            echo "**Incomplete:** ${#outcomes[@]}/$EXPECTED_SHARDS shards reported." >>"$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          count() { find results -name "$1.txt" -exec cat {} + | grep -c . || true; }
+          missed=$(count missed)
+          echo "shards=${#outcomes[@]} caught=$(count caught) missed=$missed unviable=$(count unviable) timeout=$(count timeout)"
+
+          # Which package a survivor is in is the first thing anyone asks, and
+          # the run now spans five of them. The artifact directory carries it.
+          {
+            echo "### mutants: $missed surviving, $(count caught) caught, $(count unviable) unviable"
+            echo
+            for dir in results/mutants-*; do
+              pkg=${dir#results/mutants-}
+              echo "${pkg%-*}"
+            done | sort -u | while read -r pkg; do
+              n=$(find results -path "results/mutants-$pkg-*" -name missed.txt -exec cat {} + | grep -c . || true)
+              echo "- \`$pkg\`: $n surviving"
+            done
+          } >>"$GITHUB_STEP_SUMMARY"
+
           if [ "$missed" -gt 0 ]; then
             {
-              echo "### $missed surviving mutant(s)"
+              echo
+              echo "<details><summary>All $missed surviving mutants</summary>"
               echo
               echo '```'
-              cat results/*/missed.txt
+              find results -name missed.txt -exec cat {} +
               echo '```'
+              echo
+              echo "</details>"
             } >>"$GITHUB_STEP_SUMMARY"
             exit 1
           fi
