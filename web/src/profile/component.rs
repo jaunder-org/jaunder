@@ -16,8 +16,8 @@ pub fn ProfilePage() -> impl IntoView {
     // Client-validated display name and bio (both optional: empty clears them),
     // owned by the component so the bespoke form can `.dispatch` the typed
     // `Update` args — the ADR-0065 direct-bind pattern (mirrors the post
-    // compose/edit forms), replacing the former `<ActionForm>` whose string fields
-    // could not carry validated `Option<DisplayName>`/`Option<Bio>`.
+    // compose/edit forms); an `<ActionForm>`'s string fields cannot carry
+    // validated `Option<DisplayName>`/`Option<Bio>`.
     let dn_field = Field::<DisplayName>::optional();
     let bio_field = Field::<Bio>::optional();
 

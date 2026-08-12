@@ -187,7 +187,7 @@ fn map_media_error(err: &anyhow::Error) -> InternalError {
 }
 
 /// Streams a multipart file upload to storage and returns its stored URL/metadata.
-/// The multipart `#[server]` fn replacing the old `POST /media/upload` glue (#517).
+/// The multipart `#[server]` fn (#517).
 #[macros::server(input = MultipartFormData, skip_all)]
 pub async fn upload(data: MultipartData) -> WebResult<UploadResponse> {
     let auth = require_auth().await?;
@@ -252,7 +252,7 @@ mod tests {
             ErrorKind::Internal
         );
         // A non-`MediaError` failure (e.g. a mid-stream IO fault) downcasts to `None`
-        // and also masks as a server error — the previously-uncovered fallback arm.
+        // and also masks as a server error — the fallback arm.
         assert_eq!(
             map_media_error(&anyhow::anyhow!("io boom")).kind(),
             ErrorKind::Internal

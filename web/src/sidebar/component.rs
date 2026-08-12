@@ -54,8 +54,8 @@ pub fn Sidebar(#[prop(optional)] active: Option<String>) -> impl IntoView {
     let active_key = active.unwrap_or_default();
 
     // The shared session context (#591) is the single source: its `current` signal
-    // is marker-seeded (flash-free for BOTH username and operator chrome, since
-    // `is_operator` now rides in the marker) and the reconcile keeps it current. The
+    // is marker-seeded (flash-free for BOTH username and operator chrome —
+    // `is_operator` rides in the marker) and the reconcile keeps it current. The
     // anonymous sidebar is the pure `markup::render_sidebar` (the SAME code the
     // projector server-renders) injected via `inner_html`, so a seeded first paint
     // and the reactive re-render coincide (flash-free). `display:contents` keeps the

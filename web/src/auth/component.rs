@@ -104,8 +104,8 @@ pub fn LogoutPage() -> impl IntoView {
     });
 
     // What actually paints: a "Logging out…" transient during the round-trip, then on
-    // success leptos_router's redirect->pushState navigates to "/" (the SSR-era full reload
-    // is gone, #591) on the same resolution that fills the action value — so a logout
+    // success leptos_router's redirect->pushState navigates to "/" (no full reload,
+    // #591) on the same resolution that fills the action value — so a logout
     // *failure* (no redirect) is the only case the resolution block below can show (#649).
     view! {
         <Topbar title="Logout".to_string() />

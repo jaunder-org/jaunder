@@ -53,16 +53,13 @@ pub const SPA_SHELL: &str = include_str!("../../../csr/index.html");
 /// The wasm bundle's URL, and the JS glue's. Single source of truth for the boot
 /// artifacts' paths (#866).
 ///
-/// These exist because the paths were previously written out by hand in every
-/// place that needed them — both shells, the projector's boot script, and two
-/// xtask checks — with nothing tying the copies together.
-///
-/// #866 introduced them while trialling a `<link rel="preload">`, where a URL
-/// that had drifted from the `init()` target would not fail but silently
-/// **download the wasm twice**. That preload was measured and reverted, so the
-/// hazard is gone — but the copies remain, and the shell's `init()` target, its
-/// glue `import`, and the projector's boot script are all still asserted against
-/// these constants by the drift guards in this module's tests.
+/// Every consumer — both shells, the projector's boot script, and two xtask
+/// checks — reads these constants, and the shell's `init()` target, its glue
+/// `import`, and the projector's boot script are asserted against them by the
+/// drift guards in this module's tests. Hand-written copies with nothing tying
+/// them together are the hazard (see
+/// docs/adr/drafts/no-wasm-preload.md for the double-download failure a
+/// drifted copy causes).
 pub const WASM_URL: &str = "/pkg/jaunder.wasm";
 /// The wasm-bindgen JS glue's URL. See [`WASM_URL`].
 pub const GLUE_URL: &str = "/pkg/jaunder.js";
@@ -93,18 +90,9 @@ pub fn render_head(seed: &PageSeed) -> Markup {
     Markup::new(html! {
         meta charset="utf-8";
         meta name="viewport" content="width=device-width, initial-scale=1";
-        // NO wasm preload here, and that is a measured decision, not an oversight
-        // (#866). A `<link rel="preload">` for the bundle collapsed the serial
-        // pre-fetch window exactly as intended — firefox 276.2 -> 81.5 ms per
-        // navigation — and bought nothing: the time reappeared as fetch contention
-        // and, unexpectedly, 125 ms MORE `wasm_instantiate` on firefox. Boot total
-        // improved 18.8 ms against a pre-registered floor of 38.8 ms, so the
-        // pre-committed abort rule fired and the preload was reverted.
-        //
-        // Do not re-add it without reading `docs/observability.md` §"#866" and #887
-        // (why delivery changes firefox's instantiate cost at all). If you do
-        // re-add it, `crossorigin` is mandatory: without it firefox downloads the
-        // 2.2 MB bundle twice.
+        // NO wasm preload here — a measured decision with a fired abort rule, not
+        // an oversight (#866; docs/adr/drafts/no-wasm-preload.md). Do not re-add
+        // without reading that draft; `crossorigin` would be mandatory.
         link rel="stylesheet" href="/style/jaunder.css";
         link rel="stylesheet" href="/style/jaunder-themes.css";
         title { (title) }

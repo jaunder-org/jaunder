@@ -80,7 +80,7 @@ pub fn VerifyEmailPage() -> impl IntoView {
     let token = move || query.with(|q| q.get("token").unwrap_or_default());
     // `verify` takes a typed `RawToken`. Parse the URL's token client-side
     // (ADR-0065 pre-validation): a malformed token short-circuits to a validation error
-    // with no server round-trip; a well-formed one is verified server-side as before.
+    // with no server round-trip; a well-formed one is verified server-side.
     let result = Resource::new(token, |raw: String| async move {
         let token = parse_verification_token(&raw)?;
         verify(token).await

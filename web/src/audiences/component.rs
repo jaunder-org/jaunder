@@ -81,8 +81,8 @@ pub fn AudiencesPage() -> impl IntoView {
                                 "Rename, delete, or assign subscribers to each audience."
                             </div>
                         </div>
-                        // Inline `<svg>` (not `<Icon>`) is retained here. Glyph data is shared
-                        // via `Icons::REFRESH`.
+                        // Inline `<svg>` (not `<Icon>`) so the button owns its own
+                        // markup; glyph data is shared via `Icons::REFRESH`.
                         <button
                             type="button"
                             class="j-icon-btn"
@@ -192,7 +192,7 @@ fn CreateAudienceForm() -> impl IntoView {
                     .flatten()
                     .map(|m| view! { <p class="error">{m}</p> })
             }}
-            // Server-action error (e.g. a duplicate name) — unchanged.
+            // Server-action error (e.g. a duplicate name).
             {move || {
                 create_action
                     .value()
@@ -293,7 +293,7 @@ fn MemberChecklist(audience_id: AudienceId) -> impl IntoView {
                 Some(Err(e)) => {
                     // Surface a members fetch error rather than swallowing it into an empty set
                     // (which would misrepresent everyone as a non-member) — consistent with the
-                    // audience list (#346). Stringify at the render site: `sticky` now preserves
+                    // audience list (#346). Stringify at the render site: `sticky` preserves
                     // the structured `WebError`, which is `Display` but not `IntoRender` (#347).
                     view! { <p class="error">{e.to_string()}</p> }
                         .into_any()

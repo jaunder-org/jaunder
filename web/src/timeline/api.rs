@@ -87,8 +87,7 @@ pub async fn list_home_feed(
         )
         .await?;
 
-    // Was a hand-rolled copy of `page_from_rows` — the second place the has-more
-    // rule was spelled out, and the one that could drift from the shared helper.
+    // Via the shared `page_from_rows`, so the has-more rule is spelled once (#696).
     Ok(page_from_rows(rows, page_size, Some(auth.user_id)))
 }
 

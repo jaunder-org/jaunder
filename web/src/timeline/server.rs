@@ -283,7 +283,7 @@ mod tests {
             .await
             .expect("local timeline succeeds");
 
-        // `fetch_posts_by_tag` — site-wide by-tag. This is the site that regressed.
+        // `fetch_posts_by_tag` — site-wide by-tag.
         let mut posts = MockPostStorage::new();
         posts
             .expect_list_posts_by_tag()

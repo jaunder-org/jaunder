@@ -12,9 +12,9 @@ use leptos::prelude::expect_context;
 use std::sync::Arc;
 use storage::{SessionStorage, UserStorage};
 
-// `CookieSettings` now lives in `host` (pure config data); re-export it so the
-// long-standing `web::auth::CookieSettings` path (the `server` crate provides it
-// into leptos context) keeps resolving.
+// `CookieSettings` lives in `host` (pure config data); re-exported so the
+// `web::auth::CookieSettings` path (the `server` crate provides it into leptos
+// context) keeps resolving.
 pub use host::auth::CookieSettings;
 
 // ---------------------------------------------------------------------------

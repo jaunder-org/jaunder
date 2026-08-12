@@ -23,8 +23,7 @@ use crate::topbar::Topbar;
 /// `on_uploaded` / `on_error`, when provided, fire with the media URL or a
 /// human-readable error. When `show_result` is set the widget also renders the
 /// uploaded URL (read-only, click-to-select) and any error inline below the button
-/// — the self-contained mode the compose form uses. (This merges the former
-/// `MediaUploadButton` primitive and `MediaPanel` wrapper into one component.)
+/// — the self-contained mode the compose form uses.
 #[component]
 pub fn MediaUpload(
     /// Called with the `/media/upload/...` URL when the upload succeeds.

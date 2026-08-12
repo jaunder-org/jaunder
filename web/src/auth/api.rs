@@ -7,7 +7,7 @@ use crate::error::WebResult;
 // `Username` / `ProfferedPassword` / `SessionLabel` are ungated: they are wire-arg
 // types of `login`, so the `#[server]`-generated arg struct references them on both
 // the client and server builds. `RawToken` is deliberately *not* here: the session
-// token no longer crosses the wire (#533), so it is a server-only value that the
+// token does not cross the wire (#533), so it is a server-only value that the
 // `#[server]` body infers from `create_session`. The rule is recorded in
 // docs/adr/0107-web-session-establishment-is-cookie-only.md.
 use common::password::ProfferedPassword;

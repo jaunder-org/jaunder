@@ -5,8 +5,8 @@
 //!
 //! The composer renders in two shapes (a compact inline row and the full compose
 //! page) over one set of signals. Bundling them here is what lets each shape be its
-//! own `#[component]` taking a single prop instead of seven, and it removes the
-//! three near-identical `PostInputs` constructions the two shapes used to carry.
+//! own `#[component]` taking a single prop instead of seven, with one `PostInputs`
+//! construction instead of a near-identical copy per shape.
 
 use leptos::prelude::*;
 
@@ -209,7 +209,7 @@ mod tests {
         });
     }
 
-    /// The body is now a validated field, so seeding must leave it consistent: a real
+    /// The body is a validated field, so seeding must leave it consistent: a real
     /// post's body is valid, and the seeded field must say so rather than keeping the
     /// "blank" error `Field::new` seeded at construction. The summary goes through the
     /// same door, for the same reason (#860).
