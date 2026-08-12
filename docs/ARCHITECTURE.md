@@ -34,22 +34,42 @@ client-side-rendered [Leptos] frontend
 storage layer ([ADR-0001](adr/0001-storage-backends.md)), with an Emacs blogging
 client and an AtomPub API as first-class publishing surfaces.
 
-| Crate          | Target      | Responsibility                                                                                                                                  |
-| -------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `common`       | host + wasm | Shared domain logic and types: validated newtypes, rendering, visibility, feed/AtomPub serialization.                                           |
-| `storage`      | host        | Storage traits, record types, SQL migrations, and the SQLite/PostgreSQL backends ([ADR-0019](adr/0019-generic-storage-backend-via-dialect.md)). |
-| `server`       | host        | The `jaunder` binary: Axum router, CLI, background workers, integration tests.                                                                  |
-| `web`          | host + wasm | Leptos components and `#[server]` functions — the UI and its server halves ([ADR-0013](adr/0013-server-submodule-pattern.md)).                  |
-| `csr`          | wasm        | The client-side-rendering entry point: mounts `web` in the browser ([ADR-0041](adr/0041-public-projector-and-csr-client.md)).                   |
-| `host`         | host        | Strictly-host-focused shared code (error carrier, capture, metrics, HTTP infra) ([ADR-0058](adr/0058-host-crate-layering.md)).                  |
-| `macros`       | host        | The workspace's proc-macro home ([ADR-0062](adr/0062-macros-crate-proc-macro-home.md)).                                                         |
-| `test-support` | host        | A seed binary linking `storage` for out-of-process e2e seeding ([ADR-0046](adr/0046-test-support-seed-binary.md)).                              |
+Shared code is split by compile target, not by convenience: `common` is the
+target-agnostic domain crate, `host` is its host-only sibling, and `client` is
+the symmetric wasm-only peer. `host` never compiles to wasm, so it uses
+`std::fs`/`std::env` without the `#[cfg]` gating `common` would demand
+([ADR-0058](adr/0058-host-crate-layering.md)). `client` holds only raw browser
+glue (`web_sys`/`js_sys`/`wasm_bindgen` and wasm-side Leptos plumbing) and no
+domain types; `web` and `csr` depend on `client`, never the reverse
+([ADR-0069](adr/0069-client-crate-wasm-only-home.md)). Proc-macros live apart
+from all three, in `macros`
+([ADR-0062](adr/0062-macros-crate-proc-macro-home.md)).
 
-Outside the workspace: `xtask/` (the dev/CI driver, workspace-excluded and
-host-only) and `tools/` (`devtool`), covered under
-[Development tooling](#development-tooling); `elisp/` (the Emacs client,
+| Crate          | Target      | Responsibility                                                                                                                                                                                                   |
+| -------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `common`       | host + wasm | Shared domain logic and types: validated newtypes, rendering, visibility, feed/AtomPub serialization.                                                                                                            |
+| `storage`      | host        | Storage traits, record types, SQL migrations, and the SQLite/PostgreSQL backends ([ADR-0019](adr/0019-generic-storage-backend-via-dialect.md)).                                                                  |
+| `server`       | host        | The `jaunder` binary: Axum router, CLI, background workers, integration tests.                                                                                                                                   |
+| `web`          | host + wasm | Leptos components and `#[server]` functions — the UI and its server halves, split host/wasm at the file level ([ADR-0070](adr/0070-web-vertical-wasm-only-component-files.md)).                                  |
+| `csr`          | wasm        | The client-side-rendering entry point: mounts `web` in the browser ([ADR-0041](adr/0041-public-projector-and-csr-client.md)).                                                                                    |
+| `host`         | host        | Strictly-host-focused shared code: error carrier, capture dir, auth/token parsing, invites, metrics ([ADR-0058](adr/0058-host-crate-layering.md)).                                                               |
+| `client`       | wasm        | Strictly-browser shared infrastructure: `localStorage`, confirm dialog, DOM primitives, file upload, reactive revalidation, and the CSR performance marks ([ADR-0069](adr/0069-client-crate-wasm-only-home.md)). |
+| `macros`       | build-time  | The workspace's proc-macro home: newtype, `text_enum`, sqlx-bridge and server-fn derives ([ADR-0062](adr/0062-macros-crate-proc-macro-home.md)).                                                                 |
+| `test-support` | host        | A seed binary linking `storage` for out-of-process e2e seeding ([ADR-0046](adr/0046-test-support-seed-binary.md)).                                                                                               |
+
+Every `client` module that touches the browser carries
+`#[cfg(target_arch = "wasm32")]`, so a host build of the crate is an
+all-but-empty rlib with no coverage-measured browser glue. The one exception is
+`client::perf`, whose mark names are plain `&str` data and are therefore pinned
+by host tests ([ADR-0069](adr/0069-client-crate-wasm-only-home.md)).
+
+Two sibling trees are outside the root workspace, each its own cargo workspace:
+`xtask/` (the host-only dev/CI driver, also named in the root
+`exclude = ["xtask"]`) and `tools/` (members `devtool`, `coverage`, `doctests` —
+the in-sandbox tools that run where `xtask` is unavailable). Both are covered
+under [Development tooling](#development-tooling). `elisp/` (the Emacs client,
 [ADR-0031](adr/0031-elisp-separately-tested-subproject.md)) and `end2end/`
-(Playwright), covered in their sections.
+(Playwright) are covered in their sections.
 
 [Axum]: https://github.com/tokio-rs/axum
 [Leptos]: https://leptos.dev/

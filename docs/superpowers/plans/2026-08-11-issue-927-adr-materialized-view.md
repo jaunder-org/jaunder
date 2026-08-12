@@ -128,6 +128,29 @@ ADR list from task 2's worksheet.
 6. Collect domain vocabulary this section's ADRs introduced that `CONTEXT.md`
    lacks. Report the list; do not edit `CONTEXT.md`.
 
+**The superseded-ADR rule — applies to both passes.**
+
+**Never cite a `superseded` ADR as establishing current practice.** Cite its
+successor. A superseded ADR may appear only in an explicitly past-tense or
+historical construction ("ADR-0055's module-level split, superseded by ADR-0070,
+survives in the unmigrated verticals"). The parity gate cannot catch this — it
+only checks that accepted ADRs are _present_ — so it is on you.
+
+Found at task 3, inherited from the parked text, in six places. Note the 0043
+case especially: it is not merely a stale citation, it describes a
+`[patch.crates-io]` / flake-input / crane-override apparatus that has since been
+**deleted outright**, so the Protocols (line ~325) and Development tooling (line
+~1026) sections currently assert machinery that no longer exists.
+
+| Superseded | Successor                          |
+| ---------- | ---------------------------------- |
+| 0013       | 0070                               |
+| 0030       | 0050 (the stateless coverage gate) |
+| 0043       | 0089 — and the machinery is GONE   |
+| 0055       | 0056, itself superseded by 0070    |
+| 0056       | 0070                               |
+| 0074       | 0075                               |
+
 **Pass B — verify.** A _different_ agent, which does not see Pass A's reasoning:
 
 1. Re-check every factual claim in the section against code, independently.
@@ -139,6 +162,13 @@ ADR list from task 2's worksheet.
 
 Pass B's disagreements are resolved before the commit, by reading the code
 yourself.
+
+**Operational note, learned at task 3.** Both agents finished their work and
+went idle **without sending their report**, costing a round-trip each. End every
+section brief with an explicit instruction: _"When you are done, you MUST call
+SendMessage to `team-lead` with your report. Going idle without sending it loses
+your work."_ State the report's required shape in the brief, and tell Pass B to
+lead with what is wrong rather than with what it confirmed.
 
 **Commit:**
 `docs(architecture): rebuild the <section> section of the view (#927)`
@@ -206,9 +236,9 @@ text.
 
 One task and one commit per section, each following **The section brief** above.
 
-- [ ] Task 3 — Workspace. Must add the `client` crate and the separate `tools/`
-      workspace; the parked text predates both and still calls `client`
-      "reserved future" under ADR-0058's framing.
+- [x] Task 3 — Workspace. Added the `client` row and the separate `tools/`
+      workspace; replaced the "reserved future" framing with the actual
+      split-by-compile-target rule. Pass B found no defects.
 - [ ] Task 4 — Storage.
 - [ ] Task 5 — Content model.
 - [ ] Task 6 — Protocols (AtomPub, feeds, WebSub).
@@ -234,6 +264,11 @@ means task 2's worksheet was incomplete, so fix the worksheet too.
 
 This probe is the same computation task 23 encodes as a gate. Reaching zero here
 is what lets task 23 land green.
+
+**Also sweep the opposite direction:** list every citation of a `superseded` ADR
+and confirm each sits in an explicitly past-tense or historical construction,
+never one asserting current practice. See section-brief rule 4b. The gate is
+blind to this.
 
 **This probe cannot detect a false claim** — only a missing citation. It is not
 a substitute for the section briefs' Pass B.
@@ -528,6 +563,16 @@ say so.
   newtype, and storage is where it happens to cross.
 - **0112** (role-tagged site URLs) → Protocols, as part of the published URL
   surface.
+
+### CONTEXT.md vocabulary worksheet
+
+Accumulated by the section passes (brief step 6). This seeds the `CONTEXT.md`
+backfill issue filed at task 16 — it is **not** edited in this branch. Append as
+each section completes; do not deduplicate until task 16.
+
+| Section   | Terms `CONTEXT.md` does not define                                                                      |
+| --------- | ------------------------------------------------------------------------------------------------------- |
+| Workspace | host crate; client crate; target-agnostic crate; wasm-only crate; proc-macro home; CSR performance mark |
 
 ### Inherited `un-ADR'd` flags by section
 
