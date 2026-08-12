@@ -2073,7 +2073,9 @@ placed by a single litmus test — _where must this code execute?_
 
 ADR-0028's original "devtool = in-sandbox, xtask = host" charter has been
 deliberately softened: devtool is now the **shared host/sandbox tool**, and two
-of its subcommands run host-side by design.
+of its subcommands (`run`, `check`) run host-side by design.
+
+<!-- DRIFT vs ADR-0028: the ADR describes devtool as the crate that "runs inside the Nix coverage/e2e build" (adr/0028, Context). `devtool run` and `devtool check` are invoked on the host — by the verify ladder and by humans/agents — so the in-sandbox-only framing no longer matches the code. The litmus test itself (where must this code execute?) still holds. -->
 
 - **`devtool run -- <cmd>`** is a no-shell single-command runner used both
   in-sandbox and on the host as the gate-execution surface for humans and
@@ -2094,19 +2096,22 @@ of its subcommands run host-side by design.
   ([ADR-0052](adr/0052-devtool-unifies-static-checks.md)). Compiling checks
   (`clippy`, `cargo-deny`) stay in crane derivations plus host StepSpecs
   ([ADR-0052](adr/0052-devtool-unifies-static-checks.md)).
-  <!-- un-ADR'd: ADR-0052 chartered 7 non-compiling checks; the set is now 8 — `byte-compile` was added and the former tsc-deps step folded into `devtool check tsc`. -->
+  <!-- DRIFT vs ADR-0052: the ADR's Decision says "the 7 non-compiling static checks"; the set is now 8 (`tools/devtool/src/check.rs:17` `ALL`). `byte-compile` was added, and the former standalone tsc-deps step folded into `devtool check tsc` (`xtask/src/steps/static_checks.rs:41`, `tools/devtool/src/check.rs:110`). The count in ADR-0052 is stale; the view carries the current inventory. ADR-0052 is edited by a separate task, not here. -->
 
 **xtask is host-only — an enforced invariant.** Nix derivations never invoke
 xtask; the flow is strictly one-directional (host `cargo xtask` → `nix build`).
 The flake's source filters exclude `xtask/` (`!hasInfix "/xtask/" path` in
 `flake.nix`), so an accidental `cargo xtask` inside a derivation fails loudly
 rather than running a stale copy, and frequently-edited gate logic never busts
-the coverage/e2e cache ([ADR-0052](adr/0052-devtool-unifies-static-checks.md)).
+the coverage/e2e cache ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)).
 xtask is also excluded from the root cargo workspace (`exclude = ["xtask"]`,
 with its own `[workspace]` in `xtask/Cargo.toml`), and `tools/` is a second
-standalone workspace (`coverage`, `devtool`).
+standalone workspace (`coverage`, `devtool`, `doctests` — `tools/Cargo.toml:3`).
+All three manifests pin `resolver = "3"` explicitly, because the two virtual
+manifests would otherwise default to resolver 1
+([ADR-0104](adr/0104-edition-2024-unsafe-env-and-precise-capturing.md)).
 
-<!-- un-ADR'd: the cargo-workspace exclusions themselves (root `exclude = ["xtask"]`, the separate `tools/` workspace) are stated only in flake.nix comments and ADR asides, never decided in their own ADR. -->
+<!-- GAP: the cargo-workspace exclusions themselves (root `exclude = ["xtask"]`, the separate `tools/` workspace) are stated only in flake.nix comments and ADR asides, never decided in their own ADR. No GitHub issue tracks it (searched jaunder-org/jaunder, all states, 2026-08-11); the nearest is #276, which assumes the tools workspace rather than deciding it. -->
 
 **Workspace layering.** The root workspace's shared crates are target-scoped
 ([ADR-0058](adr/0058-host-crate-layering.md)): `common` is target-agnostic
@@ -2130,13 +2135,62 @@ member, so the coverage source filter auto-admits it and its expansion logic
 tests in `macros/src/lib.rs`.
 
 **Dependency patching.** The workspace carries one temporary git
-`[patch.crates-io]`: `atom_syndication` and `rss` are routed to `jaunder-org`
-forks at pinned revs (root `Cargo.toml`) that raise their quick-xml requirement
-to ≥ 0.41, clearing RUSTSEC-2026-0194/0195 without an advisory ignore. The
-hermetic Nix build resolves the same revs via `flake = false` inputs fed to
-crane's `overrideVendorGitCheckout` (`flake.nix`). The apparatus is deleted once
-upstream releases depend on quick-xml ≥ 0.41
-([ADR-0043](adr/0043-quick-xml-fork-patch.md)).
+`[patch.crates-io]` entry: `lettre`, routed to a `jaunder-org` fork pinned by
+rev (`Cargo.toml:134-135`) until the mailbox-parsing fix lands upstream. It is
+pinned by rev rather than branch so a build input changes only when someone
+changes it here. This entry is recorded in no ADR.
+
+The repository formerly ran a much larger patching apparatus: `atom_syndication`
+and `rss` were routed to forks raising their `quick-xml` requirement, with the
+hermetic Nix build re-resolving the same revs through crane's vendor override
+([ADR-0043](adr/0043-quick-xml-fork-patch.md), now **superseded**). That era is
+over. Upstream releases of both crates now depend on `quick-xml` ≥ 0.41, so the
+fork bridge was retired and AtomPub Atom document I/O was delegated to
+`atom_syndication` ([ADR-0089](adr/0089-upstream-atom-document-io.md)). Nothing
+of the apparatus survives: no fork entries in `[patch.crates-io]`, no
+`flake = false` fork inputs, and no `overrideVendorGitCheckout` in `flake.nix`.
+
+<!-- GAP: the `lettre` fork patch (Cargo.toml:134) is un-ADR'd — the same class of temporary-fork decision ADR-0043 once recorded. -->
+
+**Rust edition and the one `unsafe` seam.** All workspace crates are on edition
+2024 ([ADR-0104](adr/0104-edition-2024-unsafe-env-and-precise-capturing.md)).
+Two consequences are load-bearing for tooling:
+
+- Edition 2024 made `std::env::set_var` / `remove_var` `unsafe` (RFC 3543). The
+  workspace answer is a single audited seam: `common::test_support::with_env`
+  (`common/src/test_support/env.rs`) is the **only** place that names either
+  function, and the only env-related `unsafe` block — verified by grep across
+  all `.rs` sources. It takes one process-global lock for the whole closure,
+  restores prior values on exit including on panic, and ignores lock poisoning.
+  It is deliberately not reentrant.
+- Return-position `impl Trait` now captures every in-scope lifetime (RFC 3498).
+  View helpers that borrow a parameter return `impl IntoView + use<>` — precise
+  capturing (RFC 3617) — so the returned opaque type captures nothing (14 sites
+  across `web/src/*/component.rs`).
+
+Both the resolver and the formatting style are pinned rather than inferred:
+`.rustfmt.toml` sets `edition = "2024"` **and** `style_edition = "2024"`, so a
+future edition move changes the language and not the formatting
+([ADR-0104](adr/0104-edition-2024-unsafe-env-and-precise-capturing.md)).
+
+**Landing changes: the merge queue and its observer.** `main` is behind a GitHub
+merge queue ([ADR-0077](adr/0077-adopt-github-merge-queue.md)): GitHub builds
+each PR combined with the current `main` in a temporary `merge_group` branch and
+merges only if that build is green, so the up-to-date-before-merge treadmill is
+gone while the semantic-conflict guarantee is kept.
+`.github/workflows/ci.yml:11` carries the `merge_group:` trigger that makes the
+required checks run in that context.
+
+Because green checks are only phase one under a queue — and an ejected PR leaves
+the queue silently — xtask owns the observation: `cargo xtask pr watch [N]`
+follows a PR through checks → queue → merged and reports exactly one outcome;
+`cargo xtask pr land [N]` arms the merge and watches it home
+([ADR-0087](adr/0087-xtask-github-pr-observation.md)). The transport is the `gh`
+CLI as a subprocess (`xtask/src/pr/gh.rs`), with `snapshot` turning its JSON
+into typed values and `decide` holding the pure verdict logic (`xtask/src/pr/`).
+The exit code only says merged-or-not; the distinguishing detail is `pr.outcome`
+in the result envelope, where `timed-out` ("GitHub never finished") is
+deliberately distinct from `watcher-error` ("we could not tell").
 
 ## Documentation & decision process
 
