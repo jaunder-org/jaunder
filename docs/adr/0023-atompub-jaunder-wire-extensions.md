@@ -43,8 +43,8 @@ type in `type`, and any `text/*` is carried as inline escaped text exactly like
 `type="text"`.
 
 **2. The mapping is encapsulated in a `format_wire` seam** — two pure functions
-in `server/src/atompub/mapping.rs` (the seam has since moved to
-`common/src/atompub`):
+in `server/src/atompub/mapping.rs` (the namespace and `j:slug` extension
+definitions it consumes live in `common/src/atompub`):
 
 ```rust
 fn wire_to_format(content_type: Option<&str>, default: PostFormat) -> PostFormat;
