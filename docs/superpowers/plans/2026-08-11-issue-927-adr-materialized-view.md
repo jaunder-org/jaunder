@@ -71,6 +71,18 @@ also listed individually further down.
 - **The draft ADR is gitignored and was the sole copy.** It is now backed up at
   `/home/mdorman/src/jaunder/.parked-backup-927/`. Do not delete that directory
   until the PR merges.
+- **SHIP BLOCKER — `promote` MUST run before the branch is pushed.** The view
+  links to `adr/drafts/architecture-view-materialized-from-adrs.md` in several
+  places. `doc-links` resolves targets with `.exists()` on disk
+  (`xtask/src/doc_links.rs:209`), and the drafts pen is gitignored — so those
+  links pass locally, where the file is present, and would **fail in a CI clone,
+  where it is not**. The designed flow already covers this:
+  `cargo xtask adr promote` rewrites every `drafts/<slug>` path-form reference
+  repo-wide to `NNNN-<slug>` and stages the result, so CI never sees a draft
+  link. But it means the ordering is not optional. Sequence at ship: final
+  rebase → `promote` → gate → push → PR. If the branch is ever pushed before
+  `promote`, CI fails on `doc-links` and the cause will not be obvious from the
+  error.
 
 **For agentic workers.** Drive with `jaunder-iterate`; delegate individual
 section tasks (3–14) via `jaunder-dispatch`. Tick checkboxes in real time.
@@ -589,6 +601,8 @@ consumes the DRIFT rows. Append as each section reports.
 | Drift                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Owner   |
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
 | **ADR-0052**: chartered 7 non-compiling checks, the set is now 8.                                                                                                                                                                                                                                                                                                                                                                                                                              | Task 18 |
+| **ADR-0036's addendum** says the branch-protection ruleset requires PRs to be up to date with `main` so the gate runs against the merged tree. ADR-0077 supersedes exactly that: `strict_required_status_checks_policy` goes to `false` and the merge queue tests the combined state on a `gh-readonly-queue/…` branch. The view now cites 0077 alongside 0036. _(Not a defect in either ADR — 0077 states the supersession. Listed so task 18 can check whether 0036 wants a pointer.)_       | Task 18 |
+| **ADR-0039 §3** calls `admin-site` "the lone global-singleton spec". The Playwright config now quarantines **two** — `admin-site` and `invite` — in the per-browser serial `*-admin` projects (`end2end/playwright.config.ts:72-105`).                                                                                                                                                                                                                                                         | Task 18 |
 | **ADR-0003 (`:17`, `:30-31`)** asserts user-uploadable stylesheets "remain architecturally distinct and are served from the storage layer". The feature was never built — no CSS handling in `storage/`, no config key, no path in `server/src`. An `accepted` ADR describing an unimplemented feature as though it shipped. Nearly deleted silently by the section pass; caught by verification.                                                                                              | Task 18 |
 | **ADR-0061 (`:51,:92,:97`)** names `Invalidator::patched`. No such method exists — `Invalidator` has only `new`/`notify`/`track`. The real symbol is a free function in another crate, `client::reactive::patched` (`client/src/reactive.rs:52`). The prose at `web/src/audiences/component.rs:48` repeats the stale name, so the drift is in the ADR _and_ in a code comment.                                                                                                                 | Task 18 |
 | **ADR-0022 line 22** names `auth::generate_token` — zero hits anywhere in the tree, deleted by #458, surviving only in `docs/archive/`. Confirmed independently by two passes. Real drift inside an `accepted` ADR. Live equivalents: `host::token::generate_hashed` (session and reset tokens) and `host::invite::generate` (invite codes).                                                                                                                                                   | Task 18 |

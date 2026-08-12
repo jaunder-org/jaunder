@@ -3,11 +3,11 @@
 This document is the **materialized view** of the repository's architectural
 decision log: the single authoritative statement of the architecture as it is
 _now_, folded from the ADRs in [docs/adr/](adr/) (see
-[ADR-DRAFT](adr/drafts/architecture-view-materialized-from-adrs.md)). The ADRs
-are the immutable events — each records why a decision was made, pinned to its
-moment; this view records what is currently true, and every claim cites the
-decision(s) that established it. Read this to learn the system; open a cited ADR
-only when you need the _why_.
+[the materialized-view ADR](adr/drafts/architecture-view-materialized-from-adrs.md)).
+The ADRs are the immutable events — each records why a decision was made, pinned
+to its moment; this view records what is currently true, and every claim cites
+the decision(s) that established it. Read this to learn the system; open a cited
+ADR only when you need the _why_.
 
 Two conventions keep it honest:
 
@@ -1437,59 +1437,404 @@ stub that signals "not yet implemented"
 `CONTRIBUTING.md` remains the how-to; this section records the architecture of
 the test suites. The gates that run them are the next section.
 
-### Backend-parity & test homing
+### The dual-backend harness
 
-PLACEHOLDER_TESTING_BODY
+The harness — the `Backend` enum, `TestEnv`, per-test DB provisioning, and the
+rstest templates — lives _inside_ `storage`, as the single module file
+`storage/src/test_support.rs` gated
+`#[cfg(any(test, feature = "test-support"))]` (`storage/src/lib.rs:42`)
+([ADR-0033](adr/0033-shared-db-test-harness-crate.md)). `storage`'s own tests
+reach it through `cfg(test)`; external test crates enable the `test-support`
+feature. A separate crate is impossible: it must return `storage::AppState`, so
+`storage`'s tests would dev-depend on a crate that depends on `storage`, and
+`storage`'s own test target then links two distinct instances of itself
+(`E0308: multiple different versions of crate storage`).
+
+There are four templates, not three: `backends` and `backends_matrix` (both
+dual; the second is the `#[values]`-based variant), plus `sqlite_only` and
+`postgres_only` (`storage/src/test_support.rs:418-448`).
+
+A storage test is homed by what it proves
+([ADR-0053](adr/0053-storage-test-homing-and-dual-backend.md)): a backend-common
+contract is written `#[apply(backends)]` and lives in the generic home module
+beside the store it exercises, because a dual-backend test inside a dialect file
+(`storage/src/sqlite/media.rs`) is self-contradictory. A single-backend test is
+_presumed_ a Postgres coverage gap and converted, unless its subject is
+backend-exclusive syntax or introspection — Postgres `CREATE ROLE`, SQLite
+`PRAGMA`/`sqlite_master`. "Error path", "lazy/closed pool", and "the seed SQL is
+written in one dialect" are explicitly not decisive reasons.
+
+The `test-backend-pattern` guard (`xtask/src/steps/test_pattern_check.rs`)
+enforces this over **both** `storage/src/` and `server/tests/`: every
+`#[tokio::test]` must carry a backend template or an exemption marker
+(`// guard:no-backend — <reason>`). It also checks placement — a dual template
+inside a dialect directory, or a mismatched single template, is an error — and
+requires a `// reason:` on a single-backend keep. Plain synchronous `#[test]`
+units are never flagged.
+
+The same reasoning governs test doubles
+([ADR-0103](adr/0103-prefer-real-harness-over-mirroring-fake.md)): when a fake
+would have to reproduce backend behaviour to be useful, use the real harness
+instead. `InMemorySiteConfig` was deleted for that reason and its tests became
+dual-backend. `MockSiteConfigStorage` stays, because its call sites assert
+_non-interaction_ — a bare `::new()` panics if anything calls it, an assertion a
+real store cannot express.
+
+Test-only fault-injection hooks are gated on
+`#[cfg(any(test, feature = "test-utils"))]`, not bare `#[cfg(test)]`, so
+cross-crate integration tests can drive them dual-backend
+([ADR-0026](adr/0026-test-fault-injection-hooks-feature.md); the live hook is
+`hash_password`'s at `storage/src/helpers.rs:392`). Note that `test-utils` and
+`test-support` are two different features: `test-utils` carries the mocks and
+the injection hooks, `test-support` carries the harness.
+
+### Server integration tests
+
+The server integration tests are one binary, not six
+([ADR-0067](adr/0067-server-integration-tests-one-binary.md)): `autotests` is
+off and a single `[[test]]` target points at `server/tests/main.rs`, which
+declares `mod helpers;` once and one module per subsystem (`atompub`, `feed`,
+`misc`, `projector`, `storage`, `web`). `helpers` therefore compiles once, and
+six crate-level `#![expect(clippy::unwrap_used, clippy::expect_used)]` collapse
+into the one at `server/tests/main.rs:9`. The accepted cost is lost build
+isolation — a compile error in any subsystem fails the whole target.
+
+Backup is a cross-backend _contract_ (a portable dump), so its tests are homed
+here rather than in `storage`
+([ADR-0054](adr/0054-backup-test-homing-and-uniform-restore-failure.md)):
+`server/tests/misc/commands.rs` holds the per-backend round-trips and negatives,
+`server/tests/misc/backup_interop.rs` the cross-backend hops and the four-hop
+`postgres→sqlite→postgres→sqlite` cycle — seeded from Postgres on purpose, so
+every timestamp is pinned at microsecond precision from the first store and both
+same-backend dump pairs are byte-comparable. A constraint-violating restore
+fails uniformly on both backends: `BackupError::ConstraintViolation` with the
+target unmodified (`storage/src/backup.rs:98`; Postgres maps its SQLSTATE class
+at `storage/src/postgres/backup.rs:28`).
+
+### The e2e suite
+
+Each e2e check is a NixOS-test VM running Playwright against a real served
+instance, one derivation per `{backend}×{browser}` combo (`mkE2eCombo`,
+`flake.nix:969`). CI runs `cargo xtask validate --no-e2e` in one job plus a
+`{sqlite,postgres}×{chromium,firefox}` matrix — each job
+`cargo xtask e2e <backend> <browser>` — aggregated by an `e2e-gate` job, so
+branch protection needs two stable names
+([ADR-0034](adr/0034-ci-e2e-matrix-distribution.md)). `e2e-gate` also requires
+the separate `elisp-integration` job (`.github/workflows/ci.yml:162`). Local
+`cargo xtask validate` builds the `e2e-checks` aggregate instead: the same
+derivations on one machine.
+
+`end2end/playwright.config.ts` is the one config, loaded verbatim by both the VM
+and the host loop; the only host/VM differences are invocation flags set by the
+host driver ([ADR-0051](adr/0051-single-playwright-config.md)) —
+`--reporter=html,line`, `PLAYWRIGHT_HTML_OPEN=never`, and
+`JAUNDER_E2E_WORKERS=1` (the host serves a debug CSR build; the VM keeps the
+config default of 2). The host loop is `cargo xtask e2e-local`
+(`xtask/src/steps/e2e_local.rs`), which owns the whole lifecycle: build, spawn
+`jaunder serve` on an ephemeral port, seed, run Playwright, tear down.
+
+Specs are parallel-safe by construction, via per-test identity fixtures in
+`end2end/tests/fixtures.ts`
+([ADR-0039](adr/0039-e2e-parallelism-via-per-test-identity-fixtures.md)): `user`
+provisions a uniquely-named account out of band, `mailbox` is a recipient-scoped
+cursor-tracked mail waiter, `verifiedUser` adds the verification flow. Specs
+that mutate the global site-config singleton are quarantined in per-browser
+serial `*-admin` projects that run after the main projects — today that is
+**two** specs, `admin-site` and `invite`
+(`end2end/playwright.config.ts:72-105`).
+
+<!-- DRIFT vs ADR-0039: §3 calls `admin-site` "the lone global-singleton spec".
+`invite.spec.ts` has since joined the quarantine, so the ADR's "lone" is stale. -->
+
+The config also carries a `webkit` project, but the gate never runs it: both
+`flake.nix:963-966` and the CI matrix enumerate chromium and firefox only.
+Timeout budgets are stated for Chromium and scaled per browser
+([ADR-0012](adr/0012-environment-aware-timeouts.md)) — `slowBrowserTimeoutMs`
+for an individual wait and the ambient whole-test budget,
+`slowBrowserFirstNavigationTimeoutMs` for the coldest navigation.
+
+Two rules bound what a spec may do to the page. First, authentication is
+provisioned by seeding, never by driving the UI
+([ADR-0098](adr/0098-e2e-seeded-auth.md)): `test-support seed-user` /
+`create-session` mint the account and session, the cookie comes from
+`host::auth::session_cookie_header` and the marker from
+`common::session_user::encode_marker` — neither artifact is re-spelled in
+TypeScript — and the helpers (`signInAsNewUser`, `signInAs`) do not navigate.
+Second, each page performs exactly one document load, its entry
+([ADR-0111](adr/0111-e2e-one-boot-per-page.md)): the `registeredPage` fixture
+takes the entry path from the test and throws on a second call, all later
+movement is in-app, and `end2end/tests/bootBudget.ts` enforces the per-`Page`
+budget — raising at the next budget-aware call where it can, and sweeping the
+rest at teardown (`takeBudgetFailures`).
+
+The suite does not pre-warm ([ADR-0099](adr/0099-e2e-does-not-pre-warm.md)).
+There is no warmup navigation, no `JAUNDER_E2E_WARMUP*` setting and no
+`e2e.warmup` span, so every test's first navigation is a genuine cold load. A
+once-per-worker warmup is not a shortcut around this: Playwright mints a fresh
+context per test and the HTTP cache is not shared across `browser.newContext()`.
+
+The suite is a zero-panic gate ([ADR-0032](adr/0032-e2e-zero-panic-gate.md)):
+each VM testScript copies the `jaunder.service` journal into the check's `$out`
+and asserts it contains no `panicked at` line, default-deny via an explicit
+`allowed_panics` list, empty today (`flake.nix:603`). A panic therefore fails
+the _derivation_ and can never be cached green, and the journal is an artifact
+on every run, fresh or cached.
+
+Diagnostics are captured before the check is allowed to fail
+([ADR-0037](adr/0037-e2e-failure-diagnostics-capture.md)):
+`trace: "retain-on-failure"` and `screenshot: "only-on-failure"`
+(`end2end/playwright.config.ts:62`), and the shared `e2eRunAndCapture` helper
+(`flake.nix:650`) runs Playwright capturing its exit, streams the line-reporter
+output into `build.log`, copies every artifact out of the VM unconditionally,
+and only then asserts the exit. On a failed build xtask rescues the bundle from
+the `--keep-failed` outPath into `.xtask/diagnostics/<check>/`
+(`xtask/src/steps/nix.rs:421`), best-effort so a copy failure can never fail a
+gate.
+
+Out-of-process state manipulation — seeding, fixture users, mail reset — goes
+through the dedicated `test-support` workspace binary, which links the real
+crates and drives the genuine storage code paths, never a production CLI or HTTP
+surface and never hand-written per-backend SQL
+([ADR-0046](adr/0046-test-support-seed-binary.md)). The shipped binary links
+`storage` with only the lightweight `seed-posts` feature; the heavy harness is a
+dev-dependency for its own smoke tests (`test-support/Cargo.toml:16,32`).
+Capture streams write well-known filenames (`mail.jsonl`, `websub.jsonl`,
+`diag.log`) under one `JAUNDER_CAPTURE_DIR`, lifted per combo as a tarball
+([ADR-0057](adr/0057-e2e-capture-dir-contract.md) — see observability).
+
+Retries are env-driven and default to 0; the CI/`validate` run sets
+`JAUNDER_E2E_RETRIES=1`, so a test that fails then passes is reported `flaky`
+rather than failing the check, with the JSON report still recording it
+(`end2end/playwright.config.ts:11-17`; decided in #621, not in an ADR).
+
+### Elisp testing
+
+`elisp/` is a first-class, separately-tested subproject
+([ADR-0031](adr/0031-elisp-separately-tested-subproject.md)): host `ert` and
+`elisp-fmt` steps run in both `check` (Fix) and `validate` (Check), the latter
+as a `devtool check` step in the `static-checks` derivation
+([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
+`xtask/src/steps/static_checks.rs:44`); one `emacsForCi` toolchain
+(`flake.nix:563`) serves both. Elisp is exempt from the Rust coverage gate,
+which cannot instrument it.
+
+Live client behavior — transport, auth, publish and media round-trips — runs
+against a real server through the self-booting harness
+([ADR-0035](adr/0035-elisp-live-integration-harness.md)):
+`jaunder-test--with-live-server`
+(`elisp/test/jaunder-integration-helper.el:222`) spawns the server, discovers
+the port from the `runtime.json` file `serve` writes, and provisions credentials
+via `jaunder app-password-create`. The suite
+(`elisp/test/jaunder-*-integration.el`, driven by
+`elisp/scripts/run-integration-tests.el`) runs hermetically as the
+`e2e-elisp-integration` nixosTest — which joins the `e2e-checks` aggregate and
+is also its own CI job — and host-side via `JAUNDER_TEST_BINARY` for fast
+iteration.
 
 ## Verification gates
 
 ### The verify ladder & git-enforced gate
 
-The ladder has two rungs, both driven by `xtask` (`xtask/src/lib.rs`):
-`cargo xtask check` runs the host static checks in Fix mode (auto-fixing
-formatters), the repo-shape guards, the host tests, and — unless `--no-test` —
-the Nix coverage check; `cargo xtask validate` runs the same set verify-only,
-plus — unless `--no-e2e` — the full e2e aggregate. Enforcement is git-native
-([ADR-0029](adr/0029-git-enforced-verify-gate.md)): `.githooks/pre-commit` runs
-a single `cargo xtask check` and, if the run changed the tree, fails and asks
-the author to restage — since the coverage gate went stateless this fires only
-on formatting fixes ([ADR-0050](adr/0050-stateless-coverage-gate.md));
-`.githooks/pre-push` runs `cargo xtask validate --no-e2e`. `validate` refuses a
-dirty working tree unless `--allow-dirty`, making pre-push the one point proving
+The ladder has two rungs, both driven by `xtask` (`xtask/src/lib.rs:452`,
+`:487`):
+
+- **`cargo xtask check`** runs the host static checks in **Fix** mode
+  (formatters auto-fix), then every repo-shape and type-safety gate, then the
+  host unit tests, and — unless `--no-test` — the Nix `coverage` and `doctests`
+  derivations.
+- **`cargo xtask validate`** runs the same set **verify-only**, adds
+  `wasm-budget` (kept out of `check` because it costs a `nix build .#site`,
+  #836), and — unless `--no-e2e` — the e2e aggregate.
+
+Enforcement is git-native ([ADR-0029](adr/0029-git-enforced-verify-gate.md)).
+`.githooks/pre-commit` runs a single `cargo xtask check`, compares
+`git status --porcelain` before and after, and fails when the run changed the
+tree, so the author restages consciously rather than having the fix folded in
+silently; since the coverage gate went stateless this fires only on formatting
+fixes ([ADR-0050](adr/0050-stateless-coverage-gate.md)). `.githooks/pre-push`
+runs `cargo xtask validate --no-e2e`. `validate` opens with a `clean-tree`
+precheck that refuses a dirty tree unless `--allow-dirty` and returns before any
+expensive step (`xtask/src/lib.rs:801`), making pre-push the one point proving
 _what was measured == the committed tip == what CI sees_. Every `cargo xtask`
 run self-heals `core.hooksPath` to the tracked, relative `.githooks`
-(`xtask/src/git.rs`). `SKIP_PRE_COMMIT=1` / `SKIP_PRE_PUSH=1` are deliberate
+(`xtask/src/git.rs:97`). `SKIP_PRE_COMMIT=1` / `SKIP_PRE_PUSH=1` are deliberate
 local escapes; CI is the non-bypassable authority.
 
 The heavy checks are Nix flake check derivations — the hermetic layer. xtask
-realizes each via `nix build -L --keep-failed --out-link .xtask/gcroots/<check>`
-(`xtask/src/steps/nix.rs`): cachix-cached (an unchanged re-run is a
+realizes each via
+`nix build -L --keep-failed --accept-flake-config --out-link .xtask/gcroots/<check>`
+(`xtask/src/steps/nix.rs:361`): cachix-substituted (an unchanged re-run is a
 substitution) and GC-rooted by the out-link, so garbage collection cannot evict
-a warm gate. xtask itself is host-only; Nix never invokes it back
-([ADR-0034](adr/0034-ci-e2e-matrix-distribution.md)).
+a warm gate. Each heavy check is a **producer/consumer pair** — `nix-coverage` +
+`nix-coverage-gate`, `nix-doctests` + `nix-doctests-gate` — where the producer
+is contractually unable to fail and the verdict is read from the sandbox's
+`status.json` (`xtask/src/steps/nix.rs:19`, `:54`). xtask itself is host-only;
+Nix never invokes it back ([ADR-0034](adr/0034-ci-e2e-matrix-distribution.md)).
 
-<!-- un-ADR'd: the ladder also carries sequence_check and host_tests steps (xtask/src/steps/),
-recorded in no ADR. -->
+### What the ladder actually runs
+
+In order, after `static-checks` (`fmt`, `leptosfmt`, `prettier`, `tsc`,
+`elisp-fmt`, `ert`, `byte-compile`, `cargo-deny`, `clippy`, `wasm-clippy`,
+`tools-fmt`/`tools-clippy`, `xtask-fmt`/`xtask-clippy`), both rungs run the same
+host steps (`xtask/src/lib.rs:457`-`:479`):
+
+| Step                                                       | Guards                                                    |
+| ---------------------------------------------------------- | --------------------------------------------------------- |
+| `identifier-collisions`                                    | duplicate ADR/migration number prefixes, migration parity |
+| `adr-format`, `adr-readme-parity`                          | ADR front-matter shape and the README table               |
+| `doc-links`                                                | intra-doc link targets                                    |
+| `test-backend-pattern`                                     | dual-backend storage test shape                           |
+| `server-fn-registrar`                                      | every `web` `#[server]` fn is in the test registrar       |
+| `server-fn-tracing`                                        | each server fn's instrumentation                          |
+| `server-fn-coverage`                                       | static lane of the flow-coverage snapshot                 |
+| `traced-context`                                           | context propagation                                       |
+| `proffered-secret`, `proffered-filename-position`          | untrusted-input handling                                  |
+| `no-full-reload`                                           | SPA navigation                                            |
+| `e2e-goto-wrapper`, `e2e-scaffold`                         | e2e harness shape; no committed `e2eSalt`                 |
+| `target-arch-placement`                                    | host/wasm split at module wiring only                     |
+| `thin-components`                                          | `#[component]` control-flow budget                        |
+| `sqlx-newtype-bind`, `sqlx-newtype-decode`                 | newtypes at the SQL boundary                              |
+| `doctest-fences`                                           | the doctest population Nix cannot reach                   |
+| `rendered-html-from-trusted`, `raw-html-door`, `html-sink` | the three XSS doors                                       |
+| `xlang-literal`                                            | Rust/TypeScript literal agreement                         |
+| `xtask-tests`, `tools-test`                                | xtask's and `tools/`'s own unit tests                     |
+
+<!-- un-ADR'd: `host_tests` (`xtask-tests`, `tools-test`) is recorded in no ADR. -->
+
+### How a gate is built
+
+Three decisions shape every static gate above, and they were each paid for by a
+gate that reported green for the wrong reason.
+
+**A gate enumerates; it does not search.**
+[ADR-0085](adr/0085-static-type-safety-gates-enumerate.md): a check that hunts
+for the spelling its author anticipated can only confirm that hypothesis. So a
+gate defines its population **structurally** — from what the AST plainly says —
+denies by default, grants no automatic exemption from a pattern, scopes each
+exemption to a single site (stating multiplicity where sites are genuinely
+indistinguishable), parses rather than scans when the invariant spans lines, and
+fails on input it cannot read. It also states, in its own module docs, what it
+does not claim to cover.
+
+**Membership is structural and fails closed.**
+[ADR-0110](adr/0110-gate-population-membership-is-structural.md) separates two
+operations that look alike: deciding whether a site is _in_ the population, and
+_exempting_ one that is. Only the second needs a human. A gate may therefore
+read a path qualifier, a file's `use` bindings, or an enclosing `impl`'s
+self-type to identify the door it guards — provided a site it cannot resolve (a
+glob import, a generic parameter, a macro body) **stays in the population**.
+Obscuring a qualifier buys a gate failure, not an exemption. The three XSS gates
+share one traversal implementing this (`xtask/src/steps/ident_gate.rs`), so a
+fix cannot land in two copies out of three.
+
+**An exemption is a marker at the site.**
+[ADR-0094](adr/0094-gate-exemptions-in-source-markers.md): the form is
+`// <gate-step-name>:allow <reason>`, on the line **immediately above** the site
+— a position chosen because it was measured, not preferred. Written trailing, 7
+of 12 live markers were relocated by `rustfmt`/`leptosfmt`; written above, all
+twelve stayed put. A reason is required, block form does not exist, the marked
+line must hold exactly one site of that gate, and an orphan marker fails. The
+token is derived from the gate's step name, so it cannot drift; it is per-gate,
+because one line can belong to two populations.
 
 ### Coverage gate
 
 The coverage verdict is **stateless** — a pure function of
 `(coverage report, source tree)`, with no committed baseline, manifest, or merge
-driver ([ADR-0050](adr/0050-stateless-coverage-gate.md), superseding the
-baseline/re-anchor lineage of
-[ADR-0030](adr/0030-coverage-reanchor-text-identity.md)). One workspace-wide
-instrumented nextest pass runs in the Nix `coverage` derivation with an
-ephemeral PostgreSQL live for the whole run; the gate (`xtask/src/coverage/`)
-then applies: structural exemptions for `#[component]` bodies (CSR UI is
-validated by the e2e matrix, never host-side) and for `unreachable!("msg")` with
-a non-empty message (self-re-flagging: reaching it panics the test) — both
-fail-closed; `// cov:ignore` (line or `cov:ignore-start`/`-stop` block) as the
-sole manual acceptance path, reviewable in the diff where it lives; and a
-per-function CRAP threshold T = 30, overridable only by
-`// crap:allow: <reason>`. A tripwire fails the gate if any _covered_ line falls
-inside an exempt span, enforcing the "native tests never render components"
-assumption. The coverage source is bounded to cargo sources, enforced by a
-`drvPath` probe (`cargo xtask coverage probe-source`, run in CI).
+driver ([ADR-0050](adr/0050-stateless-coverage-gate.md)). It replaced an earlier
+stateful ratchet that re-anchored a committed baseline by text identity
+([ADR-0030](adr/0030-coverage-reanchor-text-identity.md), superseded). The Nix
+`coverage` derivation produces the instrumented report; the host-side gate
+(`xtask/src/coverage/`) then applies:
+
+- **One structural exemption**: a literal `unreachable!("msg")` with a non-empty
+  message. It needs no marker because it is self-re-flagging — reaching the line
+  panics the test, so no report is produced — and recognition is fail-closed
+  (`mac.path.is_ident("unreachable")`, so `std::unreachable!` and aliases stay
+  measured; `xtask/src/coverage/exempt.rs:57`). The `#[component]` exemption
+  this gate once carried was **retired** (#520): components now live in
+  wasm-only `component.rs` files
+  ([ADR-0070](adr/0070-web-vertical-wasm-only-component-files.md)), so their
+  lines never host-compile and never enter the denominator at all.
+- **A tripwire**: the gate fails if any _covered_ report line falls inside an
+  exempt span. With the `#[component]` arm gone it now protects the
+  `unreachable!` exemption only — a covered `unreachable!` means the premise is
+  violated.
+- **`// cov:ignore`** (line, or a `cov:ignore-start`/`-stop` block) as the sole
+  manual acceptance path, reviewable in the diff where it lives.
+- **A per-function CRAP threshold of 30**, exclusive, waived only by an
+  in-source `crap:allow` within the function's span
+  (`xtask/src/coverage/crap.rs:32`).
+
+The coverage source is bounded to cargo sources, enforced by a `drvPath` probe
+in both directions — an excluded file must not change it, an instrumented `.rs`
+must (`xtask/src/coverage/probe.rs`) — run in CI as
+`cargo xtask coverage probe-source` (`.github/workflows/ci.yml:52`).
+
+### Doctest gate
+
+Running the doctests is half the gate; the other half is proving the run saw
+every fence
+([ADR-0095](adr/0095-doctest-gate-enumerates-the-fence-population.md)). The
+scanner enumerates fences with `syn` and reconciles them against the run **in
+both directions**: an unmatched fence means a proof was never evaluated, an
+unmatched run entry means the scanner's own population shrank. The fence
+vocabulary is closed to three exact strings — plain, `compile_fail`, `text` —
+because `ignore` is collected and reported by rustdoc and would read as a
+one-word self-exemption. Every `compile_fail` must carry a `#`-hidden prelude
+whose every line appears in a plain fence **in the same doc comment**; the run
+is `cargo test --workspace --doc`, never package-scoped. The population splits
+across two steps: the Nix `doctests` derivation covers the workspace, and the
+`doctest-fences` step covers `xtask/` and `tools/`, which the flake's source
+filter excludes (`xtask/src/steps/doctest_fences.rs`). Doctests feed no
+coverage: `llvm-cov --doctests` is unstable, so `--doc` runs outside
+instrumentation.
+
+### Server-fn gates
+
+Two gates guard the `#[server]` surface from opposite ends, both drawing their
+inventory from one `syn` enumerator.
+
+`server-fn-registrar` ([ADR-0066](adr/0066-server-fn-test-registrar-guard.md))
+exists because test binaries link `web` as an rlib, and dead-code elimination
+drops each `#[server]` macro's `inventory`-based auto-registration. One
+hand-maintained registrar (`server/tests/helpers/mod.rs`) is therefore the sole
+list, registration is **mandatory** with no per-fn opt-out, and the gate fails
+on any `web` `#[server]` fn missing from it, matching on `(vertical, leaf)`. It
+checks only the missing direction — a stale entry already fails to compile.
+
+`server-fn-coverage` ([ADR-0081](adr/0081-empirical-server-fn-flow-coverage.md))
+answers a question line coverage cannot: which server entry points a real
+browser session drives. The claim is **derived from evidence, not asserted** —
+the hit set is extracted from the OTLP traces a passing `sqlite × chromium` e2e
+run emits, matched forward from the inventory by `#[tracing::instrument]` span
+name plus `code.namespace`. A documentary convention was rejected precisely
+because a doc naming a spec that never touches the fn would stay green forever.
+The gate has two lanes (`xtask/src/steps/server_fn_coverage_check.rs`): a static
+lane in `check`/`validate --no-e2e` that reads only committed files, and an e2e
+lane (`server-fn-coverage-regenerate` / `-verify`) that runs on the per-combo
+`cargo xtask e2e sqlite chromium` path only.
+
+### Component thinness and cross-language literals
+
+`thin-components` ([ADR-0086](adr/0086-enforced-thin-component-budget.md))
+enforces the premise the coverage gate rests on. A `#[component]` body fails
+above **2** units of raw Rust control flow on either of two surfaces — _setup_
+(counted over the AST) and _view_ (counted over the `view!` token stream, since
+`syn` cannot see inside a macro). Leptos's declarative `<Show>`, `<For>`, and
+child components cost nothing, which makes the cheapest fix the idiomatic one.
+There is **no `thin:allow`**: more budget is a design conversation.
+
+`xlang-literal` ([ADR-0109](adr/0109-cross-language-literal-agreement.md))
+covers the few constants that cannot be declared once because no import spans
+their boundary — the CSR mount marker, the boot-mark prefix. A declared table of
+pairs names each site by file, an **anchor** (the syntax introducing the
+literal, never its value — a counterpart comment quotes the value, so a
+value-anchor would let prose change the verdict), and the opening quote. The
+anchor locates; only exact string inequality fails. Zero anchor matches, more
+than one, or an unreadable file are all hard failures, because a locator that
+has quietly stopped locating is the one thing this gate must never report as
+green.
 
 ## Development tooling
 
@@ -1584,26 +1929,30 @@ upstream releases depend on quick-xml ≥ 0.41
 The documentation architecture is event-sourced: ADRs in `docs/adr/` are
 append-only decision events, and this document — `docs/ARCHITECTURE.md` — is the
 materialized view folded from them
-([ADR-DRAFT](adr/drafts/architecture-view-materialized-from-adrs.md)). An ADR's
-Decision text is never edited to track the present; when a decision changes, a
-new ADR supersedes it with reciprocal pointers. In-place ADR edits are limited
-to metadata and navigation (status lines, moved pointers, short past-tense
-annotations), and any new addendum is written in past tense from birth — "as of
-<date>, Y held" — never as a present-tense patch. The view is kept current by
-two disciplines: shipping an ADR updates `ARCHITECTURE.md` (and `CONTEXT.md`
-when the ubiquitous language changes) in the same change, and a periodic replay
-audit re-derives the view from the log plus the code to catch un-ADR'd drift
-([ADR-DRAFT](adr/drafts/architecture-view-materialized-from-adrs.md)).
+([the materialized-view ADR](adr/drafts/architecture-view-materialized-from-adrs.md)).
+An ADR's Decision text is never edited to track the present; when a decision
+changes, a new ADR supersedes it with reciprocal pointers. In-place ADR edits
+are limited to metadata and navigation (status lines, moved pointers, short
+past-tense annotations), and any new addendum is written in past tense from
+birth — "as of <date>, Y held" — never as a present-tense patch. The view is
+kept current by two disciplines: shipping an ADR updates `ARCHITECTURE.md` (and
+`CONTEXT.md` when the ubiquitous language changes) in the same change, and a
+periodic replay audit re-derives the view from the log plus the code to catch
+un-ADR'd drift
+([the materialized-view ADR](adr/drafts/architecture-view-materialized-from-adrs.md)).
 
 The documentation landscape, per [ADR-0000](adr/0000-documentation-strategy.md)
 as amended by
-[ADR-DRAFT](adr/drafts/architecture-view-materialized-from-adrs.md):
+[the materialized-view ADR](adr/drafts/architecture-view-materialized-from-adrs.md):
 
 - `docs/adr/` — the decision log (MADR-style, the "why"). Each ADR's line-1
-  heading is `# ADR-NNNN: <title>` and its status is a single token from
-  `{proposed, accepted, superseded, deprecated, rejected}` on a `- Status:`
-  line, machine-checked by the `adr-format` gate
-  ([ADR-0036](adr/0036-identifier-collision-policy.md)).
+  heading is `# ADR-NNNN: <title>` and its status is a single token on a
+  canonical `- Status:` line, machine-checked by the `adr-format` gate
+  ([ADR-0036](adr/0036-identifier-collision-policy.md)). A **numbered** ADR may
+  carry only `{accepted, superseded, deprecated, rejected}`; `proposed` is
+  rejected outright, because numbering is itself the acceptance event
+  ([ADR-0088](adr/0088-promotion-is-the-acceptance-event.md)). A draft may say
+  `proposed` — the drafts pen _is_ that state.
 - `docs/ARCHITECTURE.md` — the materialized view; every claim cites its ADR(s),
   and current reality is kept distinct from committed direction.
 - `CONTRIBUTING.md` — process (setup, verify, land); it cross-links the view
@@ -1611,32 +1960,75 @@ as amended by
   are projections in the same sense.
 - `docs/DESIGN.md` — functional behavior and operational model;
   `docs/ROADMAP.md` — strategic vision and milestones.
-- `docs/archive/` — shipped, dated specs/plans and milestone documents.
-  <!-- un-ADR'd: ADR-0000 says transient docs are *deleted* once captured;
-  current practice (issue #39) archives them as dated files in docs/archive/
-  at ship instead. -->
+- `docs/archive/` — shipped specs, plans, and milestone documents, kept as dated
+  `YYYY-MM-DD-<slug>.md` files and moved there at ship rather than deleted.
+  <!-- DRIFT vs ADR-0000: ADR-0000 ("Transient Documentation", Status:
+  accepted) says milestone/plan/spec documents "should be committed to git
+  during development but deleted once the work is complete", with git history
+  as the authoritative record. Practice since issue #39 archives them instead:
+  docs/archive/ holds 664 dated files, added continuously through 2026-08-11,
+  and CONTRIBUTING.md treats the tree as a frozen record excluded from the
+  doc-links and formatting gates. ADR-0000 has never been amended or superseded
+  to say so. Recorded here, not fixed here: the fix is an ADR, not an edit to
+  this view. -->
 
 New ADRs are drafted **out of git** in `docs/adr/drafts/` — the directory is
 gitignored except its `README.md`, so a premature number cannot be committed
 ([ADR-0048](adr/0048-adr-out-of-git-draft-workflow.md)). A draft carries the
 heading `# ADR-DRAFT: <title>` and is referenced only by its
-`docs/adr/drafts/<slug>.md` path. At ship, after the final rebase,
+`docs/adr/drafts/<slug>.md` path — there is no bare `ADR-DRAFT` token, because
+the path is what `promote` can rewrite. At ship, after the final rebase,
 `cargo xtask adr promote` assigns each draft the next free number, moves it to
-`docs/adr/NNNN-<slug>.md`, rewrites its path-form references repo-wide, syncs
-the README table, and stages the result — the ADR's first appearance in history
-is already correctly numbered
+`docs/adr/NNNN-<slug>.md`, strips one `../` level from its link targets,
+rewrites its path-form references repo-wide, syncs the README table, and stages
+the result — the ADR's first appearance in history is already correctly numbered
 ([ADR-0048](adr/0048-adr-out-of-git-draft-workflow.md)).
+
+Promotion is also the **acceptance event**
+([ADR-0088](adr/0088-promotion-is-the-acceptance-event.md)): in the same pass
+that replaces the heading token, `promote` rewrites a `- Status: proposed` line
+to `accepted`. Any other token a draft carries — `superseded`, `rejected`,
+`deprecated` — is a deliberate authorial claim and survives untouched. The
+rewrite alone would not hold the property, so `adr-format` enforces the other
+half by rejecting `proposed` on any numbered file; rewrite, gate, and table
+renderer share one status-line parse, so they cannot disagree about which line
+they are reading (`xtask/src/adr.rs:105`, `xtask/src/adr_readme.rs:152`,
+`xtask/src/adr_readme.rs:391`).
 
 Identifier collisions are made loud, not silent
 ([ADR-0036](adr/0036-identifier-collision-policy.md)): the
 `identifier-collisions` gate in `cargo xtask check`/`validate` fails on
-duplicate numeric prefixes in `docs/adr/` and the migration directories, the
-branch-protection ruleset requires PRs to be up to date with `main` so the gate
-runs against the merged tree, and `cargo xtask adr renumber` resolves an
-already-committed collision in one command. The ADR index table in
-`docs/README.md` is a generated projection of the ADR files' headings and Status
-lines: `cargo xtask adr sync-readme` (folded into `renumber` and `promote`)
-regenerates the number, link, and status cells between
+duplicate numeric prefixes in `docs/adr/` and the migration directories, and
+`cargo xtask adr renumber` resolves an already-committed collision in one
+command. The gate must see the _merged_ tree to be worth anything. ADR-0036's
+addendum obtained that with a strict up-to-date-before-merge ruleset; the merge
+queue supersedes that mechanism while keeping the guarantee — GitHub stacks the
+PR on an ephemeral queue branch and runs the required checks there
+([ADR-0077](adr/0077-adopt-github-merge-queue.md)).
+
+The ADR index table in `docs/README.md` is a generated projection of the ADR
+files' headings and Status lines: `cargo xtask adr sync-readme` (folded into
+`renumber` and `promote`) regenerates the number, link, and status cells between
 `<!-- adr-table:begin/end -->` markers, titles stay hand-curated, and the
-`adr-readme-parity` gate keeps table and directory in agreement
-([ADR-0036](adr/0036-identifier-collision-policy.md)).
+`adr-readme-parity` gate keeps table and directory in agreement, naming
+`sync-readme` as its recovery
+([ADR-0036](adr/0036-identifier-collision-policy.md)). Parity is not
+correctness: the check compares two artifacts and stays green when both are
+wrong in the same way, which is why the status rule is enforced at the file, not
+at the table ([ADR-0088](adr/0088-promotion-is-the-acceptance-event.md)).
+
+Four gates guard the log, and drafts are invisible to all of them.
+`identifier-collisions`, `adr-format`, and `adr-readme-parity` share one
+enumeration rule — non-recursive `read_dir` over `docs/adr/`, then `is_file` →
+`.md` → leading number — which excludes a numberless file in a subdirectory
+twice over. `doc-links` enumerates tracked files instead, and an uncommitted
+draft is not tracked ([ADR-0048](adr/0048-adr-out-of-git-draft-workflow.md)).
+
+<!-- un-ADR'd (DECIDED-ELSEWHERE, issue #682): the `doc-links` gate itself has
+no ADR; xtask/src/steps/doc_links.rs:1 cites only the issue. -->
+
+Committed direction: this document becomes a gated artifact of the same kind. A
+planned `adr-view-parity` check will require every `accepted` ADR to be cited
+here, closing the loop that today depends on the replay audit
+([the materialized-view ADR](adr/drafts/architecture-view-materialized-from-adrs.md)).
+It does not exist yet.
