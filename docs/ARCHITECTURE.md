@@ -843,9 +843,11 @@ Markup is built with **maud's `html!`**
 ([ADR-0093](adr/0093-web-render-html-macro.md)), and the trusted-HTML invariant
 is carried by one crate-local newtype, `web::html::Markup` (`web/src/html.rs`),
 which shadows `maud::Markup` inside `web`. The single raw door is
-`Markup::from_rendered_html`; two xtask gates — `html_sink_check` and
-`raw_html_door_check` — read inside macro bodies so a hand-built `String` cannot
-reach a sink unescaped.
+`Markup::from_rendered_html`, which takes a `&RenderedHtml`
+(`web/src/html.rs:59`) so the sanitization invariant is what opens it. Three
+xtask gates gate the area — `html_sink_check`, `raw_html_door_check`, and
+`rendered_html_from_trusted_check` — and the first two read inside macro bodies,
+so a hand-built `String` cannot reach a sink unescaped.
 
 The authenticated owner stays flash-free by _enhancement_
 ([ADR-0044](adr/0044-authenticated-owner-flash-free-enhancement.md)): an
@@ -865,7 +867,7 @@ DOM, never a branch switch. The personalized cockpit is its own route, `/app`;
 and `server` (the server-side data-API build; renamed from `ssr`)
 ([ADR-0041](adr/0041-public-projector-and-csr-client.md)) — declared at
 `web/Cargo.toml:50-64`. The `csr` crate is the wasm entry point and owns its own
-`main()`/`mount()` (`csr/src/lib.rs:34,54`); there is no `web::mount_csr`.
+`mount()`/`main()` (`csr/src/lib.rs:34,54`); there is no `web::mount_csr`.
 `cargo xtask build-csr` compiles `csr` to wasm and hands the artifact to
 `devtool csr-bundle` (wasm-bindgen + `wasm-opt -Oz`), landing
 `jaunder.{js,wasm}` in `target/site/pkg/`
@@ -888,8 +890,9 @@ widening it is deliberate.
 
 Each vertical splits host and wasm code at the **file** level inside the single
 `web` crate ([ADR-0070](adr/0070-web-vertical-wasm-only-component-files.md),
-which supersedes the module-level gating of ADR-0055 and the
-feature-gated-but-ungated-UI shape of ADR-0056):
+which supersedes ADR-0056 and is a deliberate partial **return** to ADR-0055's
+module-level gating — ADR-0055's own status is unchanged, having been superseded
+by ADR-0056 before either):
 
 - `mod.rs` — module wiring and re-exports only, no items of its own;
 - `api.rs` — the vertical's wire types and **every** `#[server]` fn,
@@ -900,18 +903,23 @@ feature-gated-but-ungated-UI shape of ADR-0056):
 - plus ungated, host-tested, coverage-measured state/logic files
   (`compose_state.rs`, `input_state.rs`, `state.rs`, `render.rs`, …).
 
-`web/src/pages/` is gone. Of the 29 directories under `web/src/`, all have
+`web/src/pages/` is gone. Of the 28 directories under `web/src/`, all have
 `mod.rs`, 25 carry a `component.rs`, 15 carry an `api.rs`, and 6 (`audiences`,
 `auth`, `error`, `posts`, `subscriptions`, `timeline`) need a `server.rs`. The
-remaining files are the ungated logic homes, which is the point of the split —
-not lag. Two mechanisms enforce it: the `target-arch-placement` xtask check
-(`xtask/src/steps/target_arch_placement_check.rs`), which rejects a
-`target_arch` gate anywhere but a `mod.rs` module declaration or a
-`component.rs` file header, and `#[macros::server]`, which hard-errors on any
-`#[server]` fn outside `web/src/<vertical>/api.rs`
-(`macros/src/server_fn.rs:22,69`). ADR-0070 carries forward the two rules the
-earlier module-level split established: pure logic keeps a host-tested,
-coverage-measured home, and no fake-value host stubs, ever.
+three without a `component.rs` — `error`, `reactive`, `taglist` — are a
+wire-type home, a primitive, and a pure-markup helper: none has UI, so the
+absence is structural, not lag. Two mechanisms enforce the layout. The
+`target-arch-placement` xtask check
+(`xtask/src/steps/target_arch_placement_check.rs`, policing `web/src`,
+`client/src` and `csr/src`) admits a `target_arch` gate in exactly two shapes:
+an inner `#![cfg(…)]` in a `lib.rs` — the whole-crate gate `client` and `csr`
+use — or an outer attribute on a `mod` **or `use`** item in a `mod.rs` or
+`lib.rs`. Anywhere else, including a `component.rs` file header, fails. The
+second mechanism is `#[macros::server]`, which hard-errors on any `#[server]` fn
+outside `web/src/<vertical>/api.rs` (`macros/src/server_fn.rs:22,69`). ADR-0070
+carries forward the two rules the earlier module-level split established: pure
+logic keeps a host-tested, coverage-measured home, and no fake-value host stubs,
+ever.
 
 ### Server-fn surface, DI, and errors
 
@@ -936,7 +944,9 @@ been retired: the sole server-fn invocation path, `leptos_axum`'s `/api`
 handler, holds the owner strong for the whole call, so no `ScopedFuture` wrapper
 and no sanctioned `Resource` constructor exist — components call `Resource::new`
 directly (13 files across `web/src`), and no clippy `disallowed-methods` entry
-bans it (`clippy.toml` denies only `unwrap`/`expect` outside tests).
+bans it — `clippy.toml` has no `disallowed-methods` entry at all; it only
+_relaxes_ `unwrap`/`expect` for tests, which the workspace otherwise denies
+(`Cargo.toml:141`).
 
 `web/` is a **thin shell**
 ([ADR-0059](adr/0059-thin-web-shell-error-layering.md)): it keeps only the
@@ -944,7 +954,7 @@ leptos UI, the `#[server]` surface, and the wire types. Errors flow through the
 one-way T1→T2→T3 pipeline — typed domain errors (`storage`/`common`) → the
 operator carrier `host::error::InternalError` (`host/src/error.rs:94`) → the
 wire type `WebError` (`web/src/error/mod.rs:26`), via the lossy projection
-`project` in `web/src/error/server.rs:108`. T2→T3 is a security boundary made
+`project` in `web/src/error/server.rs:68`. T2→T3 is a security boundary made
 structural: the operator payload is absent from the type that crosses the wire,
 so the masked public boundary
 ([ADR-0017](adr/0017-error-handling-and-the-public-boundary.md)) cannot leak by
@@ -970,8 +980,9 @@ Revalidation goes through one primitive, `web::reactive::Invalidator`
 cross-component scopes are per-vertical `invalidator_scope!` newtypes
 (`web/src/reactive/scope.rs:28`). Keyed lists whose rows mutate in place or hold
 nested state render from a `reactive_stores::Store` (`#[store(key: …)]`) fed by
-`Invalidator::patched` plus a keyed `<For>` mounted unconditionally; flat lists
-stay plain `map`/`collect`
+`client::reactive::patched` (`client/src/reactive.rs:52`, driven by the
+vertical's `Invalidator::track`) plus a keyed `<For>` mounted unconditionally;
+flat lists stay plain `map`/`collect`
 ([ADR-0061](adr/0061-web-keyed-list-reactive-store.md)). `audiences` is the sole
 adopter so far (`web/src/audiences/component.rs`). A domain newtype used as a
 **leaf** field of such a store row is declared as itself and given the derive's
@@ -1033,48 +1044,127 @@ crate ([ADR-0011](adr/0011-unified-observability.md)). `init_tracing`
 (`server/src/observability.rs`) installs the OTLP tracer only when
 `JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT` (fallback `OTEL_EXPORTER_OTLP_ENDPOINT`)
 is set; with no endpoint every emit is a no-op, and exporter-setup failure is
-non-fatal. Inbound W3C `traceparent` headers are extracted onto the per-request
-span, so backend spans parent into the caller's trace. Span fields and metric
-attributes are exported, so they MUST NOT carry user PII or secrets — stable
-identifiers (`user_id`, `error.kind`) only.
+non-fatal. `with_http_observability` (same file) layers the per-request tracing
+span onto the router, together with a `tower-http` `x-request-id` that it mints
+when absent and propagates onto the response. Inbound W3C `traceparent` headers
+are extracted onto the per-request span, so backend spans parent into the
+caller's trace. Span fields and metric attributes are exported, so they MUST NOT
+carry user PII or secrets — stable identifiers (`user_id`, `error.kind`) only.
 
-<!-- un-ADR'd: `with_http_observability` also sets/propagates a request id. -->
+### Server-fn span names are macro-derived
+
+Every `#[server]` fn in `web/src` is written as `#[macros::server]`, which emits
+the `#[tracing::instrument]` attribute itself with the name
+`web.<vertical>.<ident>` computed from the file path and identifier
+(`macros/src/server_fn.rs`) — so no span name exists in the source and none can
+drift ([ADR-0011](adr/0011-unified-observability.md), amended 2026-07-30). The
+macro rejects `fields(…)`, `level`, `err`, and `ret` outright. What the author
+still writes is `skip(…)` / `skip_all`, and the `server-fn-tracing` gate holds a
+default-deny `RECORDABLE_TYPES` allowlist over every unskipped parameter type:
+an unlisted type fails the gate until someone classifies it. A type is
+admissible only if it is bounded by its own type, is operator configuration, is
+already published in a permalink, or is `Username`.
+
+The earlier arrangement — the gate writing the `name = "…"` literal into
+`web/src`, and a `server_fn` field on the boundary log event — was retired with
+that addendum. Nothing under `web/src` is rewritten by `cargo xtask check` for
+span naming any more.
+
+### E2e traces
 
 E2E tracing is layered ([ADR-0011](adr/0011-unified-observability.md)): an
-automatic `e2e.test` span per test (`end2end/tests/fixtures.ts` — request,
-navigation, resource, and timed-action summaries) plus opt-in `e2e.flow.*`
-semantic-phase spans (`end2end/tests/perf.ts`). Trace context flows via
-`JAUNDER_E2E_TRACEPARENT` (`flake.nix` → `end2end/tests/otel.ts`), so
-browser-side and backend spans share one trace. In the e2e VMs an otel-collector
-writes `otel-traces.jsonl` into the capture dir
-([ADR-0057](adr/0057-e2e-capture-dir-contract.md), #332);
-`cargo xtask traces analyze` consumes those files offline (see the tooling
-section).
+automatic `e2e.test` span per test plus opt-in `e2e.flow.*` semantic-phase spans
+(`end2end/tests/perf.ts`). Trace context flows via `JAUNDER_E2E_TRACEPARENT`
+(`flake.nix` → `end2end/tests/otel.ts`), so browser-side and backend spans share
+one trace.
 
-<!-- un-ADR'd: e2e VMs also copy out `playwright-report-<backend>.json`. -->
+**Capture and attribution are two separate things**
+([ADR-0096](adr/0096-e2e-trace-capture-vs-attribution.md)). Client-side perf
+capture — `addInitScript`, `exposeBinding`, and the request / navigation /
+resource / long-task listeners — attaches once per browser _context_ through
+`attachTraceCapture` (`end2end/tests/capture-trace.ts`), called from both the
+auto fixture and the `tracedContext` fixture, so every page is instrumented by
+one code path. The per-test `traceparent` is applied later, and switches a
+phase-tagged sink from `pretest` to `test`, so nothing a fixture does before the
+test body lands in `e2e.test`'s arrays.
+
+`e2e.test` keeps its original span id, range, and attributes. Fixture-lifecycle
+time is measured by an envelope nested around it (`end2end/tests/fixtures.ts`):
+
+```
+e2e.test.lifecycle
+├── e2e.context_mint
+├── e2e.test            (unchanged span id, range, and attributes)
+│   └── … server request spans
+├── e2e.page            (one per extra tracedContext page)
+└── e2e.teardown
+```
+
+An `e2e.warmup` child existed under the envelope until the per-test warmup was
+removed ([ADR-0099](adr/0099-e2e-does-not-pre-warm.md)); the `pretest` phase it
+occupied is now normally empty, and the flow-coverage orphan bucket
+([ADR-0081](adr/0081-empirical-server-fn-flow-coverage.md)) with it. A residual
+is unmeasurable by construction: Playwright tears fixtures down in reverse
+order, so the span build and the OTLP POST run before `context.close()`.
+
+In the e2e VMs an otel-collector writes `otel-traces.jsonl` into the capture dir
+([ADR-0057](adr/0057-e2e-capture-dir-contract.md), #332). Each VM also copies
+out `playwright-report-<backend>.json` (Playwright's `results.json`) and the
+service and system journals alongside the capture tarball, per the
+[ADR-0037](adr/0037-e2e-failure-diagnostics-capture.md) rule that artifacts are
+copied before the Playwright exit is asserted. `cargo xtask traces analyze`
+consumes the trace files offline (see the tooling section).
+
+### Measurement frames are not mixed
+
+The browser measurements arrive in two clocks, and a decomposition is computed
+entirely within one of them
+([ADR-0100](adr/0100-measurement-frames-are-not-mixed.md)). The **document
+frame** — `performance.mark` and `PerformanceResourceTiming`, relative to that
+document's `timeOrigin` — is what `capture-trace.ts`'s `harvestDocument` returns
+and the only frame boot analysis decomposes: `bootTotalMs` is `timeOrigin` to
+`jaunder.boot.mount_done`, and its parts sum to it by construction. The **Node
+frame** — `Date.now()` stamps taken in the Playwright driver — carries
+`committedMs`, `mountedMs`, and `commitToMountMs`. `commitToMountMs` is still
+reported as the bridge to suite wall-clock but is never decomposed; the
+difference `commitToMountMs - bootTotalMs` is reported separately as **frame
+skew** and charged to the harness (`frame_skew_ms` in
+`xtask/src/traces/boot_phases.rs`). The two frames differ by cross-process,
+plausibly engine-asymmetric lag, so mixing them would charge harness IPC to the
+app's boot phases.
 
 ### Metrics
 
 An OTLP `MeterProvider` is installed next to the tracer (`build_otel_meter` in
 `server::observability`), behind the same endpoint gate
 ([ADR-0011](adr/0011-unified-observability.md)). Emits go through the
-`host::metrics` facade (`host` is native-only, keeping `opentelemetry` out of
-wasm — [ADR-0058](adr/0058-host-crate-layering.md)); every helper takes a
-bounded enum, so no call site can attach an unbounded label. `init_tracing`
-returns a `#[must_use]` `TelemetryGuard` whose `Drop` force-flushes both
-providers on every exit path, so one-shot CLI commands export buffered telemetry
-instead of silently dropping it; one binding at the `run()` dispatch boundary
-covers every command, and export failures are logged, never propagated
+`host::metrics` facade, which lives in `host` **unconditionally** — no `metrics`
+Cargo feature — because `host` is native-only and therefore keeps
+`opentelemetry` out of the wasm closure by crate structure
+([ADR-0058](adr/0058-host-crate-layering.md)). Helper arguments are bounded
+enums, or a `&'static str` derived from one, so no call site can attach
+caller-supplied text as a label. `init_tracing` returns a `#[must_use]`
+`TelemetryGuard` whose `Drop` force-flushes both providers on every exit path,
+so one-shot CLI commands export buffered telemetry instead of silently dropping
+it; one binding at the `run()` dispatch boundary covers every command, and
+export failures are logged, never propagated
 ([ADR-0011](adr/0011-unified-observability.md)).
 
 ### Errors at the boundary
 
-`server_boundary` (`web/src/error.rs`) logs operator detail as discrete tracing
-fields — `error.kind` / `error.class` plus the preserved typed source chain — at
-class-appropriate levels, then returns only the masked public error
-([ADR-0017](adr/0017-error-handling-and-the-public-boundary.md)). The carrier
-(`host::error::InternalError`: `ErrorKind`, `ErrorClass`, `anyhow` source chain)
-is the T1 layer of [ADR-0059](adr/0059-thin-web-shell-error-layering.md).
+The carrier owns its own observability: `InternalError::emit_boundary_failure`
+(`host/src/error.rs`) logs five discrete tracing fields — `error.kind`,
+`error.class`, `error.public`, `error.source` (the preserved typed chain,
+rendered once), `error.context` — at the level derived from the error class, and
+emits the `jaunder.errors` metric with the bounded kind/class attributes.
+`server_boundary` (`web/src/error/server.rs`) calls it and then performs only
+the outward wire projection, returning the masked public error
+([ADR-0017](adr/0017-error-handling-and-the-public-boundary.md)). Which fn
+failed is not a field: the event is raised inside the enclosing
+`web.<vertical>.<ident>` span, and both configured sinks render span context.
+The carrier (`host::error::InternalError`: `ErrorKind`, `ErrorClass`, `anyhow`
+source chain) is the T1 layer of
+[ADR-0059](adr/0059-thin-web-shell-error-layering.md).
 
 ### Scoped server diagnostics (e2e capture)
 
@@ -1097,57 +1187,92 @@ the [ADR-0037](adr/0037-e2e-failure-diagnostics-capture.md) artifact set.
   [ADR-0011](adr/0011-unified-observability.md).
 - A configurable diag level and an analyzer over the diag JSONL — left open in
   [ADR-0049](adr/0049-app-driven-scoped-server-diagnostics.md).
+- Decomposing `commitToMountMs` at all requires first measuring frame skew per
+  engine and subtracting it. Nothing does today; adding one is a decision to
+  revisit ([ADR-0100](adr/0100-measurement-frames-are-not-mixed.md)).
 
 ## Deployment
 
 Jaunder deploys as a **single self-contained server binary behind an external
-reverse proxy** ([ADR-0008](adr/0008-deployment-model.md)). The binary bundles
-the application, the default SQLite storage, and its static assets; it never
-terminates TLS itself — HTTPS is the reverse proxy's job (nginx, Caddy, …), so
-Jaunder binds plain HTTP and production exposure is a proxy-configuration
-concern, not an application feature.
+reverse proxy** ([ADR-0008](adr/0008-deployment-model.md)). It never terminates
+TLS itself — HTTPS is the reverse proxy's job (nginx, Caddy, …), so Jaunder
+binds plain HTTP (`--bind`, default `127.0.0.1:3000`, `server/src/cli.rs:267`)
+and production exposure is a proxy-configuration concern, not an application
+feature.
 
-**Embedded assets** ([ADR-0003](adr/0003-asset-management.md)). The base
-stylesheets `jaunder.css` and `jaunder-themes.css` (in `server/assets/`) are
-compiled into the binary via `rust-embed` (`StaticAssets` in
-`server/src/assets.rs`) and served at `/style` by `axum_embed::ServeEmbed`, with
-ETag/conditional-request support. Theme switching is a `data-theme` attribute on
-the HTML shell. User-uploaded stylesheets are deliberately _not_ embedded — they
-live in and are served from the storage layer.
+**What is inside the executable.** Two `rust-embed` trees, and nothing on disk
+is needed to serve a request ([ADR-0003](adr/0003-asset-management.md)):
 
-**The CSR client's place in the served binary.** The SPA shell (`index.html`) is
-embedded in the server as a compile-time constant and served as the fallback for
-app routes, so no shell file exists on disk. The wasm bundle itself
-(`pkg/jaunder.wasm` + public assets) is served from the on-disk site root via
-`ServeDir` — it is a sibling artifact staged next to the binary, the one part of
-the deployment that is not inside the executable. Rendering architecture —
-leptos-CSR client plus the server-side public projector — is owned by the web
-section ([ADR-0040](adr/0040-web-rendering-leptos-csr.md),
+- `StaticAssets` (`server/src/assets.rs:3-5`, `#[folder = "assets/"]`) carries
+  the base stylesheets `jaunder.css` and `jaunder-themes.css`, mounted at
+  `/style` by `axum_embed::ServeEmbed` (`server/src/lib.rs:54,57`), which
+  supplies ETag and conditional-request handling.
+- `Site` (`server/src/site.rs:33-35`, `#[folder = "$OUT_DIR/site"]`) carries the
+  CSR client: `pkg/jaunder.{js,wasm}`, their precompressed `.br`/`.gz` siblings,
+  the wasm-bindgen `snippets/`, and the `public/` assets. `server/build.rs`
+  stages that tree at compile time from `JAUNDER_CSR_BUNDLE_DIR` (Nix) or
+  `target/site/pkg` (host build).
+- The SPA shell is the compile-time constant `web::app::SPA_SHELL`
+  (`web/src/app/render.rs:51`, `include_str!` of `csr/index.html`), served as
+  the fallback for unknown paths (`server/src/site.rs:126-128`).
+
+`ServeEmbed` does no `Accept-Encoding` negotiation, so `site::serve_site` is a
+hand-written handler: it picks br/gzip/identity against the embedded variants,
+sets `Content-Type` from the logical path, and emits a per-representation `ETag`
+with `304` on `If-None-Match`. Only the data directory and the database live
+outside the binary, so **"single binary" holds without qualification.** This was
+not always true: until #237 (closed 2026-07-17) the wasm bundle was served from
+an on-disk site root by `ServeDir`. The wasm bundle's size is gated separately
+on raw bytes ([ADR-0106](adr/0106-wasm-raw-size-budget.md)). Rendering
+architecture — leptos-CSR client plus the server-side public projector — is
+owned by the web section ([ADR-0040](adr/0040-web-rendering-leptos-csr.md),
 [ADR-0041](adr/0041-public-projector-and-csr-client.md)).
 
-<!-- un-ADR'd: the embedded-SPA-shell / on-disk-wasm-bundle split (#239) qualifies ADR-0003/0008's "single binary" and is recorded only in code comments and flake.nix. -->
-
 **CLI surface.** The `jaunder` binary is also the operations tool
-(`server/src/cli.rs`): `serve` runs the server; `init` prepares the storage
-directory and database; `create-pg-db` bootstraps a PostgreSQL database;
+(`server/src/cli.rs:233-382`): `serve` runs the server; `init` prepares the
+storage directory and database; `create-pg-db` bootstraps a PostgreSQL database;
 `user-create`, `user-invite`, and `app-password-create` manage accounts;
 `smtp-test` verifies mail configuration; `backup` (directory or archive mode)
 and `restore` round-trip the data, with the backup target auto-derived from the
 storage configuration ([ADR-0064](adr/0064-backup-target-auto-derivation.md),
-[ADR-0054](adr/0054-backup-test-homing-and-uniform-restore-failure.md)).
+[ADR-0054](adr/0054-backup-test-homing-and-uniform-restore-failure.md)); and
+`site-config set/get/list/unset` reads and writes site settings.
 
-<!-- un-ADR'd: the CLI subcommand surface and the JAUNDER_BIND / JAUNDER_DB / JAUNDER_ENV environment variables have no ADR. -->
+`site-config` is not a free-form door. Its `key` argument is the `SiteConfigKey`
+enum, so clap rejects an unknown key at parse time, and each key carries the
+validator that `set` runs before any row is written
+([ADR-0102](adr/0102-config-key-closed-registry.md); the registry macro is
+`common/src/config_key.rs:85,158`). `list` is the deliberate exception: it dumps
+every stored row, flagging keys outside the registry as `UNKNOWN KEY` and
+recognised keys holding unparseable values as `INVALID`, so legacy rows stay
+visible.
+
+Three environment variables configure a deployment, each a clap `env` fallback
+for a flag: `JAUNDER_BIND` (listen address), `JAUNDER_DB` (database URL, default
+`sqlite:./data/jaunder.db`, `server/src/cli.rs:41`), and `JAUNDER_ENV` (`dev` |
+`prod`, `server/src/cli.rs:271`). `prod` is load-bearing in two places: it sets
+the `secure_cookies` flag passed to `create_router`
+(`server/src/commands.rs:546`, `server/src/lib.rs:32`), and it disables the
+dev-only auto-initialization of a missing database on `serve`
+(`server/src/commands.rs:501-512`).
+
+<!-- un-ADR'd (GAP): the CLI subcommand surface and the JAUNDER_BIND / JAUNDER_DB / JAUNDER_ENV environment variables have no ADR. ADR-0102 governs site_config keys only, not process configuration. No issue exists. -->
 
 **What the flake ships.** `flake.nix` exports `packages.jaunder` (the server
-binary), `packages.site` (the wasm bundle + public assets the binary serves from
-disk), and `nixosModules.jaunder` — a `services.jaunder` NixOS module that
-creates a dedicated `jaunder` user/group, runs from
-`StateDirectory=/var/lib/jaunder`, symlinks the site package into place, runs
-`jaunder init --skip-if-exists`, and starts `jaunder serve` under systemd. Two
+binary), `packages.site`, and `nixosModules.jaunder` (`flake.nix:247-249`,
+`1059-1062`). `packages.site` is **no longer a deployment artifact** — the
+binary embeds the bundle — and is retained only so `cargo xtask audit-wasm` can
+build `.#site` and inspect the bundle for size analysis (`flake.nix:464-473`,
+[ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)). The `services.jaunder`
+module (`flake.nix:44-118`) creates a dedicated `jaunder` user/group, runs under
+systemd from `StateDirectory=jaunder` with `WorkingDirectory=%S/jaunder`, passes
+`bind`/`db`/`prod` options through as the three environment variables, runs
+`jaunder init --skip-if-exists` in `preStart`, and starts `jaunder serve`. There
+is no site symlink; the module comment names #237 as the reason. Two
 `nixosConfigurations` test VMs (interactive, PostgreSQL) exist for development
 only.
 
-<!-- un-ADR'd: the NixOS module and package outputs are load-bearing deployment reality with no ADR beyond ADR-0008's single-binary framing. -->
+<!-- un-ADR'd (GAP): the NixOS module and package outputs are load-bearing deployment reality with no ADR beyond ADR-0008's single-binary framing. No issue exists. -->
 
 ## Emacs client
 

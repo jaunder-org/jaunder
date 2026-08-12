@@ -142,14 +142,14 @@ case especially: it is not merely a stale citation, it describes a
 **deleted outright**, so the Protocols (line ~325) and Development tooling (line
 ~1026) sections currently assert machinery that no longer exists.
 
-| Superseded | Successor                          |
-| ---------- | ---------------------------------- |
-| 0013       | 0070                               |
-| 0030       | 0050 (the stateless coverage gate) |
-| 0043       | 0089 — and the machinery is GONE   |
-| 0055       | 0056, itself superseded by 0070    |
-| 0056       | 0070                               |
-| 0074       | 0075                               |
+| Superseded | Successor                                                                                                             |
+| ---------- | --------------------------------------------------------------------------------------------------------------------- |
+| 0013       | 0070                                                                                                                  |
+| 0030       | 0050 (the stateless coverage gate)                                                                                    |
+| 0043       | 0089 — and the machinery is GONE                                                                                      |
+| 0055       | 0056 (NOT 0070 — and 0070 is a deliberate partial _return_ to 0055's module-level gating; 0055's status is unchanged) |
+| 0056       | 0070                                                                                                                  |
+| 0074       | 0075                                                                                                                  |
 
 **Pass B — verify.** A _different_ agent, which does not see Pass A's reasoning:
 
@@ -589,6 +589,7 @@ consumes the DRIFT rows. Append as each section reports.
 | Drift                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | Owner   |
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
 | **ADR-0052**: chartered 7 non-compiling checks, the set is now 8.                                                                                                                                                                                                                                                                                                                                                                                                                              | Task 18 |
+| **ADR-0061 (`:51,:92,:97`)** names `Invalidator::patched`. No such method exists — `Invalidator` has only `new`/`notify`/`track`. The real symbol is a free function in another crate, `client::reactive::patched` (`client/src/reactive.rs:52`). The prose at `web/src/audiences/component.rs:48` repeats the stale name, so the drift is in the ADR _and_ in a code comment.                                                                                                                 | Task 18 |
 | **ADR-0022 line 22** names `auth::generate_token` — zero hits anywhere in the tree, deleted by #458, surviving only in `docs/archive/`. Confirmed independently by two passes. Real drift inside an `accepted` ADR. Live equivalents: `host::token::generate_hashed` (session and reset tokens) and `host::invite::generate` (invite codes).                                                                                                                                                   | Task 18 |
 | ~~**ADR-0089 §1** asserts a `deny.toml` removal that did not happen.~~ **WITHDRAWN.** Verified against git history, not just current state: `6328cb4d` (#199) did set `github = []`, executing ADR-0089 §1 in full; `0e8b66bb` (#297) later re-added it for the unrelated `lettre` patch. The ADR is correct. A lesson for the remaining sections: current state alone cannot distinguish "never done" from "done, then undone for another reason" — check the history before recording drift. | —       |
 | **ADR-0016 ~line 271** attributes component-SSR removal to #487, whose only commit is unrelated. See below.                                                                                                                                                                                                                                                                                                                                                                                    | Task 19 |
