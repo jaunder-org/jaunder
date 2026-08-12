@@ -20,11 +20,11 @@ use thiserror::Error;
 /// variant names, so the admin `<select>` and `site_config` need no hand-maintained
 /// string list. Only [`BackupMode::label`] (UI text) is authored.
 ///
-/// The token is now declared **once** (`serialize_all`); it previously had to be
-/// repeated in serde's `rename_all`, since the attribute's serde bridge reads the same
-/// strum token. Adopting it also replaces strum's generic `Matching variant not found`
-/// with the named [`InvalidBackupMode`] — `site_config` JSON is operator-editable, so a
-/// bad value should name the valid ones.
+/// The token is declared **once** (`serialize_all`) — the attribute's serde bridge
+/// reads the same strum token, so nothing repeats it. The bridge also surfaces the
+/// named [`InvalidBackupMode`] instead of strum's generic "Matching variant not
+/// found" — `site_config` JSON is operator-editable, so a bad value should name the
+/// valid ones.
 #[macros::text_enum(
     error = InvalidBackupMode,
     message = "backup mode must be \"directory\" or \"archive\""
@@ -97,8 +97,8 @@ impl Default for BackupSchedule {
 
 /// The filesystem path backups are written under — surrounding whitespace trimmed,
 /// non-empty (interior content and casing preserved). Modelled on
-/// [`SiteTitle`](crate::site::SiteTitle): the non-empty invariant that
-/// `update_backup_settings` used to enforce in-body now lives at construction. There is
+/// [`SiteTitle`](crate::site::SiteTitle): the non-empty invariant lives at
+/// construction, not in `update_backup_settings`. There is
 /// deliberately **no** `Default` — an unconfigured destination is `None`
 /// ([`BackupConfig::destination_path`]), not a default value, and no absolute-path rule
 /// (the server treats the value as an opaque `Path`).
@@ -197,7 +197,7 @@ mod tests {
     #[test]
     fn retention_count_serde_rejects_zero_on_the_wire() {
         let r: RetentionCount = "5".parse().unwrap();
-        // Plain integer — the JSON shape is unchanged from the old `usize` field.
+        // Plain integer JSON shape — no wrapping object.
         assert_eq!(serde_json::to_string(&r).unwrap(), "5");
         assert_eq!(serde_json::from_str::<RetentionCount>("5").unwrap(), r);
         // The min-1 bound rejects 0 at deserialize time.
@@ -242,10 +242,8 @@ mod tests {
 
     #[test]
     fn backup_mode_json_bytes_are_unchanged() {
-        // This is the one enum whose serde `rename_all` was swapped for strum's
-        // `serialize_all` (#746), and it crosses a `#[server]` boundary via
-        // `BackupConfig` — so the literal bytes are pinned, not just their agreement
-        // with `as_ref`.
+        // This enum crosses a `#[server]` boundary via `BackupConfig` (#746), so the
+        // literal wire bytes are pinned, not just their agreement with `as_ref`.
         assert_eq!(
             serde_json::to_string(&BackupMode::Directory).unwrap(),
             "\"directory\""
@@ -262,9 +260,8 @@ mod tests {
 
     #[test]
     fn backup_mode_rejects_unknown_with_the_named_error() {
-        // Before #746 this was strum's generic "Matching variant not found"; the named
-        // error is the point of adopting `#[text_enum]` here, since `site_config` JSON
-        // is operator-editable.
+        // The named error is the point of `#[text_enum]` here (#746): `site_config`
+        // JSON is operator-editable, so a bad value must name the valid ones.
         let err = "sideways".parse::<BackupMode>().unwrap_err();
         assert_eq!(err, InvalidBackupMode);
         assert_eq!(
@@ -325,8 +322,7 @@ mod tests {
             "0 0 0 * * *".parse::<BackupSchedule>().unwrap()
         );
 
-        // Invalid input is rejected at deserialize time (the tightening over the old
-        // transparent derive).
+        // Invalid input is rejected at deserialize time.
         assert!(serde_json::from_str::<BackupSchedule>("\"not a cron\"").is_err());
     }
 

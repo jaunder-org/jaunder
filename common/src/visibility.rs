@@ -16,11 +16,11 @@ use crate::ids::{AudienceId, ChannelId, UserId};
 // though the bind direction does not. `Channel` and `SubscriptionStatus` are not read
 // back that way and so stay bridge-less; when one of them is, it takes the flag too.
 //
-// Those three gain `Serialize`/`Deserialize` they do not currently need, which is the
-// price of one convention rather than two (#746 D12). Note the cost: their tokens are a
-// *storage encoding*, and the absence of serde used to be a compile-time barrier before
-// they could become a wire contract. If that barrier is ever wanted back, the fix is a
-// `no_serde` option on the attribute, not an exemption from it.
+// Those three gain `Serialize`/`Deserialize` they do not currently need — the price of
+// one convention rather than two (#746 D12). Note the cost: their tokens are a
+// *storage encoding*, and serde's presence removes the compile-time barrier that would
+// otherwise stop them becoming a wire contract. If that barrier is ever wanted back,
+// the fix is a `no_serde` option on the attribute, not an exemption from it.
 #[macros::text_enum(error = InvalidChannel, message = "channel must be \"local\"")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[strum(serialize_all = "snake_case")]
@@ -56,7 +56,7 @@ pub enum TargetKind {
 // The mutually-exclusive built-in audience base chosen in the editor / API — the
 // typed form of the audience-picker's `base`. Composes with named audiences by
 // union except for `Private` (author-only), which is the safe, non-widening
-// `Default` (faithful to the prior empty-string -> author-only fall-through). #499.
+// `Default`. #499.
 #[macros::text_enum(
     error = InvalidAudienceBase,
     message = "audience must be \"private\", \"public\", or \"subscribers\""
@@ -211,8 +211,8 @@ pub fn audience_selection_to_targets(selection: &AudienceSelection) -> Vec<Audie
 }
 
 /// Resolves an optional picker selection to the targets to persist. An absent
-/// selection defaults to `[Public]` — the historical behavior and the safe
-/// default for non-editor callers that omit the field on the wire.
+/// selection defaults to `[Public]` — the safe default for non-editor callers
+/// that omit the field on the wire.
 #[must_use]
 pub fn audience_targets_or_public(selection: Option<&AudienceSelection>) -> Vec<AudienceTarget> {
     selection.map_or_else(

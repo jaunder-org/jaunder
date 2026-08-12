@@ -11,7 +11,7 @@ use unicode_segmentation::UnicodeSegmentation;
 ///
 /// `cost` is the caller's because the budget's *unit* differs per use — scalar count for a
 /// slug's character cap, percent-encoded byte length for a media filename's filesystem cap.
-/// Shared so the two do not drift (they were near-identical copies).
+/// Shared so the two do not drift.
 ///
 /// Returns an **empty string** when not even the first cluster fits. A caller that cannot use
 /// an empty result must substitute something itself; this function does not guess.

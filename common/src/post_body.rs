@@ -16,8 +16,7 @@ use thiserror::Error;
 /// to accommodate (#811).
 ///
 /// There is no length bound: any body *length* is valid. What is rejected is a body that
-/// is nothing but blank lines, which the service layer previously accepted and then
-/// compensated for downstream.
+/// is nothing but blank lines.
 ///
 /// **This door validates but never normalizes**, because it cannot: whether trailing
 /// whitespace is content depends on the `PostFormat`, which lives beside the body rather

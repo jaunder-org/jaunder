@@ -220,7 +220,7 @@ mod tests {
         }
     }
 
-    /// Opt-in: without the attribute the emitted tokens are exactly what they were.
+    /// Opt-in: without the attribute the emitted tokens use the field type unchanged.
     #[test]
     fn without_the_option_every_inner_is_still_the_field_type() {
         let input: DeriveInput = syn::parse_quote! { pub struct IntPort(u16); };

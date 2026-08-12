@@ -240,14 +240,10 @@ fn infallible_trailer_orders() {
 // --- no_ord opt-out -------------------------------------------------------------------
 // `#[str_newtype(no_ord)]` suppresses only the ordering half, for a type that
 // deliberately derives no `PartialEq`/`Eq` (`RawToken`, the bearer-token profile).
-// The *absence* of ordering is locked by a `compile_fail` doctest on the derive; what
-// this fixture proves is that nothing else in the trailer went with it.
-//
-// That division of labour used to be circular: the doctest disclaimed itself as
-// intent-only and named this test as "the actual guard", while this comment named the
-// doctest. Neither guarded anything. The doctest's fixture now derives `PartialEq, Eq`,
-// so `a < b` can only fail for the missing `PartialOrd`, and a control fence beside it
-// shows an un-suppressed newtype ordering — so the claim above is now true (#763).
+// The *absence* of ordering is locked by a `compile_fail` doctest on the derive
+// (whose fixture derives `PartialEq, Eq` so the failure can only be the missing
+// `PartialOrd`, #763); what this fixture proves is that nothing else in the trailer
+// went with it.
 
 #[derive(Clone, Debug, StrNewtype)]
 #[str_newtype(no_ord)]

@@ -160,16 +160,11 @@ mod text_enum;
 /// A secret is never sorted or used as a `BTreeMap` key, and `#[str_newtype(no_ord)]`
 /// suppresses the ordering half for a type that deliberately has none (`RawToken`).
 ///
-/// These three proofs used to derive no `PartialEq`, which made them **vacuous**:
-/// `a < b` would have failed to compile even if the macro *did* emit ordering, so
-/// they documented intent rather than discriminating. (Their prose said so, and
-/// pointed at a unit test as "the actual guard" — while that test pointed back at
-/// these doctests. Neither guarded anything.)
-///
-/// Each fixture now derives `PartialEq, Eq`, so `a < b` can only fail for the missing
-/// `PartialOrd`. The control below is what makes that argument checkable: the same
-/// shape *without* a suppressing option orders, so the failures are about ordering
-/// and not about the fixture.
+/// Each fixture derives `PartialEq, Eq`, so `a < b` can only fail for the missing
+/// `PartialOrd` — without those derives the proofs would be vacuous, failing to
+/// compile whether or not the macro emitted ordering. The control below is what
+/// makes that argument checkable: the same shape *without* a suppressing option
+/// orders, so the failures are about ordering and not about the fixture.
 ///
 /// ```
 /// use macros::StrNewtype;
@@ -470,8 +465,9 @@ pub fn server(args: TokenStream, item: TokenStream) -> TokenStream {
 /// bytes — anything reachable from outside — must either establish it on the way in through
 /// its own door, or not use this derive.
 ///
-/// `RenderedHtml` (`common/src/render.rs`) is the motivating case, and its module documents
-/// exactly why a sanitizing decode was rejected there and when to revisit that.
+/// `RenderedHtml` (`common/src/render.rs`) is the motivating case;
+/// docs/adr/drafts/rendered-html-storage-decode.md documents exactly why a
+/// sanitizing decode was rejected there and when to revisit that.
 #[proc_macro_derive(SqlxBridge, attributes(sqlx_bridge))]
 pub fn sqlx_bridge_derive(item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as DeriveInput);

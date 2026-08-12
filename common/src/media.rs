@@ -17,9 +17,9 @@
 //! from [`media_path`], which is the only place the layout is spelled — so a new consumer must
 //! call it rather than re-deriving, or the two spellings drift apart (#675).
 //!
-//! Since #720 that encoding is not something [`media_path`] *does* — a [`Filename`] already
-//! **is** the canonical encoded segment. The database column, the on-disk name and the URL all
-//! hold the same bytes, and display is the one place anything is transformed
+//! That encoding is not something [`media_path`] *does* — a [`Filename`] already **is**
+//! the canonical encoded segment (#720). The database column, the on-disk name and the URL
+//! all hold the same bytes, and display is the one place anything is transformed
 //! ([`Filename::decoded`]).
 //!
 //! Encoding is not cosmetic. The name a user types may legally contain a space (which
@@ -285,10 +285,10 @@ impl FromStr for Filename {
         // Run on `decoded`, never on `s`: `sanitize_filename("a%2Fb.jpg")` is
         // `"a%2Fb.jpg"`, so testing the encoded form passes vacuously.
         //
-        // Note what this does *not* catch: `sanitize_filename` has never touched CR/LF, so
-        // a canonical `a%0D%0Ab.jpg` is accepted, exactly as raw `a\r\nb.jpg` was before
-        // #720 — see `from_str_accepts_a_canonical_name_carrying_control_characters` for
-        // why that is safe and deliberate rather than an oversight.
+        // Note what this does *not* catch: `sanitize_filename` does not touch CR/LF, so
+        // a canonical `a%0D%0Ab.jpg` is accepted — see
+        // `from_str_accepts_a_canonical_name_carrying_control_characters` for why that
+        // is safe and deliberate rather than an oversight.
         //
         // Ordered BEFORE canonicity because a separator value is *both* an unsafe leaf and
         // non-canonical, and the failure a caller needs to hear about is the leaf.
@@ -565,7 +565,6 @@ fn is_safe_leaf(candidate: &str) -> bool {
 /// Strip path components, replace null bytes, reject `.`, `..`, and empty results.
 #[must_use]
 pub fn sanitize_filename(name: &str) -> String {
-    // Normalize Windows backslashes to forward slashes before extracting file name
     let normalized = name.replace('\\', "/");
     let path = Path::new(&normalized);
     let Some(file_name) = path.file_name() else {
@@ -717,9 +716,8 @@ pub fn media_url(
 /// into a `BTreeSet`, which gives dedup and a stable row order in one move, so callers
 /// writing those rows get a byte-identical result for a byte-identical body. The order is
 /// the derived one: field by field, in declaration order, each member ordering as its inner
-/// value. The two newtype members no longer opt in individually — ordering is part of the
-/// standard newtype trailer (ADR-0063 §2, #761), which is what this type's need prompted.
-/// [`MediaSource`] still derives its own: it is a `text_enum`, not a newtype, so it has no
+/// value. The newtype members get ordering from the standard newtype trailer (ADR-0063 §2,
+/// #761). [`MediaSource`] derives its own: it is a `text_enum`, not a newtype, so it has no
 /// inner value to delegate to and orders by variant declaration order instead.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MediaRef {
@@ -864,11 +862,8 @@ impl ContentType {
     /// pinned by a test that the value is valid (`detect_content_type_outputs_are_valid`,
     /// `feed_path::…::format_content_types`). That is a **convention backed by those
     /// tests**, not a build-time guarantee: nothing fails if a new mint site arrives
-    /// without one. (Between `#778` and `#790` the `rendered-html-from-trusted` gate did
-    /// enforce it as a side effect of a name collision — it policed the bare
-    /// `from_trusted` ident, so every site here carried a marker saying "not that door".
-    /// `#790` taught the gate to read the qualifier, so this door is no longer in its
-    /// population and the markers are gone.)
+    /// without one — the `rendered-html-from-trusted` gate reads the qualifier (#790),
+    /// so this door is outside its population.
     #[must_use]
     pub(crate) fn from_trusted(content_type: impl Into<String>) -> Self {
         Self(content_type.into())
@@ -1010,7 +1005,7 @@ pub struct UserQuota(i64);
 pub struct ByteSize(i64);
 
 /// The metadata returned on a successful media upload — the server-fn wire response
-/// (#517), moved here from `server` so it is nameable on the wasm client. `storage`'s
+/// (#517), living here (not in `server`) so it is nameable on the wasm client. `storage`'s
 /// `MediaManager` returns it directly; `web`'s `media::upload` fn returns it; `AtomPub`
 /// serializes it. Every field is a validated `common` newtype, so each re-validates on
 /// deserialize — including `url`, the derived serve path: it is a
@@ -1096,7 +1091,6 @@ mod tests {
         // `ByteSize` has its own test — it is min-0 (accepts `0`) and has no `default`, so it
         // cannot use `assert_positive_byte_newtype` (min-1, `Default`-requiring). Drives every
         // generated branch for coverage.
-        // parse accept 0 + positive, trim; reject negative/non-integer with the domain message
         assert_eq!("0".parse::<ByteSize>().map(i64::from).ok(), Some(0));
         assert_eq!(
             "  2048  ".parse::<ByteSize>().map(i64::from).ok(),
@@ -1215,14 +1209,12 @@ mod tests {
 
     #[test]
     fn media_path_interpolates_the_already_encoded_name() {
-        // Since #720 the encoding happens once, at intake — `media_path` only
-        // interpolates. So this pins two things at once: that the intake door produces the
-        // right spelling for each hazard, and that the path is byte-identical to it.
-        //
-        // The hazards are unchanged. A space makes the URL unrepresentable as
-        // `RootRelativeUrl`; `?`/`#` are worse — they pass its validation while truncating
-        // the path, addressing another file. `%` must encode too, or a pre-existing escape
-        // is double-decoded on the way back.
+        // Encoding happens once, at intake (#720) — `media_path` only interpolates. So
+        // this pins two things at once: that the intake door produces the right
+        // spelling for each hazard, and that the path is byte-identical to it. A space
+        // makes the URL unrepresentable as `RootRelativeUrl`; `?`/`#` are worse — they
+        // pass its validation while truncating the path, addressing another file. `%`
+        // must encode too, or a pre-existing escape is double-decoded on the way back.
         for (raw, encoded) in [
             ("a b.txt", "a%20b.txt"),
             ("what?.png", "what%3F.png"),
@@ -1368,7 +1360,7 @@ mod tests {
 
     #[test]
     fn valid_content_hash_rejects_short_input() {
-        // The historical panic trigger: a single byte cannot be sliced at [2..].
+        // A single byte cannot be sliced at [2..]; short input must reject, not panic.
         assert!(!is_valid_content_hash("a"));
         assert!(!is_valid_content_hash(""));
         assert!(!is_valid_content_hash(&"a".repeat(63)));
@@ -1396,8 +1388,8 @@ mod tests {
     #[test]
     fn valid_content_hash_rejects_non_ascii_off_boundary() {
         // A multi-byte char makes byte index 2 land off a UTF-8 boundary — the
-        // other historical panic source. 21 'é' chars = 42 bytes ... build a
-        // 64-byte string whose char boundaries do not align with byte 2.
+        // other off-boundary slice hazard: build a 64-byte string whose char
+        // boundaries do not align with byte 2. It must reject, not panic.
         let hash = format!("é{}", "a".repeat(62));
         assert!(!is_valid_content_hash(&hash));
     }
@@ -1712,10 +1704,10 @@ mod tests {
     // door (A). Otherwise a stored, B-written filename becomes a `Decode` error on read-back
     // — this fails loudly here instead.
     //
-    // Asserted on `Filename::sanitized`, not on `sanitize_filename`. Since #708 the bare
-    // oracle is no longer enough: it does not truncate, so its output for a long name is
-    // over budget and Door A rightly rejects it. The claim that has to hold is about the
-    // door callers actually use.
+    // Asserted on `Filename::sanitized`, not on `sanitize_filename`: the bare oracle
+    // does not truncate (#708), so its output for a long name is over budget and Door A
+    // rightly rejects it. The claim that has to hold is about the door callers
+    // actually use.
     #[test]
     fn sanitized_output_always_reparses_as_filename() {
         for raw in [
@@ -1731,10 +1723,9 @@ mod tests {
             &"ä".repeat(300),
             &format!("{}.jpg", "a".repeat(400)),
         ] {
-            // Asserted as `Ok` first, deliberately: an earlier form allowed `Err` to satisfy
-            // the claim, which meant the test could not catch `sanitized` regressing to
-            // *rejecting* long names — the very behaviour #708 changed. None of these inputs
-            // is degenerate, so every one must succeed.
+            // Asserted as `Ok` first, deliberately: allowing `Err` to satisfy the claim
+            // would hide `sanitized` regressing to *rejecting* long names (#708). None
+            // of these inputs is degenerate, so every one must succeed.
             let f = Filename::sanitized(raw)
                 .unwrap_or_else(|e| panic!("sanitized({raw:?}) must succeed, got {e}"));
             assert!(
@@ -1819,20 +1810,13 @@ mod tests {
 
     #[test]
     fn from_str_accepts_a_canonical_name_carrying_control_characters() {
-        // Considered and deliberately unchanged by #720. `sanitize_filename` has never
-        // rejected CR/LF — it normalizes backslashes, strips path components and maps NUL
-        // — so `a\r\nb.jpg` was an acceptable raw name before this change and stays an
-        // acceptable encoded one. Relocating the oracle onto the decoded form neither
-        // widens nor narrows it.
-        //
-        // No live hazard follows: `content_disposition` drops control characters from its
-        // `filename=` fallback and percent-encodes `filename*=`, the stored spelling holds
-        // no literal control byte, and CR/LF are legal XML characters in the Atom
-        // `<title>`. NUL, the one that is *not* legal XML, is caught above.
-        //
-        // Pinned rather than omitted so a later reader can see this was decided, not
-        // missed; tightening it would change what uploads are accepted, which is a
-        // separate decision from this issue's.
+        // CR/LF in a canonical name is accepted — decided, not missed (#720):
+        // `sanitize_filename` normalizes backslashes, strips path components and maps
+        // NUL, but does not reject CR/LF. No live hazard follows: `content_disposition`
+        // drops control characters from its `filename=` fallback and percent-encodes
+        // `filename*=`, the stored spelling holds no literal control byte, and CR/LF
+        // are legal XML in the Atom `<title>` (NUL, which is not, is caught above).
+        // Tightening this would change what uploads are accepted — a separate decision.
         assert!("a%0D%0Ab.jpg".parse::<Filename>().is_ok());
     }
 

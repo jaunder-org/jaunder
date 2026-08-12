@@ -152,9 +152,8 @@ mod tests {
         }
     }
 
-    /// The cursor only became wire data in #569 — before that it was client-side
-    /// state with no serde at all. Both shapes the server emits (a last page, and
-    /// a page with more behind it) must survive the projector's seed blob.
+    /// The cursor is wire data (#569): both shapes the server emits (a last page,
+    /// and a page with more behind it) must survive the projector's seed blob.
     #[test]
     fn timeline_page_round_trips_with_and_without_a_cursor() {
         for original in [

@@ -15,9 +15,9 @@ use thiserror::Error;
 /// secret: it arrives as a clap argument and is consumed once during bootstrap, never
 /// written to or decoded from a column, so it takes no `sqlx` bridge.
 ///
-/// It exists because `create_postgres_database_and_role` took three adjacent `&str` with
-/// this credential in the middle (#693) — every permutation compiled, and the middle one
-/// was a secret.
+/// It exists so `create_postgres_database_and_role` cannot take three adjacent `&str`
+/// with this credential in the middle (#693) — bare, every permutation compiles, and
+/// the middle one is a secret.
 #[derive(Clone, StrNewtype)]
 #[str_newtype(secret)]
 pub struct PgRolePassword(String);

@@ -1,12 +1,10 @@
 //! Shared `quick-xml` writer helpers for the `AtomPub` serializers.
 //!
 //! These exist to keep element and escaping behavior consistent across the
-//! service and categories serializers, which had each hand-rolled their own
-//! element writes.
-//!
-//! They once served the Atom documents too — entry, feed, and media-link — which
-//! is why the set is wider than those two callers strictly need. Those documents
-//! are now written by `atom_syndication` and no longer pass through here.
+//! service and categories serializers — one element-write spelling, not one per
+//! caller. (The Atom documents themselves — entry, feed, media-link — are written
+//! by `atom_syndication` and do not pass through here; the helper set is wider
+//! than the two callers strictly need.)
 //!
 //! Every serializer writes into an in-memory `Writer<Vec<u8>>`, whose only
 //! failure mode is real I/O — which a `Vec<u8>` never produces. These helpers

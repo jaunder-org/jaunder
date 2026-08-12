@@ -3,9 +3,7 @@
 //! RFC 5023 §9.6 media-link entry.
 //!
 //! The data model *and* the XML are `atom_syndication`'s — `Entry::write_to` and
-//! `Feed::write_to` do the serializing. Bare-entry I/O was crate-private until
-//! `atom_syndication` 0.12.10, which is why this module once carried its own
-//! `quick-xml` reader and writers.
+//! `Feed::write_to` do the serializing (ADR-0089).
 //!
 //! **There is no reader here.** Parsing is `Entry::from_str` at the call site;
 //! a wrapper would be a rename of `parse` and nothing else.
@@ -379,7 +377,7 @@ fn rel_link<T: UrlRole>(rel: &str, href: &TaggedUrl<T>) -> Link {
 /// Returns [`AtomPubError`] if the document cannot be written.
 pub fn render_feed(meta: &FeedMeta, entries: &[Entry]) -> Result<String, AtomPubError> {
     let mut links = vec![rel_link("self", &meta.self_url)];
-    // Order matches the previous hand-rolled writer: first, previous, next.
+    // Pagination links emit in a fixed order: first, previous, next.
     for (rel, href) in [
         ("first", &meta.first),
         ("previous", &meta.previous),
@@ -493,7 +491,7 @@ pub fn render_media_link_entry(entry: &MediaLinkEntry) -> Result<String, AtomPub
 ///   bookkeeping that goes with them;
 /// - the documents assembled from *our* wire structs (`FeedMeta`,
 ///   `MediaLinkEntry`);
-/// - each behaviour delta the migration deliberately accepted, so a future
+/// - each behaviour delta ADR-0089 deliberately accepted, so a future
 ///   upstream bump that changes one fails here instead of on a client;
 /// - the error class a malformed document maps to.
 #[cfg(test)]
@@ -531,11 +529,10 @@ mod tests {
 
     #[test]
     fn an_unsupported_entity_is_passed_through_literally() {
-        // The one *loosening* delta of the atom_syndication migration: upstream
-        // resolves predefined entities, then char refs, then re-emits anything it
-        // cannot resolve verbatim — where the previous hand-rolled reader rejected
-        // the document. Lenient ingest, consistent with how `mapping.rs` drops a
-        // single bad category term rather than failing the entry (R5).
+        // The one *loosening* delta ADR-0089 accepts: upstream resolves predefined
+        // entities, then char refs, then re-emits anything it cannot resolve
+        // verbatim. Lenient ingest, consistent with how `mapping.rs` drops a single
+        // bad category term rather than failing the entry (R5).
         let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom">
   <title>x&bogus;y</title>
 </entry>"#;
@@ -576,9 +573,8 @@ mod tests {
 
     #[test]
     fn a_prefixed_atom_title_does_not_populate_the_title() {
-        // Accepted narrowing: upstream matches qualified names, so a prefixed child
-        // lands in the extension map instead of the title. Documented in the ADR as
-        // an interop cost of deleting the bespoke local-name-matching reader.
+        // Accepted narrowing (ADR-0089): upstream matches qualified names, so a
+        // prefixed child lands in the extension map instead of the title.
         let xml = r#"<entry xmlns:atom="http://www.w3.org/2005/Atom">
   <atom:title>T</atom:title>
 </entry>"#;
@@ -784,8 +780,6 @@ mod tests {
             entry.updated().to_rfc3339(),
             "updated lost; xml: {out}"
         );
-        // The slug had no reader arm at all before this migration, so nothing
-        // pinned it round-tripping.
         assert_eq!(j_slug(&parsed), Some("my-post".to_string()));
         assert_eq!(
             content_parts(&parsed),
@@ -1216,8 +1210,8 @@ mod tests {
         let out = render_media_link_entry(&sample_media_link_entry()).expect("serialize");
 
         assert!(out.contains("<entry"), "out: {out}");
-        // Upstream writes a paired `<content>`, not the self-closing form the previous
-        // hand-rolled writer emitted — a deliberate, consumer-checked delta.
+        // Upstream writes a paired `<content>`, not a self-closing form — a
+        // deliberate, consumer-checked delta (ADR-0089).
         assert!(out.contains(r#"<content type="image/png""#), "out: {out}");
         assert!(
             out.contains("src=\"https://h/media/upload/ab/c0/abc/pic.png\""),
