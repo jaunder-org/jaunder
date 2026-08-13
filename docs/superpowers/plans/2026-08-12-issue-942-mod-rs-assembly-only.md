@@ -273,24 +273,28 @@ drafted, gitignored) · `CONTRIBUTING.md` · `docs/ARCHITECTURE.md`
 
 **Files:** `web/src/error/mod.rs` → new `wire.rs`
 
-- [ ] `wire.rs`: `pub type WebResult<T>`, `pub enum WebError` with its derives
+- [x] `wire.rs`: `pub type WebResult<T>`, `pub enum WebError` with its derives
       and `#[serde(rename_all = "snake_case")]`, the inherent `impl` (5
       constructors), `impl FromServerFnError for WebError`, and the
       `#[cfg(test)] mod tests`.
-- [ ] The `FromServerFnError` impl calls `server::emit_arg_decode_failure`
+- [x] The `FromServerFnError` impl calls `server::emit_arg_decode_failure`
       behind a statement-level `#[cfg(feature = "server")]`, and `mod server;`
       is private — so `wire.rs` must be a sibling **inside** `web/src/error/`
       and reach it as `super::server::emit_arg_decode_failure`.
-- [ ] `mod.rs` keeps `#[cfg(feature = "server")] mod server;`, the
+- [x] `mod.rs` keeps `#[cfg(feature = "server")] mod server;`, the
       `#[cfg(all(test, feature = "server"))] pub(crate) use server::project;`,
       the `#[cfg(feature = "server")] pub use server::{…}` list, and the
       explanatory comment block. Add
-      `mod wire; pub use wire::{WebError, WebResult};`.
-- **Verify:** `devtool run -- cargo nextest run -p web --features server` —
-  PASS. The plain `-p web` run is **not sufficient**: `web`'s `default = []`, so
-  the `#[cfg(feature = "server")]` call to `emit_arg_decode_failure` never
-  compiles without the feature, and the sibling-placement hazard above would go
-  untested. Follow with `devtool run -- cargo xtask check`.
+      `mod wire; pub use wire::{WebError, WebResult};`. → the comment block
+      stays adjacent to the `server` re-exports it describes, so the two `mod`
+      declarations now sit together above it.
+- **Verify:** → `cargo xtask check` green;
+  `cargo nextest run -p web --features server` — **265 passed**.
+  `devtool run -- cargo nextest run -p web --features server` — PASS. The plain
+  `-p web` run is **not sufficient**: `web`'s `default = []`, so the
+  `#[cfg(feature = "server")]` call to `emit_arg_decode_failure` never compiles
+  without the feature, and the sibling-placement hazard above would go untested.
+  Follow with `devtool run -- cargo xtask check`.
 - **Commit:** `refactor(web): move WebError out of error/mod.rs (#942)`
 
 ## Task 8 — `web/src/reactive/`
