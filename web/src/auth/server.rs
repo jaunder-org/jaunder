@@ -7,7 +7,7 @@ use axum::{
 use common::ids::UserId;
 use common::token::{RawToken, TokenHash};
 use common::username::Username;
-use host::auth::resolve_credential;
+use host::auth::{CredentialResolutionError, CredentialTransport, resolve_credential};
 use leptos::prelude::expect_context;
 use std::sync::Arc;
 use storage::{SessionStorage, UserStorage};
@@ -32,24 +32,34 @@ pub struct AuthUser {
 #[derive(Debug)]
 pub enum AuthRejection {
     MissingToken,
-    MissingSessionStorage,
-    Session(storage::SessionAuthError),
+    InvalidAuthorization,
+    MissingSessionStorage {
+        transport: CredentialTransport,
+    },
+    Session {
+        transport: CredentialTransport,
+        error: storage::SessionAuthError,
+    },
     BasicUsernameMismatch,
 }
 
 impl IntoResponse for AuthRejection {
     fn into_response(self) -> Response {
         match self {
-            AuthRejection::MissingSessionStorage
-            | AuthRejection::Session(storage::SessionAuthError::Internal(_)) => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
+            AuthRejection::MissingSessionStorage { .. }
+            | AuthRejection::Session {
+                error: storage::SessionAuthError::Internal(_),
+                ..
+            } => StatusCode::INTERNAL_SERVER_ERROR,
             AuthRejection::MissingToken
+            | AuthRejection::InvalidAuthorization
             | AuthRejection::BasicUsernameMismatch
-            | AuthRejection::Session(
-                storage::SessionAuthError::InvalidToken
-                | storage::SessionAuthError::SessionNotFound,
-            ) => StatusCode::UNAUTHORIZED,
+            | AuthRejection::Session {
+                error:
+                    storage::SessionAuthError::InvalidToken
+                    | storage::SessionAuthError::SessionNotFound,
+                ..
+            } => StatusCode::UNAUTHORIZED,
         }
         .into_response()
     }
@@ -62,12 +72,16 @@ where
     type Rejection = AuthRejection;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        let credential = resolve_credential(&parts.headers).ok_or(AuthRejection::MissingToken)?;
+        let credential = resolve_credential(&parts.headers).map_err(|error| match error {
+            CredentialResolutionError::Missing => AuthRejection::MissingToken,
+            CredentialResolutionError::InvalidAuthorization => AuthRejection::InvalidAuthorization,
+        })?;
+        let transport = credential.transport;
 
         let sessions = parts
             .extensions
             .get::<Arc<dyn SessionStorage>>()
-            .ok_or(AuthRejection::MissingSessionStorage)?;
+            .ok_or(AuthRejection::MissingSessionStorage { transport })?;
 
         match sessions.authenticate(&credential.token).await {
             Ok(record) => {
@@ -81,7 +95,7 @@ where
             }
             Err(error) => {
                 host::metrics::session_validation(storage::session_outcome(&error));
-                Err(AuthRejection::Session(error))
+                Err(AuthRejection::Session { transport, error })
             }
         }
     }
@@ -166,21 +180,27 @@ pub async fn is_operator_soft() -> InternalResult<bool> {
 fn auth_rejection_error(error: AuthRejection) -> InternalError {
     match error {
         AuthRejection::MissingToken => InternalError::unauthorized("missing session token"),
-        AuthRejection::MissingSessionStorage => {
+        AuthRejection::InvalidAuthorization => {
+            InternalError::unauthorized("invalid authorization header")
+        }
+        AuthRejection::MissingSessionStorage { .. } => {
             InternalError::server_message("missing SessionStorage context")
         }
         AuthRejection::BasicUsernameMismatch => {
             InternalError::unauthorized("basic auth username mismatch")
         }
-        AuthRejection::Session(storage::SessionAuthError::InvalidToken) => {
-            InternalError::unauthorized("invalid session token")
-        }
-        AuthRejection::Session(storage::SessionAuthError::SessionNotFound) => {
-            InternalError::unauthorized("session not found")
-        }
-        AuthRejection::Session(storage::SessionAuthError::Internal(error)) => {
-            InternalError::storage(error)
-        }
+        AuthRejection::Session {
+            error: storage::SessionAuthError::InvalidToken,
+            ..
+        } => InternalError::unauthorized("invalid session token"),
+        AuthRejection::Session {
+            error: storage::SessionAuthError::SessionNotFound,
+            ..
+        } => InternalError::unauthorized("session not found"),
+        AuthRejection::Session {
+            error: storage::SessionAuthError::Internal(error),
+            ..
+        } => InternalError::storage(error),
     }
 }
 
@@ -320,57 +340,63 @@ mod tests {
 
     #[test]
     fn auth_rejection_into_response_renders_500_for_missing_session_storage() {
-        let response = AuthRejection::MissingSessionStorage.into_response();
+        let response = AuthRejection::MissingSessionStorage {
+            transport: CredentialTransport::Cookie,
+        }
+        .into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[test]
     fn auth_rejection_into_response_renders_500_for_session_internal_error() {
-        let response =
-            AuthRejection::Session(storage::SessionAuthError::Internal(sqlx::Error::PoolClosed))
-                .into_response();
+        let response = AuthRejection::Session {
+            transport: CredentialTransport::Bearer,
+            error: storage::SessionAuthError::Internal(sqlx::Error::PoolClosed),
+        }
+        .into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[test]
     fn auth_rejection_error_maps_each_variant_to_expected_internal_error() {
-        let missing_token = auth_rejection_error(AuthRejection::MissingToken);
-        assert!(matches!(
-            crate::error::project(missing_token.kind(), missing_token.public_message()),
-            crate::error::WebError::Unauthorized
-        ));
+        for rejection in [
+            AuthRejection::MissingToken,
+            AuthRejection::InvalidAuthorization,
+            AuthRejection::BasicUsernameMismatch,
+        ] {
+            let error = auth_rejection_error(rejection);
+            assert!(matches!(
+                crate::error::project(error.kind(), error.public_message()),
+                crate::error::WebError::Unauthorized
+            ));
+        }
 
-        let missing_state = auth_rejection_error(AuthRejection::MissingSessionStorage);
+        let missing_state = auth_rejection_error(AuthRejection::MissingSessionStorage {
+            transport: CredentialTransport::Cookie,
+        });
         assert!(matches!(
             crate::error::project(missing_state.kind(), missing_state.public_message()),
             crate::error::WebError::Server { .. }
         ));
 
-        let basic_mismatch = auth_rejection_error(AuthRejection::BasicUsernameMismatch);
-        assert!(matches!(
-            crate::error::project(basic_mismatch.kind(), basic_mismatch.public_message()),
-            crate::error::WebError::Unauthorized
-        ));
-
-        let invalid = auth_rejection_error(AuthRejection::Session(
+        for error in [
             storage::SessionAuthError::InvalidToken,
-        ));
-        assert!(matches!(
-            crate::error::project(invalid.kind(), invalid.public_message()),
-            crate::error::WebError::Unauthorized
-        ));
-
-        let not_found = auth_rejection_error(AuthRejection::Session(
             storage::SessionAuthError::SessionNotFound,
-        ));
-        assert!(matches!(
-            crate::error::project(not_found.kind(), not_found.public_message()),
-            crate::error::WebError::Unauthorized
-        ));
+        ] {
+            let rejection = auth_rejection_error(AuthRejection::Session {
+                transport: CredentialTransport::Bearer,
+                error,
+            });
+            assert!(matches!(
+                crate::error::project(rejection.kind(), rejection.public_message()),
+                crate::error::WebError::Unauthorized
+            ));
+        }
 
-        let internal = auth_rejection_error(AuthRejection::Session(
-            storage::SessionAuthError::Internal(sqlx::Error::PoolClosed),
-        ));
+        let internal = auth_rejection_error(AuthRejection::Session {
+            transport: CredentialTransport::Bearer,
+            error: storage::SessionAuthError::Internal(sqlx::Error::PoolClosed),
+        });
         assert!(matches!(
             crate::error::project(internal.kind(), internal.public_message()),
             crate::error::WebError::Storage { .. }
@@ -383,6 +409,25 @@ mod tests {
         assert!(matches!(
             crate::error::project(e.kind(), e.public_message()),
             crate::error::WebError::Server { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn auth_user_extraction_rejects_invalid_authorization_before_cookie_fallback() {
+        use axum::body::Body;
+        use axum::http::{Request, header};
+
+        let request = Request::builder()
+            .header(header::AUTHORIZATION, "Negotiate unsupported")
+            .header(header::COOKIE, "session=some-token")
+            .body(Body::empty())
+            .unwrap();
+        let (mut parts, _) = request.into_parts();
+
+        let result = AuthUser::from_request_parts(&mut parts, &()).await;
+        assert!(matches!(
+            result.unwrap_err(),
+            AuthRejection::InvalidAuthorization
         ));
     }
 
@@ -404,7 +449,9 @@ mod tests {
         let result = AuthUser::from_request_parts(&mut parts, &()).await;
         assert!(matches!(
             result.unwrap_err(),
-            AuthRejection::MissingSessionStorage
+            AuthRejection::MissingSessionStorage {
+                transport: CredentialTransport::Cookie
+            }
         ));
     }
 }

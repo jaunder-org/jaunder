@@ -20,59 +20,103 @@ pub struct CookieSettings {
     pub secure: bool,
 }
 
-/// A session token resolved from request headers, plus — for HTTP Basic auth —
-/// the username the authenticated session must belong to.
+/// How a request presented a resolved session credential.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CredentialTransport {
+    /// The `session=` cookie.
+    Cookie,
+    /// An `Authorization: Bearer` header.
+    Bearer,
+    /// An `Authorization: Basic` app password.
+    Basic,
+}
+
+/// Why request headers did not resolve to a credential.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CredentialResolutionError {
+    /// No syntactically valid cookie or explicit credential was present.
+    Missing,
+    /// An `Authorization` header was present but unsupported or malformed.
+    InvalidAuthorization,
+}
+
+/// A session token resolved from request headers, with transport provenance.
+#[derive(Debug)]
 pub struct Credential {
     /// The raw session token to authenticate.
     pub token: RawToken,
     /// For Basic auth, the validated username supplied alongside the token, which
     /// must match the authenticated session's user. `None` for cookie/Bearer auth.
     pub expected_username: Option<common::username::Username>,
+    /// The request transport that supplied this credential.
+    pub transport: CredentialTransport,
+    /// Whether the request also carried a `session=` cookie, valid or not.
+    pub session_cookie_present: bool,
 }
 
-/// Resolves the session credential from request headers.
+/// Resolves the authoritative session credential from request headers.
 ///
-/// Precedence: the `session=` cookie, then `Authorization: Bearer <token>`,
-/// then `Authorization: Basic <base64(user:token)>` (app passwords). Returns
-/// `None` when no recognized credential is present.
-#[must_use]
-pub fn resolve_credential(headers: &http::HeaderMap) -> Option<Credential> {
-    // Validate a token string into a `RawToken`, yielding a `Credential` — or
-    // `None` when the value isn't a syntactically valid token (empty or
-    // out-of-charset). A skipped source does not short-circuit, so e.g. an empty
-    // `session=` cookie falls through to a valid `Authorization` header (#344 item 2).
-    fn credential(
-        raw: &str,
-        expected_username: Option<common::username::Username>,
-    ) -> Option<Credential> {
-        Some(Credential {
-            token: RawToken::from_str(raw).ok()?,
-            expected_username,
-        })
-    }
-
-    let from_cookie = headers
+/// Any `Authorization` header is explicit request intent and is resolved before
+/// cookies. Unsupported or malformed authorization therefore rejects rather than
+/// falling back to ambient browser identity. Without that header, a valid
+/// `session=` cookie is accepted.
+///
+/// # Errors
+///
+/// Returns [`CredentialResolutionError::InvalidAuthorization`] for any present
+/// but unsupported or malformed `Authorization` value, and
+/// [`CredentialResolutionError::Missing`] when no valid cookie is available.
+pub fn resolve_credential(
+    headers: &http::HeaderMap,
+) -> Result<Credential, CredentialResolutionError> {
+    let session_cookie = headers
         .get(http::header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| {
-            s.split(';')
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            value
+                .split(';')
                 .map(str::trim)
-                .find_map(|c| c.strip_prefix("session="))
-                .and_then(|token| credential(token, None))
+                .find_map(|cookie| cookie.strip_prefix("session="))
         });
-    if from_cookie.is_some() {
-        return from_cookie;
+    let session_cookie_present = session_cookie.is_some();
+
+    if let Some(value) = headers.get(http::header::AUTHORIZATION) {
+        let header = value
+            .to_str()
+            .map_err(|_| CredentialResolutionError::InvalidAuthorization)?;
+        let (raw, expected_username, transport) =
+            if let Some(token) = header.strip_prefix("Bearer ") {
+                (token, None, CredentialTransport::Bearer)
+            } else if header.starts_with("Basic ") {
+                let (username, password) = common::auth::parse_basic_auth(header)
+                    .ok_or(CredentialResolutionError::InvalidAuthorization)?;
+                return Ok(Credential {
+                    token: RawToken::from_str(&password)
+                        .map_err(|_| CredentialResolutionError::InvalidAuthorization)?,
+                    expected_username: Some(username),
+                    transport: CredentialTransport::Basic,
+                    session_cookie_present,
+                });
+            } else {
+                return Err(CredentialResolutionError::InvalidAuthorization);
+            };
+
+        return Ok(Credential {
+            token: RawToken::from_str(raw)
+                .map_err(|_| CredentialResolutionError::InvalidAuthorization)?,
+            expected_username,
+            transport,
+            session_cookie_present,
+        });
     }
 
-    let header = headers
-        .get(http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())?;
-    if let Some(token) = header.strip_prefix("Bearer ") {
-        credential(token, None)
-    } else {
-        let (username, password) = common::auth::parse_basic_auth(header)?;
-        credential(&password, Some(username))
-    }
+    Ok(Credential {
+        token: RawToken::from_str(session_cookie.ok_or(CredentialResolutionError::Missing)?)
+            .map_err(|_| CredentialResolutionError::Missing)?,
+        expected_username: None,
+        transport: CredentialTransport::Cookie,
+        session_cookie_present,
+    })
 }
 
 /// Builds the `Set-Cookie` header value that stores the session token. `secure`
@@ -107,15 +151,16 @@ mod tests {
     }
 
     #[test]
-    fn resolve_credential_prefers_cookie_over_authorization() {
+    fn resolve_credential_prefers_authorization_and_reports_cookie_presence() {
         let mut headers = headers_with(http::header::COOKIE, "session=cookie-token");
         headers.insert(
             http::header::AUTHORIZATION,
             http::HeaderValue::from_static("Bearer bearer-token"),
         );
         let credential = resolve_credential(&headers).expect("credential");
-        assert_eq!(credential.token, "cookie-token");
-        assert_eq!(credential.expected_username, None);
+        assert_eq!(credential.token, "bearer-token");
+        assert_eq!(credential.transport, CredentialTransport::Bearer);
+        assert!(credential.session_cookie_present);
     }
 
     #[test]
@@ -124,22 +169,54 @@ mod tests {
         let credential = resolve_credential(&headers).expect("credential");
         assert_eq!(credential.token, "bearer-token");
         assert_eq!(credential.expected_username, None);
+        assert_eq!(credential.transport, CredentialTransport::Bearer);
+        assert!(!credential.session_cookie_present);
     }
 
     #[test]
-    fn resolve_credential_reads_basic_app_password() {
-        // base64("alice:tok123") == "YWxpY2U6dG9rMTIz"
-        let headers = headers_with(http::header::AUTHORIZATION, "Basic YWxpY2U6dG9rMTIz");
+    fn resolve_credential_reads_basic_app_password_and_canonical_username() {
+        // base64("Alice:tok123") == "QWxpY2U6dG9rMTIz"
+        let headers = headers_with(http::header::AUTHORIZATION, "Basic QWxpY2U6dG9rMTIz");
         let credential = resolve_credential(&headers).expect("credential");
         assert_eq!(credential.token, "tok123");
         assert_eq!(credential.expected_username.as_deref(), Some("alice"));
+        assert_eq!(credential.transport, CredentialTransport::Basic);
+        assert!(!credential.session_cookie_present);
     }
 
     #[test]
-    fn resolve_credential_returns_none_without_recognized_header() {
-        assert!(resolve_credential(&http::HeaderMap::new()).is_none());
-        let headers = headers_with(http::header::AUTHORIZATION, "Negotiate xyz");
-        assert!(resolve_credential(&headers).is_none());
+    fn resolve_credential_uses_cookie_without_authorization() {
+        let headers = headers_with(http::header::COOKIE, "session=cookie-token");
+        let credential = resolve_credential(&headers).expect("credential");
+        assert_eq!(credential.token, "cookie-token");
+        assert_eq!(credential.expected_username, None);
+        assert_eq!(credential.transport, CredentialTransport::Cookie);
+        assert!(credential.session_cookie_present);
+    }
+
+    #[test]
+    fn resolve_credential_rejects_bad_authorization_instead_of_using_cookie() {
+        for value in ["Negotiate xyz", "Bearer has space", "Basic !!!notbase64!!!"] {
+            let mut headers = headers_with(http::header::COOKIE, "session=cookie-token");
+            headers.insert(http::header::AUTHORIZATION, value.parse().unwrap());
+            assert!(matches!(
+                resolve_credential(&headers),
+                Err(CredentialResolutionError::InvalidAuthorization)
+            ));
+        }
+    }
+
+    #[test]
+    fn resolve_credential_reports_missing_without_a_valid_credential() {
+        assert!(matches!(
+            resolve_credential(&http::HeaderMap::new()),
+            Err(CredentialResolutionError::Missing)
+        ));
+        let headers = headers_with(http::header::COOKIE, "session=");
+        assert!(matches!(
+            resolve_credential(&headers),
+            Err(CredentialResolutionError::Missing)
+        ));
     }
 
     #[test]
@@ -154,17 +231,8 @@ mod tests {
         );
         let credential = resolve_credential(&headers).expect("credential from header");
         assert_eq!(credential.token, "abcABC012-_");
-    }
-
-    #[test]
-    fn resolve_credential_rejects_unparseable_bearer() {
-        // A Bearer value that is not a valid RawToken yields no credential from that source.
-        let mut headers = http::HeaderMap::new();
-        headers.insert(
-            http::header::AUTHORIZATION,
-            "Bearer has space".parse().unwrap(),
-        );
-        assert!(resolve_credential(&headers).is_none());
+        assert_eq!(credential.transport, CredentialTransport::Bearer);
+        assert!(credential.session_cookie_present);
     }
 
     #[test]

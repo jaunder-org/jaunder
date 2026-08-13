@@ -150,7 +150,7 @@ pub fn resolve_credential(
 - Task 2 consumes `CredentialTransport` and `session_cookie_present` after
   authentication succeeds.
 
-- [ ] **Step 1: Replace the host resolver tests with the full precedence
+- [x] **Step 1: Replace the host resolver tests with the full precedence
       contract**
 
 Keep the existing cookie/Bearer/Basic happy-path and cookie-header construction
@@ -187,7 +187,7 @@ fn cookie_is_used_only_without_authorization() {
     let headers = headers_with(http::header::COOKIE, "session=cookie-token");
     let credential = resolve_credential(&headers).unwrap();
     assert_eq!(credential.transport, CredentialTransport::Cookie);
-    assert!(!credential.session_cookie_present);
+    assert!(credential.session_cookie_present);
 }
 
 #[test]
@@ -220,11 +220,7 @@ fn missing_or_invalid_cookie_without_authorization_remains_missing() {
 }
 ```
 
-Also retain the valid-cookie-plus-empty-cookie fall-through behavior within the
-cookie transport itself; no `Authorization` behavior may revive the old
-cookie-first path.
-
-- [ ] **Step 2: Run the host tests and verify the old API fails**
+- [x] **Step 2: Run the host tests and verify the old API fails**
 
 ```bash
 devtool run -- cargo nextest run -p host resolve_credential
@@ -233,7 +229,7 @@ devtool run -- cargo nextest run -p host resolve_credential
 Expected: FAIL because the typed result, transport, and error variants do not
 exist and the resolver still prefers cookies.
 
-- [ ] **Step 3: Implement the pure resolver and migrate `AuthUser`**
+- [x] **Step 3: Implement the pure resolver and migrate `AuthUser`**
 
 Resolve `Authorization` by header presence before inspecting cookies. Bearer and
 Basic parsing failures, invalid header bytes, and every unsupported scheme
@@ -247,11 +243,11 @@ existing session lookup and Basic username check, and extend the response/error
 projection tests so both variants produce the repository's unauthorized public
 shape.
 
-- [ ] **Step 4: Run targeted tests, then the fast gate**
+- [x] **Step 4: Run targeted tests, then the fast gate**
 
 ```bash
 devtool run -- cargo nextest run -p host resolve_credential
-devtool run -- cargo nextest run -p web auth::server::tests
+devtool run -- cargo nextest run -p web --features server auth_rejection
 devtool run -- cargo xtask check --no-test
 ```
 
@@ -259,7 +255,7 @@ Expected: all PASS. Existing no-header cookie tests remain green; unsupported
 Authorization now reaches unauthorized rather than `MissingToken` or cookie
 authentication.
 
-- [ ] **Step 5: Commit the typed resolution cutover**
+- [x] **Step 5: Commit the typed resolution cutover**
 
 After the required full gate, stage `host/src/auth.rs`,
 `web/src/auth/server.rs`, and the checked plan:
