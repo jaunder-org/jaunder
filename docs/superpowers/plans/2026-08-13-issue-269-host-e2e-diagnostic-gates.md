@@ -479,7 +479,7 @@ is still running, kill it; always wait/reap it; then join the mirror. The
 recording helper always pushes both `e2e-local-playwright` and
 `e2e-local-panic-gate` steps.
 
-- [ ] **Step 1: Add failing unit tests for the stderr and aggregation seams**
+- [x] **Step 1: Add failing unit tests for the stderr and aggregation seams**
 
 Add these tests to the existing `e2e_local.rs` test module, updating the
 existing `ServerChild` construction only after the new type is implemented:
@@ -552,7 +552,7 @@ Run:
 
 Expected: **FAIL** — the mirror and aggregation interfaces are undefined.
 
-- [ ] **Step 2: Implement streaming stderr ownership and teardown**
+- [x] **Step 2: Implement streaming stderr ownership and teardown**
 
 Import `File`, `Read`, `Write`, `Stdio`, and `JoinHandle`. Implement
 `mirror_server_stderr` with one fixed stack buffer: each successful read writes
@@ -572,7 +572,7 @@ result, preserving cleanup on every pre-Playwright early return. Update
 `server_child_kills_on_drop` for the new constructor and retain its `/proc`
 reaping assertion.
 
-- [ ] **Step 3: Preserve Playwright status, drain, verify, and record both
+- [x] **Step 3: Preserve Playwright status, drain, verify, and record both
       results**
 
 Replace the Playwright failure early return with a stored `playwright_ok` bool.
@@ -592,7 +592,7 @@ After Playwright exits:
 Do not expose the parser in `xtask`, do not return before the shared verifier,
 and do not persist the temp directory.
 
-- [ ] **Step 4: Run the host-driver unit tests**
+- [x] **Step 4: Run the host-driver unit tests**
 
 Run:
 `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml e2e_local`
@@ -600,7 +600,7 @@ Run:
 Expected: **PASS** — byte-exact teeing, dual-failure aggregation, clean
 aggregation, runtime parsing, and kill/reap tests all pass.
 
-- [ ] **Step 5: Update the architecture view**
+- [x] **Step 5: Update the architecture view**
 
 Update `docs/ARCHITECTURE.md` without restating implementation trivia:
 
@@ -616,7 +616,7 @@ Run: `devtool run -- prettier -w docs/ARCHITECTURE.md`
 
 Expected: **PASS**; only intended paragraphs reflow.
 
-- [ ] **Step 6: Smoke the real host loop**
+- [x] **Step 6: Smoke the real host loop**
 
 Run: `devtool run -- cargo xtask e2e-local example.spec.ts`
 
@@ -625,15 +625,15 @@ Expected: **PASS** with successful `e2e-local-playwright` and
 completion the server is reaped and the command exits without retaining the
 per-run directory.
 
-- [ ] **Step 7: Run the full local gate**
+- [x] **Step 7: Run the full local gate**
 
-Run: `devtool run -- cargo xtask validate`
+Run: `devtool run -- cargo xtask validate --allow-dirty`
 
 Expected: **PASS** — verify-only static checks, coverage, and all four
 `{sqlite,postgres}×{chromium,firefox}` e2e combinations, each using the shared
 verifier.
 
-- [ ] **Step 8: Stage, gate, and commit Task 3**
+- [x] **Step 8: Stage, gate, and commit Task 3**
 
 Tick Task 3 and stage `xtask/src/steps/e2e_local.rs`, `docs/ARCHITECTURE.md`,
 and the completed plan. Then run: `devtool run -- cargo xtask check`

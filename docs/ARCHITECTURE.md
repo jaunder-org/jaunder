@@ -1208,9 +1208,11 @@ The single env var `JAUNDER_CAPTURE_DIR` enables app-driven capture
 (`mail.jsonl`, `websub.jsonl`, `diag.log`), resolved at a composition root. The
 diag stream is a WARN+-filtered JSON `tracing` layer plus a panic hook appending
 `kind: "panic"` JSONL records through its own `O_APPEND` handle (bypassing
-`tracing` to avoid deadlock); the zero-panic gate
-([ADR-0032](adr/0032-e2e-zero-panic-gate.md)) sources panics from the union of
-`diag.log` and the journal. Per combo the e2e harness tars the directory out as
+`tracing` to avoid deadlock). The shared `test_support::panic_gate` verifier
+([ADR-0032](adr/0032-e2e-zero-panic-gate.md)) resolves the diagnostic filename
+through `host::capture`, scans raw bytes from the union of that stream and a
+required server log, and de-duplicates by panic location with the scoped record
+winning. Per combo the e2e harness tars the directory out as
 `capture-<backend>.tar.gz` — those three files plus `otel-traces.jsonl` — into
 the [ADR-0037](adr/0037-e2e-failure-diagnostics-capture.md) artifact set.
 
@@ -1795,7 +1797,11 @@ host driver ([ADR-0051](adr/0051-single-playwright-config.md)) —
 `JAUNDER_E2E_WORKERS=1` (the host serves a debug CSR build; the VM keeps the
 config default of 2). The host loop is `cargo xtask e2e-local`
 (`xtask/src/steps/e2e_local.rs`), which owns the whole lifecycle: build, spawn
-`jaunder serve` on an ephemeral port, seed, run Playwright, tear down.
+`jaunder serve` on an ephemeral port, seed, run Playwright, stop and reap the
+server, then verify its diagnostics. Server stderr is streamed unchanged to the
+live terminal and a per-run file; stopping the child closes the pipe so the
+driver can drain that journal-equivalent input before invoking the shared
+zero-panic verifier.
 
 Specs are parallel-safe by construction, via per-test identity fixtures in
 `end2end/tests/fixtures.ts`
@@ -1834,12 +1840,15 @@ There is no warmup navigation, no `JAUNDER_E2E_WARMUP*` setting and no
 once-per-worker warmup is not a shortcut around this: Playwright mints a fresh
 context per test and the HTTP cache is not shared across `browser.newContext()`.
 
-The suite is a zero-panic gate ([ADR-0032](adr/0032-e2e-zero-panic-gate.md)):
-each VM testScript copies the `jaunder.service` journal into the check's `$out`
-and asserts it contains no `panicked at` line, default-deny via an explicit
-`allowed_panics` list, empty today (`flake.nix:603`). A panic therefore fails
-the _derivation_ and can never be cached green, and the journal is an artifact
-on every run, fresh or cached.
+The suite is a zero-panic gate ([ADR-0032](adr/0032-e2e-zero-panic-gate.md)).
+Both e2e surfaces invoke `test-support verify-no-panics`, whose Rust
+implementation owns the default-empty allowlist, raw-byte union scan,
+location-based de-duplication, and scoped-record preference. Each VM testScript
+passes its materialized `jaunder.service` journal; the host loop passes its
+drained stderr capture. Both preserve Playwright's status and verify afterward,
+so a test failure cannot mask a server panic. A VM panic fails the _derivation_
+and can never be cached green, while the copied journal remains an artifact on
+every run, fresh or cached.
 
 Diagnostics are captured before the check is allowed to fail
 ([ADR-0037](adr/0037-e2e-failure-diagnostics-capture.md)):
