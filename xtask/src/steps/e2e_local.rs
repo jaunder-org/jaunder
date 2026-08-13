@@ -20,9 +20,11 @@
 //! capture paths (via `test-support capture-path`) the server writes, and
 //! `seed.ts`'s bare-`test-support` `seedPostsViaTool` resolves the same binary +
 //! DB — VM parity for the mail/websub/pagination specs.
+use std::fs::File;
+use std::io::{Read, Write};
 use std::path::Path;
-use std::process::{Child, Command};
-use std::thread::sleep;
+use std::process::{Child, Command, Stdio};
+use std::thread::{JoinHandle, sleep};
 use std::time::Duration;
 
 use xshell::{Shell, cmd};
@@ -39,16 +41,103 @@ fn base_url_from_runtime(json: &str) -> Option<String> {
     Some(format!("http://{ip}:{port}"))
 }
 
-/// Owns the spawned `jaunder serve` child and reaps it on `Drop`, so no exit path
-/// (early return, panic-unwind) leaks the server (#249 G1). `SIGKILL` is fine — the
-/// child holds no state we need flushed; the per-run temp storage dir is dropped
-/// separately.
-struct ServerChild(Child);
+/// Stream the server's stderr to the live terminal and the per-run verifier
+/// input without accumulating the log in memory.
+fn mirror_server_stderr(
+    mut reader: impl Read,
+    mut terminal: impl Write,
+    mut capture: impl Write,
+) -> std::io::Result<()> {
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            terminal.flush()?;
+            capture.flush()?;
+            return Ok(());
+        }
+        terminal.write_all(&buffer[..read])?;
+        terminal.flush()?;
+        capture.write_all(&buffer[..read])?;
+    }
+}
+
+/// Owns the spawned server and its stderr mirror. Stopping the child closes the
+/// pipe, after which joining the mirror proves every byte reached its capture.
+struct ServerChild {
+    child: Option<Child>,
+    stderr_mirror: Option<JoinHandle<std::io::Result<()>>>,
+}
+
+impl ServerChild {
+    fn new(mut child: Child, capture: File) -> anyhow::Result<Self> {
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("jaunder serve stderr was not piped"))?;
+        let stderr_mirror =
+            std::thread::spawn(move || mirror_server_stderr(stderr, std::io::stderr(), capture));
+        Ok(Self {
+            child: Some(child),
+            stderr_mirror: Some(stderr_mirror),
+        })
+    }
+
+    fn stop(&mut self) -> anyhow::Result<()> {
+        let mut failures = Vec::new();
+        if let Some(mut child) = self.child.take() {
+            match child.try_wait() {
+                Ok(Some(_)) => {}
+                Ok(None) => {
+                    if let Err(error) = child.kill() {
+                        failures.push(format!("failed to stop jaunder serve: {error}"));
+                    }
+                }
+                Err(error) => failures.push(format!("failed to inspect jaunder serve: {error}")),
+            }
+            if let Err(error) = child.wait() {
+                failures.push(format!("failed to reap jaunder serve: {error}"));
+            }
+        }
+        if let Some(mirror) = self.stderr_mirror.take() {
+            match mirror.join() {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => failures.push(format!("failed to mirror server stderr: {error}")),
+                Err(_) => failures.push("server stderr mirror panicked".to_owned()),
+            }
+        }
+
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            anyhow::bail!(failures.join("; "))
+        }
+    }
+}
 
 impl Drop for ServerChild {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        let _ = self.stop();
+    }
+}
+
+fn record_post_playwright_results(
+    result: &mut CommandResult,
+    playwright_ok: bool,
+    panic_gate_result: Result<(), String>,
+) {
+    if playwright_ok {
+        result.push(StepResult::ok("e2e-local-playwright"));
+    } else {
+        result.push(
+            StepResult::fail("e2e-local-playwright")
+                .detail("Playwright reported failures".to_owned()),
+        );
+    }
+
+    match panic_gate_result {
+        Ok(()) => result.push(StepResult::ok("e2e-local-panic-gate")),
+        Err(detail) => result.push(StepResult::fail("e2e-local-panic-gate").detail(detail)),
     }
 }
 
@@ -95,6 +184,17 @@ pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
     // mail.jsonl/websub.jsonl/diag.log into. Kept separate from the storage root so it
     // holds only capture streams (VM parity: /var/lib/jaunder/capture).
     let capture = format!("{sp}/capture");
+    let server_stderr = storage.path().join("server-stderr.log");
+    let stderr_capture = match File::create(&server_stderr) {
+        Ok(file) => file,
+        Err(error) => {
+            result.push(
+                StepResult::fail("e2e-local-server-log")
+                    .detail(format!("failed to create server stderr capture: {error}")),
+            );
+            return;
+        }
+    };
 
     // 3. Start `jaunder serve` on an EPHEMERAL port (:0) with the canonical capture
     // env, in the dev environment (default) so the schema auto-inits on start.
@@ -106,6 +206,7 @@ pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
         .env("JAUNDER_DB", &db)
         .env("JAUNDER_RUNTIME_FILE", &runtime)
         .env("JAUNDER_CAPTURE_DIR", &capture)
+        .stderr(Stdio::piped())
         .spawn()
     {
         Ok(c) => c,
@@ -117,7 +218,16 @@ pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
             return;
         }
     };
-    let _server = ServerChild(child);
+    let mut server = match ServerChild::new(child, stderr_capture) {
+        Ok(server) => server,
+        Err(error) => {
+            result.push(
+                StepResult::fail("e2e-local-server-log")
+                    .detail(format!("failed to start server stderr capture: {error}")),
+            );
+            return;
+        }
+    };
 
     // 4. Discover the OS-assigned port from the runtime file, then wait for the
     // server to answer (~15s: 30 × 0.5s).
@@ -187,7 +297,7 @@ pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
     if let Some(f) = test_filter {
         pw.push(f);
     }
-    if cmd!(sh, "playwright")
+    let playwright_ok = cmd!(sh, "playwright")
         .args(pw)
         .env("JAUNDER_E2E_BASE_URL", &base_url)
         .env("JAUNDER_DB", &db)
@@ -196,17 +306,26 @@ pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
         .env("PLAYWRIGHT_HTML_OPEN", "never")
         .env("PATH", &path)
         .run()
-        .is_err()
-    {
+        .is_ok();
+
+    // Stop first: child exit closes stderr, so a successful stop also proves the
+    // mirror reached EOF and flushed the complete verifier input.
+    if let Err(error) = server.stop() {
         result.push(
-            StepResult::fail("e2e-local-playwright")
-                .detail("Playwright reported failures".to_owned()),
+            StepResult::fail("e2e-local-server-log")
+                .detail(format!("failed to finalize server stderr capture: {error}")),
         );
-        return;
     }
-    result.push(StepResult::ok("e2e-local-playwright"));
-    // `_server` (ServerChild) and `storage` (TempDir) drop here: server killed and
-    // reaped, temp storage removed.
+
+    let panic_gate_result = cmd!(
+        sh,
+        "{test_support} verify-no-panics --capture-dir {capture} --server-log {server_stderr}"
+    )
+    .run()
+    .map_err(|_| "shared zero-panic verifier failed".to_owned());
+    record_post_playwright_results(result, playwright_ok, panic_gate_result);
+    // `storage` drops here after the server is reaped and verification has read
+    // its per-run files.
 }
 
 #[cfg(test)]
@@ -229,15 +348,75 @@ mod tests {
     }
 
     #[test]
+    fn stderr_mirror_copies_every_byte_to_both_sinks() {
+        let input = b"first\n\xff panicked at src/x.rs:1:2: boom\n";
+        let mut terminal = Vec::new();
+        let mut capture = Vec::new();
+
+        mirror_server_stderr(&input[..], &mut terminal, &mut capture).expect("mirror succeeds");
+
+        assert_eq!(terminal, input);
+        assert_eq!(capture, input);
+    }
+
+    #[test]
+    fn playwright_and_panic_failures_are_both_recorded() {
+        let mut result = CommandResult::new("e2e-local");
+
+        record_post_playwright_results(
+            &mut result,
+            false,
+            Err("shared verifier rejected a panic".to_owned()),
+        );
+
+        assert!(!result.ok);
+        let playwright = result
+            .steps
+            .iter()
+            .find(|step| step.name == "e2e-local-playwright")
+            .expect("playwright step");
+        let panic_gate = result
+            .steps
+            .iter()
+            .find(|step| step.name == "e2e-local-panic-gate")
+            .expect("panic step");
+        assert!(!playwright.ok);
+        assert!(!panic_gate.ok);
+        assert_eq!(
+            panic_gate.detail.as_deref(),
+            Some("shared verifier rejected a panic")
+        );
+    }
+
+    #[test]
+    fn clean_post_playwright_results_are_both_successful() {
+        let mut result = CommandResult::new("e2e-local");
+        record_post_playwright_results(&mut result, true, Ok(()));
+        assert!(result.ok);
+        assert_eq!(
+            result
+                .steps
+                .iter()
+                .filter(|step| {
+                    step.name == "e2e-local-playwright" || step.name == "e2e-local-panic-gate"
+                })
+                .filter(|step| step.ok)
+                .count(),
+            2
+        );
+    }
+
+    #[test]
     fn server_child_kills_on_drop() {
-        // A long-lived child stands in for `jaunder serve`.
         let child = Command::new("sleep")
             .arg("60")
+            .stderr(Stdio::piped())
             .spawn()
             .expect("spawn sleep");
+        let capture = tempfile::tempfile().expect("capture file");
         let pid = child.id();
         let proc = std::path::PathBuf::from(format!("/proc/{pid}"));
-        let guard = ServerChild(child);
+        let guard = ServerChild::new(child, capture).expect("server guard");
         assert!(proc.exists(), "child should be alive before drop");
         drop(guard); // Drop kills AND waits (reaps the zombie so /proc/<pid> clears)
         // Linux-only (xtask is host-only Linux): once killed + reaped, /proc/<pid>

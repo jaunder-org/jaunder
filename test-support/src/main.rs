@@ -96,6 +96,15 @@ enum Commands {
         /// The capture stream key.
         stream: String,
     },
+    /// Fail if the scoped diagnostic stream or required server log records a Rust panic.
+    VerifyNoPanics {
+        /// E2E capture directory; the diagnostic filename is resolved by `host::capture`.
+        #[arg(long)]
+        capture_dir: std::path::PathBuf,
+        /// Required VM-journal or host-stderr capture.
+        #[arg(long)]
+        server_log: std::path::PathBuf,
+    },
 }
 
 #[tokio::main]
@@ -135,6 +144,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             label,
         } => cmd_create_session(&db, &username, label.as_deref()).await,
         Commands::CapturePath { stream } => cmd_capture_path(&stream),
+        Commands::VerifyNoPanics {
+            capture_dir,
+            server_log,
+        } => test_support::panic_gate::verify_no_panics(&capture_dir, &server_log),
     }
 }
 
