@@ -182,9 +182,9 @@ This tracker-only task makes no repository commit.
 Completed 2026-08-13. All 17 owner issues are open `Task` issues with label
 `dx`, milestone `Code quality ratchet`, Backlog Status `Todo`, and Priority
 `P3`. Five exact owners filed concurrently were reused; the duplicate issues
-#981, #982, #983, #987, and #990 were closed as duplicates and removed from
-the Backlog. Owner-issue creation timestamps are 2026-08-13
-20:13:35–20:14:14 UTC, before the first code-move commit:
+#981, #982, #983, #987, and #990 were closed as duplicates and removed from the
+Backlog. Owner-issue creation timestamps are 2026-08-13 20:13:35–20:14:14 UTC,
+before the first code-move commit:
 
 - `server/tests/atompub/atompub_posts.rs` → #976
 - `server/src/commands.rs` → #977
