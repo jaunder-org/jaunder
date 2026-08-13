@@ -578,7 +578,7 @@ compared, serialized, displayed, and used in URLs. _Avoid_: preserving case as a
 second username identity or pre-normalizing outside the Username boundary.
 ```
 
-- [ ] **Step 1: Author the four numberless ADR drafts and project them online**
+- [x] **Step 1: Author the four numberless ADR drafts and project them online**
 
 Copy `docs/adr/template.md` four times, then write one decision per draft:
 
@@ -605,7 +605,7 @@ intro to only the still-open #937/#938 sets. Add **Username** to `CONTEXT.md`
 and the User→Username relationship; do not put Rust implementation detail in the
 glossary.
 
-- [ ] **Step 2: Verify the unchanged cheap-KDF and token safeguards**
+- [x] **Step 2: Verify the unchanged cheap-KDF and token safeguards**
 
 Run existing behavioral tests:
 
@@ -628,7 +628,7 @@ Expected: the normal release check PASSes; the cheap-KDF release check FAILs
 specifically with `cheap-kdf must not be enabled in a release/optimized build`.
 The second non-zero exit is the expected proof, not a gate failure to suppress.
 
-- [ ] **Step 3: Check documentation and links locally**
+- [x] **Step 3: Check documentation and links locally**
 
 ```bash
 devtool run -- prettier -c CONTEXT.md docs/ARCHITECTURE.md docs/adr/drafts/test-only-cheap-kdf-fails-closed.md docs/adr/drafts/hash-bearer-tokens-before-persistence.md docs/adr/drafts/explicit-authorization-replaces-session-cookie.md docs/adr/drafts/lowercase-canonical-usernames.md
@@ -639,7 +639,7 @@ Expected: PASS while the draft files exist in the local ignored pen. Do not push
 this intermediate state: tracked architecture links to ignored drafts are valid
 locally but would be dead in a clean clone until promotion.
 
-- [ ] **Step 4: Commit the tracked documentation projection**
+- [x] **Step 4: Commit the tracked documentation projection**
 
 After the required full gate, stage only `CONTEXT.md`, `docs/ARCHITECTURE.md`,
 and the checked plan; drafts intentionally remain ignored and uncommitted:
@@ -652,7 +652,7 @@ Expected: tracked docs cite all four local draft paths; **Un-ADR'd reality** has
 no #936 entry. The four drafts remain under `docs/adr/drafts/` for
 `jaunder-ship`.
 
-- [ ] **Step 5: Preserve ship-time promotion prerequisites**
+- [x] **Step 5: Preserve ship-time promotion prerequisites**
 
 Confirm all four ignored drafts exist in this checkout and no duplicate copies
 exist in another checkout used for this issue. Do not run promotion yet.
