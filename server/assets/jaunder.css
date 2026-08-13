@@ -722,7 +722,7 @@
     padding: var(--post-pad-y) var(--post-pad-x);
 }
 
-/* ─── compose page ─── */
+/* ─── compose page (grid and aside shared with Post editor) ─── */
 .j-compose-header {
     padding: 14px 28px;
     border-bottom: 1px var(--border-style) var(--line);
@@ -1060,13 +1060,6 @@
 }
 
 /* ─── edit post form ─── */
-.j-edit-form-grid {
-    flex: 1;
-    display: grid;
-    grid-template-columns: 1fr 320px;
-    overflow: hidden;
-    min-height: 0;
-}
 .j-edit-form-body {
     padding: 28px 32px;
     overflow: auto;
@@ -1074,15 +1067,6 @@
     display: flex;
     flex-direction: column;
     gap: 20px;
-}
-.j-edit-form-aside {
-    border-left: 1px var(--border-style) var(--line);
-    padding: 24px 20px;
-    background: var(--bg);
-    display: flex;
-    flex-direction: column;
-    gap: 18px;
-    overflow: auto;
 }
 .j-edit-form-field {
     display: flex;

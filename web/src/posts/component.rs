@@ -1120,7 +1120,7 @@ fn EditPostForm(
         }),
     );
     view! {
-        <div class="j-edit-form-grid">
+        <div class="j-compose-grid">
             <div class="j-edit-form-body">
                 <ComposerFields
                     body=state.body
@@ -1131,7 +1131,7 @@ fn EditPostForm(
                     show_seg=false
                 />
             </div>
-            <aside class="j-edit-form-aside">
+            <aside class="j-compose-aside">
                 <ComposeOptions state=state slug_field=slug_field is_published=is_published />
                 <MediaSection />
                 <div class="j-edit-form-actions">
