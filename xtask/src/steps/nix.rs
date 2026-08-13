@@ -12,6 +12,55 @@ use crate::result::{CommandResult, StepResult};
 /// the project's CI host is x86_64-linux.
 const SYSTEM: &str = "x86_64-linux";
 
+#[derive(Clone, Copy)]
+enum TestCheck {
+    Wasm,
+    Coverage,
+    Doctests,
+}
+
+const TEST_CHECKS: [TestCheck; 3] = [TestCheck::Wasm, TestCheck::Coverage, TestCheck::Doctests];
+
+impl TestCheck {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Wasm => "wasm-tests",
+            Self::Coverage => "coverage",
+            Self::Doctests => "doctests",
+        }
+    }
+
+    fn run(self, result: &mut CommandResult) {
+        match self {
+            Self::Wasm => {
+                let name = self.name();
+                result.push(build_check(name, name));
+            }
+            Self::Coverage => coverage(result),
+            Self::Doctests => doctests(result),
+        }
+    }
+}
+
+fn selected_test_checks(no_test: bool) -> &'static [TestCheck] {
+    if no_test { &[] } else { &TEST_CHECKS }
+}
+
+#[cfg(test)]
+fn test_check_names(no_test: bool) -> impl ExactSizeIterator<Item = &'static str> {
+    selected_test_checks(no_test)
+        .iter()
+        .copied()
+        .map(TestCheck::name)
+}
+
+/// Run the Nix-backed test checks unless `--no-test` disables the group.
+pub fn test_checks(result: &mut CommandResult, no_test: bool) {
+    for check in selected_test_checks(no_test) {
+        check.run(result);
+    }
+}
+
 /// The Nix coverage check: the instrumented test suite (SQLite- and
 /// PostgreSQL-backed tests together in one pass under an ephemeral PostgreSQL)
 /// emits the reports; the regression gate + auto-heal then runs host-side over
@@ -521,10 +570,20 @@ fn rescue_diagnostics(check: &str) {
 mod tests {
     use std::os::unix::fs::PermissionsExt;
 
-    use super::{doctest_sentinel_detail, sentinel_detail};
+    use super::{doctest_sentinel_detail, sentinel_detail, test_check_names};
     use coverage::status::{CoverageStatus, StatusCategory};
     use doctests::check::{Kind, Violation};
     use doctests::status::DoctestStatus;
+
+    #[test]
+    fn nix_test_check_names_include_wasm_tests() {
+        assert!(test_check_names(false).eq(["wasm-tests", "coverage", "doctests"]));
+    }
+
+    #[test]
+    fn nix_test_check_names_omit_all_for_no_test() {
+        assert!(test_check_names(true).next().is_none());
+    }
 
     #[test]
     fn doctest_sentinel_detail_names_each_violation() {

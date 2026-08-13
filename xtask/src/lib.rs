@@ -475,10 +475,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::e2e_scaffold_check::run(&mut result);
             steps::xlang_literal_check::run(&mut result);
             steps::host_tests::run(&sh, &mut result);
-            if !no_test {
-                steps::nix::coverage(&mut result);
-                steps::nix::doctests(&mut result);
-            }
+            steps::nix::test_checks(&mut result, no_test);
             finalize(&mut result, start);
             Ok(result)
         }
@@ -525,8 +522,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             // `nix build .#site`, which the pre-commit gate should not pay (#836).
             steps::wasm_budget::run(&mut result);
             steps::host_tests::run(&sh, &mut result);
-            steps::nix::coverage(&mut result);
-            steps::nix::doctests(&mut result);
+            steps::nix::test_checks(&mut result, false);
             if !no_e2e {
                 // `e2e` builds the `e2e-checks` aggregate, which now includes the
                 // `e2e-elisp-integration` check — so it runs in parallel with the

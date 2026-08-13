@@ -285,22 +285,20 @@ Expected: pre-commit's `cargo xtask check` passes; commit contains no trailer.
 - `validate` passes `false` regardless of `--no-e2e`; only e2e remains governed
   by that flag.
 
-- [ ] **Step 1: Add failing tests for the Nix-test group**
+- [x] **Step 1: Add failing tests for the Nix-test group**
 
 In `xtask/src/steps/nix.rs`, test a not-yet-defined pure selector:
 
 ```rust
 #[test]
 fn nix_test_check_names_include_wasm_tests() {
-    assert_eq!(
-        test_check_names(false),
-        ["wasm-tests", "coverage", "doctests"]
-    );
+    assert!(test_check_names(false).eq(["wasm-tests", "coverage", "doctests"]));
 }
 
+
 #[test]
-fn no_test_omits_every_nix_test_check() {
-    assert!(test_check_names(true).is_empty());
+fn nix_test_check_names_omit_all_for_no_test() {
+    assert!(test_check_names(true).next().is_none());
 }
 ```
 
@@ -309,7 +307,7 @@ Run:
 
 Expected: **FAIL** — `test_check_names` is undefined.
 
-- [ ] **Step 2: Implement one shared Nix-test group**
+- [x] **Step 2: Implement one shared Nix-test group**
 
 Add a private enum or fixed descriptor table that is the single source for both
 `test_check_names` and execution. Implement public
@@ -327,7 +325,7 @@ Replace `lib.rs`'s check-mode `if !no_test { coverage; doctests; }` with
 `steps::nix::test_checks(&mut result, no_test)`. Replace validate's two direct
 calls with `steps::nix::test_checks(&mut result, false)`.
 
-- [ ] **Step 3: Run xtask unit tests**
+- [x] **Step 3: Run xtask unit tests**
 
 Run:
 `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml nix_test_check_names`
@@ -338,14 +336,14 @@ Run: `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml`
 
 Expected: **PASS** — the complete xtask suite accepts the refactor.
 
-- [ ] **Step 4: Exercise the static-only command path**
+- [x] **Step 4: Exercise the static-only command path**
 
 Run: `devtool run -- cargo xtask check --no-test`
 
 Expected: **PASS**. Its result has the always-on `xtask-tests` and `tools-test`
 steps but no `wasm-tests`, `nix-coverage`, or `nix-doctests` step.
 
-- [ ] **Step 5: Stage, gate, and commit Task 2**
+- [x] **Step 5: Stage, gate, and commit Task 2**
 
 Tick Task 2 and stage `xtask/src/steps/nix.rs`, `xtask/src/lib.rs`, and this
 plan. Run: `devtool run -- cargo xtask check`
