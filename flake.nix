@@ -410,6 +410,18 @@
           };
         });
 
+        wasmTestWebdriverConfig = pkgs.writeText "wasm-bindgen-test-webdriver.json" (
+          builtins.toJSON {
+            "goog:chromeOptions" = {
+              binary = "${pkgs.chromium}/bin/chromium";
+              args = [
+                "--no-sandbox"
+                "--disable-dev-shm-usage"
+              ];
+            };
+          }
+        );
+
         # leptosfmt pinned past its last release (#420): 0.1.33 mangles wrapping
         # generic component tags; the fix is merged upstream but unreleased.
         # REMOVE THIS OVERRIDE once a leptosfmt release later than 0.1.33
@@ -1050,6 +1062,31 @@
           pkgs.lib.optionalAttrs pkgs.stdenv.isLinux (
             e2eGateChecks
             // {
+              wasm-tests = craneLib.cargoTest (
+                commonArgs
+                // {
+                  cargoArtifacts = craneLib.buildDepsOnly (
+                    commonArgs
+                    // {
+                      CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
+                      cargoExtraArgs = "-p client";
+                      doCheck = false;
+                    }
+                  );
+                  pname = "jaunder-wasm-tests";
+                  CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
+                  cargoTestExtraArgs = "-p client";
+                  nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ wasm-bindgen-cli ];
+                  CHROMEDRIVER = "${pkgs.chromedriver}/bin/chromedriver";
+                  CHROMEDRIVER_ARGS = "--verbose";
+                  WASM_BINDGEN_TEST_WEBDRIVER_JSON = "${wasmTestWebdriverConfig}";
+                  preCheck = ''
+                    export XDG_CONFIG_HOME="$TMPDIR/chromium-config"
+                    mkdir -p "$XDG_CONFIG_HOME"
+                  '';
+                }
+              );
+
               # The single e2e gate `cargo xtask validate` builds. `e2e-checks`
               # aggregates every `checks.e2e-*` combo (now 4); they are independent
               # derivations realized in parallel up to the host `max-jobs` (CI's

@@ -38,6 +38,9 @@ leptos = { workspace = true, optional = true }
 # `web`'s manifest lighting it through feature unification (#520).
 server_fn = { workspace = true, features = ["multipart"], optional = true }
 
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "=0.3.71"
+
 [features]
 csr = ["dep:leptos", "leptos/csr", "dep:server_fn"]
 
