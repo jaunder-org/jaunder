@@ -119,3 +119,47 @@ fn capture_path_errors_without_capture_dir() {
         "stderr should name the unset-dir failure, got: {stderr}"
     );
 }
+
+#[test]
+fn verify_no_panics_cli_accepts_clean_capture() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let capture = dir.path().join("capture");
+    std::fs::create_dir_all(&capture).expect("capture dir");
+    let server = dir.path().join("server.log");
+    std::fs::write(&server, b"clean stderr\n").expect("server log");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_test-support"))
+        .args(["verify-no-panics", "--capture-dir"])
+        .arg(&capture)
+        .arg("--server-log")
+        .arg(&server)
+        .output()
+        .expect("spawn verifier");
+
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn verify_no_panics_cli_reports_panic_and_exits_nonzero() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let capture = dir.path().join("capture");
+    std::fs::create_dir_all(&capture).expect("capture dir");
+    let server = dir.path().join("server.log");
+    std::fs::write(&server, b"panicked at src/cli.rs:8:3: boom\n").expect("server log");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_test-support"))
+        .args(["verify-no-panics", "--capture-dir"])
+        .arg(&capture)
+        .arg("--server-log")
+        .arg(&server)
+        .output()
+        .expect("spawn verifier");
+
+    assert!(!out.status.success(), "panic must fail CLI");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("src/cli.rs:8:3"), "{stderr}");
+}

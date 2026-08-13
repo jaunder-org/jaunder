@@ -18,6 +18,8 @@ use common::ids::{PostId, UserId};
 use common::username::Username;
 use storage::{AppState, seed_post_input};
 
+pub mod panic_gate;
+
 /// The rendered-body source for seeded post `i` under `prefix`. Its Markdown H1
 /// renders the text `"{prefix} {i}"`, which the heavy e2e timeline tests assert
 /// on (first/last post title after pagination).
