@@ -1,6 +1,6 @@
 //! The `server-fn-registrar` static check (#426): every `#[macros::server]`-annotated
 //! fn in the `web` crate must be named in the test registrar
-//! (`ensure_server_fns_registered()` in `server/tests/helpers/mod.rs`).
+//! (`ensure_server_fns_registered()` in `server/tests/helpers/registrar.rs`).
 //!
 //! The integration/router test binaries link `web`/`jaunder` as rlibs, where
 //! dead-code elimination drops each `#[server]` macro's auto-registration unless
@@ -59,7 +59,7 @@ use crate::result::{CommandResult, StepResult};
 use crate::web_server_fns::{self, WEB_SRC};
 
 /// The single canonical registrar the enumerated fns must appear in.
-const REGISTRAR: &str = "server/tests/helpers/mod.rs";
+const REGISTRAR: &str = "server/tests/helpers/registrar.rs";
 
 /// A `#[macros::server]` fn discovered in a `web` source file: the generated type
 /// name (`PascalCase` of the fn ident) and the 1-based line of its attribute.

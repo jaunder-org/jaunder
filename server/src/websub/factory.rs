@@ -1,0 +1,62 @@
+use super::{FileCapturingWebSubClient, HttpWebSubClient, WebSubClient};
+
+/// Build the `WebSubClient` for the given capture configuration.
+///
+/// A `Some` capture path (resolved from `JAUNDER_CAPTURE_DIR` at the composition
+/// root — see the `host` crate) returns a [`FileCapturingWebSubClient`] recording
+/// pings to `<dir>/websub.jsonl` (end-to-end tests). `None` (the production default)
+/// returns the live [`HttpWebSubClient`].
+#[must_use]
+pub fn default_client(
+    websub_capture: Option<std::path::PathBuf>,
+) -> std::sync::Arc<dyn WebSubClient> {
+    if let Some(path) = websub_capture {
+        std::sync::Arc::new(FileCapturingWebSubClient::new(path))
+    } else {
+        std::sync::Arc::new(HttpWebSubClient::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::tagged_url::FeedUrl;
+    use common::test_support::parse_url;
+    use rstest::*;
+
+    #[fixture]
+    fn capture_dir() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
+    }
+
+    /// The feed both arms publish; its value is incidental.
+    fn feed_url() -> FeedUrl {
+        parse_url("https://example.com/feed.rss")
+    }
+
+    // The injected path selects the transport — no env, no lock (spec Decision 5).
+    #[rstest]
+    #[tokio::test]
+    async fn default_client_selects_file_capture_when_path_given(capture_dir: tempfile::TempDir) {
+        // None ⇒ the live HTTP client fails on an unreachable hub. Port 1 on
+        // loopback has no listener, so the connect is refused immediately — no
+        // DNS lookup, no network egress, deterministic offline and in CI.
+        let http = default_client(None);
+        assert!(
+            http.send_publish(&parse_url("http://127.0.0.1:1/"), &feed_url())
+                .await
+                .is_err()
+        );
+
+        // Some ⇒ the file-capture client records the ping to <dir>/websub.jsonl.
+        let path = capture_dir.path().join("websub.jsonl");
+        let captured = default_client(Some(path.clone()));
+        captured
+            .send_publish(&parse_url("https://hub.example.com/"), &feed_url())
+            .await
+            .expect("file capture write");
+
+        let contents = std::fs::read_to_string(&path).expect("read capture file");
+        assert!(contents.contains("https://example.com/feed.rss"));
+    }
+}
