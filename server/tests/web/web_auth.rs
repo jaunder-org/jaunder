@@ -961,6 +961,32 @@ async fn explicit_auth_set_cookie_appends_to_handler_cookie(#[case] backend: Bac
     );
 }
 
+#[apply(backends)]
+#[tokio::test]
+async fn optional_auth_endpoints_reject_explicit_auth_failure(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let session = create_user_and_session(&state).await;
+
+    for path in [
+        <web::auth::GetSession as ServerFn>::PATH,
+        <web::backup::IsWarningVisible as ServerFn>::PATH,
+        <web::site::IsBaseUrlWarningVisible as ServerFn>::PATH,
+    ] {
+        let response = post_form_with_credentials(
+            &state,
+            path,
+            "",
+            Some(&session.cookie()),
+            Some("Malformed"),
+            true,
+        )
+        .await;
+
+        assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR, "{path}");
+        assert!(response.set_cookies.is_empty(), "{path}");
+    }
+}
+
 // Unauthenticated logout: no session cookie → skips revoke, still clears cookie.
 #[apply(backends)]
 #[tokio::test]

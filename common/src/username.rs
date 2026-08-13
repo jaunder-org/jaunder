@@ -24,15 +24,14 @@ impl FromStr for Username {
     type Err = InvalidUsername;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = s.to_lowercase();
         if s.is_empty()
             || !s
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
         {
             return Err(InvalidUsername);
         }
-        Ok(Username(s))
+        Ok(Username(s.to_ascii_lowercase()))
     }
 }
 
@@ -63,6 +62,10 @@ mod tests {
         assert!("a@b".parse::<Username>().is_err());
     }
 
+    #[test]
+    fn username_rejects_non_ascii_that_unicode_lowercases_to_ascii() {
+        assert!("\u{212a}evin".parse::<Username>().is_err());
+    }
     #[test]
     fn username_display_produces_the_username_string() {
         let u: Username = "alice".parse().unwrap();

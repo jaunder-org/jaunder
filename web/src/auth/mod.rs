@@ -50,7 +50,7 @@ pub use session::{
 
 // Public re-exports — must remain accessible as crate::auth::* for other modules.
 #[cfg(feature = "server")]
-pub(crate) use server::auth_rejection_error;
+pub(crate) use server::optional_auth;
 #[cfg(feature = "server")]
 pub use server::{
     AuthRejection, AuthUser, CookieSettings, SessionCookieRetirement, is_operator_soft,

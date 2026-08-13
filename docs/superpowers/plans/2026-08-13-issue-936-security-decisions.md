@@ -665,3 +665,54 @@ devtool run -- cargo xtask adr promote
 Expected at ship: four numbered accepted ADRs, rewritten architecture citations,
 generated `docs/README.md` rows, and staged promotion output ready for the ship
 commit.
+
+---
+
+### Task 5: Close final-review conformance gaps
+
+**Files:**
+
+- Modify: `common/src/username.rs`
+- Modify: `web/src/auth/server.rs`
+- Modify: `web/src/auth/api.rs`
+- Modify: `web/src/auth/mod.rs`
+- Modify: `web/src/viewer.rs`
+- Modify: `web/src/site/api.rs`
+- Modify: `server/tests/web/web_auth.rs`
+
+**Interfaces:**
+
+- `optional_auth()` is the single absent-cookie/failed-cookie fallback policy
+  for viewer, session-reconcile, and soft-operator paths.
+- Original username input must be ASCII alphanumeric, `_`, or `-`; only then is
+  ASCII case canonicalized.
+
+- [x] **Step 1: Reproduce both final-review findings**
+
+Add a username unit test for `Kevin` and a dual-backend integration test that
+sends a valid cookie plus malformed `Authorization` to all three optional-auth
+server functions. Expected before the fix: both tests FAIL.
+
+- [x] **Step 2: Centralize optional-auth fallback and enforce ASCII input**
+
+Move the cookie-only anonymous fallback into `optional_auth()` and use it from
+`viewer_identity`, `get_session`, and `is_operator_soft`. Check the original
+username bytes before `to_ascii_lowercase()`.
+
+- [x] **Step 3: Remove unused missing-storage transport provenance**
+
+Restore `AuthRejection::MissingSessionStorage` to a unit variant; transport
+provenance changes behavior only on session lookup failure.
+
+- [x] **Step 4: Run affected tests and the commit gate**
+
+Run the two focused regression tests,
+`cargo nextest run -p web --features server`, and `cargo xtask check`.
+
+- [x] **Step 5: Commit final-review fixes**
+
+Stage the seven source/test files and checked plan, then commit:
+
+```bash
+git commit -m "fix(auth): close optional authentication gaps (#936)"
+```

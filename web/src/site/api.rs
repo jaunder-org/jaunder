@@ -37,11 +37,11 @@ pub async fn update_identity(title: SiteTitle, base_url: Option<BaseUrl>) -> Web
         .map_err(InternalError::storage)
 }
 
-/// Whether to show the "site base URL not configured" warning banner (#575): `true`
-/// only for an operator when `SiteIdentity.base_url` is `None`. Like
-/// `backup::is_warning_visible`, this is a **soft** check — a non-operator or
-/// unauthenticated caller yields `Ok(false)` (banner hidden), never an error — so the
-/// banner degrades to absent rather than surfacing a failure in the chrome.
+/// Whether to show the "site base URL not configured" warning banner (#575):
+/// `true` only for an operator when `SiteIdentity.base_url` is `None`. Like
+/// `backup::is_warning_visible`, this is a **soft** check: non-operators and
+/// missing/stale cookie-only credentials yield `Ok(false)`, while failures
+/// attributable to an explicit `Authorization` credential reject.
 #[macros::server]
 pub async fn is_base_url_warning_visible() -> WebResult<bool> {
     if !is_operator_soft().await? {

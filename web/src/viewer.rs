@@ -13,13 +13,8 @@
 
 #[cfg(feature = "server")]
 use {
-    crate::{
-        auth::{AuthRejection, AuthUser, auth_rejection_error},
-        error::{InternalError, InternalResult},
-    },
-    axum::{extract::FromRequestParts, http::request::Parts},
+    crate::{auth::optional_auth, error::InternalResult},
     common::visibility::ViewerIdentity,
-    host::auth::CredentialTransport,
 };
 
 /// Resolves the viewer for a `#[server]` read path.
@@ -44,22 +39,12 @@ use {
 pub async fn viewer_identity() -> InternalResult<ViewerIdentity> {
     // ---- Layer C insertion point: precedence ladder begins here. ----
     // 1. Account session (the only positively-authenticated branch in Layer A).
-    let mut parts = leptos::context::use_context::<Parts>()
-        .ok_or_else(|| InternalError::server_message("missing request parts context"))?;
-    match AuthUser::from_request_parts(&mut parts, &()).await {
-        Ok(auth) => Ok(ViewerIdentity::local(auth.user_id)),
-        Err(
-            AuthRejection::MissingToken
-            | AuthRejection::Session {
-                transport: CredentialTransport::Cookie,
-                error:
-                    storage::SessionAuthError::InvalidToken | storage::SessionAuthError::SessionNotFound,
-            },
-        ) => {
+    match optional_auth().await? {
+        Some(auth) => Ok(ViewerIdentity::local(auth.user_id)),
+        None => {
             // 2. (Layer C) viewer-session branch inserts here.
             // 3. Anonymous fallback.
             Ok(ViewerIdentity::Anonymous)
         }
-        Err(error) => Err(auth_rejection_error(error)),
     }
 }

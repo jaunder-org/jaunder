@@ -1,4 +1,4 @@
-use crate::error::{ErrorKind, InternalError, InternalResult};
+use crate::error::{InternalError, InternalResult};
 use axum::{
     extract::FromRequestParts,
     http::{StatusCode, request::Parts},
@@ -52,9 +52,7 @@ pub struct AuthUser {
 pub enum AuthRejection {
     MissingToken,
     InvalidAuthorization,
-    MissingSessionStorage {
-        transport: CredentialTransport,
-    },
+    MissingSessionStorage,
     Session {
         transport: CredentialTransport,
         error: storage::SessionAuthError,
@@ -65,7 +63,7 @@ pub enum AuthRejection {
 impl IntoResponse for AuthRejection {
     fn into_response(self) -> Response {
         match self {
-            AuthRejection::MissingSessionStorage { .. }
+            AuthRejection::MissingSessionStorage
             | AuthRejection::Session {
                 error: storage::SessionAuthError::Internal(_),
                 ..
@@ -100,7 +98,7 @@ where
         let sessions = parts
             .extensions
             .get::<Arc<dyn SessionStorage>>()
-            .ok_or(AuthRejection::MissingSessionStorage { transport })?;
+            .ok_or(AuthRejection::MissingSessionStorage)?;
 
         match sessions.authenticate(&credential.token).await {
             Ok(record) => {
@@ -153,6 +151,32 @@ pub async fn require_auth() -> InternalResult<AuthUser> {
     require_auth_with_parts(leptos::context::use_context::<Parts>()).await
 }
 
+/// Resolves an optional authenticated user inside a Leptos server function.
+///
+/// Missing credentials and failed cookie-only credentials resolve to `None`.
+/// Failures attributable to an explicit `Authorization` credential reject.
+///
+/// # Errors
+///
+/// Returns an authentication error when a present Authorization credential
+/// cannot be resolved or authenticated, and propagates infrastructure failures.
+pub(crate) async fn optional_auth() -> InternalResult<Option<AuthUser>> {
+    let mut parts = leptos::context::use_context::<Parts>()
+        .ok_or_else(|| InternalError::server_message("missing request Parts context"))?;
+    match AuthUser::from_request_parts(&mut parts, &()).await {
+        Ok(auth) => Ok(Some(auth)),
+        Err(
+            AuthRejection::MissingToken
+            | AuthRejection::Session {
+                transport: CredentialTransport::Cookie,
+                error:
+                    storage::SessionAuthError::InvalidToken | storage::SessionAuthError::SessionNotFound,
+            },
+        ) => Ok(None),
+        Err(error) => Err(auth_rejection_error(error)),
+    }
+}
+
 /// Authorizes an operator-only server function: the caller must be authenticated
 /// (`require_auth`) **and** carry the `is_operator` flag. This is the hard guard
 /// (it *errors* `Unauthorized` for a non-operator) — distinct from the soft,
@@ -178,22 +202,18 @@ pub async fn require_operator() -> InternalResult<()> {
     Ok(())
 }
 
-/// Soft operator check for the warning-banner endpoints: `Ok(true)` when the caller
-/// is an authenticated operator, `Ok(false)` when unauthenticated or a non-operator
-/// (so the banner simply stays hidden). Unlike [`require_operator`], it never returns
-/// `Unauthorized` — it errors only on a non-auth failure (e.g. storage). Both the
-/// backup and site warning endpoints gate on it, so it lives here beside the hard
-/// guard rather than being duplicated per vertical.
+/// Soft operator check for the warning-banner endpoints: `Ok(true)` when the
+/// caller is an authenticated operator, and `Ok(false)` for a non-operator or
+/// missing/stale cookie-only credentials. Failures attributable to an explicit
+/// `Authorization` credential reject.
 ///
 /// # Errors
 ///
-/// Returns `Err` only on a non-auth failure resolving the session or loading the user
-/// (e.g. a storage error) — never for a merely unauthenticated/non-operator caller.
+/// Returns an authentication error when a present Authorization credential
+/// cannot be resolved or authenticated, and propagates infrastructure failures.
 pub async fn is_operator_soft() -> InternalResult<bool> {
-    let auth = match require_auth().await {
-        Ok(auth) => auth,
-        Err(error) if error.kind() == ErrorKind::Auth => return Ok(false),
-        Err(error) => return Err(error),
+    let Some(auth) = optional_auth().await? else {
+        return Ok(false);
     };
     let users = expect_context::<Arc<dyn UserStorage>>();
     Ok(users
@@ -208,7 +228,7 @@ pub(crate) fn auth_rejection_error(error: AuthRejection) -> InternalError {
         AuthRejection::InvalidAuthorization => {
             InternalError::unauthorized("invalid authorization header")
         }
-        AuthRejection::MissingSessionStorage { .. } => {
+        AuthRejection::MissingSessionStorage => {
             InternalError::server_message("missing SessionStorage context")
         }
         AuthRejection::BasicUsernameMismatch => {
@@ -365,10 +385,7 @@ mod tests {
 
     #[test]
     fn auth_rejection_into_response_renders_500_for_missing_session_storage() {
-        let response = AuthRejection::MissingSessionStorage {
-            transport: CredentialTransport::Cookie,
-        }
-        .into_response();
+        let response = AuthRejection::MissingSessionStorage.into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -396,9 +413,7 @@ mod tests {
             ));
         }
 
-        let missing_state = auth_rejection_error(AuthRejection::MissingSessionStorage {
-            transport: CredentialTransport::Cookie,
-        });
+        let missing_state = auth_rejection_error(AuthRejection::MissingSessionStorage);
         assert!(matches!(
             crate::error::project(missing_state.kind(), missing_state.public_message()),
             crate::error::WebError::Server { .. }
@@ -474,9 +489,7 @@ mod tests {
         let result = AuthUser::from_request_parts(&mut parts, &()).await;
         assert!(matches!(
             result.unwrap_err(),
-            AuthRejection::MissingSessionStorage {
-                transport: CredentialTransport::Cookie
-            }
+            AuthRejection::MissingSessionStorage
         ));
     }
 }
