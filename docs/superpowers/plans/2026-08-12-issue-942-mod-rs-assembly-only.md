@@ -301,16 +301,21 @@ drafted, gitignored) · `CONTRIBUTING.md` · `docs/ARCHITECTURE.md`
 
 **Files:** `web/src/reactive/mod.rs` → new `invalidator.rs`
 
-- [ ] `invalidator.rs`: `pub struct Invalidator`, its inherent `impl`
+- [x] `invalidator.rs`: `pub struct Invalidator`, its inherent `impl`
       (`new`/`notify`/`track`), `impl Default`, and the
       `#[cfg(test)] mod tests`.
-- [ ] The tests use the `invalidator_scope!` macro, reached through `mod.rs`'s
+- [x] The tests use the `invalidator_scope!` macro, reached through `mod.rs`'s
       gated `pub(crate) use`. In the moved file import it as
       `use crate::reactive::invalidator_scope;` — the comment at `mod.rs:18-21`
       says this consumption chain is what keeps the host build free of a denied
       `unused_imports`, so verify that comment still describes reality and
-      update it if the chain now runs through `invalidator.rs`.
-- [ ] `mod.rs` keeps its `//!` doc, **both**
+      update it if the chain now runs through `invalidator.rs`. → the crate path
+      is **required**, not merely preferred: inside `invalidator.rs`, `super` is
+      the `invalidator` module, so the old `use super::{…}` would no longer
+      reach the macro. Both the `mod.rs` comment and the in-test comment that
+      names the chain are re-pointed at `invalidator.rs`; the chain itself is
+      unbroken.
+- [x] `mod.rs` keeps its `//!` doc, **both**
       `#[cfg(any(target_arch = "wasm32", test))]` lines (`mod scope;` and
       `pub(crate) use scope::invalidator_scope;`) and their explanatory
       comments. Add `mod invalidator; pub use invalidator::Invalidator;`.
