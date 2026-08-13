@@ -385,19 +385,19 @@ Expected: pre-commit's `cargo xtask check` passes; commit contains no trailer.
   unit tests where appropriate in addition to Playwright flow coverage, while
   host coverage remains unable to instrument wasm.
 
-- [ ] **Step 1: Update the contributor testing guide**
+- [x] **Step 1: Update the contributor testing guide**
 
 Add a compact subsection near the existing unit/e2e layer guidance, then update
 the verify-ladder command table and Nix-check inventory. Describe policy and
 commands, not the one initial test's implementation.
 
-- [ ] **Step 2: Update the architecture view**
+- [x] **Step 2: Update the architecture view**
 
 Amend the workspace/client paragraph and test-gate composition. Preserve
 ADR-0069/0070 boundaries and state explicitly that this is pass/fail execution,
 not wasm line coverage.
 
-- [ ] **Step 3: Format documentation**
+- [x] **Step 3: Format documentation**
 
 Run:
 
@@ -407,7 +407,7 @@ devtool run -- prettier -w CONTRIBUTING.md docs/ARCHITECTURE.md docs/superpowers
 
 Expected: **PASS**; only intended Markdown paragraphs/tables reflow.
 
-- [ ] **Step 4: Prove the CI-equivalent and complete gates**
+- [x] **Step 4: Prove the CI-equivalent and complete gates**
 
 Run: `devtool run -- cargo xtask validate --no-e2e --allow-dirty`
 
@@ -420,7 +420,7 @@ Then run: `devtool run -- cargo xtask validate --allow-dirty`
 Expected: **PASS** — verify-only static checks, headless Chromium wasm unit
 test, host coverage/doctests, and all four Playwright e2e combinations pass.
 
-- [ ] **Step 5: Stage, gate, and commit Task 3**
+- [x] **Step 5: Stage, gate, and commit Task 3**
 
 Tick Task 3 and stage `CONTRIBUTING.md`, `docs/ARCHITECTURE.md`, and this plan.
 Run: `devtool run -- cargo xtask check`
