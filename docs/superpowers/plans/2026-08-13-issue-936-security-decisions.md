@@ -460,7 +460,7 @@ pub async fn viewer_identity() -> InternalResult<ViewerIdentity>;
 - Every posts/timeline caller consumes the fallible result with `.await?`; no
   caller may restore catch-all anonymous fallback.
 
-- [ ] **Step 1: Extend the viewer-sensitive timeline test with explicit auth**
+- [x] **Step 1: Extend the viewer-sensitive timeline test with explicit auth**
 
 Extend `local_timeline_enforces_visibility_for_viewer`, which already creates
 Public, Subscribers, Named, and Private posts. Add a subscriber Bearer session
@@ -500,7 +500,7 @@ rejects (non-OK unauthorized body), returns no timeline payload, and emits no
 expiry cookie. This distinguishes “credential absent” from “explicit credential
 failed.”
 
-- [ ] **Step 2: Run the optional-auth test and verify failure**
+- [x] **Step 2: Run the optional-auth test and verify failure**
 
 ```bash
 devtool run -- cargo nextest run -p jaunder --test integration local_timeline_enforces_visibility_for_viewer
@@ -509,7 +509,7 @@ devtool run -- cargo nextest run -p jaunder --test integration local_timeline_en
 Expected: FAIL because `viewer_identity` currently converts every `AuthUser`
 rejection into `Anonymous`.
 
-- [ ] **Step 3: Make viewer extraction fallible and migrate every caller**
+- [x] **Step 3: Make viewer extraction fallible and migrate every caller**
 
 Expose the existing `auth_rejection_error` within the `web` crate. In
 `viewer_identity`, preserve anonymous fallback for `AuthRejection::MissingToken`
@@ -524,7 +524,7 @@ Before editing the exported function, re-run LSP references on
 posts/timeline call sites plus the declaration. Migrate the complete returned
 set.
 
-- [ ] **Step 4: Run affected tests and fast gate**
+- [x] **Step 4: Run affected tests and fast gate**
 
 ```bash
 devtool run -- cargo nextest run -p jaunder --test integration local_timeline_enforces_visibility_for_viewer
@@ -537,7 +537,7 @@ Expected: PASS. Absent credentials remain anonymous; valid explicit credentials
 select the authenticated viewer and retire the cookie; present failed explicit
 credentials reject.
 
-- [ ] **Step 5: Commit optional-auth propagation**
+- [x] **Step 5: Commit optional-auth propagation**
 
 After the full gate, stage the viewer/callsites/test and checked plan:
 

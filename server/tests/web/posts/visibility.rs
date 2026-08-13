@@ -11,7 +11,9 @@ use web::posts::{EditPostPreview, SavedPost};
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{create_session_for, create_user_and_session, post_form};
+use crate::helpers::{
+    create_session_for, create_user_and_session, post_form, post_json_with_credentials,
+};
 use storage::test_support::{
     Backend, SeedRawPost, SeedUser, SeededPost, TestEnv, backends, backends_matrix,
 };
@@ -351,9 +353,12 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     let named = create_targeted_post(&state, author, vec![AudienceTarget::Named(friends)]).await;
     let private = create_targeted_post(&state, author, vec![]).await;
 
-    let author_cookie = create_session_for(&state, author).await.cookie();
-    let subscriber_cookie = create_session_for(&state, subscriber).await.cookie();
-    let stranger_cookie = create_session_for(&state, stranger).await.cookie();
+    let author_session = create_session_for(&state, author).await;
+    let subscriber_session = create_session_for(&state, subscriber).await;
+    let stranger_session = create_session_for(&state, stranger).await;
+    let author_cookie = author_session.cookie();
+    let subscriber_cookie = subscriber_session.cookie();
+    let stranger_cookie = stranger_session.cookie();
 
     // Anonymous viewer: only the Public post.
     let (status, body) = list_local_timeline(&state, None, 50, None).await;
@@ -401,6 +406,51 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
         sub.posts.iter().all(|p| !p.is_author),
         "subscriber is not the author; body: {body}"
     );
+
+    // Explicit Bearer identity is authoritative over an unrelated ambient cookie.
+    let authorization = format!("Bearer {}", subscriber_session.token);
+    let response = post_json_with_credentials(
+        &state,
+        <web::timeline::ListLocalTimeline as ServerFn>::PATH,
+        serde_json::json!({ "cursor": null, "limit": 50 }),
+        Some(&stranger_cookie),
+        Some(&authorization),
+        true,
+    )
+    .await;
+    assert_eq!(response.status, StatusCode::OK, "body: {}", response.body);
+    let bearer_page: TimelinePage = serde_json::from_str(&response.body).unwrap();
+    assert_eq!(
+        timeline_slugs(&bearer_page),
+        [
+            public.slug.to_string(),
+            subscribers.slug.to_string(),
+            named.slug.to_string(),
+        ]
+        .into_iter()
+        .collect()
+    );
+    assert!(
+        response
+            .set_cookies
+            .iter()
+            .any(|value| value.contains("Max-Age=0"))
+    );
+
+    // A present but failed explicit credential rejects instead of becoming
+    // anonymous or falling back to the valid cookie.
+    let response = post_json_with_credentials(
+        &state,
+        <web::timeline::ListLocalTimeline as ServerFn>::PATH,
+        serde_json::json!({ "cursor": null, "limit": 50 }),
+        Some(&subscriber_cookie),
+        Some("Bearer unknown-token"),
+        true,
+    )
+    .await;
+    assert_ne!(response.status, StatusCode::OK);
+    assert!(serde_json::from_str::<TimelinePage>(&response.body).is_err());
+    assert!(response.set_cookies.is_empty());
 
     // Authed non-subscriber: only the Public post (same reach as anonymous,
     // proving viewer_identity yields a Channel viewer that is correctly *not*

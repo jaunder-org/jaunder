@@ -202,7 +202,7 @@ pub async fn is_operator_soft() -> InternalResult<bool> {
         .is_some_and(|u| u.is_operator))
 }
 
-fn auth_rejection_error(error: AuthRejection) -> InternalError {
+pub(crate) fn auth_rejection_error(error: AuthRejection) -> InternalError {
     match error {
         AuthRejection::MissingToken => InternalError::unauthorized("missing session token"),
         AuthRejection::InvalidAuthorization => {

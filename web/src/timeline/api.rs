@@ -42,7 +42,7 @@ pub async fn list_by_user(
     limit: Option<PageSize>,
 ) -> WebResult<TimelinePage> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
-    let viewer = viewer_identity().await;
+    let viewer = viewer_identity().await?;
     fetch_user_posts(
         posts.as_ref(),
         &viewer,
@@ -60,7 +60,7 @@ pub async fn list_local_timeline(
     limit: Option<PageSize>,
 ) -> WebResult<TimelinePage> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
-    let viewer = viewer_identity().await;
+    let viewer = viewer_identity().await?;
     fetch_local_timeline(posts.as_ref(), &viewer, keyset_cursor(cursor), limit).await
 }
 
@@ -74,7 +74,7 @@ pub async fn list_home_feed(
     let posts = expect_context::<Arc<dyn PostStorage>>();
 
     let cursor = keyset_cursor(cursor);
-    let viewer = viewer_identity().await;
+    let viewer = viewer_identity().await?;
     let page_size = limit.unwrap_or_default();
 
     let rows = posts
@@ -99,7 +99,7 @@ pub async fn list_by_tag(
     limit: Option<PageSize>,
 ) -> WebResult<TimelinePage> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
-    let viewer = viewer_identity().await;
+    let viewer = viewer_identity().await?;
     fetch_posts_by_tag(posts.as_ref(), &viewer, &tag, keyset_cursor(cursor), limit).await
 }
 
@@ -113,7 +113,7 @@ pub async fn list_by_user_and_tag(
 ) -> WebResult<TimelinePage> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
     let users = expect_context::<Arc<dyn UserStorage>>();
-    let viewer = viewer_identity().await;
+    let viewer = viewer_identity().await?;
     fetch_user_posts_by_tag(
         posts.as_ref(),
         users.as_ref(),
