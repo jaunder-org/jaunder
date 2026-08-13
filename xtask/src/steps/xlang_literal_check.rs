@@ -149,7 +149,7 @@ const PAIRS: &[Pair] = &[
     Pair {
         key: "mark-prefix",
         a: Site {
-            file: "client/src/perf/mod.rs",
+            file: "client/src/perf/names.rs",
             anchor: "MARK_PREFIX: &str = ",
             quote: '"',
         },
@@ -356,7 +356,7 @@ mod tests {
         let dir = fixture_root(["data-mounted", "data-mounted", "jaunder.", "jaunder-"]);
         let detail = problems(dir.path()).expect("a problem");
         assert!(detail.contains("mark-prefix"), "{detail}");
-        assert!(detail.contains("client/src/perf/mod.rs"), "{detail}");
+        assert!(detail.contains("client/src/perf/names.rs"), "{detail}");
         assert!(
             detail.contains("end2end/tests/capture-trace.ts"),
             "{detail}"

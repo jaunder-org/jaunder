@@ -243,18 +243,28 @@ drafted, gitignored) · `CONTRIBUTING.md` · `docs/ARCHITECTURE.md`
 
 ## Task 6 — `client/src/perf/`
 
-**Files:** `client/src/perf/mod.rs` → new `names.rs`
+**Files:** `client/src/perf/mod.rs` → new `names.rs` ·
+`xtask/src/steps/xlang_literal_check.rs`
 
-- [ ] `names.rs`: the 5 `pub const` mark names, plus the
+- [x] `names.rs`: the 5 `pub const` mark names, plus the
       `#[cfg(test)] mod tests`. The tests call `mark`, which is _not_ defined
-      here — the moved test module needs `use crate::perf::mark;`.
-- [ ] `mod.rs` keeps the `//!` doc **and both `#[cfg(target_arch = "wasm32")]` /
+      here — the moved test module needs `use crate::perf::mark;`. → confirmed
+      by the compiler: `use super::*` does not carry `mark`, because the
+      re-export is target-gated. The explicit import is the only edit.
+- [x] `mod.rs` keeps the `//!` doc **and both `#[cfg(target_arch = "wasm32")]` /
       `#[cfg(not(…))]` `mod`+`pub use` pairs** — `target-arch-placement` permits
       that gate only on a `mod`/`use` in a `mod.rs`. Add
-      `mod names; pub use names::{…};`.
-- [ ] `MARK_PREFIX`'s doc mentions the `xlang-literal` gate; confirm
+      `mod names; pub use names::{…};`. The `//!` doc's intra-doc links to
+      `MARK_PREFIX` and `mark` still resolve through the re-exports.
+- [x] `MARK_PREFIX`'s doc mentions the `xlang-literal` gate; confirm
       `xtask/src/steps/xlang_literal_check.rs` matches on the literal, not a
-      file path.
+      file path. → **the plan's assumption was wrong.** The gate's `PAIRS` table
+      pins the site by **path**, and one of its own tests asserts that path in
+      the failure text. Both are re-pointed at `names.rs` in this same commit —
+      a third folded prep, for the reason task 19 records: a lone constant
+      change names a file that does not exist yet, and a lone move leaves the
+      gate pointed at a file that no longer holds the literal, so neither half
+      can be a green commit on its own.
 - **Verify:** `devtool run -- cargo xtask check` — `target-arch-placement` and
   `xlang-literal` green.
 - **Commit:** `refactor(client): move perf mark names out of mod.rs (#942)`
