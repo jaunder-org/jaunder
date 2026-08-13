@@ -273,7 +273,7 @@ pub async fn fetch_post_record(
   `get_unpublished_post_by_permalink` after authentication and username
   ownership checks.
 
-- [ ] **Step 1: Replace the obsolete scan-shaped server regression with the bug
+- [x] **Step 1: Replace the obsolete scan-shaped server regression with the bug
       reproduction**
 
 Replace `get_post_finds_author_draft_across_multiple_pages` in
@@ -310,7 +310,7 @@ assert!(returned.post.is_author);
 The existing `get_post_returns_draft_to_author_only` continues to pin true-draft
 resolution and non-author denial.
 
-- [ ] **Step 2: Extend the scheduled-Post Playwright scenario**
+- [x] **Step 2: Extend the scheduled-Post Playwright scenario**
 
 In `scheduling a post shows a Scheduled-for badge on the drafts page`, retain
 the badge assertions, then add:
@@ -330,15 +330,15 @@ await expect(page.locator("article.j-post")).toContainText("Scheduled Draft");
 This is an in-app route transition from the page's sole initial boot; do not
 call `goto` or `allowSecondBoot`.
 
-- [ ] **Step 3: Run the server reproduction and verify red**
+- [x] **Step 3: Run the server reproduction and verify red**
 
 Run:
-`devtool run -- cargo nextest run -p jaunder get_post_returns_scheduled_post_at_canonical_permalink_to_author`
+`devtool run -- devtool pg run -- cargo nextest run -p jaunder get_post_returns_scheduled_post_at_canonical_permalink_to_author`
 
 Expected: FAIL with the current not-found response because the old fallback
 compares the requested publication date with `created_at`.
 
-- [ ] **Step 4: Cut every caller over with one timestamp**
+- [x] **Step 4: Cut every caller over with one timestamp**
 
 Before modifying the exported helper, use LSP references on `fetch_post_record`
 and update every result.
@@ -365,21 +365,21 @@ In `server/src/projector/mod.rs`, pass `chrono::Utc::now()` to
 `fetch_post_record`; the anonymous projector has only the public lookup and
 therefore no cross-query boundary to share.
 
-- [ ] **Step 5: Run the focused Rust regressions and verify green**
+- [x] **Step 5: Run the focused Rust regressions and verify green**
 
 Run:
 
 ```bash
-devtool run -- cargo nextest run -p jaunder get_post_returns_scheduled_post_at_canonical_permalink_to_author
-devtool run -- cargo nextest run -p jaunder get_post_returns_draft_to_author_only
-devtool run -- cargo nextest run -p storage get_unpublished_post_by_permalink
+devtool run -- devtool pg run -- cargo nextest run -p jaunder get_post_returns_scheduled_post_at_canonical_permalink_to_author
+devtool run -- devtool pg run -- cargo nextest run -p jaunder get_post_returns_draft_to_author_only
+devtool run -- devtool pg run -- cargo nextest run -p storage get_unpublished_post_by_permalink
 ```
 
 Expected: PASS on SQLite and PostgreSQL. Also verify by structural inspection
 that `find_draft_by_permalink_for_user`, its 200-iteration bound, and all
 references are absent.
 
-- [ ] **Step 6: Run the user-facing scheduled permalink scenario**
+- [x] **Step 6: Run the user-facing scheduled permalink scenario**
 
 Run: `devtool run -- cargo xtask e2e-local posts.spec.ts`
 
@@ -387,7 +387,7 @@ Expected: PASS; the scheduled row links to `/~<author>/2999/01/01/<slug>`,
 in-app navigation reaches `article.j-post`, and the article contains
 `Scheduled Draft`.
 
-- [ ] **Step 7: Gate and commit Task 2**
+- [x] **Step 7: Gate and commit Task 2**
 
 Follow `jaunder-commit`. Run `devtool run -- cargo xtask check`; inspect its
 JSON result and require `ok: true`. Check Task 2 in this plan, stage all five

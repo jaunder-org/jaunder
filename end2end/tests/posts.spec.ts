@@ -1306,6 +1306,15 @@ test("scheduling a post shows a Scheduled-for badge on the drafts page", async (
   const badge = scheduledRow.locator(".j-badge-scheduled");
   await expect(badge).toBeVisible();
   await expect(badge).toContainText("Scheduled for");
+  const permalinkLink = scheduledRow.locator('a:has-text("Permalink")');
+  const permalinkHref = await permalinkLink.getAttribute("href");
+  expect(permalinkHref).toBeTruthy();
+  expect(permalinkHref).toMatch(/\/2999\/01\/01\//);
+  await navigateInApp(page, () => permalinkLink.click(), {
+    url: permalinkHref!,
+    ready: "article.j-post",
+  });
+  await expect(page.locator("article.j-post")).toContainText("Scheduled Draft");
 });
 
 test("scheduling from the edit page shows a Scheduled-for badge on the drafts page", async ({

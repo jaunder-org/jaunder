@@ -50,8 +50,8 @@ use {
     std::{collections::BTreeSet, sync::Arc},
     storage::{
         FeedEventStorage, PostCreation, PostStorage, PostUpdate, PublishUpdate, SiteConfigStorage,
-        fetch_post_record, find_draft_by_permalink_for_user, keyset_cursor, perform_post_creation,
-        perform_post_update, to_post_cursor, wire_cursor,
+        fetch_post_record, keyset_cursor, perform_post_creation, perform_post_update,
+        to_post_cursor, wire_cursor,
     },
 };
 
@@ -222,9 +222,12 @@ pub async fn create(post: PostInputs) -> WebResult<SavedPost> {
 #[macros::server]
 pub async fn get(username: Username, date: PermalinkDate, slug: Slug) -> WebResult<AuthoredPost> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
+    let now = Utc::now();
 
     let viewer = viewer_identity().await;
-    if let Some(post) = fetch_post_record(posts.as_ref(), &viewer, &username, date, &slug).await? {
+    if let Some(post) =
+        fetch_post_record(posts.as_ref(), &viewer, &username, date, &slug, now).await?
+    {
         let is_author = require_auth()
             .await
             .is_ok_and(|auth| auth.user_id == post.user_id);
@@ -233,9 +236,9 @@ pub async fn get(username: Username, date: PermalinkDate, slug: Slug) -> WebResu
 
     // The visibility-filtered lookup above found nothing public at this
     // permalink. The only remaining legitimate resolution is the author
-    // viewing their own unpublished draft, so require auth and confirm the
+    // viewing their own unpublished post, so require auth and confirm the
     // requester owns the namespace; everyone else gets an indistinguishable
-    // 404 (never a 403 that would leak the draft's existence).
+    // 404 (never a 403 that would leak the post's existence).
     let auth = require_auth()
         .await
         .map_err(|e| private_post_not_found_error(&e))?;
@@ -243,11 +246,12 @@ pub async fn get(username: Username, date: PermalinkDate, slug: Slug) -> WebResu
         return Err(not_found_error());
     }
 
-    let draft = find_draft_by_permalink_for_user(posts.as_ref(), auth.user_id, date, &slug)
+    let post = posts
+        .get_unpublished_post_by_permalink(auth.user_id, date, &slug, now)
         .await?
         .ok_or_else(not_found_error)?;
 
-    Ok(authored_post(draft, true))
+    Ok(authored_post(post, true))
 }
 
 /// Retrieves a draft preview for the authenticated author.

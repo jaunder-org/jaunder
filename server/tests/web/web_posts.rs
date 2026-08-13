@@ -1393,35 +1393,33 @@ async fn publish_post_returns_not_found_for_missing_or_deleted_posts(#[case] bac
 
 #[apply(backends)]
 #[tokio::test]
-async fn get_post_finds_author_draft_across_multiple_pages(#[case] backend: Backend) {
+async fn get_post_returns_scheduled_post_at_canonical_permalink_to_author(
+    #[case] backend: Backend,
+) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let session = create_user_and_session(&state).await;
-
-    let ids = storage::test_support::seed_posts(&state, session.user_id, 55, false).await;
-    let first_post_id = ids[0];
-    let record = state
-        .posts
-        .get_post_by_id(
-            first_post_id,
-            &common::visibility::ViewerIdentity::Anonymous,
-        )
-        .await
-        .unwrap()
-        .expect("first draft should exist");
+    let author = create_user_and_session(&state).await;
+    let cookie = author.cookie();
+    let scheduled_at = chrono::Utc::now() + chrono::Duration::days(30);
+    let scheduled = SeedRawPost::new(author.user_id)
+        .published_at(scheduled_at)
+        .seed(&state)
+        .await;
 
     let (status, body) = get_post_form(
         &state,
-        &session.username,
-        record.created_at.year(),
-        record.created_at.month(),
-        record.created_at.day(),
-        record.slug.as_ref(),
-        Some(&session.cookie()),
+        &author.username,
+        scheduled_at.year(),
+        scheduled_at.month(),
+        scheduled_at.day(),
+        scheduled.slug.as_ref(),
+        Some(&cookie),
     )
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    assert!(body.contains("\"is_draft\":true"), "body: {body}");
+    let returned: AuthoredPost = serde_json::from_str(&body).unwrap();
+    assert_eq!(returned.post.post_id, scheduled.post_id);
+    assert!(returned.post.is_author);
 }
 
 #[apply(backends)]

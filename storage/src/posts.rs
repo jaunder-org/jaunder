@@ -525,59 +525,12 @@ pub async fn fetch_post_record(
     username: &Username,
     date: PermalinkDate,
     slug: &Slug,
+    now: DateTime<Utc>,
 ) -> InternalResult<Option<PostRecord>> {
     posts
-        .get_post_by_permalink(username, date, slug, viewer, Utc::now())
+        .get_post_by_permalink(username, date, slug, viewer, now)
         .await
         .map_err(InternalError::storage)
-}
-
-/// Finds an authenticated author's own draft at a given permalink by paging
-/// their draft list.
-///
-/// # Errors
-///
-/// Returns a storage error if a draft-listing page fails to load.
-pub async fn find_draft_by_permalink_for_user(
-    posts: &dyn PostStorage,
-    user_id: UserId,
-    date: PermalinkDate,
-    slug: &Slug,
-) -> InternalResult<Option<PostRecord>> {
-    let mut cursor = None;
-
-    // Search through up to 10,000 drafts (200 pages of 50). This 200-iteration
-    // limit is a safety bound to prevent infinite loops or excessive DB load
-    // while still being large enough for almost any user's draft list.
-    for _ in 0..200 {
-        let drafts = posts
-            .list_drafts_by_user(
-                user_id,
-                cursor.as_ref(),
-                RowLimit::at_most(50),
-                chrono::Utc::now(),
-            )
-            .await?;
-        if drafts.is_empty() {
-            return Ok(None);
-        }
-
-        let next_cursor = drafts.last().map(to_post_cursor);
-
-        if let Some(found) = drafts
-            .into_iter()
-            .find(|post| post.slug == *slug && post.created_at.date_naive() == date.value())
-        {
-            return Ok(Some(found));
-        }
-
-        let Some(next_cursor) = next_cursor else {
-            unreachable!("drafts is non-empty after the is_empty guard, so last() is Some")
-        };
-        cursor = Some(next_cursor);
-    }
-
-    Ok(None)
 }
 
 /// Applies the `TagNotFound → empty` business rule to a by-tag listing result:
@@ -4091,6 +4044,7 @@ mod tests {
             &record.author_username,
             date,
             &record.slug,
+            Utc::now(),
         )
         .await
         .unwrap();
@@ -4103,6 +4057,7 @@ mod tests {
             &record.author_username,
             date,
             &parse_slug("no-such-slug"),
+            Utc::now(),
         )
         .await
         .unwrap();
@@ -4325,32 +4280,6 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn find_draft_by_permalink_for_user_finds_draft_and_misses(#[case] backend: Backend) {
-        let env = backend.setup().await;
-        let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let posts = &*env.state.posts;
-        crate::test_support::seed_posts(&env.state, user_id, 1, false).await;
-        let drafts = posts
-            .list_drafts_by_user(user_id, None, parse_row_limit("50"), Utc::now())
-            .await
-            .unwrap();
-        let record = drafts.first().expect("seeded draft is listed");
-        let date = PermalinkDate::from(record.created_at.date_naive());
-
-        let found = find_draft_by_permalink_for_user(posts, user_id, date, &record.slug)
-            .await
-            .unwrap();
-        assert_eq!(found.map(|post| post.post_id), Some(record.post_id));
-
-        let missing =
-            find_draft_by_permalink_for_user(posts, user_id, date, &parse_slug("missing"))
-                .await
-                .unwrap();
-        assert!(missing.is_none());
-    }
-
-    #[apply(backends)]
-    #[tokio::test]
     async fn get_unpublished_post_by_permalink_matches_canonical_date_and_scope(
         #[case] backend: Backend,
     ) {
@@ -4421,54 +4350,5 @@ mod tests {
                     .is_none()
             );
         }
-    }
-
-    // guard:no-backend — mock store, no live database backend
-    #[cfg(feature = "test-utils")]
-    #[tokio::test]
-    async fn find_draft_by_permalink_returns_none_after_exhausting_pages() {
-        use chrono::TimeZone;
-        let mut mock = crate::MockPostStorage::new();
-        // Every call returns a full 50-row page of drafts whose slug never matches
-        // the searched permalink, each row carrying a distinct created_at/post_id so
-        // `to_post_cursor` yields an advancing (non-`None`) cursor. Since the page is
-        // always non-empty and never matches, all 200 iterations of the safety bound
-        // run and the loop falls through to `Ok(None)`.
-        mock.expect_list_drafts_by_user()
-            .returning(|_user_id, _cursor, _limit, _now| {
-                let base = Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap();
-                let username = parse_username("author");
-                let slug = parse_slug("other-slug");
-                let page = (0..50_i64)
-                    .map(|i| PostRecord {
-                        post_id: PostId::from(i),
-                        user_id: UserId::from(1),
-                        author_username: username.clone(),
-                        title: None,
-                        slug: slug.clone(),
-                        body: parse_post_body("draft body"),
-                        format: PostFormat::Markdown,
-                        rendered_html: RenderedHtml::from_trusted("<p>draft body</p>"),
-                        created_at: base + chrono::Duration::seconds(i),
-                        updated_at: base,
-                        published_at: None,
-                        deleted_at: None,
-                        summary: None,
-                        tags: vec![],
-                    })
-                    .collect();
-                Ok(page)
-            });
-
-        let searched = parse_slug("target-slug");
-        let result = find_draft_by_permalink_for_user(
-            &mock,
-            UserId::from(1),
-            common::test_support::permalink_date(2020, 1, 1),
-            &searched,
-        )
-        .await
-        .unwrap();
-        assert!(result.is_none());
     }
 }
