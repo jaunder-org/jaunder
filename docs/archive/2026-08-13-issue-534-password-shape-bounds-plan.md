@@ -34,7 +34,7 @@ domain/client and wire-validation doors, so no caller or web component changes.
 `cargo xtask` gate.
 
 **Approved spec:**
-[`docs/superpowers/specs/2026-08-13-issue-534-password-shape-bounds.md`](../specs/2026-08-13-issue-534-password-shape-bounds.md)
+[`docs/archive/2026-08-13-issue-534-password-shape-bounds-spec.md`](2026-08-13-issue-534-password-shape-bounds-spec.md)
 
 ## Global Constraints
 
