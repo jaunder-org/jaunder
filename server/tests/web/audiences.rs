@@ -230,6 +230,11 @@ async fn add_subscriber_nested_request_maps_both_ids(#[case] backend: Backend) {
         .subscribe(author.user_id, channel, &i64::from(subscriber).to_string())
         .await
         .unwrap();
+    state
+        .audiences
+        .create_audience(author.user_id, &parse_audience_name("Decoy"))
+        .await
+        .unwrap();
 
     let (_s, body) = post_form(
         &state,
@@ -239,6 +244,11 @@ async fn add_subscriber_nested_request_maps_both_ids(#[case] backend: Backend) {
     )
     .await;
     let aud_id = AudienceId::from(parse_id(&body));
+    assert_ne!(
+        i64::from(aud_id),
+        i64::from(sub_id),
+        "sentinel ids must differ so a transposition cannot pass"
+    );
 
     let (status, body) = post_form(
         &state,
@@ -329,11 +339,21 @@ async fn remove_subscriber_nested_request_maps_both_ids(#[case] backend: Backend
         .subscribe(author.user_id, channel, &i64::from(subscriber).to_string())
         .await
         .unwrap();
+    state
+        .audiences
+        .create_audience(author.user_id, &parse_audience_name("Decoy"))
+        .await
+        .unwrap();
     let audience_id = state
         .audiences
         .create_audience(author.user_id, &parse_audience_name("Remove target"))
         .await
         .unwrap();
+    assert_ne!(
+        i64::from(audience_id),
+        i64::from(subscription_id),
+        "sentinel ids must differ so a transposition cannot pass"
+    );
     state
         .audiences
         .add_member(author.user_id, audience_id, subscription_id)

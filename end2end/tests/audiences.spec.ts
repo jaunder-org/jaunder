@@ -114,6 +114,10 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
   // Remove X; the button flips back.
   await friendsX.locator('button:has-text("Remove")').click();
   await expect(friendsX.locator('button:has-text("Add")')).toBeVisible();
+  // The remove re-fetches only Friends too: one additional request despite two
+  // mounted checklists, and still no audience-list refresh.
+  expect(memberFetches).toBe(2);
+  expect(listFetches).toBe(0);
 
   // #348 (create): creating another audience refetches the list; the keyed store `patch`es
   // in place, so the two existing rows' checklists are not remounted (handles stay
@@ -183,6 +187,17 @@ test("audience rename pending and error preserve the row", async ({ page }) => {
     if (request.url().includes("/api/audiences/rename")) renameRequests += 1;
     if (request.url().includes("/api/audiences/list_mine")) listRequests += 1;
   });
+  await input.fill("   ");
+  await input.blur();
+  await expect(
+    form.locator("p.error", {
+      hasText: "audience name must not be empty",
+    }),
+  ).toBeVisible();
+  await expect(button).toBeDisabled();
+  await input.press("Enter");
+  expect(renameRequests).toBe(0);
+
   const release = await stallServerFn(page, "audiences/rename");
   await input.fill("BestFriends");
   await button.click();
@@ -268,8 +283,23 @@ test("audience remove pending prevents duplicate dispatch", async ({
   await goto(page, "/audiences");
   await page.fill('input[placeholder="Audience name"]', "Friends");
   await click(page, 'button:has-text("Create")');
-  const row = page
-    .locator(".j-audience-item", { hasText: "Friends" })
+  await page.fill('input[placeholder="Audience name"]', "Family");
+  await click(page, 'button:has-text("Create")');
+  const friends = page.locator(".j-audience-item", { hasText: "Friends" });
+  const family = page.locator(".j-audience-item", { hasText: "Family" });
+  const familySubscriber = family
+    .locator(".j-audience-members li")
+    .filter({ hasText: subscriber });
+  await expect(
+    familySubscriber.locator('button:has-text("Add")'),
+  ).toBeVisible();
+  const friendsId = await friends
+    .locator('input[name="audience_id"]')
+    .inputValue();
+  const familyId = await family
+    .locator('input[name="audience_id"]')
+    .inputValue();
+  const row = friends
     .locator(".j-audience-members li")
     .filter({ hasText: subscriber });
   await row.locator('button:has-text("Add")').click();
@@ -277,19 +307,26 @@ test("audience remove pending prevents duplicate dispatch", async ({
   await expect(button).toBeVisible();
 
   let removeRequests = 0;
-  let memberRequests = 0;
+  let targetMemberRequests = 0;
+  let unrelatedMemberRequests = 0;
   let listRequests = 0;
   page.on("request", (request) => {
     if (request.url().includes("/api/audiences/remove_subscriber"))
       removeRequests += 1;
-    if (request.url().includes("/api/audiences/list_members"))
-      memberRequests += 1;
+    if (request.url().includes("/api/audiences/list_members")) {
+      const audienceId = new URLSearchParams(request.postData() ?? "").get(
+        "audience_id",
+      );
+      if (audienceId === friendsId) targetMemberRequests += 1;
+      if (audienceId === familyId) unrelatedMemberRequests += 1;
+    }
     if (request.url().includes("/api/audiences/list_mine")) listRequests += 1;
   });
   await failServerFn(page, "audiences/remove_subscriber");
   await button.click();
   await expect(row.locator("p.error")).toBeVisible();
-  expect(memberRequests).toBe(0);
+  expect(targetMemberRequests).toBe(0);
+  expect(unrelatedMemberRequests).toBe(0);
   expect(listRequests).toBe(0);
   await page.unroute("**/api/audiences/remove_subscriber");
   removeRequests = 0;
@@ -301,7 +338,8 @@ test("audience remove pending prevents duplicate dispatch", async ({
   expect(removeRequests).toBe(1);
   release();
   await expect(row.locator('button:has-text("Add")')).toBeVisible();
-  await expect.poll(() => memberRequests).toBe(1);
+  await expect.poll(() => targetMemberRequests).toBe(1);
+  expect(unrelatedMemberRequests).toBe(0);
   expect(listRequests).toBe(0);
 });
 // #383: fetch-error UI branches, driven by Playwright route interception (`failServerFn`).

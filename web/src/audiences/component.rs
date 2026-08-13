@@ -9,7 +9,7 @@ use super::api::{
 use crate::error::WebResult;
 // `crate::forms::Field` (the validated-input field) is aliased to avoid colliding with
 // `reactive_stores::Field` (the keyed-store field used by `AudienceRow`).
-use crate::forms::Field as ValidatedField;
+use crate::forms::{Field as ValidatedField, request_submit_gate};
 use crate::icon::Icons;
 use crate::reactive::{Invalidator, invalidator_scope};
 use crate::topbar::Topbar;
@@ -232,17 +232,19 @@ fn AudienceHeader(audience_id: AudienceId, name: AudienceName) -> impl IntoView 
     // row is already valid (submit enabled); clearing it disables Rename and — once
     // touched — shows the newtype's own message inline.
     let name = ValidatedField::<AudienceName>::prefilled(&name);
-    let rename_disabled =
-        Signal::derive(move || rename_action.pending().get() || name.parsed().is_none());
+    let (rename_disabled, dispatch_rename) = request_submit_gate(
+        rename_action.pending().into(),
+        Callback::new(move |()| {
+            name.parsed()
+                .map(|name| RenameAudienceRequest { audience_id, name })
+        }),
+        Callback::new(move |request| {
+            rename_action.dispatch(Rename { request });
+        }),
+    );
     let submit_rename = move |event: leptos::ev::SubmitEvent| {
         event.prevent_default();
-        if !rename_action.pending().get()
-            && let Some(name) = name.parsed()
-        {
-            rename_action.dispatch(Rename {
-                request: RenameAudienceRequest { audience_id, name },
-            });
-        }
+        dispatch_rename.run(());
     };
 
     view! {

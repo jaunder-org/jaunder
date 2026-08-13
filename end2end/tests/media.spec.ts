@@ -346,6 +346,7 @@ test.describe("Media delete guard", () => {
     release();
 
     await expect(page.getByRole("link", { name: "forced.jpg" })).toHaveCount(0);
+    await expect(page.locator("p.success")).toHaveText("Media deleted.");
     await expect.poll(counts.listRequests).toBe(1);
   });
 

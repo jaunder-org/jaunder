@@ -3,7 +3,7 @@
 
 use super::{Confirm, ConfirmPasswordResetRequest, Request};
 use crate::error::WebError;
-use crate::forms::{Field, ValidatedInput};
+use crate::forms::{Field, ValidatedInput, request_submit_gate};
 use crate::topbar::Topbar;
 use common::password::ProfferedPassword;
 use common::token::RawToken;
@@ -76,25 +76,24 @@ pub fn ResetPasswordPage() -> impl IntoView {
         .and_then(|value| value.parse::<RawToken>().ok());
     let confirm_action = ServerAction::<Confirm>::new();
     let new_password = Field::<ProfferedPassword>::new();
-    let disabled_token = token.clone();
-    let disabled = Signal::derive(move || {
-        confirm_action.pending().get()
-            || disabled_token.is_none()
-            || new_password.parsed().is_none()
-    });
-    let submit = move |event: leptos::ev::SubmitEvent| {
-        event.prevent_default();
-        let request = (!confirm_action.pending().get())
-            .then(|| token.clone().zip(new_password.parsed()))
-            .flatten();
-        if let Some((token, new_password)) = request {
-            confirm_action.dispatch(Confirm {
-                request: ConfirmPasswordResetRequest {
+    let (disabled, dispatch) = request_submit_gate(
+        confirm_action.pending().into(),
+        Callback::new(move |()| {
+            token
+                .clone()
+                .zip(new_password.parsed())
+                .map(|(token, new_password)| ConfirmPasswordResetRequest {
                     token,
                     new_password,
-                },
-            });
-        }
+                })
+        }),
+        Callback::new(move |request| {
+            confirm_action.dispatch(Confirm { request });
+        }),
+    );
+    let submit = move |event: leptos::ev::SubmitEvent| {
+        event.prevent_default();
+        dispatch.run(());
     };
 
     view! {

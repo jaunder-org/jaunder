@@ -425,10 +425,12 @@ async fn create_invite_omits_hours_uses_default(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK, "omitted TTL should default: {body}");
-    assert_eq!(
-        mailer.sent().len(),
-        1,
-        "default-TTL invite should be emailed"
+    let sent = mailer.sent();
+    assert_eq!(sent.len(), 1, "default-TTL invite should be emailed");
+    assert!(
+        sent[0].body_text.contains("expires in 168 hours"),
+        "omitted TTL should use the 168-hour default, got: {}",
+        sent[0].body_text
     );
 }
 
@@ -457,10 +459,12 @@ async fn create_invite_empty_hours_uses_default(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK, "empty TTL should default: {body}");
-    assert_eq!(
-        mailer.sent().len(),
-        1,
-        "default-TTL invite should be emailed"
+    let sent = mailer.sent();
+    assert_eq!(sent.len(), 1, "default-TTL invite should be emailed");
+    assert!(
+        sent[0].body_text.contains("expires in 168 hours"),
+        "empty TTL should use the 168-hour default, got: {}",
+        sent[0].body_text
     );
 }
 

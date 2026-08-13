@@ -21,25 +21,27 @@ test("register page shows form", async ({ page }) => {
   await expect(page.locator(SEL.password)).toBeVisible();
 });
 
-test("register rejects a too-short password client-side", async ({ page }) => {
+test("register invalid fields do not dispatch", async ({ page }) => {
   let requests = 0;
   page.on("request", (request) => {
     if (request.url().includes("/api/registration/register")) requests += 1;
   });
-  // Holdout (spec D6): proves client-side validation.
   await goto(page, "/register");
 
-  await page.fill(SEL.username, "validusername");
-  await page.fill(SEL.password, "short"); // < 8 chars
-  await page.locator(SEL.password).blur(); // touched → message shows
+  await page.fill(SEL.username, "Bad User");
+  await page.fill(SEL.password, "short");
+  await page.locator(SEL.username).blur();
+  await page.locator(SEL.password).blur();
 
-  await expect(page.locator(SEL.error)).toBeVisible();
+  await expect(page.locator(SEL.error)).toHaveCount(2);
   await expect(page.locator(SEL.submit)).toBeDisabled();
   await page.locator(SEL.password).press("Enter");
   expect(requests).toBe(0);
 
-  // A valid password clears the error and enables submit.
+  // Both valid values clear the errors and enable submit.
+  await page.fill(SEL.username, "validusername");
   await page.fill(SEL.password, "longenough123");
+  await expect(page.locator(SEL.error)).toHaveCount(0);
   await expect(page.locator(SEL.submit)).toBeEnabled();
 });
 

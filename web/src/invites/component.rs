@@ -2,7 +2,7 @@
 
 use super::{Create, CreateInviteRequest, Info, list};
 use crate::error::WebError;
-use crate::forms::{Field, ValidatedInput};
+use crate::forms::{Field, ValidatedInput, request_submit_gate};
 use crate::registration::get_policy;
 use crate::topbar::Topbar;
 use common::email::Email;
@@ -68,31 +68,29 @@ fn InviteCreateForm(action: ServerAction<Create>) -> impl IntoView {
     // Optional TTL: empty dispatches `None` for the server's 168-hour default. A
     // non-empty value is dispatched only after `Field::parsed()` validates it.
     let ttl = Field::<InviteTtlHours>::optional();
-    let disabled = Signal::derive(move || {
-        action.pending().get()
-            || recipient.parsed().is_none()
-            || (ttl.value.with(|value| !value.trim().is_empty()) && ttl.parsed().is_none())
-    });
-    let submit = move |event: leptos::ev::SubmitEvent| {
-        event.prevent_default();
-        let request = (!action.pending().get())
-            .then(|| {
-                let expires_in_hours = ttl
-                    .value
-                    .with(|value| value.trim().is_empty())
-                    .then_some(None)
-                    .or_else(|| ttl.parsed().map(Some));
-                recipient.parsed().zip(expires_in_hours)
-            })
-            .flatten();
-        if let Some((recipient_email, expires_in_hours)) = request {
-            action.dispatch(Create {
-                request: CreateInviteRequest {
+    let (disabled, dispatch) = request_submit_gate(
+        action.pending().into(),
+        Callback::new(move |()| {
+            let expires_in_hours = ttl
+                .value
+                .with(|value| value.trim().is_empty())
+                .then_some(None)
+                .or_else(|| ttl.parsed().map(Some));
+            recipient
+                .parsed()
+                .zip(expires_in_hours)
+                .map(|(recipient_email, expires_in_hours)| CreateInviteRequest {
                     expires_in_hours,
                     recipient_email,
-                },
-            });
-        }
+                })
+        }),
+        Callback::new(move |request| {
+            action.dispatch(Create { request });
+        }),
+    );
+    let submit = move |event: leptos::ev::SubmitEvent| {
+        event.prevent_default();
+        dispatch.run(());
     };
 
     view! {
