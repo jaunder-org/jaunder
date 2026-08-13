@@ -176,6 +176,7 @@ async fn permalink(
         &username,
         date,
         &slug,
+        chrono::Utc::now(),
     )
     .await;
     permalink_response(result, &headers, &shell)
