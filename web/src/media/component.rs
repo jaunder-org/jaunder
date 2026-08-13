@@ -14,6 +14,7 @@ use super::{
     format_bytes, get_usage, list_mine, storage_usage_percent, upload,
 };
 use crate::error::{WebError, WebResult};
+use crate::forms::request_submit_gate;
 use crate::topbar::Topbar;
 
 /// A media upload control: a button that opens the file picker and immediately
@@ -329,13 +330,16 @@ fn force_delete_form(item: &Item, delete_action: ServerAction<Delete>) -> impl I
         source: item.source,
         force: Some(true),
     };
+    let (disabled, dispatch_delete) = request_submit_gate(
+        delete_action.pending().into(),
+        Callback::new(move |()| Some(request.clone())),
+        Callback::new(move |request| {
+            delete_action.dispatch(Delete { request });
+        }),
+    );
     let submit = move |event: leptos::ev::SubmitEvent| {
         event.prevent_default();
-        if !delete_action.pending().get() {
-            delete_action.dispatch(Delete {
-                request: request.clone(),
-            });
-        }
+        dispatch_delete.run(());
     };
 
     view! {
@@ -344,7 +348,7 @@ fn force_delete_form(item: &Item, delete_action: ServerAction<Delete>) -> impl I
                 type="submit"
                 class="j-btn is-danger"
                 onclick="return confirm('Delete anyway? Posts that embed this item will keep pointing at it.')"
-                prop:disabled=move || delete_action.pending().get()
+                prop:disabled=move || disabled.get()
             >
                 {format!("Force delete {display_name}")}
             </button>
@@ -371,14 +375,17 @@ fn render_media_row(
         source: item.source,
         force: None,
     };
+    let (disabled, dispatch_delete) = request_submit_gate(
+        delete_action.pending().into(),
+        Callback::new(move |()| Some((target.clone(), request.clone()))),
+        Callback::new(move |(target, request)| {
+            delete_target.set(Some(target));
+            delete_action.dispatch(Delete { request });
+        }),
+    );
     let submit = move |event: leptos::ev::SubmitEvent| {
         event.prevent_default();
-        if !delete_action.pending().get() {
-            delete_target.set(Some(target.clone()));
-            delete_action.dispatch(Delete {
-                request: request.clone(),
-            });
-        }
+        dispatch_delete.run(());
     };
 
     view! {
@@ -398,7 +405,7 @@ fn render_media_row(
                         type="submit"
                         class="j-btn is-danger"
                         onclick="return confirm('Delete this media item?')"
-                        prop:disabled=move || delete_action.pending().get()
+                        prop:disabled=move || disabled.get()
                     >
                         "Delete"
                     </button>

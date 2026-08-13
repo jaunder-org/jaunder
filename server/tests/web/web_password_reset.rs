@@ -9,7 +9,8 @@ use storage::AppState;
 
 use crate::helpers::{
     SeededSession, assert_no_email, assert_one_absolute_link_email, create_session_for,
-    create_user_and_session, post_form_with_mailer, setup_with_base_url,
+    create_user_and_session, post_form_with_mailer, post_server_fn_with_mailer,
+    setup_with_base_url,
 };
 use storage::test_support::{Backend, SeedUser, TestEnv, backends};
 
@@ -154,12 +155,15 @@ async fn confirm_nested_request_maps_token_and_password(#[case] backend: Backend
         .await
         .unwrap();
 
-    let body = format!("request%5Btoken%5D={raw_token}&request%5Bnew_password%5D=newpassword456");
-    let (status, _body) = post_form_with_mailer(
+    let (status, _body) = post_server_fn_with_mailer(
         &state,
         &mailer,
-        <web::password_reset::Confirm as ServerFn>::PATH,
-        body,
+        &web::password_reset::Confirm {
+            request: web::password_reset::ConfirmPasswordResetRequest {
+                token: raw_token,
+                new_password: "newpassword456".parse().unwrap(),
+            },
+        },
         None,
     )
     .await;
@@ -203,12 +207,15 @@ async fn confirm_password_reset_with_expired_token_returns_error(#[case] backend
         .await
         .unwrap();
 
-    let body = format!("request%5Btoken%5D={raw_token}&request%5Bnew_password%5D=newpassword456");
-    let (status, _body) = post_form_with_mailer(
+    let (status, _body) = post_server_fn_with_mailer(
         &state,
         &mailer,
-        <web::password_reset::Confirm as ServerFn>::PATH,
-        body,
+        &web::password_reset::Confirm {
+            request: web::password_reset::ConfirmPasswordResetRequest {
+                token: raw_token,
+                new_password: "newpassword456".parse().unwrap(),
+            },
+        },
         None,
     )
     .await;
@@ -297,28 +304,19 @@ async fn confirm_password_reset_with_used_token_returns_error(#[case] backend: B
         .await
         .unwrap();
 
-    let body = format!("request%5Btoken%5D={raw_token}&request%5Bnew_password%5D=newpassword456");
+    let request = web::password_reset::Confirm {
+        request: web::password_reset::ConfirmPasswordResetRequest {
+            token: raw_token,
+            new_password: "newpassword456".parse().unwrap(),
+        },
+    };
 
     // Use it once — should succeed
-    let (status, _) = post_form_with_mailer(
-        &state,
-        &mailer,
-        <web::password_reset::Confirm as ServerFn>::PATH,
-        body.clone(),
-        None,
-    )
-    .await;
+    let (status, _) = post_server_fn_with_mailer(&state, &mailer, &request, None).await;
     assert_eq!(status, StatusCode::OK);
 
     // Use it again — should fail
-    let (status, _) = post_form_with_mailer(
-        &state,
-        &mailer,
-        <web::password_reset::Confirm as ServerFn>::PATH,
-        body,
-        None,
-    )
-    .await;
+    let (status, _) = post_server_fn_with_mailer(&state, &mailer, &request, None).await;
     assert_ne!(status, StatusCode::OK);
 }
 

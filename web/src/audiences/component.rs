@@ -375,21 +375,27 @@ fn MemberToggle(
         subscription_id,
     };
     let remove_request = request.clone();
+    let (remove_disabled, dispatch_remove) = request_submit_gate(
+        remove_action.pending().into(),
+        Callback::new(move |()| Some(remove_request.clone())),
+        Callback::new(move |request| {
+            remove_action.dispatch(RemoveSubscriber { request });
+        }),
+    );
     let submit_remove = move |event: leptos::ev::SubmitEvent| {
         event.prevent_default();
-        if !remove_action.pending().get() {
-            remove_action.dispatch(RemoveSubscriber {
-                request: remove_request.clone(),
-            });
-        }
+        dispatch_remove.run(());
     };
+    let (add_disabled, dispatch_add) = request_submit_gate(
+        add_action.pending().into(),
+        Callback::new(move |()| Some(request.clone())),
+        Callback::new(move |request| {
+            add_action.dispatch(AddSubscriber { request });
+        }),
+    );
     let submit_add = move |event: leptos::ev::SubmitEvent| {
         event.prevent_default();
-        if !add_action.pending().get() {
-            add_action.dispatch(AddSubscriber {
-                request: request.clone(),
-            });
-        }
+        dispatch_add.run(());
     };
 
     view! {
@@ -401,7 +407,7 @@ fn MemberToggle(
                         <button
                             type="submit"
                             class="j-btn"
-                            prop:disabled=move || remove_action.pending().get()
+                            prop:disabled=move || remove_disabled.get()
                         >
                             "Remove"
                         </button>
@@ -424,7 +430,7 @@ fn MemberToggle(
                         <button
                             type="submit"
                             class="j-btn"
-                            prop:disabled=move || add_action.pending().get()
+                            prop:disabled=move || add_disabled.get()
                         >
                             "Add"
                         </button>

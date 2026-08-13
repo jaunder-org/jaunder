@@ -3,7 +3,9 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use common::config_key::SiteConfigKey;
 use common::mailer::test_utils::CapturingMailSender;
-use common::test_support::{parse_bio, parse_display_name, parse_session_label};
+use common::test_support::{
+    parse_bio, parse_display_name, parse_email, parse_invite_ttl_hours, parse_session_label,
+};
 use server_fn::ServerFn;
 use storage::ProfileUpdate;
 
@@ -12,7 +14,7 @@ use rstest_reuse::*;
 
 use crate::helpers::{
     create_operator_and_session, create_session_for, create_user_and_session, post_form,
-    post_form_with_mailer, session_cookie,
+    post_form_with_mailer, post_server_fn, post_server_fn_with_mailer, session_cookie,
 };
 use storage::test_support::{Backend, SeedUser, TestEnv, backends};
 
@@ -213,11 +215,15 @@ async fn create_invite_nested_request_maps_fields(#[case] backend: Backend) {
     let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let (status, body) = post_form_with_mailer(
+    let (status, body) = post_server_fn_with_mailer(
         &state,
         &mailer,
-        <web::invites::Create as ServerFn>::PATH,
-        "request%5Bexpires_in_hours%5D=37&request%5Brecipient_email%5D=invitee@example.com",
+        &web::invites::Create {
+            request: web::invites::CreateInviteRequest {
+                expires_in_hours: Some(parse_invite_ttl_hours("37")),
+                recipient_email: parse_email("invitee@example.com"),
+            },
+        },
         Some(&cookie),
     )
     .await;
@@ -273,10 +279,14 @@ async fn create_invite_nested_request_maps_fields(#[case] backend: Backend) {
 async fn create_invite_unauthorized_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, _) = post_form(
+    let (status, _) = post_server_fn(
         &state,
-        <web::invites::Create as ServerFn>::PATH,
-        "request%5Brecipient_email%5D=invitee@example.com",
+        &web::invites::Create {
+            request: web::invites::CreateInviteRequest {
+                expires_in_hours: None,
+                recipient_email: parse_email("invitee@example.com"),
+            },
+        },
         None,
     )
     .await;
@@ -292,11 +302,15 @@ async fn create_invite_without_base_url_errors_and_sends_nothing(#[case] backend
     let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let (status, _) = post_form_with_mailer(
+    let (status, _) = post_server_fn_with_mailer(
         &state,
         &mailer,
-        <web::invites::Create as ServerFn>::PATH,
-        "request%5Bexpires_in_hours%5D=24&request%5Brecipient_email%5D=invitee@example.com",
+        &web::invites::Create {
+            request: web::invites::CreateInviteRequest {
+                expires_in_hours: Some(parse_invite_ttl_hours("24")),
+                recipient_email: parse_email("invitee@example.com"),
+            },
+        },
         Some(&cookie),
     )
     .await;
@@ -353,11 +367,16 @@ async fn create_invite_send_failure_returns_error(#[case] backend: Backend) {
         .unwrap();
     let cookie = create_operator_and_session(&state).await.cookie();
 
-    // `post_form` uses the noop mailer, whose `send_email` fails with NotConfigured.
-    let (status, _) = post_form(
+    // `post_server_fn` uses the noop mailer, whose `send_email` fails with
+    // `NotConfigured`.
+    let (status, _) = post_server_fn(
         &state,
-        <web::invites::Create as ServerFn>::PATH,
-        "request%5Bexpires_in_hours%5D=24&request%5Brecipient_email%5D=invitee@example.com",
+        &web::invites::Create {
+            request: web::invites::CreateInviteRequest {
+                expires_in_hours: Some(parse_invite_ttl_hours("24")),
+                recipient_email: parse_email("invitee@example.com"),
+            },
+        },
         Some(&cookie),
     )
     .await;
@@ -415,11 +434,15 @@ async fn create_invite_omits_hours_uses_default(#[case] backend: Backend) {
     let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let (status, body) = post_form_with_mailer(
+    let (status, body) = post_server_fn_with_mailer(
         &state,
         &mailer,
-        <web::invites::Create as ServerFn>::PATH,
-        "request%5Brecipient_email%5D=invitee@example.com", // no expires_in_hours key
+        &web::invites::Create {
+            request: web::invites::CreateInviteRequest {
+                expires_in_hours: None,
+                recipient_email: parse_email("invitee@example.com"),
+            },
+        },
         Some(&cookie),
     )
     .await;

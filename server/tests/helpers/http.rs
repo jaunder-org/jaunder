@@ -50,6 +50,13 @@ enum PostBody {
 }
 
 impl PostBody {
+    fn server_fn<F>(input: &F) -> Self
+    where
+        F: serde::Serialize + server_fn::ServerFn,
+    {
+        Self::Form(serde_qs::to_string(input).expect("failed to encode server-function input"))
+    }
+
     fn content_type(&self) -> &'static str {
         match self {
             PostBody::Form(_) => "application/x-www-form-urlencoded",
@@ -139,6 +146,103 @@ pub async fn post_form(
     .await;
     (status, body)
 }
+/// POST one typed server-function input using that function's derived path and
+/// default URL-encoded input codec.
+pub async fn post_server_fn<F>(
+    state: &Arc<storage::AppState>,
+    input: &F,
+    cookie: Option<&str>,
+) -> (StatusCode, String)
+where
+    F: serde::Serialize + server_fn::ServerFn,
+{
+    let auth = cookie.map_or(Auth::None, Auth::Cookie);
+    let (status, _set_cookie, body) = post_inner(
+        state,
+        noop_mailer(),
+        F::PATH,
+        PostBody::server_fn(input),
+        auth,
+        None,
+        true,
+    )
+    .await;
+    (status, body)
+}
+
+/// Like [`post_server_fn`], but injects a specific mailer.
+pub async fn post_server_fn_with_mailer<M, F>(
+    state: &Arc<storage::AppState>,
+    mailer: &Arc<M>,
+    input: &F,
+    cookie: Option<&str>,
+) -> (StatusCode, String)
+where
+    M: MailSender + 'static,
+    F: serde::Serialize + server_fn::ServerFn,
+{
+    let auth = cookie.map_or(Auth::None, Auth::Cookie);
+    let mailer: Arc<dyn MailSender> = mailer.clone();
+    let (status, _set_cookie, body) = post_inner(
+        state,
+        mailer,
+        F::PATH,
+        PostBody::server_fn(input),
+        auth,
+        None,
+        true,
+    )
+    .await;
+    (status, body)
+}
+
+/// Like [`post_server_fn`], but exposes the secure-cookie toggle and returns
+/// `Set-Cookie`.
+pub async fn post_server_fn_with_secure_flag<F>(
+    state: &Arc<storage::AppState>,
+    input: &F,
+    cookie: Option<&str>,
+    secure_cookies: bool,
+) -> (StatusCode, Option<String>, String)
+where
+    F: serde::Serialize + server_fn::ServerFn,
+{
+    let auth = cookie.map_or(Auth::None, Auth::Cookie);
+    post_inner(
+        state,
+        noop_mailer(),
+        F::PATH,
+        PostBody::server_fn(input),
+        auth,
+        None,
+        secure_cookies,
+    )
+    .await
+}
+
+/// Like [`post_server_fn_with_secure_flag`], but also sets `User-Agent`.
+pub async fn post_server_fn_with_ua<F>(
+    state: &Arc<storage::AppState>,
+    input: &F,
+    cookie: Option<&str>,
+    user_agent: &str,
+    secure_cookies: bool,
+) -> (StatusCode, Option<String>, String)
+where
+    F: serde::Serialize + server_fn::ServerFn,
+{
+    let auth = cookie.map_or(Auth::None, Auth::Cookie);
+    post_inner(
+        state,
+        noop_mailer(),
+        F::PATH,
+        PostBody::server_fn(input),
+        auth,
+        Some(user_agent),
+        secure_cookies,
+    )
+    .await
+}
 
 /// Like [`post_form`], but injects a specific `mailer` (e.g. a capturing sender)
 /// instead of the noop.
@@ -183,28 +287,6 @@ pub async fn post_form_with_secure_flag(
         PostBody::Form(body.into()),
         auth,
         None,
-        secure_cookies,
-    )
-    .await
-}
-
-/// Like [`post_form_with_secure_flag`], but also sets a `User-Agent` header.
-pub async fn post_form_with_ua(
-    state: &Arc<storage::AppState>,
-    uri: &str,
-    body: impl Into<String>,
-    cookie: Option<&str>,
-    user_agent: &str,
-    secure_cookies: bool,
-) -> (StatusCode, Option<String>, String) {
-    let auth = cookie.map_or(Auth::None, Auth::Cookie);
-    post_inner(
-        state,
-        noop_mailer(),
-        uri,
-        PostBody::Form(body.into()),
-        auth,
-        Some(user_agent),
         secure_cookies,
     )
     .await

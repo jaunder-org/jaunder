@@ -15,7 +15,9 @@ use storage::{CreateMediaError, MediaRecord};
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{MultipartFile, create_user_and_session, make_app, post_form, post_multipart};
+use crate::helpers::{
+    MultipartFile, create_user_and_session, make_app, post_form, post_multipart, post_server_fn,
+};
 use common::media::{MaxFileSize, MediaSource, UploadResponse, UserQuota};
 use common::test_support::{
     parse_byte_size, parse_content_hash, parse_content_type, parse_filename, parse_post_body,
@@ -50,24 +52,52 @@ async fn media_usage_returns_defaults_for_authenticated_user(#[case] backend: Ba
 }
 
 // Shape B — every media server-fn refuses an unauthenticated request the same
-// way (Leptos server fn → INTERNAL_SERVER_ERROR + "unauthorized"); only the
-// endpoint and request body vary.
-#[apply(backends_matrix)]
-#[case::media_usage(<web::media::GetUsage as ServerFn>::PATH, "")]
-#[case::list_my_media(<web::media::ListMine as ServerFn>::PATH, "")]
-#[case::delete_media(<web::media::Delete as ServerFn>::PATH, "request%5Bsha256%5D=deadbeef00000000000000000000000000000000000000000000000000000000&request%5Bfilename%5D=test.png&request%5Bsource%5D=upload")]
+// way (Leptos server fn → INTERNAL_SERVER_ERROR + "unauthorized"). Typed inputs
+// keep this gate test independent of hand-encoded transport syntax.
+#[apply(backends)]
 #[tokio::test]
-async fn media_endpoint_rejects_unauthenticated_request(
-    backend: Backend,
-    #[case] uri: &str,
-    #[case] body: &str,
-) {
+async fn media_endpoints_reject_unauthenticated_requests(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, body) = post_form(&state, uri, body, None).await;
+    let (usage_status, usage_body) = post_server_fn(&state, &web::media::GetUsage {}, None).await;
+    let (list_status, list_body) = post_server_fn(
+        &state,
+        &web::media::ListMine {
+            source: None,
+            limit: None,
+            offset: None,
+        },
+        None,
+    )
+    .await;
+    let (delete_status, delete_body) = post_server_fn(
+        &state,
+        &web::media::Delete {
+            request: web::media::DeleteMediaRequest {
+                sha256: parse_content_hash(
+                    "deadbeef00000000000000000000000000000000000000000000000000000000",
+                ),
+                filename: parse_filename("test.png"),
+                source: MediaSource::Upload,
+                force: None,
+            },
+        },
+        None,
+    )
+    .await;
 
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("unauthorized"), "body: {body}");
+    for (endpoint, status, body) in [
+        ("get_usage", usage_status, usage_body),
+        ("list_mine", list_status, list_body),
+        ("delete", delete_status, delete_body),
+    ] {
+        assert_eq!(
+            status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "{endpoint}: {body}"
+        );
+        assert!(body.contains("unauthorized"), "{endpoint}: {body}");
+    }
 }
 
 // ─── list_my_media ────────────────────────────────────────────
@@ -225,11 +255,16 @@ async fn delete_nested_request_maps_identity_without_force(#[case] backend: Back
 
     let cookie = session.cookie();
 
-    let body = "request%5Bsha256%5D=deadbeef01234567000000000000000000000000000000000000000000000000&request%5Bfilename%5D=test.png&request%5Bsource%5D=upload";
-    let (status, body_str) = post_form(
+    let (status, body_str) = post_server_fn(
         &state,
-        <web::media::Delete as ServerFn>::PATH,
-        body,
+        &web::media::Delete {
+            request: web::media::DeleteMediaRequest {
+                sha256: record.sha256.clone(),
+                filename: record.filename.clone(),
+                source: record.source,
+                force: None,
+            },
+        },
         Some(&cookie),
     )
     .await;
@@ -283,11 +318,16 @@ async fn delete_nested_request_refuses_referenced_without_force(#[case] backend:
 
     let cookie = session.cookie();
 
-    let body = "request%5Bsha256%5D=deadbeef99999999000000000000000000000000000000000000000000000000&request%5Bfilename%5D=inline.png&request%5Bsource%5D=upload";
-    let (status, body_str) = post_form(
+    let (status, body_str) = post_server_fn(
         &state,
-        <web::media::Delete as ServerFn>::PATH,
-        body,
+        &web::media::Delete {
+            request: web::media::DeleteMediaRequest {
+                sha256: record.sha256.clone(),
+                filename: record.filename.clone(),
+                source: record.source,
+                force: None,
+            },
+        },
         Some(&cookie),
     )
     .await;
@@ -332,11 +372,16 @@ async fn delete_nested_request_maps_identity_with_force(#[case] backend: Backend
         .seed(&state)
         .await;
 
-    let body = "request%5Bsha256%5D=feedface99999999000000000000000000000000000000000000000000000000&request%5Bfilename%5D=forced.png&request%5Bsource%5D=upload&request%5Bforce%5D=true";
-    let (status, body_str) = post_form(
+    let (status, body_str) = post_server_fn(
         &state,
-        <web::media::Delete as ServerFn>::PATH,
-        body,
+        &web::media::Delete {
+            request: web::media::DeleteMediaRequest {
+                sha256: sha256.clone(),
+                filename: filename.clone(),
+                source: MediaSource::Upload,
+                force: Some(true),
+            },
+        },
         Some(&session.cookie()),
     )
     .await;

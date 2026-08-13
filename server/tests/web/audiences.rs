@@ -6,7 +6,7 @@ use server_fn::ServerFn;
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{create_user_and_session, post_form};
+use crate::helpers::{create_user_and_session, post_form, post_server_fn};
 use storage::test_support::{Backend, SeedUser, TestEnv, backends};
 
 /// Parses the JSON-encoded `i64` that `create_audience` returns.
@@ -45,10 +45,14 @@ async fn rename_nested_request_maps_id_and_name(#[case] backend: Backend) {
         "audience missing from list: {body}"
     );
 
-    let (status, body) = post_form(
+    let (status, body) = post_server_fn(
         &state,
-        <web::audiences::Rename as ServerFn>::PATH,
-        &format!("request%5Baudience_id%5D={id}&request%5Bname%5D=BestFriends"),
+        &web::audiences::Rename {
+            request: web::audiences::RenameAudienceRequest {
+                audience_id: AudienceId::from(id),
+                name: parse_audience_name("BestFriends"),
+            },
+        },
         Some(&cookie),
     )
     .await;
@@ -250,10 +254,15 @@ async fn add_subscriber_nested_request_maps_both_ids(#[case] backend: Backend) {
         "sentinel ids must differ so a transposition cannot pass"
     );
 
-    let (status, body) = post_form(
+    let request = web::audiences::AudienceMembershipRequest {
+        audience_id: aud_id,
+        subscription_id: sub_id,
+    };
+    let (status, body) = post_server_fn(
         &state,
-        <web::audiences::AddSubscriber as ServerFn>::PATH,
-        &format!("request%5Baudience_id%5D={aud_id}&request%5Bsubscription_id%5D={sub_id}"),
+        &web::audiences::AddSubscriber {
+            request: request.clone(),
+        },
         Some(&cookie),
     )
     .await;
@@ -268,10 +277,11 @@ async fn add_subscriber_nested_request_maps_both_ids(#[case] backend: Backend) {
     );
 
     // Adding the same subscriber again is idempotent through the boundary.
-    let (status, body) = post_form(
+    let (status, body) = post_server_fn(
         &state,
-        <web::audiences::AddSubscriber as ServerFn>::PATH,
-        &format!("request%5Baudience_id%5D={aud_id}&request%5Bsubscription_id%5D={sub_id}"),
+        &web::audiences::AddSubscriber {
+            request: request.clone(),
+        },
         Some(&cookie),
     )
     .await;
@@ -286,10 +296,11 @@ async fn add_subscriber_nested_request_maps_both_ids(#[case] backend: Backend) {
         "a duplicate add must not duplicate the membership"
     );
 
-    let (status, body) = post_form(
+    let (status, body) = post_server_fn(
         &state,
-        <web::audiences::RemoveSubscriber as ServerFn>::PATH,
-        &format!("request%5Baudience_id%5D={aud_id}&request%5Bsubscription_id%5D={sub_id}"),
+        &web::audiences::RemoveSubscriber {
+            request: request.clone(),
+        },
         Some(&cookie),
     )
     .await;
@@ -304,10 +315,9 @@ async fn add_subscriber_nested_request_maps_both_ids(#[case] backend: Backend) {
     );
 
     // Removing a subscriber who is no longer a member is a no-op, not an error.
-    let (status, body) = post_form(
+    let (status, body) = post_server_fn(
         &state,
-        <web::audiences::RemoveSubscriber as ServerFn>::PATH,
-        &format!("request%5Baudience_id%5D={aud_id}&request%5Bsubscription_id%5D={sub_id}"),
+        &web::audiences::RemoveSubscriber { request },
         Some(&cookie),
     )
     .await;
@@ -360,12 +370,14 @@ async fn remove_subscriber_nested_request_maps_both_ids(#[case] backend: Backend
         .await
         .unwrap();
 
-    let (status, body) = post_form(
+    let (status, body) = post_server_fn(
         &state,
-        <web::audiences::RemoveSubscriber as ServerFn>::PATH,
-        &format!(
-            "request%5Baudience_id%5D={audience_id}&request%5Bsubscription_id%5D={subscription_id}"
-        ),
+        &web::audiences::RemoveSubscriber {
+            request: web::audiences::AudienceMembershipRequest {
+                audience_id,
+                subscription_id,
+            },
+        },
         Some(&cookie),
     )
     .await;
@@ -426,10 +438,14 @@ async fn cross_author_audience_id_is_scoped_away(#[case] backend: Backend) {
     );
 
     // Bob removes from Alice's audience → succeeds, but changes nothing.
-    let (status, body) = post_form(
+    let (status, body) = post_server_fn(
         &state,
-        <web::audiences::RemoveSubscriber as ServerFn>::PATH,
-        &format!("request%5Baudience_id%5D={alice_aud}&request%5Bsubscription_id%5D={alice_sub}"),
+        &web::audiences::RemoveSubscriber {
+            request: web::audiences::AudienceMembershipRequest {
+                audience_id: alice_aud,
+                subscription_id: alice_sub,
+            },
+        },
         Some(&bob_cookie),
     )
     .await;
@@ -544,10 +560,14 @@ async fn cross_author_add_member_is_rejected(#[case] backend: Backend) {
     let bob_cookie = create_user_and_session(&state).await.cookie();
 
     // Bob tries to inject Alice's subscription into Alice's audience.
-    let (status, body) = post_form(
+    let (status, body) = post_server_fn(
         &state,
-        <web::audiences::AddSubscriber as ServerFn>::PATH,
-        &format!("request%5Baudience_id%5D={alice_aud}&request%5Bsubscription_id%5D={alice_sub}"),
+        &web::audiences::AddSubscriber {
+            request: web::audiences::AudienceMembershipRequest {
+                audience_id: alice_aud,
+                subscription_id: alice_sub,
+            },
+        },
         Some(&bob_cookie),
     )
     .await;
@@ -586,10 +606,14 @@ async fn cross_author_rename_and_delete_are_scoped(#[case] backend: Backend) {
     let bob_cookie = create_user_and_session(&state).await.cookie();
 
     // Bob renames Alice's audience → refused (store NotFound); name unchanged.
-    let (status, body) = post_form(
+    let (status, body) = post_server_fn(
         &state,
-        <web::audiences::Rename as ServerFn>::PATH,
-        &format!("request%5Baudience_id%5D={alice_aud}&request%5Bname%5D=Hijacked"),
+        &web::audiences::Rename {
+            request: web::audiences::RenameAudienceRequest {
+                audience_id: alice_aud,
+                name: parse_audience_name("Hijacked"),
+            },
+        },
         Some(&bob_cookie),
     )
     .await;
