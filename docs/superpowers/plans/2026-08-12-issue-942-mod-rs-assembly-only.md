@@ -331,12 +331,15 @@ drafted, gitignored) · `CONTRIBUTING.md` · `docs/ARCHITECTURE.md`
 > Named `factory.rs`, not `build.rs`: the latter reads as a Cargo build script
 > even though it is harmless in a subdirectory.
 
-- [ ] `factory.rs`: `pub async fn build_mailer` with its
+- [x] `factory.rs`: `pub async fn build_mailer` with its
       `#[tracing::instrument]`, and the `#[cfg(test)] mod tests` (3 tests, one
       `#[apply(backends)]` — carry its `// guard:no-backend` markers verbatim).
-- [ ] Header: `use super::{FileMailSender, LettreMailSender};` — both arrive via
-      `mod.rs`'s re-exports.
-- [ ] `mod.rs` keeps its `//!` doc, `mod file; mod smtp;` and the two `pub use`
+- [x] Header: `use super::{FileMailSender, LettreMailSender};` — both arrive via
+      `mod.rs`'s re-exports. The rest of the old `mod.rs` preamble (`Arc`,
+      `MailSender`/`NoopMailSender`, `SiteConfigStorage`/`load_smtp_config`)
+      travels with `build_mailer`, and the tests' `use super::*` still reaches
+      all of it — a child module sees its parent's private imports.
+- [x] `mod.rs` keeps its `//!` doc, `mod file; mod smtp;` and the two `pub use`
       lines; add `mod factory; pub use factory::build_mailer;`.
 - **Verify:** `devtool run -- cargo nextest run -p jaunder mailer` — PASS.
 - **Commit:** `refactor(server): move build_mailer out of mailer/mod.rs (#942)`
