@@ -75,7 +75,7 @@ Across every one of those trees, a `mod.rs` states its module's surface and
 holds nothing else: `mod`/`pub mod` declarations, `use`/`pub use` re-exports,
 `//!` documentation, and attributes — never a `fn`, type, `impl`, `const`,
 `macro_rules!`, or an inline test module
-([mod.rs assembles the module surface](adr/drafts/mod-rs-assembles-module-surface.md)).
+([mod.rs assembles the module surface](adr/0128-mod-rs-assembles-module-surface.md)).
 Code lives in a sibling file the `mod.rs` declares and re-exports, by an
 explicit list rather than a glob, so the file a reader opens first is a map
 rather than a haystack. The rule is workspace-wide and deliberately **not**

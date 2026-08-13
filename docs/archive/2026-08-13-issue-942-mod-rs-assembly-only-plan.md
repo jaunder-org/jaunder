@@ -137,7 +137,7 @@ blocked behind this branch (`jaunder-start` step 5).
 
 ## Task 2 — Records
 
-**Files:** `docs/adr/drafts/mod-rs-assembles-module-surface.md` (already
+**Files:** `docs/adr/0128-mod-rs-assembles-module-surface.md` (already
 drafted, gitignored) · `CONTRIBUTING.md` · `docs/ARCHITECTURE.md`
 
 - [x] Re-read the ADR draft; confirm line 1 is exactly `# ADR-DRAFT: <Title>`,
@@ -145,7 +145,7 @@ drafted, gitignored) · `CONTRIBUTING.md` · `docs/ARCHITECTURE.md`
       (`0070-….md`) per `docs/adr/drafts/README.md`.
 - [x] `CONTRIBUTING.md`: add the rule to the repository-layout section — what a
       `mod.rs` may contain, workspace-wide, enforced at review not by a gate,
-      citing `docs/adr/drafts/mod-rs-assembles-module-surface.md`.
+      citing `docs/adr/0128-mod-rs-assembles-module-surface.md`.
 - [x] `docs/ARCHITECTURE.md`: project the decision per
       **`jaunder-adr-projection`**, citing the draft **by path** (promote
       rewrites it at ship). Update line 916's prose so the rule reads

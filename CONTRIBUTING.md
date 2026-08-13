@@ -48,7 +48,7 @@ The rule is workspace-wide — production crates, test trees, `xtask/` and
 `tools/` alike. It is **enforced at review, not by a gate**: whether a given
 item earns its own file is a judgement a syntactic check would get wrong in both
 directions. See
-[`docs/adr/drafts/mod-rs-assembles-module-surface.md`](docs/adr/drafts/mod-rs-assembles-module-surface.md).
+[`docs/adr/0128-mod-rs-assembles-module-surface.md`](docs/adr/0128-mod-rs-assembles-module-surface.md).
 
 ## Development setup
 
