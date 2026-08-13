@@ -344,7 +344,10 @@ async fn delete_nested_request_maps_identity_with_force(#[case] backend: Backend
     assert_eq!(status, StatusCode::OK, "body: {body_str}");
     let result: DeleteResult =
         serde_json::from_str(&body_str).expect("response should be valid JSON");
-    assert!(result.deleted, "forced delete should remove referenced media");
+    assert!(
+        result.deleted,
+        "forced delete should remove referenced media"
+    );
     assert!(result.referenced_in_posts.is_empty());
     assert!(
         state

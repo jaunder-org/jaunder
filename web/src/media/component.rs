@@ -352,7 +352,6 @@ fn force_delete_form(item: &Item, delete_action: ServerAction<Delete>) -> impl I
     }
 }
 
-
 /// One row of the media table: the link, metadata, and typed ordinary-delete form.
 fn render_media_row(
     item: &Item,

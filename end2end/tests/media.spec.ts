@@ -75,7 +75,9 @@ test.describe("Media upload and serving", () => {
     expect(await serveResponse.text()).toBe("spaced filename content");
   });
 
-  test("ordinary media delete confirms and removes unreferenced item", async ({ page }) => {
+  test("ordinary media delete confirms and removes unreferenced item", async ({
+    page,
+  }) => {
     // The display label decodes the canonical filename while the typed request keeps
     // the canonical identity needed by the delete boundary.
     await signInAsNewUser(page);
@@ -110,7 +112,9 @@ test.describe("Media upload and serving", () => {
     });
     page.on("dialog", (dialog) => dialog.accept());
     const button = page.getByRole("button", { name: "Delete", exact: true });
-    expect(await button.getAttribute("onclick")).toContain("Delete this media item?");
+    expect(await button.getAttribute("onclick")).toContain(
+      "Delete this media item?",
+    );
 
     const release = await stallServerFn(page, "media/delete");
     await button.click();
@@ -275,7 +279,9 @@ test.describe("Media delete guard", () => {
     await page.getByRole("button", { name: "Delete", exact: true }).click();
   }
 
-  test("ordinary media delete confirms and refuses referenced item", async ({ page }) => {
+  test("ordinary media delete confirms and refuses referenced item", async ({
+    page,
+  }) => {
     // The whole causal chain, which exists only end to end: rendering the post wrote
     // its post_media rows, and the guard reads them. No Rust test spans it.
     await signInAsNewUser(page);
@@ -305,7 +311,9 @@ test.describe("Media delete guard", () => {
     ).toBeVisible();
     const forceButton = page.getByRole("button", { name: /^Force delete / });
     await expect(forceButton).toBeVisible();
-    expect(await forceButton.getAttribute("onclick")).toContain("Delete anyway?");
+    expect(await forceButton.getAttribute("onclick")).toContain(
+      "Delete anyway?",
+    );
   });
 
   test("forced media delete confirms, renders errors, and cannot double dispatch", async ({
