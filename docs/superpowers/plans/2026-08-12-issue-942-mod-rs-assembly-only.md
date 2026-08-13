@@ -548,16 +548,18 @@ Widening first keeps task 15 a pure move.
 
 **Files:** `xtask/src/coverage/mod.rs` → new `model.rs`, `run.rs`
 
-- [ ] `model.rs`: `pub struct LineCov`, `FileCoverage`, `CoverageReport` with
+- [x] `model.rs`: `pub struct LineCov`, `FileCoverage`, `CoverageReport` with
       their `#[derive(Serialize)]`.
-- [ ] `run.rs`: `pub fn run`, `fn run_inner`, `fn write_failures_dump`,
+- [x] `run.rs`: `pub fn run`, `fn run_inner`, `fn write_failures_dump`,
       `fn failure_report`, and the `#[cfg(test)] mod tests`. Header needs
-      `use super::{crap, gate, report};`.
-- [ ] `mod.rs` keeps its `//!` doc — **including the intra-doc links**
+      `use super::{crap, gate, report};` — plus `exempt`, which `run_inner`'s
+      `exempt_of` closure calls, and `CoverageReport`.
+- [x] `mod.rs` keeps its `//!` doc — **including the intra-doc links**
       `[`exempt`]`, `[`report`]`, `[`crap`]`, which stay valid — and the five
       `pub mod` lines. Add the two `mod` lines and explicit re-exports.
-- [ ] `target_arch_placement_check.rs` and `thin_components.rs` cite
-      `[`crate::coverage::exempt`]` in their own docs; that path is unchanged.
+- [x] `target_arch_placement_check.rs` and `thin_components.rs` cite
+      `[`crate::coverage::exempt`]` in their own docs; that path is unchanged. →
+      confirmed by a green `doc-links`.
 - **Verify:** `devtool run -- cargo xtask check` — `doc-links` and
   `doctest-fences` green.
 - **Commit:** `refactor(xtask): split coverage/mod.rs into model and run (#942)`
