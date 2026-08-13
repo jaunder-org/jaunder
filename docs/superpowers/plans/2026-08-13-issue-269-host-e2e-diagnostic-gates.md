@@ -380,7 +380,7 @@ trailer.
   shared `e2eRunAndCapture`, therefore structurally covering every
   `{sqlite,postgres}×{chromium,firefox}` combination.
 
-- [ ] **Step 1: Replace the inline VM parser**
+- [x] **Step 1: Replace the inline VM parser**
 
 Keep journal materialization and `copy_from_vm` unchanged. Replace the `diag`,
 `allowed_panics`, `panic_location`, `collect`, and `reports` Python block with:
@@ -397,14 +397,14 @@ Update the adjacent comment to name the shared Rust verifier. Do not spell
 `diag.log`; the CLI resolves `Stream::Diag`. Keep `${e2ePanicGate backend}`
 after all diagnostic copies and before the existing `pw_status` assertion.
 
-- [ ] **Step 2: Run static checks before the VM smoke**
+- [x] **Step 2: Run static checks before the VM smoke**
 
 Run: `devtool run -- cargo xtask check --no-test`
 
 Expected: **PASS** — Rust, Nix formatting/evaluation, clippy, and repository
 static invariants accept the migrated helper.
 
-- [ ] **Step 3: Exercise the changed VM process seam**
+- [x] **Step 3: Exercise the changed VM process seam**
 
 Run: `devtool run -- cargo xtask e2e sqlite chromium`
 
@@ -415,7 +415,7 @@ checks interpolate the same `e2eRunAndCapture`/`e2ePanicGate` helper, this one
 real combo plus structural sharing covers the invocation wiring before the full
 four-combo gate in Task 3.
 
-- [ ] **Step 4: Stage, gate, and commit Task 2**
+- [x] **Step 4: Stage, gate, and commit Task 2**
 
 Tick Task 2 and stage `flake.nix` plus the plan. Then run:
 `devtool run -- cargo xtask check`

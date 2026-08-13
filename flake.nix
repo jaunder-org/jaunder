@@ -556,44 +556,22 @@
         # #93 / ADR-0032: shared zero-panic gate appended to each e2e testScript.
         # A server Rust panic is isolated (tests still pass), so without this it
         # gets cached green and stays invisible. Dump the service journal, copy it
-        # to $out (before the assert, so a failing run is still diagnosable), then
-        # fail the check on any `panicked at` line. Default-deny via `allowed_panics`.
-        #
-        # #144: panic detection now sources from the UNION of the scoped diag file
-        # (`/var/lib/jaunder/capture/diag.log` — the low-noise primary the app's panic
-        # hook writes, #227) and the journal (the fallback, and the only source for a panic
-        # that fires before the hook is installed). Reports are de-duped by panic
-        # location, the scoped record winning; a location seen only in the journal is
-        # still reported. Raw-substring scan (not JSON parsing) so a rare torn line in
-        # the scoped file can't crash the gate.
+        # to $out before asserting, then run the shared Rust verifier from
+        # `test-support`. It scans raw bytes from the union of the scoped diagnostic
+        # stream (#144/#227) and the journal fallback, de-duplicates by panic
+        # location with the scoped record winning, and owns the default-empty
+        # source-controlled allowlist. The CLI receives the capture directory rather
+        # than restating the diagnostic filename defined by `host::capture`.
         e2ePanicGate = backend: ''
           machine.succeed("journalctl -u jaunder.service --no-pager -o cat > /tmp/jaunder-journal-${backend}.log")
           # copy_from_vm's 2nd arg is a target *directory*; "" lands the file flat at
           # $out/jaunder-journal-${backend}.log (the per-backend name comes from the source).
           machine.copy_from_vm("/tmp/jaunder-journal-${backend}.log", "")
-          journal = machine.succeed("cat /tmp/jaunder-journal-${backend}.log")
-          # `cat` tolerates the scoped file being absent (empty output) — a run that
-          # never wrote it still gates on the journal alone.
-          diag = machine.execute("cat /var/lib/jaunder/capture/diag.log 2>/dev/null")[1]
-          allowed_panics: list[str] = []  # default-deny; add a proven-benign substring + a comment here if one ever appears
-
-          def panic_location(line):
-              # Token after "panicked at ", trailing ':' stripped — canonical across BOTH
-              # the scoped JSON record ("...panicked at src/x.rs:12:5: msg") and the default
-              # hook's journal line ("...panicked at src/x.rs:12:5:", payload on the next
-              # line). Both derive the path from the same `Location`, so the stripped tokens
-              # match. Assumes the current toolchain's `panicked at <loc>:` format.
-              return line.split("panicked at ", 1)[1].split()[0].rstrip(":")
-
-          def collect(text):
-              return [l for l in text.splitlines() if "panicked at" in l and not any(a in l for a in allowed_panics)]
-
-          reports: dict[str, str] = {}
-          for line in collect(diag):
-              reports[panic_location(line)] = line       # scoped record is authoritative
-          for line in collect(journal):
-              reports.setdefault(panic_location(line), line)  # journal-only ⇒ pre-hook-install
-          assert not reports, "e2e zero-panic gate (${backend}): jaunder.service logged Rust panic(s):\n" + "\n".join(reports.values())
+          machine.succeed(
+              "test-support verify-no-panics"
+              + " --capture-dir /var/lib/jaunder/capture"
+              + " --server-log /tmp/jaunder-journal-${backend}.log"
+          )
         '';
 
         # The two e2e time budgets, which must stay ordered:
