@@ -465,14 +465,16 @@ Jaunder uses OpenTelemetry for deep performance analysis (see
 
 The server integration tests compile as a **single** `integration` binary, so
 run a subset by filtering on the module path rather than by picking a target.
-Test paths are `<subsystem>::<file>::<name>` — e.g. `web::web_auth::…`,
-`misc::commands::…`, or `storage::…`/`projector::…` (those two subsystems are a
-single file, so they have no file segment).
+Test paths follow the nested module path to the test name. A shallow file yields
+`web::web_auth::<name>`; concern submodules add segments, as in
+`web::posts::create::create_post_persists_rendered_published_post`.
+`misc::commands::…` is another nested example, while `storage::…` and
+`projector::…` have no file segment because each subsystem is a single file.
 
 - One subsystem: `cargo nextest run -p jaunder -E 'test(/^web::/)'` (or
   `atompub`, `feed`, `misc`, `projector`, `storage`).
-- One file or test (substring match):
-  `cargo nextest run -p jaunder web::web_auth`.
+- One file, concern module, or test (substring match):
+  `cargo nextest run -p jaunder web::posts::create`.
 - Library/unit tests only: `cargo test -p jaunder --lib`.
 
 `cargo nextest list -p jaunder` shows every registered Rust test with its full
