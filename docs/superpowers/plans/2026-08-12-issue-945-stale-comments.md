@@ -26,15 +26,17 @@ folded in rather than deferred.
 
 **Tasks.**
 
-1. Item E — narrow the retry handler to `plz-error`, tests first (AC-7…AC-10).
-2. Item A — `host/src/metrics.rs` module doc states the real mechanism (AC-1).
-3. Item B code — the four `extract.rs` sites credit `#[macros::server]`
-   (AC-2/AC-3).
-4. Item B prose — `docs/observability.md` edit + ADR-0081 dated annotation
-   (AC-2/AC-4).
-5. Items C + D — `component.rs` names a symbol that exists; `flake.nix` drops
-   the count (AC-5/AC-6).
-6. Full gate + acceptance sweep (AC-11).
+- [x] **1** Item E — narrow the retry handler to `plz-error`, tests first
+      (AC-7…AC-10).
+- [x] **2** Item A — `host/src/metrics.rs` module doc states the real mechanism
+      (AC-1).
+- [x] **3** Item B code — the four `extract.rs` sites credit `#[macros::server]`
+      (AC-2/AC-3).
+- [x] **4** Item B prose — `docs/observability.md` edit + ADR-0081 dated
+      annotation (AC-2/AC-4).
+- [x] **5** Items C + D — `component.rs` names a symbol that exists; `flake.nix`
+      drops the count (AC-5/AC-6).
+- [x] **6** Full gate + acceptance sweep (AC-11).
 
 **Key risks / decisions.**
 
