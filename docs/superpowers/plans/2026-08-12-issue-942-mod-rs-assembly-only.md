@@ -206,18 +206,18 @@ drafted, gitignored) · `CONTRIBUTING.md` · `docs/ARCHITECTURE.md`
 **Files:** `common/src/test_support/mod.rs` → new `identity.rs`, `content.rs`,
 `media.rs`, `urls_time.rs`, `numbers.rs`
 
-- [ ] Partition the ~40 `parse_*` fns and `MEDIA_TEST_SHA256`: - `identity.rs` —
-      username, display*name, bio, email, password, session_label, token,
-      token_hash, smtp*\* - `content.rs` — post_title, post_body, post_summary,
-      slug, tag, tag_label, site_title, rendered\_\* - `media.rs` —
-      content_hash, filename, content_type, max_file_size, user_quota,
-      byte_size, `MEDIA_TEST_SHA256` - `urls_time.rs` — parse_url,
+- [x] Partition the ~40 `parse_*` fns and `MEDIA_TEST_SHA256` (**38** in
+      fact): - `identity.rs` — username, display*name, bio, email, password,
+      session_label, token, token_hash, smtp*\* - `content.rs` — post_title,
+      post_body, post_summary, slug, tag, tag_label, site_title, rendered\_\* -
+      `media.rs` — content_hash, filename, content_type, max_file_size,
+      user_quota, byte_size, `MEDIA_TEST_SHA256` - `urls_time.rs` — parse_url,
       parse_root_relative_url, etag, utc_instant, permalink_date - `numbers.rs`
       — page_size, page_offset, row_limit, retention_count, invite_ttl_hours,
       destination_path, feed_min\_\*
-- [ ] Partition the long `use crate::…` preamble per file; do not copy it
+- [x] Partition the long `use crate::…` preamble per file; do not copy it
       wholesale (`unused_imports` is denied).
-- [ ] **Narrow the suppression in this same commit.** Delete the subtree-wide
+- [x] **Narrow the suppression in this same commit.** Delete the subtree-wide
       inner `#![expect(clippy::expect_used)]` from `mod.rs:9`, and add a
       per-file inner `#![expect(clippy::expect_used)]` to each new sibling that
       calls `expect()` — and **only** those. `mod.rs` retains 39 `expect(` calls
@@ -229,11 +229,12 @@ drafted, gitignored) · `CONTRIBUTING.md` · `docs/ARCHITECTURE.md`
   > be prep. The commit message must say so. Everything else in this commit is a
   > verbatim move.
 
-- [ ] `mod.rs` keeps its `//!` doc and `mod env; pub use env::{Env, with_env};`,
+- [x] `mod.rs` keeps its `//!` doc and `mod env; pub use env::{Env, with_env};`,
       and gains the 5 `mod` + re-export pairs. Explicit lists; if any one
       sibling exceeds 25 exports, a glob is permitted and the commit message
-      states the count.
-- [ ] Confirm `storage::test_support`'s re-export of `MEDIA_TEST_SHA256` still
+      states the count. → no sibling reached 25, so all five lists are explicit
+      and no glob was needed.
+- [x] Confirm `storage::test_support`'s re-export of `MEDIA_TEST_SHA256` still
       resolves.
 - **Verify:** `devtool run -- cargo nextest run -p common` and
   `devtool run -- cargo nextest run -p storage` — PASS.
