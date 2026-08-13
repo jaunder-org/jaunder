@@ -25,8 +25,8 @@
 //! and *then* compares the computed endpoint to the URI a real run requested.
 //!
 //! **The name is matched forward, never inverted**, because this repo has already
-//! had two naming regimes and could have a third. `server-fn-tracing` writes
-//! `web.<vertical>.<ident>` today (#511); omitting the explicit `name` derives
+//! had two naming regimes and could have a third. `#[macros::server]` derives
+//! `web.<vertical>.<ident>` (#714); omitting the explicit `name` derives
 //! `__server_<ident>`, since `#[server]` relocates the annotated body into a
 //! generated fn of that name. An earlier version of this module matched only the
 //! bare ident, so signal 1 matched **nothing** — and did so *silently*, because
@@ -68,7 +68,7 @@ const CRATE_PREFIX: &str = "web::";
 /// The prefix `#[server]` gives the fn it relocates the annotated body into, so a
 /// span whose name `#[tracing::instrument]` *derived* carries it.
 const DERIVED_SPAN_PREFIX: &str = "__server_";
-/// The prefix on the span names `server-fn-tracing` writes (#511, ADR-0011):
+/// The prefix on the span names `#[macros::server]` derives (#714):
 /// `web.<vertical>.<ident>`, where the vertical is the module's first segment.
 const EXPLICIT_SPAN_PREFIX: &str = "web.";
 /// The span name the e2e harness gives its per-test span.
@@ -106,8 +106,8 @@ pub struct Coverage {
 /// know which regime produced the name, and getting that wrong fails silently
 /// (`uri` keeps carrying every hit, so the totals still look right).
 ///
-/// - `web.<vertical>.<ident>` — what `server-fn-tracing` writes today (#511,
-///   ADR-0011). The vertical is the module's first segment, so `posts::api::listing`
+/// - `web.<vertical>.<ident>` — what `#[macros::server]` derives (#714). The
+///   vertical is the module's first segment, so `posts::api::listing`
 ///   and `posts::api` both yield `web.posts.…`; that collapse is why the module
 ///   check below, not the name, is what actually disambiguates.
 /// - `__server_<ident>` — the name `#[tracing::instrument]` *derives* when no
@@ -452,7 +452,7 @@ mod tests {
     #[test]
     fn every_naming_regime_is_a_hit_given_the_right_module() {
         // The gate must not depend on which naming regime is in force. Today
-        // `server-fn-tracing` writes `web.<vertical>.<ident>` (#511); omitting the
+        // `#[macros::server]` derives `web.<vertical>.<ident>` (#714); omitting the
         // explicit name derives `__server_<ident>`; and were `#[server]` to stop
         // relocating the body, derivation would yield the bare ident. All three
         // denote the same fn, so all three count — matching one shape only is how
