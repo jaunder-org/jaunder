@@ -156,6 +156,35 @@ where
     }
 }
 
+/// Couples a two-field form's disabled state and dispatched payload to the same
+/// `parsed()` sources (ADR-0113). The callback receives only validated values;
+/// the sole unreachable-to-users `None` arm lives here beside the gate.
+#[must_use]
+pub fn pair_submit_gate<A, B>(
+    first: Field<A>,
+    second: Field<B>,
+    pending: Signal<bool>,
+    on_submit: Callback<(A, B)>,
+) -> (Signal<bool>, Callback<()>)
+where
+    A: FromStr + 'static,
+    A::Err: Display,
+    B: FromStr + 'static,
+    B::Err: Display,
+{
+    let disabled =
+        Signal::derive(move || pending.get() || first.parsed().zip(second.parsed()).is_none());
+    let submit = Callback::new(move |()| {
+        let values = (!pending.get())
+            .then(|| first.parsed().zip(second.parsed()))
+            .flatten();
+        if let Some(values) = values {
+            on_submit.run(values);
+        }
+    });
+    (disabled, submit)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,6 +439,61 @@ mod tests {
         field.set_input("Bad Slug!");
         assert!(!field.is_touched());
 
+        drop(owner);
+    }
+
+    #[test]
+    fn pair_submit_gate_dispatches_the_same_parsed_values_that_enable_it() {
+        let owner = Owner::new();
+        owner.set();
+        let username = Field::<Username>::new();
+        let email = Field::<Email>::new();
+        username.set_input("alice");
+        email.set_input("alice@example.com");
+        let seen = RwSignal::new(None::<(String, String)>);
+        let (disabled, submit) = pair_submit_gate(
+            username,
+            email,
+            Signal::derive(|| false),
+            Callback::new(move |(username, email): (Username, Email)| {
+                seen.set(Some((username.to_string(), email.to_string())));
+            }),
+        );
+
+        assert!(!disabled.get());
+        submit.run(());
+        assert_eq!(
+            seen.get(),
+            Some(("alice".to_owned(), "alice@example.com".to_owned()))
+        );
+        drop(owner);
+    }
+
+    #[test]
+    fn pair_submit_gate_blocks_invalid_or_pending_without_dispatch() {
+        let owner = Owner::new();
+        owner.set();
+        let username = Field::<Username>::new();
+        let email = Field::<Email>::new();
+        let pending = RwSignal::new(false);
+        let calls = RwSignal::new(0_u32);
+        let (disabled, submit) = pair_submit_gate(
+            username,
+            email,
+            pending.into(),
+            Callback::new(move |_: (Username, Email)| calls.update(|n| *n += 1)),
+        );
+
+        assert!(disabled.get());
+        submit.run(());
+        assert_eq!(calls.get(), 0);
+
+        username.set_input("alice");
+        email.set_input("alice@example.com");
+        pending.set(true);
+        assert!(disabled.get());
+        submit.run(());
+        assert_eq!(calls.get(), 0);
         drop(owner);
     }
 }

@@ -7,6 +7,7 @@ import {
   waitForSelector,
   signInAs,
   fillLoginForm,
+  stallServerFn,
 } from "./helpers";
 import { SEL } from "./selectors";
 
@@ -84,6 +85,53 @@ test("login with valid credentials succeeds", async ({
   await expect(page.locator(".j-sidebar")).toBeVisible();
   perf.mark("assertions_complete");
   await perf.log();
+});
+
+test("login submits with Enter", async ({ page, user }) => {
+  await goto(page, "/login");
+  await page.fill(SEL.username, user.username);
+  await page.fill(SEL.password, user.password);
+  await page.locator(SEL.password).press("Enter");
+  await waitForSelector(page, SEL.logoutLink);
+  await expect(page).toHaveURL(`${BASE_URL}/`);
+});
+
+test("login invalid fields do not dispatch", async ({ page }) => {
+  let requests = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/auth/login")) requests += 1;
+  });
+  await goto(page, "/login");
+  await page.fill(SEL.username, "invalid username");
+  await page.locator(SEL.username).blur();
+  await page.fill(SEL.password, "short");
+  await page.locator(SEL.password).blur();
+
+  await expect(page.locator(SEL.error)).toHaveCount(2);
+  await expect(page.locator(SEL.submit)).toBeDisabled();
+  await page.locator(SEL.password).press("Enter");
+  expect(requests).toBe(0);
+});
+
+test("login pending state prevents duplicate dispatch", async ({
+  page,
+  user,
+}) => {
+  let requests = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/auth/login")) requests += 1;
+  });
+  await goto(page, "/login");
+  const release = await stallServerFn(page, "auth/login");
+  await page.fill(SEL.username, user.username);
+  await page.fill(SEL.password, user.password);
+  await click(page, SEL.submit);
+  await expect.poll(() => requests).toBe(1);
+  await expect(page.locator(SEL.submit)).toBeDisabled();
+  await page.locator(SEL.password).press("Enter");
+  expect(requests).toBe(1);
+  release();
+  await waitForSelector(page, SEL.logoutLink);
 });
 
 // #591: login/logout redirect via client-side pushState, so the wasm app is not

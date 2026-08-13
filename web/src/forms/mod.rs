@@ -12,4 +12,4 @@ mod field;
 
 #[cfg(target_arch = "wasm32")]
 pub use component::{ValidatedInput, ValidatedTextarea};
-pub use field::{Field, field_error};
+pub use field::{Field, field_error, pair_submit_gate};

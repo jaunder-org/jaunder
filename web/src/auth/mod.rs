@@ -39,7 +39,7 @@ mod session;
 
 // The API surface — re-exported so external call sites and the server-fn
 // registrar keep the stable `crate::auth::…` paths despite living in `api.rs`.
-pub use api::{GetSession, Login, LoginResponse, Logout, get_session, login, logout};
+pub use api::{GetSession, Login, LoginRequest, LoginResponse, Logout, get_session, login, logout};
 #[cfg(target_arch = "wasm32")]
 pub use component::{LoginPage, LogoutPage};
 pub use marker::SessionUser;

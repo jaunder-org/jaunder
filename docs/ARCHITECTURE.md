@@ -1020,6 +1020,25 @@ Typing the arg moves validation into arg-**decode**, so a malformed request from
 a non-browser client fails before the fn body — the defense-in-depth path, not
 the user path.
 
+**Committed direction.** Once the migration recorded by
+[cohesive request aggregates](adr/drafts/request-aggregate-server-function-inputs.md)
+lands, multiple caller-supplied values forming one cohesive operation will cross
+the server-fn boundary as one typed request aggregate. Its wasm form will
+manually assemble the generated action input from parsed fields before
+`ServerAction` dispatch. The aggregate will exclude ambient request context and
+injected dependencies. A native `<form>` will retain submit and Enter-key
+behavior; only `ActionForm`'s string harvest and redundant client-side decode
+will be removed. This is a semantic boundary rule rather than an arity rule:
+single values and genuinely independent parameters stay direct, and no static
+check guesses whether fields are cohesive.
+
+The same migration extends `proffered-secret` without weakening its directional
+boundary: an inbound-secret field is admitted only on a `*Request` type named by
+a server-function parameter, while a wasm-only vertical `component.rs` may name
+one only as `Field<Proffered*>` or its validated input renderer for dispatch
+staging. Returns, response DTOs, helpers, and every other occurrence remain
+rejected by the gate.
+
 ### Reactive idioms
 
 Revalidation goes through one primitive, `web::reactive::Invalidator`

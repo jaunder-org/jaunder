@@ -3,11 +3,11 @@
 //! [`marker_storage`](super::marker_storage) binding) directly, no `cfg` gates
 //! inside this file.
 
-use super::{Login, LoginResponse, Logout, SessionUser, clear_session, set_session};
+use super::{Login, LoginRequest, LoginResponse, Logout, SessionUser, clear_session, set_session};
 use crate::error::WebError;
-use crate::forms::{Field, ValidatedInput};
+use crate::forms::{Field, ValidatedInput, pair_submit_gate};
 use crate::topbar::Topbar;
-use common::password::Password;
+use common::password::ProfferedPassword;
 use common::username::Username;
 use leptos::prelude::*;
 
@@ -15,8 +15,6 @@ use leptos::prelude::*;
 #[component]
 pub fn LoginPage() -> impl IntoView {
     let login_action = ServerAction::<Login>::new();
-    let username = Field::<Username>::new();
-    let password = Field::<Password>::new();
 
     // On a successful login, set the shared session (#591): updates the reactive
     // signal so the chrome flips without a document reload, and mirrors it into the
@@ -29,7 +27,7 @@ pub fn LoginPage() -> impl IntoView {
             && let Some(input) = login_action.input().get()
         {
             set_session(SessionUser {
-                username: input.username,
+                username: input.request.username.clone(),
                 is_operator: resp.is_operator,
             });
         }
@@ -39,36 +37,7 @@ pub fn LoginPage() -> impl IntoView {
         <Topbar title="Login".to_string() sub="Sign in to your account".to_string() />
         <div class="j-scroll">
             <div class="j-page-narrow">
-                <ActionForm action=login_action attr:class="j-card">
-                    <div class="j-card-head">
-                        <h2>"Sign in"</h2>
-                    </div>
-                    <div class="j-form-body">
-                        <ValidatedInput<Username>
-                            label="Username"
-                            name="username"
-                            autocomplete="username"
-                            field=username
-                            transform=str::to_lowercase
-                        />
-                        <ValidatedInput<Password>
-                            label="Password"
-                            name="password"
-                            input_type="password"
-                            autocomplete="current-password"
-                            field=password
-                        />
-                    </div>
-                    <div class="j-form-actions">
-                        <button
-                            type="submit"
-                            class="j-btn is-primary"
-                            prop:disabled=move || !(username.is_valid() && password.is_valid())
-                        >
-                            "Login"
-                        </button>
-                    </div>
-                </ActionForm>
+                <LoginForm action=login_action />
                 {move || {
                     login_action
                         .value()
@@ -82,6 +51,61 @@ pub fn LoginPage() -> impl IntoView {
                 }}
             </div>
         </div>
+    }
+}
+
+/// Native login form: parsed domain values are assembled directly into the
+/// cohesive request instead of being harvested back through browser strings.
+#[component]
+fn LoginForm(action: ServerAction<Login>) -> impl IntoView {
+    let username = Field::<Username>::new();
+    let password = Field::<ProfferedPassword>::new();
+    let (disabled, dispatch) = pair_submit_gate(
+        username,
+        password,
+        action.pending().into(),
+        Callback::new(move |(username, password)| {
+            action.dispatch(Login {
+                request: LoginRequest {
+                    username,
+                    password,
+                    label: None,
+                },
+            });
+        }),
+    );
+    let submit = move |event: leptos::ev::SubmitEvent| {
+        event.prevent_default();
+        dispatch.run(());
+    };
+
+    view! {
+        <form class="j-card" on:submit=submit>
+            <div class="j-card-head">
+                <h2>"Sign in"</h2>
+            </div>
+            <div class="j-form-body">
+                <ValidatedInput<Username>
+                    label="Username"
+                    name="username"
+                    autocomplete="username"
+                    field=username
+                    transform=str::to_lowercase
+                />
+                <ValidatedInput<ProfferedPassword>
+                    label="Password"
+                    name="password"
+                    input_type="password"
+                    autocomplete="current-password"
+                    field=password
+                />
+            </div>
+            <div class="j-form-actions">
+                <button type="submit" class="j-btn is-primary" prop:disabled=move || disabled.get()>
+                    "Login"
+                </button>
+            </div>
+        </form>
     }
 }
 
