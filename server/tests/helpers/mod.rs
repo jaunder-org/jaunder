@@ -22,8 +22,8 @@ mod websub_capturing;
 // nothing outside consumes — and `unused_imports` is denied. Each definition
 // keeps its `pub`, so nothing narrowed; only unreachable paths went away.
 pub use atompub::{
-    atompub, atompub_at, atompub_get, atompub_post_xml, atompub_put_xml, atompub_upload,
-    atompub_xml,
+    atompub, atompub_at, atompub_authed, atompub_get, atompub_post_xml, atompub_put_xml,
+    atompub_upload, atompub_xml,
 };
 pub use http::{
     MultipartFile, TestHttpResponse, body_string, get_asset, make_app, post_form,
@@ -42,4 +42,3 @@ pub use session::{
 };
 // The capturing WebSub client used by `feed_worker.rs`.
 pub use websub_capturing::CapturingWebSubClient;
-

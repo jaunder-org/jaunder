@@ -198,6 +198,7 @@ where
         secure_cookies,
     )
     .await
+    .into_first_cookie()
 }
 
 /// POST one typed server-function input using that function's derived path and
