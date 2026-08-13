@@ -1020,7 +1020,7 @@ Typing the arg moves validation into arg-**decode**, so a malformed request from
 a non-browser client fails before the fn body — the defense-in-depth path, not
 the user path.
 
-[Cohesive request aggregates](adr/drafts/request-aggregate-server-function-inputs.md)
+[Cohesive request aggregates](adr/0129-request-aggregate-server-function-inputs.md)
 are the server-fn boundary rule: multiple caller-supplied values forming one
 cohesive operation cross as one typed request aggregate. Wasm forms manually
 assemble the generated action input from parsed fields before `ServerAction`

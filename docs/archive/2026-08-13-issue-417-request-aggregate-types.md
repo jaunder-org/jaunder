@@ -60,7 +60,7 @@ promoted before push.
 `web/src/auth/mod.rs`, `server/tests/web/web_auth.rs`,
 `end2end/tests/auth.spec.ts`, `xtask/src/steps/proffered_secret_check.rs`,
 `docs/ARCHITECTURE.md`, approved spec, this plan. Keep
-`docs/adr/drafts/request-aggregate-server-function-inputs.md` ignored.
+`docs/adr/0129-request-aggregate-server-function-inputs.md` ignored.
 
 **Produces:**
 

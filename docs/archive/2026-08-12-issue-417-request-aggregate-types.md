@@ -27,7 +27,7 @@ state as strings before dispatch.
    independent remain direct-parameter server functions. No syntactic xtask gate
    attempts to decide semantic cohesion.
 6. The convention and its trade-offs are recorded in
-   `docs/adr/drafts/request-aggregate-server-function-inputs.md` and projected
+   `docs/adr/0129-request-aggregate-server-function-inputs.md` and projected
    into `docs/ARCHITECTURE.md`. It does not alter Jaunder's ubiquitous domain
    language, so `CONTEXT.md` is unchanged.
 
