@@ -373,9 +373,9 @@ devtool run -- cargo xtask e2e-local audiences.spec.ts
 devtool run -- cargo xtask e2e-local media.spec.ts
 ```
 
-- [ ] Run `devtool run -- cargo xtask validate`; expect PASS across static,
+- [x] Run `devtool run -- cargo xtask validate`; expect PASS across static,
       coverage, SQLite/PostgreSQL, and Chromium/Firefox.
-- [ ] Mandatory stage/check sequence; commit docs/audit corrections as
+- [x] Mandatory stage/check sequence; commit docs/audit corrections as
       `docs: record request-aggregate boundary`.
 - [ ] Hand off to `jaunder-ship`: final review/rebase, promote the draft ADR
       (rewriting/staging its architecture citation), gate, push/open/monitor PR,
