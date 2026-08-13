@@ -573,7 +573,7 @@ const ALLOWLIST: &[Allowed] = &[
         reason: "the stored DDL text from sqlite_master, hashed into the schema fingerprint",
     },
     Allowed {
-        file: "postgres/mod.rs",
+        file: "postgres/open.rs",
         function: "database_is_empty",
         target: "String",
         what: "\"SELECTtable_nameFROMinformation_schema.tables\\WHEREtable_schema='public'ANDtable_type='BASETABLE'\\ANDtable_name<>'_sqlx_migrations'\"",
@@ -592,7 +592,7 @@ const ALLOWLIST: &[Allowed] = &[
     },
     // ---- cardinality probes ----
     Allowed {
-        file: "postgres/mod.rs",
+        file: "postgres/open.rs",
         function: "database_is_empty",
         target: "bool",
         what: "&format!(\"SELECTEXISTS(SELECT1FROM{}LIMIT1)\",crate::sql::quote_identifier(&table))",

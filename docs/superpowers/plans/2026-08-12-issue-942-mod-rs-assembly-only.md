@@ -461,15 +461,16 @@ drafted, gitignored) · `CONTRIBUTING.md` · `docs/ARCHITECTURE.md`
 
 ## Task 13 — `storage/src/postgres/`
 
-**Files:** `storage/src/postgres/mod.rs` → new `atomic.rs`, `open.rs`
+**Files:** `storage/src/postgres/mod.rs` → new `atomic.rs`, `open.rs` ·
+`xtask/src/steps/sqlx_newtype_decode_check.rs`
 
 > Split along the file's existing `// ---` banners (partition rule 1). Sibling
 > names carry no dialect prefix — the directory does, matching `users.rs`,
 > `posts.rs`, `pool.rs` (spec, Scope).
 
-- [ ] `atomic.rs`: `pub struct PostgresAtomicOps`, its inherent `impl` (`new`),
+- [x] `atomic.rs`: `pub struct PostgresAtomicOps`, its inherent `impl` (`new`),
       and `#[async_trait] impl AtomicOps for PostgresAtomicOps`.
-- [ ] `open.rs`: `fn make_postgres_app_state`, `fn postgres_password_from_env`,
+- [x] `open.rs`: `fn make_postgres_app_state`, `fn postgres_password_from_env`,
       `pub fn resolved_postgres_options`,
       `pub(crate) async fn open_postgres_database_with_pool` (with its
       `#[tracing::instrument]`), `open_postgres_database`, `database_is_empty`,
@@ -477,15 +478,22 @@ drafted, gitignored) · `CONTRIBUTING.md` · `docs/ARCHITECTURE.md`
       `postgres_password_from_env` via `super::*`, so they must travel here. One
       is `#[apply(postgres_only)]`; it stays under `postgres/`, so ADR-0053
       homing holds.
-- [ ] `make_postgres_app_state` names all 14 `Postgres*Storage` types, which
+- [x] `make_postgres_app_state` names all 14 `Postgres*Storage` types, which
       arrive via `mod.rs`'s re-exports — `use super::{…}` them.
-- [ ] `mod.rs`: keep the 14 `mod`+`pub use` pairs, `pub(crate) mod backup;`, and
+- [x] **A third path-pinned gate constant, missed by the plan.**
+      `sqlx-newtype-decode`'s `ALLOWLIST` keys its entries by file path, and
+      **two** of them name `postgres/mod.rs` for `database_is_empty` (the
+      `String` table-name enumeration and the `bool` existence probe). Both are
+      re-pointed at `postgres/open.rs` in this same commit, for the reason task
+      19 records: neither half gates green alone. The two `sqlite/mod.rs` twins
+      belong to task 15.
+- [x] `mod.rs`: keep the 14 `mod`+`pub use` pairs, `pub(crate) mod backup;`, and
       the three `#[cfg(test)] mod` decls. Add
       `mod atomic; pub use atomic::PostgresAtomicOps;` and `mod open;` with
       `pub use open::resolved_postgres_options;` plus
       **`pub(crate) use open::{database_is_empty, open_postgres_database, open_postgres_database_with_pool};`**.
-- [ ] Confirm `storage/src/lib.rs:63`'s `pub use postgres::{…}` list still
-      resolves.
+- [x] Confirm `storage/src/lib.rs:63`'s `pub use postgres::{…}` list still
+      resolves. → confirmed by a green gate.
 - **Verify:** `devtool run -- cargo nextest run -p storage` — PASS.
 - **Commit:**
   `refactor(storage): split postgres/mod.rs into atomic and open (#942)`
