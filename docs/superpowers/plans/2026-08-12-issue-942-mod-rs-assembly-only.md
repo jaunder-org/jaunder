@@ -715,18 +715,31 @@ Widening first keeps task 15 a pure move.
 > those (lines 916, 926, 935) are prose about the layout rule, not citations.
 > The real citation count is **19**.
 
-- [ ] Re-point the **19** citations: 17 carry a line number and need file
+- [x] Re-point the **19** citations: 17 carry a line number and need file
       **and** line corrected; 2 name a file only (lines 834
       `server/src/projector/mod.rs`, 2083 `server/tests/helpers/mod.rs`) and
-      need the path re-pointed only if the cited code moved.
-- [ ] **Line 705 is the awkward one** — it cites `mod.rs:28` with no path at
+      need the path re-pointed only if the cited code moved. → both did move.
+      The projector one now names the **directory** (`server/src/projector/`),
+      since the subject is the projector as a whole and no single file is it any
+      more; the registrar one names `registrar.rs`. After the edits, exactly
+      **6** `mod.rs` mentions remain in the file and every one is prose about
+      the rule.
+- [x] **Line 705 is the awkward one** — it cites `mod.rs:28` with no path at
       all, relying on the surrounding prose for context. Resolve which file it
       means before correcting it, and give it an explicit path while you are
-      there.
-- [ ] Confirm line 916's prose (updated in task 2) still reads correctly against
-      the finished tree, and that the counts at 926 remain true.
+      there. → it means the `/atompub/service` route, now
+      `server/src/atompub/router.rs:17`, and it is written with the full path.
+- [x] Confirm line 916's prose (updated in task 2) still reads correctly against
+      the finished tree, and that the counts at 926 remain true. → prose reads
+      correctly. Counts re-measured against the tree and all four still hold:
+      **28** directories under `web/src/` all with a `mod.rs`, **25** with a
+      `component.rs`, **15** with an `api.rs`, **6** with a `server.rs`. This
+      branch added `wire.rs` and `invalidator.rs`, neither of which is one of
+      the counted names.
 - **Verify:** `devtool run -- cargo xtask check` — `doc-links` and
   `adr-view-parity` green. Spot-check each citation resolves to the named item.
+  → gate green; every re-pointed line number was read back off the new file
+  before being written.
 - **Commit:**
   `docs(architecture): re-point mod.rs citations after the split (#942)`
 

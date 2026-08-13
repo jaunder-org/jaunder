@@ -179,8 +179,8 @@ Operations that must span multiple traits atomically (`create_user_with_invite`,
   `SQLITE_BUSY` under WAL concurrency): "read to validate, then write" is
   expressed as a single autocommit `UPDATE/INSERT/DELETE … WHERE … RETURNING`,
   and genuinely multi-statement transactions open with `BEGIN IMMEDIATE`
-  (`storage/src/sqlite/posts.rs:53`, `storage/src/sqlite/mod.rs:203`). Where the
-  same operation is generic, Postgres reaches the same serialization with
+  (`storage/src/sqlite/posts.rs:53`, `storage/src/sqlite/atomic.rs:48`). Where
+  the same operation is generic, Postgres reaches the same serialization with
   `SELECT … FOR UPDATE` instead
   ([ADR-0021](adr/0021-sqlite-transaction-discipline.md)).
 - **Bounded write-lock occupancy.** SQLite has one write lock and `busy_timeout`
@@ -542,7 +542,7 @@ crate the same way.
 
 ### AtomPub editing interface
 
-The authenticated Collection (`server/src/atompub/mod.rs:28-43`:
+The authenticated Collection (`server/src/atompub/router.rs:16-33`:
 `/atompub/service`, the per-user post collection and member routes, the media
 collection and its `{sha}/{filename}` members) serves editing clients — MarsEdit
 and the Emacs front-end — authenticating with HTTP Basic app passwords validated
@@ -566,7 +566,7 @@ server crate; only the namespace and `j:slug` definitions it works against live
 in `common/src/atompub`.
 
 Two Jaunder wire extensions ride the namespace `https://jaunder.org/ns/atompub`
-(`J_NS`, `common/src/atompub/mod.rs:51`;
+(`J_NS`, `common/src/atompub/ns.rs:6`;
 [ADR-0023](adr/0023-atompub-jaunder-wire-extensions.md)): a read-only `j:slug`
 on every entry — drafts and scheduled included, incoming values ignored
 (`mapping.rs:123`) — and
@@ -609,9 +609,9 @@ as before: `quick-xml` ≥ 0.41.
 WebSub is publisher-side only. After regenerating a feed, the feed worker pings
 the configured hub (the `feeds.websub_hub_url` setting,
 `common/src/config_key.rs:165`) through
-`WebSubClient::send_publish(&HubUrl, &FeedUrl)` (`server/src/websub/mod.rs:45`)
-with bounded retries and a `websub_ping` metric whose outcome distinguishes
-`Success`, `Exhausted`, `Failed`, and `NoHub`
+`WebSubClient::send_publish(&HubUrl, &FeedUrl)`
+(`server/src/websub/contract.rs:45`) with bounded retries and a `websub_ping`
+metric whose outcome distinguishes `Success`, `Exhausted`, `Failed`, and `NoHub`
 (`server/src/feed/worker.rs:239-266`) — an unconfigured hub is a recorded no-op,
 not a silent one. `HttpWebSubClient` runs in production; noop and file-capture
 implementations back the tests.
@@ -686,7 +686,7 @@ pass.
   persisted, so the raw value is never stored. On the lookup side
   `host::token::hash` (`:53`) is the **sole** `RawToken → TokenHash` conversion
   (`storage/src/sessions.rs:185`, `password.rs:116`, `email.rs:161`,
-  `sqlite/mod.rs:286`, `postgres/mod.rs:161`). The neighbouring
+  `sqlite/atomic.rs:131`, `postgres/atomic.rs:98`). The neighbouring
   `host::token::generate` (`:28`) mints invite codes, not session tokens
   (`host/src/invite.rs:59` is its only caller). The two are distinct newtypes,
   `common::token::{RawToken, TokenHash}`
@@ -707,8 +707,8 @@ pass.
   deleting the session in the Sessions UI
   ([ADR-0014](adr/0014-atompub-authentication.md)).
 - A token for user X reaches only `/atompub/X/*`. The enforcer is
-  `server::atompub::require_user_match` (`server/src/atompub/mod.rs:107`), which
-  returns 403 on mismatch and guards every per-user route — directly at
+  `server::atompub::require_user_match` (`server/src/atompub/guards.rs:13`),
+  which returns 403 on mismatch and guards every per-user route — directly at
   `posts.rs:135,313` and `media.rs:85,152,181`, and through `owned_post`
   (`posts.rs:227`) at `:253,282,435`. It applies whichever credential was used
   ([ADR-0014](adr/0014-atompub-authentication.md)). Separately, on the Basic
@@ -716,10 +716,10 @@ pass.
   username to the resolved session's user; cookie and Bearer requests pass
   `expected: None` and skip that check, which is why the route guard rather than
   the credential check is what does the scoping. `/atompub/service`
-  (`mod.rs:28`) is authenticated but sits outside the per-user tree, and RSD is
-  deliberately unauthenticated (`atompub/rsd.rs:22`). Basic sends the token on
-  every request, so the TLS-terminating reverse proxy is load-bearing for
-  AtomPub ([ADR-0014](adr/0014-atompub-authentication.md)).
+  (`server/src/atompub/router.rs:17`) is authenticated but sits outside the
+  per-user tree, and RSD is deliberately unauthenticated (`atompub/rsd.rs:22`).
+  Basic sends the token on every request, so the TLS-terminating reverse proxy
+  is load-bearing for AtomPub ([ADR-0014](adr/0014-atompub-authentication.md)).
 
 Cookie management is layered:
 `web::auth::server::{set_session_cookie, clear_session_cookie}`
@@ -786,13 +786,13 @@ split by the **entropy of the value being validated**:
   ([ADR-0114](adr/0114-absent-user-timing-equalization.md)).
 - **High-entropy secret (invite code, reset token): cheap-reject first.** Both
   operations live on the `AtomicOps` trait (`storage/src/atomic.rs:101`), which
-  each backend implements separately (`storage/src/sqlite/mod.rs:185`, `:280`;
-  `storage/src/postgres/mod.rs:89`, `:155`). `create_user_with_invite` validates
-  the invite with a cheap lookup before hashing (the SQLite backend takes its
-  write lock up front per ADR-0021, so the hash runs inside the immediate
-  transaction on the success path only), and `confirm_password_reset` atomically
-  claims the reset token before hashing the new password — it originally hashed
-  first, which ADR-0022 recorded as a violation and
+  each backend implements separately (`storage/src/sqlite/atomic.rs:30`, `:125`;
+  `storage/src/postgres/atomic.rs:26`, `:92`). `create_user_with_invite`
+  validates the invite with a cheap lookup before hashing (the SQLite backend
+  takes its write lock up front per ADR-0021, so the hash runs inside the
+  immediate transaction on the success path only), and `confirm_password_reset`
+  atomically claims the reset token before hashing the new password — it
+  originally hashed first, which ADR-0022 recorded as a violation and
   [#60](https://github.com/jaunder-org/jaunder/issues/60) fixed. A ~256-bit
   secret admits no useful timing oracle, and hashing first would turn
   bogus-secret requests into a CPU-exhaustion amplifier while destroying invite
@@ -845,13 +845,13 @@ stack is tracked, not done.
 
 The mechanism is "SSR the data, not the components"
 ([ADR-0041](adr/0041-public-projector-and-csr-client.md)): a thin non-reactive
-**public projector** (`server/src/projector/mod.rs`) renders the anonymous
-document for public routes, fetching through explicit-viewer `fetch_*` seams as
-`ViewerIdentity::Anonymous` (`server/src/projector/mod.rs:173-329`), so its
+**public projector** (`server/src/projector/`) renders the anonymous document
+for public routes, fetching through explicit-viewer `fetch_*` seams as
+`ViewerIdentity::Anonymous` (`server/src/projector/handlers.rs:63-198`), so its
 output is byte-identical per URL and therefore CDN-cacheable. The document is
 assembled from `web::app::render_head` / `render_shell`
-(`server/src/projector/mod.rs:41,77-93`), which compose the pure per-vertical
-render fns; those live beside the vertical they serve —
+(`server/src/projector/document.rs:7,16-40`), which compose the pure
+per-vertical render fns; those live beside the vertical they serve —
 `web/src/posts/render.rs`, `timeline/render.rs`, `home/render.rs`,
 `sidebar/markup.rs`, `taglist/markup.rs`, `topbar/markup.rs`,
 `avatar/markup.rs`, `icon/markup.rs` — not in a central render module. The
@@ -879,7 +879,7 @@ The authenticated owner stays flash-free by _enhancement_
 advisory localStorage auth marker, read by an inline blocking `<head>` script
 (`web::app::PREPAINT_SCRIPT`, `web/src/app/render.rs:40`), sets
 `<html class="authed">` before first paint. The same constant is emitted by the
-projector (`server/src/projector/mod.rs:93`) and embedded verbatim in
+projector (`server/src/projector/document.rs:32`) and embedded verbatim in
 `csr/index.html`, with a host test guarding the drift
 (`web/src/app/render.rs:284`). `current_user()` is only a background reconcile;
 owner affordances are additive decoration in CSS-reserved slots on the untouched
@@ -991,7 +991,7 @@ _relaxes_ `unwrap`/`expect` for tests, which the workspace otherwise denies
 leptos UI, the `#[server]` surface, and the wire types. Errors flow through the
 one-way T1→T2→T3 pipeline — typed domain errors (`storage`/`common`) → the
 operator carrier `host::error::InternalError` (`host/src/error.rs:94`) → the
-wire type `WebError` (`web/src/error/mod.rs:26`), via the lossy projection
+wire type `WebError` (`web/src/error/wire.rs:12`), via the lossy projection
 `project` in `web/src/error/server.rs:68`. T2→T3 is a security boundary made
 structural: the operator payload is absent from the type that crosses the wire,
 so the masked public boundary
@@ -1019,7 +1019,7 @@ the user path.
 ### Reactive idioms
 
 Revalidation goes through one primitive, `web::reactive::Invalidator`
-(`web/src/reactive/mod.rs:33`,
+(`web/src/reactive/invalidator.rs:11`,
 [ADR-0060](adr/0060-web-invalidator-revalidation-idiom.md)): committed mutations
 `notify()`, resources `track()`; `action::<A>()` is success-gated;
 cross-component scopes are per-vertical `invalidator_scope!` newtypes
@@ -1191,12 +1191,12 @@ Cargo feature — because `host` is native-only and therefore keeps
 ([ADR-0058](adr/0058-host-crate-layering.md)). Helper arguments are bounded
 enums, or a `&'static str` drawn from a closed set the call site cannot widen —
 `atompub_request`'s `op` comes from a matched-route-plus-method lookup
-(`server/src/atompub/mod.rs:56`), not from an enum. Either way no call site can
-attach caller-supplied text as a label. `init_tracing` returns a `#[must_use]`
-`TelemetryGuard` whose `Drop` force-flushes both providers on every exit path,
-so one-shot CLI commands export buffered telemetry instead of silently dropping
-it; one binding at the `run()` dispatch boundary covers every command, and
-export failures are logged, never propagated
+(`server/src/atompub/router.rs:61`), not from an enum. Either way no call site
+can attach caller-supplied text as a label. `init_tracing` returns a
+`#[must_use]` `TelemetryGuard` whose `Drop` force-flushes both providers on
+every exit path, so one-shot CLI commands export buffered telemetry instead of
+silently dropping it; one binding at the `run()` dispatch boundary covers every
+command, and export failures are logged, never propagated
 ([ADR-0011](adr/0011-unified-observability.md)).
 
 ### Errors at the boundary
@@ -1321,7 +1321,7 @@ for a flag (`server/src/cli.rs`). The process-shape ones are `JAUNDER_BIND`
 default `./data`, `:33`), `JAUNDER_ENV` (`dev` | `prod`, `:271`),
 `JAUNDER_RUNTIME_FILE` (`:276`) and `JAUNDER_VERBOSE` (`:25`). PostgreSQL takes
 its secret by either `JAUNDER_DB_PASSWORD` or `JAUNDER_DB_PASSWORD_FILE`
-(`:39-40`, read at `storage/src/postgres/mod.rs:249,253`). The observability
+(`:39-40`, read at `storage/src/postgres/open.rs:40,44`). The observability
 variables are covered under [Observability](#observability). `prod` is
 load-bearing in two places: it sets the `secure_cookies` flag passed to
 `create_router` (`server/src/commands.rs:546`, `server/src/lib.rs:32`), and it
@@ -1689,7 +1689,7 @@ a source being invented.
 
 Internal detail reaches a client only through the masking boundary (§2). The
 leaky public constructors `WebError::storage`/`WebError::server` are removed —
-`WebError` (`web/src/error/mod.rs:26`) exposes no constructor that serializes a
+`WebError` (`web/src/error/wire.rs:12`) exposes no constructor that serializes a
 raw source chain. The operator carrier is `InternalError`
 (`host/src/error.rs:94`), which holds `kind`, `class`, `context`, the exact
 public message, and the preserved `anyhow` source; the public message it masks
@@ -2096,10 +2096,11 @@ inventory from one `syn` enumerator.
 `server-fn-registrar` ([ADR-0066](adr/0066-server-fn-test-registrar-guard.md))
 exists because test binaries link `web` as an rlib, and dead-code elimination
 drops each `#[server]` macro's `inventory`-based auto-registration. One
-hand-maintained registrar (`server/tests/helpers/mod.rs`) is therefore the sole
-list, registration is **mandatory** with no per-fn opt-out, and the gate fails
-on any `web` `#[server]` fn missing from it, matching on `(vertical, leaf)`. It
-checks only the missing direction — a stale entry already fails to compile.
+hand-maintained registrar (`server/tests/helpers/registrar.rs`) is therefore the
+sole list, registration is **mandatory** with no per-fn opt-out, and the gate
+fails on any `web` `#[server]` fn missing from it, matching on
+`(vertical, leaf)`. It checks only the missing direction — a stale entry already
+fails to compile.
 
 `server-fn-coverage` ([ADR-0081](adr/0081-empirical-server-fn-flow-coverage.md))
 answers a question line coverage cannot: which server entry points a real
