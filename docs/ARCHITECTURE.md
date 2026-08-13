@@ -71,6 +71,20 @@ under [Development tooling](#development-tooling). `elisp/` (the Emacs client,
 [ADR-0031](adr/0031-elisp-separately-tested-subproject.md)) and `end2end/`
 (Playwright) are covered in their sections.
 
+Across every one of those trees, a `mod.rs` states its module's surface and
+holds nothing else: `mod`/`pub mod` declarations, `use`/`pub use` re-exports,
+`//!` documentation, and attributes — never a `fn`, type, `impl`, `const`,
+`macro_rules!`, or an inline test module
+([mod.rs assembles the module surface](adr/drafts/mod-rs-assembles-module-surface.md)).
+Code lives in a sibling file the `mod.rs` declares and re-exports, by an
+explicit list rather than a glob, so the file a reader opens first is a map
+rather than a haystack. The rule is workspace-wide and deliberately **not**
+machine-enforced: whether an item earns its own file is a cohesion judgement a
+syntactic check would get wrong in both directions, so it is carried by review.
+It generalises the per-vertical rule
+[ADR-0070](adr/0070-web-vertical-wasm-only-component-files.md) established for
+`web/`, which is unchanged.
+
 [Axum]: https://github.com/tokio-rs/axum
 [Leptos]: https://leptos.dev/
 
@@ -913,7 +927,9 @@ which supersedes ADR-0056 and is a deliberate partial **return** to ADR-0055's
 module-level gating — ADR-0055's own status is unchanged, having been superseded
 by ADR-0056 before either):
 
-- `mod.rs` — module wiring and re-exports only, no items of its own;
+- `mod.rs` — module wiring and re-exports only, no items of its own (now a
+  workspace-wide rule rather than a per-vertical one — see
+  [Workspace](#workspace));
 - `api.rs` — the vertical's wire types and **every** `#[server]` fn,
   dual-compiled;
 - `server.rs` — `#[cfg(feature = "server")]` host-only helpers;

@@ -140,16 +140,20 @@ blocked behind this branch (`jaunder-start` step 5).
 **Files:** `docs/adr/drafts/mod-rs-assembles-module-surface.md` (already
 drafted, gitignored) · `CONTRIBUTING.md` · `docs/ARCHITECTURE.md`
 
-- [ ] Re-read the ADR draft; confirm line 1 is exactly `# ADR-DRAFT: <Title>`,
+- [x] Re-read the ADR draft; confirm line 1 is exactly `# ADR-DRAFT: <Title>`,
       `- Status: proposed`, and that links to sibling ADRs are bare
       (`0070-….md`) per `docs/adr/drafts/README.md`.
-- [ ] `CONTRIBUTING.md`: add the rule to the repository-layout section — what a
+- [x] `CONTRIBUTING.md`: add the rule to the repository-layout section — what a
       `mod.rs` may contain, workspace-wide, enforced at review not by a gate,
       citing `docs/adr/drafts/mod-rs-assembles-module-surface.md`.
-- [ ] `docs/ARCHITECTURE.md`: project the decision per
+- [x] `docs/ARCHITECTURE.md`: project the decision per
       **`jaunder-adr-projection`**, citing the draft **by path** (promote
       rewrites it at ship). Update line 916's prose so the rule reads
-      workspace-wide rather than web-vertical-only.
+      workspace-wide rather than web-vertical-only. → projected into
+      **§Workspace** (the workspace-wide home, not the web section), with
+      descriptive link text rather than an `ADR-DRAFT` label, which `promote`
+      would otherwise leave dangling. The per-vertical line (now 931) points at
+      §Workspace.
 - **Verify:** `devtool run -- cargo xtask check` — `adr-format` and `doc-links`
   green. (`adr-view-parity` only binds numbered ADRs, so it stays green now and
   is satisfied at promote.)

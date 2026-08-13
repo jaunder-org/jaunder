@@ -28,6 +28,28 @@ entries are:
   `server/build.rs`
 - `scripts/`: small shell helpers not part of any build
 
+### `mod.rs` assembles the module surface
+
+A `mod.rs` states what a module contains and exports, and holds nothing else. It
+may contain only:
+
+- `mod` / `pub mod` declarations,
+- `use` / `pub use` / `pub(crate) use` re-exports,
+- `//!` module documentation,
+- attributes — inner ones, and outer attributes on those `mod` and `use` items.
+
+Anything else — `fn`, `struct`, `enum`, `trait`, `impl`, `const`, `static`,
+`type`, `macro_rules!`, or an inline `#[cfg(test)] mod tests { … }` body — lives
+in a sibling file that `mod.rs` declares and re-exports. Prefer an explicit
+re-export list (`pub use thing::{A, B};`) over a glob: a glob states nothing,
+and stating the surface is the point.
+
+The rule is workspace-wide — production crates, test trees, `xtask/` and
+`tools/` alike. It is **enforced at review, not by a gate**: whether a given
+item earns its own file is a judgement a syntactic check would get wrong in both
+directions. See
+[`docs/adr/drafts/mod-rs-assembles-module-surface.md`](docs/adr/drafts/mod-rs-assembles-module-surface.md).
+
 ## Development setup
 
 ### Prerequisites
