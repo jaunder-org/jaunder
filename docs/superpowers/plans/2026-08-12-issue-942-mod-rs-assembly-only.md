@@ -608,21 +608,32 @@ Widening first keeps task 15 a pure move.
 > **No sibling named `projector.rs`** — ADR-0067 promoted that file _to_
 > `mod.rs` to avoid `clippy::module_inception`.
 
-- [ ] `fixtures.rs`: `const TEST_SHELL`, `fn projector_app`,
+- [x] `fixtures.rs`: `const TEST_SHELL`, `fn projector_app`,
       `async fn seed_tagged_post`, `async fn seed_published_post`, `fn get` —
       all currently private, so widen to `pub(super)` (they now have consumers
       in four siblings, which is exactly the case the spec permits).
-- [ ] Partition the 17 tests by route: `permalink.rs`, `listing.rs` (profile +
-      site_timeline), `tags.rs`, `caching.rs`.
-- [ ] **Every** new file repeats the three ADR-0124 imports: `use rstest::*;`,
+- [x] Partition the **15** tests (the plan said 17; the file holds 15) by route:
+      `permalink.rs` (4), `listing.rs` (3 — profile + site_timeline), `tags.rs`
+      (4), `caching.rs` (4). The two conditional-request tests
+      (`…_stale_if_none_match…`, `…_if_none_match_returns_304`) are named for
+      the permalink route but assert `ETag`/`304` behaviour, so they home with
+      the other cacheability tests rather than with the route.
+- [x] **Every** new file repeats the three ADR-0124 imports: `use rstest::*;`,
       `use rstest_reuse::*;`, and the template by bare name
       (`use storage::test_support::backends;`). Omit the third and
       `#[apply(backends)]` is unresolved.
-- [ ] `mod.rs` becomes pure assembly: five `mod` lines. It has no `//!` doc and
+- [x] `mod.rs` becomes pure assembly: five `mod` lines. It has no `//!` doc and
       no re-exports today and needs none — nothing outside the directory names
       these tests.
-- **Verify:** `devtool run -- cargo xtask check` — `test-backend-pattern` green;
-  `devtool run -- cargo nextest run -p jaunder projector` — all 17 tests PASS.
+- **Verify:** `devtool run -- cargo xtask check` — `test-backend-pattern` green.
+  → gate green. A **bare-host** `cargo nextest run -p jaunder projector` fails
+  every `case_2_postgres` with `ConnectionRefused`: there is no PostgreSQL
+  server outside the Nix harness, which is an environment fact and not a code
+  one. Filtered to what the host can run,
+  `test(projector) and not test(postgres)` is **21 passed** (15 sqlite cases +
+  the 6 `server/src/ projector` unit tests). The PostgreSQL half is exercised by
+  the gate's `nix-coverage` step, which runs the instrumented suite against a
+  real PostgreSQL and is green.
 - **Commit:**
   `test(server): split projector integration tests out of mod.rs (#942)`
 
