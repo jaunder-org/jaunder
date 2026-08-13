@@ -2125,8 +2125,9 @@ async fn permalink_hides_scheduled_until_due(#[case] backend: Backend) {
         "scheduled post must be hidden before its time"
     );
 
-    // One second past go-live: the scheduled post appears (locks the boundary).
-    let after = now + Duration::hours(1) + Duration::seconds(1);
+    // Exactly at go-live, the scheduled post appears (locks the `<= now`
+    // boundary shared with the unpublished lookup's strict `> now` predicate).
+    let due = now + Duration::hours(1);
     let got_after = state
         .posts
         .get_post_by_permalink(
@@ -2134,7 +2135,7 @@ async fn permalink_hides_scheduled_until_due(#[case] backend: Backend) {
             permalink_date(2026, 6, 26),
             &"sched-one".parse().unwrap(),
             &ViewerIdentity::Anonymous,
-            after,
+            due,
         )
         .await
         .unwrap();

@@ -22,7 +22,7 @@ impl PostDialect for Sqlite {
     /// Postgres twin does need one, and keep the two in sync.
     const TAGS_SUBQUERY: &'static str = "COALESCE((SELECT json_group_array(json_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display) ORDER BY t.tag_slug) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]')";
 
-    const PERMALINK_DATE_CLAUSE: &'static str = "date(p.published_at) = $3";
+    const PERMALINK_DATE_CLAUSE: &'static str = "date(COALESCE(p.published_at, p.created_at)) = $3";
 
     const DELETE_POST_AUDIENCES: &'static str = "DELETE FROM post_audiences WHERE post_id = ?";
 

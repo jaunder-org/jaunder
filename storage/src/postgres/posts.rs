@@ -23,7 +23,7 @@ impl PostDialect for Postgres {
     const TAGS_SUBQUERY: &'static str = "COALESCE((SELECT json_agg(json_build_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display) ORDER BY t.tag_slug COLLATE \"C\") FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = p.post_id), '[]'::json)::text";
 
     const PERMALINK_DATE_CLAUSE: &'static str =
-        "date(p.published_at AT TIME ZONE 'UTC') = $3::date";
+        "date(COALESCE(p.published_at, p.created_at) AT TIME ZONE 'UTC') = $3::date";
 
     const DELETE_POST_AUDIENCES: &'static str = "DELETE FROM post_audiences WHERE post_id = $1";
 

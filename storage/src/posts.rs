@@ -649,6 +649,19 @@ pub trait PostStorage: Send + Sync {
         now: DateTime<Utc>,
     ) -> sqlx::Result<Option<PostRecord>>;
 
+    /// Fetches an author's own not-yet-live post by its canonical permalink.
+    ///
+    /// True drafts match the UTC date of `created_at`; scheduled posts match
+    /// the UTC date of `published_at`. `now` separates scheduled posts
+    /// (`published_at > now`) from posts already live on the public surface.
+    async fn get_unpublished_post_by_permalink(
+        &self,
+        user_id: UserId,
+        date: PermalinkDate,
+        slug: &Slug,
+        now: DateTime<Utc>,
+    ) -> sqlx::Result<Option<PostRecord>>;
+
     /// Updates a post and creates a new revision.
     ///
     /// # Errors
@@ -886,7 +899,8 @@ pub trait PostStorage: Send + Sync {
 /// [`TAGS_SUBQUERY`][PostDialect::TAGS_SUBQUERY] (`SQLite` `json_group_array`
 /// vs Postgres `json_agg`/`::text`) and
 /// [`PERMALINK_DATE_CLAUSE`][PostDialect::PERMALINK_DATE_CLAUSE] (`SQLite`
-/// `date(...)` vs Postgres `date(... AT TIME ZONE 'UTC') = $3::date`).
+/// `date(COALESCE(...))` vs Postgres
+/// `date(COALESCE(...) AT TIME ZONE 'UTC') = $3::date`).
 ///
 /// The two transaction-bearing mutations are monomorphised per backend:
 /// [`update_post`][PostDialect::update_post] (Postgres locks the row with
@@ -910,8 +924,9 @@ pub trait PostDialect: Backend {
     /// `tags_subquery_pins_slug_ordering_on_both_dialects`.
     const TAGS_SUBQUERY: &'static str;
 
-    /// Predicate matching a post's `published_at` date against the bound
-    /// `YYYY-MM-DD` string (`$3`), in this backend's date dialect.
+    /// Predicate matching a post's canonical UTC permalink date —
+    /// `COALESCE(published_at, created_at)` — against the bound `YYYY-MM-DD`
+    /// string (`$3`), in this backend's date dialect.
     const PERMALINK_DATE_CLAUSE: &'static str;
 
     /// Deletes every `post_audiences` row for a post. Bind order: `post_id`.
@@ -1205,6 +1220,43 @@ where
             .bind(date_str.as_str())
             .bind(now);
         let row = binds.bind_onto(query).fetch_optional(&self.pool).await?;
+        Ok(row.map(post_record_from_row).transpose()?)
+    }
+
+    #[tracing::instrument(
+        name = "storage.posts.get_unpublished_by_permalink",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn get_unpublished_post_by_permalink(
+        &self,
+        user_id: UserId,
+        date: PermalinkDate,
+        slug: &Slug,
+        now: DateTime<Utc>,
+    ) -> sqlx::Result<Option<PostRecord>> {
+        let tags = DB::TAGS_SUBQUERY;
+        let date_clause = DB::PERMALINK_DATE_CLAUSE;
+        let date_str = date.to_string();
+        let sql = format!(
+            "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                    p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
+                    {tags} AS tags
+             FROM posts p
+             JOIN users u ON p.user_id = u.user_id
+             WHERE p.user_id = $1
+               AND p.slug = $2
+               AND {date_clause}
+               AND (p.published_at IS NULL OR p.published_at > $4)
+               AND p.deleted_at IS NULL"
+        );
+        let row = sqlx::query_as::<_, PostRow>(&sql)
+            .bind(user_id)
+            .bind(slug)
+            .bind(date_str.as_str())
+            .bind(now)
+            .fetch_optional(&self.pool)
+            .await?;
         Ok(row.map(post_record_from_row).transpose()?)
     }
 
@@ -2629,7 +2681,7 @@ mod tests {
     };
     use common::test_support::{
         parse_content_type, parse_etag, parse_post_body, parse_post_summary, parse_post_title,
-        parse_row_limit, parse_slug, parse_tag, parse_tag_label, parse_username, permalink_date,
+        parse_row_limit, parse_slug, parse_tag, parse_tag_label, parse_username,
     };
     use rstest::*;
     use rstest_reuse::*;
@@ -4277,9 +4329,7 @@ mod tests {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let posts = &*env.state.posts;
-        // Seed unpublished drafts; read one back (via the per-user draft listing,
-        // which is author-scoped and so needs no viewer) for its permalink parts.
-        crate::test_support::seed_posts(&env.state, user_id, 3, false).await;
+        crate::test_support::seed_posts(&env.state, user_id, 1, false).await;
         let drafts = posts
             .list_drafts_by_user(user_id, None, parse_row_limit("50"), Utc::now())
             .await
@@ -4290,14 +4340,87 @@ mod tests {
         let found = find_draft_by_permalink_for_user(posts, user_id, date, &record.slug)
             .await
             .unwrap();
-        assert_eq!(found.map(|p| p.post_id), Some(record.post_id));
+        assert_eq!(found.map(|post| post.post_id), Some(record.post_id));
 
-        // A slug the user has no draft for pages to an empty page and returns None.
         let missing =
-            find_draft_by_permalink_for_user(posts, user_id, date, &parse_slug("no-such-draft"))
+            find_draft_by_permalink_for_user(posts, user_id, date, &parse_slug("missing"))
                 .await
                 .unwrap();
         assert!(missing.is_none());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_unpublished_post_by_permalink_matches_canonical_date_and_scope(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let posts = &*env.state.posts;
+        let now = Utc::now();
+        let scheduled_at = now + chrono::Duration::days(30);
+        let author = SeedUser::new().seed(&env.state).await.user_id;
+        let other = SeedUser::new().seed(&env.state).await.user_id;
+
+        let draft = SeedRawPost::new(author).draft().seed(&env.state).await;
+        let scheduled = SeedRawPost::new(author)
+            .published_at(scheduled_at)
+            .seed(&env.state)
+            .await;
+        let live_at_boundary = SeedRawPost::new(author)
+            .published_at(now)
+            .seed(&env.state)
+            .await;
+        let deleted = SeedRawPost::new(author)
+            .published_at(scheduled_at)
+            .seed(&env.state)
+            .await;
+        posts
+            .soft_delete_post(deleted.post_id)
+            .await
+            .expect("soft delete");
+
+        let draft_record = posts
+            .get_post_by_id(draft.post_id, &ViewerIdentity::Local { user_id: author })
+            .await
+            .unwrap()
+            .expect("author can read seeded draft");
+        let draft_date = PermalinkDate::from(draft_record.created_at.date_naive());
+        let scheduled_date = PermalinkDate::from(scheduled_at.date_naive());
+
+        let found_draft = posts
+            .get_unpublished_post_by_permalink(author, draft_date, &draft.slug, now)
+            .await
+            .unwrap();
+        assert_eq!(found_draft.map(|post| post.post_id), Some(draft.post_id));
+
+        let found_scheduled = posts
+            .get_unpublished_post_by_permalink(author, scheduled_date, &scheduled.slug, now)
+            .await
+            .unwrap();
+        assert_eq!(
+            found_scheduled.map(|post| post.post_id),
+            Some(scheduled.post_id)
+        );
+
+        let missing = parse_slug("missing");
+        for (user_id, date, slug) in [
+            (other, scheduled_date, &scheduled.slug),
+            (author, scheduled_date, &missing),
+            (
+                author,
+                PermalinkDate::from(now.date_naive()),
+                &live_at_boundary.slug,
+            ),
+            (author, scheduled_date, &deleted.slug),
+        ] {
+            assert!(
+                posts
+                    .get_unpublished_post_by_permalink(user_id, date, slug, now)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
     }
 
     // guard:no-backend — mock store, no live database backend
@@ -4341,7 +4464,7 @@ mod tests {
         let result = find_draft_by_permalink_for_user(
             &mock,
             UserId::from(1),
-            permalink_date(2020, 1, 1),
+            common::test_support::permalink_date(2020, 1, 1),
             &searched,
         )
         .await
