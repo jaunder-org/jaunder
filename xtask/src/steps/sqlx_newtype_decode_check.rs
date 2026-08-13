@@ -582,7 +582,7 @@ const ALLOWLIST: &[Allowed] = &[
         reason: "table names enumerated to decide emptiness",
     },
     Allowed {
-        file: "sqlite/mod.rs",
+        file: "sqlite/open.rs",
         function: "database_is_empty",
         target: "String",
         what: "\"SELECTnameFROMsqlite_master\\WHEREtype='table'ANDnameNOTLIKE'sqlite_%'ANDname<>'_sqlx_migrations'\"",
@@ -867,7 +867,7 @@ const ALLOWLIST: &[Allowed] = &[
         reason: "COUNT(*) per seeded lookup table; the two dialect arms are byte-identical",
     },
     Allowed {
-        file: "sqlite/mod.rs",
+        file: "sqlite/open.rs",
         function: "database_is_empty",
         target: "i64",
         what: "&format!(\"SELECTEXISTS(SELECT1FROM{}LIMIT1)\",crate::sql::quote_identifier(&table))",

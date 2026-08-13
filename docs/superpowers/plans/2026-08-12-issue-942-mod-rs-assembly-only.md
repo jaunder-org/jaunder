@@ -518,22 +518,28 @@ Widening first keeps task 15 a pure move.
 
 ## Task 15 — `storage/src/sqlite/`
 
-**Files:** `storage/src/sqlite/mod.rs` → new `atomic.rs`, `open.rs`
+**Files:** `storage/src/sqlite/mod.rs` → new `atomic.rs`, `open.rs` ·
+`xtask/src/steps/sqlx_newtype_decode_check.rs`
 
 > Mirror task 13's split exactly — the symmetry is free and worth keeping.
 
-- [ ] `atomic.rs`: `pub struct SqliteAtomicOps`, inherent `impl`, and
+- [x] `atomic.rs`: `pub struct SqliteAtomicOps`, inherent `impl`, and
       `#[async_trait] impl AtomicOps`.
-- [ ] `open.rs`: `fn make_sqlite_app_state`,
+- [x] `open.rs`: `fn make_sqlite_app_state`,
       `pub(crate) async fn open_sqlite_database_with_pool` (with
       `#[tracing::instrument]`), and the two functions widened in task 14. This
       file has no `#[cfg(test)] mod tests` to carry.
-- [ ] `mod.rs`: keep the **13** `mod`+`pub use` pairs (sqlite has 13, not
+- [x] **The `sqlx-newtype-decode` twins.** Both `sqlite/mod.rs` allowlist
+      entries for `database_is_empty` (the `String` table-name enumeration and
+      the `i64` existence probe) are re-pointed at `sqlite/open.rs` in this
+      commit, matching what task 13 did for the Postgres pair.
+- [x] `mod.rs`: keep the **13** `mod`+`pub use` pairs (sqlite has 13, not
       postgres's 14 — there is no `bootstrap`), `pub(crate) mod backup;`, and
       `#[cfg(test)] mod pool;`. Add
       `mod atomic; pub use atomic::SqliteAtomicOps;` and
       `mod open; pub(crate) use open::{database_is_empty, open_sqlite_database, open_sqlite_database_with_pool};`.
-- [ ] Confirm `storage/src/lib.rs:75`'s `pub use sqlite::{…}` still resolves.
+- [x] Confirm `storage/src/lib.rs:75`'s `pub use sqlite::{…}` still resolves. →
+      confirmed by a green gate.
 - **Verify:** `devtool run -- cargo nextest run -p storage` — PASS.
 - **Commit:**
   `refactor(storage): split sqlite/mod.rs into atomic and open (#942)`
