@@ -306,7 +306,7 @@ lookup succeeded, and Basic username verification (when applicable) succeeded.
   and returning all response `Set-Cookie` values via `HeaderMap::get_all`.
 - Task 3 reuses those helpers and the same marker on optional-auth routes.
 
-- [ ] **Step 1: Add failing dual-credential integration tests**
+- [x] **Step 1: Add failing dual-credential integration tests**
 
 In `server/tests/helpers/mod.rs`, add a response carrier and mixed-auth helpers
 without changing existing wrapper signatures:
@@ -384,7 +384,7 @@ namespace and the insecure test router appends the non-`Secure` expiry cookie.
 Add a Basic-username mismatch plus valid cookie case asserting `401` and no
 expiry cookie.
 
-- [ ] **Step 2: Run the integration filters and verify failure**
+- [x] **Step 2: Run the integration filters and verify failure**
 
 ```bash
 devtool run -- cargo nextest run -p jaunder --test integration bearer_identity_wins
@@ -395,7 +395,7 @@ devtool run -- cargo nextest run -p jaunder --test integration explicit_auth_set
 Expected: FAIL because no marker/middleware exists, the cookie is not retired,
 and the test helper cannot yet observe all `Set-Cookie` values.
 
-- [ ] **Step 3: Implement the marker and outer response middleware**
+- [x] **Step 3: Implement the marker and outer response middleware**
 
 Insert one `SessionCookieRetirement` into request extensions before `Next`.
 After the response returns, append the generated expiry cookie only when the
@@ -409,7 +409,7 @@ At the successful end of `AuthUser::from_request_parts`, after
 Keep the extractor usable in contexts without the router marker by treating an
 absent marker as no response work, not as authentication failure.
 
-- [ ] **Step 4: Run the complete auth integration slice and fast gate**
+- [x] **Step 4: Run the complete auth integration slice and fast gate**
 
 ```bash
 devtool run -- cargo nextest run -p jaunder --test integration web_sessions
@@ -422,7 +422,7 @@ Expected: PASS for both backends. Header identity wins, success retires the
 cookie with the configured `Secure` attribute, failures never retire it, and
 pre-existing `Set-Cookie` values remain.
 
-- [ ] **Step 5: Commit shared cookie retirement**
+- [x] **Step 5: Commit shared cookie retirement**
 
 After the full gate, stage the auth/router/test-helper/tests and checked plan:
 

@@ -26,9 +26,11 @@ pub use atompub::{
     atompub_xml,
 };
 pub use http::{
-    MultipartFile, body_string, get_asset, make_app, post_form, post_form_with_bearer,
-    post_form_with_mailer, post_form_with_secure_flag, post_json, post_multipart, post_server_fn,
-    post_server_fn_request_fixture, post_server_fn_request_fixture_with_mailer,
+    MultipartFile, TestHttpResponse, body_string, get_asset, make_app, post_form,
+    post_form_with_bearer, post_form_with_credentials, post_form_with_mailer,
+    post_form_with_secure_flag, post_json, post_json_with_credentials, post_multipart,
+    post_server_fn, post_server_fn_request_fixture,
+    post_server_fn_request_fixture_with_mailer,
     post_server_fn_request_fixture_with_secure_flag, post_server_fn_with_mailer,
     post_server_fn_with_secure_flag, post_server_fn_with_ua,
 };
@@ -40,3 +42,4 @@ pub use session::{
 };
 // The capturing WebSub client used by `feed_worker.rs`.
 pub use websub_capturing::CapturingWebSubClient;
+

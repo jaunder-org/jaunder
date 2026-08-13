@@ -9,13 +9,32 @@ use common::token::{RawToken, TokenHash};
 use common::username::Username;
 use host::auth::{CredentialResolutionError, CredentialTransport, resolve_credential};
 use leptos::prelude::expect_context;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use storage::{SessionStorage, UserStorage};
 
 // `CookieSettings` lives in `host` (pure config data); re-exported so the
 // `web::auth::CookieSettings` path (the `server` crate provides it into leptos
 // context) keeps resolving.
 pub use host::auth::CookieSettings;
+
+/// Request-scoped signal that successful explicit authentication should retire
+/// an ambient browser session cookie from the response.
+#[derive(Clone, Default)]
+pub struct SessionCookieRetirement(Arc<AtomicBool>);
+
+impl SessionCookieRetirement {
+    pub fn request(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    #[must_use]
+    pub fn requested(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // AuthUser
@@ -77,7 +96,7 @@ where
             CredentialResolutionError::InvalidAuthorization => AuthRejection::InvalidAuthorization,
         })?;
         let transport = credential.transport;
-
+        let retire_cookie = parts.extensions.get::<SessionCookieRetirement>().cloned();
         let sessions = parts
             .extensions
             .get::<Arc<dyn SessionStorage>>()
@@ -87,6 +106,12 @@ where
             Ok(record) => {
                 host::metrics::session_validation(host::metrics::SessionOutcome::Ok);
                 verify_basic_username(&record.username, credential.expected_username.as_ref())?;
+                if credential.session_cookie_present
+                    && transport != CredentialTransport::Cookie
+                    && let Some(retirement) = retire_cookie
+                {
+                    retirement.request();
+                }
                 Ok(AuthUser {
                     user_id: record.user_id,
                     username: record.username,

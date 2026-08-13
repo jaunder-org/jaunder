@@ -26,6 +26,27 @@ use leptos::prelude::*;
 use crate::assets::StaticAssets;
 use ::storage::AppState;
 
+async fn retire_session_cookie(
+    axum::extract::State(secure): axum::extract::State<bool>,
+    mut request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let retirement = web::auth::SessionCookieRetirement::default();
+    request.extensions_mut().insert(retirement.clone());
+    let mut response = next.run(request).await;
+
+    if retirement.requested() {
+        let Ok(value) = host::auth::clear_session_cookie_header(secure).parse() else {
+            unreachable!("generated session cookie header must be valid");
+        };
+        response
+            .headers_mut()
+            .append(axum::http::header::SET_COOKIE, value);
+    }
+
+    response
+}
+
 pub fn create_router(
     state: Arc<AppState>,
     mailer: Arc<dyn common::mailer::MailSender>,
@@ -119,6 +140,10 @@ pub fn create_router(
         .layer(axum::Extension(site_config_ext))
         .layer(axum::Extension(media_ext))
         .layer(axum::Extension(feed_cache_ext))
-        .layer(axum::Extension(sessions_ext));
+        .layer(axum::Extension(sessions_ext))
+        .layer(axum::middleware::from_fn_with_state(
+            secure_cookies,
+            retire_session_cookie,
+        ));
     crate::observability::with_http_observability(app)
 }

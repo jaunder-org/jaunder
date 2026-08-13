@@ -33,12 +33,9 @@ pub fn make_app(state: &Arc<storage::AppState>, storage: &TempDir) -> axum::Rout
     jaunder::create_router(Arc::clone(state), noop_mailer(), false, storage_path)
 }
 
-/// How a `post_form` request authenticates. Cookie and bearer are mutually
-/// exclusive — no caller sends both — so they are one argument, not two.
-enum Auth<'a> {
-    None,
-    Cookie(&'a str),
-    Bearer(&'a str),
+struct RequestCredentials<'a> {
+    cookie: Option<&'a str>,
+    authorization: Option<&'a str>,
 }
 
 /// A POST body paired with its content type — the two always travel together, so
@@ -71,31 +68,46 @@ impl PostBody {
     }
 }
 
+/// Full response data for auth-sensitive request helpers.
+pub struct TestHttpResponse {
+    pub status: StatusCode,
+    pub set_cookies: Vec<String>,
+    pub body: String,
+}
+
+impl TestHttpResponse {
+    fn into_without_cookies(self) -> (StatusCode, String) {
+        (self.status, self.body)
+    }
+
+    fn into_first_cookie(self) -> (StatusCode, Option<String>, String) {
+        (self.status, self.set_cookies.into_iter().next(), self.body)
+    }
+}
+
 /// The single implementation behind every `post_form*`/`post_json` helper: build
 /// a fresh router from `state` (with `mailer` and `secure_cookies`), send one POST
-/// with the given `body` (and its content type), and return `(status, Set-Cookie,
-/// body)`. The public wrappers below fix the arguments most callers don't vary.
+/// with the given body, and return the complete auth-relevant response.
 async fn post_inner(
     state: &Arc<storage::AppState>,
     mailer: Arc<dyn MailSender>,
     uri: &str,
     body: PostBody,
-    auth: Auth<'_>,
+    credentials: RequestCredentials<'_>,
     user_agent: Option<&str>,
     secure_cookies: bool,
-) -> (StatusCode, Option<String>, String) {
+) -> TestHttpResponse {
     ensure_server_fns_registered();
 
     let mut builder = Request::builder()
         .method("POST")
         .uri(uri)
         .header(header::CONTENT_TYPE, body.content_type());
-    match auth {
-        Auth::None => {}
-        Auth::Cookie(c) => builder = builder.header(header::COOKIE, c),
-        Auth::Bearer(token) => {
-            builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
-        }
+    if let Some(cookie) = credentials.cookie {
+        builder = builder.header(header::COOKIE, cookie);
+    }
+    if let Some(authorization) = credentials.authorization {
+        builder = builder.header(header::AUTHORIZATION, authorization);
     }
     if let Some(ua) = user_agent {
         builder = builder.header(header::USER_AGENT, ua);
@@ -113,17 +125,27 @@ async fn post_inner(
     let response = app.oneshot(request).await.expect("router oneshot failed");
 
     let status = response.status();
-    let set_cookie = response.headers().get(header::SET_COOKIE).map(|v| {
-        v.to_str()
-            .expect("Set-Cookie header is not valid UTF-8")
-            .to_string()
-    });
+    let set_cookies = response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .map(|value| {
+            value
+                .to_str()
+                .expect("Set-Cookie header is not valid UTF-8")
+                .to_owned()
+        })
+        .collect();
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("failed to read response body");
-    let body_str = String::from_utf8(bytes.to_vec()).expect("response body is not valid UTF-8");
+    let body = String::from_utf8(bytes.to_vec()).expect("response body is not valid UTF-8");
 
-    (status, set_cookie, body_str)
+    TestHttpResponse {
+        status,
+        set_cookies,
+        body,
+    }
 }
 
 /// Canonical case: noop mailer, secure cookies, cookie auth, `Set-Cookie` dropped.
@@ -133,18 +155,20 @@ pub async fn post_form(
     body: impl Into<String>,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
-    let auth = cookie.map_or(Auth::None, Auth::Cookie);
-    let (status, _set_cookie, body) = post_inner(
+    post_inner(
         state,
         noop_mailer(),
         uri,
         PostBody::Form(body.into()),
-        auth,
+        RequestCredentials {
+            cookie,
+            authorization: None,
+        },
         None,
         true,
     )
-    .await;
-    (status, body)
+    .await
+    .into_without_cookies()
 }
 
 /// Shared typed/fixture server-function dispatcher. `F` selects the generated
@@ -161,13 +185,15 @@ where
     F: server_fn::ServerFn,
     I: serde::Serialize,
 {
-    let auth = cookie.map_or(Auth::None, Auth::Cookie);
     post_inner(
         state,
         mailer,
         F::PATH,
         PostBody::server_fn(input),
-        auth,
+        RequestCredentials {
+            cookie,
+            authorization: None,
+        },
         user_agent,
         secure_cookies,
     )
@@ -309,21 +335,23 @@ pub async fn post_form_with_mailer<M: MailSender + 'static>(
     body: impl Into<String>,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
-    let auth = cookie.map_or(Auth::None, Auth::Cookie);
     // The router consumes an owned `Arc<dyn MailSender>`; borrow at the call site and
     // do the single clone-and-unsize (`Arc<M>` -> `Arc<dyn MailSender>`) here.
     let mailer: Arc<dyn MailSender> = mailer.clone();
-    let (status, _set_cookie, body) = post_inner(
+    post_inner(
         state,
         mailer,
         uri,
         PostBody::Form(body.into()),
-        auth,
+        RequestCredentials {
+            cookie,
+            authorization: None,
+        },
         None,
         true,
     )
-    .await;
-    (status, body)
+    .await
+    .into_without_cookies()
 }
 
 /// Exposes the `secure_cookies` toggle and returns the `Set-Cookie` value —
@@ -335,35 +363,67 @@ pub async fn post_form_with_secure_flag(
     cookie: Option<&str>,
     secure_cookies: bool,
 ) -> (StatusCode, Option<String>, String) {
-    let auth = cookie.map_or(Auth::None, Auth::Cookie);
     post_inner(
         state,
         noop_mailer(),
         uri,
         PostBody::Form(body.into()),
-        auth,
+        RequestCredentials {
+            cookie,
+            authorization: None,
+        },
         None,
         secure_cookies,
     )
     .await
+    .into_first_cookie()
 }
 
 /// Authenticates with an `Authorization: Bearer <token>` header instead of a
-/// cookie. Returns the `Set-Cookie` value like the other auth helpers.
+/// cookie. Returns the first `Set-Cookie` value like the existing auth helpers.
 pub async fn post_form_with_bearer(
     state: &Arc<storage::AppState>,
     uri: &str,
     body: impl Into<String>,
     bearer: &str,
 ) -> (StatusCode, Option<String>, String) {
+    let authorization = format!("Bearer {bearer}");
     post_inner(
         state,
         noop_mailer(),
         uri,
         PostBody::Form(body.into()),
-        Auth::Bearer(bearer),
+        RequestCredentials {
+            cookie: None,
+            authorization: Some(&authorization),
+        },
         None,
         true,
+    )
+    .await
+    .into_first_cookie()
+}
+
+/// Sends form data with cookie and Authorization headers controlled independently.
+pub async fn post_form_with_credentials(
+    state: &Arc<storage::AppState>,
+    uri: &str,
+    body: impl Into<String>,
+    cookie: Option<&str>,
+    authorization: Option<&str>,
+    secure_cookies: bool,
+) -> TestHttpResponse {
+    post_inner(
+        state,
+        noop_mailer(),
+        uri,
+        PostBody::Form(body.into()),
+        RequestCredentials {
+            cookie,
+            authorization,
+        },
+        None,
+        secure_cookies,
     )
     .await
 }
@@ -377,18 +437,33 @@ pub async fn post_json(
     body: serde_json::Value,
     cookie: Option<&str>,
 ) -> (StatusCode, String) {
-    let auth = cookie.map_or(Auth::None, Auth::Cookie);
-    let (status, _set_cookie, body) = post_inner(
+    post_json_with_credentials(state, uri, body, cookie, None, true)
+        .await
+        .into_without_cookies()
+}
+
+/// Sends JSON with cookie and Authorization headers controlled independently.
+pub async fn post_json_with_credentials(
+    state: &Arc<storage::AppState>,
+    uri: &str,
+    body: serde_json::Value,
+    cookie: Option<&str>,
+    authorization: Option<&str>,
+    secure_cookies: bool,
+) -> TestHttpResponse {
+    post_inner(
         state,
         noop_mailer(),
         uri,
         PostBody::Json(body.to_string()),
-        auth,
+        RequestCredentials {
+            cookie,
+            authorization,
+        },
         None,
-        true,
+        secure_cookies,
     )
-    .await;
-    (status, body)
+    .await
 }
 
 /// A single `multipart/form-data` file field, as [`post_multipart`] sends it.

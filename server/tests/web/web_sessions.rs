@@ -6,7 +6,10 @@ use rstest_reuse::*;
 use common::test_support::parse_session_label;
 use server_fn::ServerFn;
 
-use crate::helpers::{create_session_for, create_user_and_session, post_form};
+use crate::helpers::{
+    TestHttpResponse, create_session_for, create_user_and_session, post_form,
+    post_form_with_credentials,
+};
 use storage::test_support::{Backend, TestEnv, backends};
 
 #[apply(backends)]
@@ -60,6 +63,112 @@ async fn list_sessions_marks_current_session(#[case] backend: Backend) {
         body.contains("\"is_current\":true"),
         "current session should be marked: {body}"
     );
+}
+#[apply(backends)]
+#[tokio::test]
+async fn bearer_identity_wins_and_expires_simultaneous_cookie(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie_user = create_user_and_session(&state).await;
+    let bearer_user = create_user_and_session(&state).await;
+    let authorization = format!("Bearer {}", bearer_user.token);
+
+    let response = post_form_with_credentials(
+        &state,
+        <web::sessions::List as ServerFn>::PATH,
+        "",
+        Some(&cookie_user.cookie()),
+        Some(&authorization),
+        true,
+    )
+    .await;
+
+    assert_eq!(response.status, StatusCode::OK);
+    let sessions: Vec<web::sessions::Info> = serde_json::from_str(&response.body).unwrap();
+    let current = sessions.iter().find(|session| session.is_current).unwrap();
+    assert_eq!(
+        current.token_hash,
+        host::token::hash(&bearer_user.token).unwrap()
+    );
+    assert!(
+        response.set_cookies.iter().any(|value| {
+            value == "session=; HttpOnly; SameSite=Lax; Path=/; Secure; Max-Age=0"
+        })
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn bearer_matching_cookie_still_expires_cookie(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let session = create_user_and_session(&state).await;
+    let authorization = format!("Bearer {}", session.token);
+
+    let response = post_form_with_credentials(
+        &state,
+        <web::sessions::List as ServerFn>::PATH,
+        "",
+        Some(&session.cookie()),
+        Some(&authorization),
+        true,
+    )
+    .await;
+
+    assert_eq!(response.status, StatusCode::OK);
+    assert_eq!(
+        response.set_cookies,
+        ["session=; HttpOnly; SameSite=Lax; Path=/; Secure; Max-Age=0"]
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn explicit_auth_failures_do_not_expire_valid_cookie(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_user_and_session(&state).await.cookie();
+
+    for authorization in [
+        "Bearer unknown-token",
+        "Bearer has space",
+        "Negotiate unsupported",
+    ] {
+        let TestHttpResponse {
+            status,
+            set_cookies,
+            ..
+        } = post_form_with_credentials(
+            &state,
+            <web::sessions::List as ServerFn>::PATH,
+            "",
+            Some(&cookie),
+            Some(authorization),
+            true,
+        )
+        .await;
+
+        assert_ne!(status, StatusCode::OK, "{authorization}");
+        assert!(set_cookies.is_empty(), "{authorization}: {set_cookies:?}");
+    }
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn bearer_only_success_does_not_emit_cookie_expiry(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let session = create_user_and_session(&state).await;
+    let authorization = format!("Bearer {}", session.token);
+
+    let response = post_form_with_credentials(
+        &state,
+        <web::sessions::List as ServerFn>::PATH,
+        "",
+        None,
+        Some(&authorization),
+        true,
+    )
+    .await;
+
+    assert_eq!(response.status, StatusCode::OK);
+    assert!(response.set_cookies.is_empty());
 }
 
 #[apply(backends)]
