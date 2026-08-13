@@ -1,6 +1,7 @@
 //! Shared e2e zero-panic verifier.
 
-use std::io::ErrorKind;
+use std::fs::File;
+use std::io::{BufRead, BufReader, ErrorKind};
 use std::path::Path;
 
 use anyhow::Context;
@@ -31,24 +32,29 @@ struct PanicReport {
 /// every distinct report when either input contains the raw panic marker.
 pub fn verify_no_panics(capture_dir: &Path, server_log: &Path) -> anyhow::Result<()> {
     let diag_path = capture_dir.join(host::capture::Stream::Diag.filename());
-    let diag = match std::fs::read(&diag_path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == ErrorKind::NotFound => Vec::new(),
+    let mut reports = Vec::new();
+    match File::open(&diag_path) {
+        Ok(file) => collect_reports(BufReader::new(file), &mut reports)
+            .with_context(|| format!("failed to read diagnostic log {}", diag_path.display()))?,
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
         Err(error) => {
             return Err(error)
                 .with_context(|| format!("failed to read diagnostic log {}", diag_path.display()));
         }
-    };
-    let server = std::fs::read(server_log).with_context(|| {
+    }
+
+    let server = File::open(server_log).with_context(|| {
         format!(
             "failed to read required server log {}",
             server_log.display()
         )
     })?;
-
-    let mut reports = Vec::new();
-    collect_reports(&diag, &mut reports);
-    collect_reports(&server, &mut reports);
+    collect_reports(BufReader::new(server), &mut reports).with_context(|| {
+        format!(
+            "failed to read required server log {}",
+            server_log.display()
+        )
+    })?;
 
     if reports.is_empty() {
         return Ok(());
@@ -62,21 +68,29 @@ pub fn verify_no_panics(capture_dir: &Path, server_log: &Path) -> anyhow::Result
     anyhow::bail!(message)
 }
 
-fn collect_reports(input: &[u8], reports: &mut Vec<PanicReport>) {
-    for line in input.split(|byte| *byte == b'\n') {
-        let Some(marker_at) = find_bytes(line, PANIC_MARKER).filter(|_| {
+fn collect_reports(mut input: impl BufRead, reports: &mut Vec<PanicReport>) -> std::io::Result<()> {
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if input.read_until(b'\n', &mut line)? == 0 {
+            return Ok(());
+        }
+        while matches!(line.last(), Some(b'\n' | b'\r')) {
+            line.pop();
+        }
+        let Some(marker_at) = find_bytes(&line, PANIC_MARKER).filter(|_| {
             !ALLOWED_PANICS
                 .iter()
-                .any(|allowed| !allowed.is_empty() && find_bytes(line, allowed).is_some())
+                .any(|allowed| !allowed.is_empty() && find_bytes(&line, allowed).is_some())
         }) else {
             continue;
         };
 
-        let key = report_key(line, marker_at);
+        let key = report_key(&line, marker_at);
         if reports.iter().all(|report| report.key != key) {
             reports.push(PanicReport {
                 key,
-                line: line.to_vec(),
+                line: line.clone(),
             });
         }
     }
@@ -168,6 +182,18 @@ mod tests {
     }
 
     #[test]
+    fn marker_split_across_reader_chunks_is_detected() {
+        let input = std::io::Cursor::new(b"prefix panicked at src/chunk.rs:2:3: boom\n");
+        let mut reports = Vec::new();
+
+        collect_reports(BufReader::with_capacity(4, input), &mut reports)
+            .expect("chunked scan succeeds");
+
+        assert_eq!(reports.len(), 1);
+        assert!(reports[0].line.ends_with(b"src/chunk.rs:2:3: boom"));
+    }
+
+    #[test]
     fn marker_without_location_still_fails() {
         let error = verify(Some(b"torn panicked at\n"), b"clean\n")
             .expect_err("marker-only line must fail")
@@ -220,6 +246,15 @@ mod tests {
     }
 
     #[test]
+    fn diagnostic_open_failure_is_infrastructure_error() {
+        let capture = std::path::PathBuf::from("/").join("x".repeat(5000));
+        let error = verify_no_panics(&capture, Path::new("/unused-server.log"))
+            .expect_err("invalid diagnostic path must fail")
+            .to_string();
+        assert!(error.contains("diagnostic log"), "{error}");
+    }
+
+    #[test]
     fn required_server_log_read_failure_is_infrastructure_error() {
         let dir = tempfile::tempdir().expect("tempdir");
         let capture = dir.path().join("capture");
@@ -230,5 +265,20 @@ mod tests {
             .to_string();
         assert!(error.contains("server log"), "{error}");
         assert!(error.contains("missing-server.log"), "{error}");
+    }
+
+    #[test]
+    fn required_server_log_stream_failure_is_infrastructure_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let capture = dir.path().join("capture");
+        std::fs::create_dir_all(&capture).expect("capture dir");
+        let server_directory = dir.path().join("server-log-directory");
+        std::fs::create_dir(&server_directory).expect("server log directory");
+
+        let error = verify_no_panics(&capture, &server_directory)
+            .expect_err("unreadable server stream must fail")
+            .to_string();
+        assert!(error.contains("server log"), "{error}");
+        assert!(error.contains("server-log-directory"), "{error}");
     }
 }
