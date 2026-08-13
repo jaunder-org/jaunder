@@ -2,8 +2,9 @@
 //! newtype — `common::invite::ProfferedInviteCode` and
 //! `common::password::ProfferedPassword` — to `#[macros::server]` function
 //! **parameter** positions, including fields of a request aggregate that is itself
-//! such a parameter. Wasm-only `web` component files may stage the inbound value
-//! long enough to assemble that request; they cannot define a server response.
+//! such a parameter. Wasm-only `web` component files may parse or field-stage the
+//! inbound value long enough to assemble that request; they cannot define a server
+//! response.
 //!
 //! An inbound secret is the serde-capable *inbound* half of an ADR-0063
 //! inbound-secret type split (`#[str_newtype(secret, serde)]`): a client submits
@@ -188,6 +189,7 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
                         line.contains(&format!("Field::<{}>", policed.name))
                             || line.contains(&format!("ValidatedInput<{}>", policed.name))
                             || line.contains(&format!("ValidatedTextarea<{}>", policed.name))
+                            || line.contains(&format!("parse::<{}>", policed.name))
                     });
                 if is_client_staging {
                     continue;
@@ -352,6 +354,21 @@ fn view() { view! { <ValidatedInput<ProfferedPassword> /> } }
 ";
         assert_eq!(
             problems(&[("web/src/auth/component.rs".to_string(), source.to_string())]),
+            None
+        );
+    }
+
+    #[test]
+    fn wasm_component_may_parse_an_inbound_secret_for_dispatch() {
+        let source = "\
+use common::invite::ProfferedInviteCode;
+fn form(code: &str) { let parsed = code.parse::<ProfferedInviteCode>(); }
+";
+        assert_eq!(
+            problems(&[(
+                "web/src/registration/component.rs".to_string(),
+                source.to_string()
+            )]),
             None
         );
     }

@@ -7,6 +7,7 @@ import {
   waitForSelector,
   signInAs,
   fillLoginForm,
+  failServerFn,
   stallServerFn,
 } from "./helpers";
 import { SEL } from "./selectors";
@@ -21,6 +22,10 @@ test("register page shows form", async ({ page }) => {
 });
 
 test("register rejects a too-short password client-side", async ({ page }) => {
+  let requests = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/registration/register")) requests += 1;
+  });
   // Holdout (spec D6): proves client-side validation.
   await goto(page, "/register");
 
@@ -30,10 +35,41 @@ test("register rejects a too-short password client-side", async ({ page }) => {
 
   await expect(page.locator(SEL.error)).toBeVisible();
   await expect(page.locator(SEL.submit)).toBeDisabled();
+  await page.locator(SEL.password).press("Enter");
+  expect(requests).toBe(0);
 
   // A valid password clears the error and enables submit.
   await page.fill(SEL.password, "longenough123");
   await expect(page.locator(SEL.submit)).toBeEnabled();
+});
+
+test("register pending state prevents duplicate dispatch", async ({ page }) => {
+  let requests = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/registration/register")) requests += 1;
+  });
+  await goto(page, "/register");
+  const release = await stallServerFn(page, "registration/register");
+  await page.fill(SEL.username, `pending${Date.now()}`);
+  await page.fill(SEL.password, "newpassword123");
+  await click(page, SEL.submit);
+  await expect.poll(() => requests).toBe(1);
+  await expect(page.locator(SEL.submit)).toBeDisabled();
+  await page.locator(SEL.password).press("Enter");
+  expect(requests).toBe(1);
+  release();
+  await waitForSelector(page, SEL.logoutLink);
+});
+
+test("register server failure renders error", async ({ page }) => {
+  await failServerFn(page, "registration/register");
+  await goto(page, "/register");
+  await page.fill(SEL.username, `failure${Date.now()}`);
+  await page.fill(SEL.password, "newpassword123");
+  await click(page, SEL.submit);
+  await expect(page.locator(SEL.error)).toBeVisible();
+  await expect(page).toHaveURL(`${BASE_URL}/register`);
+  await expect(page.locator(SEL.logoutLink)).toHaveCount(0);
 });
 
 test("register with open policy succeeds", async ({ page }) => {

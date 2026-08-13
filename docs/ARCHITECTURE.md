@@ -1035,9 +1035,9 @@ check guesses whether fields are cohesive.
 The same migration extends `proffered-secret` without weakening its directional
 boundary: an inbound-secret field is admitted only on a `*Request` type named by
 a server-function parameter, while a wasm-only vertical `component.rs` may name
-one only as `Field<Proffered*>` or its validated input renderer for dispatch
-staging. Returns, response DTOs, helpers, and every other occurrence remain
-rejected by the gate.
+one only as `Field<Proffered*>`, its validated input renderer, or an explicit
+`parse::<Proffered*>()` for dispatch staging. Returns, response DTOs, helpers,
+and every other occurrence remain rejected by the gate.
 
 ### Reactive idioms
 

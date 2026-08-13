@@ -131,17 +131,17 @@ pub async fn register(request: RegistrationRequest) -> WebResult<()>;
 
 Derive `Debug, Clone, Serialize, Deserialize`.
 
-- [ ] Adapt backend registration posts to nested keys. Add
+- [x] Adapt backend registration posts to nested keys. Add
       `register_nested_request_maps_open_fields` (distinct username/password,
       `invite_code: None`) and `register_nested_request_maps_invite_code` (exact
       `Some` code is redeemed). Assert created username, password
       authentication, session cookie, and invite redemption—not only status.
-- [ ] Run
+- [x] Run
       `devtool run -- devtool pg run -- cargo nextest run -p jaunder web::web_auth`;
       expect RED.
-- [ ] Implement the aggregate/handler and update Rust callers; rerun; expect
+- [x] Implement the aggregate/handler and update Rust callers; rerun; expect
       GREEN on both backends.
-- [ ] Add Playwright tests `register pending state prevents duplicate dispatch`,
+- [x] Add Playwright tests `register pending state prevents duplicate dispatch`,
       `register invalid fields do not dispatch`, and
       `register server failure renders error`; delay/count
       `/api/registration/register`, assert disabled + exactly one request after
@@ -150,13 +150,13 @@ Derive `Debug, Clone, Serialize, Deserialize`.
       remain the success/redirect/session/hidden-code oracles. The failure test
       intercepts the endpoint, asserts the visible error, and asserts no
       navigation/session establishment.
-- [ ] Run `devtool run -- cargo xtask e2e-local auth.spec.ts` and
+- [x] Run `devtool run -- cargo xtask e2e-local auth.spec.ts` and
       `devtool run -- cargo xtask e2e-local invite.spec.ts`; expect RED.
-- [ ] Replace registration `ActionForm`, use `Field<ProfferedPassword>`, parse
+- [x] Replace registration `ActionForm`, use `Field<ProfferedPassword>`, parse
       the query invite code into `Option<ProfferedInviteCode>` before dispatch,
       and preserve policy guidance/error/redirect/session behavior. Rerun both
       specs; expect GREEN.
-- [ ] Mandatory stage/check sequence; commit
+- [x] Mandatory stage/check sequence; commit
       `feat(web): aggregate registration requests`.
 
 ### Task 3: Invite-creation request
