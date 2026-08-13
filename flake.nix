@@ -1143,7 +1143,7 @@
                   + "-A clippy::too_many_arguments";
               }
             );
-            # The 7 non-compiling static checks (#188), unified behind one `devtool
+            # The non-compiling static checks (#188), unified behind one `devtool
             # check --all` — the same command the host verify ladder runs. Not a crane
             # derivation: none of these compiles, so no vendored deps are needed; a plain
             # runCommand over a broad source tree suffices (and stays cheap). The

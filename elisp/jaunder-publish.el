@@ -23,6 +23,11 @@
 
 ;;; Code:
 
+;; `plz' is required directly, not left to arrive via `jaunder-transport': the
+;; retry below dispatches on the `plz-error' condition, and `condition-case'
+;; silently never matches a condition symbol that no `define-error' has run for.
+(require 'plz)
+
 (require 'jaunder-entry)
 (require 'jaunder-config)
 (require 'jaunder-datetime)
@@ -165,7 +170,7 @@ retry."
       (let ((r (condition-case err
                    (jaunder--http-request "POST" url xml jaunder--entry-content-type
                                           (list (cons "Idempotency-Key" key)))
-                 (error (if (< attempt 3) 'retry (signal (car err) (cdr err)))))))
+                 (plz-error (if (< attempt 3) 'retry (signal (car err) (cdr err)))))))
         (cond
          ((eq r 'retry) (sleep-for (pop delays)))
          ((and (integerp (plist-get r :status))

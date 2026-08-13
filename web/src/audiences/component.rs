@@ -45,7 +45,7 @@ invalidator_scope! {
 #[component]
 pub fn AudiencesPage() -> impl IntoView {
     // The audience list: a keyed reactive store, refetched via the `AudienceList` invalidator
-    // and `patch`ed in place on success (`Invalidator::patched` owns the plumbing) — so
+    // and `patch`ed in place on success (`client::reactive::patched` owns the plumbing) — so
     // unchanged rows keep their DOM (and their `MemberChecklist`'s loaded members) and a rename
     // updates just that row's name. `state` drives the sibling loading/empty/error node.
     let list = AudienceList(Invalidator::new());
