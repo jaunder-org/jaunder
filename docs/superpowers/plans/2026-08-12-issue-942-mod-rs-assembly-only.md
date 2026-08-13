@@ -385,20 +385,26 @@ drafted, gitignored) · `CONTRIBUTING.md` · `docs/ARCHITECTURE.md`
 > This `mod.rs` has **no** `mod` declarations today — it is 100% items. After
 > this task it is pure assembly, which is the intended outcome.
 
-- [ ] `shell.rs`: `pub struct Shell(pub Arc<str>)` with `#[derive(Clone)]`.
+- [x] `shell.rs`: `pub struct Shell(pub Arc<str>)` with `#[derive(Clone)]`.
       `Shell` is named externally as `jaunder::projector::Shell`
       (`server/tests/projector/mod.rs:30`), so it must stay re-exported.
-- [ ] `document.rs`: `pub fn document`, `fn cacheable`, `fn shell_response`,
+- [x] `document.rs`: `pub fn document`, `fn cacheable`, `fn shell_response`,
       `fn permalink_response`, `fn timeline_response`, `fn tag_response`, and
       the `#[cfg(test)] mod tests` (6 tests) — the tests reach these via
       `super::`, so they travel together and the private fns need no widening.
       The tests use `include_str!("../../../csr/index.html")`, resolved relative
       to the containing file; a same-directory sibling keeps it valid — **do
-      not** nest deeper.
-- [ ] `handlers.rs`: `pub fn register<S>`, `type PermalinkPath`, and the five
+      not** nest deeper. → all 6 tests do home here; the `include_str!` path is
+      unchanged. **But "no widening" was wrong:** all five response mappers are
+      called by the handlers, which are now across a file seam, so each becomes
+      `pub(super)`. That is not an actual widening — `pub(super)` from a sibling
+      means "visible inside `projector/`", which is exactly the scope a private
+      item in the old `mod.rs` already had.
+- [x] `handlers.rs`: `pub fn register<S>`, `type PermalinkPath`, and the five
       private `async fn` handlers. `register` is their only consumer, so keeping
-      them together avoids any `pub(super)` widening (cohesion rule 2).
-- [ ] `mod.rs`: keep the `//!` doc; add the three `mod` lines and
+      them together avoids any `pub(super)` widening (cohesion rule 2). → holds
+      for the handlers themselves; they stay private.
+- [x] `mod.rs`: keep the `//!` doc; add the three `mod` lines and
       `pub use shell::Shell; pub use document::document; pub use handlers::register;`.
 - **Verify:** `devtool run -- cargo nextest run -p jaunder projector` — PASS.
 - **Commit:**
