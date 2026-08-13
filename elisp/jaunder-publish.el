@@ -23,6 +23,11 @@
 
 ;;; Code:
 
+;; `plz' is required directly, not left to arrive via `jaunder-transport': the
+;; retry below dispatches on the `plz-error' condition, and `condition-case'
+;; silently never matches a condition symbol that no `define-error' has run for.
+(require 'plz)
+
 (require 'jaunder-entry)
 (require 'jaunder-config)
 (require 'jaunder-datetime)

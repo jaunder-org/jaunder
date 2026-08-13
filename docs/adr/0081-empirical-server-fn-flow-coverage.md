@@ -89,8 +89,8 @@ Concretely:
   > addendum). The gate survives as the recordable-type default-deny and its
   > siblings. The decision this bullet records — match the name forward from the
   > inventory, never invert it — is unchanged, and the cautionary tale is
-  > stronger for it: the regime moved a third time, and the extractor needed no
-  > edit.
+  > stronger for it: authorship of the name moved again and the extractor needed
+  > no edit, because it computes candidates rather than parsing them.
 
 - **`code.namespace` disambiguates, not the name.** `web.<vertical>.<ident>`
   uses the module's _first_ segment, so `posts::api` and `posts::api::listing`
