@@ -4,12 +4,14 @@ use macros::StrNewtype;
 use thiserror::Error;
 
 const MIN_LENGTH: usize = 8;
+const MAX_LENGTH: usize = 512;
 
-/// A validated plaintext password with a minimum length of [`MIN_LENGTH`].
+/// A validated plaintext password containing between [`MIN_LENGTH`] and
+/// [`MAX_LENGTH`] Unicode scalar values.
 ///
-/// Constructed via [`FromStr`]; passwords that are too short are rejected at
-/// the boundary. Interior code works only with [`Password`] values and never
-/// with raw strings.
+/// Constructed via [`FromStr`]; passwords outside those inclusive bounds are
+/// rejected at the boundary. Validation does not normalize the input, so
+/// interior code and Argon2 retain the exact submitted UTF-8 bytes.
 ///
 /// Adopts the [`StrNewtype`] `secret` surface (ADR-0063 §2): a redacting `Debug`
 /// and borrowed `AsRef<str>` access for hashing, with no `Display`, serde, or
@@ -23,6 +25,8 @@ pub struct Password(String);
 pub enum PasswordError {
     #[error("password must be at least {MIN_LENGTH} characters")]
     PasswordTooShort,
+    #[error("password must be at most {MAX_LENGTH} characters")]
+    PasswordTooLong,
     #[error("hashing failed: {0}")]
     HashingFailed(String),
     #[error("verification failed: {0}")]
@@ -38,13 +42,20 @@ impl FromStr for Password {
     }
 }
 
-/// The shared shape invariant for a plaintext password: at least [`MIN_LENGTH`]
-/// characters. Both [`Password`] and [`ProfferedPassword`] delegate to it, so the
-/// inbound wire type and the domain type cannot drift (mirrors invite codes'
-/// `common::token::validate_shape`).
+/// The shared shape invariant for a plaintext password: between [`MIN_LENGTH`]
+/// and [`MAX_LENGTH`] Unicode scalar values, inclusive. Both [`Password`] and
+/// [`ProfferedPassword`] delegate to it, so the inbound wire type and the domain
+/// type cannot drift (mirrors invite codes' `common::token::validate_shape`).
+///
+/// Counting scalar values without normalization preserves the submitted bytes
+/// while avoiding UTF-8 byte length as a proxy for characters.
 fn validate_password_shape(s: &str) -> Result<(), PasswordError> {
-    if s.len() < MIN_LENGTH {
+    let length = s.chars().count();
+    if length < MIN_LENGTH {
         return Err(PasswordError::PasswordTooShort);
+    }
+    if length > MAX_LENGTH {
+        return Err(PasswordError::PasswordTooLong);
     }
     Ok(())
 }
@@ -148,34 +159,74 @@ mod tests {
     use super::*;
 
     #[test]
-    fn password_accepts_minimum_length() {
-        assert!("12345678".parse::<Password>().is_ok());
-        assert!("a longer passphrase".parse::<Password>().is_ok());
+    fn password_types_accept_inclusive_unicode_scalar_bounds() {
+        assert_eq!(MIN_LENGTH, 8);
+        assert_eq!(MAX_LENGTH, 512);
+
+        let minimum = "é".repeat(MIN_LENGTH);
+        let maximum = "a".repeat(MAX_LENGTH);
+
+        assert_eq!(minimum.chars().count(), MIN_LENGTH);
+        assert!(minimum.len() > MIN_LENGTH);
+        assert!(minimum.parse::<Password>().is_ok());
+        assert!(minimum.parse::<ProfferedPassword>().is_ok());
+
+        assert_eq!(maximum.chars().count(), MAX_LENGTH);
+        assert!(maximum.parse::<Password>().is_ok());
+        assert!(maximum.parse::<ProfferedPassword>().is_ok());
     }
 
     #[test]
-    fn password_rejects_too_short() {
-        assert!("".parse::<Password>().is_err());
-        assert!("short".parse::<Password>().is_err());
-        assert!("1234567".parse::<Password>().is_err());
+    fn password_types_reject_outside_unicode_scalar_bounds_without_echoing_input() {
+        let too_short = "é".repeat(MIN_LENGTH - 1);
+        let too_long = "x".repeat(MAX_LENGTH + 1);
+        assert_eq!(too_long.chars().count(), MAX_LENGTH + 1);
+
+        let password_short = too_short.parse::<Password>().unwrap_err();
+        let proffered_short = too_short.parse::<ProfferedPassword>().unwrap_err();
+        assert!(matches!(password_short, PasswordError::PasswordTooShort));
+        assert!(matches!(proffered_short, PasswordError::PasswordTooShort));
+        assert!(
+            password_short
+                .to_string()
+                .contains(&format!("at least {MIN_LENGTH} characters"))
+        );
+        assert!(!password_short.to_string().contains(&too_short));
+
+        let password_long = too_long.parse::<Password>().unwrap_err();
+        let proffered_long = too_long.parse::<ProfferedPassword>().unwrap_err();
+        assert!(matches!(password_long, PasswordError::PasswordTooLong));
+        assert!(matches!(proffered_long, PasswordError::PasswordTooLong));
+        assert!(
+            password_long
+                .to_string()
+                .contains(&format!("at most {MAX_LENGTH} characters"))
+        );
+        assert!(!password_long.to_string().contains(&too_long));
     }
 
     #[test]
-    fn proffered_from_str_valid_and_invalid() {
-        assert!("12345678".parse::<ProfferedPassword>().is_ok());
-        assert!("short".parse::<ProfferedPassword>().is_err());
-        assert!("".parse::<ProfferedPassword>().is_err());
+    fn password_validation_does_not_normalize_before_counting() {
+        let decomposed = "e\u{301}".repeat(7);
+        assert_eq!(decomposed.chars().count(), 14);
+
+        let password: Password = decomposed.parse().unwrap();
+        let proffered: ProfferedPassword = decomposed.parse().unwrap();
+        assert_eq!(password.as_ref(), decomposed);
+        assert_eq!(proffered.as_ref(), decomposed);
     }
 
     #[test]
-    fn proffered_serde_roundtrips_and_validates_on_the_wire() {
-        let p: ProfferedPassword = "password123".parse().unwrap();
-        assert_eq!(serde_json::to_string(&p).unwrap(), "\"password123\"");
-        let back: ProfferedPassword = serde_json::from_str("\"password123\"").unwrap();
-        assert_eq!(back.as_ref(), "password123");
-        // Deserialize routes through the shared shape validator, so a too-short
-        // password is rejected on the wire.
-        assert!(serde_json::from_str::<ProfferedPassword>("\"short\"").is_err());
+    fn proffered_serde_enforces_unicode_scalar_bounds() {
+        let accepted: ProfferedPassword = "password123".parse().unwrap();
+        assert_eq!(serde_json::to_string(&accepted).unwrap(), "\"password123\"");
+        let roundtrip: ProfferedPassword = serde_json::from_str("\"password123\"").unwrap();
+        assert_eq!(roundtrip.as_ref(), "password123");
+
+        let too_short = serde_json::to_string(&"é".repeat(MIN_LENGTH - 1)).unwrap();
+        let too_long = serde_json::to_string(&"a".repeat(MAX_LENGTH + 1)).unwrap();
+        assert!(serde_json::from_str::<ProfferedPassword>(&too_short).is_err());
+        assert!(serde_json::from_str::<ProfferedPassword>(&too_long).is_err());
     }
 
     #[test]
