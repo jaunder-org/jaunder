@@ -683,21 +683,21 @@ commit.
 **Interfaces:**
 
 - `optional_auth()` is the single absent-cookie/failed-cookie fallback policy
-  for viewer, session-reconcile, and soft-operator paths.
+  for viewer, session-reconcile, soft-operator, and logout paths.
 - Original username input must be ASCII alphanumeric, `_`, or `-`; only then is
   ASCII case canonicalized.
 
 - [x] **Step 1: Reproduce both final-review findings**
 
 Add a username unit test for `Kevin` and a dual-backend integration test that
-sends a valid cookie plus malformed `Authorization` to all three optional-auth
+sends a valid cookie plus malformed `Authorization` to all four optional-auth
 server functions. Expected before the fix: both tests FAIL.
 
 - [x] **Step 2: Centralize optional-auth fallback and enforce ASCII input**
 
 Move the cookie-only anonymous fallback into `optional_auth()` and use it from
-`viewer_identity`, `get_session`, and `is_operator_soft`. Check the original
-username bytes before `to_ascii_lowercase()`.
+`viewer_identity`, `get_session`, `is_operator_soft`, and `logout`. Check the
+original username bytes before `to_ascii_lowercase()`.
 
 - [x] **Step 3: Remove unused missing-storage transport provenance**
 

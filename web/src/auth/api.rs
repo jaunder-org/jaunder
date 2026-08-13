@@ -18,7 +18,7 @@ use common::username::Username;
 // sibling `server` module's helpers plus the crate-level server-only dependencies.
 #[cfg(feature = "server")]
 use {
-    super::server::{clear_session_cookie, optional_auth, require_auth, set_session_cookie},
+    super::server::{clear_session_cookie, optional_auth, set_session_cookie},
     common::password::Password,
     leptos::prelude::*,
     std::sync::Arc,
@@ -130,10 +130,12 @@ pub async fn login(request: LoginRequest) -> WebResult<LoginResponse> {
     })
 }
 
-/// Revokes the current session and clears the `session` cookie.
+/// Revokes the current session and clears the `session` cookie. Missing or stale
+/// cookie-only credentials still clear the cookie; explicit Authorization failures
+/// reject without clearing it.
 #[macros::server]
 pub async fn logout() -> WebResult<()> {
-    if let Ok(auth) = require_auth().await {
+    if let Some(auth) = optional_auth().await? {
         let sessions = expect_context::<Arc<dyn SessionStorage>>();
         sessions.revoke_session(&auth.token_hash).await?;
     }

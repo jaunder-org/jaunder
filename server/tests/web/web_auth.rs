@@ -969,6 +969,7 @@ async fn optional_auth_endpoints_reject_explicit_auth_failure(#[case] backend: B
 
     for path in [
         <web::auth::GetSession as ServerFn>::PATH,
+        <web::auth::Logout as ServerFn>::PATH,
         <web::backup::IsWarningVisible as ServerFn>::PATH,
         <web::site::IsBaseUrlWarningVisible as ServerFn>::PATH,
     ] {
