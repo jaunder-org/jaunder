@@ -7,6 +7,7 @@ import {
   fillLoginForm,
   followEmailLink,
   requestPasswordReset,
+  stallServerFn,
 } from "./helpers";
 import { SEL } from "./selectors";
 
@@ -76,6 +77,54 @@ test("reset-password rejects a too-short password client-side", async ({
 
   await pw.fill("longenough123");
   await expect(page.locator(SEL.submit)).toBeEnabled();
+});
+
+test("reset confirmation invalid input does not dispatch", async ({ page }) => {
+  let requests = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/password_reset/confirm")) requests += 1;
+  });
+  await goto(page, "/reset-password?token=bad!token");
+  const password = page.locator(SEL.newPassword);
+  await password.fill("short");
+  await password.blur();
+
+  await expect(page.locator(SEL.error)).toBeVisible();
+  await expect(page.locator(SEL.submit)).toBeDisabled();
+  await password.press("Enter");
+  expect(requests).toBe(0);
+
+  await password.fill("longenough123");
+  await expect(page.locator(SEL.error)).toHaveCount(0);
+  await expect(page.locator(SEL.submit)).toBeDisabled();
+  await password.press("Enter");
+  expect(requests).toBe(0);
+});
+
+test("reset confirmation pending prevents duplicate dispatch", async ({
+  page,
+  verifiedUser,
+  mailbox,
+}) => {
+  await requestPasswordReset(page, verifiedUser.username);
+  const email = await mailbox.waitForNewEmail();
+  await followEmailLink(page, email, "/reset-password");
+
+  let requests = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/password_reset/confirm")) requests += 1;
+  });
+  const release = await stallServerFn(page, "password_reset/confirm");
+  const password = page.locator(SEL.newPassword);
+  await password.fill("pendingpassword123");
+  await click(page, SEL.submit);
+  await expect.poll(() => requests).toBe(1);
+  await expect(page.locator(SEL.submit)).toBeDisabled();
+  await password.press("Enter");
+  expect(requests).toBe(1);
+  release();
+
+  await page.waitForURL("**/login");
 });
 
 // M3.11.15: /forgot-password for a user with no verified email shows the

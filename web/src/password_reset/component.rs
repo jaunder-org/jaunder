@@ -1,11 +1,12 @@
 //! Password-reset vertical — wasm-only UI (ADR-0070): the forgot-password and
 //! reset-password pages.
 
-use super::{Confirm, Request};
+use super::{Confirm, ConfirmPasswordResetRequest, Request};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput};
 use crate::topbar::Topbar;
-use common::password::Password;
+use common::password::ProfferedPassword;
+use common::token::RawToken;
 use common::username::Username;
 use leptos::prelude::*;
 use leptos_router::components::Redirect;
@@ -67,22 +68,41 @@ pub fn ResetPasswordPage() -> impl IntoView {
     use leptos_router::hooks::use_query_map;
 
     // The reset token arrives in the URL (`?token=…`) from the emailed reset link,
-    // not typed by hand. Read it once at mount — a plain read is safe here because
-    // the app is CSR (no SSR-hydration race; see the spec/#433) — and feed it to the
-    // hidden input as a fixed value, not a reactive closure that would re-read the
-    // query map for a param that never changes on this page.
-    let token = use_query_map().read().get("token").unwrap_or_default();
-
+    // not typed by hand. Read and parse it once at mount — a plain read is safe here
+    // because the app is CSR (no SSR-hydration race; see the spec/#433).
+    let token = use_query_map()
+        .read()
+        .get("token")
+        .and_then(|value| value.parse::<RawToken>().ok());
     let confirm_action = ServerAction::<Confirm>::new();
-    let new_password = Field::<Password>::new();
+    let new_password = Field::<ProfferedPassword>::new();
+    let disabled_token = token.clone();
+    let disabled = Signal::derive(move || {
+        confirm_action.pending().get()
+            || disabled_token.is_none()
+            || new_password.parsed().is_none()
+    });
+    let submit = move |event: leptos::ev::SubmitEvent| {
+        event.prevent_default();
+        let request = (!confirm_action.pending().get())
+            .then(|| token.clone().zip(new_password.parsed()))
+            .flatten();
+        if let Some((token, new_password)) = request {
+            confirm_action.dispatch(Confirm {
+                request: ConfirmPasswordResetRequest {
+                    token,
+                    new_password,
+                },
+            });
+        }
+    };
 
     view! {
         <Topbar title="Reset Password" sub="Set a new password" />
         <div class="j-scroll">
             <div class="j-page">
-                <ActionForm action=confirm_action>
-                    <input type="hidden" name="token" value=token />
-                    <ValidatedInput<Password>
+                <form on:submit=submit>
+                    <ValidatedInput<ProfferedPassword>
                         label="New password"
                         name="new_password"
                         input_type="password"
@@ -92,11 +112,11 @@ pub fn ResetPasswordPage() -> impl IntoView {
                     <button
                         type="submit"
                         class="j-btn is-primary"
-                        prop:disabled=move || !new_password.is_valid()
+                        prop:disabled=move || disabled.get()
                     >
                         "Set new password"
                     </button>
-                </ActionForm>
+                </form>
                 {move || {
                     confirm_action
                         .value()

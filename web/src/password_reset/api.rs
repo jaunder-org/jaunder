@@ -15,8 +15,8 @@ use {
 
 use crate::error::WebResult;
 // `Username` / `ProfferedPassword` / `RawToken` are ungated: they type the
-// `request` / `confirm` wire args, so the generated arg
-// structs reference them on both the client and server builds.
+// request wire arguments, so generated inputs reference them on both client and
+// server builds.
 use common::password::ProfferedPassword;
 use common::token::RawToken;
 use common::username::Username;
@@ -81,8 +81,18 @@ pub async fn request(username: Username) -> WebResult<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ConfirmPasswordResetRequest {
+    pub token: RawToken,
+    pub new_password: ProfferedPassword,
+}
+
 #[macros::server(skip_all)]
-pub async fn confirm(token: RawToken, new_password: ProfferedPassword) -> WebResult<()> {
+pub async fn confirm(request: ConfirmPasswordResetRequest) -> WebResult<()> {
+    let ConfirmPasswordResetRequest {
+        token,
+        new_password,
+    } = request;
     let atomic = expect_context::<Arc<dyn AtomicOps>>();
 
     // `new_password` is the inbound-secret twin (ADR-0063); convert into the

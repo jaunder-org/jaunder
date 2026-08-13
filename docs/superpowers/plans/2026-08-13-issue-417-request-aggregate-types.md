@@ -224,26 +224,26 @@ pub async fn confirm(request: ConfirmPasswordResetRequest) -> WebResult<()>;
 
 Derive `Debug, Clone, Serialize, Deserialize`.
 
-- [ ] Adapt confirmation posts to nested keys. Add
+- [x] Adapt confirmation posts to nested keys. Add
       `confirm_nested_request_maps_token_and_password`; use distinct sentinels
       and assert the token is consumed, new password authenticates, and old
       sessions are revoked. Retain malformed token and short password HTTP 500 +
       `server_function` cases with unchanged password/session state.
-- [ ] Run
+- [x] Run
       `devtool run -- devtool pg run -- cargo nextest run -p jaunder web::web_password_reset`;
       expect RED, then implement aggregate/handler and rerun; expect GREEN.
-- [ ] Add Playwright tests `reset confirmation invalid input does not dispatch`
+- [x] Add Playwright tests `reset confirmation invalid input does not dispatch`
       and `reset confirmation pending prevents duplicate dispatch`; assert
       parsed query-token mapping, zero request on invalid token/password,
       touched error, delayed response disabled state, one request after second
       Enter, error rendering, and success redirect. Keep the existing end-to-end
       new-password login assertion.
-- [ ] Run `devtool run -- cargo xtask e2e-local password_reset.spec.ts`; expect
+- [x] Run `devtool run -- cargo xtask e2e-local password_reset.spec.ts`; expect
       RED.
-- [ ] Replace confirm `ActionForm`, parse query token to `RawToken`, use
+- [x] Replace confirm `ActionForm`, parse query token to `RawToken`, use
       `Field<ProfferedPassword>`, preserve error/redirect behavior; rerun;
       expect GREEN.
-- [ ] Mandatory stage/check sequence; commit
+- [x] Mandatory stage/check sequence; commit
       `feat(web): aggregate password reset requests`.
 
 ### Task 5: Audience rename and membership requests
