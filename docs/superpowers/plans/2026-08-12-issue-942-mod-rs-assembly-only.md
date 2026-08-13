@@ -568,25 +568,33 @@ Widening first keeps task 15 a pure move.
 
 **Files:** `xtask/src/pr/mod.rs` → new `types.rs`, `invocation.rs`, `execute.rs`
 
-- [ ] `types.rs`: `PrNumber` + `impl Display`, `Subject`, `Outcome` + inherent
+- [x] `types.rs`: `PrNumber` + `impl Display`, `Subject`, `Outcome` + inherent
       `impl` + **the hand-written `impl Serialize`** (its delegation to `as_str`
       is load-bearing against drift — keep them adjacent) + `impl Display`,
       `EventKind` + `as_str`, `Event`, `PrReport`.
       `crate::result::CommandResult.pr` embeds `crate::pr::PrReport`, so that
       path must survive.
-- [ ] `invocation.rs`: `pub struct GitFacts` + its private `impl … read`,
-      `pub struct Invocation<'a>`.
-- [ ] `execute.rs`: `pub fn execute`, `pub fn execute_with<S,A,C>`,
+- [x] `invocation.rs`: `pub struct GitFacts` + its private `impl … read`,
+      `pub struct Invocation<'a>`. → `read` becomes `pub(super)`: `execute.rs`
+      calls it across the new file seam, and `pub(super)` from a sibling is
+      exactly the "visible inside `crate::pr`" scope a private item in the old
+      `mod.rs` already had, so nothing widened.
+- [x] `execute.rs`: `pub fn execute`, `pub fn execute_with<S,A,C>`,
       `pub fn into_result`, and the `#[cfg(test)] mod tests` (11 tests + the
       `SpyArmer` struct). The tests use `use crate::pr::test_support::*;` — that
       path is unchanged because `#[cfg(test)] pub(crate) mod test_support;` is
       assembly and stays in `mod.rs`. Header needs
-      `use super::{gh, land, snapshot, watch};`.
-- [ ] `mod.rs`: keep the `//!` doc, the five `pub mod` lines and the
+      `use super::{gh, land, snapshot, watch};` — plus the six types it names
+      and the `PrSource`/`ApiError` it matches on. The test module imports
+      `EventKind` and `Subject` by crate path rather than letting the file-level
+      preamble carry them: neither is named by `execute.rs`'s own code, so a
+      module-level import of either would be unused off a test build.
+- [x] `mod.rs`: keep the `//!` doc, the five `pub mod` lines and the
       `#[cfg(test)] pub(crate) mod test_support;`. Add the three `mod` lines and
       explicit re-exports.
-- [ ] Confirm `decide.rs`/`land.rs`/`snapshot.rs`/`watch.rs` still resolve their
-      `use super::{…}` imports.
+- [x] Confirm `decide.rs`/`land.rs`/`snapshot.rs`/`watch.rs` still resolve their
+      `use super::{…}` imports. → confirmed by a green gate, `xtask-tests`
+      included.
 - **Verify:** `devtool run -- cargo xtask check` — green; xtask's own tests
   PASS.
 - **Commit:**
