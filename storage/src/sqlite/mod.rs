@@ -124,7 +124,7 @@ pub(crate) async fn open_sqlite_database_with_pool(
 /// Opens (or creates) the `SQLite` database and returns just the [`AppState`];
 /// the pool is dropped. Tests that need to inject a pool fault use
 /// [`open_sqlite_database_with_pool`] via the `test_support` harness.
-pub(super) async fn open_sqlite_database(
+pub(crate) async fn open_sqlite_database(
     options: &SqliteConnectOptions,
     create_if_missing: bool,
 ) -> sqlx::Result<Arc<AppState>> {
@@ -135,7 +135,7 @@ pub(super) async fn open_sqlite_database(
 
 /// Returns `true` if the `SQLite` database holds no user data — every table
 /// except the migration-seeded lookups is empty.
-pub(super) async fn database_is_empty(options: &SqliteConnectOptions) -> sqlx::Result<bool> {
+pub(crate) async fn database_is_empty(options: &SqliteConnectOptions) -> sqlx::Result<bool> {
     let pool = SqlitePool::connect_with(options.clone()).await?;
     let tables = sqlx::query_scalar::<_, String>(
         "SELECT name FROM sqlite_master \

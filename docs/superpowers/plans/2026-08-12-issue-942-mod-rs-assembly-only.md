@@ -507,11 +507,13 @@ is why `storage/src/db.rs:15,289` can call these. In `sqlite/open.rs` the same
 keyword would mean "visible in `crate::sqlite`" and those callers break.
 Widening first keeps task 15 a pure move.
 
-- [ ] Change `pub(super) async fn open_sqlite_database` and
+- [x] Change `pub(super) async fn open_sqlite_database` and
       `pub(super) async fn database_is_empty` to `pub(crate)`.
-- [ ] Leave every call site alone — `pub(crate)` is strictly wider, so
+- [x] Leave every call site alone — `pub(crate)` is strictly wider, so
       `crate::sqlite::open_sqlite_database` still resolves.
-- **Verify:** `devtool run -- cargo xtask check --no-test` — green.
+- **Verify:** `devtool run -- cargo xtask check --no-test` — green. → ran the
+  full `cargo xtask check` instead, which is what the pre-commit hook runs
+  anyway; green, so this prep does stand as a commit on its own.
 - **Commit:** `refactor(storage): widen sqlite open fns to pub(crate) (#942)`
 
 ## Task 15 — `storage/src/sqlite/`
