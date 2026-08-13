@@ -1,4 +1,5 @@
 mod audiences;
+mod posts;
 mod router;
 mod server_fn_wire;
 mod web_account;
@@ -7,7 +8,6 @@ mod web_backup;
 mod web_email;
 mod web_media;
 mod web_password_reset;
-mod web_posts;
 mod web_sessions;
 mod web_site;
 mod web_subscriptions;

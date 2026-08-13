@@ -20,7 +20,7 @@ use crate::slug::{Slug, slugify_title};
 /// serde is the attribute's own bridge, NOT the derived enum (de)serializer: deserialize
 /// goes `String` → `FromStr`, so an invalid token surfaces the domain
 /// `InvalidPostFormat` message (asserted at the web boundary,
-/// `server/tests/web/web_posts.rs`) rather than serde's generic "unknown variant", and so
+/// `server/tests/web/posts/create.rs`) rather than serde's generic "unknown variant", and so
 /// `serde_qs` form transport decodes a bare form value. The wire token is single-sourced
 /// in `serialize_all` (no `rename_all`).
 #[macros::text_enum(
