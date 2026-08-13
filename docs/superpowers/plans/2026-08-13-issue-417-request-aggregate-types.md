@@ -349,16 +349,16 @@ draft remains ignored until `jaunder-ship` promotion.
 
 **Consumes:** All six migration commits and the approved spec.
 
-- [ ] Search every `ActionForm` and `#[macros::server]` signature. Verify the
+- [x] Search every `ActionForm` and `#[macros::server]` signature. Verify the
       seven aggregate shapes exist; audience add/remove share one type; media's
       two renderings share one type; enumerated audience create/delete, email
       request, password-reset request, post publish/delete, and
       subscribe/unsubscribe remain direct. Investigate every other multi-arg
       server fn and record why it is independent or already aggregate-shaped.
-- [ ] Update stale comments describing positional args/string harvesting. Change
+- [x] Update stale comments describing positional args/string harvesting. Change
       the issue-417 `Committed direction` paragraph in `docs/ARCHITECTURE.md` to
       present-tense current truth. Do not number the ADR.
-- [ ] Run these exact commands; expect PASS:
+- [x] Run these exact commands; expect PASS:
 
 ```bash
 devtool run -- devtool pg run -- cargo nextest run -p jaunder web::web_auth

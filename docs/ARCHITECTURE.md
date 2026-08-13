@@ -1020,17 +1020,31 @@ Typing the arg moves validation into arg-**decode**, so a malformed request from
 a non-browser client fails before the fn body — the defense-in-depth path, not
 the user path.
 
-**Committed direction.** Once the migration recorded by
-[cohesive request aggregates](adr/drafts/request-aggregate-server-function-inputs.md)
-lands, multiple caller-supplied values forming one cohesive operation will cross
-the server-fn boundary as one typed request aggregate. Its wasm form will
-manually assemble the generated action input from parsed fields before
-`ServerAction` dispatch. The aggregate will exclude ambient request context and
-injected dependencies. A native `<form>` will retain submit and Enter-key
-behavior; only `ActionForm`'s string harvest and redundant client-side decode
-will be removed. This is a semantic boundary rule rather than an arity rule:
-single values and genuinely independent parameters stay direct, and no static
-check guesses whether fields are cohesive.
+[Cohesive request aggregates](adr/drafts/request-aggregate-server-function-inputs.md)
+are the server-fn boundary rule: multiple caller-supplied values forming one
+cohesive operation cross as one typed request aggregate. Wasm forms manually
+assemble the generated action input from parsed fields before `ServerAction`
+dispatch. Aggregates exclude ambient request context and injected dependencies;
+native `<form>` submission retains submit and Enter-key behavior without
+`ActionForm`'s string harvest and redundant client-side decode.
+
+The current population is `LoginRequest`, `RegistrationRequest`,
+`CreateInviteRequest`, `ConfirmPasswordResetRequest`, `RenameAudienceRequest`,
+`AudienceMembershipRequest`, and `DeleteMediaRequest`. Audience add/remove share
+`AudienceMembershipRequest` because their fields and member identity coincide;
+ordinary and forced media deletion share `DeleteMediaRequest`, differing only in
+its `force` value.
+
+This is a semantic boundary rule, not an arity rule. The remaining `ActionForm`s
+each carry one domain value: audience create/delete, email and password-reset
+requests, post publish/delete, and subscription subscribe/unsubscribe. Other
+multi-argument server fns keep direct parameters for independent settings
+(`backup::update_settings`, `profile::update`, `site::update_identity`),
+independent lookup/filter/pagination dimensions (`media::list_mine`,
+`posts::get`, `posts::list_drafts`, `tags::list`, and the `timeline::list_*`
+family), or a separate target plus an already-aggregate payload
+(`posts::update`). `posts::create` already takes `PostInputs`, and
+`media::upload` takes `MultipartData`. No static check guesses cohesion.
 
 The same migration extends `proffered-secret` without weakening its directional
 boundary: an inbound-secret field is admitted only on a `*Request` type named by

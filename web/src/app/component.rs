@@ -70,10 +70,10 @@ pub fn App() -> impl IntoView {
     provide_meta_context();
 
     // No server-fn redirect-hook override (#591): `<Router>` installs a same-origin
-    // `use_navigate` hook into the first-caller-wins `OnceLock`, and it mounts before
-    // any `ActionForm`, so login/logout/register redirects are client-side pushState
-    // with no full document reload. Chrome updates reactively via the shared session
-    // context, which the login/logout/register components set/clear on success.
+    // `use_navigate` hook into the first-caller-wins `OnceLock` before any auth action
+    // can redirect, so login/logout/register use client-side pushState with no full
+    // document reload. Chrome updates reactively via the shared session context, which
+    // those components set/clear on success.
 
     let theme = RwSignal::new(DEFAULT_THEME.to_string());
 
