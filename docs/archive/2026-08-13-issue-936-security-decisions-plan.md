@@ -554,12 +554,12 @@ Expected: no infallible `viewer_identity().await` call remains.
 **Files:**
 
 - Create, ignored until ship:
-  `docs/adr/drafts/test-only-cheap-kdf-fails-closed.md`
+  `docs/adr/0131-test-only-cheap-kdf-fails-closed.md`
 - Create, ignored until ship:
-  `docs/adr/drafts/hash-bearer-tokens-before-persistence.md`
+  `docs/adr/0133-hash-bearer-tokens-before-persistence.md`
 - Create, ignored until ship:
-  `docs/adr/drafts/explicit-authorization-replaces-session-cookie.md`
-- Create, ignored until ship: `docs/adr/drafts/lowercase-canonical-usernames.md`
+  `docs/adr/0132-explicit-authorization-replaces-session-cookie.md`
+- Create, ignored until ship: `docs/adr/0134-lowercase-canonical-usernames.md`
 - Modify: `docs/ARCHITECTURE.md:621-743,2416-2440`
 - Modify: `CONTEXT.md:9-27,74-84`
 
@@ -631,7 +631,7 @@ The second non-zero exit is the expected proof, not a gate failure to suppress.
 - [x] **Step 3: Check documentation and links locally**
 
 ```bash
-devtool run -- prettier -c CONTEXT.md docs/ARCHITECTURE.md docs/adr/drafts/test-only-cheap-kdf-fails-closed.md docs/adr/drafts/hash-bearer-tokens-before-persistence.md docs/adr/drafts/explicit-authorization-replaces-session-cookie.md docs/adr/drafts/lowercase-canonical-usernames.md
+devtool run -- prettier -c CONTEXT.md docs/ARCHITECTURE.md docs/adr/0131-test-only-cheap-kdf-fails-closed.md docs/adr/0133-hash-bearer-tokens-before-persistence.md docs/adr/0132-explicit-authorization-replaces-session-cookie.md docs/adr/0134-lowercase-canonical-usernames.md
 devtool run -- cargo xtask check --no-test
 ```
 

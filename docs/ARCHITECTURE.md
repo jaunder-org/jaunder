@@ -663,7 +663,7 @@ Bearer or Basic authentication, a simultaneous session cookie is expired on the
 response across Leptos and raw Axum routes. Optional-auth reads distinguish
 absence from failure: absent or stale cookie-only credentials may remain
 anonymous, while explicit-credential failures propagate
-([explicit Authorization replaces ambient session state](adr/drafts/explicit-authorization-replaces-session-cookie.md)).
+([explicit Authorization replaces ambient session state](adr/0132-explicit-authorization-replaces-session-cookie.md)).
 
 Leptos server functions obtain the same identity via `require_auth()`
 (`web/src/auth/server.rs`), which pulls request `Parts` from context and runs
@@ -714,7 +714,7 @@ pass.
   a raw token out of a query. `RawToken`'s `Debug` is hand-written to redact the
   body ([ADR-0011](adr/0011-unified-observability.md)). The directional
   guarantee and the rejected stronger type-state design are recorded by
-  [hash bearer-equivalent tokens before persistence](adr/drafts/hash-bearer-tokens-before-persistence.md).
+  [hash bearer-equivalent tokens before persistence](adr/0133-hash-bearer-tokens-before-persistence.md).
 - An **app password** is just a labelled session: minting calls
   `SessionStorage::create_session(user_id, &label)`
   (`storage/src/sessions.rs:70`) — no separate table, no `kind` column, so
@@ -757,7 +757,7 @@ Explicit-auth cookie retirement uses a request-scoped `SessionCookieRetirement`
 marker set by `AuthUser` only after Bearer/Basic token and username checks
 succeed. Outer router middleware appends the expiry header, preserving any
 `Set-Cookie` values already emitted by the handler
-([explicit Authorization replaces ambient session state](adr/drafts/explicit-authorization-replaces-session-cookie.md)).
+([explicit Authorization replaces ambient session state](adr/0132-explicit-authorization-replaces-session-cookie.md)).
 
 ### Password hashing
 
@@ -778,7 +778,7 @@ hash, so it needs no branch. The feature fails closed twice, at different times:
   debug-build-in-production case the compile-time guard lets through.
 
 The dependency isolation and both complementary guards are the
-[test-only cheap KDF fail-closed policy](adr/drafts/test-only-cheap-kdf-fails-closed.md).
+[test-only cheap KDF fail-closed policy](adr/0131-test-only-cheap-kdf-fails-closed.md).
 
 ### Timing discipline: the entropy dividing line
 
@@ -851,7 +851,7 @@ URLs. Direct equality is therefore case-insensitive in effect:
 `verify_basic_username` compares two already-canonical `Username` values, so an
 app-password client may vary ASCII case without changing identity. Unicode and
 case-preserving username identities are deliberately excluded
-([lowercase-canonical usernames](adr/drafts/lowercase-canonical-usernames.md)).
+([lowercase-canonical usernames](adr/0134-lowercase-canonical-usernames.md)).
 
 ## Web frontend
 
