@@ -270,16 +270,16 @@ pub async fn remove_subscriber(request: AudienceMembershipRequest) -> WebResult<
 
 Both derive `Debug, Clone, Serialize, Deserialize`.
 
-- [ ] Adapt nested backend inputs. Add `rename_nested_request_maps_id_and_name`,
+- [x] Adapt nested backend inputs. Add `rename_nested_request_maps_id_and_name`,
       `add_subscriber_nested_request_maps_both_ids`, and
       `remove_subscriber_nested_request_maps_both_ids`; use different IDs,
       assert exact renamed row/member set, and retain blank-name decode
       rejection.
-- [ ] Run
+- [x] Run
       `devtool run -- devtool pg run -- cargo nextest run -p jaunder web::audiences`;
       expect RED. Implement API aggregates/destructuring/callers; rerun; expect
       GREEN.
-- [ ] Add Playwright tests `audience rename pending and error preserve the row`,
+- [x] Add Playwright tests `audience rename pending and error preserve the row`,
       `audience add pending prevents duplicate dispatch`, and
       `audience remove pending prevents duplicate dispatch`. For each mutation,
       delay/count its endpoint, assert disabled + one request after second
@@ -288,11 +288,11 @@ Both derive `Debug, Clone, Serialize, Deserialize`.
       must produce exactly one target audience `list_members` refresh, zero
       `list_mine` refresh, and zero unrelated-audience `list_members` refresh.
       Existing blank-name test remains validation/zero-dispatch proof.
-- [ ] Run `devtool run -- cargo xtask e2e-local audiences.spec.ts`; expect RED.
+- [x] Run `devtool run -- cargo xtask e2e-local audiences.spec.ts`; expect RED.
       Replace rename/add/remove `ActionForm`s with typed native forms while
       leaving audience create/delete direct. Rerun; expect GREEN with scoped
       counters.
-- [ ] Mandatory stage/check sequence; commit
+- [x] Mandatory stage/check sequence; commit
       `feat(web): aggregate audience mutation requests`.
 
 ### Task 6: Media deletion request

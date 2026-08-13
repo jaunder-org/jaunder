@@ -48,6 +48,18 @@ pub struct SubscriberSummary {
     pub label: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenameAudienceRequest {
+    pub audience_id: AudienceId,
+    pub name: AudienceName,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudienceMembershipRequest {
+    pub audience_id: AudienceId,
+    pub subscription_id: SubscriptionId,
+}
+
 /// Creates a named audience owned by the authenticated author.
 #[macros::server(skip_all)]
 pub async fn create(name: AudienceName) -> WebResult<AudienceId> {
@@ -61,8 +73,9 @@ pub async fn create(name: AudienceName) -> WebResult<AudienceId> {
 }
 
 /// Renames an audience the authenticated author owns.
-#[macros::server(skip(name))]
-pub async fn rename(audience_id: AudienceId, name: AudienceName) -> WebResult<()> {
+#[macros::server(skip_all)]
+pub async fn rename(request: RenameAudienceRequest) -> WebResult<()> {
+    let RenameAudienceRequest { audience_id, name } = request;
     let audiences = expect_context::<Arc<dyn AudienceStorage>>();
     let auth = require_auth().await?;
     // `name` arrives already validated (see `create`).
@@ -131,11 +144,12 @@ pub async fn list_my_subscribers() -> WebResult<Vec<SubscriberSummary>> {
 /// `add_member` is author-scoped in the store (it writes `author_user_id` so
 /// the composite FKs reject a cross-author pairing), so passing the session's
 /// `user_id` is the authorization.
-#[macros::server]
-pub async fn add_subscriber(
-    audience_id: AudienceId,
-    subscription_id: SubscriptionId,
-) -> WebResult<()> {
+#[macros::server(skip_all)]
+pub async fn add_subscriber(request: AudienceMembershipRequest) -> WebResult<()> {
+    let AudienceMembershipRequest {
+        audience_id,
+        subscription_id,
+    } = request;
     let audiences = expect_context::<Arc<dyn AudienceStorage>>();
     let auth = require_auth().await?;
     audiences
@@ -146,11 +160,12 @@ pub async fn add_subscriber(
 
 /// Removes a subscription from an audience the authenticated author owns.
 /// `remove_member` is author-scoped, so a cross-author `audience_id` is a no-op.
-#[macros::server]
-pub async fn remove_subscriber(
-    audience_id: AudienceId,
-    subscription_id: SubscriptionId,
-) -> WebResult<()> {
+#[macros::server(skip_all)]
+pub async fn remove_subscriber(request: AudienceMembershipRequest) -> WebResult<()> {
+    let AudienceMembershipRequest {
+        audience_id,
+        subscription_id,
+    } = request;
     let audiences = expect_context::<Arc<dyn AudienceStorage>>();
     let auth = require_auth().await?;
     audiences

@@ -17,7 +17,7 @@ fn parse_id(body: &str) -> i64 {
 // create → list → rename → delete happy path.
 #[apply(backends)]
 #[tokio::test]
-async fn audience_crud_round_trips(#[case] backend: Backend) {
+async fn rename_nested_request_maps_id_and_name(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let author = create_user_and_session(&state).await;
     let cookie = author.cookie();
@@ -48,7 +48,7 @@ async fn audience_crud_round_trips(#[case] backend: Backend) {
     let (status, body) = post_form(
         &state,
         <web::audiences::Rename as ServerFn>::PATH,
-        &format!("audience_id={id}&name=BestFriends"),
+        &format!("request%5Baudience_id%5D={id}&request%5Bname%5D=BestFriends"),
         Some(&cookie),
     )
     .await;
@@ -157,7 +157,7 @@ async fn rename_audience_empty_name_is_rejected(#[case] backend: Backend) {
     let (status, _body) = post_form(
         &state,
         <web::audiences::Rename as ServerFn>::PATH,
-        &format!("audience_id={aud_id}&name=%20%20"),
+        &format!("request%5Baudience_id%5D={aud_id}&request%5Bname%5D=%20%20"),
         Some(&cookie),
     )
     .await;
@@ -219,7 +219,7 @@ async fn list_audience_members_returns_members(#[case] backend: Backend) {
 // add member → list members → remove member happy path.
 #[apply(backends)]
 #[tokio::test]
-async fn audience_membership_round_trips(#[case] backend: Backend) {
+async fn add_subscriber_nested_request_maps_both_ids(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let author = create_user_and_session(&state).await;
     let subscriber = SeedUser::new().seed(&state).await.user_id;
@@ -243,7 +243,7 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
     let (status, body) = post_form(
         &state,
         <web::audiences::AddSubscriber as ServerFn>::PATH,
-        &format!("audience_id={aud_id}&subscription_id={sub_id}"),
+        &format!("request%5Baudience_id%5D={aud_id}&request%5Bsubscription_id%5D={sub_id}"),
         Some(&cookie),
     )
     .await;
@@ -261,7 +261,7 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
     let (status, body) = post_form(
         &state,
         <web::audiences::AddSubscriber as ServerFn>::PATH,
-        &format!("audience_id={aud_id}&subscription_id={sub_id}"),
+        &format!("request%5Baudience_id%5D={aud_id}&request%5Bsubscription_id%5D={sub_id}"),
         Some(&cookie),
     )
     .await;
@@ -279,7 +279,7 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
     let (status, body) = post_form(
         &state,
         <web::audiences::RemoveSubscriber as ServerFn>::PATH,
-        &format!("audience_id={aud_id}&subscription_id={sub_id}"),
+        &format!("request%5Baudience_id%5D={aud_id}&request%5Bsubscription_id%5D={sub_id}"),
         Some(&cookie),
     )
     .await;
@@ -297,7 +297,7 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
     let (status, body) = post_form(
         &state,
         <web::audiences::RemoveSubscriber as ServerFn>::PATH,
-        &format!("audience_id={aud_id}&subscription_id={sub_id}"),
+        &format!("request%5Baudience_id%5D={aud_id}&request%5Bsubscription_id%5D={sub_id}"),
         Some(&cookie),
     )
     .await;
@@ -310,6 +310,51 @@ async fn audience_membership_round_trips(#[case] backend: Backend) {
         state
             .audiences
             .list_members(author.user_id, aud_id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn remove_subscriber_nested_request_maps_both_ids(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let author = create_user_and_session(&state).await;
+    let subscriber = SeedUser::new().seed(&state).await.user_id;
+    let cookie = author.cookie();
+    let channel = state.subscriptions.local_channel_id().await.unwrap();
+    let subscription_id = state
+        .subscriptions
+        .subscribe(author.user_id, channel, &i64::from(subscriber).to_string())
+        .await
+        .unwrap();
+    let audience_id = state
+        .audiences
+        .create_audience(author.user_id, &parse_audience_name("Remove target"))
+        .await
+        .unwrap();
+    state
+        .audiences
+        .add_member(author.user_id, audience_id, subscription_id)
+        .await
+        .unwrap();
+
+    let (status, body) = post_form(
+        &state,
+        <web::audiences::RemoveSubscriber as ServerFn>::PATH,
+        &format!(
+            "request%5Baudience_id%5D={audience_id}&request%5Bsubscription_id%5D={subscription_id}"
+        ),
+        Some(&cookie),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "remove_member failed: {body}");
+    assert!(
+        state
+            .audiences
+            .list_members(author.user_id, audience_id)
             .await
             .unwrap()
             .is_empty()
@@ -364,7 +409,7 @@ async fn cross_author_audience_id_is_scoped_away(#[case] backend: Backend) {
     let (status, body) = post_form(
         &state,
         <web::audiences::RemoveSubscriber as ServerFn>::PATH,
-        &format!("audience_id={alice_aud}&subscription_id={alice_sub}"),
+        &format!("request%5Baudience_id%5D={alice_aud}&request%5Bsubscription_id%5D={alice_sub}"),
         Some(&bob_cookie),
     )
     .await;
@@ -482,7 +527,7 @@ async fn cross_author_add_member_is_rejected(#[case] backend: Backend) {
     let (status, body) = post_form(
         &state,
         <web::audiences::AddSubscriber as ServerFn>::PATH,
-        &format!("audience_id={alice_aud}&subscription_id={alice_sub}"),
+        &format!("request%5Baudience_id%5D={alice_aud}&request%5Bsubscription_id%5D={alice_sub}"),
         Some(&bob_cookie),
     )
     .await;
@@ -524,7 +569,7 @@ async fn cross_author_rename_and_delete_are_scoped(#[case] backend: Backend) {
     let (status, body) = post_form(
         &state,
         <web::audiences::Rename as ServerFn>::PATH,
-        &format!("audience_id={alice_aud}&name=Hijacked"),
+        &format!("request%5Baudience_id%5D={alice_aud}&request%5Bname%5D=Hijacked"),
         Some(&bob_cookie),
     )
     .await;

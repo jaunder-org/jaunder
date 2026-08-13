@@ -5,6 +5,7 @@ import {
   signInAsNewUser,
   subscribeTo,
   failServerFn,
+  stallServerFn,
 } from "./helpers";
 
 // Audiences management UI (`/audiences`, converged into `web::audiences`).
@@ -165,6 +166,144 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
   expect(listFetches).toBe(beforeDup);
 });
 
+test("audience rename pending and error preserve the row", async ({ page }) => {
+  await signInAsNewUser(page);
+  await goto(page, "/audiences");
+  await page.fill('input[placeholder="Audience name"]', "Friends");
+  await click(page, 'button:has-text("Create")');
+  const row = page.locator(".j-audience-item", { hasText: "Friends" });
+  await expect(row).toBeVisible();
+  const form = row.locator("form").filter({ hasText: "Rename" });
+  const input = form.locator('input[name="name"]');
+  const button = form.locator('button:has-text("Rename")');
+
+  let renameRequests = 0;
+  let listRequests = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/audiences/rename")) renameRequests += 1;
+    if (request.url().includes("/api/audiences/list_mine")) listRequests += 1;
+  });
+  const release = await stallServerFn(page, "audiences/rename");
+  await input.fill("BestFriends");
+  await button.click();
+  await expect.poll(() => renameRequests).toBe(1);
+  await expect(button).toBeDisabled();
+  await input.press("Enter");
+  expect(renameRequests).toBe(1);
+  release();
+  await expect(
+    page.locator("h3.j-audience-name", { hasText: "BestFriends" }),
+  ).toBeVisible();
+  await expect.poll(() => listRequests).toBe(1);
+
+  await failServerFn(page, "audiences/rename");
+  await input.fill("StillFriends");
+  await button.click();
+  await expect(form.locator("p.error")).toBeVisible();
+  await expect(
+    page.locator("h3.j-audience-name", { hasText: "BestFriends" }),
+  ).toBeVisible();
+  expect(listRequests).toBe(1);
+});
+
+test("audience add pending prevents duplicate dispatch", async ({
+  page,
+  tracedContext,
+}) => {
+  const author = await signInAsNewUser(page);
+  const subscriberContext = await tracedContext();
+  const subscriberPage = await subscriberContext.newPage();
+  const subscriber = await signInAsNewUser(subscriberPage);
+  await subscribeTo(subscriberPage, author);
+  await subscriberContext.close();
+  await goto(page, "/audiences");
+  await page.fill('input[placeholder="Audience name"]', "Friends");
+  await click(page, 'button:has-text("Create")');
+  const row = page
+    .locator(".j-audience-item", { hasText: "Friends" })
+    .locator(".j-audience-members li")
+    .filter({ hasText: subscriber });
+  const button = row.locator('button:has-text("Add")');
+  await expect(button).toBeVisible();
+
+  let addRequests = 0;
+  let memberRequests = 0;
+  let listRequests = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/audiences/add_subscriber"))
+      addRequests += 1;
+    if (request.url().includes("/api/audiences/list_members"))
+      memberRequests += 1;
+    if (request.url().includes("/api/audiences/list_mine")) listRequests += 1;
+  });
+  await failServerFn(page, "audiences/add_subscriber");
+  await button.click();
+  await expect(row.locator("p.error")).toBeVisible();
+  expect(memberRequests).toBe(0);
+  expect(listRequests).toBe(0);
+  await page.unroute("**/api/audiences/add_subscriber");
+  addRequests = 0;
+  const release = await stallServerFn(page, "audiences/add_subscriber");
+  await button.click();
+  await expect.poll(() => addRequests).toBe(1);
+  await expect(button).toBeDisabled();
+  await button.press("Enter");
+  expect(addRequests).toBe(1);
+  release();
+  await expect(row.locator('button:has-text("Remove")')).toBeVisible();
+  await expect.poll(() => memberRequests).toBe(1);
+  expect(listRequests).toBe(0);
+});
+
+test("audience remove pending prevents duplicate dispatch", async ({
+  page,
+  tracedContext,
+}) => {
+  const author = await signInAsNewUser(page);
+  const subscriberContext = await tracedContext();
+  const subscriberPage = await subscriberContext.newPage();
+  const subscriber = await signInAsNewUser(subscriberPage);
+  await subscribeTo(subscriberPage, author);
+  await subscriberContext.close();
+  await goto(page, "/audiences");
+  await page.fill('input[placeholder="Audience name"]', "Friends");
+  await click(page, 'button:has-text("Create")');
+  const row = page
+    .locator(".j-audience-item", { hasText: "Friends" })
+    .locator(".j-audience-members li")
+    .filter({ hasText: subscriber });
+  await row.locator('button:has-text("Add")').click();
+  const button = row.locator('button:has-text("Remove")');
+  await expect(button).toBeVisible();
+
+  let removeRequests = 0;
+  let memberRequests = 0;
+  let listRequests = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/audiences/remove_subscriber"))
+      removeRequests += 1;
+    if (request.url().includes("/api/audiences/list_members"))
+      memberRequests += 1;
+    if (request.url().includes("/api/audiences/list_mine")) listRequests += 1;
+  });
+  await failServerFn(page, "audiences/remove_subscriber");
+  await button.click();
+  await expect(row.locator("p.error")).toBeVisible();
+  expect(memberRequests).toBe(0);
+  expect(listRequests).toBe(0);
+  await page.unroute("**/api/audiences/remove_subscriber");
+  removeRequests = 0;
+  const release = await stallServerFn(page, "audiences/remove_subscriber");
+  await button.click();
+  await expect.poll(() => removeRequests).toBe(1);
+  await expect(button).toBeDisabled();
+  await button.press("Enter");
+  expect(removeRequests).toBe(1);
+  release();
+  await expect(row.locator('button:has-text("Add")')).toBeVisible();
+  await expect.poll(() => memberRequests).toBe(1);
+  expect(listRequests).toBe(0);
+});
 // #383: fetch-error UI branches, driven by Playwright route interception (`failServerFn`).
 // A read server-fn only `Err`s if the DB breaks, so these error nodes — which the
 // `#[component]`/`cov:ignore` exemptions push to e2e — were otherwise unexercised. The
