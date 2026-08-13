@@ -164,13 +164,15 @@ drafted, gitignored) · `CONTRIBUTING.md` · `docs/ARCHITECTURE.md`
 
 **Files:** `common/src/feed/mod.rs` → new `common/src/feed/config.rs`
 
-- [ ] Move `pub struct FeedsConfig` (3 pub fields) to `config.rs`.
-- [ ] Header: `use crate::tagged_url::HubUrl;` plus
+- [x] Move `pub struct FeedsConfig` (3 pub fields) to `config.rs`.
+- [x] Header: `use crate::tagged_url::HubUrl;` plus
       `use crate::feed::{FeedMinDays, FeedMinItems};` — those two arrive via
       `mod.rs`'s `pub use settings::…`, so import them by their re-exported
       path.
-- [ ] `mod.rs`: add `mod config;` and `pub use config::FeedsConfig;` alongside
-      the existing 8 `pub mod` + `pub use` pairs.
+- [x] `mod.rs`: add `mod config;` and `pub use config::FeedsConfig;` alongside
+      the existing 8 `pub mod` + `pub use` pairs. → used `pub mod config;` to
+      match the sibling pairs' existing style; the module was already public in
+      effect and `pub mod` keeps the file's shape uniform.
 - **Verify:** `devtool run -- cargo nextest run -p common` — PASS.
 - **Commit:** `refactor(common): move FeedsConfig out of feed/mod.rs (#942)`
 
