@@ -1199,14 +1199,30 @@ Lets the warning tests assert on emitted warnings without touching the real
                (should (= calls 1))))))
 
 (ert-deftest jaunder-create-retry-exhausts-on-transport-error ()
-  ;; AC-C5: after 3 transient failures the publish errors.
+  ;; AC-C5: after 3 transport failures the publish errors. The stub signals a
+  ;; `plz-error' subtype because that is what `jaunder--http-request' re-signals
+  ;; when a transport failure carries no response.
   (let ((calls 0))
     (cl-letf (((symbol-function 'sleep-for) (lambda (&rest _) nil))
               ((symbol-function 'jaunder--http-request)
                (lambda (&rest _)
                  (setq calls (1+ calls))
-                 (error "boom"))))
+                 (signal 'plz-curl-error (list "Curl error" (make-plz-error))))))
              (should-error (jaunder--create-with-retry "http://x/posts" "<xml/>"))
              (should (= calls 3)))))
+
+(ert-deftest jaunder-create-retry-does-not-retry-a-config-error ()
+  ;; #945: a non-transport error (e.g. no auth-source entry) cannot succeed on
+  ;; retry, so it surfaces on the first attempt with no backoff.
+  (let ((calls 0)
+        (sleeps 0))
+    (cl-letf (((symbol-function 'sleep-for) (lambda (&rest _) (setq sleeps (1+ sleeps))))
+              ((symbol-function 'jaunder--http-request)
+               (lambda (&rest _)
+                 (setq calls (1+ calls))
+                 (error "jaunder: no auth-source entry for a@b"))))
+             (should-error (jaunder--create-with-retry "http://x/posts" "<xml/>"))
+             (should (= calls 1))
+             (should (= sleeps 0)))))
 
 ;;; jaunder-test.el ends here
