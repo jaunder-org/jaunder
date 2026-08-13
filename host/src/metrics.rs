@@ -1,9 +1,12 @@
 //! Cardinality-safe OpenTelemetry metric emitters, shared by `web` (its native
 //! `#[server]` bodies), `server`, `storage`, and the CLI. Instruments are built once from the global
 //! meter; when no `MeterProvider` is installed (no OTLP endpoint, or any
-//! non-server process) they are no-ops. Helper arguments are bounded enums, so a
-//! call site can never emit an unbounded attribute. Exporter setup lives in the
-//! binary (`server::observability`), not here.
+//! non-server process) they are no-ops. Helper arguments are bounded enums, or a
+//! `&'static str` drawn from a closed set the call site cannot widen —
+//! `atompub_request`'s `op` comes from `atompub_op` in
+//! `server/src/atompub/mod.rs`, a matched-route-plus-method lookup, not from an
+//! enum. Either way no call site can attach caller-supplied text as a label.
+//! Exporter setup lives in the binary (`server::observability`), not here.
 //!
 //! This facade lives in `host` — the native-only shared crate (ADR-0058) — so
 //! `opentelemetry` is kept out of the wasm bundle by crate structure rather than
