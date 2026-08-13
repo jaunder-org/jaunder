@@ -415,7 +415,7 @@ drafted, gitignored) · `CONTRIBUTING.md` · `docs/ARCHITECTURE.md`
 **Files:** `server/src/atompub/mod.rs` → new `router.rs`, `error.rs`,
 `guards.rs`
 
-- [ ] `error.rs`: `pub enum HandlerError`, `impl IntoResponse for HandlerError`,
+- [x] `error.rs`: `pub enum HandlerError`, `impl IntoResponse for HandlerError`,
       the **11** `From<…> for HandlerError` impls (`sqlx`, `StatusCode`,
       `AtomError`, `AtomPubError`, `TaggingError`, `TagValidationError`,
       `InvalidPostBody`, `PerformCreationError`, `PerformUpdateError`,
@@ -423,17 +423,23 @@ drafted, gitignored) · `CONTRIBUTING.md` · `docs/ARCHITECTURE.md`
       `From<anyhow::Error>` impl reaches `crate::media::map_error` — the _server
       crate's_ `media`, not the sibling `atompub::media`. Keep it written
       `crate::media::map_error` so it cannot re-resolve.
-- [ ] `guards.rs`: `pub(crate) fn require_user_match`,
+- [x] `guards.rs`: `pub(crate) fn require_user_match`,
       `pub(crate) async fn base_url`, `pub(crate) async fn required_base_url`.
       These stay `pub(crate)` and `mod.rs` re-exports them
       **`pub(crate) use guards::{…};`** — a bare `pub use` of a `pub(crate)`
       item does not compile. `posts.rs`, `media.rs`, `service.rs` and `rsd.rs`
       call them as `super::require_user_match` etc. (6 call sites), which the
-      re-export preserves.
-- [ ] `router.rs`: `pub fn router<S>`, `async fn record_atompub_request`,
+      re-export preserves. → **`base_url` is re-exported no longer.** Its only
+      caller in the whole crate is `required_base_url`, which now sits beside it
+      in `guards.rs`, so the re-export was an import nothing consumed and the
+      denied `unused_imports` rejected it. The definition keeps its
+      `pub(crate)`, so nothing narrowed; only the unreachable
+      `crate::atompub::base_url` path went away. A comment in `mod.rs` records
+      why.
+- [x] `router.rs`: `pub fn router<S>`, `async fn record_atompub_request`,
       `fn atompub_op`, `fn atompub_result`. Header needs
       `use super::{media, posts, rsd, service};`.
-- [ ] **Split the existing 10-test `mod tests` between the two files** rather
+- [x] **Split the existing 10-test `mod tests` between the two files** rather
       than sending it whole to `router.rs`: 8 of the tests exercise
       `HandlerError` and the `From` impls and belong in `error.rs`; the
       remainder, which cover `atompub_op`/`atompub_result`, belong in
@@ -441,11 +447,14 @@ drafted, gitignored) · `CONTRIBUTING.md` · `docs/ARCHITECTURE.md`
       testless and force `use super::{HandlerError, atompub_op, atompub_result}`
       across the seam — the exact separation partition rule 2 exists to prevent.
       Read each test and home it with its subject.
-- [ ] `mod.rs`: keep the `//!` doc and the five `pub mod` lines; add the three
+- [x] `mod.rs`: keep the `//!` doc and the five `pub mod` lines; add the three
       new `mod` lines, `pub use error::HandlerError;`,
       `pub use router::router;`, and the `pub(crate) use guards::{…};` line.
-- [ ] `mapping.rs` and `posts.rs` have `use super::*;` inside their own test
-      modules — confirm they still see what they need.
+- [x] `mapping.rs` and `posts.rs` have `use super::*;` inside their own test
+      modules — confirm they still see what they need. → confirmed by a green
+      gate. The `From<anyhow::Error>` impl keeps `crate::media::map_error`
+      written crate-absolute, so it still names the server crate's `media` and
+      not the sibling `atompub::media`.
 - **Verify:** `devtool run -- cargo nextest run -p jaunder atompub` — PASS.
 - **Commit:**
   `refactor(server): split atompub/mod.rs into router, error, guards (#942)`
