@@ -195,10 +195,10 @@ async fn revoke_session_removes_session_and_reauth_fails(#[case] backend: Backen
 
 // ── Invites tests (M2.10.9, #433) ─────────────────────────────────────────
 
-// #433: create_invite emails the invitation link to the recipient and records the invite.
+// #433: a nested create request preserves its distinct expiry and recipient fields.
 #[apply(backends)]
 #[tokio::test]
-async fn create_invite_emails_link_and_appears_in_list(#[case] backend: Backend) {
+async fn create_invite_nested_request_maps_fields(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
@@ -217,7 +217,7 @@ async fn create_invite_emails_link_and_appears_in_list(#[case] backend: Backend)
         &state,
         &mailer,
         <web::invites::Create as ServerFn>::PATH,
-        "expires_in_hours=24&recipient_email=invitee@example.com",
+        "request%5Bexpires_in_hours%5D=37&request%5Brecipient_email%5D=invitee@example.com",
         Some(&cookie),
     )
     .await;
@@ -233,6 +233,19 @@ async fn create_invite_emails_link_and_appears_in_list(#[case] backend: Backend)
             .contains("https://example.com/register?invite_code="),
         "email should contain the invite link, got: {}",
         sent[0].body_text
+    );
+    assert!(
+        sent[0].body_text.contains("expires in 37 hours"),
+        "email should preserve the requested TTL, got: {}",
+        sent[0].body_text
+    );
+    let invites = state.invites.list_invites().await.unwrap();
+    assert_eq!(invites.len(), 1, "expected one stored invite");
+    let stored_ttl = invites[0].expires_at - invites[0].created_at;
+    assert!(
+        stored_ttl <= chrono::Duration::hours(37)
+            && stored_ttl >= chrono::Duration::hours(37) - chrono::Duration::seconds(1),
+        "stored invite should preserve the 37-hour TTL, got {stored_ttl:?}"
     );
 
     // The invite is tracked — as metadata only, never the raw code.
@@ -263,7 +276,7 @@ async fn create_invite_unauthorized_returns_error(#[case] backend: Backend) {
     let (status, _) = post_form(
         &state,
         <web::invites::Create as ServerFn>::PATH,
-        "recipient_email=invitee@example.com",
+        "request%5Brecipient_email%5D=invitee@example.com",
         None,
     )
     .await;
@@ -283,7 +296,7 @@ async fn create_invite_without_base_url_errors_and_sends_nothing(#[case] backend
         &state,
         &mailer,
         <web::invites::Create as ServerFn>::PATH,
-        "expires_in_hours=24&recipient_email=invitee@example.com",
+        "request%5Bexpires_in_hours%5D=24&request%5Brecipient_email%5D=invitee@example.com",
         Some(&cookie),
     )
     .await;
@@ -312,7 +325,7 @@ async fn create_invite_invalid_recipient_returns_error(#[case] backend: Backend)
         &state,
         &mailer,
         <web::invites::Create as ServerFn>::PATH,
-        "expires_in_hours=24&recipient_email=not-an-email",
+        "request%5Bexpires_in_hours%5D=24&request%5Brecipient_email%5D=not-an-email",
         Some(&cookie),
     )
     .await;
@@ -321,6 +334,10 @@ async fn create_invite_invalid_recipient_returns_error(#[case] backend: Backend)
     assert!(
         mailer.sent().is_empty(),
         "no email must be sent for a malformed recipient"
+    );
+    assert!(
+        state.invites.list_invites().await.unwrap().is_empty(),
+        "no invite must be created for a malformed recipient"
     );
 }
 
@@ -340,7 +357,7 @@ async fn create_invite_send_failure_returns_error(#[case] backend: Backend) {
     let (status, _) = post_form(
         &state,
         <web::invites::Create as ServerFn>::PATH,
-        "expires_in_hours=24&recipient_email=invitee@example.com",
+        "request%5Bexpires_in_hours%5D=24&request%5Brecipient_email%5D=invitee@example.com",
         Some(&cookie),
     )
     .await;
@@ -365,7 +382,7 @@ async fn create_invite_large_hours_returns_error(#[case] backend: Backend) {
         &state,
         &mailer,
         <web::invites::Create as ServerFn>::PATH,
-        "expires_in_hours=18446744073709551615&recipient_email=invitee@example.com", // u64::MAX
+        "request%5Bexpires_in_hours%5D=18446744073709551615&request%5Brecipient_email%5D=invitee@example.com", // u64::MAX
         Some(&cookie),
     )
     .await;
@@ -377,6 +394,10 @@ async fn create_invite_large_hours_returns_error(#[case] backend: Backend) {
     assert!(
         mailer.sent().is_empty(),
         "an out-of-range expiry must error before emailing"
+    );
+    assert!(
+        state.invites.list_invites().await.unwrap().is_empty(),
+        "an out-of-range expiry must not create an invite"
     );
 }
 
@@ -398,7 +419,7 @@ async fn create_invite_omits_hours_uses_default(#[case] backend: Backend) {
         &state,
         &mailer,
         <web::invites::Create as ServerFn>::PATH,
-        "recipient_email=invitee@example.com", // no expires_in_hours key
+        "request%5Brecipient_email%5D=invitee@example.com", // no expires_in_hours key
         Some(&cookie),
     )
     .await;
@@ -430,7 +451,7 @@ async fn create_invite_empty_hours_uses_default(#[case] backend: Backend) {
         &state,
         &mailer,
         <web::invites::Create as ServerFn>::PATH,
-        "expires_in_hours=&recipient_email=invitee@example.com", // empty-present
+        "request%5Bexpires_in_hours%5D=&request%5Brecipient_email%5D=invitee@example.com", // empty-present
         Some(&cookie),
     )
     .await;

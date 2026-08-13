@@ -1,5 +1,12 @@
 import { test, expect, slowBrowserFirstNavigationTimeoutMs } from "./fixtures";
-import { goto, signInAs, click, waitForSelector } from "./helpers";
+import {
+  goto,
+  signInAs,
+  click,
+  waitForSelector,
+  failServerFn,
+  stallServerFn,
+} from "./helpers";
 import { SEL } from "./selectors";
 import { extractInviteCode } from "./mail";
 import { seedConfigViaTool } from "./seed";
@@ -36,7 +43,7 @@ test("invite link registration completes end-to-end", async ({
   await signInAs(page, "testoperator");
   await goto(page, "/invites");
   await page.fill('input[name="recipient_email"]', user.email);
-  await page.fill('input[name="expires_in_hours"]', "168");
+  await page.fill('input[name="expires_in_hours"]', "37");
   await click(page, SEL.submit);
   await waitForSelector(page, 'p:has-text("Invitation emailed to")');
 
@@ -80,6 +87,82 @@ test("invite link registration completes end-to-end", async ({
   } finally {
     await context.close();
   }
+});
+
+test("invite creation pending prevents duplicate dispatch", async ({
+  page,
+  user,
+}) => {
+  await seedConfigViaTool("site.registration_policy", "invite_only");
+  await seedConfigViaTool("site.base_url", "https://example.com");
+  await signInAs(page, "testoperator");
+  await goto(page, "/invites");
+  await waitForSelector(page, 'input[name="recipient_email"]');
+
+  let createRequests = 0;
+  let listRequests = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/invites/create")) createRequests += 1;
+    if (request.url().includes("/api/invites/list")) listRequests += 1;
+  });
+  const release = await stallServerFn(page, "invites/create");
+  await page.fill('input[name="recipient_email"]', user.email);
+  await page.fill('input[name="expires_in_hours"]', "37");
+  await click(page, SEL.submit);
+  await expect.poll(() => createRequests).toBe(1);
+  await expect(page.locator(SEL.submit)).toBeDisabled();
+  await page.locator('input[name="expires_in_hours"]').press("Enter");
+  expect(createRequests).toBe(1);
+  release();
+
+  await waitForSelector(page, 'p:has-text("Invitation emailed to")');
+  await expect.poll(() => listRequests).toBe(1);
+});
+
+test("invite creation server failure renders error", async ({ page, user }) => {
+  await seedConfigViaTool("site.registration_policy", "invite_only");
+  await seedConfigViaTool("site.base_url", "https://example.com");
+  await signInAs(page, "testoperator");
+  await goto(page, "/invites");
+  await waitForSelector(page, 'input[name="recipient_email"]');
+
+  let listRequests = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/invites/list")) listRequests += 1;
+  });
+  await failServerFn(page, "invites/create");
+  await page.fill('input[name="recipient_email"]', user.email);
+  await page.fill('input[name="expires_in_hours"]', "37");
+  await click(page, SEL.submit);
+
+  await expect(page.locator(SEL.error)).toBeVisible();
+  await expect(page.locator('p:has-text("Invitation emailed to")')).toHaveCount(
+    0,
+  );
+  expect(listRequests).toBe(0);
+});
+
+test("invite creation invalid fields do not dispatch", async ({ page }) => {
+  await seedConfigViaTool("site.registration_policy", "invite_only");
+  await seedConfigViaTool("site.base_url", "https://example.com");
+  await signInAs(page, "testoperator");
+  await goto(page, "/invites");
+
+  let createRequests = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/invites/create")) createRequests += 1;
+  });
+  const recipient = page.locator('input[name="recipient_email"]');
+  const expiry = page.locator('input[name="expires_in_hours"]');
+  await recipient.fill("not-an-email");
+  await recipient.blur();
+  await expiry.fill("337");
+  await expiry.blur();
+
+  await expect(page.locator(SEL.error)).toHaveCount(2);
+  await expect(page.locator(SEL.submit)).toBeDisabled();
+  await expiry.press("Enter");
+  expect(createRequests).toBe(0);
 });
 
 // Test B — no-code guidance: in invite_only mode, visiting /register with no

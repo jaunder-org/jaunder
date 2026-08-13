@@ -177,32 +177,32 @@ pub async fn create(request: CreateInviteRequest) -> WebResult<()>;
 
 Derive `Debug, Clone, Serialize, Deserialize`.
 
-- [ ] Adapt invite posts to nested keys. Add/retain named cases proving exact
+- [x] Adapt invite posts to nested keys. Add/retain named cases proving exact
       recipient plus `expires_in_hours: Some(37)` in the emailed/stored invite,
       and both omitted and empty hours map to `None`/the 168-hour default. Keep
       malformed email/expiry decode rejection and assert no invite/email side
       effect.
-- [ ] Run
+- [x] Run
       `devtool run -- devtool pg run -- cargo nextest run -p jaunder web::web_account`;
       expect RED.
-- [ ] Implement aggregate/handler/callers; rerun; expect GREEN on both backends.
-- [ ] Add Playwright `invite creation pending prevents duplicate dispatch`:
+- [x] Implement aggregate/handler/callers; rerun; expect GREEN on both backends.
+- [x] Add Playwright `invite creation pending prevents duplicate dispatch`:
       delay/count `/api/invites/create`, assert disabled, second Enter produces
       no second request, release, observe success message and exactly one
       `/api/invites/list` refresh. Existing main-flow test remains the
       email/list success oracle; extend it to exercise a non-default expiry
       value.
-- [ ] Add Playwright `invite creation server failure renders error`: intercept
+- [x] Add Playwright `invite creation server failure renders error`: intercept
       `/api/invites/create`, assert the visible error, no success message, and
       zero `/api/invites/list` refreshes.
-- [ ] Add Playwright `invite creation invalid fields do not dispatch`: submit
+- [x] Add Playwright `invite creation invalid fields do not dispatch`: submit
       invalid email and out-of-range expiry values, assert both touched field
       errors, and count zero `/api/invites/create` requests.
-- [ ] Run `devtool run -- cargo xtask e2e-local invite.spec.ts`; expect RED.
-- [ ] Replace create `ActionForm` with typed manual dispatch; preserve email and
+- [x] Run `devtool run -- cargo xtask e2e-local invite.spec.ts`; expect RED.
+- [x] Replace create `ActionForm` with typed manual dispatch; preserve email and
       optional-expiry validation, outcome rendering, and list invalidation.
       Rerun; expect GREEN.
-- [ ] Mandatory stage/check sequence; commit
+- [x] Mandatory stage/check sequence; commit
       `feat(web): aggregate invite creation requests`.
 
 ### Task 4: Password-reset confirmation request
