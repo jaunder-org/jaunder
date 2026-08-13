@@ -179,26 +179,28 @@ timestamps precede the first code-move commit in Task 2.
 
 This tracker-only task makes no repository commit.
 
-Completed 2026-08-13. All are open `Task` issues with label `dx`, milestone
-`Code quality ratchet`, Backlog Status `Todo`, and Priority `P3`; GitHub
-creation timestamps are 2026-08-13 20:13:54–20:14:14 UTC, before any code-move
-commit:
+Completed 2026-08-13. All 17 owner issues are open `Task` issues with label
+`dx`, milestone `Code quality ratchet`, Backlog Status `Todo`, and Priority
+`P3`. Five exact owners filed concurrently were reused; the duplicate issues
+#981, #982, #983, #987, and #990 were closed as duplicates and removed from
+the Backlog. Owner-issue creation timestamps are 2026-08-13
+20:13:35–20:14:14 UTC, before the first code-move commit:
 
 - `server/tests/atompub/atompub_posts.rs` → #976
 - `server/src/commands.rs` → #977
 - `server/src/observability.rs` → #978
 - `storage/src/posts.rs` → #979
 - `common/src/media.rs` → #980
-- `storage/src/test_support.rs` → #981
-- `common/src/atompub/entry.rs` → #982
-- `storage/src/backup.rs` → #983
+- `storage/src/test_support.rs` → #963
+- `common/src/atompub/entry.rs` → #967
+- `storage/src/backup.rs` → #959
 - `xtask/src/steps/ident_gate.rs` → #984
 - `flake.nix` → #985
 - `xtask/src/traces/analyze.rs` → #986
-- `xtask/src/adr_readme.rs` → #987
+- `xtask/src/adr_readme.rs` → #973
 - `xtask/src/lib.rs` → #988
 - `xtask/src/adr.rs` → #989
-- `web/src/posts/component.rs` → #990
+- `web/src/posts/component.rs` → #974
 - `end2end/tests/fixtures.ts` → #991
 - `elisp/test/jaunder-test.el` → #992
 
