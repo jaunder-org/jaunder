@@ -1208,9 +1208,9 @@ fn EditSaveActions(
 /// The options aside shared by the two full-page compose shapes: slug and schedule
 /// while the post is still a draft, then summary, tags, audience and format.
 ///
-/// Shared by [`FullComposer`] and [`EditPostForm`] (#863): one aside, one field
-/// order, one id prefix — the two shapes never render on the same page, and
-/// separate copies would have to be edited in lockstep.
+/// Shared by [`FullComposer`] and [`EditPostForm`] (#863): one aside and one field
+/// order — the two shapes never render on the same page, and separate copies would
+/// have to be edited in lockstep.
 ///
 /// Emits a single wrapping `<div>` on purpose: both asides are flex columns with
 /// `gap:18px`, so a bare fragment would put 18px between every field.
@@ -1233,12 +1233,9 @@ fn ComposeOptions(
             {(!is_published)
                 .then(|| {
                     view! {
-                        <div class="j-field-row" style="grid-template-columns:auto 1fr">
-                            <label class="j-field-label" for="options-slug">
-                                "Slug"
-                            </label>
+                        <label class="j-field-row" style="grid-template-columns:auto 1fr">
+                            <span class="j-field-label">"Slug"</span>
                             <input
-                                id="options-slug"
                                 type="text"
                                 name="slug_override"
                                 placeholder="auto"
@@ -1256,22 +1253,24 @@ fn ComposeOptions(
                                     .is_touched()
                                     .then(|| slug_field.error.get())
                                     .flatten()
-                                    .map(|msg| view! { <p class="error">{msg}</p> })
+                                    .map(|msg| {
+                                        view! { <span class="error">{msg}</span> }
+                                    })
                             }}
-                        </div>
+                        </label>
                         // Optional schedule: a future time schedules the post;
                         // a past time backdates it; empty publishes immediately.
                         <div style="margin-top:10px">
-                            <label class="j-field-label" for="options-publish-at">
+                            <label class="j-field-label">
                                 "Publish at (optional)"
+                                <input
+                                    type="datetime-local"
+                                    name="publish_at"
+                                    class="j-field-val"
+                                    prop:value=state.publish_at
+                                    on:input=move |ev| state.publish_at.set(event_target_value(&ev))
+                                />
                             </label>
-                            <input
-                                id="options-publish-at"
-                                type="datetime-local"
-                                class="j-field-val"
-                                prop:value=state.publish_at
-                                on:input=move |ev| state.publish_at.set(event_target_value(&ev))
-                            />
                         </div>
                     }
                 })}

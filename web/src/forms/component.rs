@@ -59,7 +59,9 @@ fn Labelled(
                     .get()
                     .then(|| error.get())
                     .flatten()
-                    .map(|msg| view! { <p class="error">{msg}</p> })
+                    .map(|msg| {
+                        view! { <span class="error">{msg}</span> }
+                    })
             }}
         </label>
     }

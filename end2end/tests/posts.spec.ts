@@ -175,7 +175,7 @@ test("a blurred blank body shows the newtype's own message", async ({
 
   // Scoped to the body field's own wrapper, not matched on message text: a text-coupled
   // selector would silently start passing against some other field's error.
-  const bodyError = page.locator(".j-composer-field p.error");
+  const bodyError = page.locator(".j-composer-field span.error");
   await expect(bodyError).toHaveCount(0);
 
   await page.locator(SEL.postBody).click();
@@ -184,6 +184,7 @@ test("a blurred blank body shows the newtype's own message", async ({
   await expect(bodyError).toHaveText(
     "post body must contain at least one non-blank line",
   );
+  await expect(bodyError).toHaveCSS("display", "block");
 });
 
 // #860: the editor carried the same missing body clause — clearing the textarea left
@@ -524,8 +525,9 @@ test("editing a published post freezes the slug", async ({
     ready: SEL.postBody,
   });
 
-  // Published post should not have a slug_override input
+  // Published post should have neither unpublished-only option control.
   await expect(page.locator('input[name="slug_override"]')).not.toBeVisible();
+  await expect(page.locator('input[name="publish_at"]')).not.toBeVisible();
 
   // Save the published post (body already pre-filled from loaded post; slug stays frozen)
   await click(page, SEL.publishButton("true"));
@@ -1277,21 +1279,47 @@ test("authenticated user can delete a draft from the drafts page", async ({
 test("scheduling a post shows a Scheduled-for badge on the drafts page", async ({
   registeredPage,
 }) => {
-  test.slow();
   // A fixed far-future wall-clock time keeps the post unambiguously *scheduled*
   // no matter when the suite runs, with no Date arithmetic that could drift.
-  // The non-compact composer's optional schedule control is `#options-publish-at`
-  // (a `datetime-local` input); a future time plus Publish creates a post whose
+  // The non-compact composer's optional schedule control is selected by its
+  // semantic `publish_at` name; a future time plus Publish creates a post whose
   // `published_at` is in the future. Such posts surface on the drafts page with a
   // "Scheduled for …" badge (`.j-badge-scheduled`) rather than going live.
   const FUTURE_DATETIME_LOCAL = "2999-01-01T09:00";
 
   const page = await registeredPage("/posts/new");
+  const slug = page.locator('input[name="slug_override"]');
+  const slugLabel = page.locator(
+    'label.j-field-row:has(input[name="slug_override"])',
+  );
+  await expect(slugLabel).toHaveCount(1);
+  await expect(slugLabel.locator(":scope > .j-field-label")).toHaveText("Slug");
+  await expect(slug).not.toHaveAttribute("id", /.+/);
+  await expect(slugLabel).not.toHaveAttribute("for", /.+/);
+  await expect(slugLabel).toHaveCSS("grid-template-columns", /.+/);
+  expect(
+    await slugLabel.evaluate((label) => label.style.gridTemplateColumns),
+  ).toBe("auto 1fr");
+
+  const schedule = page.locator('input[name="publish_at"]');
+  const scheduleLabel = page.locator(
+    'label.j-field-label:has(input[name="publish_at"])',
+  );
+  await expect(scheduleLabel).toHaveCount(1);
+  await expect(scheduleLabel).toContainText("Publish at (optional)");
+  await expect(schedule).not.toHaveAttribute("id", /.+/);
+  await expect(scheduleLabel).not.toHaveAttribute("for", /.+/);
+  expect(
+    await scheduleLabel.evaluate(
+      (label) => (label.parentElement as HTMLElement).style.marginTop,
+    ),
+  ).toBe("10px");
+
   await page.fill(
     SEL.postBody,
     "# Scheduled Draft\n\nbody for a scheduled post",
   );
-  await page.fill("#options-publish-at", FUTURE_DATETIME_LOCAL);
+  await schedule.fill(FUTURE_DATETIME_LOCAL);
   await click(page, SEL.publishButton("true"));
   await waitForSelector(page, SEL.saveSummary);
 
@@ -1311,9 +1339,8 @@ test("scheduling a post shows a Scheduled-for badge on the drafts page", async (
 test("scheduling from the edit page shows a Scheduled-for badge on the drafts page", async ({
   registeredPage,
 }) => {
-  test.slow();
-  // The editor renders the same `#options-publish-at` the composer does
-  // (`ComposeOptions`, #863); this pins the editor side's id and behavior.
+  // The editor renders the same semantically named, implicitly labelled schedule
+  // control the composer does (`ComposeOptions`, #863).
   // Mirrors the composer-side test above, with one deliberate
   // difference in the settle step: a *scheduled* publish sets `published_at` to a
   // future instant, so `EditSaveOutcome` takes its `Ok(_)` "Redirecting…" arm rather
@@ -1347,7 +1374,22 @@ test("scheduling from the edit page shows a Scheduled-for badge on the drafts pa
   await expect(page.locator(SEL.topbarHeading)).toHaveText("Edit Post");
 
   // The post is still a draft, so the slug and schedule controls are rendered.
-  await page.fill("#options-publish-at", FUTURE_DATETIME_LOCAL);
+  const slug = page.locator('input[name="slug_override"]');
+  const slugLabel = page.locator(
+    'label.j-field-row:has(input[name="slug_override"])',
+  );
+  await expect(slugLabel).toContainText("Slug");
+  await expect(slug).not.toHaveAttribute("id", /.+/);
+  await expect(slugLabel).not.toHaveAttribute("for", /.+/);
+
+  const schedule = page.locator('input[name="publish_at"]');
+  const scheduleLabel = page.locator(
+    'label.j-field-label:has(input[name="publish_at"])',
+  );
+  await expect(scheduleLabel).toContainText("Publish at (optional)");
+  await expect(schedule).not.toHaveAttribute("id", /.+/);
+  await expect(scheduleLabel).not.toHaveAttribute("for", /.+/);
+  await schedule.fill(FUTURE_DATETIME_LOCAL);
   await click(page, SEL.publishButton("true"));
 
   // Settle before navigating, or the `goto` races the in-flight update. The signal is
