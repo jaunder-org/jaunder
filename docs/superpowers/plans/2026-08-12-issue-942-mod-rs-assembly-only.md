@@ -348,15 +348,18 @@ drafted, gitignored) · `CONTRIBUTING.md` · `docs/ARCHITECTURE.md`
 
 **Files:** `server/src/websub/mod.rs` → new `contract.rs`, `factory.rs`
 
-- [ ] `contract.rs`: `pub enum WebSubError` and
+- [x] `contract.rs`: `pub enum WebSubError` and
       `#[async_trait] pub trait WebSubClient` **with its doc comment intact** —
       it carries a `compile_fail` doctest and a positive one naming
       `jaunder::websub::{NoopWebSubClient, WebSubClient}`, and `doctest-fences`
       reconciles the fence population, so a dropped or unreachable fence is a
       gate failure.
-- [ ] `factory.rs`: `pub fn default_client` plus the `#[cfg(test)] mod tests`;
-      header `use super::{FileCapturingWebSubClient, HttpWebSubClient};`.
-- [ ] `mod.rs`: this file has no `//!` doc today — **do not add one** (Global
+- [x] `factory.rs`: `pub fn default_client` plus the `#[cfg(test)] mod tests`;
+      header `use super::{FileCapturingWebSubClient, HttpWebSubClient};` — plus
+      `WebSubClient`, which the return type `Arc<dyn WebSubClient>` names. The
+      tests additionally import `FeedUrl` directly: it was reaching them through
+      the old `mod.rs` preamble, which does not follow them here.
+- [x] `mod.rs`: this file has no `//!` doc today — **do not add one** (Global
       Constraints: docs follow their subject; inventing module docs is separate
       work). Keep the three `pub mod` + `pub use` lines **exactly where they
       are** — the existing wiring currently sits below the trait, and relocating
@@ -364,8 +367,11 @@ drafted, gitignored) · `CONTRIBUTING.md` · `docs/ARCHITECTURE.md`
       commit. Append
       `mod contract; pub use contract::{WebSubClient, WebSubError};` and
       `mod factory; pub use factory::default_client;`.
-- [ ] Confirm `file_capture.rs`/`http.rs`/`noop.rs` still resolve
-      `use super::{WebSubClient, WebSubError}` through the re-export.
+- [x] Confirm `file_capture.rs`/`http.rs`/`noop.rs` still resolve
+      `use super::{WebSubClient, WebSubError}` through the re-export. →
+      confirmed by a green gate, including `doctest-fences` and the Nix doctest
+      run, which is what proves the trait's `compile_fail` and positive fences
+      both survived the move.
 - **Verify:** `devtool run -- cargo xtask check` — `doctest-fences` green;
   `devtool run -- cargo nextest run -p jaunder websub` — PASS.
 - **Commit:**
