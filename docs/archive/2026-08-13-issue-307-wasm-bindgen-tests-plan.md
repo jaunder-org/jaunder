@@ -18,7 +18,7 @@ command.
 Crane/Nix, Chromium, chromedriver, `cargo xtask`.
 
 **Spec:**
-[`2026-08-13-issue-307-wasm-bindgen-tests.md`](../specs/2026-08-13-issue-307-wasm-bindgen-tests.md)
+[`2026-08-13-issue-307-wasm-bindgen-tests-spec.md`](2026-08-13-issue-307-wasm-bindgen-tests-spec.md)
 
 ## Review header
 
