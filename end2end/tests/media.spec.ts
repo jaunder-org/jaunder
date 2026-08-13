@@ -5,6 +5,8 @@ import {
   signInAsNewUser,
   click,
   waitForSelector,
+  failServerFn,
+  stallServerFn,
 } from "./helpers";
 import { createPostViaApi } from "./posts";
 import type { Page } from "@playwright/test";
@@ -73,13 +75,9 @@ test.describe("Media upload and serving", () => {
     expect(await serveResponse.text()).toBe("spaced filename content");
   });
 
-  test("the media row decodes its label but not its delete key", async ({
-    page,
-  }) => {
-    // The media library is a CSR view, so this is the only surface that can observe both
-    // spellings of one filename (#720). The link text and the hidden delete field
-    // diverge, and getting it wrong is invisible to type checking — the label would
-    // show `my%20holiday%20photo.jpg`, or the delete would fail at the wire door.
+  test("ordinary media delete confirms and removes unreferenced item", async ({ page }) => {
+    // The display label decodes the canonical filename while the typed request keeps
+    // the canonical identity needed by the delete boundary.
     await signInAsNewUser(page);
     await goto(page, "/");
 
@@ -98,25 +96,33 @@ test.describe("Media upload and serving", () => {
     // sibling media-page tests below — a bare `goto` races the CSR shell's mount.
     await click(page, "a[href='/media']");
     await waitForSelector(page, "button:has-text('Attach media')");
-
-    // Wait on the *label*, not the hidden input: `waitForSelector` waits for visibility,
-    // which a `type="hidden"` field never reaches.
-    //
-    // The label is cosmetic and decodes; the hidden field is the lookup key and does not.
     await expect(
       page.getByRole("link", { name: "my holiday photo.jpg" }),
     ).toBeVisible();
-    await expect(page.locator('input[name="filename"]')).toHaveValue(
-      "my%20holiday%20photo.jpg",
-    );
 
-    // And the round-trip: deleting through the form succeeds, which is the end-to-end
-    // check that the key was not decoded — `Filename`'s wire door rejects a raw value.
+    // The label is cosmetic and decodes. Successful deletion proves the typed request
+    // retained the encoded filename key expected by `Filename` at the wire boundary.
+    let deleteRequests = 0;
+    let listRequests = 0;
+    page.on("request", (request) => {
+      if (request.url().includes("/api/media/delete")) deleteRequests += 1;
+      if (request.url().includes("/api/media/list_mine")) listRequests += 1;
+    });
     page.on("dialog", (dialog) => dialog.accept());
-    await click(page, 'button:has-text("Delete")');
+    const button = page.getByRole("button", { name: "Delete", exact: true });
+    expect(await button.getAttribute("onclick")).toContain("Delete this media item?");
+
+    const release = await stallServerFn(page, "media/delete");
+    await button.click();
+    await expect.poll(() => deleteRequests).toBe(1);
+    await expect(button).toBeDisabled();
+    await button.click({ force: true });
+    expect(deleteRequests).toBe(1);
+    release();
     await expect(
       page.getByRole("link", { name: "my holiday photo.jpg" }),
     ).toHaveCount(0);
+    await expect.poll(() => listRequests).toBe(1);
   });
 
   test("unauthenticated upload is rejected", async ({ page }) => {
@@ -221,6 +227,38 @@ test.describe("Media delete guard", () => {
     return await response.json();
   }
 
+  function countMediaRequests(page: Page): {
+    deleteRequests: () => number;
+    listRequests: () => number;
+  } {
+    let deleteRequests = 0;
+    let listRequests = 0;
+    page.on("request", (request) => {
+      if (request.url().includes("/api/media/delete")) deleteRequests += 1;
+      if (request.url().includes("/api/media/list_mine")) listRequests += 1;
+    });
+    return {
+      deleteRequests: () => deleteRequests,
+      listRequests: () => listRequests,
+    };
+  }
+
+  async function submitOrdinaryDeleteOnce(page: Page): Promise<{
+    release: () => void;
+    deleteRequests: () => number;
+    listRequests: () => number;
+  }> {
+    const counts = countMediaRequests(page);
+    const release = await stallServerFn(page, "media/delete");
+    const button = page.getByRole("button", { name: "Delete", exact: true });
+    await button.click();
+    await expect.poll(counts.deleteRequests).toBe(1);
+    await expect(button).toBeDisabled();
+    await button.press("Enter");
+    expect(counts.deleteRequests()).toBe(1);
+    return { release, ...counts };
+  }
+
   /**
    * Opens the media library and clicks the row's Delete, accepting the confirm.
    *
@@ -237,9 +275,7 @@ test.describe("Media delete guard", () => {
     await page.getByRole("button", { name: "Delete", exact: true }).click();
   }
 
-  test("deleting media referenced by a post is refused, then forced", async ({
-    page,
-  }) => {
+  test("ordinary media delete confirms and refuses referenced item", async ({ page }) => {
     // The whole causal chain, which exists only end to end: rendering the post wrote
     // its post_media rows, and the guard reads them. No Rust test spans it.
     await signInAsNewUser(page);
@@ -248,10 +284,16 @@ test.describe("Media delete guard", () => {
       body: `![pic](${url})`,
     });
 
-    await attemptDelete(page);
-    // Naming the post is part of the contract, not decoration: asserting only the
-    // prefix would pass even if the lookup returned nothing and the guard refused on
-    // its own, leaving the message a dangling "referenced in post(s) .".
+    await goto(page, "/");
+    await click(page, "a[href='/media']");
+    await waitForSelector(page, "button:has-text('Attach media')");
+    page.on("dialog", (dialog) => dialog.accept());
+    const { release, deleteRequests, listRequests } =
+      await submitOrdinaryDeleteOnce(page);
+    release();
+    await expect.poll(deleteRequests).toBe(1);
+    await expect.poll(listRequests).toBe(0);
+    // Naming the post is part of the contract: this cannot pass on an empty lookup.
     await expect(
       page.getByText(
         new RegExp(`Cannot delete: referenced in post\\(s\\) ${post_id}\\.`),
@@ -261,11 +303,42 @@ test.describe("Media delete guard", () => {
     await expect(
       page.getByRole("link", { name: "referenced.jpg" }),
     ).toBeVisible();
+    const forceButton = page.getByRole("button", { name: /^Force delete / });
+    await expect(forceButton).toBeVisible();
+    expect(await forceButton.getAttribute("onclick")).toContain("Delete anyway?");
+  });
 
-    await page.getByRole("button", { name: /^Force delete / }).click();
+  test("forced media delete confirms, renders errors, and cannot double dispatch", async ({
+    page,
+  }) => {
+    await signInAsNewUser(page);
+    const { url } = await uploadMedia(page, "forced.jpg");
+    await createPostViaApi(page, { body: `![pic](${url})` });
+    await attemptDelete(page);
+    const forceButton = page.getByRole("button", { name: /^Force delete / });
+
+    await failServerFn(page, "media/delete");
+    await forceButton.click();
+    await expect(page.locator("p.error")).toBeVisible();
+    await expect(page.getByRole("link", { name: "forced.jpg" })).toBeVisible();
+    await page.unroute("**/api/media/delete");
+
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
     await expect(
-      page.getByRole("link", { name: "referenced.jpg" }),
-    ).toHaveCount(0);
+      page.getByText(/Cannot delete: referenced in post/),
+    ).toBeVisible();
+    await expect(forceButton).toBeVisible();
+    const counts = countMediaRequests(page);
+    const release = await stallServerFn(page, "media/delete");
+    await forceButton.click();
+    await expect.poll(counts.deleteRequests).toBe(1);
+    await expect(forceButton).toBeDisabled();
+    await forceButton.click({ force: true });
+    expect(counts.deleteRequests()).toBe(1);
+    release();
+
+    await expect(page.getByRole("link", { name: "forced.jpg" })).toHaveCount(0);
+    await expect.poll(counts.listRequests).toBe(1);
   });
 
   test("a post embedding the raw filename spelling blocks deletion", async ({

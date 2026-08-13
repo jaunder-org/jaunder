@@ -55,7 +55,7 @@ async fn media_usage_returns_defaults_for_authenticated_user(#[case] backend: Ba
 #[apply(backends_matrix)]
 #[case::media_usage(<web::media::GetUsage as ServerFn>::PATH, "")]
 #[case::list_my_media(<web::media::ListMine as ServerFn>::PATH, "")]
-#[case::delete_media(<web::media::Delete as ServerFn>::PATH, "sha256=deadbeef00000000000000000000000000000000000000000000000000000000&filename=test.png&source=upload")]
+#[case::delete_media(<web::media::Delete as ServerFn>::PATH, "request%5Bsha256%5D=deadbeef00000000000000000000000000000000000000000000000000000000&request%5Bfilename%5D=test.png&request%5Bsource%5D=upload")]
 #[tokio::test]
 async fn media_endpoint_rejects_unauthenticated_request(
     backend: Backend,
@@ -201,7 +201,7 @@ async fn list_my_media_with_source_filter(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
-async fn delete_media_succeeds_for_existing_item(#[case] backend: Backend) {
+async fn delete_nested_request_maps_identity_without_force(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
 
@@ -225,7 +225,7 @@ async fn delete_media_succeeds_for_existing_item(#[case] backend: Backend) {
 
     let cookie = session.cookie();
 
-    let body = "sha256=deadbeef01234567000000000000000000000000000000000000000000000000&filename=test.png&source=upload&force=false";
+    let body = "request%5Bsha256%5D=deadbeef01234567000000000000000000000000000000000000000000000000&request%5Bfilename%5D=test.png&request%5Bsource%5D=upload";
     let (status, body_str) = post_form(
         &state,
         <web::media::Delete as ServerFn>::PATH,
@@ -249,7 +249,7 @@ async fn delete_media_succeeds_for_existing_item(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
-async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend: Backend) {
+async fn delete_nested_request_refuses_referenced_without_force(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let user_id = session.user_id;
@@ -283,7 +283,7 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
 
     let cookie = session.cookie();
 
-    let body = "sha256=deadbeef99999999000000000000000000000000000000000000000000000000&filename=inline.png&source=upload&force=false";
+    let body = "request%5Bsha256%5D=deadbeef99999999000000000000000000000000000000000000000000000000&request%5Bfilename%5D=inline.png&request%5Bsource%5D=upload";
     let (status, body_str) = post_form(
         &state,
         <web::media::Delete as ServerFn>::PATH,
@@ -303,6 +303,57 @@ async fn delete_media_reports_referencing_posts_when_not_forced(#[case] backend:
         result.referenced_in_posts,
         vec![post.post_id],
         "referenced_in_posts should list the referencing post"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn delete_nested_request_maps_identity_with_force(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let session = create_user_and_session(&state).await;
+    let user_id = session.user_id;
+    let sha256 =
+        parse_content_hash("feedface99999999000000000000000000000000000000000000000000000000");
+    let filename = parse_filename("forced.png");
+    let media_url = common::media::media_url(&MediaSource::Upload, &sha256, &filename);
+    let record = MediaRecord {
+        user_id,
+        sha256: sha256.clone(),
+        filename: filename.clone(),
+        source: MediaSource::Upload,
+        content_type: parse_content_type("image/png"),
+        size_bytes: parse_byte_size("43"),
+        source_url: None,
+        created_at: Utc::now(),
+    };
+    state.media.create_media(&record).await.unwrap();
+    SeedRawPost::new(user_id)
+        .body(parse_post_body(&format!("![forced]({media_url})")))
+        .seed(&state)
+        .await;
+
+    let body = "request%5Bsha256%5D=feedface99999999000000000000000000000000000000000000000000000000&request%5Bfilename%5D=forced.png&request%5Bsource%5D=upload&request%5Bforce%5D=true";
+    let (status, body_str) = post_form(
+        &state,
+        <web::media::Delete as ServerFn>::PATH,
+        body,
+        Some(&session.cookie()),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK, "body: {body_str}");
+    let result: DeleteResult =
+        serde_json::from_str(&body_str).expect("response should be valid JSON");
+    assert!(result.deleted, "forced delete should remove referenced media");
+    assert!(result.referenced_in_posts.is_empty());
+    assert!(
+        state
+            .media
+            .get_media(user_id, &sha256, &filename, &MediaSource::Upload)
+            .await
+            .unwrap()
+            .is_none(),
+        "forced delete should remove the exact media identity"
     );
 }
 

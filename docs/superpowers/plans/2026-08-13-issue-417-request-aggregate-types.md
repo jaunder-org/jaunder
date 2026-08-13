@@ -315,16 +315,16 @@ pub async fn delete(request: DeleteMediaRequest) -> WebResult<DeleteResult>;
 
 Derive `Debug, Clone, Serialize, Deserialize`.
 
-- [ ] Adapt delete inputs to nested fields. Add
+- [x] Adapt delete inputs to nested fields. Add
       `delete_nested_request_maps_identity_without_force` and
       `delete_nested_request_maps_identity_with_force`; distinct hash/filename/
       source sentinels prove mapping. Omitted force refuses referenced deletion;
       `Some(true)` deletes the same item. Retain malformed typed-field
       rejection.
-- [ ] Run
+- [x] Run
       `devtool run -- devtool pg run -- cargo nextest run -p jaunder web::web_media`;
       expect RED. Implement the aggregate/handler/callers; rerun; expect GREEN.
-- [ ] Split/extend Playwright coverage with
+- [x] Split/extend Playwright coverage with
       `ordinary media delete confirms and removes unreferenced item`,
       `ordinary media delete confirms and refuses referenced item`, and
       `forced media delete confirms and cannot double dispatch`. Observe the
@@ -335,11 +335,11 @@ Derive `Debug, Clone, Serialize, Deserialize`.
       pending/dedup contract. Also observe distinct confirmation text, refusal
       rendering without list removal, forced success/error rendering, and
       exactly one list refresh/removal on success.
-- [ ] Run `devtool run -- cargo xtask e2e-local media.spec.ts`; expect RED.
+- [x] Run `devtool run -- cargo xtask e2e-local media.spec.ts`; expect RED.
       Replace both delete `ActionForm`s with native dispatch (`force: None` and
       `Some(true)`), preserving target tracking and confirmations. Rerun; expect
       GREEN.
-- [ ] Mandatory stage/check sequence; commit
+- [x] Mandatory stage/check sequence; commit
       `feat(web): aggregate media deletion requests`.
 
 ### Task 7: Population audit, architecture truth, and full gate

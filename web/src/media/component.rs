@@ -10,8 +10,8 @@ use common::pagination::{PageOffset, PageSize};
 use common::root_relative_url::RootRelativeUrl;
 
 use super::{
-    Delete, DeleteResult, Item, UploadCallbacks, UploadState, UsageData, format_bytes, get_usage,
-    list_mine, storage_usage_percent, upload,
+    Delete, DeleteMediaRequest, DeleteResult, Item, UploadCallbacks, UploadState, UsageData,
+    format_bytes, get_usage, list_mine, storage_usage_percent, upload,
 };
 use crate::error::{WebError, WebResult};
 use crate::topbar::Topbar;
@@ -122,21 +122,28 @@ fn uploaded_url_view(url: RootRelativeUrl) -> impl IntoView {
 #[component]
 pub fn MediaPage() -> impl IntoView {
     let delete_action = ServerAction::<Delete>::new();
+    let successful_deletes = RwSignal::new(0_u32);
+    Effect::new(move |_| {
+        if let Some(Ok(result)) = delete_action.value().get()
+            && result.deleted
+        {
+            successful_deletes.update(|version| *version += 1);
+        }
+    });
     let upload_version = RwSignal::new(0u32);
     // Which item the last Delete click was about. `DeleteResult` carries only the
     // referencing post ids, so the refusal branch cannot otherwise name the item it
-    // must offer a force-delete for, and `ServerAction::input()` reverts to `None` the
-    // moment the action resolves — which is exactly when the refusal renders.
+    // must offer a force-delete for.
     let delete_target = RwSignal::new(Option::<Item>::None);
 
     let usage = Resource::new(
-        move || (delete_action.version().get(), upload_version.get()),
-        |_: (usize, u32)| get_usage(),
+        move || (successful_deletes.get(), upload_version.get()),
+        |_: (u32, u32)| get_usage(),
     );
 
     let media_list = Resource::new(
-        move || (delete_action.version().get(), upload_version.get()),
-        |_: (usize, u32)| list_mine(None, Some(PageSize::default()), Some(PageOffset::default())),
+        move || (successful_deletes.get(), upload_version.get()),
+        |_: (u32, u32)| list_mine(None, Some(PageSize::default()), Some(PageOffset::default())),
     );
 
     view! {
@@ -312,90 +319,68 @@ fn MediaDeleteOutcome(
     }
 }
 
-/// The force-delete submission, rendered only in the refusal branch — the control the
-/// refusal message tells the user to reach for. It is the same `Delete` server fn as the
-/// row's button plus a `force` field, which the handler reads as
-/// `try_delete_media(…, force = true)`: the guard is overridden, the row goes, and the
-/// posts that embed it keep serving the file (which stays on disk).
-///
-/// The button's accessible name contains "Force delete" — the e2e selects on it.
-/// `+ use<>` — precise capturing, ADR-0100; see [`media_key_fields`], which this
-/// calls and whose captured lifetime would otherwise propagate in here.
+/// The force-delete submission rendered after an ordinary delete refuses a
+/// referenced item. It dispatches the same aggregate with `force: Some(true)`.
 fn force_delete_form(item: &Item, delete_action: ServerAction<Delete>) -> impl IntoView + use<> {
-    // The label decodes to the name the user typed; the key the form submits is
-    // `media_key_fields`'s canonical spelling (#720).
     let display_name = item.filename.decoded().into_owned();
-    // Built before the `view!`, like every other borrow off `item`: `ActionForm` takes its
-    // children as a `'static` closure, so nothing borrowed may be named inside it.
-    let key_fields = media_key_fields(item);
+    let request = DeleteMediaRequest {
+        sha256: item.sha256.clone(),
+        filename: item.filename.clone(),
+        source: item.source,
+        force: Some(true),
+    };
+    let submit = move |event: leptos::ev::SubmitEvent| {
+        event.prevent_default();
+        if !delete_action.pending().get() {
+            delete_action.dispatch(Delete {
+                request: request.clone(),
+            });
+        }
+    };
 
     view! {
-        <ActionForm action=delete_action>
-            {key_fields} <input type="hidden" name="force" value="true" />
+        <form on:submit=submit>
             <button
                 type="submit"
                 class="j-btn is-danger"
                 onclick="return confirm('Delete anyway? Posts that embed this item will keep pointing at it.')"
+                prop:disabled=move || delete_action.pending().get()
             >
                 {format!("Force delete {display_name}")}
             </button>
-        </ActionForm>
+        </form>
     }
 }
 
-/// The three hidden fields naming a media item to the [`Delete`] server fn — its wire
-/// key `(sha256, filename, source)`. Rendered by both submissions that can carry it,
-/// the row's Delete form and [`force_delete_form`], so the two cannot drift apart.
-///
-/// Each value takes an owned `String` view here: `ContentHash`, `Filename` and
-/// `MediaSource` implement neither Leptos `IntoView` nor `IntoAttributeValue`.
-///
-/// `filename` is the *key* that round-trips to `media::delete(filename: Filename)`, so
-/// it stays the canonical spelling — the other half of the two-roles/two-spellings split
-/// whose cosmetic half is each caller's `display_name` (#720). Decoding the key would
-/// make every delete of an encoding-needing name fail at the wire door — loudly, since
-/// `Filename`'s `FromStr` rejects a raw value, but fail all the same.
-/// `+ use<>` — precise capturing, ADR-0100. The three values are stringified before
-/// the `view!`, so nothing is lent across it; saying so explicitly is what lets this
-/// keep `&Item` under edition 2024. Both callers below inherit the same requirement.
-fn media_key_fields(item: &Item) -> impl IntoView + use<> {
-    let sha256 = item.sha256.to_string();
-    let filename_key = item.filename.to_string();
-    let source = item.source.to_string();
 
-    view! {
-        <input type="hidden" name="sha256" value=sha256 />
-        <input type="hidden" name="filename" value=filename_key />
-        <input type="hidden" name="source" value=source />
-    }
-}
-
-/// One row of the media table: the link, the metadata cells, and the delete form.
-///
-/// `+ use<>` — precise capturing, ADR-0100; see [`media_key_fields`], which this
-/// calls and whose captured lifetime would otherwise propagate in here.
+/// One row of the media table: the link, metadata, and typed ordinary-delete form.
 fn render_media_row(
     item: &Item,
     delete_action: ServerAction<Delete>,
     delete_target: RwSignal<Option<Item>>,
 ) -> impl IntoView + use<> {
-    // Same reason as `display_name` below: `RootRelativeUrl` is not an
-    // `IntoAttributeValue`, so the `href` gets its `str` view here.
     let url = item.url.to_string();
-    // The cosmetic half of the #720 split (see `media_key_fields` for the key half):
-    // the label decodes to the name the user typed.
     let display_name = item.filename.decoded().into_owned();
     let source = item.source.to_string();
     let size_label = format_bytes(item.size_bytes);
     let created_at = item.created_at.to_string();
     let content_type = item.content_type.to_string();
-    // See `force_delete_form`: `ActionForm`'s children are a `'static` closure, so the
-    // hidden fields are built out here rather than named inside the `view!`.
-    let key_fields = media_key_fields(item);
-    // Remembered on click rather than on submit: the refusal branch needs the identity of
-    // whatever the response comes back about, and a click the confirm dialog then cancels
-    // sets it harmlessly — nothing reads it until a refusal actually arrives.
     let target = item.clone();
+    let request = DeleteMediaRequest {
+        sha256: item.sha256.clone(),
+        filename: item.filename.clone(),
+        source: item.source,
+        force: None,
+    };
+    let submit = move |event: leptos::ev::SubmitEvent| {
+        event.prevent_default();
+        if !delete_action.pending().get() {
+            delete_target.set(Some(target.clone()));
+            delete_action.dispatch(Delete {
+                request: request.clone(),
+            });
+        }
+    };
 
     view! {
         <tr>
@@ -409,17 +394,16 @@ fn render_media_row(
             <td>{source}</td>
             <td>{created_at}</td>
             <td>
-                <ActionForm action=delete_action>
-                    {key_fields}
+                <form on:submit=submit>
                     <button
                         type="submit"
                         class="j-btn is-danger"
                         onclick="return confirm('Delete this media item?')"
-                        on:click=move |_| delete_target.set(Some(target.clone()))
+                        prop:disabled=move || delete_action.pending().get()
                     >
                         "Delete"
                     </button>
-                </ActionForm>
+                </form>
             </td>
         </tr>
     }
