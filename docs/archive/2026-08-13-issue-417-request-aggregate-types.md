@@ -377,6 +377,6 @@ devtool run -- cargo xtask e2e-local media.spec.ts
       coverage, SQLite/PostgreSQL, and Chromium/Firefox.
 - [x] Mandatory stage/check sequence; commit docs/audit corrections as
       `docs: record request-aggregate boundary`.
-- [ ] Hand off to `jaunder-ship`: final review/rebase, promote the draft ADR
+- [x] Hand off to `jaunder-ship`: final review/rebase, promote the draft ADR
       (rewriting/staging its architecture citation), gate, push/open/monitor PR,
       and halt before merge.
