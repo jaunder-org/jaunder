@@ -243,14 +243,14 @@ endpoint. Attribution is an **ancestor walk** up `parent_span_id` to a known
 `e2e.test` span — `uri` hits resolve in one hop, span-name hits in two.
 
 **The span name is matched forward, from the inventory — never inverted out of
-the name.** This repo has already had two naming regimes: `server-fn-tracing`
-writes `web.<vertical>.<ident>` today (#511, ADR-0011), while omitting the
-explicit `name` derives `__server_<ident>`, because `#[server]` relocates the
-annotated body — and its `#[tracing::instrument]` — into a generated fn of that
-name (`server_fn_macro`'s `to_dummy_ident`). The extractor computes every
-candidate for each inventory fn and accepts any, so a regime change is a code
-update rather than a silent outage. An earlier version matched one shape only
-and therefore matched **nothing**, silently: `uri` covered the same fns, so the
+the name.** This repo has already had two naming regimes: `#[macros::server]`
+derives `web.<vertical>.<ident>` today (#714), while omitting the explicit
+`name` derives `__server_<ident>`, because `#[server]` relocates the annotated
+body — and its `#[tracing::instrument]` — into a generated fn of that name
+(`server_fn_macro`'s `to_dummy_ident`). The extractor computes every candidate
+for each inventory fn and accepts any, so a regime change is a code update
+rather than a silent outage. An earlier version matched one shape only and
+therefore matched **nothing**, silently: `uri` covered the same fns, so the
 union looked healthy. That is why
 `each_signal_finds_fns_on_its_own_in_the_real_capture` measures the two signals
 **separately** against the committed capture, asserting each alone covers

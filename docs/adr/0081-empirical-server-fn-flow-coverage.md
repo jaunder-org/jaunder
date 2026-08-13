@@ -84,6 +84,14 @@ Concretely:
   parsing them out of the observation**, so a regime change is a code update
   that a test catches, not a silent outage.
 
+  > **Annotation (2026-08-12).** `server-fn-tracing` no longer authors the span
+  > name: `#[macros::server]` derives it (#714, and ADR-0011's 2026-07-30
+  > addendum). The gate survives as the recordable-type default-deny and its
+  > siblings. The decision this bullet records — match the name forward from the
+  > inventory, never invert it — is unchanged, and the cautionary tale is
+  > stronger for it: the regime moved a third time, and the extractor needed no
+  > edit.
+
 - **`code.namespace` disambiguates, not the name.** `web.<vertical>.<ident>`
   uses the module's _first_ segment, so `posts::api` and `posts::api::listing`
   both render `web.posts.…` — a lossy key. `(module, ident)` cannot collide,
