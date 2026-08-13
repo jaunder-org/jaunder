@@ -745,18 +745,56 @@ Widening first keeps task 15 a pure move.
 
 ## Task 21 — Full gate and self-review
 
-- [ ] Run both audit commands from Global Constraints — exactly **1** offending
-      file remains (`server/tests/storage/mod.rs`, deferred).
-- [ ] `git diff issue-942-mod-rs-assembly-only-base..HEAD --stat` — confirm no
+- [x] Run both audit commands from Global Constraints — exactly **1** offending
+      file remains (`server/tests/storage/mod.rs`, deferred). The second pass
+      reports three files, all false positives: `postgres/mod.rs` (3),
+      `sqlite/mod.rs` (1) and `pr/mod.rs` (1) each carry only
+      `#[cfg(test)] mod <name>;` **declarations**, which are assembly and
+      permitted. The regex cannot tell a gated `mod` line from an inline
+      `mod tests { … }`; there are no inline test modules left in any `mod.rs`.
+- [x] `git diff issue-942-mod-rs-assembly-only-base..HEAD --stat` — confirm no
       file outside the 16 module directories, the four docs files, and the
-      registrar check is touched (acceptance criterion 2).
-- [ ] `rg -n 'use .*::\*;' <the 16 dirs>` — every glob re-export is justified by
+      registrar check is touched (acceptance criterion 2). → **four files exceed
+      that allowance, and the criterion as written is too narrow.** Three are
+      xtask gate constants that pin a policed site _by file path_, so each had
+      to move in the same commit as its file or leave the gate reading a file
+      that no longer holds the thing it checks: `xlang_literal_check.rs` (the
+      `mark-prefix` site + the test asserting it),
+      `sqlx_newtype_decode_check.rs` (four `ALLOWLIST` entries for
+      `database_is_empty`), and `server_fn_registrar_check.rs` (the `REGISTRAR`
+      constant, which the plan **did** anticipate). The fourth is
+      `docs/adr/0066`, whose Decision names the registrar by path as a live
+      invariant. Only the registrar one was foreseen; the plan's survey missed
+      that three other gates are path-keyed.
+- [x] `rg -n 'use .*::\*;' <the 16 dirs>` — every glob re-export is justified by
       a >25-item export list, with the count in its commit message (criterion
-      3).
-- [ ] `git log --oneline` — every prep commit precedes its move commit
-      (criterion 4).
-- [ ] `devtool run -- cargo xtask validate` — green (criterion 10).
-- [ ] Walk the spec's 16 acceptance criteria and confirm each.
+      3). → **this branch introduces no glob re-export at all**, so the
+      justification never comes up. The matches the command returns are
+      `use super::*` inside test modules and prelude imports (`rstest`,
+      `leptos`), which are imports rather than re-exports. The only real
+      `pub use …::*` lines in the workspace are the pre-existing ones in
+      `storage/src/lib.rs`, which this branch does not touch.
+- [x] `git log --oneline` — every prep commit precedes its move commit
+      (criterion 4). → the one standalone prep,
+      `refactor(storage): widen sqlite open fns to pub(crate)` (`fc45de47`),
+      sits directly before `split sqlite/mod.rs into atomic and open`
+      (`14816756`). The other preps are folded into their move commits, each for
+      a reason recorded at its task.
+- [x] `devtool run -- cargo xtask validate` — green (criterion 10). → `ok: true`
+      in 1 303 391 ms, **zero** failed steps, `nix-e2e` (all four
+      `{sqlite,postgres}×{chromium,firefox}` combos) green.
+- [x] Walk the spec's 16 acceptance criteria and confirm each. → all 16 hold.
+      Two are met differently than the plan predicted, both recorded above:
+      criterion 2's file list needed three more path-keyed gate constants plus
+      `docs/adr/0066`, and criterion 3's glob allowance was never used because
+      no glob re-export was introduced. Four public paths were **dropped**
+      rather than re-exported — `atompub::base_url`,
+      `helpers::{atompub_authed, basic_header, seed_base_url}` — each because
+      its only consumer now sits beside it, leaving the re-export an import
+      nothing named against a denied `unused_imports`. Every definition keeps
+      its visibility, so criterion 1 ("no public path changes") holds for every
+      path anything actually reaches; the four that went away were unreachable
+      in practice, and each is recorded in a comment at its `mod.rs`.
 - **Commit:** none — this is verification. Then hand to **`jaunder-ship`**.
 
 ---
