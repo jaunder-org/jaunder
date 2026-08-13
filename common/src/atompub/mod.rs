@@ -41,41 +41,8 @@ pub use rsd::render_rsd_document;
 /// its own error type (the server turns it into a `400`).
 pub use atom_syndication::{Category, Content, Entry, Error as AtomError, Link, Text};
 
-use thiserror::Error;
+mod ns;
+pub use ns::{APP_NS, ATOM_NS, J_NS};
 
-/// The `AtomPub` Atom namespace URI.
-pub const ATOM_NS: &str = "http://www.w3.org/2005/Atom";
-/// The Atom Publishing Protocol control namespace URI (RFC 5023 §B).
-pub const APP_NS: &str = "http://www.w3.org/2007/app";
-/// Jaunder foreign-markup namespace (ADR-0023): `j:slug`, `j:extension`.
-pub const J_NS: &str = "https://jaunder.org/ns/atompub";
-
-/// An `AtomPub` document could not be **written**.
-///
-/// There is deliberately no read counterpart. `atom_syndication` owns parsing, so
-/// a document the client sent that will not parse surfaces as [`AtomError`] and
-/// each consumer maps it at its own boundary (the server: a `400`). Failing to
-/// write a document we composed ourselves is never the client's fault, so the two
-/// directions are separate types rather than two variants of one — which is what
-/// keeps a serialization failure off the `400` path.
-#[derive(Debug, Error)]
-#[error("failed to serialize AtomPub document: {0}")]
-pub struct AtomPubError(String);
-
-impl AtomPubError {
-    /// Wraps the cause of a failed write.
-    #[must_use]
-    pub fn new(cause: impl Into<String>) -> Self {
-        Self(cause.into())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn serialize_error_displays_its_cause() {
-        assert!(AtomPubError::new("boom").to_string().contains("boom"));
-    }
-}
+mod error;
+pub use error::AtomPubError;

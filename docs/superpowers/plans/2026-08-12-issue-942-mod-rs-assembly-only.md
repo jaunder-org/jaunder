@@ -180,18 +180,23 @@ drafted, gitignored) · `CONTRIBUTING.md` · `docs/ARCHITECTURE.md`
 
 **Files:** `common/src/atompub/mod.rs` → new `ns.rs`, `error.rs`
 
-- [ ] `ns.rs`: the three `pub const` (`ATOM_NS`, `APP_NS`, `J_NS`) with their
+- [x] `ns.rs`: the three `pub const` (`ATOM_NS`, `APP_NS`, `J_NS`) with their
       docs.
-- [ ] `error.rs`: `pub struct AtomPubError`, its `#[derive(Debug, Error)]` /
+- [x] `error.rs`: `pub struct AtomPubError`, its `#[derive(Debug, Error)]` /
       `#[error(...)]` attributes, the inherent
       `impl AtomPubError { pub fn new }`, the `#[cfg(test)] mod tests` (1 test),
-      and `use thiserror::Error;`.
-- [ ] `mod.rs`: keep the `//!` doc, `mod xml;`, the four `pub mod` + `pub use`
+      and `use thiserror::Error;`. → **one deviation from verbatim**: the doc
+      comment links `[`AtomError`]`, which resolved in `mod.rs` because the
+      `atom_syndication` re-export is there. In `error.rs` it does not, and
+      `doc-links` is a gate, so the doc gained an explicit
+      `[`AtomError`]: crate::atompub::AtomError` target.
+- [x] `mod.rs`: keep the `//!` doc, `mod xml;`, the four `pub mod` + `pub use`
       pairs, and the `pub use atom_syndication::{…}` block. Add
       `mod ns; pub use ns::{APP_NS, ATOM_NS, J_NS};` and
       `mod error; pub use error::AtomPubError;`.
-- [ ] Check `xml.rs`/`entry.rs` for `use super::{ATOM_NS, …}` — the re-export
-      keeps those resolving; confirm rather than assume.
+- [x] Check `xml.rs`/`entry.rs` for `use super::{ATOM_NS, …}` — the re-export
+      keeps those resolving; confirm rather than assume. → confirmed by a green
+      gate; no consumer needed editing.
 - **Verify:** `devtool run -- cargo nextest run -p common` — PASS.
 - **Commit:**
   `refactor(common): move atompub constants and error out of mod.rs (#942)`
