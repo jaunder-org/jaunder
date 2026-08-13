@@ -43,13 +43,13 @@ integration tests).
 Adopt **C + mandatory + a `syn`-based `xtask` gate**.
 
 - **One registrar.**
-  `server/tests/helpers/mod.rs::ensure_server_fns_registered()` is the sole
-  list. The `server/src/lib.rs` subset is deleted and its registration-dependent
-  router tests are relocated to an integration test that calls the shared
-  helper. Relocation (rather than a shared `test-support` fn) is chosen because
-  `server_fn` is dev-only: relocation reuses the existing integration idiom
-  (`jaunder::create_router` + `ensure_server_fns_registered`) with zero
-  Cargo/feature surface.
+  `server/tests/helpers/registrar.rs::ensure_server_fns_registered()` is the
+  sole list. The `server/src/lib.rs` subset is deleted and its
+  registration-dependent router tests are relocated to an integration test that
+  calls the shared helper. Relocation (rather than a shared `test-support` fn)
+  is chosen because `server_fn` is dev-only: relocation reuses the existing
+  integration idiom (`jaunder::create_router` + `ensure_server_fns_registered`)
+  with zero Cargo/feature surface.
 - **Mandatory.** Every `web` `#[server]` fn must appear in the registrar; there
   is no per-fn opt-out. Registration is harmless (it only makes a route
   available), so the pre-existing gaps are registered, not exempted.

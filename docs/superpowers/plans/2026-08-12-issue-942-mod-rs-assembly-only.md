@@ -652,15 +652,21 @@ Widening first keeps task 15 a pure move.
 > fails the hook twice over. The gate is already fail-loud; do **not** add
 > hardening the spec does not ask for.
 
-- [ ] Change `const REGISTRAR: &str = "server/tests/helpers/mod.rs";`
+- [x] Change `const REGISTRAR: &str = "server/tests/helpers/mod.rs";`
       (`server_fn_registrar_check.rs:62`) to
-      `"server/tests/helpers/registrar.rs"`.
+      `"server/tests/helpers/registrar.rs"`. Its module doc names the same path
+      one line 3, and is corrected with it.
+- [x] **`docs/adr/0066` names the registrar by path in its Decision**, as a live
+      invariant ("… is the sole list"), and no gate would have caught the dangle
+      — `doc-links` sees inline code, not a link. Re-pointed at `registrar.rs`.
+      The other four ADR mentions (0026, 0033, 0067, and 0066's Context) are
+      historical narrative about where the file _was_, and stay as written.
 
-- [ ] `registrar.rs`: `pub fn ensure_server_fns_registered` (the 55
+- [x] `registrar.rs`: `pub fn ensure_server_fns_registered` (the 55
       `register_explicit::<…>()` calls) and
       `pub const REGISTERED_SERVER_FN_COUNT`, with the doc block explaining the
       count.
-- [ ] `session.rs`: `pub struct SeededSession` + its inherent `impl` (`cookie`,
+- [x] `session.rs`: `pub struct SeededSession` + its inherent `impl` (`cookie`,
       `seed_post`), `async fn issue_session`, `seed_and_session`,
       `create_session_for`, `create_user_and_session`,
       `create_operator_and_session`, `fn tmp_storage_path`, `session_cookie`,
@@ -668,24 +674,31 @@ Widening first keeps task 15 a pure move.
       `setup_with_base_url`, `assert_one_absolute_link_email`,
       `assert_no_email`. The private `issue_session`/`seed_and_session` stay
       with their only consumers (cohesion rule 2), so no widening.
-- [ ] `atompub.rs`: the whole builder family — `atompub_authed`, `atompub_xml`,
+- [x] `atompub.rs`: the whole builder family — `atompub_authed`, `atompub_xml`,
       `atompub_uri`, `atompub`, `atompub_at`, `atompub_get`, `atompub_send_xml`,
       `atompub_post_xml`, `atompub_put_xml`, `atompub_upload`. Takes
       `&SeededSession`, so `use super::session::SeededSession;` — a one-way
       dependency on `session.rs`.
-- [ ] `http.rs`: `enum Auth<'a>`, `enum PostBody` + inherent `impl`,
+- [x] `http.rs`: `enum Auth<'a>`, `enum PostBody` + inherent `impl`,
       `async fn post_inner`, `post_form`, `post_form_with_mailer`,
       `post_form_with_secure_flag`, `post_form_with_ua`,
       `post_form_with_bearer`, `post_json`, `pub struct MultipartFile<'a>`,
       `post_multipart`, `get_asset`, `body_string`, `make_app`. The private
       `Auth`/`PostBody`/`post_inner` stay with their wrappers — no widening.
-- [ ] `mod.rs`: keep the header comment and
+- [x] `mod.rs`: keep the header comment and
       `mod websub_capturing; pub use websub_capturing::CapturingWebSubClient;`.
       Add the four `mod` lines and explicit `pub use` lists. ADR-0067 makes
       `crate::helpers::…` the documented import path for every subsystem, so the
       re-exports must cover everything currently reachable — check each
-      subsystem still compiles rather than eyeballing the list.
-- [ ] No `#[cfg(test)]` anywhere here (the whole tree is a test target), and
+      subsystem still compiles rather than eyeballing the list. → checking is
+      what caught it: **three items are not re-exported** — `atompub_authed`,
+      `basic_header`, `seed_base_url`. Each is now consumed only from inside the
+      directory, so its re-export imported something nothing outside named, and
+      `unused_imports` is denied. `seed_base_url`'s one out-of-directory mention
+      is a comment saying a test deliberately does _not_ call it. Every
+      definition keeps its `pub`; only unreachable paths went away, and `mod.rs`
+      records why.
+- [x] No `#[cfg(test)]` anywhere here (the whole tree is a test target), and
       `server/tests/main.rs`'s crate-level
       `#![expect(clippy::unwrap_used, clippy::expect_used)]` covers new siblings
       automatically — add no per-file suppression.
