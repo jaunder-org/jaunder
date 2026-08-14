@@ -121,18 +121,65 @@ impl Drop for ServerChild {
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct PlaywrightInvocation {
+    label: &'static str,
+    args: Vec<String>,
+}
+
+fn playwright_invocations(test_filter: Option<&str>) -> Vec<PlaywrightInvocation> {
+    let owned = |args: &[&str]| args.iter().map(|arg| (*arg).to_owned()).collect();
+    match test_filter {
+        None => vec![PlaywrightInvocation {
+            label: "ordinary",
+            args: owned(&[
+                "test",
+                "--project",
+                "chromium",
+                "--project",
+                "chromium-admin",
+                "--reporter=html,line",
+            ]),
+        }],
+        Some(filter) => vec![
+            PlaywrightInvocation {
+                label: "visual",
+                args: owned(&[
+                    "test",
+                    "--project",
+                    "chromium-visual",
+                    "--no-deps",
+                    "--pass-with-no-tests",
+                    "--reporter=html,line",
+                    filter,
+                ]),
+            },
+            PlaywrightInvocation {
+                label: "ordinary",
+                args: owned(&[
+                    "test",
+                    "--project",
+                    "chromium",
+                    "--project",
+                    "chromium-admin",
+                    "--no-deps",
+                    "--pass-with-no-tests",
+                    "--reporter=html,line",
+                    filter,
+                ]),
+            },
+        ],
+    }
+}
+
 fn record_post_playwright_results(
     result: &mut CommandResult,
-    playwright_ok: bool,
+    playwright_result: Result<(), String>,
     panic_gate_result: Result<(), String>,
 ) {
-    if playwright_ok {
-        result.push(StepResult::ok("e2e-local-playwright"));
-    } else {
-        result.push(
-            StepResult::fail("e2e-local-playwright")
-                .detail("Playwright reported failures".to_owned()),
-        );
+    match playwright_result {
+        Ok(()) => result.push(StepResult::ok("e2e-local-playwright")),
+        Err(detail) => result.push(StepResult::fail("e2e-local-playwright").detail(detail)),
     }
 
     match panic_gate_result {
@@ -286,27 +333,26 @@ pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
         std::env::var("PATH").unwrap_or_default()
     );
     sh.change_dir(format!("{root}/end2end"));
-    let mut pw: Vec<&str> = vec![
-        "test",
-        "--project",
-        "chromium",
-        "--project",
-        "chromium-admin",
-        "--reporter=html,line",
-    ];
-    if let Some(f) = test_filter {
-        pw.push(f);
+    let mut playwright_result = Ok(());
+    for invocation in playwright_invocations(test_filter) {
+        let playwright_ok = cmd!(sh, "playwright")
+            .args(&invocation.args)
+            .env("JAUNDER_E2E_BASE_URL", &base_url)
+            .env("JAUNDER_DB", &db)
+            .env("JAUNDER_CAPTURE_DIR", &capture)
+            .env("JAUNDER_E2E_WORKERS", &workers)
+            .env("PLAYWRIGHT_HTML_OPEN", "never")
+            .env("PATH", &path)
+            .run()
+            .is_ok();
+        if !playwright_ok {
+            playwright_result = Err(format!(
+                "{} Playwright invocation reported failures",
+                invocation.label
+            ));
+            break;
+        }
     }
-    let playwright_ok = cmd!(sh, "playwright")
-        .args(pw)
-        .env("JAUNDER_E2E_BASE_URL", &base_url)
-        .env("JAUNDER_DB", &db)
-        .env("JAUNDER_CAPTURE_DIR", &capture)
-        .env("JAUNDER_E2E_WORKERS", &workers)
-        .env("PLAYWRIGHT_HTML_OPEN", "never")
-        .env("PATH", &path)
-        .run()
-        .is_ok();
 
     // Stop first: child exit closes stderr, so a successful stop also proves the
     // mirror reached EOF and flushed the complete verifier input.
@@ -323,7 +369,7 @@ pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
     )
     .run()
     .map_err(|_| "shared zero-panic verifier failed".to_owned());
-    record_post_playwright_results(result, playwright_ok, panic_gate_result);
+    record_post_playwright_results(result, playwright_result, panic_gate_result);
     // `storage` drops here after the server is reaped and verification has read
     // its per-run files.
 }
@@ -347,6 +393,65 @@ mod tests {
         assert_eq!(base_url_from_runtime(r#"{"ip":"127.0.0.1"}"#), None); // no port
     }
 
+    fn owned(args: &[&str]) -> Vec<String> {
+        args.iter().map(|arg| (*arg).to_owned()).collect()
+    }
+
+    #[test]
+    fn unfiltered_run_keeps_project_dependencies_enabled() {
+        let plan = playwright_invocations(None);
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].label, "ordinary");
+        assert_eq!(
+            plan[0].args,
+            owned(&[
+                "test",
+                "--project",
+                "chromium",
+                "--project",
+                "chromium-admin",
+                "--reporter=html,line",
+            ])
+        );
+    }
+
+    #[test]
+    fn filtered_run_scopes_visual_and_ordinary_invocations() {
+        let plan = playwright_invocations(Some("auth.spec.ts"));
+        assert_eq!(
+            plan.iter()
+                .map(|invocation| invocation.label)
+                .collect::<Vec<_>>(),
+            vec!["visual", "ordinary"]
+        );
+        assert_eq!(
+            plan[0].args,
+            owned(&[
+                "test",
+                "--project",
+                "chromium-visual",
+                "--no-deps",
+                "--pass-with-no-tests",
+                "--reporter=html,line",
+                "auth.spec.ts",
+            ])
+        );
+        assert_eq!(
+            plan[1].args,
+            owned(&[
+                "test",
+                "--project",
+                "chromium",
+                "--project",
+                "chromium-admin",
+                "--no-deps",
+                "--pass-with-no-tests",
+                "--reporter=html,line",
+                "auth.spec.ts",
+            ])
+        );
+    }
+
     #[test]
     fn stderr_mirror_copies_every_byte_to_both_sinks() {
         let input = b"first\n\xff panicked at src/x.rs:1:2: boom\n";
@@ -365,7 +470,7 @@ mod tests {
 
         record_post_playwright_results(
             &mut result,
-            false,
+            Err("visual Playwright invocation reported failures".to_owned()),
             Err("shared verifier rejected a panic".to_owned()),
         );
 
@@ -391,7 +496,7 @@ mod tests {
     #[test]
     fn clean_post_playwright_results_are_both_successful() {
         let mut result = CommandResult::new("e2e-local");
-        record_post_playwright_results(&mut result, true, Ok(()));
+        record_post_playwright_results(&mut result, Ok(()), Ok(()));
         assert!(result.ok);
         assert_eq!(
             result

@@ -157,7 +157,7 @@ test(e2e): add deterministic visual project harness (#308)
 - The public CLI remains `cargo xtask e2e-local [<spec-or-file:line>]`; this
   task does not expose update mode.
 
-- [ ] **Step 1: Add failing pure-plan tests**
+- [x] **Step 1: Add failing pure-plan tests**
 
 Add unit tests for the unfiltered and filtered plans. Assert complete ordered
 argument vectors, including:
@@ -175,7 +175,7 @@ devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml e2e_local
 
 Expected: FAIL because the pure planner does not exist.
 
-- [ ] **Step 2: Implement and consume the normal-mode plan**
+- [x] **Step 2: Implement and consume the normal-mode plan**
 
 Move Playwright argument construction out of the lifecycle body. Execute each
 planned invocation against the existing base URL, DB, capture directory, worker
@@ -184,7 +184,7 @@ failure, but retain unconditional server teardown and zero-panic verification.
 
 Run the Step 1 command again. Expected: PASS.
 
-- [ ] **Step 3: Exercise both public normal paths**
+- [x] **Step 3: Exercise both public normal paths**
 
 Run:
 
@@ -197,10 +197,10 @@ invocation selects nothing and passes; the filtered ordinary invocation runs
 `auth.spec.ts`. The unfiltered path remains pinned by the pure-plan test and
 will be exercised by the full browser gates after Task 4.
 
-- [ ] **Step 4: Gate, stage, and commit Task 2**
+- [x] **Step 4: Gate, stage, and commit Task 2**
 
-Run `devtool run -- cargo xtask check`. Stage `xtask/src/steps/e2e_local.rs`.
-Commit:
+Run `devtool run -- cargo xtask check`. Stage `xtask/src/steps/e2e_local.rs` and
+this plan. Commit:
 
 ```text
 refactor(xtask): preserve filtered e2e project scope (#308)
