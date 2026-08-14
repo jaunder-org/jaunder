@@ -33,15 +33,22 @@ pub struct Info {
     pub used_by: Option<UserId>,
 }
 
-/// Creates an invite code expiring in `expires_in_hours` (default 168 = 7 days) and
-/// **emails the invitation link** to `recipient_email`. Requires authentication. The
-/// code is never returned to the client (#400) — it is delivered only as the link in
-/// the email (mirrors `password_reset::request`).
-#[macros::server(skip(recipient_email))]
-pub async fn create(
-    expires_in_hours: Option<InviteTtlHours>,
-    recipient_email: Email,
-) -> WebResult<()> {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateInviteRequest {
+    pub expires_in_hours: Option<InviteTtlHours>,
+    pub recipient_email: Email,
+}
+
+/// Creates an invite code expiring in `request.expires_in_hours` (default 168 = 7
+/// days) and **emails the invitation link** to `request.recipient_email`. Requires
+/// authentication. The code is never returned to the client (#400) — it is delivered
+/// only as the link in the email (mirrors `password_reset::request`).
+#[macros::server(skip_all)]
+pub async fn create(request: CreateInviteRequest) -> WebResult<()> {
+    let CreateInviteRequest {
+        expires_in_hours,
+        recipient_email,
+    } = request;
     let _auth = require_auth().await?;
     let invites = expect_context::<Arc<dyn InviteStorage>>();
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();

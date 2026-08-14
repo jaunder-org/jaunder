@@ -18,6 +18,13 @@ use common::password::ProfferedPassword;
 use common::registration::RegistrationPolicy;
 use common::username::Username;
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RegistrationRequest {
+    pub username: Username,
+    pub password: ProfferedPassword,
+    pub invite_code: Option<ProfferedInviteCode>,
+}
+
 // One grouped `feature = "server"` support block for the `#[server]` bodies.
 // `set_session_cookie` is auth's — registration logs the freshly-created user in
 // through it.
@@ -51,12 +58,13 @@ pub async fn get_policy() -> WebResult<RegistrationPolicy> {
 /// the body (#533), so an XSS at registration time has no credential to read. The
 /// rule is recorded in
 /// `docs/adr/0107-web-session-establishment-is-cookie-only.md`.
-#[macros::server(skip(password, invite_code))]
-pub async fn register(
-    username: Username,
-    password: ProfferedPassword,
-    invite_code: Option<ProfferedInviteCode>,
-) -> WebResult<()> {
+#[macros::server(skip_all)]
+pub async fn register(request: RegistrationRequest) -> WebResult<()> {
+    let RegistrationRequest {
+        username,
+        password,
+        invite_code,
+    } = request;
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
     let users = expect_context::<Arc<dyn UserStorage>>();
     let atomic = expect_context::<Arc<dyn AtomicOps>>();

@@ -5,6 +5,6 @@ mod api;
 #[cfg(target_arch = "wasm32")]
 mod component;
 
-pub use api::{Create, Info, List, create, list};
+pub use api::{Create, CreateInviteRequest, Info, List, create, list};
 #[cfg(target_arch = "wasm32")]
 pub use component::InvitesPage;

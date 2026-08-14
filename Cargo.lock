@@ -1932,6 +1932,7 @@ dependencies = [
  "rust-embed",
  "serde",
  "serde_json",
+ "serde_qs",
  "server_fn",
  "sha2",
  "sqlx",

@@ -1,8 +1,8 @@
 //! Invites vertical — wasm-only UI (ADR-0070): the invite management page.
 
-use super::{Create, Info, list};
+use super::{Create, CreateInviteRequest, Info, list};
 use crate::error::WebError;
-use crate::forms::{Field, ValidatedInput};
+use crate::forms::{Field, ValidatedInput, server_action_submit};
 use crate::registration::get_policy;
 use crate::topbar::Topbar;
 use common::email::Email;
@@ -19,12 +19,14 @@ use leptos::prelude::*;
 #[component]
 pub fn InvitesPage() -> impl IntoView {
     let create_action = ServerAction::<Create>::new();
-    let recipient = Field::<Email>::new();
-    // Optional TTL: empty ⇒ valid ⇒ server default 168 (#582). A non-empty out-of-range value
-    // shows the newtype's message and gates submit.
-    let ttl = Field::<InviteTtlHours>::optional();
+    let successful_creates = RwSignal::new(0_u32);
+    Effect::new(move |_| {
+        if let Some(Ok(())) = create_action.value().get() {
+            successful_creates.update(|version| *version += 1);
+        }
+    });
     let policy = Resource::new(|| (), |()| get_policy());
-    let invites = Resource::new(move || create_action.version().get(), |_| list());
+    let invites = Resource::new(move || successful_creates.get(), |_| list());
 
     view! {
         <Topbar title="Invites" sub="Manage codes" />
@@ -40,30 +42,7 @@ pub fn InvitesPage() -> impl IntoView {
                         match invites.await {
                             Ok(list) => {
                                 view! {
-                                    <ActionForm action=create_action>
-                                        <ValidatedInput<Email>
-                                            label="Invitee email"
-                                            name="recipient_email"
-                                            input_type="email"
-                                            autocomplete="email"
-                                            field=recipient
-                                        />
-                                        <ValidatedInput<InviteTtlHours>
-                                            label="Expires in hours"
-                                            name="expires_in_hours"
-                                            input_type="number"
-                                            field=ttl
-                                        />
-                                        <button
-                                            type="submit"
-                                            class="j-btn is-primary"
-                                            prop:disabled=move || {
-                                                !recipient.is_valid() || !ttl.is_valid()
-                                            }
-                                        >
-                                            "Send Invite"
-                                        </button>
-                                    </ActionForm>
+                                    <InviteCreateForm action=create_action />
                                     <InviteCreateOutcome action=create_action />
                                     <ul>
                                         {list
@@ -80,6 +59,51 @@ pub fn InvitesPage() -> impl IntoView {
                 </Suspense>
             </div>
         </div>
+    }
+}
+
+#[component]
+fn InviteCreateForm(action: ServerAction<Create>) -> impl IntoView {
+    let recipient = Field::<Email>::new();
+    // Optional TTL: empty dispatches `None` for the server's 168-hour default. A
+    // non-empty value is dispatched only after `Field::parsed()` validates it.
+    let ttl = Field::<InviteTtlHours>::optional();
+    let (disabled, submit) = server_action_submit(action, move || {
+        let expires_in_hours = ttl
+            .value
+            .with(|value| value.trim().is_empty())
+            .then_some(None)
+            .or_else(|| ttl.parsed().map(Some));
+        recipient
+            .parsed()
+            .zip(expires_in_hours)
+            .map(|(recipient_email, expires_in_hours)| Create {
+                request: CreateInviteRequest {
+                    expires_in_hours,
+                    recipient_email,
+                },
+            })
+    });
+
+    view! {
+        <form on:submit=submit>
+            <ValidatedInput<Email>
+                label="Invitee email"
+                name="recipient_email"
+                input_type="email"
+                autocomplete="email"
+                field=recipient
+            />
+            <ValidatedInput<InviteTtlHours>
+                label="Expires in hours"
+                name="expires_in_hours"
+                input_type="number"
+                field=ttl
+            />
+            <button type="submit" class="j-btn is-primary" prop:disabled=move || disabled.get()>
+                "Send Invite"
+            </button>
+        </form>
     }
 }
 
@@ -101,7 +125,7 @@ fn InviteCreateOutcome(action: ServerAction<Create>) -> impl IntoView {
                         let to = action
                             .input()
                             .get()
-                            .map(|args| args.recipient_email.to_string())
+                            .map(|args| args.request.recipient_email.to_string())
                             .unwrap_or_default();
                         view! { <p class="j-form-note">"Invitation emailed to " {to} "."</p> }
                             .into_any()

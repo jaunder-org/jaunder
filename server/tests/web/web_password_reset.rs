@@ -9,9 +9,16 @@ use storage::AppState;
 
 use crate::helpers::{
     SeededSession, assert_no_email, assert_one_absolute_link_email, create_session_for,
-    create_user_and_session, post_form_with_mailer, setup_with_base_url,
+    create_user_and_session, post_form_with_mailer, post_server_fn_request_fixture_with_mailer,
+    post_server_fn_with_mailer, setup_with_base_url,
 };
 use storage::test_support::{Backend, SeedUser, TestEnv, backends};
+
+#[derive(serde::Serialize)]
+struct ConfirmPasswordResetDecodeFixture<'a> {
+    token: &'a str,
+    new_password: &'a str,
+}
 
 use rstest::*;
 use rstest_reuse::*;
@@ -134,10 +141,11 @@ async fn request_password_reset_returns_error_for_unknown_username(#[case] backe
     assert_ne!(status, StatusCode::OK);
 }
 
-// M3.11.10: confirm_password_reset with a valid token sets the new password and revokes sessions.
+// M3.11.10: the nested request maps its token and password exactly, applies the
+// password, consumes the token, and revokes every existing session.
 #[apply(backends)]
 #[tokio::test]
-async fn confirm_password_reset_sets_password_and_revokes_sessions(#[case] backend: Backend) {
+async fn confirm_nested_request_maps_token_and_password(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
@@ -153,12 +161,15 @@ async fn confirm_password_reset_sets_password_and_revokes_sessions(#[case] backe
         .await
         .unwrap();
 
-    let body = format!("token={raw_token}&new_password=newpassword456");
-    let (status, _body) = post_form_with_mailer(
+    let (status, _body) = post_server_fn_with_mailer(
         &state,
         &mailer,
-        <web::password_reset::Confirm as ServerFn>::PATH,
-        body,
+        &web::password_reset::Confirm {
+            request: web::password_reset::ConfirmPasswordResetRequest {
+                token: raw_token,
+                new_password: "newpassword456".parse().unwrap(),
+            },
+        },
         None,
     )
     .await;
@@ -202,12 +213,15 @@ async fn confirm_password_reset_with_expired_token_returns_error(#[case] backend
         .await
         .unwrap();
 
-    let body = format!("token={raw_token}&new_password=newpassword456");
-    let (status, _body) = post_form_with_mailer(
+    let (status, _body) = post_server_fn_with_mailer(
         &state,
         &mailer,
-        <web::password_reset::Confirm as ServerFn>::PATH,
-        body,
+        &web::password_reset::Confirm {
+            request: web::password_reset::ConfirmPasswordResetRequest {
+                token: raw_token,
+                new_password: "newpassword456".parse().unwrap(),
+            },
+        },
         None,
     )
     .await;
@@ -222,40 +236,65 @@ async fn confirm_password_reset_with_invalid_token_returns_error(#[case] backend
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let (status, _body) = post_form_with_mailer(
-        &state,
-        &mailer,
-        <web::password_reset::Confirm as ServerFn>::PATH,
-        "token=not-a-real-token&new_password=newpassword456",
-        None,
-    )
-    .await;
+    let (status, _body) =
+        post_server_fn_request_fixture_with_mailer::<web::password_reset::Confirm, _, _>(
+            &state,
+            &mailer,
+            &ConfirmPasswordResetDecodeFixture {
+                token: "not-a-real-token",
+                new_password: "newpassword456",
+            },
+            None,
+        )
+        .await;
 
     assert_ne!(status, StatusCode::OK);
 }
 
 #[apply(backends)]
 #[tokio::test]
-async fn confirm_password_reset_with_malformed_token_returns_error(#[case] backend: Backend) {
+async fn confirm_nested_request_rejects_malformed_token_before_handler(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
+    let session = create_user_with_verified_email(&state, "malformed@example.com").await;
 
     // `bad!token` is outside base64url, so `RawToken` rejects it (at wire-decode once
     // `token` is typed). `new_password` is valid-length, so the failure isolates to the
     // token.
-    let (status, _body) = post_form_with_mailer(
-        &state,
-        &mailer,
-        <web::password_reset::Confirm as ServerFn>::PATH,
-        "token=bad!token&new_password=newpassword456",
-        None,
-    )
-    .await;
+    let (status, response_body) =
+        post_server_fn_request_fixture_with_mailer::<web::password_reset::Confirm, _, _>(
+            &state,
+            &mailer,
+            &ConfirmPasswordResetDecodeFixture {
+                token: "bad!token",
+                new_password: "newpassword456",
+            },
+            None,
+        )
+        .await;
 
-    assert_ne!(
-        status,
-        StatusCode::OK,
-        "a malformed reset token must be rejected"
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        response_body.contains("server_function"),
+        "expected a server-fn decode rejection; body: {response_body}"
+    );
+    assert!(
+        state
+            .users
+            .authenticate(&session.username, &"password123".parse().unwrap())
+            .await
+            .is_ok(),
+        "a malformed token must not change the password"
+    );
+    assert_eq!(
+        state
+            .sessions
+            .list_sessions(session.user_id)
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "a malformed token must not revoke sessions"
     );
 }
 
@@ -277,37 +316,27 @@ async fn confirm_password_reset_with_used_token_returns_error(#[case] backend: B
         .await
         .unwrap();
 
-    let body = format!("token={raw_token}&new_password=newpassword456");
+    let request = web::password_reset::Confirm {
+        request: web::password_reset::ConfirmPasswordResetRequest {
+            token: raw_token,
+            new_password: "newpassword456".parse().unwrap(),
+        },
+    };
 
     // Use it once — should succeed
-    let (status, _) = post_form_with_mailer(
-        &state,
-        &mailer,
-        <web::password_reset::Confirm as ServerFn>::PATH,
-        body.clone(),
-        None,
-    )
-    .await;
+    let (status, _) = post_server_fn_with_mailer(&state, &mailer, &request, None).await;
     assert_eq!(status, StatusCode::OK);
 
     // Use it again — should fail
-    let (status, _) = post_form_with_mailer(
-        &state,
-        &mailer,
-        <web::password_reset::Confirm as ServerFn>::PATH,
-        body,
-        None,
-    )
-    .await;
+    let (status, _) = post_server_fn_with_mailer(&state, &mailer, &request, None).await;
     assert_ne!(status, StatusCode::OK);
 }
 
-// A too-short `new_password` is rejected at the wire (the `ProfferedPassword` arg
-// fails to deserialize via `validate_password_shape`) before the reset is applied —
-// the parallel of `register_short_password_returns_error`, for the reset endpoint.
+// A too-short `new_password` is rejected while decoding the nested request before
+// the reset is applied.
 #[apply(backends)]
 #[tokio::test]
-async fn confirm_password_reset_with_short_password_returns_error(#[case] backend: Backend) {
+async fn confirm_nested_request_rejects_short_password_before_handler(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
@@ -320,15 +349,17 @@ async fn confirm_password_reset_with_short_password_returns_error(#[case] backen
         .await
         .unwrap();
 
-    let body = format!("token={raw_token}&new_password=short");
-    let (status, response_body) = post_form_with_mailer(
-        &state,
-        &mailer,
-        <web::password_reset::Confirm as ServerFn>::PATH,
-        body,
-        None,
-    )
-    .await;
+    let (status, response_body) =
+        post_server_fn_request_fixture_with_mailer::<web::password_reset::Confirm, _, _>(
+            &state,
+            &mailer,
+            &ConfirmPasswordResetDecodeFixture {
+                token: raw_token.as_ref(),
+                new_password: "short",
+            },
+            None,
+        )
+        .await;
 
     // A decode rejection is HTTP 500 with a body tagged `server_function` — distinct
     // from an in-body failure, which projects to `validation`/`unauthorized`/etc.
@@ -348,5 +379,15 @@ async fn confirm_password_reset_with_short_password_returns_error(#[case] backen
     assert!(
         auth.is_ok(),
         "a too-short new password must be rejected without applying the reset"
+    );
+    assert_eq!(
+        state
+            .sessions
+            .list_sessions(session.user_id)
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "a too-short new password must not revoke sessions"
     );
 }

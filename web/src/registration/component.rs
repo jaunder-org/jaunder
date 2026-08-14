@@ -3,12 +3,13 @@
 //! [`marker_storage`](crate::auth::marker_storage) binding) directly, no `cfg`
 //! gates inside this file.
 
-use super::{Register, get_policy};
+use super::{Register, RegistrationRequest, get_policy};
 use crate::auth::{SessionUser, set_session};
 use crate::error::WebError;
-use crate::forms::{Field, ValidatedInput};
+use crate::forms::{Field, ValidatedInput, server_action_submit};
 use crate::topbar::Topbar;
-use common::password::Password;
+use common::invite::ProfferedInviteCode;
+use common::password::ProfferedPassword;
 use common::registration::RegistrationPolicy;
 use common::username::Username;
 use leptos::prelude::*;
@@ -35,8 +36,6 @@ pub fn RegisterPage() -> impl IntoView {
 
     let register_action = ServerAction::<Register>::new();
     let policy = Resource::new(|| (), |()| get_policy());
-    let username = Field::<Username>::new();
-    let password = Field::<Password>::new();
 
     // The invite code arrives in the URL (`?invite_code=…`) from the invitation link,
     // not typed by hand. Read it once at mount — a plain read is safe here because the
@@ -57,7 +56,7 @@ pub fn RegisterPage() -> impl IntoView {
             && let Some(input) = register_action.input().get()
         {
             set_session(SessionUser {
-                username: input.username,
+                username: input.request.username.clone(),
                 is_operator: false,
             });
         }
@@ -82,53 +81,11 @@ pub fn RegisterPage() -> impl IntoView {
                             // form that would only fail server-side.
 
                             view! {
-                                <ActionForm action=register_action attr:class="j-card">
-                                    <div class="j-card-head">
-                                        <h2>"Create an account"</h2>
-                                    </div>
-                                    <div class="j-form-body">
-                                        <ValidatedInput<Username>
-                                            label="Username"
-                                            name="username"
-                                            autocomplete="username"
-                                            field=username
-                                            transform=str::to_lowercase
-                                        />
-                                        <ValidatedInput<Password>
-                                            label="Password"
-                                            name="password"
-                                            input_type="password"
-                                            autocomplete="new-password"
-                                            field=password
-                                        />
-                                        {(is_invite_only && !invite_code.is_empty())
-                                            .then(|| {
-                                                // The code comes from the invitation link — carried as a
-                                                // hidden field and confirmed read-only, never typed.
-                                                view! {
-                                                    <input
-                                                        type="hidden"
-                                                        name="invite_code"
-                                                        value=invite_code.clone()
-                                                    />
-                                                    <p class="j-form-note">
-                                                        "Registering with your invitation."
-                                                    </p>
-                                                }
-                                            })}
-                                    </div>
-                                    <div class="j-form-actions">
-                                        <button
-                                            type="submit"
-                                            class="j-btn is-primary"
-                                            prop:disabled=move || {
-                                                !(username.is_valid() && password.is_valid())
-                                            }
-                                        >
-                                            "Register"
-                                        </button>
-                                    </div>
-                                </ActionForm>
+                                <RegistrationForm
+                                    action=register_action
+                                    invite_code=invite_code.clone()
+                                    show_invite_note=is_invite_only
+                                />
                             }
                                 .into_any()
                         })
@@ -143,5 +100,63 @@ pub fn RegisterPage() -> impl IntoView {
                 }}
             </div>
         </div>
+    }
+}
+
+#[component]
+fn RegistrationForm(
+    action: ServerAction<Register>,
+    invite_code: String,
+    show_invite_note: bool,
+) -> impl IntoView {
+    let username = Field::<Username>::new();
+    let password = Field::<ProfferedPassword>::new();
+    let parsed_invite = (!invite_code.is_empty())
+        .then(|| invite_code.parse::<ProfferedInviteCode>().ok())
+        .flatten();
+    let (disabled, submit) = server_action_submit(action, move || {
+        username
+            .parsed()
+            .zip(password.parsed())
+            .map(|(username, password)| Register {
+                request: RegistrationRequest {
+                    username,
+                    password,
+                    invite_code: parsed_invite.clone(),
+                },
+            })
+    });
+
+    view! {
+        <form class="j-card" on:submit=submit>
+            <div class="j-card-head">
+                <h2>"Create an account"</h2>
+            </div>
+            <div class="j-form-body">
+                <ValidatedInput<Username>
+                    label="Username"
+                    name="username"
+                    autocomplete="username"
+                    field=username
+                    transform=str::to_lowercase
+                />
+                <ValidatedInput<ProfferedPassword>
+                    label="Password"
+                    name="password"
+                    input_type="password"
+                    autocomplete="new-password"
+                    field=password
+                />
+                {show_invite_note
+                    .then(|| {
+                        view! { <p class="j-form-note">"Registering with your invitation."</p> }
+                    })}
+            </div>
+            <div class="j-form-actions">
+                <button type="submit" class="j-btn is-primary" prop:disabled=move || disabled.get()>
+                    "Register"
+                </button>
+            </div>
+        </form>
     }
 }

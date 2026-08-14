@@ -66,6 +66,14 @@ pub struct DeleteResult {
     pub referenced_in_posts: Vec<PostId>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteMediaRequest {
+    pub sha256: ContentHash,
+    pub filename: Filename,
+    pub source: MediaSource,
+    pub force: Option<bool>,
+}
+
 /// Lists media items owned by the authenticated user.
 #[macros::server]
 pub async fn list_mine(
@@ -123,14 +131,15 @@ pub async fn get_usage() -> WebResult<UsageData> {
 /// Deletes a media item owned by the authenticated user.
 ///
 /// If the item is referenced in any posts, it will not be deleted unless
-/// `force` is `Some(true)`.
-#[macros::server(skip(filename))]
-pub async fn delete(
-    sha256: ContentHash,
-    filename: Filename,
-    source: MediaSource,
-    force: Option<bool>,
-) -> WebResult<DeleteResult> {
+/// `request.force` is `Some(true)`.
+#[macros::server(skip_all)]
+pub async fn delete(request: DeleteMediaRequest) -> WebResult<DeleteResult> {
+    let DeleteMediaRequest {
+        sha256,
+        filename,
+        source,
+        force,
+    } = request;
     let auth = require_auth().await?;
     let media = expect_context::<Arc<dyn MediaStorage>>();
     let posts = expect_context::<Arc<dyn PostStorage>>();

@@ -2,13 +2,14 @@
 //! its child components, plus the keyed reactive store backing the list. Wasm-only.
 
 use super::api::{
-    AddSubscriber, Create, Delete, RemoveSubscriber, Rename, SubscriberSummary, Summary,
-    SummaryStoreFields, list_members, list_mine, list_my_subscribers,
+    AddSubscriber, AudienceMembershipRequest, Create, Delete, RemoveSubscriber, Rename,
+    RenameAudienceRequest, SubscriberSummary, Summary, SummaryStoreFields, list_members, list_mine,
+    list_my_subscribers,
 };
 use crate::error::WebResult;
 // `crate::forms::Field` (the validated-input field) is aliased to avoid colliding with
 // `reactive_stores::Field` (the keyed-store field used by `AudienceRow`).
-use crate::forms::Field as ValidatedField;
+use crate::forms::{Field as ValidatedField, server_action_submit};
 use crate::icon::Icons;
 use crate::reactive::{Invalidator, invalidator_scope};
 use crate::topbar::Topbar;
@@ -231,11 +232,15 @@ fn AudienceHeader(audience_id: AudienceId, name: AudienceName) -> impl IntoView 
     // row is already valid (submit enabled); clearing it disables Rename and — once
     // touched — shows the newtype's own message inline.
     let name = ValidatedField::<AudienceName>::prefilled(&name);
+    let (rename_disabled, submit_rename) = server_action_submit(rename_action, move || {
+        name.parsed().map(|name| Rename {
+            request: RenameAudienceRequest { audience_id, name },
+        })
+    });
 
     view! {
         <div class="j-audience-head">
-            <ActionForm action=rename_action>
-                <input type="hidden" name="audience_id" value=i64::from(audience_id) />
+            <form on:submit=submit_rename>
                 <input
                     type="text"
                     name="name"
@@ -247,7 +252,7 @@ fn AudienceHeader(audience_id: AudienceId, name: AudienceName) -> impl IntoView 
                     }
                     on:blur=move |_| name.touch()
                 />
-                <button type="submit" class="j-btn" prop:disabled=move || !name.is_valid()>
+                <button type="submit" class="j-btn" prop:disabled=move || rename_disabled.get()>
                     "Rename"
                 </button>
                 {move || {
@@ -256,7 +261,14 @@ fn AudienceHeader(audience_id: AudienceId, name: AudienceName) -> impl IntoView 
                         .flatten()
                         .map(|m| view! { <p class="error">{m}</p> })
                 }}
-            </ActionForm>
+                {move || {
+                    rename_action
+                        .value()
+                        .get()
+                        .and_then(Result::err)
+                        .map(|e| view! { <p class="error">{e.to_string()}</p> })
+                }}
+            </form>
             <ActionForm action=delete_action>
                 <input type="hidden" name="audience_id" value=i64::from(audience_id) />
                 <button type="submit" class="j-btn is-danger">
@@ -349,40 +361,66 @@ fn MemberToggle(
     add_action: ServerAction<AddSubscriber>,
     remove_action: ServerAction<RemoveSubscriber>,
 ) -> impl IntoView {
+    let request = AudienceMembershipRequest {
+        audience_id,
+        subscription_id,
+    };
+    let remove_request = request.clone();
+    let (remove_disabled, submit_remove) = server_action_submit(remove_action, move || {
+        Some(RemoveSubscriber {
+            request: remove_request.clone(),
+        })
+    });
+    let (add_disabled, submit_add) = server_action_submit(add_action, move || {
+        Some(AddSubscriber {
+            request: request.clone(),
+        })
+    });
+
     view! {
         {if is_member {
             view! {
                 <li>
-                    <ActionForm action=remove_action>
-                        <input type="hidden" name="audience_id" value=i64::from(audience_id) />
-                        <input
-                            type="hidden"
-                            name="subscription_id"
-                            value=i64::from(subscription_id)
-                        />
+                    <form on:submit=submit_remove>
                         <span class="j-audience-member is-member">{label}</span>
-                        <button type="submit" class="j-btn">
+                        <button
+                            type="submit"
+                            class="j-btn"
+                            prop:disabled=move || remove_disabled.get()
+                        >
                             "Remove"
                         </button>
-                    </ActionForm>
+                        {move || {
+                            remove_action
+                                .value()
+                                .get()
+                                .and_then(Result::err)
+                                .map(|e| view! { <p class="error">{e.to_string()}</p> })
+                        }}
+                    </form>
                 </li>
             }
                 .into_any()
         } else {
             view! {
                 <li>
-                    <ActionForm action=add_action>
-                        <input type="hidden" name="audience_id" value=i64::from(audience_id) />
-                        <input
-                            type="hidden"
-                            name="subscription_id"
-                            value=i64::from(subscription_id)
-                        />
+                    <form on:submit=submit_add>
                         <span class="j-audience-member">{label}</span>
-                        <button type="submit" class="j-btn">
+                        <button
+                            type="submit"
+                            class="j-btn"
+                            prop:disabled=move || add_disabled.get()
+                        >
                             "Add"
                         </button>
-                    </ActionForm>
+                        {move || {
+                            add_action
+                                .value()
+                                .get()
+                                .and_then(Result::err)
+                                .map(|e| view! { <p class="error">{e.to_string()}</p> })
+                        }}
+                    </form>
                 </li>
             }
                 .into_any()

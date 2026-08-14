@@ -7,6 +7,8 @@ import {
   waitForSelector,
   signInAs,
   fillLoginForm,
+  failServerFn,
+  stallServerFn,
 } from "./helpers";
 import { SEL } from "./selectors";
 
@@ -19,20 +21,57 @@ test("register page shows form", async ({ page }) => {
   await expect(page.locator(SEL.password)).toBeVisible();
 });
 
-test("register rejects a too-short password client-side", async ({ page }) => {
-  // Holdout (spec D6): proves client-side validation.
+test("register invalid fields do not dispatch", async ({ page }) => {
+  let requests = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/registration/register")) requests += 1;
+  });
   await goto(page, "/register");
 
-  await page.fill(SEL.username, "validusername");
-  await page.fill(SEL.password, "short"); // < 8 chars
-  await page.locator(SEL.password).blur(); // touched → message shows
+  await page.fill(SEL.username, "Bad User");
+  await page.fill(SEL.password, "short");
+  await page.locator(SEL.username).blur();
+  await page.locator(SEL.password).blur();
 
-  await expect(page.locator(SEL.error)).toBeVisible();
+  await expect(page.locator(SEL.error)).toHaveCount(2);
   await expect(page.locator(SEL.submit)).toBeDisabled();
+  await page.locator(SEL.password).press("Enter");
+  expect(requests).toBe(0);
 
-  // A valid password clears the error and enables submit.
+  // Both valid values clear the errors and enable submit.
+  await page.fill(SEL.username, "validusername");
   await page.fill(SEL.password, "longenough123");
+  await expect(page.locator(SEL.error)).toHaveCount(0);
   await expect(page.locator(SEL.submit)).toBeEnabled();
+});
+
+test("register pending state prevents duplicate dispatch", async ({ page }) => {
+  let requests = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/registration/register")) requests += 1;
+  });
+  await goto(page, "/register");
+  const release = await stallServerFn(page, "registration/register");
+  await page.fill(SEL.username, `pending${Date.now()}`);
+  await page.fill(SEL.password, "newpassword123");
+  await click(page, SEL.submit);
+  await expect.poll(() => requests).toBe(1);
+  await expect(page.locator(SEL.submit)).toBeDisabled();
+  await page.locator(SEL.password).press("Enter");
+  expect(requests).toBe(1);
+  release();
+  await waitForSelector(page, SEL.logoutLink);
+});
+
+test("register server failure renders error", async ({ page }) => {
+  await failServerFn(page, "registration/register");
+  await goto(page, "/register");
+  await page.fill(SEL.username, `failure${Date.now()}`);
+  await page.fill(SEL.password, "newpassword123");
+  await click(page, SEL.submit);
+  await expect(page.locator(SEL.error)).toBeVisible();
+  await expect(page).toHaveURL(`${BASE_URL}/register`);
+  await expect(page.locator(SEL.logoutLink)).toHaveCount(0);
 });
 
 test("register with open policy succeeds", async ({ page }) => {
@@ -84,6 +123,53 @@ test("login with valid credentials succeeds", async ({
   await expect(page.locator(".j-sidebar")).toBeVisible();
   perf.mark("assertions_complete");
   await perf.log();
+});
+
+test("login submits with Enter", async ({ page, user }) => {
+  await goto(page, "/login");
+  await page.fill(SEL.username, user.username);
+  await page.fill(SEL.password, user.password);
+  await page.locator(SEL.password).press("Enter");
+  await waitForSelector(page, SEL.logoutLink);
+  await expect(page).toHaveURL(`${BASE_URL}/`);
+});
+
+test("login invalid fields do not dispatch", async ({ page }) => {
+  let requests = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/auth/login")) requests += 1;
+  });
+  await goto(page, "/login");
+  await page.fill(SEL.username, "invalid username");
+  await page.locator(SEL.username).blur();
+  await page.fill(SEL.password, "short");
+  await page.locator(SEL.password).blur();
+
+  await expect(page.locator(SEL.error)).toHaveCount(2);
+  await expect(page.locator(SEL.submit)).toBeDisabled();
+  await page.locator(SEL.password).press("Enter");
+  expect(requests).toBe(0);
+});
+
+test("login pending state prevents duplicate dispatch", async ({
+  page,
+  user,
+}) => {
+  let requests = 0;
+  page.on("request", (request) => {
+    if (request.url().includes("/api/auth/login")) requests += 1;
+  });
+  await goto(page, "/login");
+  const release = await stallServerFn(page, "auth/login");
+  await page.fill(SEL.username, user.username);
+  await page.fill(SEL.password, user.password);
+  await click(page, SEL.submit);
+  await expect.poll(() => requests).toBe(1);
+  await expect(page.locator(SEL.submit)).toBeDisabled();
+  await page.locator(SEL.password).press("Enter");
+  expect(requests).toBe(1);
+  release();
+  await waitForSelector(page, SEL.logoutLink);
 });
 
 // #591: login/logout redirect via client-side pushState, so the wasm app is not

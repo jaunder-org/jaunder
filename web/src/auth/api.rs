@@ -39,6 +39,17 @@ pub struct LoginResponse {
     pub is_operator: bool,
 }
 
+/// Caller-supplied credentials and optional device label for one login attempt.
+///
+/// Keeping the cohesive request together makes username/password transposition a
+/// compile error and lets the CSR form dispatch values it has already parsed.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LoginRequest {
+    pub username: Username,
+    pub password: ProfferedPassword,
+    pub label: Option<SessionLabel>,
+}
+
 /// Authenticates a user.  Sets the `HttpOnly` `session` cookie and returns a
 /// [`LoginResponse`] carrying the viewer's operator flag — deliberately not the
 /// session token (#533).
@@ -52,12 +63,13 @@ pub struct LoginResponse {
 /// `Field::<SessionLabel>` in `crate::sessions::component`.) An omitted *or empty*
 /// `label` decodes to `None`: the `Option` form layer absorbs a present-but-empty
 /// field before `SessionLabel`'s deserializer runs.
-#[macros::server(skip(password, label))]
-pub async fn login(
-    username: Username,
-    password: ProfferedPassword,
-    label: Option<SessionLabel>,
-) -> WebResult<LoginResponse> {
+#[macros::server(skip_all)]
+pub async fn login(request: LoginRequest) -> WebResult<LoginResponse> {
+    let LoginRequest {
+        username,
+        password,
+        label,
+    } = request;
     let users = expect_context::<Arc<dyn UserStorage>>();
     let sessions = expect_context::<Arc<dyn SessionStorage>>();
     // `username` / `password` arrive already validated: typed wire args whose serde

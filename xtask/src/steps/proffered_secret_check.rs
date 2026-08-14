@@ -1,7 +1,10 @@
 //! The `proffered-secret` static check (#400, #315): pins each **inbound-secret**
 //! newtype — `common::invite::ProfferedInviteCode` and
 //! `common::password::ProfferedPassword` — to `#[macros::server]` function
-//! **parameter** positions.
+//! **parameter** positions, including fields of a request aggregate that is itself
+//! such a parameter. Wasm-only `web` component files may parse or field-stage the
+//! inbound value long enough to assemble that request; they cannot define a server
+//! response.
 //!
 //! An inbound secret is the serde-capable *inbound* half of an ADR-0063
 //! inbound-secret type split (`#[str_newtype(secret, serde)]`): a client submits
@@ -15,6 +18,7 @@
 //! owner files that define and convert
 //! each type are exempt.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::files;
@@ -88,25 +92,59 @@ fn type_index(line: &str, type_name: &str) -> Option<usize> {
 /// deliberate `use …::ProfferedPassword as Alias;` rename evades the guard. It is a
 /// guardrail against accidental leaks, not a determined adversary — an alias rename
 /// is as visible in review as adding a file to an allowlist.
-fn violations(source: &str, type_name: &str) -> Vec<usize> {
-    let mut out = Vec::new();
+fn server_parameters(source: &str) -> (BTreeSet<usize>, BTreeSet<String>) {
+    let mut parameter_lines = BTreeSet::new();
+    let mut request_types = BTreeSet::new();
     let mut pending_server = false;
     let mut in_server_params = false;
-    for (i, raw) in source.lines().enumerate() {
+    for (line, raw) in source.lines().enumerate() {
         let t = raw.trim();
-        // `#[macros::server]` is the one spelling that arms the region (#714). This
-        // scan is independent of `web_server_fns`'s enumeration — it is a text state
-        // machine, not a syn walk — so it knows the attribute separately. Getting
-        // that wrong does not fail open in the usual way: every `Proffered*`
-        // parameter would suddenly read as sitting *outside* a server fn, so the gate
-        // goes loudly red rather than quietly green. That is the right direction for
-        // a secrets guard, but it is still a second place the attribute is named.
         if t.starts_with("#[macros::server") {
             pending_server = true;
         }
         if pending_server && t.contains("fn ") {
             pending_server = false;
             in_server_params = true;
+        }
+        if in_server_params {
+            parameter_lines.insert(line + 1);
+            let parameter_text = if t.contains("fn ") {
+                raw.split_once('(').map_or("", |(_, rest)| rest)
+            } else {
+                raw
+            };
+            let parameter_text = parameter_text
+                .split_once(')')
+                .map_or(parameter_text, |(params, _)| params);
+            request_types.extend(
+                parameter_text
+                    .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                    .filter(|word| word.ends_with("Request"))
+                    .map(str::to_string),
+            );
+        }
+        if in_server_params && (t.contains(')') || t.contains("->") || t.ends_with('{')) {
+            in_server_params = false;
+        }
+    }
+    (parameter_lines, request_types)
+}
+
+fn violations(source: &str, type_name: &str) -> Vec<usize> {
+    let (server_parameter_lines, request_types) = server_parameters(source);
+    let mut out = Vec::new();
+    let mut in_request_struct = false;
+    for (i, raw) in source.lines().enumerate() {
+        let t = raw.trim();
+        if let Some(rest) = t
+            .strip_prefix("pub struct ")
+            .or_else(|| t.strip_prefix("struct "))
+        {
+            let name = rest
+                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .next()
+                .unwrap_or_default();
+            in_request_struct = request_types.iter().any(|request| request == name);
         }
         if let Some(type_at) = type_index(raw, type_name)
             && !t.starts_with("//")
@@ -117,12 +155,12 @@ fn violations(source: &str, type_name: &str) -> Vec<usize> {
             // always a violation; otherwise a mention is a violation only outside
             // a server parameter region.
             let is_return = raw.find("->").is_some_and(|arrow| type_at > arrow);
-            if is_return || !in_server_params {
+            if is_return || !(server_parameter_lines.contains(&(i + 1)) || in_request_struct) {
                 out.push(i + 1);
             }
         }
-        if in_server_params && (t.contains(')') || t.contains("->") || t.ends_with('{')) {
-            in_server_params = false;
+        if in_request_struct && t.starts_with('}') {
+            in_request_struct = false;
         }
     }
     out
@@ -145,6 +183,17 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
                 continue;
             }
             for ln in violations(source, policed.name) {
+                let is_client_staging = path.contains("web/src/")
+                    && path.ends_with("/component.rs")
+                    && source.lines().nth(ln - 1).is_some_and(|line| {
+                        line.contains(&format!("Field::<{}>", policed.name))
+                            || line.contains(&format!("ValidatedInput<{}>", policed.name))
+                            || line.contains(&format!("ValidatedTextarea<{}>", policed.name))
+                            || line.contains(&format!("parse::<{}>", policed.name))
+                    });
+                if is_client_staging {
+                    continue;
+                }
                 type_lines.push(format!(
                     "{path}:{ln}: `{}` outside a #[macros::server] fn parameter — an inbound \
                      secret must never be returned or stored where it can reach a client \
@@ -270,6 +319,69 @@ use common::invite::ProfferedInviteCode;
     #[test]
     fn struct_field_is_flagged() {
         assert_eq!(violations(STRUCT_FIELD, "ProfferedInviteCode"), vec![2]);
+    }
+
+    #[test]
+    fn sole_server_request_parameter_allows_its_struct_field() {
+        let source = "\
+pub struct LoginRequest {
+    pub password: ProfferedPassword,
+}
+#[macros::server(skip_all)]
+pub async fn login(request: LoginRequest) -> WebResult<()> { todo!() }
+";
+        assert!(violations(source, "ProfferedPassword").is_empty());
+    }
+
+    #[test]
+    fn server_return_request_does_not_allow_its_secret_field() {
+        let source = "\
+pub struct LoginRequest {
+    pub password: ProfferedPassword,
+}
+#[macros::server]
+pub async fn login() -> WebResult<LoginRequest> { todo!() }
+";
+        assert_eq!(violations(source, "ProfferedPassword"), vec![2]);
+    }
+
+    #[test]
+    fn wasm_component_may_stage_an_inbound_secret_for_dispatch() {
+        let source = "\
+use common::password::ProfferedPassword;
+fn form() { let password = Field::<ProfferedPassword>::new(); }
+fn view() { view! { <ValidatedInput<ProfferedPassword> /> } }
+";
+        assert_eq!(
+            problems(&[("web/src/auth/component.rs".to_string(), source.to_string())]),
+            None
+        );
+    }
+
+    #[test]
+    fn wasm_component_may_parse_an_inbound_secret_for_dispatch() {
+        let source = "\
+use common::invite::ProfferedInviteCode;
+fn form(code: &str) { let parsed = code.parse::<ProfferedInviteCode>(); }
+";
+        assert_eq!(
+            problems(&[(
+                "web/src/registration/component.rs".to_string(),
+                source.to_string()
+            )]),
+            None
+        );
+    }
+
+    #[test]
+    fn wasm_component_other_occurrences_remain_forbidden() {
+        assert!(
+            problems(&[(
+                "web/src/auth/component.rs".to_string(),
+                STRUCT_FIELD.to_string()
+            )])
+            .is_some()
+        );
     }
 
     #[test]

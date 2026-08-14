@@ -118,7 +118,7 @@ where
         self.error.get().is_none()
     }
 
-    /// The already-parsed value (`None` if invalid) — the seam for request-aggregate DTOs (#417).
+    /// The already-parsed value (`None` if invalid), used to assemble request DTOs (#417).
     #[must_use]
     pub fn parsed(&self) -> Option<T> {
         self.value.get().parse::<T>().ok()

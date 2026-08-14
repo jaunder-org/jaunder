@@ -50,6 +50,13 @@ enum PostBody {
 }
 
 impl PostBody {
+    fn server_fn<I>(input: &I) -> Self
+    where
+        I: serde::Serialize,
+    {
+        Self::Form(serde_qs::to_string(input).expect("failed to encode server-function input"))
+    }
+
     fn content_type(&self) -> &'static str {
         match self {
             PostBody::Form(_) => "application/x-www-form-urlencoded",
@@ -140,6 +147,159 @@ pub async fn post_form(
     (status, body)
 }
 
+/// Shared typed/fixture server-function dispatcher. `F` selects the generated
+/// endpoint path; `I` supplies the serializable wire shape.
+async fn post_server_fn_inner<F, I>(
+    state: &Arc<storage::AppState>,
+    mailer: Arc<dyn MailSender>,
+    input: &I,
+    cookie: Option<&str>,
+    user_agent: Option<&str>,
+    secure_cookies: bool,
+) -> (StatusCode, Option<String>, String)
+where
+    F: server_fn::ServerFn,
+    I: serde::Serialize,
+{
+    let auth = cookie.map_or(Auth::None, Auth::Cookie);
+    post_inner(
+        state,
+        mailer,
+        F::PATH,
+        PostBody::server_fn(input),
+        auth,
+        user_agent,
+        secure_cookies,
+    )
+    .await
+}
+
+/// POST one typed server-function input using that function's derived path and
+/// default URL-encoded input codec.
+pub async fn post_server_fn<F>(
+    state: &Arc<storage::AppState>,
+    input: &F,
+    cookie: Option<&str>,
+) -> (StatusCode, String)
+where
+    F: serde::Serialize + server_fn::ServerFn,
+{
+    let (status, _set_cookie, body) =
+        post_server_fn_inner::<F, F>(state, noop_mailer(), input, cookie, None, true).await;
+    (status, body)
+}
+
+#[derive(serde::Serialize)]
+struct RequestFixture<'a, R> {
+    request: &'a R,
+}
+
+/// POST a serializable request-aggregate fixture to server function `F`.
+///
+/// Decode-rejection tests use this when an invalid value cannot inhabit the
+/// operation's typed request. Valid requests use [`post_server_fn`].
+pub async fn post_server_fn_request_fixture<F, R>(
+    state: &Arc<storage::AppState>,
+    request: &R,
+    cookie: Option<&str>,
+) -> (StatusCode, String)
+where
+    F: server_fn::ServerFn,
+    R: serde::Serialize,
+{
+    let input = RequestFixture { request };
+    let (status, _set_cookie, body) =
+        post_server_fn_inner::<F, _>(state, noop_mailer(), &input, cookie, None, true).await;
+    (status, body)
+}
+
+/// Like [`post_server_fn`], but injects a specific mailer.
+pub async fn post_server_fn_with_mailer<M, F>(
+    state: &Arc<storage::AppState>,
+    mailer: &Arc<M>,
+    input: &F,
+    cookie: Option<&str>,
+) -> (StatusCode, String)
+where
+    M: MailSender + 'static,
+    F: serde::Serialize + server_fn::ServerFn,
+{
+    let mailer: Arc<dyn MailSender> = mailer.clone();
+    let (status, _set_cookie, body) =
+        post_server_fn_inner::<F, F>(state, mailer, input, cookie, None, true).await;
+    (status, body)
+}
+
+/// Fixture counterpart to [`post_server_fn_with_mailer`].
+pub async fn post_server_fn_request_fixture_with_mailer<F, M, R>(
+    state: &Arc<storage::AppState>,
+    mailer: &Arc<M>,
+    request: &R,
+    cookie: Option<&str>,
+) -> (StatusCode, String)
+where
+    M: MailSender + 'static,
+    F: server_fn::ServerFn,
+    R: serde::Serialize,
+{
+    let input = RequestFixture { request };
+    let mailer: Arc<dyn MailSender> = mailer.clone();
+    let (status, _set_cookie, body) =
+        post_server_fn_inner::<F, _>(state, mailer, &input, cookie, None, true).await;
+    (status, body)
+}
+
+/// Like [`post_server_fn`], but exposes the secure-cookie toggle and returns
+/// `Set-Cookie`.
+pub async fn post_server_fn_with_secure_flag<F>(
+    state: &Arc<storage::AppState>,
+    input: &F,
+    cookie: Option<&str>,
+    secure_cookies: bool,
+) -> (StatusCode, Option<String>, String)
+where
+    F: serde::Serialize + server_fn::ServerFn,
+{
+    post_server_fn_inner::<F, F>(state, noop_mailer(), input, cookie, None, secure_cookies).await
+}
+
+/// Fixture counterpart to [`post_server_fn_with_secure_flag`].
+pub async fn post_server_fn_request_fixture_with_secure_flag<F, R>(
+    state: &Arc<storage::AppState>,
+    request: &R,
+    cookie: Option<&str>,
+    secure_cookies: bool,
+) -> (StatusCode, Option<String>, String)
+where
+    F: server_fn::ServerFn,
+    R: serde::Serialize,
+{
+    let input = RequestFixture { request };
+    post_server_fn_inner::<F, _>(state, noop_mailer(), &input, cookie, None, secure_cookies).await
+}
+
+/// Like [`post_server_fn_with_secure_flag`], but also sets `User-Agent`.
+pub async fn post_server_fn_with_ua<F>(
+    state: &Arc<storage::AppState>,
+    input: &F,
+    cookie: Option<&str>,
+    user_agent: &str,
+    secure_cookies: bool,
+) -> (StatusCode, Option<String>, String)
+where
+    F: serde::Serialize + server_fn::ServerFn,
+{
+    post_server_fn_inner::<F, F>(
+        state,
+        noop_mailer(),
+        input,
+        cookie,
+        Some(user_agent),
+        secure_cookies,
+    )
+    .await
+}
+
 /// Like [`post_form`], but injects a specific `mailer` (e.g. a capturing sender)
 /// instead of the noop.
 pub async fn post_form_with_mailer<M: MailSender + 'static>(
@@ -183,28 +343,6 @@ pub async fn post_form_with_secure_flag(
         PostBody::Form(body.into()),
         auth,
         None,
-        secure_cookies,
-    )
-    .await
-}
-
-/// Like [`post_form_with_secure_flag`], but also sets a `User-Agent` header.
-pub async fn post_form_with_ua(
-    state: &Arc<storage::AppState>,
-    uri: &str,
-    body: impl Into<String>,
-    cookie: Option<&str>,
-    user_agent: &str,
-    secure_cookies: bool,
-) -> (StatusCode, Option<String>, String) {
-    let auth = cookie.map_or(Auth::None, Auth::Cookie);
-    post_inner(
-        state,
-        noop_mailer(),
-        uri,
-        PostBody::Form(body.into()),
-        auth,
-        Some(user_agent),
         secure_cookies,
     )
     .await

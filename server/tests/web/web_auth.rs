@@ -1,6 +1,7 @@
 use axum::http::StatusCode;
 use chrono::Utc;
 use common::config_key::SiteConfigKey;
+use common::password::Password;
 use common::session_label::MAX_SESSION_LABEL_CHARS;
 use common::token::RawToken;
 use common::username::Username;
@@ -10,10 +11,25 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    create_user_and_session, post_form_with_bearer, post_form_with_secure_flag, post_form_with_ua,
-    token_from_set_cookie,
+    create_user_and_session, post_form_with_bearer, post_form_with_secure_flag,
+    post_server_fn_request_fixture_with_secure_flag, post_server_fn_with_secure_flag,
+    post_server_fn_with_ua, token_from_set_cookie,
 };
 use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
+
+#[derive(serde::Serialize)]
+struct LoginDecodeFixture<'a> {
+    username: &'a str,
+    password: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<&'a str>,
+}
+
+#[derive(serde::Serialize)]
+struct RegistrationDecodeFixture<'a> {
+    username: &'a str,
+    password: &'a str,
+}
 
 /// The session token a login/register response established, read from its
 /// `Set-Cookie` header — the only channel that carries it (#533). Tests reach the
@@ -53,11 +69,35 @@ fn is_operator_from_body(body: &str) -> bool {
         .is_operator
 }
 
+fn register_input(
+    username: &str,
+    password: &str,
+    invite_code: Option<&str>,
+) -> web::registration::Register {
+    web::registration::Register {
+        request: web::registration::RegistrationRequest {
+            username: username.parse().expect("valid test username"),
+            password: password.parse().expect("valid test password"),
+            invite_code: invite_code.map(|code| code.parse().expect("valid test invite code")),
+        },
+    }
+}
+
+fn login_input(username: &str, password: &str, label: Option<&str>) -> web::auth::Login {
+    web::auth::Login {
+        request: web::auth::LoginRequest {
+            username: username.parse().expect("valid test username"),
+            password: password.parse().expect("valid test password"),
+            label: label.map(|label| label.parse().expect("valid test session label")),
+        },
+    }
+}
+
 // M2.9.8: `register` with Open policy creates the user and establishes the session
 // through the HttpOnly cookie alone (#533).
 #[apply(backends)]
 #[tokio::test]
-async fn register_open_creates_user_and_sets_session_cookie(#[case] backend: Backend) {
+async fn register_nested_request_maps_open_fields(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
@@ -65,10 +105,9 @@ async fn register_open_creates_user_and_sets_session_cookie(#[case] backend: Bac
         .await
         .unwrap();
 
-    let (status, set_cookie, body) = post_form_with_secure_flag(
+    let (status, set_cookie, body) = post_server_fn_with_secure_flag(
         &state,
-        <web::registration::Register as ServerFn>::PATH,
-        "username=alice&password=password123",
+        &register_input("alice", "password123", None),
         None,
         true,
     )
@@ -88,6 +127,15 @@ async fn register_open_creates_user_and_sets_session_cookie(#[case] backend: Bac
         .await
         .unwrap()
         .expect("user should exist after registration");
+    let authenticated = state
+        .users
+        .authenticate(
+            &"alice".parse::<Username>().unwrap(),
+            &"password123".parse::<Password>().unwrap(),
+        )
+        .await
+        .expect("registration password should authenticate");
+    assert_eq!(authenticated.user_id, user.user_id);
 
     // …and the cookie actually establishes a session for that user. A
     // `starts_with("session=")` check alone would pass against a cookie carrying a
@@ -111,20 +159,18 @@ async fn register_duplicate_username_returns_error(#[case] backend: Backend) {
         .unwrap();
 
     // Register alice once.
-    post_form_with_secure_flag(
+    post_server_fn_with_secure_flag(
         &state,
-        <web::registration::Register as ServerFn>::PATH,
-        "username=alice&password=password123",
+        &register_input("alice", "password123", None),
         None,
         true,
     )
     .await;
 
     // Register alice again.
-    let (status, _, _) = post_form_with_secure_flag(
+    let (status, _, _) = post_server_fn_with_secure_flag(
         &state,
-        <web::registration::Register as ServerFn>::PATH,
-        "username=alice&password=otherpassword",
+        &register_input("alice", "otherpassword", None),
         None,
         true,
     )
@@ -137,7 +183,7 @@ async fn register_duplicate_username_returns_error(#[case] backend: Backend) {
 // and establishes the session through the cookie (#533).
 #[apply(backends)]
 #[tokio::test]
-async fn register_invite_only_valid_code_creates_user_marks_invite_used(#[case] backend: Backend) {
+async fn register_nested_request_maps_invite_code(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
@@ -147,13 +193,9 @@ async fn register_invite_only_valid_code_creates_user_marks_invite_used(#[case] 
     let expires_at = Utc::now() + chrono::Duration::hours(24);
     let code = state.invites.create_invite(expires_at).await.unwrap();
 
-    let (status, set_cookie, _body) = post_form_with_secure_flag(
+    let (status, set_cookie, _body) = post_server_fn_with_secure_flag(
         &state,
-        <web::registration::Register as ServerFn>::PATH,
-        format!(
-            "username=bob&password=password123&invite_code={}",
-            code.as_ref()
-        ),
+        &register_input("bob", "password123", Some(code.as_ref())),
         None,
         true,
     )
@@ -168,10 +210,16 @@ async fn register_invite_only_valid_code_creates_user_marks_invite_used(#[case] 
         .get_user_by_username(&"bob".parse::<Username>().unwrap())
         .await
         .unwrap();
-    assert!(
-        user.is_some(),
-        "user should exist after invite registration"
-    );
+    let user = user.expect("user should exist after invite registration");
+    let authenticated = state
+        .users
+        .authenticate(
+            &"bob".parse::<Username>().unwrap(),
+            &"password123".parse::<Password>().unwrap(),
+        )
+        .await
+        .expect("invite registration password should authenticate");
+    assert_eq!(authenticated.user_id, user.user_id);
 
     let invites = state.invites.list_invites().await.unwrap();
     let invite = invites
@@ -192,10 +240,9 @@ async fn register_invite_only_missing_code_returns_error(#[case] backend: Backen
         .await
         .unwrap();
 
-    let (status, _set_cookie, _body) = post_form_with_secure_flag(
+    let (status, _set_cookie, _body) = post_server_fn_with_secure_flag(
         &state,
-        <web::registration::Register as ServerFn>::PATH,
-        "username=carol&password=password123",
+        &register_input("carol", "password123", None),
         None,
         true,
     )
@@ -225,10 +272,9 @@ async fn register_invite_only_invalid_code_returns_error(#[case] backend: Backen
         .await
         .unwrap();
 
-    let (status, _, _) = post_form_with_secure_flag(
+    let (status, _, _) = post_server_fn_with_secure_flag(
         &state,
-        <web::registration::Register as ServerFn>::PATH,
-        "username=alice&password=password123&invite_code=invalid-code",
+        &register_input("alice", "password123", Some("invalid-code")),
         None,
         true,
     )
@@ -252,13 +298,9 @@ async fn register_invite_only_expired_code_returns_error(#[case] backend: Backen
     let expires_at = Utc::now() - chrono::Duration::hours(1);
     let code = state.invites.create_invite(expires_at).await.unwrap();
 
-    let (status, _, _) = post_form_with_secure_flag(
+    let (status, _, _) = post_server_fn_with_secure_flag(
         &state,
-        <web::registration::Register as ServerFn>::PATH,
-        format!(
-            "username=alice&password=password123&invite_code={}",
-            code.as_ref()
-        ),
+        &register_input("alice", "password123", Some(code.as_ref())),
         None,
         true,
     )
@@ -274,10 +316,9 @@ async fn register_closed_policy_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     // Default policy is Closed; no need to set it explicitly.
 
-    let (status, _set_cookie, _body) = post_form_with_secure_flag(
+    let (status, _set_cookie, _body) = post_server_fn_with_secure_flag(
         &state,
-        <web::registration::Register as ServerFn>::PATH,
-        "username=dave&password=password123",
+        &register_input("dave", "password123", None),
         None,
         true,
     )
@@ -306,19 +347,17 @@ async fn login_correct_password_sets_session_cookie(#[case] backend: Backend) {
         .set(SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
-    post_form_with_secure_flag(
+    post_server_fn_with_secure_flag(
         &state,
-        <web::registration::Register as ServerFn>::PATH,
-        "username=eve&password=password123",
+        &register_input("eve", "password123", None),
         None,
         true,
     )
     .await;
 
-    let (status, set_cookie, body) = post_form_with_secure_flag(
+    let (status, set_cookie, body) = post_server_fn_with_secure_flag(
         &state,
-        <web::auth::Login as ServerFn>::PATH,
-        "username=eve&password=password123",
+        &login_input("eve", "password123", None),
         None,
         true,
     )
@@ -343,19 +382,17 @@ async fn login_returns_is_operator_flag(#[case] backend: Backend) {
         .set(SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
-    post_form_with_secure_flag(
+    post_server_fn_with_secure_flag(
         &state,
-        <web::registration::Register as ServerFn>::PATH,
-        "username=alice&password=password123",
+        &register_input("alice", "password123", None),
         None,
         true,
     )
     .await;
 
-    let (status, _cookie, body) = post_form_with_secure_flag(
+    let (status, _cookie, body) = post_server_fn_with_secure_flag(
         &state,
-        <web::auth::Login as ServerFn>::PATH,
-        "username=alice&password=password123",
+        &login_input("alice", "password123", None),
         None,
         true,
     )
@@ -371,10 +408,9 @@ async fn login_returns_is_operator_flag(#[case] backend: Backend) {
 async fn login_unknown_user_returns_error(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let (status, _, _) = post_form_with_secure_flag(
+    let (status, _, _) = post_server_fn_with_secure_flag(
         &state,
-        <web::auth::Login as ServerFn>::PATH,
-        "username=nobody&password=password123",
+        &login_input("nobody", "password123", None),
         None,
         true,
     )
@@ -385,26 +421,24 @@ async fn login_unknown_user_returns_error(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
-async fn login_with_label_creates_session_with_label(#[case] backend: Backend) {
+async fn login_nested_request_maps_distinct_fields(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
         .set(SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
-    post_form_with_secure_flag(
+    post_server_fn_with_secure_flag(
         &state,
-        <web::registration::Register as ServerFn>::PATH,
-        "username=alice&password=password123",
+        &register_input("alice", "password123", None),
         None,
         true,
     )
     .await;
 
-    let (status, set_cookie, _body) = post_form_with_secure_flag(
+    let (status, set_cookie, _body) = post_server_fn_with_secure_flag(
         &state,
-        <web::auth::Login as ServerFn>::PATH,
-        "username=alice&password=password123&label=my-device",
+        &login_input("alice", "password123", Some("Issue 417 device")),
         None,
         true,
     )
@@ -413,32 +447,31 @@ async fn login_with_label_creates_session_with_label(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK);
     let raw_token = session_token_of(set_cookie);
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
-    assert_eq!(record.label, "my-device");
+    assert_eq!(record.label, "Issue 417 device");
 }
 
 #[apply(backends)]
 #[tokio::test]
-async fn login_with_empty_label_falls_back_to_user_agent_default(#[case] backend: Backend) {
+async fn login_nested_request_without_label_uses_user_agent(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
         .set(SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
-    post_form_with_secure_flag(
+    post_server_fn_with_secure_flag(
         &state,
-        <web::registration::Register as ServerFn>::PATH,
-        "username=alice&password=password123",
+        &register_input("alice", "password123", None),
         None,
         true,
     )
     .await;
 
-    let (status, set_cookie, _body) = post_form_with_secure_flag(
+    let (status, set_cookie, _body) = post_server_fn_with_ua(
         &state,
-        <web::auth::Login as ServerFn>::PATH,
-        "username=alice&password=password123&label=",
+        &login_input("alice", "password123", None),
         None,
+        "Issue 417 browser",
         true,
     )
     .await;
@@ -446,10 +479,7 @@ async fn login_with_empty_label_falls_back_to_user_agent_default(#[case] backend
     assert_eq!(status, StatusCode::OK);
     let raw_token = session_token_of(set_cookie);
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
-    // An empty `label=` decodes to `None` (the Option form layer absorbs it before
-    // SessionLabel's deserializer runs), so this takes the User-Agent branch — and
-    // no UA header is sent here, so `from_lossy` supplies its default.
-    assert_eq!(record.label, "Unknown device");
+    assert_eq!(record.label, "Issue 417 browser");
 }
 
 #[apply(backends)]
@@ -461,10 +491,9 @@ async fn login_rejects_whitespace_only_label(#[case] backend: Backend) {
         .set(SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
-    post_form_with_secure_flag(
+    post_server_fn_with_secure_flag(
         &state,
-        <web::registration::Register as ServerFn>::PATH,
-        "username=alice&password=password123",
+        &register_input("alice", "password123", None),
         None,
         true,
     )
@@ -473,10 +502,13 @@ async fn login_rejects_whitespace_only_label(#[case] backend: Backend) {
     // A whitespace-only label is rejected at the typed-wire-arg decode
     // (SessionLabel's FromStr trims, then rejects empty) — it must not fall
     // through to the User-Agent branch. Surfaces as 500, the session-fn convention.
-    let (status, _, body) = post_form_with_secure_flag(
+    let (status, _, body) = post_server_fn_request_fixture_with_secure_flag::<web::auth::Login, _>(
         &state,
-        <web::auth::Login as ServerFn>::PATH,
-        "username=alice&password=password123&label=%20%20",
+        &LoginDecodeFixture {
+            username: "alice",
+            password: "password123",
+            label: Some("  "),
+        },
         None,
         true,
     )
@@ -496,10 +528,9 @@ async fn login_rejects_overlong_label(#[case] backend: Backend) {
         .set(SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
-    post_form_with_secure_flag(
+    post_server_fn_with_secure_flag(
         &state,
-        <web::registration::Register as ServerFn>::PATH,
-        "username=alice&password=password123",
+        &register_input("alice", "password123", None),
         None,
         true,
     )
@@ -508,10 +539,13 @@ async fn login_rejects_overlong_label(#[case] backend: Backend) {
     // Past MAX_SESSION_LABEL_CHARS (255) the label is rejected at decode rather
     // than silently truncated, matching create_app_password_rejects_overlong_label.
     let overlong = "a".repeat(256);
-    let (status, _, body) = post_form_with_secure_flag(
+    let (status, _, body) = post_server_fn_request_fixture_with_secure_flag::<web::auth::Login, _>(
         &state,
-        <web::auth::Login as ServerFn>::PATH,
-        format!("username=alice&password=password123&label={overlong}"),
+        &LoginDecodeFixture {
+            username: "alice",
+            password: "password123",
+            label: Some(&overlong),
+        },
         None,
         true,
     )
@@ -532,10 +566,9 @@ async fn login_bounds_long_user_agent_at_session_label_cap(#[case] backend: Back
         .set(SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
-    post_form_with_secure_flag(
+    post_server_fn_with_secure_flag(
         &state,
-        <web::registration::Register as ServerFn>::PATH,
-        "username=alice&password=password123",
+        &register_input("alice", "password123", None),
         None,
         true,
     )
@@ -544,10 +577,9 @@ async fn login_bounds_long_user_agent_at_session_label_cap(#[case] backend: Back
     // 250 < 255, so this UA survives intact rather than being truncated.
     let long_ua = "a".repeat(250);
 
-    let (status, set_cookie, _body) = post_form_with_ua(
+    let (status, set_cookie, _body) = post_server_fn_with_ua(
         &state,
-        <web::auth::Login as ServerFn>::PATH,
-        "username=alice&password=password123",
+        &login_input("alice", "password123", None),
         None,
         &long_ua,
         true,
@@ -571,10 +603,9 @@ async fn login_truncates_user_agent_past_session_label_cap(#[case] backend: Back
         .set(SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
-    post_form_with_secure_flag(
+    post_server_fn_with_secure_flag(
         &state,
-        <web::registration::Register as ServerFn>::PATH,
-        "username=alice&password=password123",
+        &register_input("alice", "password123", None),
         None,
         true,
     )
@@ -582,10 +613,9 @@ async fn login_truncates_user_agent_past_session_label_cap(#[case] backend: Back
 
     let long_ua = "a".repeat(300);
 
-    let (status, set_cookie, _body) = post_form_with_ua(
+    let (status, set_cookie, _body) = post_server_fn_with_ua(
         &state,
-        <web::auth::Login as ServerFn>::PATH,
-        "username=alice&password=password123",
+        &login_input("alice", "password123", None),
         None,
         &long_ua,
         true,
@@ -608,19 +638,17 @@ async fn login_wrong_password_returns_error(#[case] backend: Backend) {
         .set(SiteConfigKey::SiteRegistrationPolicy, "open")
         .await
         .unwrap();
-    post_form_with_secure_flag(
+    post_server_fn_with_secure_flag(
         &state,
-        <web::registration::Register as ServerFn>::PATH,
-        "username=frank&password=correctpassword",
+        &register_input("frank", "correctpassword", None),
         None,
         true,
     )
     .await;
 
-    let (status, _set_cookie, _body) = post_form_with_secure_flag(
+    let (status, _set_cookie, _body) = post_server_fn_with_secure_flag(
         &state,
-        <web::auth::Login as ServerFn>::PATH,
-        "username=frank&password=wrongpassword",
+        &login_input("frank", "wrongpassword", None),
         None,
         true,
     )
@@ -683,14 +711,17 @@ async fn register_invalid_username_returns_error(#[case] backend: Backend) {
 
     // "alice doe" lowercases to "alice doe" which fails Username parse
     // because Username only allows [a-z0-9_-]+.
-    let (status, _set_cookie, _body) = post_form_with_secure_flag(
-        &state,
-        <web::registration::Register as ServerFn>::PATH,
-        "username=alice%20doe&password=password123",
-        None,
-        true,
-    )
-    .await;
+    let (status, _set_cookie, _body) =
+        post_server_fn_request_fixture_with_secure_flag::<web::registration::Register, _>(
+            &state,
+            &RegistrationDecodeFixture {
+                username: "alice doe",
+                password: "password123",
+            },
+            None,
+            true,
+        )
+        .await;
 
     assert_ne!(
         status,
@@ -710,14 +741,17 @@ async fn register_short_password_returns_error(#[case] backend: Backend) {
         .await
         .expect("failed to set registration policy");
 
-    let (status, _set_cookie, _body) = post_form_with_secure_flag(
-        &state,
-        <web::registration::Register as ServerFn>::PATH,
-        "username=alice&password=short",
-        None,
-        true,
-    )
-    .await;
+    let (status, _set_cookie, _body) =
+        post_server_fn_request_fixture_with_secure_flag::<web::registration::Register, _>(
+            &state,
+            &RegistrationDecodeFixture {
+                username: "alice",
+                password: "short",
+            },
+            None,
+            true,
+        )
+        .await;
 
     assert_ne!(
         status,
@@ -739,22 +773,114 @@ async fn register_short_password_returns_error(#[case] backend: Backend) {
 // login() with a username containing a space (invalid parse) returns error.
 #[apply(backends)]
 #[tokio::test]
-async fn login_invalid_username_returns_error(#[case] backend: Backend) {
+async fn login_nested_request_rejects_invalid_username_before_handler(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-
-    let (status, _set_cookie, _body) = post_form_with_secure_flag(
+    state
+        .site_config
+        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
+        .await
+        .unwrap();
+    post_server_fn_with_secure_flag(
         &state,
-        <web::auth::Login as ServerFn>::PATH,
-        "username=alice%20doe&password=password123",
+        &register_input("alice", "password123", None),
         None,
         true,
     )
     .await;
+    let user = state
+        .users
+        .get_user_by_username(&"alice".parse().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let sessions_before = state
+        .sessions
+        .list_sessions(user.user_id)
+        .await
+        .unwrap()
+        .len();
 
-    assert_ne!(
-        status,
-        StatusCode::OK,
-        "login with space in username should fail"
+    let (status, _set_cookie, body) =
+        post_server_fn_request_fixture_with_secure_flag::<web::auth::Login, _>(
+            &state,
+            &LoginDecodeFixture {
+                username: "alice doe",
+                password: "password123",
+                label: None,
+            },
+            None,
+            true,
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(body.contains("server_function"), "body: {body}");
+    assert_eq!(
+        state
+            .sessions
+            .list_sessions(user.user_id)
+            .await
+            .unwrap()
+            .len(),
+        sessions_before,
+        "decode rejection must not create a session"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn login_nested_request_rejects_short_password_before_handler(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    state
+        .site_config
+        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
+        .await
+        .unwrap();
+    post_server_fn_with_secure_flag(
+        &state,
+        &register_input("alice", "password123", None),
+        None,
+        true,
+    )
+    .await;
+    let user = state
+        .users
+        .get_user_by_username(&"alice".parse().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let sessions_before = state
+        .sessions
+        .list_sessions(user.user_id)
+        .await
+        .unwrap()
+        .len();
+
+    let (status, set_cookie, body) =
+        post_server_fn_request_fixture_with_secure_flag::<web::auth::Login, _>(
+            &state,
+            &LoginDecodeFixture {
+                username: "alice",
+                password: "short",
+                label: None,
+            },
+            None,
+            true,
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(set_cookie.is_none(), "decode rejection minted a session");
+    assert!(body.contains("server_function"), "body: {body}");
+    assert_eq!(
+        state
+            .sessions
+            .list_sessions(user.user_id)
+            .await
+            .unwrap()
+            .len(),
+        sessions_before,
+        "decode rejection must not create a session"
     );
 }
 
@@ -932,10 +1058,9 @@ async fn register_sets_cookie_without_secure_attribute_when_disabled(#[case] bac
         .await
         .unwrap();
 
-    let (status, set_cookie, _) = post_form_with_secure_flag(
+    let (status, set_cookie, _) = post_server_fn_with_secure_flag(
         &state,
-        <web::registration::Register as ServerFn>::PATH,
-        "username=insecure&password=password123",
+        &register_input("insecure", "password123", None),
         None,
         false,
     )
