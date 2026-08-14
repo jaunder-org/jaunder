@@ -6,7 +6,9 @@ use axum::Extension;
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
 
-use common::atompub::{CollectionDecl, ServiceDocument, render_service_document};
+use common::atompub::{
+    CollectionDecl, CollectionTitle, ServiceDocument, WorkspaceTitle, render_service_document,
+};
 use common::pagination::RowLimit;
 use common::tagged_url::{CollectionHref, compose};
 use storage::{PostStorage, SiteConfigStorage};
@@ -29,7 +31,7 @@ pub async fn service_document(
     auth_user: AuthUser,
 ) -> Result<Response, HandlerError> {
     let base = required_base_url(site_config.as_ref()).await?;
-    let username = &*auth_user.username;
+    let username = &auth_user.username;
 
     // A flat cap on the service-document category list, not a page — there is no
     // pagination behind it, and 100 exceeds `PageSize`'s range by design (#696).
@@ -43,18 +45,18 @@ pub async fn service_document(
     let posts_path = format!("/atompub/{username}/posts");
     let media_path = format!("/atompub/{username}/media");
     let doc = ServiceDocument {
-        workspace_title: username.to_string(),
+        workspace_title: WorkspaceTitle::for_user(username),
         posts_collection: CollectionDecl {
             // A struct-literal field cannot be ascribed, so the role is spelled as a
             // turbofish on the tag — the alias rule's stated exception.
             href: compose::<CollectionHref>(&base, &posts_path),
-            title: "Posts".to_string(),
+            title: CollectionTitle::posts(),
             accept: vec!["application/atom+xml;type=entry".to_string()],
             categories,
         },
         media_collection: CollectionDecl {
             href: compose::<CollectionHref>(&base, &media_path),
-            title: "Media".to_string(),
+            title: CollectionTitle::media(),
             accept: MEDIA_ACCEPT.iter().map(|s| (*s).to_string()).collect(),
             categories: Vec::new(),
         },

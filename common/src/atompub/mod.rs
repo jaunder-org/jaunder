@@ -16,7 +16,9 @@
 //! Atom: the service document, the categories document, and RSD — none of which
 //! upstream models.
 
+pub mod title;
 mod xml;
+pub use title::{CollectionFeedTitle, CollectionTitle, WorkspaceTitle};
 
 pub mod entry;
 pub use entry::{

@@ -37,7 +37,7 @@ pub fn render_json(meta: &FeedMetadata, items: &[FeedItem]) -> String {
         "items": json_items,
     });
     if let Some(d) = &meta.description {
-        root["description"] = Value::String(d.clone());
+        root["description"] = Value::String(d.to_string());
     }
     if let Some(hub) = &meta.hub_url {
         root["hubs"] = json!([{ "type": "WebSub", "url": hub.as_ref() }]);
@@ -54,10 +54,11 @@ mod tests {
     use crate::render::RenderedHtml;
     use crate::test_support::{parse_post_summary, parse_post_title, parse_url};
 
-    fn meta(hub: Option<&str>) -> FeedMetadata {
+    fn meta(hub: Option<&str>, description: Option<&str>) -> FeedMetadata {
         FeedMetadata {
-            title: "Site".into(),
-            description: Some("A site".into()),
+            title: "Site".parse::<crate::feed::FeedTitle>().unwrap(),
+            description: description
+                .map(|value| value.parse::<crate::feed::FeedDescription>().unwrap()),
             canonical_url: parse_url("https://example.com/"),
             self_url: parse_url("https://example.com/feed.json"),
             hub_url: hub.map(parse_url),
@@ -84,22 +85,32 @@ mod tests {
 
     #[test]
     fn renders_empty_jsonfeed() {
-        let out = render_json(&meta(None), &[]);
+        let out = render_json(&meta(None, Some("A site")), &[]);
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["version"], "https://jsonfeed.org/version/1.1");
         assert!(v["items"].as_array().unwrap().is_empty());
     }
+    #[test]
+    fn serializes_feed_title_and_description_presence() {
+        let without: Value = serde_json::from_str(&render_json(&meta(None, None), &[])).unwrap();
+        assert_eq!(without["title"], "Site");
+        assert!(without.get("description").is_none());
+
+        let with: Value =
+            serde_json::from_str(&render_json(&meta(None, Some("A site")), &[])).unwrap();
+        assert_eq!(with["description"], "A site");
+    }
 
     #[test]
     fn emits_feed_url_as_self() {
-        let out = render_json(&meta(None), &[]);
+        let out = render_json(&meta(None, Some("A site")), &[]);
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["feed_url"], "https://example.com/feed.json");
     }
 
     #[test]
     fn includes_hub_when_set() {
-        let out = render_json(&meta(Some("https://hub.example.com/")), &[]);
+        let out = render_json(&meta(Some("https://hub.example.com/"), Some("A site")), &[]);
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["hubs"][0]["type"], "WebSub");
         assert_eq!(v["hubs"][0]["url"], "https://hub.example.com/");
@@ -107,7 +118,7 @@ mod tests {
 
     #[test]
     fn omits_title_for_titleless_post() {
-        let out = render_json(&meta(None), &[item(None, vec![])]);
+        let out = render_json(&meta(None, Some("A site")), &[item(None, vec![])]);
         let v: Value = serde_json::from_str(&out).unwrap();
         assert!(v["items"][0].get("title").is_none());
     }
@@ -115,7 +126,7 @@ mod tests {
     #[test]
     fn includes_summary_when_present() {
         let out = render_json(
-            &meta(None),
+            &meta(None, Some("A site")),
             &[item_with_summary(Some("t"), vec![], Some("a summary"))],
         );
         let v: Value = serde_json::from_str(&out).unwrap();
@@ -124,10 +135,13 @@ mod tests {
 
     #[test]
     fn includes_tags_only_when_present() {
-        let out = render_json(&meta(None), &[item(Some("t"), vec!["rust"])]);
+        let out = render_json(
+            &meta(None, Some("A site")),
+            &[item(Some("t"), vec!["rust"])],
+        );
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["items"][0]["tags"][0], "rust");
-        let out2 = render_json(&meta(None), &[item(Some("t"), vec![])]);
+        let out2 = render_json(&meta(None, Some("A site")), &[item(Some("t"), vec![])]);
         let v2: Value = serde_json::from_str(&out2).unwrap();
         assert!(v2["items"][0].get("tags").is_none());
     }
