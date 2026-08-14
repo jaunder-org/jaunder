@@ -411,17 +411,21 @@ grapheme cluster — kept iff the base scalar is alphanumeric, carrying its
 combining marks (`base_is_alphanumeric`, `common/src/slug.rs:72`, shared by
 `slugify_title` and `Slug::from_str`). `Slug::from_str` is the single chokepoint
 — NFC normalization, Unicode lowercasing, the `MAX_SLUG_CHARS` (80-scalar) cap;
-an unusable title falls back to a synthesized slug. Once `published_at` is set
-the storage layer freezes the slug (`storage/src/post_service.rs:230`,
-[ADR-0027](adr/0027-scheduled-publishing-time-gated-visibility.md)).
+an unusable title falls back to a synthesized slug. The slug is frozen while the
+Post's current `published_at` is non-null; pulling it back to draft makes the
+slug editable on a later update, and scheduling or publishing freezes it again
+(`storage/src/{sqlite,postgres}/posts.rs::update_post`,
+[scheduled publishing](adr/0027-scheduled-publishing-time-gated-visibility.md),
+[current-state slug freeze](adr/drafts/current-publication-state-slug-freeze.md)).
 
 **Visibility is two orthogonal predicates on the same reads.** _Time_: a post is
 draft (`published_at` NULL), scheduled (future), or live (past); every public
 read gates `published_at <= now` with `now` an explicit parameter, the feed
 worker's `go_live_pass` (`server/src/feed/worker.rs`) makes future-dated go-live
 restart-durable for cached feeds, and publish is an explicit
-`PublishUpdate { Unpublish, Publish { at } }` so scheduling and backdating
-round-trip ([ADR-0027](adr/0027-scheduled-publishing-time-gated-visibility.md)).
+`PublishUpdate { Unpublish, Publish { at } }` so scheduling, backdating, and
+pullback to draft round-trip
+([ADR-0027](adr/0027-scheduled-publishing-time-gated-visibility.md)).
 _Audience_: posts target audiences
 (`AudienceTarget::{Public, Private, Subscribers, Named}`) stored as
 `post_audiences` rows; a viewer is a `ViewerIdentity` (channel identity or
