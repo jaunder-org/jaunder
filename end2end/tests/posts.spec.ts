@@ -14,7 +14,11 @@ import {
   stallServerFn,
 } from "./helpers";
 import { createPerfProbe } from "./perf";
-import { seedPostsViaTool } from "./seed";
+import {
+  applySeededSession,
+  createSessionViaTool,
+  seedPostsViaTool,
+} from "./seed";
 import { SEL } from "./selectors";
 import {
   composePost,
@@ -26,6 +30,7 @@ import {
 } from "./posts";
 import { navigateInApp } from "./navigate";
 import { allowSecondBoot } from "./bootBudget";
+import { expectVisual } from "./visual";
 
 const TIMELINE_PAGE_SIZE = 50;
 const TIMELINE_OVERFLOW_COUNT = 1;
@@ -172,21 +177,26 @@ test("clearing a post summary on edit persists as empty", async ({
 // predicate, so an empty body left "Publish" enabled and pressing it did nothing at
 // all — no error, no message, no state change. The gate and the parse are now one
 // call, so a control that cannot dispatch cannot be pressed.
-test("an empty body disables the compose page's submit controls", async ({
-  registeredPage,
-}) => {
-  const page = await registeredPage("/posts/new");
+test(
+  "an empty body disables the compose page's submit controls",
+  { tag: "@visual" },
+  async ({ page, firstNav }) => {
+    const session = await createSessionViaTool("testlogin");
+    await applySeededSession(page.context(), session);
+    await goto(page, "/posts/new", { timeout: firstNav });
 
-  await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
-  await expect(page.locator(SEL.publishButton("false"))).toBeDisabled();
+    await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
+    await expect(page.locator(SEL.publishButton("false"))).toBeDisabled();
+    await expectVisual(page, "empty-post-composer.png");
 
-  // Whitespace-only is rejected by PostBody::from_str exactly as empty is.
-  await page.fill(SEL.postBody, "   \n\t ");
-  await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
+    // Whitespace-only is rejected by PostBody::from_str exactly as empty is.
+    await page.fill(SEL.postBody, "   \n\t ");
+    await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
 
-  await page.fill(SEL.postBody, "real body text");
-  await expect(page.locator(SEL.publishButton("true"))).toBeEnabled();
-});
+    await page.fill(SEL.postBody, "real body text");
+    await expect(page.locator(SEL.publishButton("true"))).toBeEnabled();
+  },
+);
 
 // #860: a rejected body is now visible, like every other rejection in these forms.
 // Gated on touch, so a composer the author has not yet typed in stays quiet.

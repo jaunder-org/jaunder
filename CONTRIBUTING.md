@@ -257,10 +257,10 @@ invoke it.
 
 - **Fast local loop** — `cargo xtask e2e-local` owns the whole loop: it builds
   the CSR bundle + server, starts its own `jaunder serve` on an ephemeral port
-  with a fresh per-run temp DB, seeds fixtures, and runs the Playwright suite
-  (chromium + `chromium-admin`) against it, tearing the server down after. No
-  pre-existing server needed. Use this while iterating on the web UI; it uses
-  the HTML reporter for interactive debugging.
+  with a fresh per-run temp DB, seeds fixtures, and runs the Playwright
+  `chromium-visual → chromium → chromium-admin` project chain against it,
+  tearing the server down after. No pre-existing server needed. Use this while
+  iterating on the web UI; it uses the HTML reporter for interactive debugging.
 - **A single test** — `cargo xtask e2e-local <spec>` runs just that spec (e.g.
   `cargo xtask e2e-local auth.spec.ts`), fully self-contained (its own ephemeral
   server + temp DB), for the tightest edit→run loop. The host runs serial
@@ -271,6 +271,40 @@ invoke it.
   runs); `cargo xtask validate` runs all four
   `{sqlite,postgres}×{chromium,firefox}` combos. The VM path is what green means
   before you push.
+
+#### Visual snapshot workflow
+
+Visual coverage is deliberately four existing behavioral tests tagged `@visual`:
+the public timeline, login form, authenticated `/app` cockpit, and empty
+`/posts/new` composer. Keep the assertions that prove each state ready; the
+screenshot comparison supplements them. Expected PNGs live beside their owning
+specs under `*.spec.ts-snapshots/`, with Playwright's browser project and Linux
+identity in the generated filename. There is one Chromium and one Firefox
+baseline per state, shared by the SQLite and PostgreSQL gates. Do not add
+backend, WebKit, mobile, or alternate-theme variants without changing this
+policy.
+
+Comparisons are exact: zero differing pixels, pinned DejaVu/fontconfig, and
+screenshot-only animation/caret/font CSS. The public timeline masks only
+`.j-post-time`; other dynamic state must be made deterministic rather than
+masked or tolerated.
+
+The only supported baseline updater is:
+
+```bash
+cargo xtask e2e-local --update-visual-snapshots
+```
+
+It release-builds CSR and gives Chromium and Firefox separate fresh
+server/database lifecycles. **Never** hand-run Playwright's snapshot-update mode
+against an ambient server or database. Review every changed PNG, then run
+`cargo xtask e2e-local` without update mode before committing intentional
+baselines together with the rendering or test change.
+
+`cargo xtask e2e-local <spec-or-file:line>` remains the targeted loop. It scopes
+both the visual prerequisite and the ordinary/admin invocation to that
+positional filter; an unrelated spec does not schedule all visual tests. Update
+mode intentionally rejects a positional filter.
 
 ### One boot per page
 

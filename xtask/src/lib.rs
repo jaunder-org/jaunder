@@ -166,17 +166,22 @@ pub enum Command {
         #[arg(value_enum)]
         browser: E2eBrowser,
     },
-    /// Run the host e2e loop, owning the whole lifecycle: build the CSR bundle +
+    /// Run the host e2e loop, owning each lifecycle: build the CSR bundle +
     /// server, start `jaunder serve` on an ephemeral port with the VM's capture
     /// env + a per-run temp DB, seed via the shared `devtool seed-e2e`, run
-    /// Playwright (chromium + chromium-admin) against the discovered URL, and tear
-    /// the server down on every exit path. Self-contained — no pre-existing server
-    /// and no `:3000` conflict. Loads the same `playwright.config.ts` the CI VM
-    /// loads. Host only.
+    /// Playwright against the discovered URL, and tear the server down on every
+    /// exit path. Normal mode runs Chromium ordinary/admin tests; visual update
+    /// mode builds release CSR and updates Chromium and Firefox baselines in
+    /// separate fresh lifecycles. Self-contained — no pre-existing server and no
+    /// `:3000` conflict. Loads the same `playwright.config.ts` the CI VM loads.
+    /// Host only.
     E2eLocal {
         /// A spec path or `file:line` filter passed through to Playwright as a
         /// positional arg (single-test runs).
         test: Option<String>,
+        /// Update every Chromium and Firefox visual baseline using release CSR.
+        #[arg(long, conflicts_with = "test")]
+        update_visual_snapshots: bool,
     },
     /// Build the CSR wasm bundle on the host (`cargo build -p csr` + the shared
     /// `devtool csr-bundle` post-processing) — the cargo-leptos-free bundle build
@@ -598,11 +603,14 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             finalize(&mut result, start);
             Ok(result)
         }
-        Command::E2eLocal { test } => {
+        Command::E2eLocal {
+            test,
+            update_visual_snapshots,
+        } => {
             let sh = xshell::Shell::new()?;
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("e2e-local");
-            steps::e2e_local::run(&sh, &mut result, test.as_deref());
+            steps::e2e_local::run(&sh, &mut result, test.as_deref(), update_visual_snapshots);
             finalize(&mut result, start);
             Ok(result)
         }
@@ -853,17 +861,55 @@ mod cli_tests {
     }
 
     #[test]
-    fn e2e_local_parses_with_optional_filter() {
+    fn e2e_local_parses_filter_or_visual_update_mode() {
         let cli = Cli::try_parse_from(["xtask", "e2e-local"]).unwrap();
         match cli.command {
-            Command::E2eLocal { test } => assert_eq!(test, None),
+            Command::E2eLocal {
+                test,
+                update_visual_snapshots,
+            } => {
+                assert_eq!(test, None);
+                assert!(!update_visual_snapshots);
+            }
             _ => panic!("expected e2e-local"),
         }
+
         let cli = Cli::try_parse_from(["xtask", "e2e-local", "auth-flow.spec.ts"]).unwrap();
         match cli.command {
-            Command::E2eLocal { test } => assert_eq!(test.as_deref(), Some("auth-flow.spec.ts")),
+            Command::E2eLocal {
+                test,
+                update_visual_snapshots,
+            } => {
+                assert_eq!(test.as_deref(), Some("auth-flow.spec.ts"));
+                assert!(!update_visual_snapshots);
+            }
             _ => panic!("expected e2e-local with filter"),
         }
+
+        let cli = Cli::try_parse_from(["xtask", "e2e-local", "--update-visual-snapshots"]).unwrap();
+        match cli.command {
+            Command::E2eLocal {
+                test,
+                update_visual_snapshots,
+            } => {
+                assert_eq!(test, None);
+                assert!(update_visual_snapshots);
+            }
+            _ => panic!("expected e2e-local visual update mode"),
+        }
+    }
+
+    #[test]
+    fn e2e_local_rejects_filter_with_visual_update_mode() {
+        assert!(
+            Cli::try_parse_from([
+                "xtask",
+                "e2e-local",
+                "--update-visual-snapshots",
+                "auth-flow.spec.ts",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
