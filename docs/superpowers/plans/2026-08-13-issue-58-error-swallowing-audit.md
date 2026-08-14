@@ -1436,7 +1436,7 @@ Playwright, and the repository `cargo xtask` gate.
   warning-only amendments preserve the primary result and warn once; remaining
   ancillary contracts pass without stdout/JSON drift.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
   ```bash
   git add server/build.rs server/src/build_staging.rs server/tests/build_script.rs server/tests/main.rs xtask/src/adr.rs xtask/src/adr_readme.rs xtask/src/lib.rs xtask/src/coverage/run.rs xtask/src/coverage/crap.rs xtask/src/coverage/exempt.rs xtask/src/coverage/probe.rs xtask/src/pr/gh.rs xtask/src/steps/adr_check.rs xtask/src/steps/e2e_local.rs xtask/src/steps/no_full_reload_check.rs xtask/src/steps/proffered_filename_check.rs xtask/src/steps/proffered_secret_check.rs xtask/src/steps/sequence_check.rs xtask/src/steps/sqlx_newtype_bind_check.rs xtask/src/steps/test_pattern_check.rs xtask/src/steps/nix.rs xtask/src/traces/analyze.rs xtask/src/traces/boot_phases.rs xtask/src/traces/parse.rs xtask/src/traces/render.rs tools/devtool/src/pg.rs tools/devtool/src/run.rs
@@ -1497,7 +1497,7 @@ Playwright, and the repository `cargo xtask` gate.
 | Build staging, ADR/sequence/PATH/trace-JSON fail-closed; workers/rate-limit/Nix warnings         | Task 11 Steps 1-3                | Task 11 Steps 5-7, commit Step 8 |     16 |
 | **All stable remediation keys**                                                                  |                                  |                                  | **88** |
 
-- [ ] **Step 1: Rerun every inventory recipe against the final tree**
+- [x] **Step 1: Rerun every inventory recipe against the final tree**
 
   Before changing classified rows, copy the exact 88 marked baseline keys into
   the delivered-remediation ledger so expression removal cannot erase the
@@ -1511,7 +1511,7 @@ Playwright, and the repository `cargo xtask` gate.
   expected rows must state the exact validation/domain or structurally
   infallible condition; propagated rows must retain their typed source.
 
-- [ ] **Step 2: Write the inventory-check red tests**
+- [x] **Step 2: Write the inventory-check red tests**
 
   Use small Markdown fixtures to assert the new step rejects: a baseline
   remediation key absent from the ledger; a duplicate or unknown baseline key;
@@ -1526,7 +1526,7 @@ Playwright, and the repository `cargo xtask` gate.
 
   Expected before implementation: FAIL because the step and ledger do not exist.
 
-- [ ] **Step 3: Implement and run the mechanical reconciliation**
+- [x] **Step 3: Implement and run the mechanical reconciliation**
 
   Parse the classified table and delivered-remediation ledger with a narrow
   line/table parser. Require exactly the frozen 88 baseline keys once each,
@@ -1546,36 +1546,36 @@ Playwright, and the repository `cargo xtask` gate.
   Expected: PASS only when every one of the 88 remediation keys has delivered
   proof and the final inventory has no incomplete continuation.
 
-- [ ] **Step 4: Run focused contract suites**
+- [x] **Step 4: Run focused contract suites**
 
   ```bash
   devtool run -- cargo nextest run -p common password
   devtool run -- cargo nextest run -p common atompub
-  devtool run -- cargo nextest run -p storage email_verification
-  devtool run -- cargo nextest run -p storage confirm_password_reset
-  devtool run -- cargo nextest run -p storage create_user_with_invite
-  devtool run -- cargo nextest run -p storage continuation_reporting
+  devtool run -- devtool pg run -- cargo nextest run -p storage email_verification
+  devtool run -- devtool pg run -- cargo nextest run -p storage confirm_password_reset
+  devtool run -- devtool pg run -- cargo nextest run -p storage create_user_with_invite
+  devtool run -- devtool pg run -- cargo nextest run -p storage continuation_reporting
   devtool run -- cargo nextest run -p host error
   devtool run -- cargo nextest run -p host capture
   devtool run -- cargo nextest run -p client telemetry
   devtool run -- cargo nextest run -p web media
-  devtool run -- cargo nextest run -p web continuation_reporting
+  devtool run -- cargo nextest run -p web --all-features continuation_reporting
   devtool run -- cargo nextest run -p web default_post_format
   devtool run -- cargo nextest run -p web audience_picker
-  devtool run -- cargo nextest run -p jaunder client_telemetry
-  devtool run -- cargo nextest run -p jaunder mailer
-  devtool run -- cargo nextest run -p jaunder media
-  devtool run -- cargo nextest run -p jaunder projector
-  devtool run -- cargo nextest run -p jaunder feed
-  devtool run -- cargo nextest run -p jaunder backup
-  devtool run -- cargo nextest run -p jaunder runtime_file
-  devtool run -- cargo nextest run -p jaunder commands
+  devtool run -- devtool pg run -- cargo nextest run -p jaunder client_telemetry
+  devtool run -- devtool pg run -- cargo nextest run -p jaunder mailer
+  devtool run -- devtool pg run -- cargo nextest run -p jaunder media
+  devtool run -- devtool pg run -- cargo nextest run -p jaunder projector
+  devtool run -- devtool pg run -- cargo nextest run -p jaunder feed
+  devtool run -- devtool pg run -- cargo nextest run -p jaunder backup
+  devtool run -- devtool pg run -- cargo nextest run -p jaunder runtime_file
+  devtool run -- devtool pg run -- cargo nextest run -p jaunder commands
   devtool run -- cargo nextest run -p jaunder build_script_staging
   devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml
   devtool run -- cargo nextest run --manifest-path tools/devtool/Cargo.toml
   ```
 
-- [ ] **Step 5: Run focused browser proofs**
+- [x] **Step 5: Run focused browser proofs**
 
   ```bash
   devtool run -- cargo xtask e2e-local client-telemetry.spec.ts
@@ -1586,21 +1586,22 @@ Playwright, and the repository `cargo xtask` gate.
   Expected: client warning/request-start proof, real intake diagnostic proof,
   and both #898/#899 visible failure flows pass.
 
-- [ ] **Step 6: Run the complete local gate**
+- [x] **Step 6: Run the complete local gate matrix on the dirty tree**
 
   ```bash
   devtool run -- cargo xtask check
-  devtool run -- cargo xtask validate
+  devtool run -- cargo xtask validate --allow-dirty
   ```
 
   Expected: the inventory checker and all static checks pass; dual-backend
   coverage/tests and all four SQLite/PostgreSQL × Chromium/Firefox e2e
-  combinations pass.
+  combinations pass. The clean-tree step remains for post-commit ship
+  validation.
 
-- [ ] **Step 7: Review final evidence and commit**
+- [x] **Step 7: Review final evidence and commit**
 
   ```bash
-  git add xtask/src/steps/error_swallowing_inventory_check.rs xtask/src/lib.rs docs/superpowers/specs/2026-08-13-issue-58-error-swallowing-inventory.md docs/superpowers/specs/2026-08-13-issue-58-error-swallowing-audit.md docs/superpowers/plans/2026-08-13-issue-58-error-swallowing-audit.md
+  git add Cargo.lock xtask/src/steps/error_swallowing_inventory_check.rs xtask/src/lib.rs xtask/src/steps/nix.rs tools/devtool/src/coverage/emit.rs end2end/tests/client-telemetry.spec.ts docs/superpowers/specs/2026-08-13-issue-58-error-swallowing-inventory.md docs/superpowers/specs/2026-08-13-issue-58-error-swallowing-audit.md docs/superpowers/plans/2026-08-13-issue-58-error-swallowing-audit.md
   git commit -m "docs: enforce reconciled error audit evidence"
   ```
 

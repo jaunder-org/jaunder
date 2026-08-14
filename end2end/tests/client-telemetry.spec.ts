@@ -1,8 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { capturePathViaTool } from "./capture";
 import { test, expect } from "./fixtures";
-import { waitForSelector } from "./helpers";
+import { goto, waitForSelector } from "./helpers";
 import { pollUntil } from "./polling";
+import { applySeededSession } from "./seed";
 
 const LOCAL_WARNING = "jaunder swallowed browser error";
 const TELEMETRY_PATH = "/api/client-telemetry";
@@ -114,4 +115,39 @@ test("audited browser failure warns before authenticated keepalive delivery", as
   // observed above only to prove the real authenticated path; nothing below asserts
   // delivery after page termination.
   await page.close();
+});
+
+test("session marker read failure reports before authenticated recovery", async ({
+  page,
+  user,
+  firstNav,
+}) => {
+  await page.context().addInitScript(
+    ({ markerKey }) => {
+      const nativeGetItem = Storage.prototype.getItem;
+      Storage.prototype.getItem = function (key: string): string | null {
+        if (key === markerKey) {
+          throw new DOMException(
+            "injected marker text must remain browser-local",
+            "SecurityError",
+          );
+        }
+        return nativeGetItem.call(this, key);
+      };
+    },
+    { markerKey: user.markerKey },
+  );
+
+  const warningPromise = page.waitForEvent("console", {
+    predicate: (message) =>
+      message.type() === "warning" && message.text() === LOCAL_WARNING,
+  });
+  await applySeededSession(page.context(), user);
+  await goto(page, "/app", { timeout: firstNav });
+  await waitForSelector(page, "a[href='/logout']");
+  const warning = await warningPromise;
+
+  expect(warning.text()).toBe(LOCAL_WARNING);
+  expect(warning.text()).not.toContain("injected marker text");
+  await expect(page.locator("a[href='/logout']")).toBeVisible();
 });

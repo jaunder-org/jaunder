@@ -788,9 +788,9 @@ mod tests {
 
     use super::{
         CommandResult, FailedBuildDiagnostics, StepResult, doctest_sentinel_detail,
-        drain_build_stderr, eval_out_path_after_failure, failed_build_after_diagnostics_with,
-        failed_status_step, prepare_build_dirs_with, report_build_diagnostic_failure,
-        sentinel_detail, test_check_names,
+        drain_build_stderr, failed_build_after_diagnostics_with, failed_status_step,
+        prepare_build_dirs_with, report_build_diagnostic_failure, sentinel_detail,
+        test_check_names,
     };
     use coverage::status::{CoverageStatus, StatusCategory};
     use doctests::check::{Kind, Violation};

@@ -32,6 +32,7 @@ mod steps {
     pub mod e2e_goto_wrapper_check;
     pub mod e2e_local;
     pub mod e2e_scaffold_check;
+    pub mod error_swallowing_inventory_check;
     pub mod flaky;
     pub mod host_tests;
     pub mod html_sink_check;
@@ -460,6 +461,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::sequence_check::run(&mut result);
             steps::adr_check::run(&mut result);
             steps::doc_links::run(&mut result);
+            steps::error_swallowing_inventory_check::run(&mut result);
             steps::test_pattern_check::run(&mut result);
             steps::server_fn_registrar_check::run(&mut result);
             steps::server_fn_tracing_check::run(&mut result);
@@ -504,6 +506,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::sequence_check::run(&mut result);
             steps::adr_check::run(&mut result);
             steps::doc_links::run(&mut result);
+            steps::error_swallowing_inventory_check::run(&mut result);
             steps::test_pattern_check::run(&mut result);
             steps::server_fn_registrar_check::run(&mut result);
             steps::server_fn_tracing_check::run(&mut result);
