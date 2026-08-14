@@ -504,6 +504,7 @@ Playwright, and the repository `cargo xtask` gate.
 - Test: in-file unit tests in all four modified modules
 - Test: `server/tests/misc/commands.rs`
 - Test: `server/tests/misc/postgres/commands.rs`
+- Test: `server/tests/storage/mod.rs`
 
 **Interfaces:**
 
@@ -525,7 +526,7 @@ Playwright, and the repository `cargo xtask` gate.
   mappings at lines 65 and 79/83; and both PostgreSQL password environment
   paths.
 
-- [ ] **Step 1: Add mailer construction and source-chain tests**
+- [x] **Step 1: Add mailer construction and source-chain tests**
 
   Pin absent config => Noop; injected config read error => `Err` with its
   source; syntactically present but invalid sender => `Err` retaining
@@ -534,7 +535,7 @@ Playwright, and the repository `cargo xtask` gate.
   lettre otherwise offers no deterministic failure input. Assert startup callers
   propagate rather than substitute Noop.
 
-- [ ] **Step 2: Add CLI source-chain tests for all nine command mappings**
+- [x] **Step 2: Add CLI source-chain tests for all nine command mappings**
 
   Inject database-open/configuration errors through `cmd_user_create`,
   `cmd_user_invite`, `cmd_app_password_create`, `cmd_smtp_test`, and both
@@ -547,7 +548,7 @@ Playwright, and the repository `cargo xtask` gate.
   remains downcastable. These tests name all nine command sites explicitly:
   lines 200, 271, 289, 319, 323, 327, 345, 513, and 520.
 
-- [ ] **Step 3: Add pure database auto-init classification tests**
+- [x] **Step 3: Add pure database auto-init classification tests**
 
   Construct cases for: SQLite CANTOPEN + missing filename => initialize; SQLite
   CANTOPEN + existing file => propagate; metadata permission/other error =>
@@ -561,7 +562,7 @@ Playwright, and the repository `cargo xtask` gate.
   typed environment source and bounded context, does not render bytes, and does
   not fall through. Assert `NotPresent` alone retains the documented fallback.
 
-- [ ] **Step 4: Run and observe current failures**
+- [x] **Step 4: Run and observe current failures**
 
   ```bash
   devtool run -- cargo nextest run -p jaunder mailer_source_chain
@@ -574,7 +575,13 @@ Playwright, and the repository `cargo xtask` gate.
   PostgreSQL configured-invalid credentials fall through, and at least the
   malformed/open classification assertions fail.
 
-- [ ] **Step 5: Implement fail-closed startup and typed propagation**
+  Red-phase disposition: the delegated implementation was already present before
+  the controller could run these focused tests. The first controller runs
+  exposed test compilation defects and an unbounded PostgreSQL connection case,
+  but no truthful pre-implementation behavior run remained. Those defects were
+  repaired; Step 6 supplies the delivery evidence.
+
+- [x] **Step 5: Implement fail-closed startup and typed propagation**
 
   Replace all eleven string-erasing mappings with typed variants or
   `anyhow::Context`; never inspect formatted error strings. Fail closed for both
@@ -582,7 +589,7 @@ Playwright, and the repository `cargo xtask` gate.
   only after matching CANTOPEN and a SQLite filename; PostgreSQL auto-init still
   never runs and retains `create-pg-db` guidance.
 
-- [ ] **Step 6: Add real backend integration proofs and verify**
+- [x] **Step 6: Add real backend integration proofs and verify**
 
   Exercise missing SQLite (auto-init succeeds) and missing PostgreSQL database
   (serve/open fails; no initialization attempt). Then run:
@@ -597,10 +604,10 @@ Playwright, and the repository `cargo xtask` gate.
   Expected: all thirteen sources/classifications pass, absent SMTP alone selects
   Noop, and backend startup/credential classification remains exact.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
   ```bash
-  git add server/src/mailer/factory.rs server/src/mailer/smtp.rs server/src/commands.rs storage/src/postgres/open.rs server/tests/misc/commands.rs server/tests/misc/postgres/commands.rs
+  git add server/src/mailer/factory.rs server/src/mailer/smtp.rs server/src/commands.rs storage/src/postgres/open.rs server/tests/misc/commands.rs server/tests/misc/postgres/commands.rs server/tests/storage/mod.rs
   git commit -m "fix(server): preserve startup and SMTP failure sources"
   ```
 

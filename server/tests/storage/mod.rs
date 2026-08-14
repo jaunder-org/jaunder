@@ -1599,7 +1599,9 @@ async fn create_user_with_invite_duplicate_username_returns_username_taken(
 #[tokio::test]
 async fn build_mailer_returns_noop_when_smtp_not_configured(#[case] backend: Backend) {
     let env = backend.setup().await;
-    let mailer = jaunder::mailer::build_mailer(env.state.site_config.as_ref(), None).await;
+    let mailer = jaunder::mailer::build_mailer(env.state.site_config.as_ref(), None)
+        .await
+        .expect("absent SMTP selects the no-op mailer");
 
     let msg = common::mailer::EmailMessage {
         from: None,

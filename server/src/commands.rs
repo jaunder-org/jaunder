@@ -2,6 +2,7 @@ use std::{
     fs, io,
     net::SocketAddr,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use anyhow::Context as _;
@@ -25,6 +26,8 @@ use host::capture;
 use storage::load_smtp_config;
 use storage::{BackupExportOptions, BackupRestoreOptions, export_backup, restore_backup};
 use storage::{init_storage, open_database, open_existing_database};
+
+const INIT_FIRST_CONTEXT: &str = "database could not be opened; run `jaunder init` first";
 
 /// Parse an optional CLI password string into `Option<Password>` (`None` stays
 /// `None`), surfacing the validation error as an `anyhow` message.
@@ -212,7 +215,7 @@ pub async fn cmd_user_create(
 ) -> anyhow::Result<()> {
     let state = open_existing_database(&storage.db)
         .await
-        .map_err(|e| anyhow::anyhow!("{e}; run `jaunder init` first"))?;
+        .context(INIT_FIRST_CONTEXT)?;
 
     let password = if let Some(p) = password {
         p
@@ -298,7 +301,7 @@ pub async fn cmd_app_password_create(
 ) -> anyhow::Result<()> {
     let state = open_existing_database(&storage.db)
         .await
-        .map_err(|e| anyhow::anyhow!("{e}; run `jaunder init` first"))?;
+        .context(INIT_FIRST_CONTEXT)?;
     let token = app_password_create(&state, username, label).await?;
     println!("{token}");
     Ok(())
@@ -316,7 +319,7 @@ pub async fn cmd_user_invite(
 ) -> anyhow::Result<()> {
     let state = open_existing_database(&storage.db)
         .await
-        .map_err(|e| anyhow::anyhow!("{e}; run `jaunder init` first"))?;
+        .context(INIT_FIRST_CONTEXT)?;
 
     // The 1..=336 bound lives in `InviteTtlHours` (clap rejects an out-of-range `--expires-in`
     // at parse), so no in-body overflow check is needed.
@@ -346,15 +349,27 @@ pub async fn cmd_user_invite(
 pub async fn cmd_smtp_test(storage: &StorageArgs, to: &str) -> anyhow::Result<()> {
     let state = open_existing_database(&storage.db)
         .await
-        .map_err(|e| anyhow::anyhow!("{e}; run `jaunder init` first"))?;
+        .context(INIT_FIRST_CONTEXT)?;
 
-    let smtp_config = load_smtp_config(state.site_config.as_ref())
+    smtp_test_with(state.site_config.as_ref(), to, |config| {
+        Ok(Box::new(LettreMailSender::from_config(config)?) as Box<dyn MailSender>)
+    })
+    .await
+}
+
+async fn smtp_test_with(
+    site_config: &dyn storage::SiteConfigStorage,
+    to: &str,
+    build_smtp: impl FnOnce(
+        &storage::SmtpConfig,
+    ) -> Result<Box<dyn MailSender>, crate::mailer::BuildMailerError>,
+) -> anyhow::Result<()> {
+    let smtp_config = load_smtp_config(site_config)
         .await
-        .map_err(|e| anyhow::anyhow!("SMTP misconfigured: {e}"))?
+        .context("SMTP is misconfigured")?
         .ok_or_else(|| anyhow::anyhow!("SMTP is not configured"))?;
 
-    let mailer = LettreMailSender::from_config(&smtp_config)
-        .map_err(|e| anyhow::anyhow!("Failed to build SMTP transport: {e}"))?;
+    let mailer = build_smtp(&smtp_config).context("failed to build SMTP transport")?;
 
     let to_addr: Email = to
         .parse()
@@ -372,7 +387,7 @@ pub async fn cmd_smtp_test(storage: &StorageArgs, to: &str) -> anyhow::Result<()
     mailer
         .send_email(&message)
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to send test email: {e}"))?;
+        .context("failed to send test email")?;
 
     println!("Test email sent successfully to {to}");
     Ok(())
@@ -476,6 +491,130 @@ fn directory_has_entries(path: &Path) -> io::Result<bool> {
     Ok(false)
 }
 
+#[async_trait::async_trait]
+trait StartupDatabaseOperations: Sync {
+    async fn open_existing(
+        &self,
+        options: &storage::DbConnectOptions,
+    ) -> sqlx::Result<Arc<storage::AppState>>;
+
+    async fn init(&self, storage: &StorageArgs) -> anyhow::Result<()>;
+
+    fn metadata(&self, path: &Path) -> io::Result<fs::Metadata>;
+}
+
+struct RealStartupDatabaseOperations;
+
+#[async_trait::async_trait]
+impl StartupDatabaseOperations for RealStartupDatabaseOperations {
+    async fn open_existing(
+        &self,
+        options: &storage::DbConnectOptions,
+    ) -> sqlx::Result<Arc<storage::AppState>> {
+        open_existing_database(options).await
+    }
+
+    async fn init(&self, storage: &StorageArgs) -> anyhow::Result<()> {
+        cmd_init(storage, true).await
+    }
+
+    fn metadata(&self, path: &Path) -> io::Result<fs::Metadata> {
+        fs::metadata(path)
+    }
+}
+
+fn database_error_code(error: &sqlx::Error, expected: &str) -> bool {
+    matches!(
+        error,
+        sqlx::Error::Database(database)
+            if database.code().as_deref() == Some(expected)
+    )
+}
+
+fn is_sqlite_cantopen(error: &sqlx::Error) -> bool {
+    database_error_code(error, "14")
+}
+
+fn classify_development_auto_init(
+    database: &storage::DbConnectOptions,
+    open_error: &sqlx::Error,
+    sqlite_filename_metadata: Option<io::Result<fs::Metadata>>,
+) -> io::Result<bool> {
+    if !matches!(database, storage::DbConnectOptions::Sqlite(_)) || !is_sqlite_cantopen(open_error)
+    {
+        return Ok(false);
+    }
+
+    match sqlite_filename_metadata {
+        Some(Err(error)) if error.kind() == io::ErrorKind::NotFound => Ok(true),
+        Some(Err(error)) => Err(error),
+        Some(Ok(_)) | None => Ok(false),
+    }
+}
+
+fn startup_database_error_context(
+    database: &storage::DbConnectOptions,
+    error: &sqlx::Error,
+) -> &'static str {
+    if matches!(database, storage::DbConnectOptions::Postgres { .. })
+        && database_error_code(error, "3D000")
+    {
+        "PostgreSQL database does not exist; run `jaunder create-pg-db` first"
+    } else {
+        INIT_FIRST_CONTEXT
+    }
+}
+
+async fn open_server_database_with(
+    storage: &StorageArgs,
+    prod: bool,
+    operations: &impl StartupDatabaseOperations,
+) -> anyhow::Result<Arc<storage::AppState>> {
+    let open_error = match operations.open_existing(&storage.db).await {
+        Ok(database) => return Ok(database),
+        Err(error) => error,
+    };
+
+    if prod {
+        let context = startup_database_error_context(&storage.db, &open_error);
+        return Err(open_error).context(context);
+    }
+
+    let metadata = match &storage.db {
+        storage::DbConnectOptions::Sqlite(options) if is_sqlite_cantopen(&open_error) => {
+            Some(operations.metadata(options.get_filename()))
+        }
+        storage::DbConnectOptions::Sqlite(_) | storage::DbConnectOptions::Postgres { .. } => None,
+    };
+    let initialize = classify_development_auto_init(&storage.db, &open_error, metadata)
+        .context("failed to inspect SQLite database filename for development auto-init")?;
+    if !initialize {
+        let context = startup_database_error_context(&storage.db, &open_error);
+        return Err(open_error).context(context);
+    }
+
+    let storage_path = storage.storage_path.display();
+    tracing::warn!(
+        storage_path = %storage_path,
+        db = %storage.db,
+        "Database not found — auto-initializing (dev mode): storage={} db={}",
+        storage_path,
+        storage.db,
+    );
+    operations.init(storage).await?;
+    operations
+        .open_existing(&storage.db)
+        .await
+        .context("auto-init failed while reopening database")
+}
+
+async fn open_server_database(
+    storage: &StorageArgs,
+    prod: bool,
+) -> anyhow::Result<Arc<storage::AppState>> {
+    open_server_database_with(storage, prod, &RealStartupDatabaseOperations).await
+}
+
 /// A bound listener and router ready to serve, plus the live background-worker
 /// schedulers that must outlive the serve loop. Produced by [`prepare_server`].
 pub struct PreparedServer {
@@ -526,29 +665,7 @@ pub async fn prepare_server(
         runtime_file::StartupCheck::Stale | runtime_file::StartupCheck::Proceed => {}
     }
 
-    let db = match open_existing_database(&storage.db).await {
-        Ok(db) => db,
-        Err(_) if !prod => {
-            // Dev mode: auto-initialize on first `jaunder serve` so the host e2e
-            // loop (and any dev run) works without a manual `jaunder init`.
-            let storage_path = storage.storage_path.display();
-            tracing::warn!(
-                storage_path = %storage_path,
-                db = %storage.db,
-                "Database not found — auto-initializing (dev mode): storage={} db={}",
-                storage_path,
-                storage.db,
-            );
-            cmd_init(storage, true).await?;
-            open_existing_database(&storage.db).await.map_err(|e| {
-                // cov:ignore-start -- unreachable in practice: reopening cannot
-                // fail immediately after `cmd_init` just created the database.
-                anyhow::anyhow!("{e}; auto-init failed")
-            })?
-            // cov:ignore-stop
-        }
-        Err(e) => return Err(anyhow::anyhow!("{e}; run `jaunder init` first")),
-    };
+    let db = open_server_database(storage, prod).await?;
 
     let backup_scheduler = crate::backup::start_backup_worker(
         db.site_config.clone(),
@@ -572,7 +689,7 @@ pub async fn prepare_server(
         db.site_config.as_ref(),
         capture::file(capture::Stream::Mail),
     )
-    .await;
+    .await?;
     let router = crate::create_router(db, mailer, prod, storage.storage_path.clone());
     let listener = tokio::net::TcpListener::bind(bind).await?;
     // `local_addr` cannot fail on a just-bound listener; fall back to the
@@ -880,6 +997,346 @@ mod tests {
         assert!(
             format!("{error:#}").contains("verification failed"),
             "human error chain must include the crypto failure: {error:#}"
+        );
+    }
+
+    fn smtp_config() -> storage::SmtpConfig {
+        storage::SmtpConfig {
+            host: "mail.example.com".parse().expect("valid host"),
+            port: common::smtp_port::SmtpPort::default(),
+            tls_mode: storage::SmtpTlsMode::StartTls,
+            username: None,
+            password: None,
+            sender: "Jaunder <noreply@example.com>"
+                .parse()
+                .expect("valid sender"),
+        }
+    }
+
+    fn transport_build_error() -> lettre::transport::smtp::Error {
+        lettre::transport::smtp::client::TlsParametersBuilder::new("mail.example.com".to_owned())
+            .set_min_tls_version(lettre::transport::smtp::client::TlsVersion::Tlsv10)
+            .build_rustls()
+            .err()
+            .expect("rustls rejects TLS 1.0")
+    }
+
+    fn assert_command_source<T: std::error::Error + 'static>(error: &anyhow::Error, context: &str) {
+        assert_eq!(error.to_string(), context);
+        assert!(
+            error
+                .chain()
+                .any(|source| source.downcast_ref::<T>().is_some()),
+            "typed source must remain downcastable: {error:#}"
+        );
+    }
+
+    struct FailingMailSender;
+
+    #[async_trait::async_trait]
+    impl MailSender for FailingMailSender {
+        async fn send_email(
+            &self,
+            _message: &EmailMessage,
+        ) -> Result<(), common::mailer::MailError> {
+            Err(common::mailer::MailError::Send(Box::new(
+                transport_build_error(),
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn command_source_chain_smtp_config_read() {
+        let mut store = storage::MockSiteConfigStorage::new();
+        store.expect_get_smtp_config().return_once(|| {
+            Err(sqlx::Error::Io(io::Error::other(
+                "injected SMTP config read failure",
+            )))
+        });
+
+        let error = smtp_test_with(&store, "to@example.com", |_| unreachable!())
+            .await
+            .unwrap_err();
+
+        assert_command_source::<sqlx::Error>(&error, "SMTP is misconfigured");
+    }
+
+    #[tokio::test]
+    async fn command_source_chain_smtp_invalid_sender() {
+        let config = storage::SmtpConfig {
+            sender: "Acme, Inc <noreply@example.com>"
+                .parse()
+                .expect("common mailbox accepts the display name"),
+            ..smtp_config()
+        };
+        let mut store = storage::MockSiteConfigStorage::new();
+        store
+            .expect_get_smtp_config()
+            .return_once(move || Ok(Some(config)));
+
+        let error = smtp_test_with(&store, "to@example.com", |config| {
+            Ok(Box::new(LettreMailSender::from_config(config)?) as Box<dyn MailSender>)
+        })
+        .await
+        .unwrap_err();
+
+        assert_command_source::<lettre::address::AddressError>(
+            &error,
+            "failed to build SMTP transport",
+        );
+    }
+
+    #[tokio::test]
+    async fn command_source_chain_smtp_transport_build() {
+        let mut store = storage::MockSiteConfigStorage::new();
+        store
+            .expect_get_smtp_config()
+            .return_once(|| Ok(Some(smtp_config())));
+
+        let error = smtp_test_with(&store, "to@example.com", |_| {
+            Err(crate::mailer::BuildMailerError::Transport(
+                transport_build_error(),
+            ))
+        })
+        .await
+        .unwrap_err();
+
+        assert_command_source::<lettre::transport::smtp::Error>(
+            &error,
+            "failed to build SMTP transport",
+        );
+    }
+
+    #[tokio::test]
+    async fn command_source_chain_smtp_send() {
+        let mut store = storage::MockSiteConfigStorage::new();
+        store
+            .expect_get_smtp_config()
+            .return_once(|| Ok(Some(smtp_config())));
+
+        let error = smtp_test_with(&store, "to@example.com", |_| {
+            Ok(Box::new(FailingMailSender) as Box<dyn MailSender>)
+        })
+        .await
+        .unwrap_err();
+
+        assert_command_source::<lettre::transport::smtp::Error>(
+            &error,
+            "failed to send test email",
+        );
+    }
+
+    async fn missing_sqlite_open_error(database: &DbConnectOptions) -> sqlx::Error {
+        storage::open_existing_database(database)
+            .await
+            .err()
+            .expect("missing SQLite filename must fail")
+    }
+
+    #[tokio::test]
+    async fn auto_init_classification_is_sqlite_cantopen_and_not_found_only() {
+        let temp = TempDir::new().expect("temp dir");
+        let filename = temp.path().join("missing.db");
+        let database: DbConnectOptions = format!("sqlite:{}", filename.display())
+            .parse()
+            .expect("SQLite options");
+        let cantopen = missing_sqlite_open_error(&database).await;
+        assert!(is_sqlite_cantopen(&cantopen), "fixture must be CANTOPEN");
+
+        assert!(
+            classify_development_auto_init(&database, &cantopen, Some(fs::metadata(&filename)),)
+                .expect("NotFound is classified"),
+            "CANTOPEN plus a missing filename requests auto-init"
+        );
+
+        fs::write(&filename, []).expect("create existing filename");
+        assert!(
+            !classify_development_auto_init(&database, &cantopen, Some(fs::metadata(&filename)),)
+                .expect("existing metadata is classified"),
+            "an existing SQLite filename must propagate CANTOPEN"
+        );
+
+        let metadata_error = classify_development_auto_init(
+            &database,
+            &cantopen,
+            Some(Err(io::Error::from(io::ErrorKind::PermissionDenied))),
+        )
+        .expect_err("metadata failures must propagate");
+        assert_eq!(metadata_error.kind(), io::ErrorKind::PermissionDenied);
+
+        assert!(
+            !classify_development_auto_init(&database, &sqlx::Error::PoolClosed, None)
+                .expect("other SQLite errors are classified"),
+            "non-CANTOPEN SQLite failures must propagate"
+        );
+
+        let malformed = sqlx::Error::Configuration(Box::new(io::Error::other("malformed URL")));
+        assert!(
+            !classify_development_auto_init(&database, &malformed, None)
+                .expect("configuration errors are classified"),
+            "malformed database URLs must propagate"
+        );
+
+        let migration =
+            sqlx::Error::Migrate(Box::new(sqlx::migrate::MigrateError::VersionMissing(1)));
+        assert!(
+            !classify_development_auto_init(&database, &migration, None)
+                .expect("migration errors are classified"),
+            "migration failures must propagate"
+        );
+
+        let postgres: DbConnectOptions = "postgres://user@localhost/database"
+            .parse()
+            .expect("PostgreSQL options");
+        assert!(
+            !classify_development_auto_init(
+                &postgres,
+                &sqlx::Error::PoolTimedOut,
+                Some(Err(io::Error::from(io::ErrorKind::NotFound))),
+            )
+            .expect("PostgreSQL errors are classified"),
+            "PostgreSQL never auto-initializes"
+        );
+    }
+
+    struct FailingStartupDatabaseOperations {
+        errors: std::sync::Mutex<std::collections::VecDeque<sqlx::Error>>,
+        metadata_error: Option<io::ErrorKind>,
+        init_calls: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl StartupDatabaseOperations for FailingStartupDatabaseOperations {
+        async fn open_existing(
+            &self,
+            _options: &DbConnectOptions,
+        ) -> sqlx::Result<Arc<storage::AppState>> {
+            Err(self
+                .errors
+                .lock()
+                .expect("error queue lock")
+                .pop_front()
+                .expect("an injected open error"))
+        }
+
+        async fn init(&self, _storage: &StorageArgs) -> anyhow::Result<()> {
+            self.init_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        }
+
+        fn metadata(&self, path: &Path) -> io::Result<fs::Metadata> {
+            match self.metadata_error {
+                Some(kind) => Err(io::Error::from(kind)),
+                None => fs::metadata(path),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn command_source_chain_prepare_server_reopen_after_auto_init() {
+        let temp = TempDir::new().expect("temp dir");
+        let filename = temp.path().join("missing.db");
+        let database: DbConnectOptions = format!("sqlite:{}", filename.display())
+            .parse()
+            .expect("SQLite options");
+        let cantopen = missing_sqlite_open_error(&database).await;
+        let operations = FailingStartupDatabaseOperations {
+            errors: std::sync::Mutex::new(
+                [cantopen, sqlx::Error::PoolClosed].into_iter().collect(),
+            ),
+            metadata_error: None,
+            init_calls: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let storage = StorageArgs {
+            storage_path: temp.path().join("storage"),
+            db: database,
+        };
+
+        let error = open_server_database_with(&storage, false, &operations)
+            .await
+            .err()
+            .expect("reopen failure must propagate");
+
+        assert_command_source::<sqlx::Error>(&error, "auto-init failed while reopening database");
+        assert_eq!(
+            operations
+                .init_calls
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn command_source_chain_prepare_server_metadata_failure() {
+        let temp = TempDir::new().expect("temp dir");
+        let filename = temp.path().join("missing.db");
+        let database: DbConnectOptions = format!("sqlite:{}", filename.display())
+            .parse()
+            .expect("SQLite options");
+        let cantopen = missing_sqlite_open_error(&database).await;
+        let operations = FailingStartupDatabaseOperations {
+            errors: std::sync::Mutex::new([cantopen].into_iter().collect()),
+            metadata_error: Some(io::ErrorKind::PermissionDenied),
+            init_calls: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let storage = StorageArgs {
+            storage_path: temp.path().join("storage"),
+            db: database,
+        };
+
+        let error = open_server_database_with(&storage, false, &operations)
+            .await
+            .err()
+            .expect("metadata failure must propagate");
+
+        assert_command_source::<io::Error>(
+            &error,
+            "failed to inspect SQLite database filename for development auto-init",
+        );
+        assert_eq!(
+            operations
+                .init_calls
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn command_source_chain_prepare_server_postgres_connection_failure() {
+        let temp = TempDir::new().expect("temp dir");
+        let database: DbConnectOptions = "postgres://jaunder@localhost/jaunder"
+            .parse()
+            .expect("PostgreSQL options");
+        let operations = FailingStartupDatabaseOperations {
+            errors: std::sync::Mutex::new([sqlx::Error::PoolTimedOut].into_iter().collect()),
+            metadata_error: None,
+            init_calls: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let storage = StorageArgs {
+            storage_path: temp.path().join("storage"),
+            db: database,
+        };
+
+        let error = open_server_database_with(&storage, false, &operations)
+            .await
+            .err()
+            .expect("connection failure must propagate");
+
+        assert_command_source::<sqlx::Error>(&error, INIT_FIRST_CONTEXT);
+        assert!(
+            error.chain().any(|source| matches!(
+                source.downcast_ref::<sqlx::Error>(),
+                Some(sqlx::Error::PoolTimedOut)
+            )),
+            "representative PostgreSQL connection failure must remain typed: {error:#}"
+        );
+        assert_eq!(
+            operations
+                .init_calls
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "PostgreSQL connection failures must not trigger auto-init"
         );
     }
 

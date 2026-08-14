@@ -3,8 +3,11 @@
 use async_trait::async_trait;
 use common::mailer::{EmailMessage, MailError, MailSender};
 use lettre::{
-    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor, message::Mailbox,
-    transport::smtp::authentication::Credentials,
+    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
+    message::Mailbox,
+    transport::smtp::{
+        AsyncSmtpTransportBuilder, Error as SmtpTransportError, authentication::Credentials,
+    },
 };
 use storage::{SmtpConfig, SmtpTlsMode};
 use thiserror::Error;
@@ -19,10 +22,10 @@ pub enum BuildMailerError {
     /// containing a comma, colon or parenthesis is then unreadable as an RFC
     /// 5322 `phrase`. See #837.
     #[error("invalid sender address: {0}")]
-    InvalidSender(String),
+    InvalidSender(#[source] lettre::address::AddressError),
     /// Failed to build the SMTP transport.
     #[error("failed to build SMTP transport: {0}")]
-    Transport(String),
+    Transport(#[source] SmtpTransportError),
 }
 
 /// An [`EmailMessage`] reached the transport with no recipients.
@@ -50,6 +53,18 @@ impl LettreMailSender {
     /// `phrase` — see [`BuildMailerError::InvalidSender`]. The sender's
     /// address half cannot fail.
     pub fn from_config(config: &SmtpConfig) -> Result<Self, BuildMailerError> {
+        Self::from_config_with(
+            config,
+            AsyncSmtpTransport::<Tokio1Executor>::starttls_relay,
+            AsyncSmtpTransport::<Tokio1Executor>::relay,
+        )
+    }
+
+    fn from_config_with(
+        config: &SmtpConfig,
+        starttls_relay: fn(&str) -> Result<AsyncSmtpTransportBuilder, SmtpTransportError>,
+        tls_relay: fn(&str) -> Result<AsyncSmtpTransportBuilder, SmtpTransportError>,
+    ) -> Result<Self, BuildMailerError> {
         // Fallible, unlike the conversions in `build_message`. Those take an
         // `Email`, which always survives lettre's parser (#297). This takes a
         // `common::mailbox::Mailbox`, whose *display name* `DisplayName` admits
@@ -57,14 +72,11 @@ impl LettreMailSender {
         // `Acme, Inc <noreply@example.com>` renders as something lettre cannot
         // read back as a `phrase`. The address half is fine; the name is not.
         // Root cause is #837; until then this reports rather than panics.
-        let sender: Mailbox =
-            config
-                .sender
-                .to_string()
-                .parse()
-                .map_err(|e: lettre::address::AddressError| {
-                    BuildMailerError::InvalidSender(e.to_string())
-                })?;
+        let sender: Mailbox = config
+            .sender
+            .to_string()
+            .parse()
+            .map_err(BuildMailerError::InvalidSender)?;
 
         let builder = match config.tls_mode {
             SmtpTlsMode::Plain => {
@@ -74,13 +86,11 @@ impl LettreMailSender {
                 AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(config.host.as_ref())
                     .port(config.port.value())
             }
-            SmtpTlsMode::StartTls => {
-                AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(config.host.as_ref())
-                    .map_err(|e| BuildMailerError::Transport(e.to_string()))?
-                    .port(config.port.value())
-            }
-            SmtpTlsMode::Tls => AsyncSmtpTransport::<Tokio1Executor>::relay(config.host.as_ref())
-                .map_err(|e| BuildMailerError::Transport(e.to_string()))?
+            SmtpTlsMode::StartTls => starttls_relay(config.host.as_ref())
+                .map_err(BuildMailerError::Transport)?
+                .port(config.port.value()),
+            SmtpTlsMode::Tls => tls_relay(config.host.as_ref())
+                .map_err(BuildMailerError::Transport)?
                 .port(config.port.value()),
         };
 
@@ -281,6 +291,18 @@ mod tests {
         }
     }
 
+    fn transport_build_error() -> SmtpTransportError {
+        lettre::transport::smtp::client::TlsParametersBuilder::new("mail.example.com".to_owned())
+            .set_min_tls_version(lettre::transport::smtp::client::TlsVersion::Tlsv10)
+            .build_rustls()
+            .err()
+            .expect("rustls rejects TLS 1.0")
+    }
+
+    fn fail_transport_build(_host: &str) -> Result<AsyncSmtpTransportBuilder, SmtpTransportError> {
+        Err(transport_build_error())
+    }
+
     #[tokio::test]
     async fn from_config_plain_succeeds() {
         assert!(LettreMailSender::from_config(&base_config(SmtpTlsMode::Plain)).is_ok());
@@ -294,6 +316,34 @@ mod tests {
     #[tokio::test]
     async fn from_config_tls_succeeds() {
         assert!(LettreMailSender::from_config(&base_config(SmtpTlsMode::Tls)).is_ok());
+    }
+
+    fn assert_transport_builder_source(tls_mode: SmtpTlsMode) {
+        let error = LettreMailSender::from_config_with(
+            &base_config(tls_mode),
+            fail_transport_build,
+            fail_transport_build,
+        )
+        .err()
+        .expect("injected TLS construction must fail");
+        let error = anyhow::Error::new(error);
+
+        assert!(
+            error
+                .chain()
+                .any(|source| source.downcast_ref::<SmtpTransportError>().is_some()),
+            "concrete lettre transport source must remain in the chain: {error:#}"
+        );
+    }
+
+    #[test]
+    fn from_config_starttls_retains_transport_builder_source() {
+        assert_transport_builder_source(SmtpTlsMode::StartTls);
+    }
+
+    #[test]
+    fn from_config_tls_retains_transport_builder_source() {
+        assert_transport_builder_source(SmtpTlsMode::Tls);
     }
 
     #[tokio::test]
@@ -347,7 +397,13 @@ mod tests {
             .send_email(&msg)
             .await
             .expect_err("send against a dead endpoint must fail");
-        assert!(matches!(error, MailError::Send(_)));
+        let error = anyhow::Error::new(error);
+        assert!(
+            error
+                .chain()
+                .any(|source| source.downcast_ref::<SmtpTransportError>().is_some()),
+            "concrete lettre transport source must remain downcastable: {error:#}"
+        );
     }
 
     /// Addresses that are RFC-legal, that `Email` accepts, and that lettre's
@@ -438,14 +494,15 @@ mod tests {
                 sender: raw.parse().expect("common::Mailbox accepts it"),
                 ..base_config(SmtpTlsMode::Plain)
             };
-            // `LettreMailSender` is not `Debug`, so reduce to a bool rather
-            // than `expect_err`.
-            let reported = LettreMailSender::from_config(&config)
+            let error = LettreMailSender::from_config(&config)
                 .err()
-                .is_some_and(|e| matches!(e, BuildMailerError::InvalidSender(_)));
+                .expect("invalid display name must be reported");
+            let error = anyhow::Error::new(error);
             assert!(
-                reported,
-                "expected {raw} to be reported, not accepted or panicked",
+                error.chain().any(|source| source
+                    .downcast_ref::<lettre::address::AddressError>()
+                    .is_some()),
+                "concrete address source must remain in the chain for {raw}: {error:#}",
             );
         }
     }

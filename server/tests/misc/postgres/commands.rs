@@ -1,9 +1,11 @@
 use jaunder::cli::StorageArgs;
-use jaunder::commands::{cmd_create_pg_db, cmd_init};
+use jaunder::commands::{cmd_create_pg_db, cmd_init, prepare_server};
 use sqlx::Connection;
 use tempfile::TempDir;
 
-use storage::test_support::{postgres_bootstrap_url, postgres_test_authority};
+use storage::test_support::{
+    nonexistent_postgres_url, postgres_bootstrap_url, postgres_test_authority,
+};
 
 // guard:low-level-db — provisions a Postgres role/database via bootstrap admin; no standard backend fixture
 #[tokio::test]
@@ -125,4 +127,44 @@ async fn cmd_create_pg_db_fails_if_role_already_exists() {
         .execute(&mut admin_conn)
         .await
         .unwrap();
+}
+
+// guard:low-level-db — verifies PostgreSQL startup classification against a real missing database
+#[tokio::test]
+async fn prepare_server_postgres_missing_database_preserves_3d000_guidance() {
+    let base = TempDir::new().expect("temp dir");
+    let storage_path = base.path().join("storage");
+    let args = StorageArgs {
+        storage_path: storage_path.clone(),
+        db: nonexistent_postgres_url(),
+    };
+    let bind = "127.0.0.1:0".parse().expect("bind address");
+
+    let error = prepare_server(&args, bind, false, None)
+        .await
+        .err()
+        .expect("missing PostgreSQL database must fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("run `jaunder create-pg-db` first"),
+        "SQLSTATE 3D000 must carry PostgreSQL bootstrap guidance: {error:#}"
+    );
+    let source = error
+        .chain()
+        .find_map(|source| source.downcast_ref::<sqlx::Error>())
+        .expect("typed SQLx source");
+    assert!(
+        matches!(
+            source,
+            sqlx::Error::Database(database)
+                if database.code().as_deref() == Some("3D000")
+        ),
+        "expected SQLSTATE 3D000, got {source:?}"
+    );
+    assert!(
+        !storage_path.exists(),
+        "PostgreSQL startup must not auto-initialize storage"
+    );
 }
