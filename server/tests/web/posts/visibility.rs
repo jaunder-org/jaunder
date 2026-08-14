@@ -6,7 +6,7 @@ use common::ids::{PostId, UserId};
 use common::seed::{AuthoredPost, TimelinePage};
 use common::test_support::parse_audience_name;
 use server_fn::ServerFn;
-use web::posts::SavedPost;
+use web::posts::{EditPostPreview, SavedPost};
 
 use rstest::*;
 use rstest_reuse::*;
@@ -194,9 +194,17 @@ draft",
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: SavedPost = serde_json::from_str(&body).unwrap();
 
+    let before = chrono::Utc::now();
     let (status, body) = get_post_preview_form(&state, created.post_id, Some(&author_cookie)).await;
+    let after = chrono::Utc::now();
     assert_eq!(status, StatusCode::OK, "author preview failed: {body}");
-    assert!(body.contains("Preview Draft"), "body: {body}");
+
+    let preview: EditPostPreview = serde_json::from_str(&body).unwrap();
+    assert_eq!(preview.post.post.post_id, created.post_id);
+    assert_eq!(preview.post.body.as_ref(), "# Preview Draft\n\ndraft\n");
+    assert!(preview.post.post.published_at.is_none());
+    assert!(preview.fetched_at.value() >= before);
+    assert!(preview.fetched_at.value() <= after);
 
     let (status, body) =
         get_post_preview_form(&state, created.post_id, Some(&stranger_cookie)).await;

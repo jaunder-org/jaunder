@@ -1064,8 +1064,8 @@ pub fn EditPostPage() -> impl IntoView {
             {move || Suspend::new(async move {
                 match post.await {
                     Ok(fetched) => {
-                        state.seed_from(&fetched);
-                        slug_field.value.set(fetched.post.slug.to_string());
+                        state.seed_from(&fetched.post);
+                        slug_field.value.set(fetched.post.post.slug.to_string());
                         if let Ok(selection) = current_audience.await {
                             state.audience.set(selection);
                         }
@@ -1075,8 +1075,8 @@ pub fn EditPostPage() -> impl IntoView {
                             <EditPostForm
                                 state=state
                                 slug_field=slug_field
-                                post_id=fetched.post.post_id
-                                is_published=fetched.post.published_at.is_some()
+                                post_id=fetched.post.post.post_id
+                                is_published=fetched.post.post.published_at.is_some()
                                 action=update_post_action
                             />
                         }
