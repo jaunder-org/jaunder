@@ -93,6 +93,13 @@ boundary ADR-0056 said could come later.
   `web-sys` dependency alive purely for one `.into()`. What stays out is _our_
   vocabulary — `common`'s newtypes, DTOs, and domain enums.
 
+  **Amended 2026-08-13 (#58): the bounded client-diagnostics protocol is one
+  narrow exception.** `common::client_telemetry` is a closed wire contract made
+  only of reviewed, data-free enums and a versioned event; it cannot carry
+  application-domain values or user data. `client::telemetry` may consume that
+  contract because it owns the corresponding browser transport. This does not
+  admit other `common` DTOs, newtypes, or domain enums into `client`.
+
 **Coverage position.** Because `client` is wasm-only, the host-run instrumented
 coverage build sees **zero measured lines** in it, and that is **not** a gate
 failure: the Nix coverage source filter auto-admits any new top-level crate, and
@@ -113,6 +120,12 @@ remedies are to keep each function's branch count low (split it) or to
 `crap:allow` it with a reason. Prefer splitting — `picked_file_multipart` was
 split into `picked_file` + the wrapper, which is also the better factoring.
 
+**Amended 2026-08-13 (#58): the transport-independent telemetry reporter also
+host-compiles.** Its one-flight state machine contains no browser calls and is
+host-tested with injected console and transport seams, so those lines contribute
+ordinary measured coverage. The fetch adapter remains wasm-only and retains the
+low-branch-count obligation described above.
+
 **Gate wiring.** Since `client`'s code exists only under
 `target_arch = "wasm32"`, the **wasm-clippy static-check step is the only place
 any `client` _code_ is actually compiled and linted** (the host build compiles
@@ -120,6 +133,11 @@ it as an empty rlib with nothing to lint). The existing single `wasm-clippy`
 step (`xtask/src/steps/static_checks.rs`) and its mirror `flake.nix` derivation
 are extended to lint `-p client` for the `wasm32-unknown-unknown` target
 alongside `web`.
+
+**Amended 2026-08-13 (#58): `client` now has two compilation paths.** Host
+clippy and coverage compile `client::perf`'s mark-name contract and
+`client::telemetry`'s transport-independent reporter; wasm-clippy additionally
+compiles the browser implementations, including the telemetry fetch adapter.
 
 ## Consequences
 
@@ -133,6 +151,9 @@ alongside `web`.
   `web`/`csr`, above only `common`/`macros`.
 - **Rules out** putting pure or dual-target logic in `client` (it belongs in
   `web`/`common`), and rules out a fake host stub for anything gated wasm-only.
+- **Admits exactly two host-testable contracts:** the performance mark-name
+  table and the bounded telemetry reporter. All browser calls remain wasm-only;
+  no fake host implementation is introduced.
 - **Does not supersede ADR-0058 or ADR-0056** — 0058's trio charter stands and
   is fulfilled; 0056's single-crate `web` stands, with this leaf as the boundary
   it foresaw.

@@ -8,6 +8,12 @@ license = "GPL-3.0-only"
 wasm-bindgen = { workspace = true }
 web-sys = { workspace = true, features = [
   "Window",
+  # `client::telemetry` owns the credentialed keepalive fetch adapter (#58).
+  "Request",
+  "RequestInit",
+  "RequestCredentials",
+  "Headers",
+  "console",
   "Storage",
   "Location",
   "Document",
@@ -26,6 +32,9 @@ web-sys = { workspace = true, features = [
 ] }
 common.workspace = true
 serde.workspace = true
+serde_json.workspace = true
+js-sys.workspace = true
+wasm-bindgen-futures.workspace = true
 # Optional + behind the `csr` feature so a normal (host / server) build never pulls leptos:
 # `web`'s server build pulls `leptos_axum`, which hard-requires `leptos/ssr`
 # (leptos_axum-0.8.10/Cargo.toml:74-79), so an unconditional dep here would risk unifying

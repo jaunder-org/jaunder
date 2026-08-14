@@ -36,31 +36,36 @@ client and an AtomPub API as first-class publishing surfaces.
 
 Shared code is split by compile target, not by convenience: `common` is the
 target-agnostic domain crate, `host` is its host-only sibling, and `client` is
-the symmetric wasm-only peer. `host` never compiles to wasm, so it uses
-`std::fs`/`std::env` without the `#[cfg]` gating `common` would demand
-([ADR-0058](adr/0058-host-crate-layering.md)). `client` holds only raw browser
-glue (`web_sys`/`js_sys`/`wasm_bindgen` and wasm-side Leptos plumbing) and no
-domain types; `web` and `csr` depend on `client`, never the reverse
+the symmetric browser-infrastructure peer. `host` never compiles to wasm, so it
+uses `std::fs`/`std::env` without the `#[cfg]` gating `common` would demand
+([ADR-0058](adr/0058-host-crate-layering.md)). `client` holds raw browser glue
+(`web_sys`/`js_sys`/`wasm_bindgen` and wasm-side Leptos plumbing), plus two
+host-testable browser contracts; it contains no application domain types. `web`
+and `csr` depend on `client`, never the reverse
 ([ADR-0069](adr/0069-client-crate-wasm-only-home.md)). Proc-macros live apart
 from all three, in `macros`
 ([ADR-0062](adr/0062-macros-crate-proc-macro-home.md)).
 
-| Crate          | Target      | Responsibility                                                                                                                                                                                                   |
-| -------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `common`       | host + wasm | Shared domain logic and types: validated newtypes, rendering, visibility, feed/AtomPub serialization.                                                                                                            |
-| `storage`      | host        | Storage traits, record types, SQL migrations, and the SQLite/PostgreSQL backends ([ADR-0019](adr/0019-generic-storage-backend-via-dialect.md)).                                                                  |
-| `server`       | host        | The `jaunder` binary: Axum router, CLI, background workers, integration tests.                                                                                                                                   |
-| `web`          | host + wasm | Leptos components and `#[server]` functions — the UI and its server halves, split host/wasm at the file level ([ADR-0070](adr/0070-web-vertical-wasm-only-component-files.md)).                                  |
-| `csr`          | wasm        | The client-side-rendering entry point: mounts `web` in the browser ([ADR-0041](adr/0041-public-projector-and-csr-client.md)).                                                                                    |
-| `host`         | host        | Strictly-host-focused shared code: error carrier, capture dir, auth/token parsing, invites, metrics ([ADR-0058](adr/0058-host-crate-layering.md)).                                                               |
-| `client`       | wasm        | Strictly-browser shared infrastructure: `localStorage`, confirm dialog, DOM primitives, file upload, reactive revalidation, and the CSR performance marks ([ADR-0069](adr/0069-client-crate-wasm-only-home.md)). |
-| `macros`       | build-time  | The workspace's proc-macro home: newtype, `text_enum`, sqlx-bridge and server-fn derives ([ADR-0062](adr/0062-macros-crate-proc-macro-home.md)).                                                                 |
-| `test-support` | host        | A seed binary linking `storage` for out-of-process e2e seeding ([ADR-0046](adr/0046-test-support-seed-binary.md)).                                                                                               |
+| Crate          | Target      | Responsibility                                                                                                                                                                                           |
+| -------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `common`       | host + wasm | Shared domain logic and types: validated newtypes, rendering, visibility, feed/AtomPub serialization.                                                                                                    |
+| `storage`      | host        | Storage traits, record types, SQL migrations, and the SQLite/PostgreSQL backends ([ADR-0019](adr/0019-generic-storage-backend-via-dialect.md)).                                                          |
+| `server`       | host        | The `jaunder` binary: Axum router, CLI, background workers, integration tests.                                                                                                                           |
+| `web`          | host + wasm | Leptos components and `#[server]` functions — the UI and its server halves, split host/wasm at the file level ([ADR-0070](adr/0070-web-vertical-wasm-only-component-files.md)).                          |
+| `csr`          | wasm        | The client-side-rendering entry point: mounts `web` in the browser ([ADR-0041](adr/0041-public-projector-and-csr-client.md)).                                                                            |
+| `host`         | host        | Strictly-host-focused shared code: error carrier, capture dir, auth/token parsing, invites, metrics ([ADR-0058](adr/0058-host-crate-layering.md)).                                                       |
+| `client`       | host + wasm | Browser infrastructure: `localStorage`, dialogs, DOM/file-upload glue, reactive revalidation, CSR performance marks, and bounded client telemetry ([ADR-0069](adr/0069-client-crate-wasm-only-home.md)). |
+| `macros`       | build-time  | The workspace's proc-macro home: newtype, `text_enum`, sqlx-bridge and server-fn derives ([ADR-0062](adr/0062-macros-crate-proc-macro-home.md)).                                                         |
+| `test-support` | host        | A seed binary linking `storage` for out-of-process e2e seeding ([ADR-0046](adr/0046-test-support-seed-binary.md)).                                                                                       |
 
 Every `client` module that touches the browser carries
 `#[cfg(target_arch = "wasm32")]`, so a host build of the crate is an
-all-but-empty rlib with no coverage-measured browser glue. Target-independent
-data such as `client::perf` mark names stays pinned by host tests. Irreducible
+all-but-empty rlib with no coverage-measured browser glue. Two
+transport-independent contracts compile and are tested on the host:
+`client::perf` owns its mark-name table, while `client::telemetry` owns the
+one-flight reporter over injected console and transport seams. The reporter may
+consume only the closed, data-free `common::client_telemetry` wire types; the
+crate remains free of application-domain DTOs, newtypes, and enums. Irreducible
 browser primitives run separately in headless Chromium through the Linux-only
 `wasm-tests` Nix check, while user-flow coverage remains in Playwright e2e.
 `wasm-tests` is behavioral pass/fail execution and does not add wasm lines to

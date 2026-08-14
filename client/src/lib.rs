@@ -5,12 +5,11 @@
 //! never our domain types. Depends on no workspace crate except `common`
 //! (+ `macros`). `web`/`csr` depend on `client`, never the reverse.
 //!
-//! Wasm-only: every module that touches the browser carries
-//! `#[cfg(target_arch = "wasm32")]`, so on the host this is an all-but-empty
-//! rlib (zero coverage-measured lines from the browser glue). The one exception
-//! is [`perf`], whose mark-name contract is plain `&str` data and is therefore
-//! host-testable — it compiles on both targets, with the browser call behind its
-//! own `#[cfg]`.
+//! Browser-bound modules carry `#[cfg(target_arch = "wasm32")]`, so their glue
+//! contributes no host coverage. Two modules also compile host-testable
+//! contracts: [`perf`] owns its mark-name table, while [`telemetry`] owns the
+//! transport-independent one-flight state machine. Their browser calls remain
+//! behind module-wiring cfgs.
 //!
 //! See docs/adr/0069-client-crate-wasm-only-home.md.
 
@@ -18,6 +17,10 @@
 /// domain types — the single `web`/`csr` home for `web_sys::Storage` access.
 #[cfg(target_arch = "wasm32")]
 pub mod storage;
+
+/// Bounded swallowed-error reporting. The transport-independent one-flight
+/// state machine host-compiles; its fetch adapter is wasm-only.
+pub mod telemetry;
 
 /// Raw browser confirm-dialog primitive (`window.confirm`, #516).
 /// `web-sys` only, no domain types — unconditional (no `csr` gate).

@@ -959,10 +959,14 @@ Playwright, and the repository `cargo xtask` gate.
 
 - Create: `common/src/client_telemetry.rs`
 - Modify: `common/src/lib.rs`
-- Create: `client/src/telemetry.rs`
+- Create: `client/src/telemetry/mod.rs`
+- Create: `client/src/telemetry/reporter.rs`
+- Create: `client/src/telemetry/browser.rs`
 - Modify: `client/src/lib.rs`
 - Modify: `client/Cargo.toml`
 - Modify: `Cargo.lock`
+- Modify: `docs/adr/0069-client-crate-wasm-only-home.md`
+- Modify: `docs/ARCHITECTURE.md`
 
 **Interfaces:**
 
@@ -1009,41 +1013,44 @@ Playwright, and the repository `cargo xtask` gate.
   `credentials: include`, `keepalive: true`; it never calls the reporter from
   its own failure path.
 
-- [ ] **Step 1: Add wire-shape tests**
+- [x] **Step 1: Add wire-shape tests**
 
   Serialize every enum variant; assert snake_case stable tokens, no dynamic
   field, exact version, `deny_unknown_fields`, and unknown version/enum
   rejection on decode. Assert a maximally encoded valid event is below 1,024
   bytes.
 
-- [ ] **Step 2: Add host reporter state-machine tests**
+- [x] **Step 2: Add host reporter state-machine tests**
 
-  With a capturing console sink and manually-completed fake transport, assert:
-  local warning precedes send; return is synchronous `()`; first report is sent;
-  second while in flight is logged and dropped; success, auth rejection, 429,
-  and network completion each clear the slot; no completion path invokes
-  transport twice or reports recursively.
+  With capturing console sinks and manually controlled transports, assert: local
+  warning precedes send; return is synchronous `()`; first report is sent;
+  second while a delayed completion is in flight is logged and dropped; delayed
+  completion clears the slot; inline terminal completion clears the slot before
+  return; no completion timing invokes transport twice or reports recursively.
+  The browser adapter maps fulfilled HTTP responses (including authentication
+  rejection and 429) and rejected network fetches to that same terminal
+  completion callback.
 
-- [ ] **Step 3: Run and observe compile failure**
+- [x] **Step 3: Run and observe compile failure**
 
   ```bash
   devtool run -- cargo nextest run -p common client_telemetry
   devtool run -- cargo nextest run -p client telemetry
   ```
 
-- [ ] **Step 4: Implement the deep interface and wasm adapter**
+- [x] **Step 4: Implement the deep interface and wasm adapter**
 
   Keep reporter state behind a single module-owned instance for browser callers.
   Add only the precise `web-sys` features needed for Request/RequestInit/Headers
   and `Window::fetch`; do not add an OTel dependency or JS bundler.
 
-- [ ] **Step 5: Verify wasm compilation, size/static policy, and commit**
+- [x] **Step 5: Verify wasm compilation, size/static policy, and commit**
 
   ```bash
   devtool run -- cargo nextest run -p common client_telemetry
   devtool run -- cargo nextest run -p client telemetry
   devtool run -- cargo xtask check
-  git add common/src/client_telemetry.rs common/src/lib.rs client/src/telemetry.rs client/src/lib.rs client/Cargo.toml Cargo.lock
+  git add common/src/client_telemetry.rs common/src/lib.rs client/src/telemetry client/src/lib.rs client/Cargo.toml Cargo.lock docs/adr/0069-client-crate-wasm-only-home.md docs/ARCHITECTURE.md docs/superpowers/plans/2026-08-13-issue-58-error-swallowing-audit.md
   git commit -m "feat(client): add bounded swallowed error reporter"
   ```
 

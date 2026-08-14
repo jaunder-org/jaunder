@@ -523,8 +523,10 @@ name = "client"
 version = "0.1.0"
 dependencies = [
  "common",
+ "js-sys",
  "leptos",
  "serde",
+ "serde_json",
  "server_fn",
  "wasm-bindgen",
  "wasm-bindgen-test",
