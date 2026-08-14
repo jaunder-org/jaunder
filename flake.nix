@@ -397,6 +397,21 @@
           })
         ) { };
 
+        # `buildRustPackage` requires a flat vendor directory plus Cargo.lock.
+        # Crane fetches from static.crates.io reliably but groups packages by
+        # registry hash, so adapt that output without re-downloading crates.
+        vendorCargoDepsForBuildRustPackage =
+          { name, src }:
+          let
+            vendor = craneLib.vendorCargoDeps { inherit src; };
+            cratesIoDir = builtins.hashString "sha256" "registry+https://github.com/rust-lang/crates.io-index";
+          in
+          pkgs.runCommand "${name}-cargo-deps" { } ''
+            mkdir -p $out
+            cp -r ${vendor}/${cratesIoDir}/. $out/
+            cp ${src}/Cargo.lock $out/Cargo.lock
+          '';
+
         wasm-bindgen-cli = pkgs.wasm-bindgen-cli.overrideAttrs (old: rec {
           version = "0.2.121";
           src = pkgs.fetchCrate {
@@ -404,9 +419,9 @@
             inherit version;
             hash = "sha256-ZOMgFNOcGkO66Jz/Z83eoIu+DIzo3Z/vq6Z5g6BDY/w=";
           };
-          cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
+          cargoDeps = vendorCargoDepsForBuildRustPackage {
+            name = "wasm-bindgen-cli";
             inherit src;
-            hash = "sha256-DPdCDPTAPBrbqLUqnCwQu1dePs9lGg85JCJOCIr9qjU=";
           };
         });
 
@@ -426,10 +441,9 @@
         # generic component tags; the fix is merged upstream but unreleased.
         # REMOVE THIS OVERRIDE once a leptosfmt release later than 0.1.33
         # exists: drop this binding and take `pkgs.leptosfmt` again. The
-        # override mechanics (src swap not applyPatches, the cargoDeps
-        # cascade, importCargoLock vs a 403ing fetchCargoVendor, and why
-        # `version` stays "0.1.33") are in
-        # docs/adr/0118-leptosfmt-pinned-past-release.md.
+        # override mechanics (`src` swap, the `cargoDeps` cascade, Crane's
+        # static.crates.io vendoring adapter, and why `version` stays "0.1.33")
+        # are in docs/adr/0118-leptosfmt-pinned-past-release.md.
         leptosfmt = pkgs.leptosfmt.overrideAttrs (_old: rec {
           src = pkgs.fetchFromGitHub {
             owner = "bram209";
@@ -443,8 +457,9 @@
           # Overriding `src` alone is not enough: nixpkgs passes `cargoHash`,
           # which `buildRustPackage` consumes *before* `overrideAttrs` applies,
           # so the 0.1.33 vendor tree would survive a bare `src` swap.
-          cargoDeps = pkgs.rustPlatform.importCargoLock {
-            lockFile = "${src}/Cargo.lock";
+          cargoDeps = vendorCargoDepsForBuildRustPackage {
+            name = "leptosfmt";
+            inherit src;
           };
         });
 
