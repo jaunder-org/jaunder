@@ -37,6 +37,19 @@ that are easy to get wrong:
   indistinguishable from the stock one by `--version`; only behaviour proves
   which is in use.
 
+## 2026-08-14 implementation note
+
+The Rust 1.97.1 pin invalidated the surrounding shell derivation, and clean
+GitHub Actions runners then rebuilt the separately pinned `wasm-bindgen-cli`
+through `fetchCargoVendor`. Every matrix job reproduced the crates.io API 403
+described above, on different crates across attempts (#995). The flake now
+shares one adapter for both overrides: Crane fetches each lockfile's packages
+from `static.crates.io`, then the adapter flattens Crane's registry-grouped
+output and adds the `Cargo.lock` expected by `buildRustPackage`. For
+`leptosfmt`, this replaced the original `importCargoLock` mechanism while
+preserving its intent: deterministic per-crate fetching without the rejected API
+endpoint.
+
 ## Consequences
 
 - REMOVE the override once a leptosfmt release later than 0.1.33 exists: drop

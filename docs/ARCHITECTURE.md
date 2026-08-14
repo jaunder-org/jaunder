@@ -2270,15 +2270,17 @@ the flake overrides `pkgs.leptosfmt` to a post-fix upstream rev
 because 0.1.33 mangles a generic component tag that has to wrap and upstream's
 fix merged three days after that release, with nothing shipped since. The
 override swaps `src` wholesale rather than patching (the fix also moves a
-submodule pointer, which a patch cannot do), restates `fetchSubmodules`,
-overrides `cargoDeps` via `importCargoLock` — `buildRustPackage` consumes
-`cargoHash` before `overrideAttrs` runs, so a bare `src` swap would keep the
-0.1.33 vendor tree — and deliberately keeps nixpkgs' `version` string, since
-upstream never bumped it and `versionCheckHook` reads it. The consequence is
-that the pinned binary is indistinguishable from the stock one by `--version`:
-only behaviour tells them apart, which is one more reason to invoke the
-devShell's binary rather than re-resolving one. Remove the override once a
-release later than 0.1.33 exists.
+submodule pointer, which a patch cannot do), restates `fetchSubmodules`, and
+overrides `cargoDeps` with Crane's `static.crates.io` vendor output. A shared
+adapter serves this override and the separately pinned `wasm-bindgen-cli`: it
+flattens Crane's registry-hash directory and adds the `Cargo.lock` that
+`buildRustPackage` expects. This avoids nixpkgs' crates.io-API vendor path,
+which returns 403 in clean CI. The override deliberately keeps nixpkgs'
+`version` string, since upstream never bumped it and `versionCheckHook` reads
+it. The consequence is that the pinned binary is indistinguishable from the
+stock one by `--version`: only behaviour tells them apart, which is one more
+reason to invoke the devShell's binary rather than re-resolving one. Remove the
+override once a release later than 0.1.33 exists.
 
 **Rust edition and the one `unsafe` seam.** All workspace crates are on edition
 2024 ([ADR-0104](adr/0104-edition-2024-unsafe-env-and-precise-capturing.md)).

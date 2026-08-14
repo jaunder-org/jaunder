@@ -254,7 +254,7 @@
         pkgs = nixpkgs.legacyPackages.${system};
         toolchain = fenix.packages.${system}.fromToolchainFile {
           file = ./rust-toolchain.toml;
-          sha256 = "sha256-gh/xTkxKHL4eiRXzWv8KP7vfjSk61Iq48x47BEDFgfk=";
+          sha256 = "sha256-A1abGIbOtcBSdrUMhDGrER3pRM1hQP4fp9gh3Y4PKc8=";
         };
 
         craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
@@ -397,6 +397,21 @@
           })
         ) { };
 
+        # `buildRustPackage` requires a flat vendor directory plus Cargo.lock.
+        # Crane fetches from static.crates.io reliably but groups packages by
+        # registry hash, so adapt that output without re-downloading crates.
+        vendorCargoDepsForBuildRustPackage =
+          { name, src }:
+          let
+            vendor = craneLib.vendorCargoDeps { inherit src; };
+            cratesIoDir = builtins.hashString "sha256" "registry+https://github.com/rust-lang/crates.io-index";
+          in
+          pkgs.runCommand "${name}-cargo-deps" { } ''
+            mkdir -p $out
+            cp -r ${vendor}/${cratesIoDir}/. $out/
+            cp ${src}/Cargo.lock $out/Cargo.lock
+          '';
+
         wasm-bindgen-cli = pkgs.wasm-bindgen-cli.overrideAttrs (old: rec {
           version = "0.2.121";
           src = pkgs.fetchCrate {
@@ -404,9 +419,9 @@
             inherit version;
             hash = "sha256-ZOMgFNOcGkO66Jz/Z83eoIu+DIzo3Z/vq6Z5g6BDY/w=";
           };
-          cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
+          cargoDeps = vendorCargoDepsForBuildRustPackage {
+            name = "wasm-bindgen-cli";
             inherit src;
-            hash = "sha256-DPdCDPTAPBrbqLUqnCwQu1dePs9lGg85JCJOCIr9qjU=";
           };
         });
 
@@ -426,10 +441,9 @@
         # generic component tags; the fix is merged upstream but unreleased.
         # REMOVE THIS OVERRIDE once a leptosfmt release later than 0.1.33
         # exists: drop this binding and take `pkgs.leptosfmt` again. The
-        # override mechanics (src swap not applyPatches, the cargoDeps
-        # cascade, importCargoLock vs a 403ing fetchCargoVendor, and why
-        # `version` stays "0.1.33") are in
-        # docs/adr/0118-leptosfmt-pinned-past-release.md.
+        # override mechanics (`src` swap, the `cargoDeps` cascade, Crane's
+        # static.crates.io vendoring adapter, and why `version` stays "0.1.33")
+        # are in docs/adr/0118-leptosfmt-pinned-past-release.md.
         leptosfmt = pkgs.leptosfmt.overrideAttrs (_old: rec {
           src = pkgs.fetchFromGitHub {
             owner = "bram209";
@@ -443,8 +457,9 @@
           # Overriding `src` alone is not enough: nixpkgs passes `cargoHash`,
           # which `buildRustPackage` consumes *before* `overrideAttrs` applies,
           # so the 0.1.33 vendor tree would survive a bare `src` swap.
-          cargoDeps = pkgs.rustPlatform.importCargoLock {
-            lockFile = "${src}/Cargo.lock";
+          cargoDeps = vendorCargoDepsForBuildRustPackage {
+            name = "leptosfmt";
+            inherit src;
           };
         });
 
@@ -773,7 +788,12 @@
               ${e2eRunAndCapture {
                 backend = "sqlite";
                 jaunderDb = "sqlite:/var/lib/jaunder/data/jaunder.db";
-                inherit browser traceId traceParent extraEnv;
+                inherit
+                  browser
+                  traceId
+                  traceParent
+                  extraEnv
+                  ;
               }}
             '';
           };
@@ -896,7 +916,12 @@
               ${e2eRunAndCapture {
                 backend = "postgres";
                 jaunderDb = "postgres://jaunder:testpassword@127.0.0.1/jaunder";
-                inherit browser traceId traceParent extraEnv;
+                inherit
+                  browser
+                  traceId
+                  traceParent
+                  extraEnv
+                  ;
               }}
             '';
           };
@@ -921,10 +946,26 @@
         # diagnostic packages, and the `e2e-checks` aggregate all extend
         # automatically.
         e2eCombos = [
-          { backend = "sqlite";   browser = "chromium"; traceDigit = "1"; }
-          { backend = "sqlite";   browser = "firefox";  traceDigit = "2"; }
-          { backend = "postgres"; browser = "chromium"; traceDigit = "3"; }
-          { backend = "postgres"; browser = "firefox";  traceDigit = "4"; }
+          {
+            backend = "sqlite";
+            browser = "chromium";
+            traceDigit = "1";
+          }
+          {
+            backend = "sqlite";
+            browser = "firefox";
+            traceDigit = "2";
+          }
+          {
+            backend = "postgres";
+            browser = "chromium";
+            traceDigit = "3";
+          }
+          {
+            backend = "postgres";
+            browser = "firefox";
+            traceDigit = "4";
+          }
         ];
 
         mkE2eCombo =
@@ -940,8 +981,7 @@
           let
             mk = if backend == "sqlite" then mkE2eSqliteCheck else mkE2ePostgresCheck;
             traceId = pkgs.lib.concatStrings (pkgs.lib.genList (_: traceDigit) 32);
-            traceParent =
-              "00-${traceId}-${pkgs.lib.concatStrings (pkgs.lib.genList (_: traceDigit) 16)}-01";
+            traceParent = "00-${traceId}-${pkgs.lib.concatStrings (pkgs.lib.genList (_: traceDigit) 16)}-01";
           in
           mk {
             checkName = "jaunder-e2e-${backend}-${browser}${nameSuffix}";
@@ -950,8 +990,7 @@
             # derivation hash. The variable itself is inert: nothing reads
             # JAUNDER_E2E_SALT. Changing the hash is its whole job. Spliced here
             # rather than per-family so every combo salts alike.
-            extraEnv =
-              extraEnv + pkgs.lib.optionalString (e2eSalt != "") " JAUNDER_E2E_SALT=${e2eSalt}";
+            extraEnv = extraEnv + pkgs.lib.optionalString (e2eSalt != "") " JAUNDER_E2E_SALT=${e2eSalt}";
             inherit
               browser
               traceId
@@ -1132,6 +1171,11 @@
               commonArgs
               // {
                 inherit cargoArtifacts;
+                # Crane defaults Clippy to release mode, but `--all-targets`
+                # activates the test-only `cheap-kdf` feature whose optimized-build
+                # guard must fail. Lint test targets in the development profile;
+                # production package builds remain release-mode.
+                CARGO_PROFILE = "dev";
                 cargoClippyExtraArgs = "--all-targets -- -D warnings";
               }
             );
@@ -1154,8 +1198,7 @@
                 );
                 CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
                 cargoClippyExtraArgs =
-                  "-p web -p client -p csr --features csr -- -D warnings "
-                  + "-A clippy::too_many_arguments";
+                  "-p web -p client -p csr --features csr -- -D warnings " + "-A clippy::too_many_arguments";
               }
             );
             # The non-compiling static checks (#188), unified behind one `devtool
@@ -1460,9 +1503,7 @@
             # none of them run mutants. This shell is `ciInputs` plus that one
             # tool, so the weekly job gets it without the pull-request path paying
             # for it. See .github/workflows/mutants.yml.
-            mutants = pkgs.mkShell (
-              shellEnv // { buildInputs = ciInputs ++ [ pkgs.cargo-mutants ]; }
-            );
+            mutants = pkgs.mkShell (shellEnv // { buildInputs = ciInputs ++ [ pkgs.cargo-mutants ]; });
             # Full interactive shell for local development.
             default = pkgs.mkShell (shellEnv // { buildInputs = ciInputs ++ devOnly; });
           };

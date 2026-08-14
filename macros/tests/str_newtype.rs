@@ -75,9 +75,9 @@ fn display() {
 #[test]
 fn partial_eq_str_and_ref_str() {
     let c = Code::from_str("ab").unwrap();
-    assert!(c == "ab"); // PartialEq<&str>
+    assert_eq!(c, "ab"); // PartialEq<&str>
     let s: &str = "ab";
-    assert!(c == *s); // PartialEq<str>
+    assert_eq!(c, *s); // PartialEq<str>
 }
 
 #[test]
@@ -267,7 +267,7 @@ fn no_ord_keeps_the_rest_of_the_trailer() {
     assert_eq!(u.to_string(), "x"); // Display
     let read: &str = &u; // Deref
     assert_eq!(read, "x");
-    assert!(u == "x"); // PartialEq<str>
+    assert_eq!(u, "x"); // PartialEq<str>
     assert_eq!(serde_json::to_string(&u).unwrap(), "\"x\"");
 }
 
