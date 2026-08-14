@@ -89,10 +89,12 @@ where
     type Rejection = AuthRejection;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        let credential = resolve_credential(&parts.headers).map_err(|error| match error {
+        let resolution = resolve_credential(&parts.headers).map_err(|error| match error {
             CredentialResolutionError::Missing => AuthRejection::MissingToken,
             CredentialResolutionError::InvalidAuthorization => AuthRejection::InvalidAuthorization,
         })?;
+        let session_cookie_present = resolution.session_cookie_present;
+        let credential = resolution.credential;
         let transport = credential.transport;
         let retire_cookie = parts.extensions.get::<SessionCookieRetirement>().cloned();
         let sessions = parts
@@ -104,7 +106,7 @@ where
             Ok(record) => {
                 host::metrics::session_validation(host::metrics::SessionOutcome::Ok);
                 verify_basic_username(&record.username, credential.expected_username.as_ref())?;
-                if credential.session_cookie_present
+                if session_cookie_present
                     && transport != CredentialTransport::Cookie
                     && let Some(retirement) = retire_cookie
                 {
