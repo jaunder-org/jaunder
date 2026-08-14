@@ -11,6 +11,7 @@ import {
   click,
   waitForSelector,
   signInAsNewUser,
+  failServerFn,
   stallServerFn,
 } from "./helpers";
 import { createPerfProbe } from "./perf";
@@ -64,7 +65,12 @@ test("authenticated user can create a post through the UI", async ({
   const page = await registeredPage("/posts/new");
 
   await expect(page.locator(SEL.topbarHeading)).toHaveText("New post");
+  // #58: a fresh author has a successfully loaded, genuinely empty named-audience
+  // list. The empty-state copy proves that Ready([]), rather than Loading or Failed,
+  // is what authorizes this ordinary publish flow.
+  await expect(page.getByText("No named audiences.")).toBeVisible();
   await page.fill(SEL.postBody, "# Playwright Post\n\n**browser**");
+  await expect(page.locator(SEL.publishButton("true"))).toBeEnabled();
   await click(page, SEL.publishButton("true"));
   await waitForSelector(page, SEL.saveSummary);
 
@@ -72,6 +78,25 @@ test("authenticated user can create a post through the UI", async ({
   await expect(page.locator(SEL.saveSummary)).toContainText(
     "Slug: playwright-post",
   );
+});
+
+// #58: list_mine failure used to collapse into [], making the picker look
+// successfully empty and leaving Publish enabled. Intercept the real server-fn
+// request before the composer mounts so the browser exercises the Failed arm.
+test("failed named-audience load shows an error and gates compose actions", async ({
+  page,
+}) => {
+  await signInAsNewUser(page);
+  await failServerFn(page, "audiences/list_mine");
+  await goto(page, "/posts/new");
+
+  await expect(page.locator("p.error")).toHaveText(
+    "Could not load named audiences.",
+  );
+  await expect(page.getByText("No named audiences.")).toHaveCount(0);
+  await page.fill(SEL.postBody, "# Audience failure\n\nMust not publish");
+  await expect(page.locator(SEL.publishButton("false"))).toBeDisabled();
+  await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
 });
 
 test("authenticated user can create a post with a summary", async ({
@@ -458,12 +483,14 @@ test("edit page pre-selects the post's current audience", async ({
   );
   await goto(page, "/posts/new");
   await waitForSelector(page, "#audience-base");
+  await expect(page.getByText("No named audiences.")).toHaveCount(0);
   await page.fill(SEL.postBody, "# Targeted Draft\n\nbody for targeted draft");
   await page.selectOption("#audience-base", "subscribers");
   await page
     .locator("label", { hasText: "Confidants" })
     .locator('input[type="checkbox"]')
     .check();
+  await expect(page.locator(SEL.publishButton("false"))).toBeEnabled();
   await click(page, SEL.publishButton("false"));
   await waitForSelector(page, SEL.saveSummary);
 
@@ -488,6 +515,7 @@ test("edit page pre-selects the post's current audience", async ({
     ready: SEL.postBody,
   });
   await waitForSelector(page, "#audience-base");
+  await expect(page.getByText("No named audiences.")).toHaveCount(0);
 
   // The seed pre-selects the stored base...
   await expect(page.locator("#audience-base")).toHaveValue("subscribers");
@@ -497,6 +525,7 @@ test("edit page pre-selects the post's current audience", async ({
       .locator("label", { hasText: "Confidants" })
       .locator('input[type="checkbox"]'),
   ).toBeChecked();
+  await expect(page.locator(SEL.publishButton("false"))).toBeEnabled();
 });
 
 test("editing an invalid or nonexistent post shows not-found", async ({

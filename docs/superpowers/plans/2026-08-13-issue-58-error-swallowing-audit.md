@@ -1226,6 +1226,7 @@ Playwright, and the repository `cargo xtask` gate.
 - Modify: `web/src/profile/mod.rs`
 - Modify: `web/src/posts/component.rs`
 - Modify: `web/src/posts/page_state.rs`
+- Modify: `web/src/posts/mod.rs`
 - Modify: `end2end/tests/profile.spec.ts`
 - Modify: `end2end/tests/posts.spec.ts`
 
@@ -1238,14 +1239,14 @@ Playwright, and the repository `cargo xtask` gate.
   loaded-empty—and Failed. Publish/update remains gated until Ready; Failed
   never submits an empty selection as if it were real data.
 
-- [ ] **Step 1: Add host-compiled decision tests**
+- [x] **Step 1: Add host-compiled decision tests**
 
   Assert profile Loading/Failed cannot dispatch and Ready dispatches the fetched
   format. Assert audience Loading/Failed cannot submit, Ready(empty) can render
   a genuine empty state and submit according to existing selection rules, and
   Ready(non-empty) preserves named selection.
 
-- [ ] **Step 2: Run and observe fabricated defaults**
+- [x] **Step 2: Run and observe fabricated defaults**
 
   ```bash
   devtool run -- cargo nextest run -p web default_post_format
@@ -1255,14 +1256,14 @@ Playwright, and the repository `cargo xtask` gate.
   Expected before implementation: FAIL because `unwrap_or(Markdown)` and
   `Result::ok().unwrap_or_default()` erase the failures.
 
-- [ ] **Step 3: Render explicit states and action gates**
+- [x] **Step 3: Render explicit states and action gates**
 
   Preserve existing successful copy/layout. On failure render a stable `.error`
   node and disable or omit the affected action. Use a distinct loaded-empty
   message for no named audiences. Do not emit client-swallow telemetry: these
   server failures already returned through the server boundary and are visible.
 
-- [ ] **Step 4: Add Playwright failure flows**
+- [x] **Step 4: Add Playwright failure flows**
 
   In profile, force `get_default_post_format` failure; assert explicit error, no
   fabricated selected Markdown save, and disabled/absent Save. In composer,
@@ -1270,7 +1271,7 @@ Playwright, and the repository `cargo xtask` gate.
   and publish remains gated. Retain success coverage for loaded-empty and
   populated audiences.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
   ```bash
   devtool run -- cargo nextest run -p web default_post_format audience_picker

@@ -6,6 +6,7 @@ use common::display_name::DisplayName;
 use common::render::PostFormat;
 use leptos::prelude::*;
 
+use super::DefaultPostFormatState;
 use super::api::{SetDefaultPostFormat, Update, get, get_default_post_format};
 
 /// Profile page — shows username, display name, bio; allows updating.
@@ -106,30 +107,32 @@ pub fn ProfilePage() -> impl IntoView {
 
 /// Control for setting the user's default post format preference.
 ///
-/// ADR-0065 direct-bind: a `RwSignal<PostFormat>` owned by the component, seeded
-/// from the persisted preference, bound to a `<select>` whose `on:change` parses
-/// the token, and a plain `type="button"` "Save" that `.dispatch`es the typed
-/// `SetDefaultPostFormat` action — no `<ActionForm>` / string-submit path.
-///
-/// The offered formats are **derived from the `PostFormat` type**, not hard-coded:
-/// `PostFormat::VARIANTS` filtered to those carrying a `strum` editor message
-/// (`get_message`) — the same source of truth as the editor `FormatToggle`
-/// (`posts::FormatToggle`). `Html` is renderer-internal (#445), carries no message,
-/// and so is excluded here too; the default falls back to `Markdown` to match.
+/// ADR-0065 direct-bind: a [`DefaultPostFormatState`] signal owned by the
+/// component is seeded only by the persisted preference, bound to a `<select>`
+/// whose `on:change` parses the token, and read by a plain `type="button"` "Save"
+/// that `.dispatch`es the typed `SetDefaultPostFormat` action — no
+/// `<ActionForm>` / string-submit path.
 #[component]
 fn DefaultPostFormatControl() -> impl IntoView {
-    use strum::{EnumMessage, VariantArray};
     let action = ServerAction::<SetDefaultPostFormat>::new();
     let initial = Resource::new(|| (), |()| get_default_post_format());
-    // Signal created OUTSIDE Suspense and seeded inside — the same shape as
-    // ProfilePage's dn_field/bio_field, so the control's owner is the component,
-    // not the transient Suspend scope.
-    let format = RwSignal::new(PostFormat::Markdown);
+    // The state belongs to the component rather than the transient Suspend
+    // scope. Loading and Failed deliberately carry no format, so neither can
+    // dispatch a fabricated Markdown preference.
+    let state = RwSignal::new(DefaultPostFormatState::Loading);
+    let save = move |_| {
+        if let Some(format) = state.get().format_to_save() {
+            action.dispatch(SetDefaultPostFormat { format });
+        }
+    };
 
     view! {
-        <Suspense fallback=|| ()>
+        <Suspense fallback=|| {
+            view! { <p class="j-loading">"Loading\u{2026}"</p> }
+        }>
             {move || Suspend::new(async move {
-                format.set(initial.await.unwrap_or(PostFormat::Markdown));
+                let resolved = initial.await;
+                state.set(DefaultPostFormatState::resolve(Some(&resolved)));
                 view! {
                     <div class="j-card">
                         <div class="j-card-head">
@@ -139,46 +142,14 @@ fn DefaultPostFormatControl() -> impl IntoView {
                             </div>
                         </div>
                         <div class="j-form-body">
-                            <label class="j-form-field">
-                                <span class="j-form-label">"Default post format"</span>
-                                <select
-                                    id="default-post-format"
-                                    class="j-form-input"
-                                    on:change=move |ev| {
-                                        if let Ok(f) = event_target_value(&ev).parse::<PostFormat>()
-                                        {
-                                            format.set(f);
-                                        }
-                                    }
-                                >
-                                    {PostFormat::VARIANTS
-                                        .iter()
-                                        .copied()
-                                        .filter_map(|f| f.get_message().map(|label| (f, label)))
-                                        .map(|(f, label)| {
-                                            view! {
-                                                <option
-                                                    value=f.to_string()
-                                                    selected=move || format.get() == f
-                                                >
-                                                    {label}
-                                                </option>
-                                            }
-                                        })
-                                        .collect_view()}
-                                </select>
-                            </label>
+                            <DefaultPostFormatBody state=state />
                         </div>
                         <div class="j-form-actions">
                             <button
                                 type="button"
                                 class="j-btn"
-                                on:click=move |_| {
-                                    action
-                                        .dispatch(SetDefaultPostFormat {
-                                            format: format.get(),
-                                        });
-                                }
+                                prop:disabled=move || state.get().format_to_save().is_none()
+                                on:click=save
                             >
                                 "Save"
                             </button>
@@ -187,5 +158,70 @@ fn DefaultPostFormatControl() -> impl IntoView {
                 }
             })}
         </Suspense>
+    }
+}
+
+/// The resolved preference body: loading, explicit failure, or the real select.
+#[component]
+fn DefaultPostFormatBody(state: RwSignal<DefaultPostFormatState>) -> impl IntoView {
+    view! {
+        <Show
+            when=move || matches!(state.get(), DefaultPostFormatState::Ready(_))
+            fallback=move || {
+                view! {
+                    <Show
+                        when=move || matches!(state.get(), DefaultPostFormatState::Loading)
+                        fallback=|| {
+                            view! { <p class="error">"Could not load the default post format."</p> }
+                        }
+                    >
+                        <p class="j-loading">"Loading\u{2026}"</p>
+                    </Show>
+                }
+            }
+        >
+            <DefaultPostFormatSelect state=state />
+        </Show>
+    }
+}
+
+/// The ready preference select, derived from user-selectable [`PostFormat`] variants.
+#[component]
+fn DefaultPostFormatSelect(state: RwSignal<DefaultPostFormatState>) -> impl IntoView {
+    use strum::{EnumMessage, VariantArray};
+
+    let change = move |ev| {
+        if let Ok(format) = event_target_value(&ev).parse::<PostFormat>() {
+            state.set(DefaultPostFormatState::Ready(format));
+        }
+    };
+
+    view! {
+        <label class="j-form-field">
+            <span class="j-form-label">"Default post format"</span>
+            <select id="default-post-format" class="j-form-input" on:change=change>
+                <For
+                    each=move || {
+                        PostFormat::VARIANTS
+                            .iter()
+                            .copied()
+                            .filter_map(|format| {
+                                format.get_message().map(|label| (format, label))
+                            })
+                    }
+                    key=|(format, _)| *format
+                    children=move |(format, label)| {
+                        view! {
+                            <option
+                                value=format.to_string()
+                                selected=move || state.get().format_to_save() == Some(format)
+                            >
+                                {label}
+                            </option>
+                        }
+                    }
+                />
+            </select>
+        </label>
     }
 }
