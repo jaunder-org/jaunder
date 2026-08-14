@@ -19,7 +19,8 @@
 //! the marked line must hold exactly one site, and an orphan marker fails. The token
 //! is derived from [`STEP`], so the gate cannot be renamed out of sync with the
 //! markers that exempt its sites. The census of live markers is **derived** from the
-//! scan and printed, because a written exemption can never be re-verified.
+//! scan and included with failure diagnostics, because a written exemption can never
+//! be re-verified; a clean check stays terse.
 //!
 //! **Unreadable classes, stated rather than solved:**
 //!
@@ -267,7 +268,7 @@ fn census(scanned: &[(String, String)]) -> Vec<String> {
 /// pairs, so it is unit-tested directly.
 ///
 /// Test-facing: [`run`] calls [`audit`] once and hands the result to [`detail`], so
-/// the census it prints and the failures it reports come from a single walk.
+/// the census it prints on failure and the failures it reports come from a single walk.
 #[cfg(test)]
 fn problems(scanned: &[(String, String)]) -> Option<String> {
     detail(&audit(scanned))
@@ -284,9 +285,22 @@ fn detail(found: &Audit) -> Option<String> {
     Some(lines.join("\n"))
 }
 
+/// Convert an audit and any file-read failures into the step result. Successful
+/// checks carry no detail; the derived census is useful only when there is a problem
+/// to investigate.
+fn step(mut read_errors: Vec<String>, found: &Audit) -> StepResult {
+    match (read_errors.is_empty(), detail(found)) {
+        (true, None) => StepResult::ok(STEP),
+        (_, problems) => {
+            read_errors.extend(problems);
+            StepResult::fail(STEP).detail(read_errors.join("\n"))
+        }
+    }
+}
+
 /// Scan every TypeScript file under each of [`POLICED_ROOTS`] and push the result
 /// step. A missing root is a hard failure, so a moved/renamed tree can never quietly
-/// disable the guard. On success the step's detail is the derived marker census.
+/// disable the guard. Successful checks carry no detail.
 pub fn run(result: &mut CommandResult) {
     let mut files = Vec::new();
     for root in POLICED_ROOTS {
@@ -306,29 +320,15 @@ pub fn run(result: &mut CommandResult) {
             Err(e) => read_errors.push(format!("{}: cannot read: {e}", p.display())),
         }
     }
-    // One walk of the tree, whose census the success path prints and whose failures
-    // the failure path reports.
+    // One walk of the tree supplies both failures and the census attached to failure
+    // diagnostics.
     let found = audit(&scanned);
-    let step = match (read_errors.is_empty(), detail(&found)) {
-        (true, None) => {
-            let rows = found.census_rows();
-            StepResult::ok(STEP).detail(format!(
-                "{} exempt site(s)\n{}",
-                rows.len(),
-                rows.join("\n")
-            ))
-        }
-        (_, prob) => {
-            read_errors.extend(prob);
-            StepResult::fail(STEP).detail(read_errors.join("\n"))
-        }
-    };
-    result.push(step);
+    result.push(step(read_errors, &found));
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{census, problems, violations};
+    use super::{audit, census, problems, step, violations};
 
     #[test]
     fn flags_a_raw_page_goto() {
@@ -430,6 +430,18 @@ mod tests {
             )]),
             None
         );
+    }
+
+    #[test]
+    fn clean_success_carries_no_detail() {
+        let found = audit(&[(
+            "end2end/tests/x.ts".to_string(),
+            "// e2e-goto-wrapper:allow the probe owns this raw load\nawait page.goto(url);\n"
+                .to_string(),
+        )]);
+        let result = step(Vec::new(), &found);
+        assert!(result.ok);
+        assert_eq!(result.detail, None);
     }
 
     /// The census is derived from the scan, so it names the sites the tree actually

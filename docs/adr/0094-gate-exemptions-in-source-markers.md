@@ -229,8 +229,9 @@ clause was written for.
 
 **What this commits us to.** A new gate's author chooses a mechanism
 deliberately, from the discriminator above, rather than by copying the last
-gate. A gate whose population is un-recheckable must derive and print its
-census. Exemption markers are per-gate, line-scoped, reason-bearing, and never
+gate. A gate whose population is un-recheckable must derive its census and
+include it in failure diagnostics; a clean gate prints only its terse success
+line. Exemption markers are per-gate, line-scoped, reason-bearing, and never
 blocked.
 
 **What it creates.** Twelve in-source markers — seven replacing the three
