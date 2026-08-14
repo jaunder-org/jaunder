@@ -10,6 +10,32 @@ use common::token::RawToken;
 use common::username::Username;
 use host::invite::InviteCode;
 
+pub(crate) fn finish_password_reset_rejection(
+    primary: Result<(), ConfirmPasswordResetError>,
+    rollback: Result<(), sqlx::Error>,
+) -> Result<(), ConfirmPasswordResetError> {
+    crate::helpers::preserve_after_secondary(
+        primary,
+        rollback,
+        host::error::ErrorKind::Storage,
+        host::error::ErrorClass::Transient,
+        "storage.sqlite.password_reset.rollback",
+    )
+}
+
+fn finish_invite_registration(
+    primary: Result<UserId, RegisterWithInviteError>,
+    rollback: Result<(), sqlx::Error>,
+) -> Result<UserId, RegisterWithInviteError> {
+    crate::helpers::preserve_after_secondary(
+        primary,
+        rollback,
+        host::error::ErrorKind::Storage,
+        host::error::ErrorClass::Transient,
+        "storage.sqlite.invite_registration.rollback",
+    )
+}
+
 /// `SQLite` implementation of [`AtomicOps`].
 ///
 /// Holds the pool directly so it can span multiple tables in a single
@@ -59,13 +85,12 @@ impl SqliteAtomicOps {
             .fetch_optional(&mut *tx)
             .await?;
 
-            tx.rollback().await.ok();
-
-            return match row {
+            let primary = match row {
                 None => Err(ConfirmPasswordResetError::NotFound),
                 Some((Some(_), _)) => Err(ConfirmPasswordResetError::AlreadyUsed),
                 Some((None, _)) => Err(ConfirmPasswordResetError::Expired),
             };
+            return finish_password_reset_rejection(primary, tx.rollback().await);
         };
 
         // ADR-0022: hash only after the token claim succeeds, so a bogus/used/expired
@@ -182,10 +207,13 @@ impl AtomicOps for SqliteAtomicOps {
                 sqlx::query("COMMIT").execute(&mut *conn).await?;
                 Ok(user_id)
             }
-            Err(error) => {
-                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-                Err(error)
-            }
+            Err(error) => finish_invite_registration(
+                Err(error),
+                sqlx::query("ROLLBACK")
+                    .execute(&mut *conn)
+                    .await
+                    .map(|_| ()),
+            ),
         }
     }
 
@@ -200,5 +228,41 @@ impl AtomicOps for SqliteAtomicOps {
             crate::helpers::hash_password_operation(new_password),
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn continuation_reporting_transaction_finish_failures_preserve_atomic_domain_errors_and_report_once()
+     {
+        let (result, trace) = crate::helpers::swallowed_test::capture(|| {
+            finish_password_reset_rejection(
+                Err(ConfirmPasswordResetError::Expired),
+                Err(sqlx::Error::PoolClosed),
+            )
+        });
+        assert!(matches!(result, Err(ConfirmPasswordResetError::Expired)));
+        crate::helpers::swallowed_test::assert_one_report(
+            &trace,
+            "storage.sqlite.password_reset.rollback",
+        );
+
+        let (result, trace) = crate::helpers::swallowed_test::capture(|| {
+            finish_invite_registration(
+                Err(RegisterWithInviteError::InviteAlreadyUsed),
+                Err(sqlx::Error::PoolClosed),
+            )
+        });
+        assert!(matches!(
+            result,
+            Err(RegisterWithInviteError::InviteAlreadyUsed)
+        ));
+        crate::helpers::swallowed_test::assert_one_report(
+            &trace,
+            "storage.sqlite.invite_registration.rollback",
+        );
     }
 }

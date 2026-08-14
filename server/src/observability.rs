@@ -867,7 +867,7 @@ mod tests {
         assert_eq!(&*buf.lock().expect("lock"), b"captured");
     }
 
-    fn assert_zero_error_metrics<R>(operation: impl FnOnce() -> R) -> R {
+    fn assert_error_metric_count<R>(expected: usize, operation: impl FnOnce() -> R) -> R {
         let exporter = InMemoryMetricExporter::default();
         let reader = PeriodicReader::builder(exporter.clone()).build();
         let provider = SdkMeterProvider::builder().with_reader(reader).build();
@@ -881,11 +881,12 @@ mod tests {
             .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
             .filter(|metric| metric.name() == "jaunder.errors")
             .count();
-        assert_eq!(
-            points, 0,
-            "observability self-failure recorded jaunder.errors"
-        );
+        assert_eq!(points, expected, "unexpected jaunder.errors metric count");
         result
+    }
+
+    fn assert_zero_error_metrics<R>(operation: impl FnOnce() -> R) -> R {
+        assert_error_metric_count(0, operation)
     }
 
     fn assert_fixed_fallback(output: &str, kind: FallbackKind) {
@@ -1562,7 +1563,7 @@ mod tests {
     fn init_tracing_impl_survives_unopenable_diag_path() {
         const CHILD: &str = "JAUNDER_TEST_DIAG_OPEN_CHILD";
         if std::env::var_os(CHILD).is_some() {
-            assert_zero_error_metrics(|| {
+            assert_error_metric_count(1, || {
                 let guard = init_tracing_impl(false);
                 drop(guard);
             });

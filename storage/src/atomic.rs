@@ -262,6 +262,40 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn continuation_reporting_password_reset_not_found_survives_injected_rollback_failure(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let (raw_token, _) = host::token::generate_hashed();
+        let password = parse_password("password123");
+        let primary = env
+            .state
+            .atomic
+            .confirm_password_reset(&raw_token, &password)
+            .await;
+        assert!(matches!(&primary, Err(ConfirmPasswordResetError::NotFound)));
+
+        let (result, trace) = crate::helpers::swallowed_test::capture(|| match backend {
+            Backend::Sqlite => crate::sqlite::atomic::finish_password_reset_rejection(
+                primary,
+                Err(sqlx::Error::PoolClosed),
+            ),
+            Backend::Postgres => crate::postgres::atomic::finish_password_reset_rejection(
+                primary,
+                Err(sqlx::Error::PoolClosed),
+            ),
+        });
+
+        assert!(matches!(result, Err(ConfirmPasswordResetError::NotFound)));
+        let context = match backend {
+            Backend::Sqlite => "storage.sqlite.password_reset.rollback",
+            Backend::Postgres => "storage.postgres.password_reset.rollback",
+        };
+        crate::helpers::swallowed_test::assert_one_report(&trace, context);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn password_reset_hash_failure_retains_source_chain(#[case] backend: Backend) {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;

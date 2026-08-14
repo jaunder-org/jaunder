@@ -24,6 +24,20 @@ const BACKOFFS_SECS: &[u64] = &[60, 300, 1800, 7200, 7200, 7200];
 /// batching #766's churn away can't reintroduce the long-hold failure mode.
 const ENQUEUE_CHUNK: usize = 256;
 
+fn report_continuation(
+    kind: host::error::ErrorKind,
+    class: host::error::ErrorClass,
+    context: &'static str,
+    error: &(dyn std::error::Error + 'static),
+) {
+    host::error::report_swallowed(
+        kind,
+        class,
+        context,
+        host::error::SwallowedSource::Error(error),
+    );
+}
+
 /// The background feed worker: the deps it needs to regenerate feeds and ping
 /// the `WebSub` hub, declared explicitly as constructor parameters rather than
 /// reached through a shared bundle (see [ADR-0016]).
@@ -116,10 +130,15 @@ impl FeedWorker {
     /// `WebSub` hub. Groups events by `feed_path` to avoid redundant regeneration.
     pub async fn tick(&self) {
         // Enqueue go-live regeneration first so the same tick drains what it
-        // just enqueued. A failure here must not abort the tick — the queue
-        // drain below is independent — so it is logged, not propagated.
+        // just enqueued. A failure here must not abort the independent queue
+        // drain, but it remains operationally visible.
         if let Err(e) = self.go_live_pass(Utc::now()).await {
-            tracing::error!(error = %e, "feed worker go-live pass failed");
+            report_continuation(
+                host::error::ErrorKind::Storage,
+                host::error::ErrorClass::Transient,
+                "server.feed.go_live_pass",
+                e.as_ref(),
+            );
         }
 
         let claimed = match self
@@ -132,7 +151,12 @@ impl FeedWorker {
         {
             Ok(c) => c,
             Err(e) => {
-                tracing::error!(error = %e, "feed worker claim failed");
+                report_continuation(
+                    host::error::ErrorKind::Storage,
+                    host::error::ErrorClass::Transient,
+                    "server.feed.claim_pending",
+                    &e,
+                );
                 return;
             }
         };
@@ -146,14 +170,32 @@ impl FeedWorker {
             groups.entry(rec.feed_path.clone()).or_default().push(rec);
         }
 
-        // Read hub URL and site identity once per tick
-        let hub_url = self
-            .site_config
-            .get_feeds_websub_hub_url()
-            .await
-            .ok()
-            .flatten();
-        let identity = self.site_config.get_identity().await.ok();
+        // Read hub URL and site identity once per tick. Their absence is normal;
+        // a failed read degrades the tick in the same way but must be reported.
+        let hub_url = match self.site_config.get_feeds_websub_hub_url().await {
+            Ok(hub) => hub,
+            Err(error) => {
+                report_continuation(
+                    host::error::ErrorKind::Storage,
+                    host::error::ErrorClass::Transient,
+                    "server.feed.websub_config_read",
+                    &error,
+                );
+                None
+            }
+        };
+        let identity = match self.site_config.get_identity().await {
+            Ok(identity) => Some(identity),
+            Err(error) => {
+                report_continuation(
+                    host::error::ErrorKind::Storage,
+                    host::error::ErrorClass::Transient,
+                    "server.feed.identity_read",
+                    &error,
+                );
+                None
+            }
+        };
 
         for (feed_path, recs) in groups {
             self.process_feed_group(feed_path, recs, hub_url.as_ref(), identity.as_ref())
@@ -187,7 +229,14 @@ impl FeedWorker {
                 host::metrics::feed_regen_duration_ms(
                     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 );
-                let _ = self.feed_events.mark_regenerated(&ids).await;
+                if let Err(error) = self.feed_events.mark_regenerated(&ids).await {
+                    report_continuation(
+                        host::error::ErrorKind::Storage,
+                        host::error::ErrorClass::Transient,
+                        "server.feed.status_write.190",
+                        &error,
+                    );
+                }
                 let item_bytes = row.body.len();
                 let duration_ms = started.elapsed().as_millis();
                 tracing::info!(
@@ -202,6 +251,12 @@ impl FeedWorker {
                     .await;
             }
             Err(e) => {
+                report_continuation(
+                    host::error::ErrorKind::Internal,
+                    host::error::ErrorClass::Bug,
+                    "server.feed.regenerate",
+                    &e,
+                );
                 self.on_regen_failure(&feed_path, &ids, &recs, &e).await;
             }
         }
@@ -238,33 +293,68 @@ impl FeedWorker {
                 Ok(()) => {
                     host::metrics::websub_ping(host::metrics::PingOutcome::Success);
                     tracing::info!(feed_url = %feed_url, hub = %hub, attempt, "feed.websub.ping.succeeded");
-                    let _ = self.feed_events.mark_pinged(ids).await;
+                    if let Err(error) = self.feed_events.mark_pinged(ids).await {
+                        report_continuation(
+                            host::error::ErrorKind::Storage,
+                            host::error::ErrorClass::Transient,
+                            "server.feed.status_write.mark_pinged",
+                            &error,
+                        );
+                    }
                 }
                 Err(e) => {
+                    report_continuation(
+                        host::error::ErrorKind::Internal,
+                        host::error::ErrorClass::External,
+                        "server.feed.websub_ping",
+                        &e,
+                    );
                     let attempt_usize = usize::try_from(attempt).unwrap_or(0);
                     let next_attempt_idx = attempt_usize.saturating_sub(1);
                     if next_attempt_idx >= BACKOFFS_SECS.len() {
                         host::metrics::websub_ping(host::metrics::PingOutcome::Exhausted);
-                        tracing::warn!(feed_url = %feed_url, hub = %hub, "feed.websub.ping.exhausted");
-                        let _ = self.feed_events.mark_exhausted(ids, &e.to_string()).await;
+                        if let Err(error) =
+                            self.feed_events.mark_exhausted(ids, &e.to_string()).await
+                        {
+                            report_continuation(
+                                host::error::ErrorKind::Storage,
+                                host::error::ErrorClass::Transient,
+                                "server.feed.status_write.249",
+                                &error,
+                            );
+                        }
                     } else {
                         let delay = chrono::Duration::seconds(
                             i64::try_from(BACKOFFS_SECS[next_attempt_idx]).unwrap_or(60),
                         );
                         let next = Utc::now() + delay;
                         host::metrics::websub_ping(host::metrics::PingOutcome::Failed);
-                        tracing::warn!(feed_url = %feed_url, hub = %hub, attempt, error = %e, "feed.websub.ping.failed");
-                        let _ = self
+                        if let Err(error) = self
                             .feed_events
                             .mark_failed(ids, &e.to_string(), next)
-                            .await;
+                            .await
+                        {
+                            report_continuation(
+                                host::error::ErrorKind::Storage,
+                                host::error::ErrorClass::Transient,
+                                "server.feed.status_write.257",
+                                &error,
+                            );
+                        }
                     }
                 }
             }
         } else {
             // No hub configured — treat as complete.
             host::metrics::websub_ping(host::metrics::PingOutcome::NoHub);
-            let _ = self.feed_events.mark_pinged(ids).await;
+            if let Err(error) = self.feed_events.mark_pinged(ids).await {
+                report_continuation(
+                    host::error::ErrorKind::Storage,
+                    host::error::ErrorClass::Transient,
+                    "server.feed.status_write.mark_pinged",
+                    &error,
+                );
+            }
         }
     }
 
@@ -273,29 +363,41 @@ impl FeedWorker {
     /// used up.
     async fn on_regen_failure(
         &self,
-        feed_url: &FeedPath,
+        _feed_url: &FeedPath,
         ids: &[FeedEventId],
         recs: &[FeedEventRecord],
         e: &RegenerateError,
     ) {
         host::metrics::feed_regeneration(host::metrics::RegenResult::Error);
-        tracing::error!(error = %e, feed_url = %feed_url, "feed.regen.failed");
         let attempt = recs.iter().map(|r| r.attempts).max().unwrap_or(0) + 1;
         let attempt_usize = usize::try_from(attempt).unwrap_or(0);
         let next_attempt_idx = attempt_usize.saturating_sub(1);
         if next_attempt_idx >= BACKOFFS_SECS.len() {
-            // cov:ignore-start
-            let _ = self.feed_events.mark_exhausted(ids, &e.to_string()).await;
-            // cov:ignore-stop
+            if let Err(error) = self.feed_events.mark_exhausted(ids, &e.to_string()).await {
+                report_continuation(
+                    host::error::ErrorKind::Storage,
+                    host::error::ErrorClass::Transient,
+                    "server.feed.status_write.288",
+                    &error,
+                );
+            }
         } else {
             let next = Utc::now()
                 + chrono::Duration::seconds(
                     i64::try_from(BACKOFFS_SECS[next_attempt_idx]).unwrap_or(60),
                 );
-            let _ = self
+            if let Err(error) = self
                 .feed_events
                 .mark_failed(ids, &e.to_string(), next)
-                .await;
+                .await
+            {
+                report_continuation(
+                    host::error::ErrorKind::Storage,
+                    host::error::ErrorClass::Transient,
+                    "server.feed.status_write.295",
+                    &error,
+                );
+            }
         }
     }
 
@@ -356,6 +458,61 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct SharedWriter(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for SharedWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("trace lock").extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for SharedWriter {
+        type Writer = Self;
+
+        fn make_writer(&'writer self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    fn trace_capture() -> (
+        tracing::subscriber::DefaultGuard,
+        Arc<std::sync::Mutex<Vec<u8>>>,
+    ) {
+        let output = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_ansi(false)
+            .with_writer(SharedWriter(output.clone()))
+            .finish();
+        (tracing::subscriber::set_default(subscriber), output)
+    }
+
+    fn trace_text(output: &Arc<std::sync::Mutex<Vec<u8>>>) -> String {
+        std::io::Write::flush(&mut SharedWriter(output.clone())).expect("flush trace");
+        String::from_utf8(output.lock().expect("trace lock").clone()).expect("utf8 trace")
+    }
+
+    struct FailingWebSubClient;
+
+    #[async_trait::async_trait]
+    impl WebSubClient for FailingWebSubClient {
+        async fn send_publish(
+            &self,
+            _hub_url: &HubUrl,
+            _feed_url: &FeedUrl,
+        ) -> Result<(), crate::websub::WebSubError> {
+            Err(crate::websub::WebSubError::Http(Box::new(
+                std::io::Error::other("worker WebSub transport failure"),
+            )))
+        }
+    }
+
     fn worker(
         site_config: storage::MockSiteConfigStorage,
         posts: storage::MockPostStorage,
@@ -371,9 +528,298 @@ mod tests {
         )
     }
 
+    fn worker_with_websub(
+        feed_events: storage::MockFeedEventStorage,
+        websub: Arc<dyn WebSubClient>,
+    ) -> FeedWorker {
+        FeedWorker::new(
+            Arc::new(storage::MockSiteConfigStorage::new()),
+            Arc::new(storage::MockPostStorage::new()),
+            Arc::new(storage::MockFeedCacheStorage::new()),
+            Arc::new(feed_events),
+            websub,
+        )
+    }
+
+    fn test_identity() -> SiteIdentity {
+        SiteIdentity {
+            title: common::test_support::parse_site_title("Jaunder"),
+            base_url: Some(common::test_support::parse_url("https://example.com/")),
+        }
+    }
+
+    fn test_feeds_config() -> common::feed::FeedsConfig {
+        common::feed::FeedsConfig {
+            min_items: common::test_support::parse_feed_min_items("10"),
+            min_days: common::test_support::parse_feed_min_days("30"),
+            websub_hub_url: None,
+        }
+    }
+
+    fn successful_tick_posts() -> storage::MockPostStorage {
+        let mut posts = storage::MockPostStorage::new();
+        posts
+            .expect_feed_urls_needing_catchup()
+            .times(1)
+            .returning(|_| Ok(vec![]));
+        posts
+            .expect_list_published_in_window()
+            .times(1)
+            .returning(|_, _, _, _| Ok(vec![]));
+        posts
+    }
+
+    fn successful_feed_cache() -> storage::MockFeedCacheStorage {
+        let mut cache = storage::MockFeedCacheStorage::new();
+        cache.expect_upsert().times(1).returning(|_| Ok(()));
+        cache
+    }
+
+    fn assert_context_once(trace: &str, context: &str) {
+        assert_eq!(
+            trace
+                .matches(format!(r#""error.context":"{context}""#).as_str())
+                .count(),
+            1,
+            "trace: {trace}"
+        );
+    }
+
+    // guard:no-backend — mock stores isolate the config-read continuation.
+    #[tokio::test]
+    async fn continuation_reporting_tick_preserves_processing_after_websub_config_read_failure() {
+        let mut site_config = storage::MockSiteConfigStorage::new();
+        site_config
+            .expect_get_feeds_websub_hub_url()
+            .times(1)
+            .returning(|| Err(sqlx::Error::PoolClosed));
+        site_config
+            .expect_get_identity()
+            .times(2)
+            .returning(|| Ok(test_identity()));
+        site_config
+            .expect_get_feeds_config()
+            .times(1)
+            .returning(|| Ok(test_feeds_config()));
+        let mut events = storage::MockFeedEventStorage::new();
+        events
+            .expect_claim_pending_batch()
+            .times(1)
+            .returning(|_, _| Ok(vec![event(1, "/feed.rss", 0)]));
+        events
+            .expect_mark_regenerated()
+            .times(1)
+            .returning(|_| Ok(()));
+        events.expect_mark_pinged().times(1).returning(|_| Ok(()));
+        let worker = worker(
+            site_config,
+            successful_tick_posts(),
+            successful_feed_cache(),
+            events,
+        );
+
+        let (guard, output) = trace_capture();
+        worker.tick().await;
+        drop(guard);
+        assert_context_once(&trace_text(&output), "server.feed.websub_config_read");
+    }
+
+    // guard:no-backend — mock stores isolate the identity-read continuation.
+    #[tokio::test]
+    async fn continuation_reporting_tick_preserves_processing_after_identity_read_failure() {
+        let mut site_config = storage::MockSiteConfigStorage::new();
+        site_config
+            .expect_get_feeds_websub_hub_url()
+            .times(1)
+            .returning(|| Ok(None));
+        let identity_reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        site_config
+            .expect_get_identity()
+            .times(2)
+            .returning(move || {
+                if identity_reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+                    Err(sqlx::Error::PoolClosed)
+                } else {
+                    Ok(test_identity())
+                }
+            });
+        site_config
+            .expect_get_feeds_config()
+            .times(1)
+            .returning(|| Ok(test_feeds_config()));
+        let mut events = storage::MockFeedEventStorage::new();
+        events
+            .expect_claim_pending_batch()
+            .times(1)
+            .returning(|_, _| Ok(vec![event(1, "/feed.rss", 0)]));
+        events
+            .expect_mark_regenerated()
+            .times(1)
+            .returning(|_| Ok(()));
+        events.expect_mark_pinged().times(1).returning(|_| Ok(()));
+        let worker = worker(
+            site_config,
+            successful_tick_posts(),
+            successful_feed_cache(),
+            events,
+        );
+
+        let (guard, output) = trace_capture();
+        worker.tick().await;
+        drop(guard);
+        assert_context_once(&trace_text(&output), "server.feed.identity_read");
+    }
+
+    // guard:no-backend — mock stores isolate the regenerated-status continuation.
+    #[tokio::test]
+    async fn continuation_reporting_successful_regeneration_survives_status_write_failure() {
+        let mut site_config = storage::MockSiteConfigStorage::new();
+        site_config
+            .expect_get_feeds_config()
+            .times(1)
+            .returning(|| Ok(test_feeds_config()));
+        site_config
+            .expect_get_identity()
+            .times(1)
+            .returning(|| Ok(test_identity()));
+        let mut posts = storage::MockPostStorage::new();
+        posts
+            .expect_list_published_in_window()
+            .times(1)
+            .returning(|_, _, _, _| Ok(vec![]));
+        let mut events = storage::MockFeedEventStorage::new();
+        events
+            .expect_mark_regenerated()
+            .times(1)
+            .returning(|_| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+        events.expect_mark_pinged().times(1).returning(|_| Ok(()));
+        let worker = worker(site_config, posts, successful_feed_cache(), events);
+        let identity = test_identity();
+
+        let (guard, output) = trace_capture();
+        worker
+            .process_feed_group(
+                "/feed.rss".parse().expect("feed path"),
+                vec![event(1, "/feed.rss", 0)],
+                None,
+                Some(&identity),
+            )
+            .await;
+        drop(guard);
+        assert_context_once(&trace_text(&output), "server.feed.status_write.190");
+    }
+
+    // guard:no-backend — mock status store and successful protocol client.
+    #[tokio::test]
+    async fn continuation_reporting_websub_success_survives_mark_pinged_failure() {
+        let mut events = storage::MockFeedEventStorage::new();
+        events
+            .expect_mark_pinged()
+            .times(1)
+            .returning(|_| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+        let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
+        let hub = "https://hub.example/".parse().expect("hub URL");
+        let identity = test_identity();
+
+        let (guard, output) = trace_capture();
+        worker
+            .ping_websub(
+                &"/feed.rss".parse().expect("feed path"),
+                &[FeedEventId::from(1)],
+                1,
+                Some(&hub),
+                Some(&identity),
+            )
+            .await;
+        drop(guard);
+        assert_context_once(&trace_text(&output), "server.feed.status_write.mark_pinged");
+    }
+
+    // guard:no-backend — mock status store and failing protocol client.
+    #[tokio::test]
+    async fn continuation_reporting_websub_exhaustion_survives_status_write_failure() {
+        let mut events = storage::MockFeedEventStorage::new();
+        events
+            .expect_mark_exhausted()
+            .times(1)
+            .returning(|_, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+        let worker = worker_with_websub(events, Arc::new(FailingWebSubClient));
+        let hub = "https://hub.example/".parse().expect("hub URL");
+        let identity = test_identity();
+
+        let (guard, output) = trace_capture();
+        worker
+            .ping_websub(
+                &"/feed.rss".parse().expect("feed path"),
+                &[FeedEventId::from(1)],
+                i32::try_from(BACKOFFS_SECS.len() + 1).expect("small backoff table"),
+                Some(&hub),
+                Some(&identity),
+            )
+            .await;
+        drop(guard);
+        let trace = trace_text(&output);
+        assert_context_once(&trace, "server.feed.websub_ping");
+        assert_context_once(&trace, "server.feed.status_write.249");
+    }
+
+    // guard:no-backend — mock status store and failing protocol client.
+    #[tokio::test]
+    async fn continuation_reporting_websub_retry_survives_status_write_failure() {
+        let mut events = storage::MockFeedEventStorage::new();
+        events
+            .expect_mark_failed()
+            .times(1)
+            .returning(|_, _, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+        let worker = worker_with_websub(events, Arc::new(FailingWebSubClient));
+        let hub = "https://hub.example/".parse().expect("hub URL");
+        let identity = test_identity();
+
+        let (guard, output) = trace_capture();
+        worker
+            .ping_websub(
+                &"/feed.rss".parse().expect("feed path"),
+                &[FeedEventId::from(1)],
+                1,
+                Some(&hub),
+                Some(&identity),
+            )
+            .await;
+        drop(guard);
+        let trace = trace_text(&output);
+        assert_context_once(&trace, "server.feed.websub_ping");
+        assert_context_once(&trace, "server.feed.status_write.257");
+    }
+
+    // guard:no-backend — mock status store isolates regeneration retry.
+    #[tokio::test]
+    async fn continuation_reporting_regeneration_retry_survives_status_write_failure() {
+        let mut events = storage::MockFeedEventStorage::new();
+        events
+            .expect_mark_failed()
+            .times(1)
+            .returning(|_, _, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+        let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
+        let record = event(1, "/feed.rss", 0);
+        let error =
+            RegenerateError::Storage(Box::new(std::io::Error::other("regeneration failed")));
+
+        let (guard, output) = trace_capture();
+        worker
+            .on_regen_failure(
+                &record.feed_path,
+                &[record.id],
+                std::slice::from_ref(&record),
+                &error,
+            )
+            .await;
+        drop(guard);
+        assert_context_once(&trace_text(&output), "server.feed.status_write.295");
+    }
+
     // guard:no-backend — mock store
     #[tokio::test]
-    async fn tick_logs_and_returns_when_claim_fails() {
+    async fn tick_reports_and_returns_when_claim_fails() {
         let mut posts = storage::MockPostStorage::new();
         posts
             .expect_feed_urls_needing_catchup()
@@ -392,7 +838,17 @@ mod tests {
             storage::MockFeedCacheStorage::new(),
             events,
         );
+        let (guard, output) = trace_capture();
         w.tick().await;
+        drop(guard);
+        let trace = trace_text(&output);
+        assert_eq!(
+            trace
+                .matches(r#""error.context":"server.feed.claim_pending""#)
+                .count(),
+            1,
+            "trace: {trace}"
+        );
     }
 
     // guard:no-backend — mock store
@@ -419,10 +875,10 @@ mod tests {
 
     // guard:no-backend — mock store
     #[tokio::test]
-    async fn tick_logs_when_go_live_pass_fails_but_still_drains() {
+    async fn tick_reports_when_go_live_pass_fails_but_still_drains() {
         let mut posts = storage::MockPostStorage::new();
-        // Go-live pass fails; the error is logged, not propagated, and the tick
-        // continues to the (empty) queue drain.
+        // Go-live pass fails and is reported, but the tick continues to the
+        // independent empty queue drain.
         posts
             .expect_feed_urls_needing_catchup()
             .times(1)
@@ -438,7 +894,89 @@ mod tests {
             storage::MockFeedCacheStorage::new(),
             events,
         );
+        let (guard, output) = trace_capture();
         w.tick().await;
+        drop(guard);
+        let trace = trace_text(&output);
+        assert_eq!(
+            trace
+                .matches(r#""error.context":"server.feed.go_live_pass""#)
+                .count(),
+            1,
+            "trace: {trace}"
+        );
+    }
+
+    // guard:no-backend — mock store and failing protocol client.
+    #[tokio::test]
+    async fn websub_transport_failure_reaches_retry_boundary_and_reports_once() {
+        let mut events = storage::MockFeedEventStorage::new();
+        events
+            .expect_mark_failed()
+            .times(1)
+            .returning(|_, error, _| {
+                assert_eq!(error, "WebSub transport failed");
+                Ok(())
+            });
+        let worker = worker_with_websub(events, Arc::new(FailingWebSubClient));
+        let hub = "https://hub.example/".parse().expect("hub URL");
+        let identity = SiteIdentity {
+            title: common::test_support::parse_site_title("Jaunder"),
+            base_url: Some(common::test_support::parse_url("https://example.com/")),
+        };
+        let (guard, output) = trace_capture();
+        worker
+            .ping_websub(
+                &"/feed.rss".parse().expect("feed path"),
+                &[FeedEventId::from(1)],
+                1,
+                Some(&hub),
+                Some(&identity),
+            )
+            .await;
+        drop(guard);
+        let trace = trace_text(&output);
+        assert_eq!(
+            trace
+                .matches(r#""error.context":"server.feed.websub_ping""#)
+                .count(),
+            1,
+            "trace: {trace}"
+        );
+        assert!(
+            trace.contains("worker WebSub transport failure"),
+            "typed source chain was lost: {trace}"
+        );
+    }
+
+    // guard:no-backend — mock status store.
+    #[tokio::test]
+    async fn completed_ping_keeps_success_primary_and_reports_status_failure_once() {
+        let mut events = storage::MockFeedEventStorage::new();
+        events
+            .expect_mark_pinged()
+            .times(1)
+            .returning(|_| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
+        let worker = worker_with_websub(events, Arc::new(NoopWebSubClient));
+        let (guard, output) = trace_capture();
+        worker
+            .ping_websub(
+                &"/feed.rss".parse().expect("feed path"),
+                &[FeedEventId::from(1)],
+                1,
+                None,
+                None,
+            )
+            .await;
+        drop(guard);
+        let trace = trace_text(&output);
+        assert_eq!(
+            trace
+                .matches(r#""error.context":"server.feed.status_write.mark_pinged""#)
+                .count(),
+            1,
+            "trace: {trace}"
+        );
     }
 
     // guard:no-backend — mock store
@@ -570,7 +1108,7 @@ mod tests {
 
     // guard:no-backend — mock store
     #[tokio::test]
-    async fn tick_marks_exhausted_when_regen_fails_past_backoff_table() {
+    async fn continuation_reporting_tick_regeneration_exhaustion_survives_status_write_failure() {
         // A FeedPath is always parseable, so regen can only fail on a storage
         // error: make the first read inside regenerate_feed fail. The record's
         // high attempt count pushes the next attempt past the backoff table, so
@@ -578,22 +1116,20 @@ mod tests {
         let mut site_config = storage::MockSiteConfigStorage::new();
         site_config
             .expect_get_feeds_config()
-            .times(0..)
+            .times(1)
             .returning(|| Err(sqlx::Error::PoolClosed));
         site_config
             .expect_get_feeds_websub_hub_url()
-            .times(0..)
+            .times(1)
             .returning(|| Ok(None));
-        site_config.expect_get_identity().times(0..).returning(|| {
-            Ok(SiteIdentity {
-                title: common::test_support::parse_site_title("Jaunder"),
-                base_url: Some(common::test_support::parse_url("https://example.com/")),
-            })
-        });
+        site_config
+            .expect_get_identity()
+            .times(1)
+            .returning(|| Ok(test_identity()));
         let mut posts = storage::MockPostStorage::new();
         posts
             .expect_feed_urls_needing_catchup()
-            .times(0..)
+            .times(1)
             .returning(|_| Ok(vec![]));
         let mut events = storage::MockFeedEventStorage::new();
         events
@@ -603,14 +1139,24 @@ mod tests {
         events
             .expect_mark_exhausted()
             .times(1)
-            .returning(|_, _| Ok(()));
+            .returning(|_, _| Err(FeedEventError::Db(sqlx::Error::PoolClosed)));
         let w = worker(
             site_config,
             posts,
             storage::MockFeedCacheStorage::new(),
             events,
         );
+        let (guard, output) = trace_capture();
         w.tick().await;
+        drop(guard);
+        let trace = trace_text(&output);
+        assert_context_once(&trace, "server.feed.regenerate");
+        assert_context_once(&trace, "server.feed.status_write.288");
+        assert_eq!(
+            trace.matches(r#""error.disposition":"swallowed""#).count(),
+            2,
+            "trace: {trace}"
+        );
     }
 
     // guard:no-backend — mock store

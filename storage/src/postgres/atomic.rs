@@ -10,6 +10,19 @@ use common::token::RawToken;
 use common::username::Username;
 use host::invite::InviteCode;
 
+pub(crate) fn finish_password_reset_rejection(
+    primary: Result<(), ConfirmPasswordResetError>,
+    rollback: Result<(), sqlx::Error>,
+) -> Result<(), ConfirmPasswordResetError> {
+    crate::helpers::preserve_after_secondary(
+        primary,
+        rollback,
+        host::error::ErrorKind::Storage,
+        host::error::ErrorClass::Transient,
+        "storage.postgres.password_reset.rollback",
+    )
+}
+
 pub struct PostgresAtomicOps {
     pool: PgPool,
 }
@@ -54,12 +67,12 @@ impl PostgresAtomicOps {
             .fetch_optional(&mut *tx)
             .await?;
 
-            tx.rollback().await.ok();
-            return match row {
+            let primary = match row {
                 None => Err(ConfirmPasswordResetError::NotFound),
                 Some((Some(_), _)) => Err(ConfirmPasswordResetError::AlreadyUsed),
                 Some((None, _)) => Err(ConfirmPasswordResetError::Expired),
             };
+            return finish_password_reset_rejection(primary, tx.rollback().await);
         };
 
         // ADR-0022: hash only after the token claim succeeds, so a bogus/used/expired
@@ -165,5 +178,29 @@ impl AtomicOps for PostgresAtomicOps {
             crate::helpers::hash_password_operation(new_password),
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn continuation_reporting_password_reset_rollback_failure_preserves_token_rejection_and_reports_once()
+     {
+        let (result, trace) = crate::helpers::swallowed_test::capture(|| {
+            finish_password_reset_rejection(
+                Err(ConfirmPasswordResetError::AlreadyUsed),
+                Err(sqlx::Error::PoolClosed),
+            )
+        });
+        assert!(matches!(
+            result,
+            Err(ConfirmPasswordResetError::AlreadyUsed)
+        ));
+        crate::helpers::swallowed_test::assert_one_report(
+            &trace,
+            "storage.postgres.password_reset.rollback",
+        );
     }
 }

@@ -14,6 +14,45 @@ use crate::backup::{
 };
 use crate::sql::{quote_identifier, quote_literal};
 
+fn finish_export_rollback(
+    primary: Result<BackupManifest, BackupError>,
+    rollback: Result<(), sqlx::Error>,
+) -> Result<BackupManifest, BackupError> {
+    crate::helpers::preserve_after_secondary(
+        primary,
+        rollback,
+        host::error::ErrorKind::Storage,
+        host::error::ErrorClass::Transient,
+        "storage.sqlite.backup.export.rollback",
+    )
+}
+
+fn finish_restore_rollback(
+    primary: Result<(), BackupError>,
+    rollback: Result<(), sqlx::Error>,
+) -> Result<(), BackupError> {
+    crate::helpers::preserve_after_secondary(
+        primary,
+        rollback,
+        host::error::ErrorKind::Storage,
+        host::error::ErrorClass::Transient,
+        "storage.sqlite.backup.restore.rollback",
+    )
+}
+
+fn finish_foreign_key_restore(
+    primary: Result<(), BackupError>,
+    foreign_keys: Result<(), sqlx::Error>,
+) -> Result<(), BackupError> {
+    crate::helpers::preserve_after_secondary(
+        primary,
+        foreign_keys,
+        host::error::ErrorKind::Storage,
+        host::error::ErrorClass::Transient,
+        "storage.sqlite.backup.restore.foreign_keys_restore",
+    )
+}
+
 pub(crate) async fn export_database(
     pool: &SqlitePool,
     destination_path: &Path,
@@ -56,10 +95,13 @@ pub(crate) async fn export_database(
         // dialect writes). It is exercised directly by pointing the dialect
         // `export_database` at a destination lacking `db/` (see tests). Parity
         // with postgres/backup.rs.
-        Err(error) => {
-            let _ = sqlx::query("ROLLBACK").execute(&mut *connection).await;
-            Err(error)
-        }
+        Err(error) => finish_export_rollback(
+            Err(error),
+            sqlx::query("ROLLBACK")
+                .execute(&mut *connection)
+                .await
+                .map(|_| ()),
+        ),
     }
 }
 
@@ -112,11 +154,20 @@ pub(crate) async fn restore_database(
             Ok(())
         }
         Err(error) => {
-            let _ = sqlx::query("ROLLBACK").execute(&mut *connection).await;
-            let _ = sqlx::query("PRAGMA foreign_keys = ON")
-                .execute(&mut *connection)
-                .await;
-            Err(error)
+            let primary = finish_restore_rollback(
+                Err(error),
+                sqlx::query("ROLLBACK")
+                    .execute(&mut *connection)
+                    .await
+                    .map(|_| ()),
+            );
+            finish_foreign_key_restore(
+                primary,
+                sqlx::query("PRAGMA foreign_keys = ON")
+                    .execute(&mut *connection)
+                    .await
+                    .map(|_| ()),
+            )
         }
     }
 }
@@ -324,6 +375,57 @@ mod tests {
     use crate::test_support::{Backend, CloseablePool, sqlite_only};
     use rstest::*;
     use rstest_reuse::*;
+
+    fn primary_io_error() -> BackupError {
+        BackupError::Io(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "primary backup failure",
+        ))
+    }
+
+    fn assert_primary_io_error(result: Result<(), BackupError>) {
+        assert!(matches!(
+            result,
+            Err(BackupError::Io(error))
+                if error.kind() == std::io::ErrorKind::PermissionDenied
+                    && error.to_string() == "primary backup failure"
+        ));
+    }
+
+    #[test]
+    fn continuation_reporting_secondary_failures_preserve_backup_primary_sources_and_report_once() {
+        let (export, trace) = crate::helpers::swallowed_test::capture(|| {
+            finish_export_rollback(Err(primary_io_error()), Err(sqlx::Error::PoolClosed))
+        });
+        assert!(matches!(
+            export,
+            Err(BackupError::Io(error))
+                if error.kind() == std::io::ErrorKind::PermissionDenied
+                    && error.to_string() == "primary backup failure"
+        ));
+        crate::helpers::swallowed_test::assert_one_report(
+            &trace,
+            "storage.sqlite.backup.export.rollback",
+        );
+
+        let (restore, trace) = crate::helpers::swallowed_test::capture(|| {
+            finish_restore_rollback(Err(primary_io_error()), Err(sqlx::Error::PoolClosed))
+        });
+        assert_primary_io_error(restore);
+        crate::helpers::swallowed_test::assert_one_report(
+            &trace,
+            "storage.sqlite.backup.restore.rollback",
+        );
+
+        let (restore, trace) = crate::helpers::swallowed_test::capture(|| {
+            finish_foreign_key_restore(Err(primary_io_error()), Err(sqlx::Error::PoolClosed))
+        });
+        assert_primary_io_error(restore);
+        crate::helpers::swallowed_test::assert_one_report(
+            &trace,
+            "storage.sqlite.backup.restore.foreign_keys_restore",
+        );
+    }
 
     // reason: drives the SQLite dialect's `export_database` directly with a
     // destination that lacks the `db/` subdir the public API always creates, so

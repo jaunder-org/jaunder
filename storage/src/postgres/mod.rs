@@ -28,7 +28,7 @@ pub use user_config::PostgresUserConfigStorage;
 mod media;
 pub use media::PostgresMediaStorage;
 
-mod posts;
+pub(crate) mod posts;
 pub use posts::PostgresPostStorage;
 
 mod subscriptions;
@@ -40,7 +40,7 @@ pub use audiences::PostgresAudienceStorage;
 mod bootstrap;
 pub use bootstrap::{PgBootstrapError, create_postgres_database_and_role};
 
-mod atomic;
+pub(crate) mod atomic;
 pub use atomic::PostgresAtomicOps;
 
 mod open;

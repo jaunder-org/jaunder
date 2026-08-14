@@ -28,7 +28,7 @@ pub use user_config::SqliteUserConfigStorage;
 mod media;
 pub use media::SqliteMediaStorage;
 
-mod posts;
+pub(crate) mod posts;
 pub use posts::SqlitePostStorage;
 
 mod subscriptions;
@@ -37,7 +37,7 @@ pub use subscriptions::SqliteSubscriptionStorage;
 mod audiences;
 pub use audiences::SqliteAudienceStorage;
 
-mod atomic;
+pub(crate) mod atomic;
 pub use atomic::SqliteAtomicOps;
 
 mod open;

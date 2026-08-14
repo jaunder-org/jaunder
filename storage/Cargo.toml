@@ -49,6 +49,7 @@ tempfile.workspace = true
 rstest.workspace = true
 rstest_reuse.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
+tracing-subscriber.workspace = true
 # `storage`'s own `cfg(test)` build needs the `#[automock]`-generated `Mock*Storage`
 # fakes (the mocks are re-gated to `any(test, feature = "test-utils")`), so `mockall`
 # must be present as a dev-dep, not only as the optional `test-utils` dep above.

@@ -781,13 +781,17 @@ Playwright, and the repository `cargo xtask` gate.
 
 **Files:**
 
+- Modify: `Cargo.lock`
 - Modify: `host/src/capture.rs`
 - Modify: `server/src/backup.rs`
 - Modify: `server/src/feed/worker.rs`
+- Modify: `server/src/observability.rs`
 - Modify: `server/src/runtime_file.rs`
 - Modify: `server/src/websub/contract.rs`
 - Modify: `server/src/websub/file_capture.rs`
 - Modify: `server/src/websub/http.rs`
+- Modify: `storage/Cargo.toml`
+- Modify: `storage/src/atomic.rs`
 - Modify: `storage/src/backup.rs`
 - Modify: `storage/src/feed_events.rs`
 - Modify: `storage/src/helpers.rs`
@@ -796,13 +800,16 @@ Playwright, and the repository `cargo xtask` gate.
 - Modify: `storage/src/postgres/backup.rs`
 - Modify: `storage/src/postgres/feed_events.rs`
 - Modify: `storage/src/postgres/posts.rs`
+- Modify: `storage/src/postgres/mod.rs`
 - Modify: `storage/src/posts.rs`
 - Modify: `storage/src/sqlite/atomic.rs`
 - Modify: `storage/src/sqlite/backup.rs`
 - Modify: `storage/src/sqlite/feed_events.rs`
 - Modify: `storage/src/sqlite/posts.rs`
+- Modify: `storage/src/sqlite/mod.rs`
 - Modify: `storage/src/users.rs`
 - Modify: `web/src/audiences/api.rs`
+- Modify: `web/src/audiences/server.rs`
 - Test: in-file unit tests in every modified storage/web module
 - Test: `server/tests/feed/feed_worker.rs`
 - Test: `server/tests/feed/feed_events_hook.rs`
@@ -832,7 +839,7 @@ Playwright, and the repository `cargo xtask` gate.
   post-tag, and post-update rollbacks; SQLite corrupt purge; dummy password
   verification; and both subscriber-label lexical rows as one report.
 
-- [ ] **Step 1: Add propagated WebSub source tests**
+- [x] **Step 1: Add propagated WebSub source tests**
 
   Inject file write/flush and HTTP transport failure separately through the
   existing clients. Assert `WebSubError::source` downcasts to the concrete I/O
@@ -840,7 +847,7 @@ Playwright, and the repository `cargo xtask` gate.
   error rather than a successful ping. These are the red/green proofs for the
   two propagated Task 6 amendments.
 
-- [ ] **Step 2: Add filesystem and decode continuation seams**
+- [x] **Step 2: Add filesystem and decode continuation seams**
 
   Use small private operation parameters at the owning functions—no global fault
   injector and no `cfg(test)` production branch—to inject:
@@ -860,7 +867,7 @@ Playwright, and the repository `cargo xtask` gate.
   - dummy password verification failure; assert `InvalidCredentials` remains
     primary and capture one report.
 
-- [ ] **Step 3: Add transaction-secondary failure seams**
+- [x] **Step 3: Add transaction-secondary failure seams**
 
   Extract narrow private transaction-finish helpers that accept the already
   determined primary result and the rollback/foreign-key-reset result.
@@ -877,7 +884,7 @@ Playwright, and the repository `cargo xtask` gate.
   separately. Backup tests inject body and secondary failures together and
   compare the returned primary error before/after by variant and source.
 
-- [ ] **Step 4: Add backend-parametric quarantine and web degradation tests**
+- [x] **Step 4: Add backend-parametric quarantine and web degradation tests**
 
   Use `#[apply(backends)]` plus `Backend::setup()` for corrupt claimed-feed
   decode/purge, password-reset rollback result preservation, and post update/tag
@@ -890,7 +897,7 @@ Playwright, and the repository `cargo xtask` gate.
   subscriber reference label is returned; the `.ok()` and `Err(_)` lexical rows
   together produce one `web.audiences.subscriber_label_lookup` report.
 
-- [ ] **Step 5: Retain the pre-existing host/server continuation proofs**
+- [x] **Step 5: Retain the pre-existing host/server continuation proofs**
 
   Keep dedicated tests for capture creation; scheduled feed status,
   ack/rollback, ping, and regeneration continuations; backup measurement and
@@ -898,12 +905,12 @@ Playwright, and the repository `cargo xtask` gate.
   and one report at its existing static context. Expected NotFound and domain
   parse mismatches remain unreported.
 
-- [ ] **Step 6: Run and observe current omissions**
+- [x] **Step 6: Run and observe current omissions**
 
   ```bash
   devtool run -- cargo nextest run -p host capture
   devtool run -- cargo nextest run -p storage continuation_reporting
-  devtool run -- cargo nextest run -p web continuation_reporting
+  devtool run -- cargo nextest run -p web --features server continuation_reporting
   devtool run -- cargo nextest run -p jaunder websub
   devtool run -- cargo nextest run -p jaunder feed
   devtool run -- cargo nextest run -p jaunder backup
@@ -914,7 +921,7 @@ Playwright, and the repository `cargo xtask` gate.
   continuation report assertions fail; primary-result assertions document the
   behavior that implementation must preserve.
 
-- [ ] **Step 7: Implement typed propagation and one report per continuation**
+- [x] **Step 7: Implement typed propagation and one report per continuation**
 
   Move WebSub sources into source-carrying variants. At continuations preserve
   the typed source whenever PII-safe; otherwise use `SwallowedSource::Redacted`.
@@ -922,12 +929,12 @@ Playwright, and the repository `cargo xtask` gate.
   `tracing::warn!` calls so one operation cannot double-report. Do not report
   propagated WebSub errors, expected NotFound, or parse mismatches.
 
-- [ ] **Step 8: Verify all 27 amendments and primary-result invariants**
+- [x] **Step 8: Verify all 27 amendments and primary-result invariants**
 
   ```bash
   devtool run -- cargo nextest run -p host capture
   devtool run -- cargo nextest run -p storage continuation_reporting
-  devtool run -- cargo nextest run -p web continuation_reporting
+  devtool run -- cargo nextest run -p web --features server continuation_reporting
   devtool run -- cargo nextest run -p jaunder websub
   devtool run -- cargo nextest run -p jaunder feed
   devtool run -- cargo nextest run -p jaunder backup
@@ -939,10 +946,10 @@ Playwright, and the repository `cargo xtask` gate.
   reports once; backend-parametric cases pass for SQLite and PostgreSQL; every
   asserted primary result is unchanged.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
   ```bash
-  git add host/src/capture.rs server/src/backup.rs server/src/feed/worker.rs server/src/runtime_file.rs server/src/websub/contract.rs server/src/websub/file_capture.rs server/src/websub/http.rs server/tests/feed/feed_worker.rs server/tests/feed/feed_events_hook.rs storage/src/backup.rs storage/src/feed_events.rs storage/src/helpers.rs storage/src/media_manager.rs storage/src/postgres/atomic.rs storage/src/postgres/backup.rs storage/src/postgres/feed_events.rs storage/src/postgres/posts.rs storage/src/posts.rs storage/src/sqlite/atomic.rs storage/src/sqlite/backup.rs storage/src/sqlite/feed_events.rs storage/src/sqlite/posts.rs storage/src/users.rs web/src/audiences/api.rs
+  git add Cargo.lock docs/superpowers/plans/2026-08-13-issue-58-error-swallowing-audit.md host/src/capture.rs server/src/backup.rs server/src/feed/worker.rs server/src/observability.rs server/src/runtime_file.rs server/src/websub/contract.rs server/src/websub/file_capture.rs server/src/websub/http.rs storage/Cargo.toml storage/src/atomic.rs storage/src/backup.rs storage/src/feed_events.rs storage/src/helpers.rs storage/src/media_manager.rs storage/src/postgres/atomic.rs storage/src/postgres/backup.rs storage/src/postgres/feed_events.rs storage/src/postgres/mod.rs storage/src/postgres/posts.rs storage/src/posts.rs storage/src/sqlite/atomic.rs storage/src/sqlite/backup.rs storage/src/sqlite/feed_events.rs storage/src/sqlite/mod.rs storage/src/sqlite/posts.rs storage/src/users.rs web/src/audiences/api.rs web/src/audiences/server.rs
   git commit -m "fix(runtime): preserve and report native failures"
   ```
 

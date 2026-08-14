@@ -280,12 +280,20 @@ impl<DB: Database> UserStore<DB> {
             // Equalize timing with the present-user path to avoid a username
             // enumeration oracle (§2.1): perform a dummy Argon2 verification
             // before rejecting. The result is intentionally discarded.
-            let _ = crate::helpers::verify_password_with(
+            if let Err(error) = crate::helpers::verify_password_with(
                 password.clone(),
                 crate::helpers::dummy_password_hash().clone(),
                 verify_operation,
             )
-            .await;
+            .await
+            {
+                host::error::report_swallowed(
+                    host::error::ErrorKind::Internal,
+                    host::error::ErrorClass::Bug,
+                    "storage.user.authenticate.dummy_verify",
+                    host::error::SwallowedSource::Error(&error),
+                );
+            }
             return Err(UserAuthError::InvalidCredentials);
         };
 
@@ -876,6 +884,44 @@ mod tests {
         };
 
         assert_eq!(actual, expected);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn continuation_reporting_absent_user_dummy_verify_failure_preserves_invalid_credentials_and_reports_once(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let username = parse_username("absent");
+        let password = parse_password("password123");
+        let operation = async {
+            match env.base.pool() {
+                CloseablePool::Sqlite(pool) => {
+                    UserStore::new(pool.clone())
+                        .authenticate_with(
+                            &username,
+                            &password,
+                            crate::helpers::forced_verify_failure,
+                        )
+                        .await
+                }
+                CloseablePool::Postgres(pool) => {
+                    UserStore::new(pool.clone())
+                        .authenticate_with(
+                            &username,
+                            &password,
+                            crate::helpers::forced_verify_failure,
+                        )
+                        .await
+                }
+            }
+        };
+        let (result, trace) = crate::helpers::swallowed_test::capture_async(operation).await;
+        assert!(matches!(result, Err(UserAuthError::InvalidCredentials)));
+        crate::helpers::swallowed_test::assert_one_report(
+            &trace,
+            "storage.user.authenticate.dummy_verify",
+        );
     }
 
     // Each variant maps to a fixed `(kind, public_message)` pair.

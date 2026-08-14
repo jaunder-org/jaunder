@@ -26,6 +26,30 @@ use common::token::TokenHash;
 use common::username::Username;
 use host::invite::InviteCode;
 
+/// Preserves an already-selected primary result while reporting a failed
+/// secondary operation exactly once. Owning modules wrap this with private,
+/// context-specific finish helpers so fault injection cannot affect production.
+pub(crate) fn preserve_after_secondary<T, E>(
+    primary: T,
+    secondary: Result<(), E>,
+    kind: host::error::ErrorKind,
+    class: host::error::ErrorClass,
+    context: &'static str,
+) -> T
+where
+    E: std::error::Error + 'static,
+{
+    if let Err(error) = secondary {
+        host::error::report_swallowed(
+            kind,
+            class,
+            context,
+            host::error::SwallowedSource::Error(&error),
+        );
+    }
+    primary
+}
+
 // ---------------------------------------------------------------------------
 // UserRecord helpers
 // ---------------------------------------------------------------------------
@@ -447,18 +471,44 @@ const DUMMY_PASSWORD_HASH_FALLBACK: &str = "$argon2id$v=19$m=19456,t=2,p=1$MlXSq
 /// Argon2 parameters as real password hashes (`Password::hash`), so the dummy
 /// verification costs the same as a genuine one.
 pub(crate) fn dummy_password_hash() -> &'static StoredPasswordHash {
-    use common::password::Password;
-    use std::str::FromStr;
     use std::sync::OnceLock;
 
     static HASH: OnceLock<StoredPasswordHash> = OnceLock::new();
-    HASH.get_or_init(|| {
-        Password::from_str(DUMMY_PASSWORD)
-            .ok()
-            .and_then(|p| p.hash().ok())
-            .and_then(|h| StoredPasswordHash::from_str(&h).ok())
-            .unwrap_or_else(fallback_dummy_password_hash)
+    dummy_password_hash_with(&HASH, common::password::Password::hash)
+}
+
+fn dummy_password_hash_with(
+    hash: &std::sync::OnceLock<StoredPasswordHash>,
+    operation: HashPasswordOperation,
+) -> &StoredPasswordHash {
+    use common::password::Password;
+    use std::str::FromStr;
+
+    hash.get_or_init(|| {
+        let Ok(password) = Password::from_str(DUMMY_PASSWORD) else {
+            unreachable!("the checked-in dummy password is valid")
+        };
+        let generated = match operation(&password) {
+            Ok(generated) => generated,
+            Err(error) => {
+                report_dummy_password_hash_failure(&error);
+                return fallback_dummy_password_hash();
+            }
+        };
+        match StoredPasswordHash::from_str(&generated) {
+            Ok(hash) => hash,
+            Err(_) => unreachable!("Password::hash returns a valid stored password hash"),
+        }
     })
+}
+
+fn report_dummy_password_hash_failure(error: &(dyn std::error::Error + 'static)) {
+    host::error::report_swallowed(
+        host::error::ErrorKind::Internal,
+        host::error::ErrorClass::Bug,
+        "storage.auth.dummy_password_hash",
+        host::error::SwallowedSource::Error(error),
+    );
 }
 
 /// [`DUMMY_PASSWORD_HASH_FALLBACK`] as a [`StoredPasswordHash`].
@@ -509,6 +559,78 @@ pub(crate) fn forced_verify_failure(
     _: &str,
 ) -> Result<bool, common::password::PasswordError> {
     password.verify(NON_PASSWORD_ARGON2_FAILURE_HASH)
+}
+
+#[cfg(test)]
+pub(crate) mod swallowed_test {
+    use std::future::Future;
+
+    #[derive(Clone)]
+    struct SharedWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for SharedWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("capture lock")
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for SharedWriter {
+        type Writer = Self;
+
+        fn make_writer(&'writer self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    pub(crate) fn capture<T>(operation: impl FnOnce() -> T) -> (T, String) {
+        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_ansi(false)
+            .with_writer(SharedWriter(output.clone()))
+            .finish();
+        let value = tracing::subscriber::with_default(subscriber, operation);
+        std::io::Write::flush(&mut SharedWriter(output.clone())).expect("flush trace");
+        let text =
+            String::from_utf8(output.lock().expect("capture lock").clone()).expect("utf8 trace");
+        (value, text)
+    }
+
+    pub(crate) async fn capture_async<T>(operation: impl Future<Output = T>) -> (T, String) {
+        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_ansi(false)
+            .with_writer(SharedWriter(output.clone()))
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+        let value = operation.await;
+        drop(guard);
+        std::io::Write::flush(&mut SharedWriter(output.clone())).expect("flush trace");
+        let text =
+            String::from_utf8(output.lock().expect("capture lock").clone()).expect("utf8 trace");
+        (value, text)
+    }
+
+    pub(crate) fn assert_one_report(text: &str, context: &str) {
+        assert_eq!(
+            text.matches(r#""error.disposition":"swallowed""#).count(),
+            1,
+            "trace: {text}"
+        );
+        assert!(
+            text.contains(&format!(r#""error.context":"{context}""#)),
+            "trace: {text}"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -703,6 +825,16 @@ mod tests {
             panic!("expected typed verification failures"); // cov:ignore
         };
         assert_eq!(actual, expected);
+    }
+    #[test]
+    fn continuation_reporting_dummy_password_hash_failure_installs_fallback_and_reports_once() {
+        let hash = std::sync::OnceLock::new();
+        let (actual, trace) =
+            swallowed_test::capture(|| dummy_password_hash_with(&hash, forced_hash_failure));
+        let expected = fallback_dummy_password_hash();
+        assert_eq!(actual.as_ref(), expected.as_ref());
+        swallowed_test::assert_one_report(&trace, "storage.auth.dummy_password_hash");
+        assert!(!trace.contains(DUMMY_PASSWORD), "trace leaked dummy secret");
     }
 
     // `build_user_record` and `build_session_record` have nothing to parse: their

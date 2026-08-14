@@ -20,6 +20,12 @@ pub enum Stream {
     Diag,
 }
 
+type CreateDirOperation = fn(&std::path::Path) -> std::io::Result<()>;
+
+fn create_capture_dir(path: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(path)
+}
+
 impl Stream {
     /// The conventional filename this stream writes within the capture dir.
     #[must_use]
@@ -44,30 +50,43 @@ impl Stream {
     }
 }
 
-/// The capture directory named by `JAUNDER_CAPTURE_DIR`, trimmed. `None` when the var is
-/// unset or blank — i.e. capture is off (the production default). Internal helper for
-/// [`file`]; not part of the public surface until a caller needs the bare directory.
-fn dir() -> Option<PathBuf> {
-    let raw = std::env::var(DIR_ENV).ok()?;
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(trimmed))
-    }
-}
-
-/// Resolve a stream's capture file within the capture dir, creating the directory so a
-/// writer can open the file. `None` when capture is off (`JAUNDER_CAPTURE_DIR` unset or
-/// blank).
+/// Returns the conventional capture path, creating the configured directory.
 ///
-/// The `create_dir_all` error is intentionally discarded: a writer opening the returned
-/// path surfaces any real failure itself, matching the pre-contract behavior where each
-/// stream simply tried to open its `_FILE` path.
+/// A missing or blank `JAUNDER_CAPTURE_DIR` disables capture. Directory
+/// creation failure is intentionally non-fatal and reported once; the
+/// conventional path is still returned so the stream writer surfaces its error.
 #[must_use]
 pub fn file(stream: Stream) -> Option<PathBuf> {
-    let dir = dir()?;
-    let _ = std::fs::create_dir_all(&dir);
+    file_with(stream, create_capture_dir)
+}
+
+fn file_with(stream: Stream, create_dir: CreateDirOperation) -> Option<PathBuf> {
+    let raw = match std::env::var(DIR_ENV) {
+        Ok(raw) => raw,
+        Err(std::env::VarError::NotPresent) => return None,
+        Err(std::env::VarError::NotUnicode(_)) => {
+            crate::error::report_swallowed(
+                crate::error::ErrorKind::Internal,
+                crate::error::ErrorClass::Bug,
+                "host.capture.directory_config",
+                crate::error::SwallowedSource::Redacted,
+            );
+            return None;
+        }
+    };
+    let configured = raw.trim();
+    if configured.is_empty() {
+        return None;
+    }
+    let dir = PathBuf::from(configured);
+    if let Err(error) = create_dir(&dir) {
+        crate::error::report_swallowed(
+            crate::error::ErrorKind::Internal,
+            crate::error::ErrorClass::Transient,
+            "host.capture.create_directory",
+            crate::error::SwallowedSource::Error(&error),
+        );
+    }
     Some(dir.join(stream.filename()))
 }
 
@@ -75,6 +94,94 @@ pub fn file(stream: Stream) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use common::test_support::with_env;
+
+    #[derive(Clone)]
+    struct SharedWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for SharedWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("capture lock")
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for SharedWriter {
+        type Writer = Self;
+
+        fn make_writer(&'writer self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    fn capture<T>(operation: impl FnOnce() -> T) -> (T, String) {
+        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_ansi(false)
+            .with_writer(SharedWriter(output.clone()))
+            .finish();
+        let value = tracing::subscriber::with_default(subscriber, operation);
+        std::io::Write::flush(&mut SharedWriter(output.clone())).expect("flush trace");
+        let text =
+            String::from_utf8(output.lock().expect("capture lock").clone()).expect("utf8 trace");
+        (value, text)
+    }
+
+    fn denied_create(_: &std::path::Path) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "capture directory denied",
+        ))
+    }
+
+    #[test]
+    fn directory_creation_failure_preserves_path_and_reports_once() {
+        with_env(|env| {
+            env.set(DIR_ENV, "/private/capture");
+            let (result, trace) = capture(|| file_with(Stream::WebSub, denied_create));
+            assert_eq!(result, Some(PathBuf::from("/private/capture/websub.jsonl")));
+            assert_eq!(
+                trace.matches(r#""error.disposition":"swallowed""#).count(),
+                1,
+                "trace: {trace}"
+            );
+            assert!(
+                trace.contains(r#""error.context":"host.capture.create_directory""#),
+                "trace: {trace}"
+            );
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn invalid_unicode_capture_directory_disables_capture_and_reports_redacted_once() {
+        use std::os::unix::ffi::OsStringExt;
+
+        with_env(|env| {
+            env.set(
+                DIR_ENV,
+                std::ffi::OsString::from_vec(b"capture-secret-\xff".to_vec()),
+            );
+            let (result, trace) = capture(|| file(Stream::WebSub));
+            assert_eq!(result, None);
+            assert_eq!(
+                trace
+                    .matches(r#""error.context":"host.capture.directory_config""#)
+                    .count(),
+                1,
+                "trace: {trace}"
+            );
+            assert!(trace.contains(r#""error.source":"redacted""#));
+            assert!(!trace.contains("capture-secret"));
+        });
+    }
 
     #[test]
     fn stream_filenames_are_the_convention() {

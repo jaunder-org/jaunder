@@ -69,19 +69,88 @@ async fn run_scheduled_backup(
 }
 
 /// Total on-disk size of a backup artifact: the file length for an archive, or
-/// the recursive sum of all files for a directory backup. Returns 0 for a path
-/// that cannot be read.
+/// the recursive sum of readable files for a directory backup. Measurement is
+/// secondary to the successful backup, so unreadable entries contribute zero
+/// and are reported once for the whole aggregate.
 fn backup_size_bytes(path: &Path) -> u64 {
-    match fs::metadata(path) {
-        Ok(metadata) if metadata.is_file() => metadata.len(),
-        Ok(_) => fs::read_dir(path)
-            .into_iter()
-            .flatten()
-            .filter_map(Result::ok)
-            .map(|entry| backup_size_bytes(&entry.path()))
-            .sum(),
-        Err(_) => 0,
+    let (size, error) = backup_size_result(path);
+    finish_backup_size(size, error)
+}
+
+type MetadataOperation = fn(&Path) -> std::io::Result<std::fs::Metadata>;
+type ReadDirOperation = fn(&Path) -> std::io::Result<std::fs::ReadDir>;
+
+fn read_metadata(path: &Path) -> std::io::Result<std::fs::Metadata> {
+    fs::metadata(path)
+}
+
+fn read_directory(path: &Path) -> std::io::Result<std::fs::ReadDir> {
+    fs::read_dir(path)
+}
+
+fn backup_size_result(path: &Path) -> (u64, Option<std::io::Error>) {
+    backup_size_result_with(path, read_metadata, read_directory)
+}
+
+fn backup_size_result_with(
+    path: &Path,
+    metadata: MetadataOperation,
+    read_dir: ReadDirOperation,
+) -> (u64, Option<std::io::Error>) {
+    match metadata(path) {
+        Ok(metadata_value) if metadata_value.is_file() => (metadata_value.len(), None),
+        Ok(_) => {
+            let entries = match read_dir(path) {
+                Ok(entries) => entries,
+                Err(error) => return (0, Some(error)),
+            };
+            backup_size_from_entries(
+                entries.map(|entry| entry.map(|entry| entry.path())),
+                |child| backup_size_result_with(child, metadata, read_dir),
+            )
+        }
+        Err(error) => (0, Some(error)),
     }
+}
+
+fn backup_size_from_entries<I>(
+    entries: I,
+    mut measure: impl FnMut(&Path) -> (u64, Option<std::io::Error>),
+) -> (u64, Option<std::io::Error>)
+where
+    I: IntoIterator<Item = std::io::Result<PathBuf>>,
+{
+    let mut size = 0_u64;
+    let mut first_error = None;
+    for entry in entries {
+        match entry {
+            Ok(path) => {
+                let (entry_size, error) = measure(&path);
+                size = size.saturating_add(entry_size);
+                if first_error.is_none() {
+                    first_error = error;
+                }
+            }
+            Err(error) => {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+    }
+    (size, first_error)
+}
+
+fn finish_backup_size(size: u64, error: Option<std::io::Error>) -> u64 {
+    if let Some(error) = error {
+        host::error::report_swallowed(
+            host::error::ErrorKind::Internal,
+            host::error::ErrorClass::Transient,
+            "server.backup.measure_size",
+            host::error::SwallowedSource::Error(&error),
+        );
+    }
+    size
 }
 
 /// Runs one scheduled backup and logs any failure, swallowing the error so a
@@ -101,7 +170,12 @@ async fn run_scheduled_backup_logged(
     host::metrics::backup_duration_ms(elapsed_ms);
     host::metrics::backup_run(backup_result_metric(result.is_ok()));
     if let Err(error) = result {
-        tracing::error!(error = %error, "scheduled backup failed");
+        host::error::report_swallowed(
+            host::error::ErrorKind::Storage,
+            host::error::ErrorClass::Transient,
+            "server.backup.scheduled_run",
+            host::error::SwallowedSource::Error(error.as_ref()),
+        );
     }
 }
 
@@ -164,6 +238,57 @@ mod tests {
     use common::test_support::{parse_destination_path, parse_retention_count};
     use storage::SiteConfigKey;
     use tempfile::TempDir;
+    #[derive(Clone)]
+    struct SharedWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for SharedWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("trace lock").extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for SharedWriter {
+        type Writer = Self;
+
+        fn make_writer(&'writer self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    fn trace_capture() -> (
+        tracing::subscriber::DefaultGuard,
+        std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    ) {
+        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_ansi(false)
+            .with_writer(SharedWriter(output.clone()))
+            .finish();
+        (tracing::subscriber::set_default(subscriber), output)
+    }
+
+    fn trace_text(output: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>) -> String {
+        std::io::Write::flush(&mut SharedWriter(output.clone())).expect("flush trace");
+        String::from_utf8(output.lock().expect("trace lock").clone()).expect("utf8 trace")
+    }
+
+    fn assert_one_report(trace: &str, context: &str) {
+        assert_eq!(
+            trace.matches(r#""error.disposition":"swallowed""#).count(),
+            1,
+            "trace: {trace}"
+        );
+        assert!(
+            trace.contains(&format!(r#""error.context":"{context}""#)),
+            "trace: {trace}"
+        );
+    }
 
     #[test]
     fn timestamped_backup_name_has_expected_format() {
@@ -323,8 +448,11 @@ mod tests {
             destination_path: Some(parse_destination_path(&bad_root.to_string_lossy())),
             ..ok_config
         };
+        let (guard, output) = trace_capture();
         run_scheduled_backup_logged(&db, &media, &bad_root, &bad_config).await;
+        drop(guard);
         assert!(!bad_root.exists(), "failed scheduled backup writes nothing");
+        assert_one_report(&trace_text(&output), "server.backup.scheduled_run");
     }
 
     #[test]
@@ -344,6 +472,76 @@ mod tests {
         assert!(temp.path().join("backup-2").exists());
         assert!(temp.path().join("backup-3").exists());
         assert!(ignored.exists());
+    }
+    fn denied_metadata(_: &Path) -> std::io::Result<std::fs::Metadata> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "metadata denied",
+        ))
+    }
+
+    fn denied_read_dir(_: &Path) -> std::io::Result<std::fs::ReadDir> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "read_dir denied",
+        ))
+    }
+
+    #[test]
+    fn continuation_reporting_backup_size_metadata_and_read_dir_failures_report_once() {
+        let temp = TempDir::new().expect("temp dir");
+        for ((size, error), message) in [
+            (
+                backup_size_result_with(temp.path(), denied_metadata, read_directory),
+                "metadata denied",
+            ),
+            (
+                backup_size_result_with(temp.path(), read_metadata, denied_read_dir),
+                "read_dir denied",
+            ),
+        ] {
+            assert_eq!(size, 0);
+            let (guard, output) = trace_capture();
+            assert_eq!(finish_backup_size(size, error), 0);
+            drop(guard);
+            let trace = trace_text(&output);
+            assert_one_report(&trace, "server.backup.measure_size");
+            assert!(trace.contains(message), "trace: {trace}");
+        }
+    }
+
+    #[test]
+    fn continuation_reporting_backup_size_iterator_and_child_failures_preserve_partial_size_and_first_error()
+     {
+        let entries = [
+            Ok(PathBuf::from("readable")),
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "entry iteration denied",
+            )),
+            Ok(PathBuf::from("child-failure")),
+        ];
+        let (size, error) = backup_size_from_entries(entries, |path| {
+            if path == Path::new("readable") {
+                (5, None)
+            } else {
+                (
+                    7,
+                    Some(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "recursive child denied",
+                    )),
+                )
+            }
+        });
+        assert_eq!(size, 12);
+        let (guard, output) = trace_capture();
+        assert_eq!(finish_backup_size(size, error), 12);
+        drop(guard);
+        let trace = trace_text(&output);
+        assert_one_report(&trace, "server.backup.measure_size");
+        assert!(trace.contains("entry iteration denied"), "trace: {trace}");
+        assert!(!trace.contains("recursive child denied"), "trace: {trace}");
     }
 
     #[test]
@@ -367,11 +565,13 @@ mod tests {
     }
 
     #[test]
-    fn backup_size_bytes_sums_files_and_handles_missing_path() {
+    fn backup_size_bytes_preserves_partial_size_and_reports_once() {
         let temp = TempDir::new().expect("temp dir");
 
-        // A missing path reports zero.
+        let (guard, output) = trace_capture();
         assert_eq!(backup_size_bytes(&temp.path().join("missing")), 0);
+        drop(guard);
+        assert_one_report(&trace_text(&output), "server.backup.measure_size");
 
         // A plain file reports its byte length.
         let file = temp.path().join("archive.tar.gz");

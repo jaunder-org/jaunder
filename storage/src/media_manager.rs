@@ -209,6 +209,16 @@ impl MediaManager {
         Ok(())
     }
 
+    fn finish_temp_cleanup<T>(primary: T, cleanup: io::Result<()>, context: &'static str) -> T {
+        crate::helpers::preserve_after_secondary(
+            primary,
+            cleanup,
+            host::error::ErrorKind::Internal,
+            host::error::ErrorClass::Transient,
+            context,
+        )
+    }
+
     /// Content-addresses the temp file at `target_path`, deduplicating against
     /// already-stored identical content. Returns `true` when the bytes were
     /// deduplicated (the target already existed, or an identical file was
@@ -220,8 +230,11 @@ impl MediaManager {
         hash_dir: &Path,
     ) -> anyhow::Result<bool> {
         if target_path.exists() {
-            let _ = fs::remove_file(tmp_path).await;
-            return Ok(true);
+            return Self::finish_temp_cleanup(
+                Ok(true),
+                fs::remove_file(tmp_path).await,
+                "storage.media.dedup_temp_cleanup",
+            );
         }
 
         // A new hash has no directory yet. Create it before enumeration so
@@ -248,8 +261,11 @@ impl MediaManager {
     ) -> anyhow::Result<bool> {
         if let Some(existing) = existing_file {
             fs::hard_link(&existing, target_path).await?;
-            let _ = fs::remove_file(tmp_path).await;
-            Ok(true)
+            Self::finish_temp_cleanup(
+                Ok(true),
+                fs::remove_file(tmp_path).await,
+                "storage.media.dedup_temp_cleanup",
+            )
         } else {
             fs::rename(tmp_path, target_path).await?;
             Ok(false)
@@ -299,8 +315,11 @@ impl MediaManager {
             .check_quota(user_id, metadata.size_bytes, user_quota)
             .await
         {
-            let _ = fs::remove_file(tmp_path).await;
-            return Err(e);
+            return Self::finish_temp_cleanup(
+                Err(e),
+                fs::remove_file(tmp_path).await,
+                "storage.media.quota_temp_cleanup",
+            );
         }
         let relative_path = media_path(
             &MediaSource::Upload,
@@ -574,6 +593,47 @@ mod tests {
             .downcast_ref::<MediaError>()
             .expect("internal create error maps to MediaError");
         assert!(matches!(media_err, MediaError::Internal(_)));
+    }
+
+    #[test]
+    fn continuation_reporting_cleanup_failures_preserve_quota_and_dedup_results_and_report_once() {
+        let cleanup_error = || {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "temp cleanup denied",
+            ))
+        };
+        let quota = anyhow::anyhow!(MediaError::InsufficientStorage);
+        let (result, trace) = crate::helpers::swallowed_test::capture(|| {
+            MediaManager::finish_temp_cleanup(
+                Err::<UploadResponse, _>(quota),
+                cleanup_error(),
+                "storage.media.quota_temp_cleanup",
+            )
+        });
+        assert!(matches!(
+            result
+                .expect_err("quota error must remain primary")
+                .downcast_ref::<MediaError>(),
+            Some(MediaError::InsufficientStorage)
+        ));
+        crate::helpers::swallowed_test::assert_one_report(
+            &trace,
+            "storage.media.quota_temp_cleanup",
+        );
+
+        let (result, trace) = crate::helpers::swallowed_test::capture(|| {
+            MediaManager::finish_temp_cleanup(
+                Ok::<bool, anyhow::Error>(true),
+                cleanup_error(),
+                "storage.media.dedup_temp_cleanup",
+            )
+        });
+        assert!(result.expect("deduplication remains successful"));
+        crate::helpers::swallowed_test::assert_one_report(
+            &trace,
+            "storage.media.dedup_temp_cleanup",
+        );
     }
 
     // guard:no-backend — mock store; the DB is unused by the dir scan

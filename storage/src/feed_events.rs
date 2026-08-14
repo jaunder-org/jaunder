@@ -80,9 +80,9 @@ where
     }
 }
 
-/// Splits a claim batch into the records the worker can act on and the ids to purge.
-///
-/// Shared because both dialects' claim statements differ only in SQL (#728).
+/// Splits a claim batch into the records the worker can act on and the ids to
+/// purge. One-or-more corrupt rows produce one redacted report for the whole
+/// batch; the stored value is never retained or rendered.
 pub(crate) fn partition_claimed(rows: Vec<ClaimedRow>) -> (Vec<FeedEventRecord>, Vec<FeedEventId>) {
     let mut records = Vec::with_capacity(rows.len());
     let mut corrupt = Vec::new();
@@ -92,7 +92,31 @@ pub(crate) fn partition_claimed(rows: Vec<ClaimedRow>) -> (Vec<FeedEventRecord>,
             ClaimedRow::Corrupt(id) => corrupt.push(id),
         }
     }
+    if !corrupt.is_empty() {
+        host::error::report_swallowed(
+            host::error::ErrorKind::Storage,
+            host::error::ErrorClass::Bug,
+            "storage.feed_events.decode_feed_path",
+            host::error::SwallowedSource::Redacted,
+        );
+    }
     (records, corrupt)
+}
+
+/// Returns the already-partitioned valid batch while reporting a failed purge
+/// once at the dialect's useful aggregation boundary.
+pub(crate) fn finish_corrupt_purge(
+    records: Vec<FeedEventRecord>,
+    purge: Result<(), sqlx::Error>,
+    context: &'static str,
+) -> Vec<FeedEventRecord> {
+    crate::helpers::preserve_after_secondary(
+        records,
+        purge,
+        host::error::ErrorKind::Storage,
+        host::error::ErrorClass::Transient,
+        context,
+    )
 }
 
 #[cfg_attr(feature = "test-utils", mockall::automock)]
@@ -440,12 +464,22 @@ mod tests {
 
         // The claim skips-and-purges the corrupt row and returns only the valid
         // one — the batch is NOT failed (which would wedge the worker forever).
-        let claimed = env
-            .state
-            .feed_events
-            .claim_pending_batch(50, chrono::Duration::minutes(5))
-            .await
-            .unwrap();
+        // The batch-level report is redacted rather than retaining the bad value.
+        let (claimed, trace) = crate::helpers::swallowed_test::capture_async(
+            env.state
+                .feed_events
+                .claim_pending_batch(50, chrono::Duration::minutes(5)),
+        )
+        .await;
+        let claimed = claimed.unwrap();
+        crate::helpers::swallowed_test::assert_one_report(
+            &trace,
+            "storage.feed_events.decode_feed_path",
+        );
+        assert!(
+            !trace.contains("not a feed path"),
+            "trace leaked stored value"
+        );
         assert_eq!(claimed.len(), 1);
         assert_eq!(claimed[0].feed_path, "/feed.rss");
 
@@ -513,6 +547,91 @@ mod tests {
         assert_eq!(
             remaining, 1,
             "a decode failure outside feed_url must never delete the row"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn continuation_reporting_failed_corrupt_purge_preserves_later_valid_row_and_reports_both_failures_once(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        env.base
+            .pool()
+            .execute("INSERT INTO feed_events (feed_url) VALUES ('not a feed path')")
+            .await
+            .unwrap();
+        env.state
+            .feed_events
+            .enqueue(&fp("/feed.rss"))
+            .await
+            .unwrap();
+        env.base
+            .pool()
+            .execute(
+                "CREATE TABLE feed_event_delete_guard (\
+                    feed_event_id BIGINT PRIMARY KEY \
+                    REFERENCES feed_events(id) ON DELETE RESTRICT\
+                )",
+            )
+            .await
+            .unwrap();
+        env.base
+            .pool()
+            .execute(
+                "INSERT INTO feed_event_delete_guard (feed_event_id) \
+                 SELECT id FROM feed_events WHERE feed_url = 'not a feed path'",
+            )
+            .await
+            .unwrap();
+
+        let (claimed, trace) = crate::helpers::swallowed_test::capture_async(
+            env.state
+                .feed_events
+                .claim_pending_batch(50, chrono::Duration::minutes(5)),
+        )
+        .await;
+        let claimed = claimed.unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].feed_path, "/feed.rss");
+
+        let purge_context = match backend {
+            Backend::Sqlite => "storage.sqlite.feed_events.purge_corrupt",
+            Backend::Postgres => "storage.postgres.feed_events.purge_corrupt",
+        };
+        assert_eq!(
+            trace
+                .matches(r#""error.context":"storage.feed_events.decode_feed_path""#)
+                .count(),
+            1,
+            "trace: {trace}"
+        );
+        assert_eq!(
+            trace
+                .matches(format!(r#""error.context":"{purge_context}""#).as_str())
+                .count(),
+            1,
+            "trace: {trace}"
+        );
+        assert_eq!(
+            trace.matches(r#""error.disposition":"swallowed""#).count(),
+            2,
+            "trace: {trace}"
+        );
+        assert!(
+            !trace.contains("not a feed path"),
+            "trace leaked stored value"
+        );
+
+        let corrupt_remaining = env
+            .base
+            .pool()
+            .scalar_i64("SELECT COUNT(*) FROM feed_events WHERE feed_url = 'not a feed path'")
+            .await
+            .unwrap();
+        assert_eq!(
+            corrupt_remaining, 1,
+            "failed purge must leave the corrupt row in place"
         );
     }
 
