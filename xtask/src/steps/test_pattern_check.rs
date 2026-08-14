@@ -28,6 +28,8 @@
 
 use std::path::Path;
 
+use anyhow::{Context, Result};
+
 use crate::files;
 use crate::result::{CommandResult, StepResult};
 
@@ -296,6 +298,20 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
     (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
+fn read_sources_with(
+    paths: &[std::path::PathBuf],
+    mut read: impl FnMut(&Path) -> std::io::Result<String>,
+) -> Result<Vec<(String, String)>> {
+    paths
+        .iter()
+        .map(|path| {
+            read(path)
+                .with_context(|| format!("reading {}", path.display()))
+                .map(|source| (path.display().to_string(), source))
+        })
+        .collect::<Result<_>>()
+}
+
 /// Scan every Rust file under each of [`TEST_ROOTS`] and push the result step. A
 /// missing test root is a hard failure (not a silent pass), so a moved/renamed
 /// tree can never quietly disable the guard.
@@ -313,14 +329,16 @@ pub fn run(result: &mut CommandResult) {
             }
         }
     }
-    let scanned: Vec<(String, String)> = files
-        .iter()
-        .filter_map(|p| {
-            std::fs::read_to_string(p)
-                .ok()
-                .map(|s| (p.display().to_string(), s))
-        })
-        .collect();
+    let scanned = match read_sources_with(&files, |path| std::fs::read_to_string(path)) {
+        Ok(scanned) => scanned,
+        Err(error) => {
+            result.push(
+                StepResult::fail("test-backend-pattern")
+                    .detail(format!("cannot read source population: {error:#}")),
+            );
+            return;
+        }
+    };
     let step = match problems(&scanned) {
         None => StepResult::ok("test-backend-pattern"),
         Some(detail) => StepResult::fail("test-backend-pattern").detail(detail),
@@ -646,5 +664,24 @@ async fn no_reason(#[case] backend: Backend) { let _e = backend.setup(); }
 async fn has_reason(#[case] backend: Backend) {}
 ";
         assert_eq!(reason_violations(src), vec![1]);
+    }
+
+    #[test]
+    fn fail_closed_population_unreadable_source() {
+        let path = std::path::PathBuf::from("server/tests/unreadable.rs");
+        let error = read_sources_with(&[path], |_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "injected",
+            ))
+        })
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("server/tests/unreadable.rs"));
+        assert_eq!(
+            error
+                .downcast_ref::<std::io::Error>()
+                .map(std::io::Error::kind),
+            Some(std::io::ErrorKind::PermissionDenied)
+        );
     }
 }

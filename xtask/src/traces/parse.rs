@@ -6,7 +6,7 @@
 //! (`parse_json_attr`, `to_url_path`) land alongside their first callers in the
 //! hotspot sections.
 
-use std::path::Path;
+use std::{fmt, path::Path};
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -149,15 +149,55 @@ pub fn parse_duration_ms(span: &Value) -> f64 {
     delta as f64 / 1_000_000.0
 }
 
-/// Parse a JSON-string attribute (the `e2e.*_json` blobs) into a `Value`.
-/// `Value::Null` when the attribute is absent or the JSON is malformed — a
-/// silent fallback; callers treat `Null` as empty.
-pub fn parse_json_attr(span: &Value, key: &str) -> Value {
-    let raw = get_attr(span, key);
-    if raw.is_empty() {
-        return Value::Null;
+/// A present `e2e.*_json` attribute whose string is not valid JSON.
+///
+/// This dedicated type is the dispatch boundary: only this correctness failure
+/// becomes a failed trace `StepResult`; file, report, JSONL, and Nix failures keep
+/// the trace command's established top-level error contract.
+#[derive(Debug)]
+pub struct MalformedJsonAttr {
+    key: String,
+    span_source: String,
+    source: serde_json::Error,
+}
+impl fmt::Display for MalformedJsonAttr {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "parsing JSON trace attribute {} from {}",
+            self.key, self.span_source
+        )
     }
-    serde_json::from_str(&raw).unwrap_or(Value::Null)
+}
+impl std::error::Error for MalformedJsonAttr {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
+/// Parse a JSON-string attribute (the `e2e.*_json` blobs). Absence is optional;
+/// malformed present JSON is a correctness error retaining the serde source.
+pub fn parse_json_attr(span: &Value, key: &str, span_source: &str) -> Result<Option<Value>> {
+    let present = span
+        .get("attributes")
+        .and_then(Value::as_array)
+        .is_some_and(|attrs| {
+            attrs
+                .iter()
+                .any(|attr| attr.get("key").and_then(Value::as_str) == Some(key))
+        });
+    if !present {
+        return Ok(None);
+    }
+    let raw = get_attr(span, key);
+    serde_json::from_str(&raw).map(Some).map_err(|source| {
+        MalformedJsonAttr {
+            key: key.to_owned(),
+            span_source: span_source.to_owned(),
+            source,
+        }
+        .into()
+    })
 }
 
 /// Normalize a URL to `host[:port]/path`:
@@ -348,15 +388,24 @@ mod tests {
     }
 
     #[test]
-    fn parse_json_attr_null_on_missing_or_bad() {
+    fn trace_json_attr_distinguishes_absent_malformed_and_valid() {
         let with =
             |s: &str| json!({ "attributes": [{ "key": "e2e.x", "value": { "stringValue": s } }] });
-        // Absent attribute → Null.
-        assert!(parse_json_attr(&json!({}), "e2e.x").is_null());
-        // Present but malformed JSON → Null (silent fallback).
-        assert!(parse_json_attr(&with("{not json"), "e2e.x").is_null());
-        // Valid JSON parses.
-        assert_eq!(parse_json_attr(&with("[1,2]"), "e2e.x"), json!([1, 2]));
+        assert_eq!(
+            parse_json_attr(&json!({}), "e2e.x", "source").unwrap(),
+            None
+        );
+
+        let error = parse_json_attr(&with("{not json"), "e2e.x", "source.jsonl").unwrap_err();
+        assert!(format!("{error:#}").contains("e2e.x"));
+        let malformed = error.downcast_ref::<MalformedJsonAttr>().unwrap();
+        assert_eq!(malformed.span_source, "source.jsonl");
+        assert!(malformed.source.is_syntax());
+
+        assert_eq!(
+            parse_json_attr(&with("[1,2]"), "e2e.x", "source").unwrap(),
+            Some(json!([1, 2]))
+        );
     }
 
     #[test]

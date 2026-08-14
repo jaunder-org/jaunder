@@ -17,6 +17,7 @@
 
 use std::fmt;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -79,18 +80,36 @@ pub fn probe_verdict(base: &str, junk: &str, rs: &str) -> Result<(), DriftError>
 /// The whole point of an RAII guard here is the panic path: a bare cleanup call at
 /// the end of `run_probe` would leak the worktree if any `?` bailed or a panic
 /// unwound through it.
-struct WorktreeGuard {
+type WorktreeRemover<'a> =
+    Box<dyn Fn(&Path, &Path) -> std::io::Result<std::process::ExitStatus> + 'a>;
+
+struct WorktreeGuard<'a> {
     repo_root: PathBuf,
     path: PathBuf,
+    remove: WorktreeRemover<'a>,
+    stderr: Box<dyn Write + 'a>,
 }
 
-impl Drop for WorktreeGuard {
+impl Drop for WorktreeGuard<'_> {
     fn drop(&mut self) {
-        let _ = git::at(&self.repo_root)
-            .args(["-c", "core.hooksPath="])
-            .args(["worktree", "remove", "--force"])
-            .arg(&self.path)
-            .status();
+        let status = (self.remove)(&self.repo_root, &self.path);
+        report_worktree_cleanup(status, &mut self.stderr);
+    }
+}
+
+fn report_worktree_cleanup(
+    status: std::io::Result<std::process::ExitStatus>,
+    stderr: &mut impl Write,
+) {
+    let failed = match status {
+        Ok(status) => !status.success(),
+        Err(_) => true,
+    };
+    if failed {
+        let _ = writeln!(
+            stderr,
+            "xtask: warning: xtask.coverage.probe_worktree_cleanup: ignored failure while removing probe worktree"
+        );
     }
 }
 
@@ -143,6 +162,16 @@ fn run_probe() -> Result<()> {
     let _guard = WorktreeGuard {
         repo_root: repo_root.clone(),
         path: tmp.clone(),
+        remove: Box::new(|repo_root, path| {
+            git::at(repo_root)
+                .args(["-c", "core.hooksPath="])
+                .args(["worktree", "remove", "--force"])
+                .arg(path)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+        }),
+        stderr: Box::new(std::io::stderr()),
     };
 
     // Dirty an EXCLUDED tracked file so *every* eval runs against a dirty tree:
@@ -247,5 +276,35 @@ mod tests {
         assert!(j.to_string().contains("admits") && j.to_string().contains("junk"));
         let s = DriftError::DropsSource { base: "b".into() };
         assert!(s.to_string().contains("drops") && s.to_string().contains("source"));
+    }
+
+    #[test]
+    fn ancillary_warning_probe_worktree_cleanup_preserves_verdict() {
+        let verdict = probe_verdict("d-base", "d-base", "d-rs");
+        let mut stderr = Vec::new();
+        {
+            let guard = WorktreeGuard {
+                repo_root: PathBuf::from("/repo"),
+                path: PathBuf::from("/repo/worktree"),
+                remove: Box::new(|_, _| {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "sensitive injected path",
+                    ))
+                }),
+                stderr: Box::new(&mut stderr),
+            };
+            drop(guard);
+        }
+        assert_eq!(verdict, Ok(()));
+        let warning = String::from_utf8(stderr).unwrap();
+        assert_eq!(
+            warning
+                .matches("xtask.coverage.probe_worktree_cleanup")
+                .count(),
+            1
+        );
+        assert_eq!(warning.lines().count(), 1);
+        assert!(!warning.contains("sensitive"));
     }
 }

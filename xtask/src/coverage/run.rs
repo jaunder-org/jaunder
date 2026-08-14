@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+use std::io::Write as IoWrite;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -14,8 +16,11 @@ use crate::result::StepResult;
 pub fn run(out_dir: &str) -> (StepResult, Option<CoverageReport>) {
     match run_inner(out_dir) {
         Ok(pair) => pair,
-        Err(e) => (StepResult::fail("coverage").detail(e.to_string()), None),
+        Err(error) => (coverage_failure_step(error), None),
     }
+}
+fn coverage_failure_step(error: anyhow::Error) -> StepResult {
+    StepResult::fail("coverage").detail(format!("{error:#}"))
 }
 
 fn run_inner(out_dir: &str) -> Result<(StepResult, Option<CoverageReport>)> {
@@ -45,31 +50,26 @@ fn run_inner(out_dir: &str) -> Result<(StepResult, Option<CoverageReport>)> {
     let repo_root = git::toplevel(Path::new("."))?;
     let current = report::parse_text_report(&report, &repo_root)?;
 
-    // The stateless coverage gate (#231): an executable line fails iff uncovered,
-    // not structurally exempt (an `unreachable!("msg")`), and not
-    // `cov:ignore`'d (the latter is already stripped by `parse_text_report`). A
-    // covered line inside an exempt span trips the A1 guard. `exempt_of` reads each
-    // repo-relative source file
-    // from `repo_root` and returns its exempt lines, or an EMPTY set on any
-    // read/parse error (fail-closed: unknown → measured).
-    let exempt_of = |path: &str| -> std::collections::BTreeSet<u32> {
-        let full = std::path::Path::new(&repo_root).join(path);
-        match std::fs::read_to_string(&full) {
-            Ok(src) => exempt::exempt_lines(&src).unwrap_or_default(),
-            Err(_) => std::collections::BTreeSet::new(),
-        }
-    };
-    let verdict = gate::evaluate(&current, exempt_of);
+    // Every report source must be readable before the verdict is evaluated.
+    // Per ADR-0050, syntax failures carry no exemption evidence and therefore
+    // leave the source fully measured via an empty exemption set.
+    let exemptions =
+        exemption_population(&current, &repo_root, |path| std::fs::read_to_string(path))?;
+    let verdict = gate::evaluate(&current, |path| {
+        exemptions.get(path).cloned().unwrap_or_default()
+    });
     write_failures_dump(&verdict);
 
     // The CRAP threshold gate (#231/#232): fail any function whose CRAP exceeds
     // the threshold, minus an in-source `crap:allow` override. Each over-threshold
     // function's source is read (relative to `repo_root`) to honor the override.
     let allow = crap::AllowSet::new(|file: &str| {
-        std::fs::read_to_string(std::path::Path::new(&repo_root).join(file)).ok()
+        let path = std::path::Path::new(&repo_root).join(file);
+        std::fs::read_to_string(&path)
+            .with_context(|| format!("reading CRAP allow-marker source {}", path.display()))
     });
     let entries = crap::parse_entries(&crap_report_str).context("parsing CRAP report")?;
-    let crap_fails = crap::evaluate_crap(&entries, &allow);
+    let crap_fails = crap::evaluate_crap(&entries, &allow)?;
 
     let gate_fails = !verdict.failures.is_empty()
         || !verdict.guard_violations.is_empty()
@@ -93,15 +93,27 @@ fn run_inner(out_dir: &str) -> Result<(StepResult, Option<CoverageReport>)> {
     Ok((step, Some(report)))
 }
 
-/// Dump the gate's full failures list (one `path:line` per line, sorted by path
-/// then line) to `.xtask/coverage-failures.txt` — a machine-checkable worklist of
-/// every uncovered-unexempt line. Best-effort: a write error must not perturb the
-/// run.
+/// Dump the gate's full failures list. Diagnostic persistence is best-effort,
+/// but failure is visible as one fixed warning and never changes the gate result.
 fn write_failures_dump(verdict: &gate::Verdict) {
+    write_failures_dump_with(
+        verdict,
+        |path| std::fs::create_dir_all(path),
+        |path, body| std::fs::write(path, body),
+        &mut std::io::stderr(),
+    );
+}
+
+fn write_failures_dump_with(
+    verdict: &gate::Verdict,
+    create_dir: impl FnOnce(&Path) -> std::io::Result<()>,
+    write_file: impl FnOnce(&Path, String) -> std::io::Result<()>,
+    stderr: &mut impl IoWrite,
+) {
     let mut lines: Vec<(&str, u32)> = verdict
         .failures
         .iter()
-        .map(|f| (f.file.as_str(), f.line))
+        .map(|failure| (failure.file.as_str(), failure.line))
         .collect();
     lines.sort();
     let mut body = String::new();
@@ -109,8 +121,14 @@ fn write_failures_dump(verdict: &gate::Verdict) {
         use std::fmt::Write as _;
         let _ = writeln!(body, "{file}:{line}");
     }
-    let _ = std::fs::create_dir_all(".xtask");
-    let _ = std::fs::write(".xtask/coverage-failures.txt", body);
+    let outcome = create_dir(Path::new(".xtask"))
+        .and_then(|()| write_file(Path::new(".xtask/coverage-failures.txt"), body));
+    if outcome.is_err() {
+        let _ = writeln!(
+            stderr,
+            "xtask: warning: xtask.coverage.failure_dump: ignored failure while writing coverage diagnostic dump"
+        );
+    }
 }
 
 /// Render a coverage-gate failure as a concise, actionable report: each uncovered
@@ -179,6 +197,25 @@ fn failure_report(verdict: &gate::Verdict, crap_fails: &[crap::CrapFail]) -> Str
     s
 }
 
+fn exemption_population(
+    current: &[crate::coverage::FileCoverage],
+    repo_root: &str,
+    mut read_source: impl FnMut(&Path) -> std::io::Result<String>,
+) -> Result<BTreeMap<String, std::collections::BTreeSet<u32>>> {
+    current
+        .iter()
+        .map(|file| {
+            let full = Path::new(repo_root).join(&file.path);
+            let source = read_source(&full)
+                .with_context(|| format!("reading coverage exemption source {}", full.display()))?;
+            // ADR-0050: malformed syntax proves no exemption; it does not remove
+            // the file from the measured population.
+            let lines = exempt::exempt_lines(&source).unwrap_or_default();
+            Ok((file.path.clone(), lines))
+        })
+        .collect::<Result<_>>()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,5 +275,68 @@ mod tests {
         let r = failure_report(&verdict, &[]);
         assert!(r.contains("30 uncovered line(s)"));
         assert!(r.contains("… and 5 more"), "{r}"); // 30 - cap 25
+    }
+
+    #[test]
+    fn fail_closed_population_unreadable_coverage_exemption_source() {
+        let current = vec![crate::coverage::FileCoverage {
+            path: "secret.rs".to_owned(),
+            lines: Vec::new(),
+        }];
+        let error = exemption_population(&current, "/repo", |_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "injected",
+            ))
+        })
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("/repo/secret.rs"));
+        assert_eq!(
+            error
+                .downcast_ref::<std::io::Error>()
+                .map(std::io::Error::kind),
+            Some(std::io::ErrorKind::PermissionDenied)
+        );
+        let step = coverage_failure_step(error);
+        assert!(!step.ok);
+        let detail = step.detail.unwrap();
+        assert!(detail.contains("/repo/secret.rs"), "{detail}");
+        assert!(detail.contains("injected"), "{detail}");
+    }
+
+    #[test]
+    fn ancillary_warning_diagnostic_dump_failures_preserve_verdict() {
+        let verdict = gate::Verdict {
+            failures: vec![fail("a.rs", 1, "x")],
+            guard_violations: Vec::new(),
+        };
+        for fail_create in [true, false] {
+            let mut stderr = Vec::new();
+            write_failures_dump_with(
+                &verdict,
+                |_| {
+                    if fail_create {
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            "injected create",
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                },
+                |_, _| {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::WriteZero,
+                        "injected write",
+                    ))
+                },
+                &mut stderr,
+            );
+            assert_eq!(verdict.failures.len(), 1);
+            let warning = String::from_utf8(stderr).unwrap();
+            assert_eq!(warning.matches("xtask.coverage.failure_dump").count(), 1);
+            assert_eq!(warning.lines().count(), 1);
+            assert!(!warning.contains("injected"));
+        }
     }
 }

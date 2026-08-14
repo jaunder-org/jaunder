@@ -3,7 +3,7 @@
 //! in-source `crap:allow` override within the function's span waives it. Stateless
 //! — there is no committed manifest or history comparison.
 
-use anyhow::Result;
+use anyhow::{Context, Result, anyhow};
 use proc_macro2::Span;
 use serde::{Deserialize, Serialize};
 use syn::spanned::Spanned;
@@ -47,27 +47,24 @@ pub struct CrapFail {
     pub crap: f64,
 }
 
-/// Resolves an entry's (repo-relative) source path to its text so
-/// [`evaluate_crap`] can look for an in-source `crap:allow` marker. Wrapping a
-/// closure keeps the reader injectable — production reads the file from disk,
-/// tests hand back a literal source string. A path it cannot resolve yields
-/// `None`, which [`evaluate_crap`] treats as *no override* (fail-closed).
-type SourceResolver<'a> = Box<dyn Fn(&str) -> Option<String> + 'a>;
+/// Resolves an entry's repo-relative source path. Read/parse failures are
+/// correctness failures: silently dropping an allow marker changes the gate's
+/// population and verdict.
+type SourceResolver<'a> = Box<dyn Fn(&str) -> Result<String> + 'a>;
 
 pub struct AllowSet<'a> {
     source_of: SourceResolver<'a>,
 }
 
 impl<'a> AllowSet<'a> {
-    /// Build an [`AllowSet`] from a source-resolver closure.
-    pub fn new(source_of: impl Fn(&str) -> Option<String> + 'a) -> Self {
+    pub fn new(source_of: impl Fn(&str) -> Result<String> + 'a) -> Self {
         Self {
             source_of: Box::new(source_of),
         }
     }
 
-    fn source(&self, file: &str) -> Option<String> {
-        (self.source_of)(file)
+    fn source(&self, file: &str) -> Result<String> {
+        (self.source_of)(file).with_context(|| format!("reading CRAP allow-marker source {file}"))
     }
 }
 
@@ -78,19 +75,15 @@ pub fn parse_entries(report: &str) -> Result<Vec<Entry>> {
 }
 
 /// Fail every function whose CRAP score exceeds [`CRAP_THRESHOLD`] unless an
-/// in-source `crap:allow` marker within the function's span overrides it. `allow`
-/// resolves each over-threshold entry's source file to its text; an unreadable
-/// file yields no override, so the function still fails (fail-closed).
-pub fn evaluate_crap(entries: &[Entry], allow: &AllowSet<'_>) -> Vec<CrapFail> {
+/// in-source `crap:allow` marker within the function's span overrides it.
+pub fn evaluate_crap(entries: &[Entry], allow: &AllowSet<'_>) -> Result<Vec<CrapFail>> {
     let mut fails = Vec::new();
     for e in entries {
         if e.crap <= CRAP_THRESHOLD {
             continue;
         }
-        let overridden = allow
-            .source(&e.file)
-            .is_some_and(|src| allow_overrides(&src, e.line, &e.file));
-        if overridden {
+        let source = allow.source(&e.file)?;
+        if allow_overrides(&source, e.line, &e.file)? {
             continue;
         }
         fails.push(CrapFail {
@@ -100,7 +93,7 @@ pub fn evaluate_crap(entries: &[Entry], allow: &AllowSet<'_>) -> Vec<CrapFail> {
             crap: e.crap,
         });
     }
-    fails
+    Ok(fails)
 }
 
 /// 1-based `(start_line, end_line)` — attributes/doc through the closing brace — for
@@ -162,30 +155,17 @@ fn resolve_span(spans: &[(usize, usize)], line: usize) -> Option<(usize, usize)>
 }
 
 /// Does `src` carry a valid `crap:allow` override for the function that contains
-/// cargo-crap's reported (1-based) `line`? The function is the innermost parsed span
-/// containing that line; the marker is searched only among lines that belong to *that*
-/// function (excluding the interior of any nested fn, so a nested marker cannot leak
-/// out). Fail-closed (no override) with a warning on a parse failure or a line no
-/// function span contains — neither happens for the project's own compiling sources.
-fn allow_overrides(src: &str, line: i64, file: &str) -> bool {
+/// cargo-crap's reported line? Unknown syntax/span membership is a hard
+/// correctness failure rather than a silently smaller allow population.
+fn allow_overrides(src: &str, line: i64, file: &str) -> Result<bool> {
     let line = line.max(1) as usize;
-    let spans = match fn_spans(src) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("xtask: coverage: crap:allow span skipped — {file} did not parse: {e}");
-            return false;
-        }
-    };
-    let Some((start, end)) = resolve_span(&spans, line) else {
-        eprintln!("xtask: coverage: crap:allow — no function span contains {file}:{line}");
-        return false;
-    };
+    let spans = fn_spans(src).with_context(|| format!("parsing CRAP marker source {file}"))?;
+    let (start, end) = resolve_span(&spans, line)
+        .ok_or_else(|| anyhow!("no function span contains {file}:{line}"))?;
     let lines: Vec<&str> = src.lines().collect();
-    // Scan only lines whose own innermost span is this function — excludes nested-fn
-    // interiors, so a nested fn's marker cannot waive its enclosing fn (and vice versa).
-    (start..=end.min(lines.len()))
+    Ok((start..=end.min(lines.len()))
         .filter(|&ln| resolve_span(&spans, ln) == Some((start, end)))
-        .any(|ln| is_allow_marker(lines[ln - 1]))
+        .any(|ln| is_allow_marker(lines[ln - 1])))
 }
 
 /// A line is a valid override marker iff it contains `// crap:allow:` followed by
@@ -210,9 +190,8 @@ mod tests {
         }
     }
 
-    /// An `AllowSet` that never resolves a source file → no overrides possible.
     fn no_source() -> AllowSet<'static> {
-        AllowSet::new(|_| None)
+        AllowSet::new(|_| Ok("fn measured() {\n\n\n\n\n\n\n\n\n\n}\n".to_owned()))
     }
 
     #[test]
@@ -226,7 +205,7 @@ mod tests {
 
     #[test]
     fn crap_over_threshold_fails() {
-        let fails = evaluate_crap(&[ent("a.rs", "big", 10, 31.0)], &no_source());
+        let fails = evaluate_crap(&[ent("a.rs", "big", 10, 31.0)], &no_source()).unwrap();
         assert_eq!(fails.len(), 1);
         assert_eq!(fails[0].function, "big");
         assert_eq!(fails[0].crap, 31.0);
@@ -240,7 +219,7 @@ mod tests {
             ent("a.rs", "under", 1, 29.999),
             ent("a.rs", "over", 1, 30.001),
         ];
-        let fails = evaluate_crap(&entries, &no_source());
+        let fails = evaluate_crap(&entries, &no_source()).unwrap();
         assert_eq!(fails.len(), 1, "only the strictly-over function fails");
         assert_eq!(fails[0].function, "over");
     }
@@ -253,12 +232,18 @@ async fn main() {
     body();
 }
 ";
-        let allow = AllowSet::new(move |f: &str| (f == "m.rs").then(|| src.to_string()));
+        let allow = AllowSet::new(move |file: &str| {
+            Ok(if file == "m.rs" {
+                src.to_string()
+            } else {
+                "fn other() {}".to_owned()
+            })
+        });
         let entries = [
             ent("m.rs", "main", 1, 156.0), // overridden in-source
             ent("o.rs", "other", 1, 99.0), // no source resolvable → still fails
         ];
-        let fails = evaluate_crap(&entries, &allow);
+        let fails = evaluate_crap(&entries, &allow).unwrap();
         assert_eq!(fails.len(), 1, "only the un-waived function fails");
         assert_eq!(fails[0].function, "other");
     }
@@ -272,8 +257,8 @@ async fn main() {
     body();
 }
 ";
-        let allow = AllowSet::new(move |_: &str| Some(src.to_string()));
-        let fails = evaluate_crap(&[ent("m.rs", "main", 1, 156.0)], &allow);
+        let allow = AllowSet::new(move |_: &str| Ok(src.to_string()));
+        let fails = evaluate_crap(&[ent("m.rs", "main", 1, 156.0)], &allow).unwrap();
         assert_eq!(fails.len(), 1, "an empty reason must not override");
     }
 
@@ -294,8 +279,8 @@ async fn main() -> Result<()> {
 }
 ";
         // Reported line 2 (the comment above the signature); marker on line 6.
-        let allow = AllowSet::new(move |_: &str| Some(src.to_string()));
-        let fails = evaluate_crap(&[ent("m.rs", "main", 2, 156.0)], &allow);
+        let allow = AllowSet::new(move |_: &str| Ok(src.to_string()));
+        let fails = evaluate_crap(&[ent("m.rs", "main", 2, 156.0)], &allow).unwrap();
         assert!(
             fails.is_empty(),
             "a marker within the function span overrides even when a few lines from the reported line"
@@ -306,8 +291,8 @@ async fn main() -> Result<()> {
     /// return whether it was WAIVED (absent from the fail list).
     fn waived(src: &'static str, line: i64) -> bool {
         let entries = vec![ent("a.rs", "f", line, 99.0)];
-        let allow = AllowSet::new(move |_| Some(src.to_string()));
-        evaluate_crap(&entries, &allow).is_empty()
+        let allow = AllowSet::new(move |_| Ok(src.to_string()));
+        evaluate_crap(&entries, &allow).unwrap().is_empty()
     }
 
     #[test]
@@ -384,13 +369,34 @@ fn run() {
     }
 
     #[test]
-    fn no_containing_span_is_fail_closed() {
-        // AC5(iii): a reported line outside every function span → no override (fails).
-        let src = "\
-const X: u32 = 1;
-fn f() { a(); }
-";
-        assert!(!waived(src, 1)); // line 1 is in no fn span → fail-closed
+    fn fail_closed_population_crap_missing_function_span_is_an_error() {
+        let source = "const X: u32 = 1;\nfn f() { a(); }\n";
+        let allow = AllowSet::new(move |_| Ok(source.to_owned()));
+        let error = evaluate_crap(&[ent("a.rs", "f", 1, 99.0)], &allow).unwrap_err();
+        assert!(format!("{error:#}").contains("a.rs:1"));
+    }
+
+    #[test]
+    fn fail_closed_population_crap_unreadable_and_unparseable_allow_sources() {
+        let unreadable = AllowSet::new(|_| {
+            Err(anyhow::Error::new(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "injected",
+            )))
+        });
+        let error = evaluate_crap(&[ent("secret.rs", "f", 1, 99.0)], &unreadable).unwrap_err();
+        assert!(format!("{error:#}").contains("secret.rs"));
+        assert_eq!(
+            error
+                .downcast_ref::<std::io::Error>()
+                .map(std::io::Error::kind),
+            Some(std::io::ErrorKind::PermissionDenied)
+        );
+
+        let malformed = AllowSet::new(|_| Ok("fn broken(".to_owned()));
+        let error = evaluate_crap(&[ent("broken.rs", "f", 1, 99.0)], &malformed).unwrap_err();
+        assert!(format!("{error:#}").contains("broken.rs"));
+        assert!(error.downcast_ref::<syn::Error>().is_some());
     }
 
     #[test]

@@ -653,10 +653,16 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("traces-analyze");
             let filters = traces::parse::Filters { trace, project };
-            // A read/parse failure (missing file, malformed JSONL line) propagates
-            // as Err → the exit-2 path in main.rs (spec §6), not a fail step.
             let reported = traces::report::ReportedDurations::from_paths(&playwright_report)?;
-            let analysis = traces::analyze::analyze(&files, filters, &reported)?;
+            let Some(analysis) = trace_attribute_owner_result(
+                &mut result,
+                "traces-analyze",
+                traces::analyze::analyze(&files, filters, &reported),
+            )?
+            else {
+                finalize(&mut result, start);
+                return Ok(result);
+            };
             let n = analysis.span_count;
             result.traces = Some(traces::render::render(&analysis, top as usize));
             result.push(StepResult::ok("traces-analyze").detail(format!("{n} span(s)")));
@@ -671,9 +677,8 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         }) => {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("traces-run");
-            // A nix-build failure or a missing trace file propagates as Err → the
-            // exit-2 path in main.rs (spec §5), not a fail step. `_tmp` guards the
-            // extracted traces (untarred from each capture bundle) until analysis ends.
+            // `_tmp` guards extracted traces until analysis ends. Collection and
+            // Nix failures retain the trace command's top-level error contract.
             let (_tmp, files, reports) = traces::run::collect_trace_files(single_worker, browser)?;
             let n = files.len();
             let filters = traces::parse::Filters {
@@ -684,7 +689,15 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             // share test+project+retry keys, so an unpaired merge would let one
             // backend's durations overwrite the other's.
             let reported = traces::report::ReportedDurations::from_labeled(&reports)?;
-            let analysis = traces::analyze::analyze(&files, filters, &reported)?;
+            let Some(analysis) = trace_attribute_owner_result(
+                &mut result,
+                "traces-run",
+                traces::analyze::analyze(&files, filters, &reported),
+            )?
+            else {
+                finalize(&mut result, start);
+                return Ok(result);
+            };
             result.traces = Some(traces::render::render(&analysis, top as usize));
             result.push(StepResult::ok("traces-run").detail(format!("{n} trace file(s)")));
             finalize(&mut result, start);
@@ -693,9 +706,15 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         Command::Traces(TracesCommand::BootPhases { files }) => {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("traces-boot-phases");
-            // A read/parse failure propagates as Err → the exit-2 path, not a
-            // fail step, matching `traces analyze`.
-            let rows = traces::boot_phases::boot_phases(&files)?;
+            let Some(rows) = trace_attribute_owner_result(
+                &mut result,
+                "traces-boot-phases",
+                traces::boot_phases::boot_phases(&files),
+            )?
+            else {
+                finalize(&mut result, start);
+                return Ok(result);
+            };
             let n = rows.len();
             result.traces = Some(traces::boot_phases::render(&rows));
             result.push(StepResult::ok("traces-boot-phases").detail(format!("{n} population(s)")));
@@ -784,6 +803,25 @@ pub fn ensure_hooks_installed() {
         Ok(true) => eprintln!("xtask: set core.hooksPath = {}", git::HOOKS_PATH),
         Ok(false) => {}
         Err(e) => eprintln!("xtask: warning: could not set core.hooksPath: {e:#}"),
+    }
+}
+
+fn trace_attribute_owner_result<T>(
+    result: &mut CommandResult,
+    step: &'static str,
+    value: anyhow::Result<T>,
+) -> anyhow::Result<Option<T>> {
+    match value {
+        Ok(value) => Ok(Some(value)),
+        Err(error)
+            if error
+                .downcast_ref::<traces::parse::MalformedJsonAttr>()
+                .is_some() =>
+        {
+            result.push(StepResult::fail(step).detail(format!("{error:#}")));
+            Ok(None)
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -1099,7 +1137,7 @@ mod cli_tests {
 
     #[test]
     fn run_errors_on_missing_trace_file() {
-        // A read failure propagates as Err → the exit-2 path (spec §6).
+        let path = "/no/such/trace.jsonl";
         let cli = Cli {
             json: false,
             command: Command::Traces(TracesCommand::Analyze {
@@ -1107,10 +1145,14 @@ mod cli_tests {
                 trace: None,
                 project: None,
                 playwright_report: Vec::new(),
-                files: vec![PathBuf::from("/no/such/trace.jsonl")],
+                files: vec![PathBuf::from(path)],
             }),
         };
-        assert!(run(cli).is_err(), "missing file must propagate as Err");
+        let error = match run(cli) {
+            Ok(_) => panic!("missing trace file must remain a top-level error"),
+            Err(error) => error,
+        };
+        assert!(format!("{error:#}").contains(path));
     }
 
     #[test]
@@ -1207,6 +1249,39 @@ mod cli_tests {
             err.contains("--json"),
             "error explains the --json rejection: {err}"
         );
+    }
+
+    #[test]
+    fn trace_json_attr_owner_returns_serializable_failed_command_result() {
+        let span = serde_json::json!({
+            "attributes": [{
+                "key": "e2e.x",
+                "value": { "stringValue": "{not json" }
+            }]
+        });
+        let error = traces::parse::parse_json_attr(&span, "e2e.x", "source.jsonl").unwrap_err();
+        let mut result = CommandResult::new("traces-analyze");
+        let value: Option<()> =
+            trace_attribute_owner_result(&mut result, "traces-analyze", Err(error)).unwrap();
+        assert!(value.is_none());
+        assert!(!result.ok);
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("source.jsonl"), "{json}");
+        assert!(json.contains("e2e.x"), "{json}");
+        assert!(json.contains("traces-analyze"), "{json}");
+    }
+
+    #[test]
+    fn trace_non_attribute_failures_remain_top_level_errors() {
+        let mut result = CommandResult::new("traces-run");
+        let error = trace_attribute_owner_result::<()>(
+            &mut result,
+            "traces-run",
+            Err(anyhow::anyhow!("nix build failed")),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("nix build failed"));
+        assert!(result.steps.is_empty());
     }
 }
 

@@ -77,12 +77,15 @@ pub fn coverage(result: &mut CommandResult) {
         // precisely (not as an opaque build failure) and skip host
         // post-processing (there is no coverage verdict to compute).
         let status_path = ".xtask/gcroots/coverage/status.json";
-        let detail = std::fs::read_to_string(status_path)
-            .ok()
-            .and_then(|s| coverage::status::CoverageStatus::from_json(&s).ok())
-            .map(|s| sentinel_detail(&s))
-            .unwrap_or_else(|| "coverage gate failed (no status.json)".to_string());
-        result.push(StepResult::fail("coverage").detail(detail));
+        result.push(failed_status_step(
+            "coverage",
+            "xtask.nix.coverage_status",
+            "coverage gate failed (no status.json)",
+            || std::fs::read_to_string(status_path),
+            coverage::status::CoverageStatus::from_json,
+            sentinel_detail,
+            &mut std::io::stderr(),
+        ));
         return;
     }
     result.push(gate);
@@ -108,15 +111,60 @@ pub fn doctests(result: &mut CommandResult) {
         // status.json, so report the violations rather than an opaque build
         // failure.
         let status_path = ".xtask/gcroots/doctests/status.json";
-        let detail = std::fs::read_to_string(status_path)
-            .ok()
-            .and_then(|s| doctests::status::DoctestStatus::from_json(&s).ok())
-            .map(|s| doctest_sentinel_detail(&s))
-            .unwrap_or_else(|| "doctest gate failed (no status.json)".to_string());
-        result.push(StepResult::fail("doctests").detail(detail));
+        result.push(failed_status_step(
+            "doctests",
+            "xtask.nix.doctest_status",
+            "doctest gate failed (no status.json)",
+            || std::fs::read_to_string(status_path),
+            doctests::status::DoctestStatus::from_json,
+            doctest_sentinel_detail,
+            &mut std::io::stderr(),
+        ));
         return;
     }
     result.push(gate);
+}
+
+fn failed_status_step<T>(
+    step: &str,
+    warning_key: &str,
+    fallback: &str,
+    read_status: impl FnOnce() -> io::Result<String>,
+    parse_status: impl FnOnce(&str) -> Result<T>,
+    render: impl FnOnce(&T) -> String,
+    stderr: &mut impl Write,
+) -> StepResult {
+    StepResult::fail(step).detail(failed_status_detail(
+        warning_key,
+        fallback,
+        read_status,
+        parse_status,
+        render,
+        stderr,
+    ))
+}
+fn failed_status_detail<T>(
+    warning_key: &str,
+    fallback: &str,
+    read_status: impl FnOnce() -> io::Result<String>,
+    parse_status: impl FnOnce(&str) -> Result<T>,
+    render: impl FnOnce(&T) -> String,
+    stderr: &mut impl Write,
+) -> String {
+    let parsed = match read_status() {
+        Ok(raw) => parse_status(&raw),
+        Err(error) => Err(error.into()),
+    };
+    match parsed {
+        Ok(status) => render(&status),
+        Err(_) => {
+            let _ = writeln!(
+                stderr,
+                "xtask: warning: {warning_key}: ignored failure while reading failed-gate status"
+            );
+            fallback.to_owned()
+        }
+    }
 }
 
 /// Render the in-sandbox doctest sentinel into a human detail. Pure + tested.
@@ -241,20 +289,23 @@ struct DiagnosticsCopy {
     failures: Vec<String>,
 }
 
-/// Copy e2e diagnostic files — the app journal (`jaunder-journal-*.log`), the full
-/// system journal (`system-journal-*.log`), the Playwright per-test JSON report
-/// (`playwright-report-*.json`), the Playwright trace/screenshot tarball
-/// (`playwright-artifacts-*.tar.gz`), and the capture-dir tarball (`capture-*.tar.gz`,
-/// #227 — diag.log plus any mail/websub and, since #332, the otel trace) — from
-/// `src_dir` into `dest_dir` (created if needed). The system journal and tarball are
-/// the #123/#49 failure-path additions; the capture tarball is the #227 consolidated
-/// capture artifact.
-/// Serves both the success path (from the out-link) and the failure path (from the
-/// kept outPath). Pure path logic so it is unit-testable; [`lift_e2e_diagnostics`] is
-/// the wrapper callers use, which surfaces the failures.
-fn copy_e2e_diagnostics_between(
-    src_dir: &std::path::Path,
-    dest_dir: &std::path::Path,
+/// Copy matching diagnostic artifacts and collect every best-effort failure.
+fn copy_e2e_diagnostics_between(src_dir: &Path, dest_dir: &Path) -> DiagnosticsCopy {
+    copy_e2e_diagnostics_with_ops(
+        src_dir,
+        dest_dir,
+        |path| std::fs::remove_file(path),
+        |from, to| std::fs::copy(from, to),
+        |path, permissions| std::fs::set_permissions(path, permissions),
+    )
+}
+
+fn copy_e2e_diagnostics_with_ops(
+    src_dir: &Path,
+    dest_dir: &Path,
+    mut remove: impl FnMut(&Path) -> io::Result<()>,
+    mut copy: impl FnMut(&Path, &Path) -> io::Result<u64>,
+    mut set_permissions: impl FnMut(&Path, std::fs::Permissions) -> io::Result<()>,
 ) -> DiagnosticsCopy {
     let wanted = |name: &str| {
         (name.starts_with("jaunder-journal-") && name.ends_with(".log"))
@@ -263,18 +314,37 @@ fn copy_e2e_diagnostics_between(
             || (name.starts_with("playwright-artifacts-") && name.ends_with(".tar.gz"))
             || (name.starts_with("capture-") && name.ends_with(".tar.gz"))
     };
-    let Ok(entries) = std::fs::read_dir(src_dir) else {
-        // No source dir at all is the ordinary "this check emits no diagnostics" case
-        // (a non-e2e check, or a build that produced no out-link), not a failure.
-        return DiagnosticsCopy {
-            copied: 0,
-            failures: Vec::new(),
-        };
+    let entries = match std::fs::read_dir(src_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return DiagnosticsCopy {
+                copied: 0,
+                failures: Vec::new(),
+            };
+        }
+        Err(error) => {
+            return DiagnosticsCopy {
+                copied: 0,
+                failures: vec![format!("reading {}: {error}", src_dir.display())],
+            };
+        }
     };
-    let _ = std::fs::create_dir_all(dest_dir);
     let mut copied = 0;
     let mut failures = Vec::new();
-    for entry in entries.flatten() {
+    if let Err(error) = std::fs::create_dir_all(dest_dir) {
+        failures.push(format!("creating {}: {error}", dest_dir.display()));
+    }
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                failures.push(format!(
+                    "reading entry under {}: {error}",
+                    src_dir.display()
+                ));
+                continue;
+            }
+        };
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
         if !wanted(name) {
@@ -282,25 +352,23 @@ fn copy_e2e_diagnostics_between(
         }
         let from = entry.path();
         let to = dest_dir.join(name);
-        // Every lifted artifact is a flat file (journals, the Playwright report, and the
-        // trace/capture tarballs); the otel trace rides `capture-*.tar.gz`.
-        //
-        // Remove first: these come from the nix store, so a previously-copied artifact
-        // is on disk read-only (0444) and `fs::copy` onto it fails EACCES. Swallowing
-        // that error keeps the FIRST run's files — and the flow-coverage gate (#681)
-        // reads `capture-*.tar.gz` from here, so it would verify today's build
-        // against yesterday's traces. Clear the read-only bit after copying too, so
-        // the next run can overwrite even if the remove fails.
-        let _ = std::fs::remove_file(&to);
-        match std::fs::copy(&from, &to) {
+        match remove(&to) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                failures.push(format!("removing {}: {error}", to.display()));
+                continue;
+            }
+        }
+        match copy(&from, &to) {
             Ok(_) => {
-                let _ = std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o644));
+                if let Err(error) = set_permissions(&to, std::fs::Permissions::from_mode(0o644)) {
+                    failures.push(format!("setting permissions on {}: {error}", to.display()));
+                }
                 copied += 1;
             }
-            // Recorded, not discarded: an undetected copy failure is what let the stale
-            // capture above survive, so any future variant of it has to say so.
-            Err(e) => failures.push(format!(
-                "could not copy {} to {}: {e}",
+            Err(error) => failures.push(format!(
+                "copying {} to {}: {error}",
                 from.display(),
                 to.display()
             )),
@@ -309,16 +377,42 @@ fn copy_e2e_diagnostics_between(
     DiagnosticsCopy { copied, failures }
 }
 
-/// [`copy_e2e_diagnostics_between`], with every failure warned about on stderr.
-///
-/// Still best-effort — diagnostics are a nicety and must never fail a gate or panic —
-/// but *visibly* so. Silence was the actual defect in the stale-capture bug: the copy
-/// failed on every re-run and nothing said a word, so the gate kept reading the first
-/// run's artifacts. Returns the number lifted, for a caller that wants it.
-fn lift_e2e_diagnostics(src_dir: &std::path::Path, dest_dir: &std::path::Path) -> usize {
-    let outcome = copy_e2e_diagnostics_between(src_dir, dest_dir);
-    for failure in &outcome.failures {
-        eprintln!("xtask: warning: {failure}");
+/// Best-effort diagnostics lift with one aggregate warning per attempt.
+fn lift_e2e_diagnostics(src_dir: &Path, dest_dir: &Path) -> usize {
+    lift_e2e_diagnostics_with(src_dir, dest_dir, &mut std::io::stderr())
+}
+
+fn lift_e2e_diagnostics_with(src_dir: &Path, dest_dir: &Path, stderr: &mut impl Write) -> usize {
+    lift_e2e_diagnostics_with_ops(
+        src_dir,
+        dest_dir,
+        |path| std::fs::remove_file(path),
+        |from, to| std::fs::copy(from, to),
+        |path, permissions| std::fs::set_permissions(path, permissions),
+        stderr,
+    )
+}
+
+fn lift_e2e_diagnostics_with_ops(
+    src_dir: &Path,
+    dest_dir: &Path,
+    remove: impl FnMut(&Path) -> io::Result<()>,
+    copy: impl FnMut(&Path, &Path) -> io::Result<u64>,
+    set_permissions: impl FnMut(&Path, std::fs::Permissions) -> io::Result<()>,
+    stderr: &mut impl Write,
+) -> usize {
+    report_diagnostics_copy(
+        copy_e2e_diagnostics_with_ops(src_dir, dest_dir, remove, copy, set_permissions),
+        stderr,
+    )
+}
+
+fn report_diagnostics_copy(outcome: DiagnosticsCopy, stderr: &mut impl Write) -> usize {
+    if !outcome.failures.is_empty() {
+        let _ = writeln!(
+            stderr,
+            "xtask: warning: xtask.nix.e2e_diagnostics: ignored failure(s) while lifting e2e diagnostics"
+        );
     }
     outcome.copied
 }
@@ -466,23 +560,21 @@ fn build_check(step_name: &str, check: &str) -> StepResult {
     match child.wait() {
         Ok(s) if s.success() => StepResult::ok(step_name),
         Ok(s) => {
-            rescue_diagnostics(check);
             let excerpt = write_failure_excerpt(&log_path);
-            StepResult::fail(step_name).detail(failure_detail(
-                &installable,
-                &s,
-                excerpt.as_deref(),
-                &log_path,
-            ))
+            let detail = failure_detail(&installable, &s, excerpt.as_deref(), &log_path);
+            failed_build_after_rescue(step_name, detail, || {
+                rescue_diagnostics(check);
+            })
         }
         Err(e) => StepResult::fail(step_name).detail(e.to_string()),
     }
 }
-
-/// Run `nix eval --raw --accept-flake-config <installable>`, optionally with cwd =
-/// `dir` (so a `.#` ref resolves that directory's flake/git state). Returns the
-/// trimmed, non-empty output; errors on spawn/exit/UTF-8/empty. Shared core of
-/// [`eval_out_path`] and [`eval_coverage_drvpath`].
+fn failed_build_after_rescue(step_name: &str, detail: String, rescue: impl FnOnce()) -> StepResult {
+    rescue();
+    StepResult::fail(step_name).detail(detail)
+}
+/// Run `nix eval --raw --accept-flake-config <installable>`, optionally in a
+/// supplied flake directory.
 fn nix_eval_raw(dir: Option<&Path>, installable: &str) -> Result<String> {
     let mut cmd = Command::new("nix");
     if let Some(dir) = dir {
@@ -508,20 +600,26 @@ fn nix_eval_raw(dir: Option<&Path>, installable: &str) -> Result<String> {
     Ok(path)
 }
 
-/// The check's evaluated output store path. On a failed build `--keep-failed`
-/// leaves this path on disk, world-readable, even though it is unregistered — so
-/// the e2e diagnostics the VM copied into `$out` are recoverable from it (#123/#49).
-/// `None` if the eval fails (e.g. an eval-time error unrelated to the build).
-fn eval_out_path(check: &str) -> Option<String> {
-    nix_eval_raw(None, &format!(".#checks.{SYSTEM}.{check}.outPath")).ok()
+fn eval_out_path(check: &str) -> Result<String> {
+    nix_eval_raw(None, &format!(".#checks.{SYSTEM}.{check}.outPath"))
 }
 
-/// Evaluate the coverage check's `.drvPath` for the flake rooted at `flake_dir`.
-/// cwd = `flake_dir` so the `.#` ref resolves *that* worktree's git state
-/// (tracked + staged, per the flake source model), which is what the coverage
-/// source-drift probe (#241) relies on. Unlike [`eval_out_path`] this evaluates
-/// `.drvPath` (the input-addressed identity — no realized output needed) and
-/// surfaces eval failure as an error rather than `None`.
+fn eval_out_path_after_failure(
+    eval: impl FnOnce() -> Result<String>,
+    stderr: &mut impl Write,
+) -> Option<String> {
+    match eval() {
+        Ok(path) => Some(path),
+        Err(_) => {
+            let _ = writeln!(
+                stderr,
+                "xtask: warning: xtask.nix.e2e_out_path: ignored failure while locating failed e2e output"
+            );
+            None
+        }
+    }
+}
+
 pub fn eval_coverage_drvpath(flake_dir: &Path) -> Result<String> {
     nix_eval_raw(
         Some(flake_dir),
@@ -529,30 +627,43 @@ pub fn eval_coverage_drvpath(flake_dir: &Path) -> Result<String> {
     )
 }
 
-/// On a failed `nix build`, best-effort copy any diagnostics bundle from the
-/// retained (`--keep-failed`) build dir to `.xtask/diagnostics/<check>/`, so a
-/// catastrophic in-sandbox failure still leaves first-hand data for inspection
-/// and CI artifact upload. Silent on miss — the kept build dir remains either way.
+fn report_rescue_failure(failed: bool, stderr: &mut impl Write) {
+    if failed {
+        let _ = writeln!(
+            stderr,
+            "xtask: warning: xtask.nix.e2e_rescue: ignored failure(s) while rescuing diagnostics"
+        );
+    }
+}
+
+/// On a failed build, best-effort copy diagnostics from retained outputs. Every
+/// continuation failure is visible without changing the failed build result.
 fn rescue_diagnostics(check: &str) {
     let dest = format!(".xtask/diagnostics/{check}");
-    let _ = std::fs::create_dir_all(&dest);
-    // #123/#49: a failed e2e VM check leaves its $out store path on disk
-    // (--keep-failed, world-readable) though unregistered. Its deterministic path
-    // is the evaluated outPath; recover the copied-out diagnostics from it, reusing
-    // the success-path copier (which handles the otel directory layout). A no-op for
-    // non-e2e checks — their outPath carries no matching files.
-    if let Some(out_path) = eval_out_path(check) {
-        lift_e2e_diagnostics(std::path::Path::new(&out_path), std::path::Path::new(&dest));
+    let mut failed = std::fs::create_dir_all(&dest).is_err();
+    if check.starts_with("e2e")
+        && let Some(out_path) =
+            eval_out_path_after_failure(|| eval_out_path(check), &mut std::io::stderr())
+    {
+        let outcome = copy_e2e_diagnostics_between(Path::new(&out_path), Path::new(&dest));
+        failed |= !outcome.failures.is_empty();
     }
-    // Resolve the kept-build-dir glob in Rust and copy with explicit `cp` args
-    // (no `bash -c`) so the check name can never inject into a shell command.
-    // The `emit-out/diagnostics` is_dir guard skips false prefix matches (e.g. a
-    // `coverage-gate` dir scanned for the `coverage` rescue — gate has no bundle).
     let prefix = format!("nix-build-jaunder-{check}");
-    let Ok(entries) = std::fs::read_dir("/tmp") else {
-        return;
+    let entries = match std::fs::read_dir("/tmp") {
+        Ok(entries) => entries,
+        Err(_) => {
+            report_rescue_failure(true, &mut std::io::stderr());
+            return;
+        }
     };
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                failed = true;
+                continue;
+            }
+        };
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
             continue;
         };
@@ -561,16 +672,29 @@ fn rescue_diagnostics(check: &str) {
         }
         let src = entry.path().join("emit-out/diagnostics");
         if src.is_dir() {
-            let _ = Command::new("cp").arg("-r").arg(&src).arg(&dest).status();
+            failed |= !matches!(
+                Command::new("cp")
+                    .arg("-r")
+                    .arg(&src)
+                    .arg(&dest)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status(),
+                Ok(status) if status.success()
+            );
         }
     }
+    report_rescue_failure(failed, &mut std::io::stderr());
 }
 
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
 
-    use super::{doctest_sentinel_detail, sentinel_detail, test_check_names};
+    use super::{
+        CommandResult, StepResult, doctest_sentinel_detail, eval_out_path_after_failure,
+        failed_status_step, sentinel_detail, test_check_names,
+    };
     use coverage::status::{CoverageStatus, StatusCategory};
     use doctests::check::{Kind, Violation};
     use doctests::status::DoctestStatus;
@@ -636,6 +760,82 @@ mod tests {
         let d = sentinel_detail(&s);
         assert!(d.contains("test failure"));
         assert!(d.contains("web_posts::case_3"));
+    }
+
+    fn assert_status_attempt_warns_once<T>(
+        warning_key: &str,
+        fallback: &str,
+        parse: fn(&str) -> anyhow::Result<T>,
+        render: fn(&T) -> String,
+    ) {
+        for raw in [None, Some("{malformed")] {
+            let mut stderr = Vec::new();
+            let mut result = CommandResult::new("nix-status");
+            result.push(failed_status_step(
+                "gate",
+                warning_key,
+                fallback,
+                || match raw {
+                    Some(raw) => Ok(raw.to_owned()),
+                    None => Err(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "injected",
+                    )),
+                },
+                parse,
+                render,
+                &mut stderr,
+            ));
+            let mut expected = CommandResult::new("nix-status");
+            expected.push(StepResult::fail("gate").detail(fallback));
+            assert_eq!(
+                serde_json::to_string(&result).unwrap(),
+                serde_json::to_string(&expected).unwrap()
+            );
+            let warning = String::from_utf8(stderr).unwrap();
+            assert_eq!(warning.matches(warning_key).count(), 1);
+            assert_eq!(warning.lines().count(), 1);
+            assert!(!warning.contains("injected"));
+            assert!(!warning.contains("{malformed"));
+        }
+    }
+
+    #[test]
+    fn failed_coverage_status_attempts_preserve_fallback_and_warn_once() {
+        assert_status_attempt_warns_once(
+            "xtask.nix.coverage_status",
+            "coverage gate failed (no status.json)",
+            CoverageStatus::from_json,
+            sentinel_detail,
+        );
+    }
+
+    #[test]
+    fn failed_doctest_status_attempts_preserve_fallback_and_warn_once() {
+        assert_status_attempt_warns_once(
+            "xtask.nix.doctest_status",
+            "doctest gate failed (no status.json)",
+            DoctestStatus::from_json,
+            doctest_sentinel_detail,
+        );
+    }
+
+    #[test]
+    fn failed_e2e_out_path_lookup_preserves_primary_failure_and_warns_once() {
+        let mut primary = CommandResult::new("nix");
+        primary.push(StepResult::fail("nix-e2e").detail("nix-e2e failed"));
+        let before = serde_json::to_string(&primary).unwrap();
+        let mut stderr = Vec::new();
+        let out_path = eval_out_path_after_failure(
+            || anyhow::bail!("injected sensitive nix eval failure"),
+            &mut stderr,
+        );
+        assert!(out_path.is_none());
+        assert_eq!(serde_json::to_string(&primary).unwrap(), before);
+        let warning = String::from_utf8(stderr).unwrap();
+        assert_eq!(warning.matches("xtask.nix.e2e_out_path").count(), 1);
+        assert_eq!(warning.lines().count(), 1);
+        assert!(!warning.contains("sensitive"));
     }
 
     use super::{MultiWriter, failure_detail, failure_excerpt, write_failure_excerpt};
@@ -845,26 +1045,85 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
 
     #[test]
     fn copy_e2e_diagnostics_reports_a_file_it_could_not_copy() {
-        // The invisibility, not the failure, was the bug: a copy that cannot happen
-        // leaves a STALE artifact behind, and the #681 gate then reads it as this run's.
-        // A directory squatting on the destination name is the deterministic stand-in
-        // for the read-only store copy that used to fail in silence.
-        let tmp = std::env::temp_dir().join(format!("xtask-cf-{}", std::process::id()));
+        // A directory squatting on the destination name deterministically makes
+        // replacement fail without depending on host permissions.
+        let tmp = std::env::temp_dir().join(format!("xtask-copy-fail-{}", std::process::id()));
         let src = tmp.join("src");
         let dest = tmp.join("dest");
         std::fs::create_dir_all(&src).unwrap();
         std::fs::create_dir_all(dest.join("capture-sqlite.tar.gz")).unwrap();
         std::fs::write(src.join("capture-sqlite.tar.gz"), b"new").unwrap();
-
         let outcome = super::copy_e2e_diagnostics_between(&src, &dest);
-
         assert_eq!(outcome.copied, 0);
         assert_eq!(outcome.failures.len(), 1, "{:?}", outcome.failures);
-        assert!(
-            outcome.failures[0].contains("capture-sqlite.tar.gz"),
-            "names the artifact that went missing: {}",
-            outcome.failures[0]
-        );
+        assert!(outcome.failures[0].contains("capture-sqlite.tar.gz"));
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn ancillary_warning_e2e_diagnostic_failures_warn_once_per_attempt() {
+        let tmp = std::env::temp_dir().join(format!("xtask-nix-lift-{}", std::process::id()));
+        let src = tmp.join("src");
+        let dest = tmp.join("dest");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("capture-sqlite.tar.gz"), b"new").unwrap();
+        for failed_operation in ["remove", "copy", "permissions"] {
+            let mut stderr = Vec::new();
+            let _ = super::lift_e2e_diagnostics_with_ops(
+                &src,
+                &dest,
+                |_| {
+                    if failed_operation == "remove" {
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            "sensitive remove failure",
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                },
+                |_, _| {
+                    if failed_operation == "copy" {
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            "sensitive copy failure",
+                        ))
+                    } else {
+                        Ok(1)
+                    }
+                },
+                |_, _| {
+                    if failed_operation == "permissions" {
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            "sensitive permission failure",
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                },
+                &mut stderr,
+            );
+            let warning = String::from_utf8(stderr).unwrap();
+            assert_eq!(warning.matches("xtask.nix.e2e_diagnostics").count(), 1);
+            assert_eq!(warning.lines().count(), 1);
+            assert!(!warning.contains("sensitive"));
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn ancillary_warning_retained_output_rescue_preserves_primary_failure() {
+        let expected = StepResult::fail("nix-e2e").detail("nix build failed");
+        let expected_json = serde_json::to_string(&expected).unwrap();
+        let mut stderr = Vec::new();
+        let actual =
+            super::failed_build_after_rescue("nix-e2e", "nix build failed".to_owned(), || {
+                super::report_rescue_failure(true, &mut stderr)
+            });
+        assert_eq!(serde_json::to_string(&actual).unwrap(), expected_json);
+        let warning = String::from_utf8(stderr).unwrap();
+        assert_eq!(warning.matches("xtask.nix.e2e_rescue").count(), 1);
+        assert_eq!(warning.lines().count(), 1);
     }
 }

@@ -12,6 +12,8 @@
 
 use std::path::Path;
 
+use anyhow::{Context, Result};
+
 use crate::files;
 use crate::result::{CommandResult, StepResult};
 
@@ -56,6 +58,20 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
     (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
+fn read_sources_with(
+    paths: &[std::path::PathBuf],
+    mut read: impl FnMut(&Path) -> std::io::Result<String>,
+) -> Result<Vec<(String, String)>> {
+    paths
+        .iter()
+        .map(|path| {
+            read(path)
+                .with_context(|| format!("reading {}", path.display()))
+                .map(|source| (path.display().to_string(), source))
+        })
+        .collect::<Result<_>>()
+}
+
 /// Scan every Rust file under each of [`POLICED_ROOTS`] and push the result step. A
 /// missing root is a hard failure, so a moved/renamed tree can never quietly disable the
 /// guard.
@@ -72,14 +88,16 @@ pub fn run(result: &mut CommandResult) {
             }
         }
     }
-    let scanned: Vec<(String, String)> = files
-        .iter()
-        .filter_map(|p| {
-            std::fs::read_to_string(p)
-                .ok()
-                .map(|s| (p.display().to_string(), s))
-        })
-        .collect();
+    let scanned = match read_sources_with(&files, |path| std::fs::read_to_string(path)) {
+        Ok(scanned) => scanned,
+        Err(error) => {
+            result.push(
+                StepResult::fail("no-full-reload")
+                    .detail(format!("cannot read source population: {error:#}")),
+            );
+            return;
+        }
+    };
     let step = match problems(&scanned) {
         None => StepResult::ok("no-full-reload"),
         Some(detail) => StepResult::fail("no-full-reload").detail(detail),
@@ -89,7 +107,7 @@ pub fn run(result: &mut CommandResult) {
 
 #[cfg(test)]
 mod tests {
-    use super::{problems, violations};
+    use super::{problems, read_sources_with, violations};
 
     #[test]
     fn flags_location_replace_assign_reload_set_href() {
@@ -131,8 +149,27 @@ mod tests {
             "    window().location().replace(&url);\n".to_string(),
         )])
         .expect("a problem");
+
         assert!(detail.contains("web/src/x.rs:1"));
         assert!(detail.contains("use_navigate()"));
+    }
+    #[test]
+    fn fail_closed_population_unreadable_source() {
+        let path = std::path::PathBuf::from("web/src/unreadable.rs");
+        let error = read_sources_with(&[path], |_| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "injected",
+            ))
+        })
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("web/src/unreadable.rs"));
+        assert_eq!(
+            error
+                .downcast_ref::<std::io::Error>()
+                .map(std::io::Error::kind),
+            Some(std::io::ErrorKind::PermissionDenied)
+        );
     }
 
     #[test]

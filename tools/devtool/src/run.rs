@@ -5,7 +5,7 @@
 //! latter silently overwrites the exit status with the last pipe stage's.
 
 use std::fs::{self, File};
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -54,27 +54,60 @@ fn alloc_id() -> String {
     format!("{millis}-{}", std::process::id())
 }
 
-/// Keep only the newest `RUN_HISTORY_LIMIT` files in `dir`; best-effort, so a
-/// race or a stat error never fails an otherwise-successful run. Called after the
-/// new files are written — they are newest, so they are never pruned.
+/// Keep only the newest history files. Enumeration/stat/removal failures are
+/// aggregated into one stderr warning and never change the child result.
 fn prune(dir: &Path) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
+    prune_with(dir, |path| fs::remove_file(path), &mut std::io::stderr());
+}
+
+fn prune_with(
+    dir: &Path,
+    mut remove: impl FnMut(&Path) -> std::io::Result<()>,
+    stderr: &mut impl Write,
+) {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => {
+            report_cleanup_failure(true, "devtool.run.history_prune", stderr);
+            return;
+        }
     };
-    let mut files: Vec<(std::time::SystemTime, PathBuf)> = entries
-        .filter_map(|e| e.ok())
-        .filter_map(|e| {
-            let modified = e.metadata().ok()?.modified().ok()?;
-            Some((modified, e.path()))
-        })
-        .collect();
-    if files.len() <= RUN_HISTORY_LIMIT {
-        return;
+    let mut failed = false;
+    let mut files = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                failed = true;
+                continue;
+            }
+        };
+        let modified = match entry.metadata().and_then(|metadata| metadata.modified()) {
+            Ok(modified) => modified,
+            Err(_) => {
+                failed = true;
+                continue;
+            }
+        };
+        files.push((modified, entry.path()));
     }
-    files.sort_by_key(|f| std::cmp::Reverse(f.0)); // newest first
+    files.sort_by_key(|file| std::cmp::Reverse(file.0));
     for (_, path) in files.into_iter().skip(RUN_HISTORY_LIMIT) {
-        let _ = fs::remove_file(path);
+        failed |= remove(&path).is_err();
     }
+    report_cleanup_failure(failed, "devtool.run.history_prune", stderr);
+}
+
+fn report_cleanup_failure(failed: bool, key: &str, stderr: &mut impl Write) {
+    if failed {
+        let _ = writeln!(
+            stderr,
+            "devtool: warning: {key}: ignored failure during runner cleanup"
+        );
+    }
+}
+fn kill_timed_out_child(kill: impl FnOnce() -> std::io::Result<()>, stderr: &mut impl Write) {
+    report_cleanup_failure(kill().is_err(), "devtool.run.timeout_kill", stderr);
 }
 
 /// Count `\n` bytes (wc -l semantics) by streaming, so a huge output file never
@@ -156,7 +189,7 @@ fn wait_with_timeout(
             return Ok((status, false));
         }
         if Instant::now() >= deadline {
-            let _ = child.kill();
+            kill_timed_out_child(|| child.kill(), &mut std::io::stderr());
             let status = child.wait().map_err(wait_err)?;
             return Ok((status, true));
         }
@@ -435,5 +468,46 @@ mod tests {
                 .exists(),
             "newest should remain"
         );
+    }
+
+    #[test]
+    fn ancillary_warning_run_cleanup_preserves_primary_code() {
+        let dir = tmp();
+        for i in 0..=RUN_HISTORY_LIMIT {
+            let path = dir.join(format!("{i:04}.out"));
+            std::fs::write(&path, b"x").unwrap();
+            set_mtime(
+                &path,
+                std::time::UNIX_EPOCH + std::time::Duration::from_secs(i as u64),
+            );
+        }
+        let primary_code = 124;
+        let mut stderr = Vec::new();
+        prune_with(
+            &dir,
+            |_| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "sensitive",
+                ))
+            },
+            &mut stderr,
+        );
+        kill_timed_out_child(
+            || {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "sensitive",
+                ))
+            },
+            &mut stderr,
+        );
+        assert_eq!(primary_code, 124);
+        let warning = String::from_utf8(stderr).unwrap();
+        for key in ["devtool.run.history_prune", "devtool.run.timeout_kill"] {
+            assert_eq!(warning.matches(key).count(), 1);
+        }
+        assert_eq!(warning.lines().count(), 2);
+        assert!(!warning.contains("sensitive"));
     }
 }

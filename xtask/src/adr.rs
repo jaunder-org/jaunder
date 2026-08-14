@@ -11,6 +11,7 @@
 //!   repo-wide; bare `ADR-NNNN` references are rewritten only in branch-touched
 //!   files, so `main`'s references to the other number are never clobbered.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -136,15 +137,43 @@ pub fn renumber() -> StepResult {
 }
 
 /// ADR filenames currently in `repo`'s `docs/adr`.
-fn adr_filenames(repo: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(repo.join(ADR_DIR)) else {
-        return Vec::new();
-    };
+fn adr_filenames(repo: &Path) -> Result<Vec<String>> {
+    regular_file_names(&repo.join(ADR_DIR))
+}
+
+fn regular_file_names(dir: &Path) -> Result<Vec<String>> {
+    let entries =
+        std::fs::read_dir(dir).with_context(|| format!("reading directory {}", dir.display()))?;
+    regular_file_names_from(
+        dir,
+        entries,
+        std::fs::DirEntry::path,
+        std::fs::DirEntry::file_type,
+        |entry| entry.file_name(),
+    )
+}
+
+fn regular_file_names_from<T>(
+    dir: &Path,
+    entries: impl IntoIterator<Item = std::io::Result<T>>,
+    path_of: impl Fn(&T) -> PathBuf,
+    file_type: impl Fn(&T) -> std::io::Result<std::fs::FileType>,
+    file_name: impl Fn(T) -> OsString,
+) -> Result<Vec<String>> {
     entries
-        .flatten()
-        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .collect()
+        .into_iter()
+        .map(|entry| entry.with_context(|| format!("reading entry under {}", dir.display())))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .map(|entry| {
+            let path = path_of(&entry);
+            let is_file = file_type(&entry)
+                .with_context(|| format!("reading file type {}", path.display()))?
+                .is_file();
+            Ok(is_file.then(|| file_name(entry).to_string_lossy().into_owned()))
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(|names| names.into_iter().flatten().collect())
 }
 
 /// Read `rel` under `repo`, apply `f`, and write it back only if it changed.
@@ -175,7 +204,7 @@ fn run_renumber(repo: &Path, main_ref: &str) -> Result<String> {
     // Files this branch touched at all — the scope for bare-ref rewrites.
     let touched: Vec<String> = git::diff_names(repo, &range)?;
 
-    let mut all = adr_filenames(repo);
+    let mut all = adr_filenames(repo)?;
     let mut summary = Vec::new();
 
     for added_name in &added {
@@ -268,19 +297,14 @@ struct Promotion {
 /// Slugs of the draft ADRs under `repo`'s `docs/adr/drafts`, sorted for a
 /// deterministic assignment order. The tracked `README.md` explainer and any
 /// non-`.md` entry are skipped; `<slug>.md` yields `slug`.
-fn draft_slugs(repo: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(repo.join(DRAFTS_DIR)) else {
-        return Vec::new();
-    };
-    let mut slugs: Vec<String> = entries
-        .flatten()
-        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| n != "README.md")
-        .filter_map(|n| n.strip_suffix(".md").map(str::to_string))
+fn draft_slugs(repo: &Path) -> Result<Vec<String>> {
+    let mut slugs: Vec<String> = regular_file_names(&repo.join(DRAFTS_DIR))?
+        .into_iter()
+        .filter(|name| name != "README.md")
+        .filter_map(|name| name.strip_suffix(".md").map(str::to_string))
         .collect();
     slugs.sort();
-    slugs
+    Ok(slugs)
 }
 
 /// Entry point for `cargo xtask adr promote`: operate on the current repo.
@@ -302,7 +326,7 @@ pub fn promote() -> StepResult {
 /// `git mv`); and there is no bare `ADR-NNNN` form to rewrite, since a draft is
 /// referenced only by its `drafts/<slug>` path.
 fn run_promote(repo: &Path) -> Result<String> {
-    let slugs = draft_slugs(repo);
+    let slugs = draft_slugs(repo)?;
     if slugs.is_empty() {
         return Ok("no ADR drafts to promote".to_string());
     }
@@ -310,7 +334,7 @@ fn run_promote(repo: &Path) -> Result<String> {
     // Pass A — assign every draft a number before rewriting anything, so a draft
     // that references another draft can resolve to the assigned number. `all`
     // grows with each assignment, exactly as the renumber loop does.
-    let mut all = adr_filenames(repo);
+    let mut all = adr_filenames(repo)?;
     let mut assigned: Vec<Promotion> = Vec::new();
     for slug in &slugs {
         let num = ids::next_number(&all);
@@ -1052,6 +1076,7 @@ mod tests {
     #[test]
     fn promote_is_noop_without_drafts() {
         let tmp = promote_repo("noop");
+        std::fs::create_dir_all(tmp.join(DRAFTS_DIR)).unwrap();
         let summary = run_promote(&tmp).unwrap();
         assert_eq!(summary, "no ADR drafts to promote");
         // Nothing staged.
@@ -1105,9 +1130,57 @@ mod tests {
             "# ADR-DRAFT: Some\n",
         );
 
-        let names = adr_filenames(&tmp);
+        let names = adr_filenames(&tmp).unwrap();
         let _ = std::fs::remove_dir_all(&tmp);
 
         assert_eq!(names, vec!["0001-a.md".to_string()]);
+    }
+
+    #[test]
+    fn fail_closed_population_missing_adr_and_draft_directories() {
+        let repo = Path::new("missing-adr-enumeration-root");
+        for error in [
+            adr_filenames(repo).unwrap_err(),
+            draft_slugs(repo).unwrap_err(),
+        ] {
+            assert_eq!(
+                error
+                    .downcast_ref::<std::io::Error>()
+                    .map(std::io::Error::kind),
+                Some(std::io::ErrorKind::NotFound)
+            );
+        }
+    }
+
+    #[test]
+    fn fail_closed_population_unreadable_adr_file_type() {
+        struct Fake {
+            path: PathBuf,
+            name: OsString,
+        }
+        let dir = Path::new("docs/adr");
+        let error = regular_file_names_from(
+            dir,
+            [Ok(Fake {
+                path: dir.join("0001-unreadable.md"),
+                name: OsString::from("0001-unreadable.md"),
+            })],
+            |entry| entry.path.clone(),
+            |_| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "injected",
+                ))
+            },
+            |entry| entry.name,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("0001-unreadable.md"));
+        assert_eq!(
+            error
+                .downcast_ref::<std::io::Error>()
+                .map(std::io::Error::kind),
+            Some(std::io::ErrorKind::PermissionDenied)
+        );
     }
 }

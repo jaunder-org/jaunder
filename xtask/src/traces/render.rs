@@ -445,15 +445,15 @@ mod tests {
         use crate::traces::analyze::analyze_spans;
         use crate::traces::parse::{Filters, parse_spans};
         const FIXTURE: &str = include_str!("testdata/otel-traces-sample.jsonl");
-        let spans = parse_spans(FIXTURE, &Filters::default(), "sample").unwrap();
-        let out = render(
-            &analyze_spans(
-                spans,
-                None,
-                &crate::traces::report::ReportedDurations::default(),
-            ),
-            25,
-        );
+        let fixture = FIXTURE.lines().next().unwrap();
+        let spans = parse_spans(fixture, &Filters::default(), "sample").unwrap();
+        let analysis = analyze_spans(
+            spans,
+            None,
+            &crate::traces::report::ReportedDurations::default(),
+        )
+        .unwrap();
+        let out = render(&analysis, 25);
         // The section order is fixed and asserted.
         let order = [
             "Top 25 slowest spans",

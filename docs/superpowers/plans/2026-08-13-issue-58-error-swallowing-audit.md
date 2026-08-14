@@ -1287,17 +1287,23 @@ Playwright, and the repository `cargo xtask` gate.
 **Files:**
 
 - Modify: `server/build.rs`
+- Create: `server/src/build_staging.rs`
 - Test: `server/tests/build_script.rs`
+- Modify: `server/tests/main.rs`
 - Modify: `xtask/src/adr.rs`
 - Modify: `xtask/src/adr_readme.rs`
+- Modify: `xtask/src/lib.rs`
 - Modify: `xtask/src/coverage/run.rs`
 - Modify: `xtask/src/coverage/crap.rs`
+- Modify: `xtask/src/coverage/exempt.rs`
 - Modify: `xtask/src/coverage/probe.rs`
 - Modify: `xtask/src/pr/gh.rs`
 - Modify: `xtask/src/traces/analyze.rs`
 - Modify: `xtask/src/traces/boot_phases.rs`
 - Modify: `xtask/src/traces/parse.rs`
+- Modify: `xtask/src/traces/render.rs`
 - Modify: `xtask/src/steps/e2e_local.rs`
+- Modify: `xtask/src/steps/adr_check.rs`
 - Modify: `xtask/src/steps/no_full_reload_check.rs`
 - Modify: `xtask/src/steps/proffered_filename_check.rs`
 - Modify: `xtask/src/steps/proffered_secret_check.rs`
@@ -1324,7 +1330,7 @@ Playwright, and the repository `cargo xtask` gate.
   `JAUNDER_E2E_WORKERS`, both `rate_limit_reset` probe failures, the three
   coverage-status rows, the three doctest-status rows, and `nix::eval_out_path`.
 
-- [ ] **Step 1: Add exact fail-closed correctness tests**
+- [x] **Step 1: Add exact fail-closed correctness tests**
 
   In `server/tests/build_script.rs`, route staging cleanup through an injected
   remover, force `remove_dir_all` failure, and assert the build aborts before
@@ -1349,7 +1355,7 @@ Playwright, and the repository `cargo xtask` gate.
   `no_full_reload_check`, `proffered_filename_check`, `proffered_secret_check`,
   `sqlx_newtype_bind_check`, and `test_pattern_check`.
 
-- [ ] **Step 2: Add exact warning-only amendment tests**
+- [x] **Step 2: Add exact warning-only amendment tests**
 
   Inject `rate_limit_reset` spawn failure and nonzero/malformed classification
   separately; assert the original `RateLimited` error is unchanged and each
@@ -1372,7 +1378,7 @@ Playwright, and the repository `cargo xtask` gate.
   read/parse/fallback hits for coverage and doctests aggregate to one warning
   per failed status attempt, not three warnings.
 
-- [ ] **Step 3: Add the remaining ancillary warning tests**
+- [x] **Step 3: Add the remaining ancillary warning tests**
 
   Inject failures for coverage diagnostic dump creation/write, e2e diagnostic
   remove/copy/permission/rescue, probe-worktree RAII cleanup, ephemeral
@@ -1382,7 +1388,7 @@ Playwright, and the repository `cargo xtask` gate.
   For every case, capture stderr and assert one contextual warning while the
   original success/failure result and JSON stdout are unchanged.
 
-- [ ] **Step 4: Run and observe current omissions**
+- [x] **Step 4: Run and observe current omissions**
 
   ```bash
   devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml fail_closed_population
@@ -1398,7 +1404,7 @@ Playwright, and the repository `cargo xtask` gate.
   empty-section behavior; the ten exact amendment warnings and existing
   ancillary warnings are absent.
 
-- [ ] **Step 5: Propagate correctness failures**
+- [x] **Step 5: Propagate correctness failures**
 
   Make staging removal return a contextual build error and abort before any
   asset copy. Convert `adr_filenames`, `draft_slugs`, `adr_files`, and
@@ -1410,7 +1416,7 @@ Playwright, and the repository `cargo xtask` gate.
   `NotPresent` with context. Apply the same rule to every correctness population
   listed in Step 1. Do not add a syntax scanner, allowlist, or warning fallback.
 
-- [ ] **Step 6: Warn for legitimate ancillary continuation**
+- [x] **Step 6: Warn for legitimate ancillary continuation**
 
   Use fixed `eprintln!` prefixes such as
   `xtask: warning: ignored failure while <static context>: {error}` and
@@ -1418,7 +1424,7 @@ Playwright, and the repository `cargo xtask` gate.
   lexical rows, recursive copy, or cleanup failures at one useful boundary.
   Never overwrite the child/primary exit code or write to stdout/JSON.
 
-- [ ] **Step 7: Verify tool contracts**
+- [x] **Step 7: Verify tool contracts**
 
   ```bash
   devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml
@@ -1433,7 +1439,7 @@ Playwright, and the repository `cargo xtask` gate.
 - [ ] **Step 8: Commit**
 
   ```bash
-  git add server/build.rs server/tests/build_script.rs xtask/src/adr.rs xtask/src/adr_readme.rs xtask/src/coverage/run.rs xtask/src/coverage/crap.rs xtask/src/coverage/probe.rs xtask/src/pr/gh.rs xtask/src/steps/e2e_local.rs xtask/src/steps/no_full_reload_check.rs xtask/src/steps/proffered_filename_check.rs xtask/src/steps/proffered_secret_check.rs xtask/src/steps/sequence_check.rs xtask/src/steps/sqlx_newtype_bind_check.rs xtask/src/steps/test_pattern_check.rs xtask/src/steps/nix.rs xtask/src/traces/analyze.rs xtask/src/traces/boot_phases.rs xtask/src/traces/parse.rs tools/devtool/src/pg.rs tools/devtool/src/run.rs
+  git add server/build.rs server/src/build_staging.rs server/tests/build_script.rs server/tests/main.rs xtask/src/adr.rs xtask/src/adr_readme.rs xtask/src/lib.rs xtask/src/coverage/run.rs xtask/src/coverage/crap.rs xtask/src/coverage/exempt.rs xtask/src/coverage/probe.rs xtask/src/pr/gh.rs xtask/src/steps/adr_check.rs xtask/src/steps/e2e_local.rs xtask/src/steps/no_full_reload_check.rs xtask/src/steps/proffered_filename_check.rs xtask/src/steps/proffered_secret_check.rs xtask/src/steps/sequence_check.rs xtask/src/steps/sqlx_newtype_bind_check.rs xtask/src/steps/test_pattern_check.rs xtask/src/steps/nix.rs xtask/src/traces/analyze.rs xtask/src/traces/boot_phases.rs xtask/src/traces/parse.rs xtask/src/traces/render.rs tools/devtool/src/pg.rs tools/devtool/src/run.rs
   git commit -m "fix(tools): expose ignored correctness and cleanup failures"
   ```
 

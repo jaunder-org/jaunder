@@ -4,6 +4,7 @@
 //! traded for speed), the `jaunder` app role/database created, and the cluster
 //! torn down on every exit path — normal return, panic, or SIGINT/SIGTERM.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -86,22 +87,56 @@ impl Cluster {
     /// Stop the server and delete the data dir. Idempotent so the Drop path and the
     /// signal-handler path cannot double-fire.
     fn teardown(&self) {
+        self.teardown_with(
+            |pgdata| {
+                matches!(
+                    Command::new("pg_ctl")
+                        .args([
+                            "-D",
+                            &pgdata.display().to_string(),
+                            "-m",
+                            "immediate",
+                            "stop",
+                        ])
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status(),
+                    Ok(status) if status.success()
+                )
+            },
+            |pgdata| std::fs::remove_dir_all(pgdata).is_ok(),
+            &mut std::io::stderr(),
+        );
+    }
+
+    fn teardown_with(
+        &self,
+        stop: impl FnOnce(&Path) -> bool,
+        remove: impl FnOnce(&Path) -> bool,
+        stderr: &mut impl Write,
+    ) {
         if self.torn_down.swap(true, Ordering::SeqCst) {
             return;
         }
-        let _ = Command::new("pg_ctl")
-            .args([
-                "-D",
-                &self.pgdata.display().to_string(),
-                "-m",
-                "immediate",
-                "stop",
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        let _ = std::fs::remove_dir_all(&self.pgdata);
+        report_cleanup_failure(!stop(&self.pgdata), "devtool.pg.stop", stderr);
+        report_cleanup_failure(!remove(&self.pgdata), "devtool.pg.remove", stderr);
     }
+}
+
+fn report_cleanup_failure(failed: bool, key: &str, stderr: &mut impl Write) {
+    if failed {
+        let _ = writeln!(
+            stderr,
+            "devtool: warning: {key}: ignored failure during ephemeral PostgreSQL cleanup"
+        );
+    }
+}
+fn emulate_signal_with(sig: i32, emulate: impl FnOnce(i32) -> bool, stderr: &mut impl Write) {
+    report_cleanup_failure(!emulate(sig), "devtool.pg.emulate_signal", stderr);
+}
+
+fn join_signal_thread_with(join: impl FnOnce() -> bool, stderr: &mut impl Write) {
+    report_cleanup_failure(!join(), "devtool.pg.join_signal_thread", stderr);
 }
 
 impl Drop for Cluster {
@@ -189,7 +224,11 @@ pub fn with_ephemeral<T>(body: impl FnOnce(&PgEnv) -> Result<T>) -> Result<T> {
             if let Some(c) = sig_cluster.upgrade() {
                 c.teardown();
             }
-            let _ = signal_hook::low_level::emulate_default_handler(sig);
+            emulate_signal_with(
+                sig,
+                |sig| signal_hook::low_level::emulate_default_handler(sig).is_ok(),
+                &mut std::io::stderr(),
+            );
         }
     });
 
@@ -200,7 +239,7 @@ pub fn with_ephemeral<T>(body: impl FnOnce(&PgEnv) -> Result<T>) -> Result<T> {
     let result = body(&env);
 
     handle.close(); // unblock the signal thread on the normal path
-    let _ = joiner.join();
+    join_signal_thread_with(|| joiner.join().is_ok(), &mut std::io::stderr());
     cluster.teardown();
     result
 }
@@ -293,5 +332,30 @@ mod tests {
     fn bootstrap_sql_creates_role_and_db() {
         assert!(BOOTSTRAP_SQL.contains("CREATE ROLE jaunder LOGIN CREATEDB;"));
         assert!(BOOTSTRAP_SQL.contains("CREATE DATABASE jaunder OWNER jaunder;"));
+    }
+
+    #[test]
+    fn ancillary_warning_pg_cleanup_preserves_primary_result() {
+        let primary: anyhow::Result<i32> = Ok(17);
+        let cluster = Cluster {
+            pgdata: PathBuf::from("sensitive"),
+            torn_down: AtomicBool::new(false),
+        };
+        let mut stderr = Vec::new();
+        cluster.teardown_with(|_| false, |_| false, &mut stderr);
+        emulate_signal_with(SIGTERM, |_| false, &mut stderr);
+        join_signal_thread_with(|| false, &mut stderr);
+        assert!(matches!(primary, Ok(17)));
+        let warning = String::from_utf8(stderr).unwrap();
+        for key in [
+            "devtool.pg.stop",
+            "devtool.pg.remove",
+            "devtool.pg.join_signal_thread",
+            "devtool.pg.emulate_signal",
+        ] {
+            assert_eq!(warning.matches(key).count(), 1);
+        }
+        assert_eq!(warning.lines().count(), 4);
+        assert!(!warning.contains("sensitive"));
     }
 }

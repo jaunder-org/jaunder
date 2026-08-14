@@ -8,6 +8,8 @@
 
 mod helpers;
 
+mod build_script;
+
 mod atompub;
 mod feed;
 mod misc;
