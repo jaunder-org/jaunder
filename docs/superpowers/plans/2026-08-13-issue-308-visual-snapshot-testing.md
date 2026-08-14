@@ -460,33 +460,36 @@ test(e2e): baseline four visual browser states (#308)
   - DejaVu/fontconfig plus screenshot-only CSS seam;
   - existing four-combination Nix/CI path, with no new workflow lane.
 
-- [ ] **Step 1: Update the contributor testing guide**
+- [x] **Step 1: Update the contributor testing guide**
 
 Place the workflow beside the existing end-to-end testing guidance. Use commands
 callable from the repository root and explicitly prohibit hand-running
 Playwright snapshot update mode against an ambient server/database.
 
-- [ ] **Step 2: Update the architecture materialized view**
+- [x] **Step 2: Update the architecture materialized view**
 
 Update the existing Playwright/e2e section rather than adding a disconnected
 testing appendix. Describe current structure in present tense; cite ADR-0051 and
 ADR-0039 without changing their historical text.
 
-- [ ] **Step 3: Format and run the full shipping gate**
+- [x] **Step 3: Format and run the full shipping gate**
 
 Run:
 
 ```bash
 devtool run -- prettier -w CONTRIBUTING.md docs/ARCHITECTURE.md docs/superpowers/plans/2026-08-13-issue-308-visual-snapshot-testing.md
-devtool run -- cargo xtask validate
+devtool run -- cargo xtask validate --allow-dirty
 ```
+
+`--allow-dirty` is required here because this task deliberately validates its
+documentation changes before committing them; validation remains verify-only.
 
 Expected: full validation passes, including all four
 `{sqlite,postgres}×{chromium,firefox}` e2e combinations. Each combination runs
 the appropriate visual prerequisite against the shared browser baseline; no
 snapshot is updated.
 
-- [ ] **Step 4: Stage and commit Task 5**
+- [x] **Step 4: Stage and commit Task 5**
 
 Tick all completed plan checkboxes, then stage `CONTRIBUTING.md`,
 `docs/ARCHITECTURE.md`, and this plan. Because the kept commit must match the
@@ -497,7 +500,7 @@ Commit:
 docs(testing): document visual baseline workflow (#308)
 ```
 
-- [ ] **Step 5: Confirm clean completion state**
+- [x] **Step 5: Confirm clean completion state**
 
 Verify the working tree is clean. Confirm:
 

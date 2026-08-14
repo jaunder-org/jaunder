@@ -1847,17 +1847,32 @@ the separate `elisp-integration` job (`.github/workflows/ci.yml:162`). Local
 derivations on one machine.
 
 `end2end/playwright.config.ts` is the one config, loaded verbatim by both the VM
-and the host loop; the only host/VM differences are invocation flags set by the
-host driver ([ADR-0051](adr/0051-single-playwright-config.md)) —
+and the host loop ([ADR-0051](adr/0051-single-playwright-config.md)). For each
+gated browser its project graph is `*-visual → ordinary → *-admin`: the visual
+project selects the four existing `@visual` behavioral tests, disables retries,
+and runs first against the combo's fresh database; ordinary excludes those
+tests, and admin remains last. Chromium and Firefox each own one Linux baseline
+per state under the owning spec's adjacent `*.spec.ts-snapshots/` directory. The
+filename carries browser identity but not backend, so SQLite and PostgreSQL
+compare the same expected image. WebKit has no visual project or baseline.
+
+Exact comparison is a controlled rendering seam: Nix supplies one DejaVu-only
+fontconfig universe to both host and VM browser processes, while
+`end2end/tests/visual.css` applies screenshot-only font/animation/caret
+stabilization. Comparisons allow zero differing pixels. The public timeline's
+timestamp is the sole dynamic mask.
+
+Normal host/VM differences are invocation flags set by the host driver —
 `--reporter=html,line`, `PLAYWRIGHT_HTML_OPEN=never`, and
 `JAUNDER_E2E_WORKERS=1` (the host serves a debug CSR build; the VM keeps the
 config default of 2). The host loop is `cargo xtask e2e-local`
-(`xtask/src/steps/e2e_local.rs`), which owns the whole lifecycle: build, spawn
-`jaunder serve` on an ephemeral port, seed, run Playwright, stop and reap the
-server, then verify its diagnostics. Server stderr is streamed unchanged to the
-live terminal and a per-run file; stopping the child closes the pipe so the
-driver can drain that journal-equivalent input before invoking the shared
-zero-panic verifier.
+(`xtask/src/steps/e2e_local.rs`), which owns build, spawn on an ephemeral port,
+seed, Playwright, stop/reap, and diagnostics verification. Its
+`--update-visual-snapshots` mode builds release CSR once, then gives Chromium
+and Firefox separate complete server/database/capture lifecycles. Server stderr
+is streamed unchanged to the live terminal and a per-run file; stopping the
+child closes the pipe so the driver can drain that journal-equivalent input
+before invoking the shared zero-panic verifier.
 
 Specs are parallel-safe by construction, via per-test identity fixtures in
 `end2end/tests/fixtures.ts`
@@ -1870,8 +1885,11 @@ serial `*-admin` projects that run after the main projects — today that is
 (`end2end/playwright.config.ts:72-105`).
 
 The config also carries a `webkit` project, but the gate never runs it: both
-`flake.nix:963-966` and the CI matrix enumerate chromium and firefox only.
-Timeout budgets are stated for Chromium and scaled per browser
+`flake.nix:963-966` and the CI matrix enumerate chromium and firefox only. The
+visual prerequisite runs inside those same four
+`{sqlite,postgres}×{chromium,firefox}` derivations and CI jobs; it adds no
+workflow lane or backend-specific baseline. Timeout budgets are stated for
+Chromium and scaled per browser
 ([ADR-0012](adr/0012-environment-aware-timeouts.md)) — `slowBrowserTimeoutMs`
 for an individual wait and the ambient whole-test budget,
 `slowBrowserFirstNavigationTimeoutMs` for the coldest navigation.
