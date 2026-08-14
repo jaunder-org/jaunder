@@ -24,6 +24,11 @@ It is not the user's login password; it is an opaque token presented as the
 password in HTTP Basic auth. _Avoid_: API key, access token (it reuses
 session-token infrastructure but is user-facing as a "password").
 
+**Username**: A case-insensitive local account identifier accepted as ASCII
+`[a-z0-9_-]+`. Input is normalized to lowercase; that canonical form is stored,
+compared, serialized, displayed, and used in URLs. _Avoid_: preserving case as a
+second username identity or pre-normalizing outside the Username boundary.
+
 ### AtomPub (RFC 5023)
 
 **Member** / **Entry**: The AtomPub wire representation of a single resource in
@@ -76,6 +81,7 @@ planned `jaunder-client` runtime (see `docs/hub-architecture.md` §8).
 - A **User** _is_ the publication: there is deliberately no
   blog/site/publication entity, and Posts group only by their author.
 - A **User** owns one publishing **Collection** of **Posts**.
+- A **User** has exactly one canonical **Username**.
 - An AtomPub **Member Entry** is the wire form of exactly one **Post**.
 - A **User** may hold many **App Passwords**, each revocable independently.
 - A **Post** appears in two unrelated Atom surfaces: the public **Syndication

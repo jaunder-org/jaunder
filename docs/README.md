@@ -158,6 +158,10 @@ convention). See the Status column below for each ADR's current status.
 | [0128](adr/0128-mod-rs-assembles-module-surface.md)                | `mod.rs` assembles the module surface and holds no items                                                     | accepted   |
 | [0129](adr/0129-request-aggregate-server-function-inputs.md)       | Cohesive request aggregates at server-function boundaries                                                    | accepted   |
 | [0130](adr/0130-current-publication-state-slug-freeze.md)          | Slug Freeze Follows Current Publication State                                                                | accepted   |
+| [0131](adr/0131-test-only-cheap-kdf-fails-closed.md)               | Test-only cheap KDF fails closed                                                                             | accepted   |
+| [0132](adr/0132-explicit-authorization-replaces-session-cookie.md) | Explicit Authorization replaces ambient session state                                                        | accepted   |
+| [0133](adr/0133-hash-bearer-tokens-before-persistence.md)          | Hash bearer-equivalent tokens before persistence                                                             | accepted   |
+| [0134](adr/0134-lowercase-canonical-usernames.md)                  | Lowercase-canonical usernames                                                                                | accepted   |
 
 <!-- adr-table:end -->
 

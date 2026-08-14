@@ -8,7 +8,8 @@ use rstest_reuse::*;
 use tower::ServiceExt;
 
 use crate::helpers::{
-    atompub_at, atompub_xml, body_string, create_user_and_session, make_app, setup_with_base_url,
+    atompub_at, atompub_authed, atompub_xml, body_string, create_user_and_session, make_app,
+    setup_with_base_url,
 };
 use storage::test_support::{Backend, TestEnv, backends};
 
@@ -62,6 +63,64 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
         body.contains("features=\"format-media-type slug\""),
         "extension features missing: {body}"
     );
+}
+#[apply(backends)]
+#[tokio::test]
+async fn explicit_basic_identity_wins_and_expires_simultaneous_cookie(#[case] backend: Backend) {
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let alice = create_user_and_session(&state).await;
+    let bob = create_user_and_session(&state).await;
+    let app = make_app(&state, &base);
+
+    let response = app
+        .oneshot(
+            atompub_at(&bob, "GET", "/atompub/service")
+                .header(header::COOKIE, alice.cookie())
+                .body(Body::empty())
+                .expect("failed to build atompub GET request"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::SET_COOKIE)
+            .and_then(|value| value.to_str().ok()),
+        Some("session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0")
+    );
+    let body = body_string(response).await;
+    assert!(body.contains(&format!(
+        "https://example.com/atompub/{}/posts",
+        bob.username
+    )));
+    assert!(!body.contains(&format!(
+        "https://example.com/atompub/{}/posts",
+        alice.username
+    )));
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn explicit_basic_identity_mismatch_does_not_expire_valid_cookie(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
+    let alice = create_user_and_session(&state).await;
+    let bob = create_user_and_session(&state).await;
+    let app = make_app(&state, &base);
+
+    let response = app
+        .oneshot(
+            atompub_authed("GET", "/atompub/service", "mallory", &bob.token)
+                .header(header::COOKIE, alice.cookie())
+                .body(Body::empty())
+                .expect("failed to build atompub GET request"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(response.headers().get(header::SET_COOKIE).is_none());
 }
 
 #[apply(backends)]

@@ -11,9 +11,9 @@ use rstest::*;
 use rstest_reuse::*;
 
 use crate::helpers::{
-    create_user_and_session, post_form_with_bearer, post_form_with_secure_flag,
-    post_server_fn_request_fixture_with_secure_flag, post_server_fn_with_secure_flag,
-    post_server_fn_with_ua, token_from_set_cookie,
+    create_user_and_session, post_form_with_bearer, post_form_with_credentials,
+    post_form_with_secure_flag, post_server_fn_request_fixture_with_secure_flag,
+    post_server_fn_with_secure_flag, post_server_fn_with_ua, token_from_set_cookie,
 };
 use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
 
@@ -934,6 +934,58 @@ async fn logout_with_bearer_token_revokes_session(#[case] backend: Backend) {
         sessions_after.is_empty(),
         "session should be revoked after bearer-token logout"
     );
+}
+#[apply(backends)]
+#[tokio::test]
+async fn explicit_auth_set_cookie_appends_to_handler_cookie(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let session = create_user_and_session(&state).await;
+    let authorization = format!("Bearer {}", session.token);
+
+    let response = post_form_with_credentials(
+        &state,
+        <web::auth::Logout as ServerFn>::PATH,
+        "",
+        Some(&session.cookie()),
+        Some(&authorization),
+        true,
+    )
+    .await;
+
+    assert_eq!(response.status, StatusCode::OK);
+    assert_eq!(response.set_cookies.len(), 2);
+    assert!(
+        response.set_cookies.iter().all(|value| {
+            value == "session=; HttpOnly; SameSite=Lax; Path=/; Secure; Max-Age=0"
+        })
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn optional_auth_endpoints_reject_explicit_auth_failure(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let session = create_user_and_session(&state).await;
+
+    for path in [
+        <web::auth::GetSession as ServerFn>::PATH,
+        <web::auth::Logout as ServerFn>::PATH,
+        <web::backup::IsWarningVisible as ServerFn>::PATH,
+        <web::site::IsBaseUrlWarningVisible as ServerFn>::PATH,
+    ] {
+        let response = post_form_with_credentials(
+            &state,
+            path,
+            "",
+            Some(&session.cookie()),
+            Some("Malformed"),
+            true,
+        )
+        .await;
+
+        assert_eq!(response.status, StatusCode::INTERNAL_SERVER_ERROR, "{path}");
+        assert!(response.set_cookies.is_empty(), "{path}");
+    }
 }
 
 // Unauthenticated logout: no session cookie → skips revoke, still clears cookie.

@@ -18,7 +18,7 @@ use common::username::Username;
 // sibling `server` module's helpers plus the crate-level server-only dependencies.
 #[cfg(feature = "server")]
 use {
-    super::server::{clear_session_cookie, require_auth, set_session_cookie},
+    super::server::{clear_session_cookie, optional_auth, set_session_cookie},
     common::password::Password,
     leptos::prelude::*,
     std::sync::Arc,
@@ -130,10 +130,12 @@ pub async fn login(request: LoginRequest) -> WebResult<LoginResponse> {
     })
 }
 
-/// Revokes the current session and clears the `session` cookie.
+/// Revokes the current session and clears the `session` cookie. Missing or stale
+/// cookie-only credentials still clear the cookie; explicit Authorization failures
+/// reject without clearing it.
 #[macros::server]
 pub async fn logout() -> WebResult<()> {
-    if let Ok(auth) = require_auth().await {
+    if let Some(auth) = optional_auth().await? {
         let sessions = expect_context::<Arc<dyn SessionStorage>>();
         sessions.revoke_session(&auth.token_hash).await?;
     }
@@ -142,15 +144,14 @@ pub async fn logout() -> WebResult<()> {
     Ok(())
 }
 
-/// The viewer's session identity — username + operator flag — or `None` when
-/// anonymous/expired. The single reconcile fetch behind the shared session context
-/// (#591), superseding `current_user` + the reactive `current_user_is_operator`.
+/// The viewer's session identity — username + operator flag — or `None` for
+/// missing/stale cookie-only credentials. Explicit Authorization failures reject.
+/// The single reconcile fetch behind the shared session context (#591), superseding
+/// `current_user` + the reactive `current_user_is_operator`.
 #[macros::server]
 pub async fn get_session() -> WebResult<Option<super::SessionUser>> {
-    let auth = match require_auth().await {
-        Ok(auth) => auth,
-        Err(error) if error.kind() == crate::error::ErrorKind::Auth => return Ok(None),
-        Err(error) => return Err(error),
+    let Some(auth) = optional_auth().await? else {
+        return Ok(None);
     };
     let users = expect_context::<Arc<dyn UserStorage>>();
     let is_operator = users

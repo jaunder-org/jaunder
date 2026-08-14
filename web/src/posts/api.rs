@@ -235,7 +235,7 @@ pub async fn get(username: Username, date: PermalinkDate, slug: Slug) -> WebResu
     let posts = expect_context::<Arc<dyn PostStorage>>();
     let now = Utc::now();
 
-    let viewer = viewer_identity().await;
+    let viewer = viewer_identity().await?;
     if let Some(post) =
         fetch_post_record(posts.as_ref(), &viewer, &username, date, &slug, now).await?
     {
@@ -275,7 +275,7 @@ pub async fn get_preview(post_id: PostId) -> WebResult<EditPostPreview> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
 
     let post = posts
-        .get_post_by_id(post_id, &viewer_identity().await)
+        .get_post_by_id(post_id, &viewer_identity().await?)
         .await?
         .ok_or_else(not_found_error)?;
 
@@ -310,7 +310,7 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
 
     let old = posts
-        .get_post_by_id(post_id, &viewer_identity().await)
+        .get_post_by_id(post_id, &viewer_identity().await?)
         .await?;
     let old_tag_slugs: BTreeSet<Tag> = old
         .as_ref()
@@ -400,7 +400,7 @@ pub async fn get_audience_selection(post_id: PostId) -> WebResult<AudienceSelect
         .map_err(|e| private_post_not_found_error(&e))?;
 
     let post = posts
-        .get_post_by_id(post_id, &viewer_identity().await)
+        .get_post_by_id(post_id, &viewer_identity().await?)
         .await?
         .ok_or_else(not_found_error)?;
     if post.deleted_at.is_some() || post.user_id != auth.user_id {
@@ -506,7 +506,7 @@ pub async fn delete(post_id: PostId) -> WebResult<()> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
 
     let existing = posts
-        .get_post_by_id(post_id, &viewer_identity().await)
+        .get_post_by_id(post_id, &viewer_identity().await?)
         .await?
         .ok_or_else(|| InternalError::not_found("Post"))?;
 
@@ -535,7 +535,7 @@ pub async fn unpublish(post_id: PostId) -> WebResult<SavedPost> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
 
     let mut existing = posts
-        .get_post_by_id(post_id, &viewer_identity().await)
+        .get_post_by_id(post_id, &viewer_identity().await?)
         .await?
         .ok_or_else(|| InternalError::not_found("Post"))?;
 

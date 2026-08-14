@@ -48,12 +48,13 @@ pub use session::{
     SessionContext, clear_session, provide_session_context, set_session, use_session,
 };
 
-// Public re-exports — must remain accessible as crate::auth::* for other modules.
+// Server-only re-exports stay split by visibility. The feature cannot gate the
+// whole `auth` module in `lib.rs`: its API stubs and wasm UI also compile in the
+// client build.
 #[cfg(feature = "server")]
 pub use server::{
-    AuthRejection, AuthUser, CookieSettings, is_operator_soft, require_auth, require_operator,
+    AuthRejection, AuthUser, CookieSettings, SessionCookieRetirement, is_operator_soft,
+    require_auth, require_operator,
 };
-// Exposed for the sibling `registration` vertical, which logs a new user in after
-// creating their account.
 #[cfg(feature = "server")]
-pub(crate) use server::set_session_cookie;
+pub(crate) use server::{optional_auth, set_session_cookie};

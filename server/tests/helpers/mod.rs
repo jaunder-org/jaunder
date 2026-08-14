@@ -22,13 +22,14 @@ mod websub_capturing;
 // nothing outside consumes — and `unused_imports` is denied. Each definition
 // keeps its `pub`, so nothing narrowed; only unreachable paths went away.
 pub use atompub::{
-    atompub, atompub_at, atompub_get, atompub_post_xml, atompub_put_xml, atompub_upload,
-    atompub_xml,
+    atompub, atompub_at, atompub_authed, atompub_get, atompub_post_xml, atompub_put_xml,
+    atompub_upload, atompub_xml,
 };
 pub use http::{
-    MultipartFile, body_string, get_asset, make_app, post_form, post_form_with_bearer,
-    post_form_with_mailer, post_form_with_secure_flag, post_json, post_multipart, post_server_fn,
-    post_server_fn_request_fixture, post_server_fn_request_fixture_with_mailer,
+    MultipartFile, TestHttpResponse, body_string, get_asset, make_app, post_form,
+    post_form_with_bearer, post_form_with_credentials, post_form_with_mailer,
+    post_form_with_secure_flag, post_json, post_json_with_credentials, post_multipart,
+    post_server_fn, post_server_fn_request_fixture, post_server_fn_request_fixture_with_mailer,
     post_server_fn_request_fixture_with_secure_flag, post_server_fn_with_mailer,
     post_server_fn_with_secure_flag, post_server_fn_with_ua,
 };
