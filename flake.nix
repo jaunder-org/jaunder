@@ -252,6 +252,12 @@
       system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+        # One explicit screenshot font universe for host baseline generation and
+        # NixOS-VM comparison. The file embeds the DejaVu store path, so the font
+        # derivation stays in both closures without ambient system-font lookup.
+        visualFontConfig = pkgs.makeFontsConf {
+          fontDirectories = [ pkgs.dejavu_fonts ];
+        };
         toolchain = fenix.packages.${system}.fromToolchainFile {
           file = ./rust-toolchain.toml;
           sha256 = "sha256-A1abGIbOtcBSdrUMhDGrER3pRM1hQP4fp9gh3Y4PKc8=";
@@ -642,6 +648,7 @@
               "cd /tmp/e2e"
               + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
               + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
+              + " FONTCONFIG_FILE=${visualFontConfig}"
               + "${extraEnv}"
               + " JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture"
               + " JAUNDER_DB=${jaunderDb}"
@@ -1470,6 +1477,7 @@
               RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
               PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
               PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
+              FONTCONFIG_FILE = "${visualFontConfig}";
               # The host `ert` step (run via `nix develop .#ci -c cargo xtask …`)
               # computes timezone->UTC from IANA zone names, which need a zone
               # database for `encode-time` to resolve. A clean CI runner has none

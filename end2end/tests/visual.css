@@ -1,0 +1,7 @@
+:root,
+.j-root {
+  --font-body: "DejaVu Sans", sans-serif !important;
+  --font-display: "DejaVu Sans", sans-serif !important;
+  --font-meta: "DejaVu Sans", sans-serif !important;
+  --font-mono: "DejaVu Sans Mono", monospace !important;
+}

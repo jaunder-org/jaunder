@@ -35,6 +35,7 @@ const firefoxLaunchOptions = {
 const chromiumLaunchOptions = {
   args: ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
 };
+const visualTag = /@visual/;
 
 export default defineConfig({
   testDir: "./tests",
@@ -65,14 +66,26 @@ export default defineConfig({
   },
   // admin-site and invite mutate global site-config singletons (site.title/base_url;
   // site.registration_policy, #433), so under fullyParallel they must not overlap specs
-  // that read them (ADR-0039). Each browser splits into a parallel main project (these
-  // specs ignored) and a serial *-admin project that runs them AFTER the main project
-  // (dependencies + fullyParallel:false). At workers=1 this is inert. webkit is defined
-  // for host use; the VM never selects it (WPE SIGABRT), so no gating needed.
+  // that read them (ADR-0039). Each gated browser runs its zero-retry visual contracts
+  // first, the parallel ordinary tests second, and the serial admin tests last. Reciprocal
+  // tag filters keep each behavioral test in exactly one project. At workers=1 the
+  // ordinary/admin serialization is inert. WebKit is host-only and excludes visual tests.
   projects: [
+    {
+      name: "chromium-visual",
+      testIgnore: /(admin-site|invite)\.spec\.ts/,
+      grep: visualTag,
+      retries: 0,
+      use: {
+        ...devices["Desktop Chrome"],
+        launchOptions: chromiumLaunchOptions,
+      },
+    },
     {
       name: "chromium",
       testIgnore: /(admin-site|invite)\.spec\.ts/,
+      grepInvert: visualTag,
+      dependencies: ["chromium-visual"],
       use: {
         ...devices["Desktop Chrome"],
         launchOptions: chromiumLaunchOptions,
@@ -81,6 +94,7 @@ export default defineConfig({
     {
       name: "chromium-admin",
       testMatch: /(admin-site|invite)\.spec\.ts/,
+      grepInvert: visualTag,
       fullyParallel: false,
       dependencies: ["chromium"],
       use: {
@@ -89,8 +103,20 @@ export default defineConfig({
       },
     },
     {
+      name: "firefox-visual",
+      testIgnore: /(admin-site|invite)\.spec\.ts/,
+      grep: visualTag,
+      retries: 0,
+      use: {
+        ...devices["Desktop Firefox"],
+        launchOptions: firefoxLaunchOptions,
+      },
+    },
+    {
       name: "firefox",
       testIgnore: /(admin-site|invite)\.spec\.ts/,
+      grepInvert: visualTag,
+      dependencies: ["firefox-visual"],
       use: {
         ...devices["Desktop Firefox"],
         launchOptions: firefoxLaunchOptions,
@@ -99,6 +125,7 @@ export default defineConfig({
     {
       name: "firefox-admin",
       testMatch: /(admin-site|invite)\.spec\.ts/,
+      grepInvert: visualTag,
       fullyParallel: false,
       dependencies: ["firefox"],
       use: {
@@ -109,6 +136,7 @@ export default defineConfig({
     {
       name: "webkit",
       testIgnore: /(admin-site|invite)\.spec\.ts/,
+      grepInvert: visualTag,
       use: { ...devices["Desktop Safari"] },
     },
   ],
