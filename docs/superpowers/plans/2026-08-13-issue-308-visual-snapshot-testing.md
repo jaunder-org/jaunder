@@ -236,7 +236,7 @@ refactor(xtask): preserve filtered e2e project scope (#308)
 - Step results identify Chromium versus Firefox. Duplicate anonymous result rows
   are not acceptable.
 
-- [ ] **Step 1: Add failing CLI and update-plan tests**
+- [x] **Step 1: Add failing CLI and update-plan tests**
 
 Extend CLI parsing coverage with:
 
@@ -260,14 +260,14 @@ devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml e2e_local
 
 Expected: FAIL because the flag and update plan do not exist.
 
-- [ ] **Step 2: Add the flag and complete planner**
+- [x] **Step 2: Add the flag and complete planner**
 
 Add the boolean field to `Command::E2eLocal`, retain the optional positional
 filter, and use Clap's argument conflict rather than a runtime special case.
 Pass both values into `steps::e2e_local::run`. Extend the existing pure plan; do
 not add a second command-construction path.
 
-- [ ] **Step 3: Separate build-once from run-once lifecycle ownership**
+- [x] **Step 3: Separate build-once from run-once lifecycle ownership**
 
 Build CSR according to the plan's release bit, and build the server plus
 `test-support` once. Move temp storage, server startup, seed, Playwright, stop,
@@ -276,7 +276,7 @@ lifecycles. Keep `ServerChild` as the teardown guard on every early return.
 Preserve the canonical DB/capture/PATH/base-URL environment and set
 `PLAYWRIGHT_HTML_OPEN=never`.
 
-- [ ] **Step 4: Run regression and invalid-interface checks**
+- [x] **Step 4: Run regression and invalid-interface checks**
 
 Run:
 
@@ -290,10 +290,10 @@ build or server startup and reports the conflict. Do not run update mode
 successfully yet; Task 4 supplies the four tagged contracts and baselines that
 make its observable output meaningful.
 
-- [ ] **Step 5: Gate, stage, and commit Task 3**
+- [x] **Step 5: Gate, stage, and commit Task 3**
 
-Run `devtool run -- cargo xtask check`. Stage `xtask/src/lib.rs` and
-`xtask/src/steps/e2e_local.rs`. Commit:
+Run `devtool run -- cargo xtask check`. Stage `xtask/src/lib.rs`,
+`xtask/src/steps/e2e_local.rs`, and this plan. Commit:
 
 ```text
 feat(xtask): update visual snapshots in fresh browsers (#308)

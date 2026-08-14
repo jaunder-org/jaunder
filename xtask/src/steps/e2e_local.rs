@@ -127,12 +127,27 @@ struct PlaywrightInvocation {
     args: Vec<String>,
 }
 
-fn playwright_invocations(test_filter: Option<&str>) -> Vec<PlaywrightInvocation> {
-    let owned = |args: &[&str]| args.iter().map(|arg| (*arg).to_owned()).collect();
+#[derive(Debug, Eq, PartialEq)]
+struct BrowserLifecycle {
+    browser: &'static str,
+    invocations: Vec<PlaywrightInvocation>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct E2eLocalPlan {
+    release_csr: bool,
+    update_visual_snapshots: bool,
+    lifecycles: Vec<BrowserLifecycle>,
+}
+fn owned_args(args: &[&str]) -> Vec<String> {
+    args.iter().map(|arg| (*arg).to_owned()).collect()
+}
+
+fn normal_invocations(test_filter: Option<&str>) -> Vec<PlaywrightInvocation> {
     match test_filter {
         None => vec![PlaywrightInvocation {
             label: "ordinary",
-            args: owned(&[
+            args: owned_args(&[
                 "test",
                 "--project",
                 "chromium",
@@ -144,7 +159,7 @@ fn playwright_invocations(test_filter: Option<&str>) -> Vec<PlaywrightInvocation
         Some(filter) => vec![
             PlaywrightInvocation {
                 label: "visual",
-                args: owned(&[
+                args: owned_args(&[
                     "test",
                     "--project",
                     "chromium-visual",
@@ -156,7 +171,7 @@ fn playwright_invocations(test_filter: Option<&str>) -> Vec<PlaywrightInvocation
             },
             PlaywrightInvocation {
                 label: "ordinary",
-                args: owned(&[
+                args: owned_args(&[
                     "test",
                     "--project",
                     "chromium",
@@ -172,81 +187,152 @@ fn playwright_invocations(test_filter: Option<&str>) -> Vec<PlaywrightInvocation
     }
 }
 
-fn record_post_playwright_results(
-    result: &mut CommandResult,
-    playwright_result: Result<(), String>,
-    panic_gate_result: Result<(), String>,
-) {
-    match playwright_result {
-        Ok(()) => result.push(StepResult::ok("e2e-local-playwright")),
-        Err(detail) => result.push(StepResult::fail("e2e-local-playwright").detail(detail)),
-    }
-
-    match panic_gate_result {
-        Ok(()) => result.push(StepResult::ok("e2e-local-panic-gate")),
-        Err(detail) => result.push(StepResult::fail("e2e-local-panic-gate").detail(detail)),
+fn e2e_local_plan(test_filter: Option<&str>, update_visual_snapshots: bool) -> E2eLocalPlan {
+    if update_visual_snapshots {
+        E2eLocalPlan {
+            release_csr: true,
+            update_visual_snapshots: true,
+            lifecycles: ["chromium", "firefox"]
+                .into_iter()
+                .map(|browser| BrowserLifecycle {
+                    browser,
+                    invocations: vec![PlaywrightInvocation {
+                        label: "visual",
+                        args: owned_args(&[
+                            "test",
+                            "--project",
+                            &format!("{browser}-visual"),
+                            "--no-deps",
+                            "--update-snapshots",
+                            "--reporter=html,line",
+                        ]),
+                    }],
+                })
+                .collect(),
+        }
+    } else {
+        E2eLocalPlan {
+            release_csr: false,
+            update_visual_snapshots: false,
+            lifecycles: vec![BrowserLifecycle {
+                browser: "chromium",
+                invocations: normal_invocations(test_filter),
+            }],
+        }
     }
 }
 
-/// Build, own a `jaunder serve` on an ephemeral port, seed, run Playwright, tear
-/// down. `test_filter`, when set, passes through to Playwright (a spec path or
-/// `-g` grep) for single-test runs.
-pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
-    // 1. Build the served CSR bundle via the shared devtool path (#236); this also
-    // leaves the shell's cwd at the repo root.
-    super::build_csr::run(sh, result, false);
-    if !result.ok {
-        return; // build_csr already recorded the failing step
-    }
-    let Ok(root) = git::toplevel(Path::new(".")) else {
-        result.push(StepResult::fail("e2e-local").detail("cannot locate repo root".to_owned()));
-        return;
-    };
+fn step_name(browser: &str, suffix: &str) -> String {
+    format!("e2e-local-{browser}-{suffix}")
+}
 
-    // The server bin and the out-of-process seed impl.
-    for (pkg, label) in [
-        ("jaunder", "e2e-local-build-server"),
-        ("test-support", "e2e-local-build-support"),
-    ] {
-        if cmd!(sh, "cargo build -p {pkg}").run().is_err() {
-            result.push(StepResult::fail(label).detail(format!("cargo build -p {pkg} failed")));
-            return;
-        }
-        result.push(StepResult::ok(label));
+fn record_post_playwright_results(
+    result: &mut CommandResult,
+    browser: &str,
+    playwright_result: Result<(), String>,
+    panic_gate_result: Result<(), String>,
+) {
+    let playwright_step = step_name(browser, "playwright");
+    match playwright_result {
+        Ok(()) => result.push(StepResult::ok(&playwright_step)),
+        Err(detail) => result.push(StepResult::fail(&playwright_step).detail(detail)),
     }
 
-    // 2. Per-run temp storage dir → fresh DB (no reset needed) + concurrency
-    // isolation. Removed when this fn returns, after the server is torn down.
+    record_panic_gate_result(result, browser, panic_gate_result);
+}
+
+fn record_panic_gate_result(
+    result: &mut CommandResult,
+    browser: &str,
+    panic_gate_result: Result<(), String>,
+) {
+    let panic_step = step_name(browser, "panic-gate");
+    match panic_gate_result {
+        Ok(()) => result.push(StepResult::ok(&panic_step)),
+        Err(detail) => result.push(StepResult::fail(&panic_step).detail(detail)),
+    }
+}
+
+struct LifecycleVerification<'a> {
+    browser: &'a str,
+    test_support: &'a str,
+    capture: &'a str,
+    server_stderr: &'a Path,
+}
+
+fn finish_lifecycle(
+    sh: &Shell,
+    result: &mut CommandResult,
+    server: &mut ServerChild,
+    verification: &LifecycleVerification<'_>,
+    playwright_result: Option<Result<(), String>>,
+) {
+    let server_log_step = step_name(verification.browser, "server-log");
+    if let Err(error) = server.stop() {
+        result.push(
+            StepResult::fail(&server_log_step)
+                .detail(format!("failed to finalize server stderr capture: {error}")),
+        );
+    }
+
+    let test_support = verification.test_support;
+    let capture = verification.capture;
+    let server_stderr = verification.server_stderr;
+    let panic_gate_result = cmd!(
+        sh,
+        "{test_support} verify-no-panics --capture-dir {capture} --server-log {server_stderr}"
+    )
+    .run()
+    .map_err(|_| "shared zero-panic verifier failed".to_owned());
+    if let Some(playwright_result) = playwright_result {
+        record_post_playwright_results(
+            result,
+            verification.browser,
+            playwright_result,
+            panic_gate_result,
+        );
+    } else {
+        record_panic_gate_result(result, verification.browser, panic_gate_result);
+    }
+}
+
+fn run_lifecycle(
+    sh: &Shell,
+    result: &mut CommandResult,
+    root: &Path,
+    lifecycle: &BrowserLifecycle,
+) {
+    let browser = lifecycle.browser;
+    let tmpdir_step = step_name(browser, "tmpdir");
+    let server_log_step = step_name(browser, "server-log");
+    let server_step = step_name(browser, "server");
+    let seed_step = step_name(browser, "seed");
+
+    // A distinct temp storage directory gives every browser a fresh database,
+    // capture directory, runtime file, port, server, and teardown.
     let Ok(storage) = tempfile::tempdir() else {
         result.push(
-            StepResult::fail("e2e-local-tmpdir")
-                .detail("cannot create temp storage dir".to_owned()),
+            StepResult::fail(&tmpdir_step).detail("cannot create temp storage dir".to_owned()),
         );
         return;
     };
     let sp = storage.path().display();
     let db = format!("sqlite:{sp}/jaunder.db");
     let runtime = storage.path().join("runtime.json");
-    // The single capture-dir contract (#227): a dedicated subdir the server writes
-    // mail.jsonl/websub.jsonl/diag.log into. Kept separate from the storage root so it
-    // holds only capture streams (VM parity: /var/lib/jaunder/capture).
     let capture = format!("{sp}/capture");
     let server_stderr = storage.path().join("server-stderr.log");
     let stderr_capture = match File::create(&server_stderr) {
         Ok(file) => file,
         Err(error) => {
             result.push(
-                StepResult::fail("e2e-local-server-log")
+                StepResult::fail(&server_log_step)
                     .detail(format!("failed to create server stderr capture: {error}")),
             );
             return;
         }
     };
 
-    // 3. Start `jaunder serve` on an EPHEMERAL port (:0) with the canonical capture
-    // env, in the dev environment (default) so the schema auto-inits on start.
-    // ServerChild reaps it on every exit path below (#249 AC 2).
-    let child = match Command::new(format!("{root}/target/debug/jaunder"))
+    let child = match Command::new(root.join("target/debug/jaunder"))
         .arg("serve")
         .env("JAUNDER_BIND", "127.0.0.1:0")
         .env("JAUNDER_STORAGE_PATH", storage.path())
@@ -256,11 +342,11 @@ pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
         .stderr(Stdio::piped())
         .spawn()
     {
-        Ok(c) => c,
-        Err(e) => {
+        Ok(child) => child,
+        Err(error) => {
             result.push(
-                StepResult::fail("e2e-local-server")
-                    .detail(format!("failed to spawn jaunder serve: {e}")),
+                StepResult::fail(&server_step)
+                    .detail(format!("failed to spawn jaunder serve: {error}")),
             );
             return;
         }
@@ -269,15 +355,20 @@ pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
         Ok(server) => server,
         Err(error) => {
             result.push(
-                StepResult::fail("e2e-local-server-log")
+                StepResult::fail(&server_log_step)
                     .detail(format!("failed to start server stderr capture: {error}")),
             );
             return;
         }
     };
 
-    // 4. Discover the OS-assigned port from the runtime file, then wait for the
-    // server to answer (~15s: 30 × 0.5s).
+    let test_support = root.join("target/debug/test-support").display().to_string();
+    let verification = LifecycleVerification {
+        browser,
+        test_support: &test_support,
+        capture: &capture,
+        server_stderr: &server_stderr,
+    };
     let mut discovered = None;
     for _ in 0..30 {
         if let Ok(contents) = std::fs::read_to_string(&runtime)
@@ -291,22 +382,16 @@ pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
     }
     let Some(base_url) = discovered else {
         result.push(
-            StepResult::fail("e2e-local-server")
+            StepResult::fail(&server_step)
                 .detail("server not reachable via runtime.json within 15s".to_owned()),
         );
+        finish_lifecycle(sh, result, &mut server, &verification, None);
         return;
     };
-    result.push(StepResult::ok("e2e-local-server"));
+    result.push(StepResult::ok(&server_step));
 
-    // 5. Seed the canonical fixtures via the SHARED devtool subcommand (the same
-    // list the flake VM's seed_db uses). Source-run devtool: its `seed-e2e`
-    // subcommand may post-date the host's on-PATH binary. The temp DB is fresh, so
-    // no reset is needed.
-    let tools = format!("{root}/tools/Cargo.toml");
-    let test_support = format!("{root}/target/debug/test-support");
-    // The `site_config` seed steps run through the shipped `jaunder` binary — the
-    // same real build already spawned for `serve` above (cheap-kdf OFF).
-    let jaunder = format!("{root}/target/debug/jaunder");
+    let tools = root.join("tools/Cargo.toml");
+    let jaunder = root.join("target/debug/jaunder");
     if cmd!(
         sh,
         "cargo run --manifest-path {tools} -- seed-e2e --db {db} --test-support-bin {test_support} --jaunder-bin {jaunder}"
@@ -315,27 +400,22 @@ pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
     .run()
     .is_err()
     {
-        result
-            .push(StepResult::fail("e2e-local-seed").detail("devtool seed-e2e failed".to_owned()));
+        result.push(StepResult::fail(&seed_step).detail("devtool seed-e2e failed".to_owned()));
+        finish_lifecycle(sh, result, &mut server, &verification, None);
         return;
     }
-    result.push(StepResult::ok("e2e-local-seed"));
+    result.push(StepResult::ok(&seed_step));
 
-    // 6. Playwright against the discovered baseURL, from end2end/. The host serves a
-    // slow debug wasm bundle, so run serial by default (workers=1, overridable via
-    // JAUNDER_E2E_WORKERS; the VM keeps the config default of 2). The DB + capture
-    // vars and a target/debug-prefixed PATH match the VM's Playwright env so
-    // mail/websub readers and `seedPostsViaTool` (bare `test-support`) see the same
-    // files/DB/binary.
     let workers = std::env::var("JAUNDER_E2E_WORKERS").unwrap_or_else(|_| "1".to_owned());
     let path = format!(
-        "{root}/target/debug:{}",
+        "{}/target/debug:{}",
+        root.display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    sh.change_dir(format!("{root}/end2end"));
+    sh.change_dir(root.join("end2end"));
     let mut playwright_result = Ok(());
-    for invocation in playwright_invocations(test_filter) {
-        let playwright_ok = cmd!(sh, "playwright")
+    for invocation in &lifecycle.invocations {
+        if cmd!(sh, "playwright")
             .args(&invocation.args)
             .env("JAUNDER_E2E_BASE_URL", &base_url)
             .env("JAUNDER_DB", &db)
@@ -344,8 +424,8 @@ pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
             .env("PLAYWRIGHT_HTML_OPEN", "never")
             .env("PATH", &path)
             .run()
-            .is_ok();
-        if !playwright_ok {
+            .is_err()
+        {
             playwright_result = Err(format!(
                 "{} Playwright invocation reported failures",
                 invocation.label
@@ -354,24 +434,47 @@ pub fn run(sh: &Shell, result: &mut CommandResult, test_filter: Option<&str>) {
         }
     }
 
-    // Stop first: child exit closes stderr, so a successful stop also proves the
-    // mirror reached EOF and flushed the complete verifier input.
-    if let Err(error) = server.stop() {
-        result.push(
-            StepResult::fail("e2e-local-server-log")
-                .detail(format!("failed to finalize server stderr capture: {error}")),
-        );
+    finish_lifecycle(
+        sh,
+        result,
+        &mut server,
+        &verification,
+        Some(playwright_result),
+    );
+}
+
+/// Build the served CSR bundle and binaries once, then execute each planned
+/// browser against its own complete server/database/capture lifecycle.
+pub fn run(
+    sh: &Shell,
+    result: &mut CommandResult,
+    test_filter: Option<&str>,
+    update_visual_snapshots: bool,
+) {
+    let plan = e2e_local_plan(test_filter, update_visual_snapshots);
+    super::build_csr::run(sh, result, plan.release_csr);
+    if !result.ok {
+        return;
+    }
+    let Ok(root) = git::toplevel(Path::new(".")) else {
+        result.push(StepResult::fail("e2e-local").detail("cannot locate repo root".to_owned()));
+        return;
+    };
+
+    for (pkg, label) in [
+        ("jaunder", "e2e-local-build-server"),
+        ("test-support", "e2e-local-build-support"),
+    ] {
+        if cmd!(sh, "cargo build -p {pkg}").run().is_err() {
+            result.push(StepResult::fail(label).detail(format!("cargo build -p {pkg} failed")));
+            return;
+        }
+        result.push(StepResult::ok(label));
     }
 
-    let panic_gate_result = cmd!(
-        sh,
-        "{test_support} verify-no-panics --capture-dir {capture} --server-log {server_stderr}"
-    )
-    .run()
-    .map_err(|_| "shared zero-panic verifier failed".to_owned());
-    record_post_playwright_results(result, playwright_result, panic_gate_result);
-    // `storage` drops here after the server is reaped and verification has read
-    // its per-run files.
+    for lifecycle in &plan.lifecycles {
+        run_lifecycle(sh, result, Path::new(&root), lifecycle);
+    }
 }
 
 #[cfg(test)]
@@ -399,11 +502,16 @@ mod tests {
 
     #[test]
     fn unfiltered_run_keeps_project_dependencies_enabled() {
-        let plan = playwright_invocations(None);
-        assert_eq!(plan.len(), 1);
-        assert_eq!(plan[0].label, "ordinary");
+        let plan = e2e_local_plan(None, false);
+        assert!(!plan.update_visual_snapshots);
+        assert!(!plan.release_csr);
+        assert_eq!(plan.lifecycles.len(), 1);
+        let lifecycle = &plan.lifecycles[0];
+        assert_eq!(lifecycle.browser, "chromium");
+        assert_eq!(lifecycle.invocations.len(), 1);
+        assert_eq!(lifecycle.invocations[0].label, "ordinary");
         assert_eq!(
-            plan[0].args,
+            lifecycle.invocations[0].args,
             owned(&[
                 "test",
                 "--project",
@@ -417,15 +525,17 @@ mod tests {
 
     #[test]
     fn filtered_run_scopes_visual_and_ordinary_invocations() {
-        let plan = playwright_invocations(Some("auth.spec.ts"));
+        let plan = e2e_local_plan(Some("auth.spec.ts"), false);
+        let invocations = &plan.lifecycles[0].invocations;
         assert_eq!(
-            plan.iter()
+            invocations
+                .iter()
                 .map(|invocation| invocation.label)
                 .collect::<Vec<_>>(),
             vec!["visual", "ordinary"]
         );
         assert_eq!(
-            plan[0].args,
+            invocations[0].args,
             owned(&[
                 "test",
                 "--project",
@@ -437,7 +547,7 @@ mod tests {
             ])
         );
         assert_eq!(
-            plan[1].args,
+            invocations[1].args,
             owned(&[
                 "test",
                 "--project",
@@ -449,6 +559,44 @@ mod tests {
                 "--reporter=html,line",
                 "auth.spec.ts",
             ])
+        );
+    }
+
+    #[test]
+    fn visual_update_plan_uses_release_csr_and_fresh_browser_lifecycles() {
+        let plan = e2e_local_plan(None, true);
+        assert!(plan.release_csr);
+        assert!(plan.update_visual_snapshots);
+        assert_eq!(
+            plan.lifecycles
+                .iter()
+                .map(|lifecycle| lifecycle.browser)
+                .collect::<Vec<_>>(),
+            vec!["chromium", "firefox"]
+        );
+        assert_eq!(
+            plan.lifecycles
+                .iter()
+                .map(|lifecycle| &lifecycle.invocations[0].args)
+                .collect::<Vec<_>>(),
+            vec![
+                &owned(&[
+                    "test",
+                    "--project",
+                    "chromium-visual",
+                    "--no-deps",
+                    "--update-snapshots",
+                    "--reporter=html,line",
+                ]),
+                &owned(&[
+                    "test",
+                    "--project",
+                    "firefox-visual",
+                    "--no-deps",
+                    "--update-snapshots",
+                    "--reporter=html,line",
+                ]),
+            ]
         );
     }
 
@@ -470,6 +618,7 @@ mod tests {
 
         record_post_playwright_results(
             &mut result,
+            "firefox",
             Err("visual Playwright invocation reported failures".to_owned()),
             Err("shared verifier rejected a panic".to_owned()),
         );
@@ -478,12 +627,12 @@ mod tests {
         let playwright = result
             .steps
             .iter()
-            .find(|step| step.name == "e2e-local-playwright")
+            .find(|step| step.name == "e2e-local-firefox-playwright")
             .expect("playwright step");
         let panic_gate = result
             .steps
             .iter()
-            .find(|step| step.name == "e2e-local-panic-gate")
+            .find(|step| step.name == "e2e-local-firefox-panic-gate")
             .expect("panic step");
         assert!(!playwright.ok);
         assert!(!panic_gate.ok);
@@ -496,14 +645,15 @@ mod tests {
     #[test]
     fn clean_post_playwright_results_are_both_successful() {
         let mut result = CommandResult::new("e2e-local");
-        record_post_playwright_results(&mut result, Ok(()), Ok(()));
+        record_post_playwright_results(&mut result, "chromium", Ok(()), Ok(()));
         assert!(result.ok);
         assert_eq!(
             result
                 .steps
                 .iter()
                 .filter(|step| {
-                    step.name == "e2e-local-playwright" || step.name == "e2e-local-panic-gate"
+                    step.name == "e2e-local-chromium-playwright"
+                        || step.name == "e2e-local-chromium-panic-gate"
                 })
                 .filter(|step| step.ok)
                 .count(),
