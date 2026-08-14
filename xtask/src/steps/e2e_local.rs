@@ -116,11 +116,24 @@ impl ServerChild {
             anyhow::bail!(failures.join("; "))
         }
     }
+
+    fn stop_for_drop_with(
+        &mut self,
+        stop: impl FnOnce(&mut Self) -> anyhow::Result<()>,
+        stderr: &mut impl Write,
+    ) {
+        if stop(self).is_err() {
+            let _ = writeln!(
+                stderr,
+                "xtask: warning: xtask.e2e.server_cleanup: ignored failure while stopping e2e-local server during drop"
+            );
+        }
+    }
 }
 
 impl Drop for ServerChild {
     fn drop(&mut self) {
-        let _ = self.stop();
+        self.stop_for_drop_with(|server| server.stop(), &mut std::io::stderr());
     }
 }
 
@@ -821,6 +834,27 @@ mod tests {
             error.downcast_ref::<env::VarError>(),
             Some(env::VarError::NotPresent)
         ));
+    }
+
+    #[test]
+    fn ancillary_warning_server_drop_failure_preserves_primary_result() {
+        let child = Command::new("sleep")
+            .arg("60")
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn sleep");
+        let capture = tempfile::tempfile().expect("capture file");
+        let mut guard = ServerChild::new(child, capture).expect("server guard");
+        let primary = CommandResult::new("e2e-local");
+        let before = serde_json::to_string(&primary).unwrap();
+        let mut stderr = Vec::new();
+        guard.stop_for_drop_with(|_| anyhow::bail!("sensitive stop failure"), &mut stderr);
+        assert_eq!(serde_json::to_string(&primary).unwrap(), before);
+        let warning = String::from_utf8(stderr).unwrap();
+        assert_eq!(warning.matches("xtask.e2e.server_cleanup").count(), 1);
+        assert_eq!(warning.lines().count(), 1);
+        assert!(!warning.contains("sensitive"));
+        drop(guard);
     }
 
     #[test]

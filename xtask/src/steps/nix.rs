@@ -417,27 +417,67 @@ fn report_diagnostics_copy(outcome: DiagnosticsCopy, stderr: &mut impl Write) ->
     outcome.copied
 }
 
-/// A `Write` that fans every write out to two inner writers, **best-effort**: a
-/// write or flush error from either sink is swallowed and the whole chunk is
-/// always reported consumed. This is deliberate. `build_check` drives it with
-/// `io::copy` to drain a child's stderr pipe, and that drain MUST run to EOF even
-/// if the log file (or our own stderr) goes unwritable mid-build — otherwise the
-/// unread pipe fills and the child blocks forever in `wait()` (the exact
-/// disk-pressure case this capture exists to diagnose). Log capture is a
-/// diagnostic nicety, never a reason to hang the gate.
-struct MultiWriter<A: Write, B: Write>(A, B);
+/// Fans every chunk to a diagnostic sink and the primary stderr sink while
+/// continuing to drain after either fails. The owner inspects the recorded
+/// failures after EOF: diagnostic failure warns; primary failure fails the step.
+struct MultiWriter<A: Write, B: Write> {
+    diagnostic: A,
+    primary: B,
+    diagnostic_failed: bool,
+    primary_failed: bool,
+}
+
+impl<A: Write, B: Write> MultiWriter<A, B> {
+    fn new(diagnostic: A, primary: B) -> Self {
+        Self {
+            diagnostic,
+            primary,
+            diagnostic_failed: false,
+            primary_failed: false,
+        }
+    }
+}
 
 impl<A: Write, B: Write> Write for MultiWriter<A, B> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let _ = self.0.write_all(buf);
-        let _ = self.1.write_all(buf);
+        self.diagnostic_failed |= self.diagnostic.write_all(buf).is_err();
+        self.primary_failed |= self.primary.write_all(buf).is_err();
         Ok(buf.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        let _ = self.0.flush();
-        let _ = self.1.flush();
+        self.diagnostic_failed |= self.diagnostic.flush().is_err();
+        self.primary_failed |= self.primary.flush().is_err();
         Ok(())
+    }
+}
+
+#[derive(Default)]
+struct BuildCaptureOutcome {
+    diagnostic_failed: bool,
+    primary_failed: bool,
+}
+
+fn drain_build_stderr(
+    reader: &mut impl io::Read,
+    diagnostic: &mut impl Write,
+    primary: &mut impl Write,
+) -> BuildCaptureOutcome {
+    let mut sink = MultiWriter::new(diagnostic, primary);
+    let read_failed = io::copy(reader, &mut sink).is_err();
+    let _ = sink.flush();
+    BuildCaptureOutcome {
+        diagnostic_failed: sink.diagnostic_failed,
+        primary_failed: read_failed || sink.primary_failed,
+    }
+}
+
+fn report_build_diagnostic_failure(failed: bool, stderr: &mut impl Write) {
+    if failed {
+        let _ = writeln!(
+            stderr,
+            "xtask: warning: xtask.nix.build_diagnostics: ignored failure while capturing nix build diagnostics"
+        );
     }
 }
 
@@ -472,64 +512,130 @@ fn failure_excerpt(build_log: &str) -> String {
     out
 }
 
-/// On a failed check, write the scoped [`failure_excerpt`] of the captured build log to
-/// `failure-excerpt.log` beside it (`.xtask/diagnostics/<check>/`). Best-effort: `None`
-/// if the log is unreadable (then only the full log is named).
-fn write_failure_excerpt(log_path: &str) -> Option<String> {
-    let log = std::fs::read_to_string(log_path).ok()?;
-    let dir = Path::new(log_path).parent().unwrap_or(Path::new("."));
-    let excerpt_path = dir.join("failure-excerpt.log");
-    std::fs::write(&excerpt_path, format!("{}\n", failure_excerpt(&log))).ok()?;
-    Some(excerpt_path.to_string_lossy().into_owned())
+/// On a failed check, write the scoped [`failure_excerpt`] beside a complete
+/// captured build log. The caller aggregates any failure with its other
+/// diagnostic losses.
+fn write_failure_excerpt(log_path: &str) -> io::Result<String> {
+    write_failure_excerpt_with(
+        log_path,
+        |path| std::fs::read_to_string(path),
+        |path, body| std::fs::write(path, body),
+    )
 }
 
-/// The failure `detail` for a Nix check, naming the installable, the exit status, the
-/// scoped excerpt (read first) when one was written, and the full build-log path. Pure
-/// so it can be unit-tested.
+fn write_failure_excerpt_with(
+    log_path: &str,
+    read_log: impl FnOnce(&str) -> io::Result<String>,
+    write_excerpt: impl FnOnce(&Path, &[u8]) -> io::Result<()>,
+) -> io::Result<String> {
+    let log = read_log(log_path)?;
+    let dir = Path::new(log_path).parent().unwrap_or(Path::new("."));
+    let excerpt_path = dir.join("failure-excerpt.log");
+    let body = format!("{}\n", failure_excerpt(&log));
+    write_excerpt(&excerpt_path, body.as_bytes())?;
+    Ok(excerpt_path.to_string_lossy().into_owned())
+}
+
+fn prepare_build_dirs_with(
+    create_gcroots: impl FnOnce() -> io::Result<()>,
+    create_diagnostics: impl FnOnce() -> io::Result<()>,
+) -> io::Result<bool> {
+    create_gcroots()?;
+    Ok(create_diagnostics().is_err())
+}
+
+/// The failure `detail` for a Nix check. Diagnostic paths are included only
+/// when the build log was captured completely.
 fn failure_detail(
     installable: &str,
     status: &std::process::ExitStatus,
     excerpt_path: Option<&str>,
-    log_path: &str,
+    log_path: Option<&str>,
 ) -> String {
-    match excerpt_path {
-        Some(e) => format!(
-            "nix build {installable} exited with {status}; scoped excerpt (read first): {e}; full build log: {log_path}"
+    match (excerpt_path, log_path) {
+        (Some(excerpt), Some(log)) => format!(
+            "nix build {installable} exited with {status}; scoped excerpt (read first): {excerpt}; full build log: {log}"
         ),
-        None => format!("nix build {installable} exited with {status}; full build log: {log_path}"),
+        (None, Some(log)) => {
+            format!("nix build {installable} exited with {status}; full build log: {log}")
+        }
+        _ => format!("nix build {installable} exited with {status}"),
     }
+}
+
+struct FailedBuildDiagnostics<'a> {
+    step_name: &'a str,
+    installable: &'a str,
+    status: &'a std::process::ExitStatus,
+    log_path: &'a str,
+    capture_failed: bool,
+}
+
+fn failed_build_after_diagnostics_with(
+    build: FailedBuildDiagnostics<'_>,
+    write_excerpt: impl FnOnce() -> io::Result<String>,
+    rescue: impl FnOnce() -> bool,
+    stderr: &mut impl Write,
+) -> StepResult {
+    let FailedBuildDiagnostics {
+        step_name,
+        installable,
+        status,
+        log_path,
+        capture_failed,
+    } = build;
+    let reliable_log_path = (!capture_failed).then_some(log_path);
+    let mut diagnostic_failed = capture_failed;
+    let excerpt = if reliable_log_path.is_some() {
+        match write_excerpt() {
+            Ok(path) => Some(path),
+            Err(_) => {
+                diagnostic_failed = true;
+                None
+            }
+        }
+    } else {
+        None
+    };
+    diagnostic_failed |= rescue();
+    report_build_diagnostic_failure(diagnostic_failed, stderr);
+    StepResult::fail(step_name).detail(failure_detail(
+        installable,
+        status,
+        excerpt.as_deref(),
+        reliable_log_path,
+    ))
 }
 
 /// `nix build -L --keep-failed --accept-flake-config --out-link .xtask/gcroots/<check> .#checks.<system>.<check>`,
 /// fanning the `-L` build log to both the live terminal and
 /// `.xtask/diagnostics/<check>/build.log` (gitignored; uploaded by ci.yml's
-/// `validate-diagnostics` artifact). On failure the saved log path is named in the
-/// `StepResult` detail so the failure is diagnosable without a rebuild.
+/// `validate-diagnostics` artifact). On failure a completely captured log is
+/// named in the `StepResult`; partial/unavailable diagnostic paths are omitted.
 /// --accept-flake-config honors the jaunder-org cachix substituter for the
 /// untrusted local user; --out-link makes the closure a GC root.
 fn build_check(step_name: &str, check: &str) -> StepResult {
-    let _ = std::fs::create_dir_all(".xtask/gcroots");
+    let mut diagnostic_failed = match prepare_build_dirs_with(
+        || std::fs::create_dir_all(".xtask/gcroots"),
+        || std::fs::create_dir_all(format!(".xtask/diagnostics/{check}")),
+    ) {
+        Ok(failed) => failed,
+        Err(error) => {
+            return StepResult::fail(step_name).detail(format!("creating .xtask/gcroots: {error}"));
+        }
+    };
     let out_link = format!(".xtask/gcroots/{check}");
     let installable = format!(".#checks.{SYSTEM}.{check}");
-
     let log_dir = format!(".xtask/diagnostics/{check}");
-    let _ = std::fs::create_dir_all(&log_dir);
     let log_path = format!("{log_dir}/build.log");
 
     let mut child = match Command::new("nix")
         .args([
             "build",
-            // -L streams every (transitive) derivation's build log to stderr, so
-            // the failing dependency's output is in the stream we capture below.
             "-L",
-            // Widen nix's own de-interleaved failing-builder tail in the `error:`
-            // summary block, which `write_failure_excerpt` carves out (#145).
+            "--keep-failed",
             "--log-lines",
             NIX_ERROR_TAIL_LINES,
-            // Retain the failed build dir so a catastrophic in-sandbox failure
-            // (e.g. ENOSPC that prevented writing `$out`) still leaves first-hand
-            // data; `rescue_diagnostics` then copies it out.
-            "--keep-failed",
             "--accept-flake-config",
             "--out-link",
             &out_link,
@@ -538,40 +644,53 @@ fn build_check(step_name: &str, check: &str) -> StepResult {
         .stderr(Stdio::piped())
         .spawn()
     {
-        Ok(c) => c,
-        Err(e) => return StepResult::fail(step_name).detail(e.to_string()),
+        Ok(child) => child,
+        Err(error) => {
+            report_build_diagnostic_failure(diagnostic_failed, &mut io::stderr());
+            return StepResult::fail(step_name).detail(error.to_string());
+        }
     };
 
-    // Drain the piped stderr to both the live terminal and the log file. We must
-    // drain it regardless (an undrained full pipe would block the child); if the
-    // log file can't be opened we still copy to stderr alone.
+    let mut primary_output_failed = false;
     if let Some(mut stderr_pipe) = child.stderr.take() {
-        match File::create(&log_path) {
-            Ok(file) => {
-                let mut sink = MultiWriter(file, io::stderr());
-                let _ = io::copy(&mut stderr_pipe, &mut sink);
-            }
+        let outcome = match File::create(&log_path) {
+            Ok(mut file) => drain_build_stderr(&mut stderr_pipe, &mut file, &mut io::stderr()),
             Err(_) => {
-                let _ = io::copy(&mut stderr_pipe, &mut io::stderr());
+                diagnostic_failed = true;
+                drain_build_stderr(&mut stderr_pipe, &mut io::sink(), &mut io::stderr())
             }
-        }
+        };
+        diagnostic_failed |= outcome.diagnostic_failed;
+        primary_output_failed |= outcome.primary_failed;
     }
-
-    match child.wait() {
-        Ok(s) if s.success() => StepResult::ok(step_name),
-        Ok(s) => {
-            let excerpt = write_failure_excerpt(&log_path);
-            let detail = failure_detail(&installable, &s, excerpt.as_deref(), &log_path);
-            failed_build_after_rescue(step_name, detail, || {
-                rescue_diagnostics(check);
-            })
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(error) => {
+            report_build_diagnostic_failure(diagnostic_failed, &mut io::stderr());
+            return StepResult::fail(step_name).detail(error.to_string());
         }
-        Err(e) => StepResult::fail(step_name).detail(e.to_string()),
+    };
+    if primary_output_failed {
+        report_build_diagnostic_failure(diagnostic_failed, &mut io::stderr());
+        return StepResult::fail(step_name).detail("failed to stream nix build stderr");
     }
-}
-fn failed_build_after_rescue(step_name: &str, detail: String, rescue: impl FnOnce()) -> StepResult {
-    rescue();
-    StepResult::fail(step_name).detail(detail)
+    if status.success() {
+        report_build_diagnostic_failure(diagnostic_failed, &mut io::stderr());
+        StepResult::ok(step_name)
+    } else {
+        failed_build_after_diagnostics_with(
+            FailedBuildDiagnostics {
+                step_name,
+                installable: &installable,
+                status: &status,
+                log_path: &log_path,
+                capture_failed: diagnostic_failed,
+            },
+            || write_failure_excerpt(&log_path),
+            || rescue_diagnostics(check),
+            &mut io::stderr(),
+        )
+    }
 }
 /// Run `nix eval --raw --accept-flake-config <installable>`, optionally in a
 /// supplied flake directory.
@@ -604,22 +723,6 @@ fn eval_out_path(check: &str) -> Result<String> {
     nix_eval_raw(None, &format!(".#checks.{SYSTEM}.{check}.outPath"))
 }
 
-fn eval_out_path_after_failure(
-    eval: impl FnOnce() -> Result<String>,
-    stderr: &mut impl Write,
-) -> Option<String> {
-    match eval() {
-        Ok(path) => Some(path),
-        Err(_) => {
-            let _ = writeln!(
-                stderr,
-                "xtask: warning: xtask.nix.e2e_out_path: ignored failure while locating failed e2e output"
-            );
-            None
-        }
-    }
-}
-
 pub fn eval_coverage_drvpath(flake_dir: &Path) -> Result<String> {
     nix_eval_raw(
         Some(flake_dir),
@@ -627,34 +730,25 @@ pub fn eval_coverage_drvpath(flake_dir: &Path) -> Result<String> {
     )
 }
 
-fn report_rescue_failure(failed: bool, stderr: &mut impl Write) {
-    if failed {
-        let _ = writeln!(
-            stderr,
-            "xtask: warning: xtask.nix.e2e_rescue: ignored failure(s) while rescuing diagnostics"
-        );
-    }
-}
-
-/// On a failed build, best-effort copy diagnostics from retained outputs. Every
-/// continuation failure is visible without changing the failed build result.
-fn rescue_diagnostics(check: &str) {
+/// On a failed build, best-effort copy diagnostics from retained outputs.
+/// Returns whether any secondary recovery step failed so the build owner can
+/// aggregate one warning without changing the primary failure.
+fn rescue_diagnostics(check: &str) -> bool {
     let dest = format!(".xtask/diagnostics/{check}");
     let mut failed = std::fs::create_dir_all(&dest).is_err();
-    if check.starts_with("e2e")
-        && let Some(out_path) =
-            eval_out_path_after_failure(|| eval_out_path(check), &mut std::io::stderr())
-    {
-        let outcome = copy_e2e_diagnostics_between(Path::new(&out_path), Path::new(&dest));
-        failed |= !outcome.failures.is_empty();
+    if check.starts_with("e2e") {
+        match eval_out_path(check) {
+            Ok(out_path) => {
+                let outcome = copy_e2e_diagnostics_between(Path::new(&out_path), Path::new(&dest));
+                failed |= !outcome.failures.is_empty();
+            }
+            Err(_) => failed = true,
+        }
     }
     let prefix = format!("nix-build-jaunder-{check}");
     let entries = match std::fs::read_dir("/tmp") {
         Ok(entries) => entries,
-        Err(_) => {
-            report_rescue_failure(true, &mut std::io::stderr());
-            return;
-        }
+        Err(_) => return true,
     };
     for entry in entries {
         let entry = match entry {
@@ -684,16 +778,19 @@ fn rescue_diagnostics(check: &str) {
             );
         }
     }
-    report_rescue_failure(failed, &mut std::io::stderr());
+    failed
 }
 
 #[cfg(test)]
 mod tests {
+    use std::io::{self, Write};
     use std::os::unix::fs::PermissionsExt;
 
     use super::{
-        CommandResult, StepResult, doctest_sentinel_detail, eval_out_path_after_failure,
-        failed_status_step, sentinel_detail, test_check_names,
+        CommandResult, FailedBuildDiagnostics, StepResult, doctest_sentinel_detail,
+        drain_build_stderr, eval_out_path_after_failure, failed_build_after_diagnostics_with,
+        failed_status_step, prepare_build_dirs_with, report_build_diagnostic_failure,
+        sentinel_detail, test_check_names,
     };
     use coverage::status::{CoverageStatus, StatusCategory};
     use doctests::check::{Kind, Violation};
@@ -821,24 +918,33 @@ mod tests {
     }
 
     #[test]
-    fn failed_e2e_out_path_lookup_preserves_primary_failure_and_warns_once() {
-        let mut primary = CommandResult::new("nix");
-        primary.push(StepResult::fail("nix-e2e").detail("nix-e2e failed"));
-        let before = serde_json::to_string(&primary).unwrap();
+    fn failed_e2e_out_path_lookup_aggregates_with_build_diagnostics() {
+        let status = std::process::Command::new("false").status().unwrap();
         let mut stderr = Vec::new();
-        let out_path = eval_out_path_after_failure(
-            || anyhow::bail!("injected sensitive nix eval failure"),
+        let result = failed_build_after_diagnostics_with(
+            FailedBuildDiagnostics {
+                step_name: "nix-e2e",
+                installable: ".#checks.x86_64-linux.e2e",
+                status: &status,
+                log_path: ".xtask/diagnostics/e2e/build.log",
+                capture_failed: false,
+            },
+            || Ok(".xtask/diagnostics/e2e/failure-excerpt.log".to_owned()),
+            || {
+                let failed_eval: anyhow::Result<String> =
+                    Err(anyhow::anyhow!("injected sensitive nix eval failure"));
+                failed_eval.is_err()
+            },
             &mut stderr,
         );
-        assert!(out_path.is_none());
-        assert_eq!(serde_json::to_string(&primary).unwrap(), before);
+        assert!(!result.ok);
         let warning = String::from_utf8(stderr).unwrap();
-        assert_eq!(warning.matches("xtask.nix.e2e_out_path").count(), 1);
+        assert_eq!(warning.matches("xtask.nix.build_diagnostics").count(), 1);
         assert_eq!(warning.lines().count(), 1);
         assert!(!warning.contains("sensitive"));
     }
 
-    use super::{MultiWriter, failure_detail, failure_excerpt, write_failure_excerpt};
+    use super::{failure_detail, failure_excerpt, write_failure_excerpt};
 
     const SAMPLE_LOG: &str = "\
 fail-probe> build-output-line-1
@@ -890,45 +996,109 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         assert!(!e.contains("drv> error"));
     }
 
-    #[test]
-    fn multiwriter_fans_full_input_out_to_both_sinks() {
-        // Larger than io::copy's internal buffer (8 KiB) so the input spans
-        // multiple write() calls — proves we don't assume a single chunk.
-        let input = vec![b'x'; 200_000];
-        let mut a: Vec<u8> = Vec::new();
-        let mut b: Vec<u8> = Vec::new();
-        {
-            let mut sink = MultiWriter(&mut a, &mut b);
-            let mut reader: &[u8] = &input;
-            std::io::copy(&mut reader, &mut sink).unwrap();
+    fn failing_sink() -> impl Write {
+        struct FailingSink;
+        impl Write for FailingSink {
+            fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+                Err(io::Error::other("sensitive sink failure"))
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Err(io::Error::other("sensitive sink failure"))
+            }
         }
-        assert_eq!(a, input);
-        assert_eq!(b, input);
+        FailingSink
     }
 
     #[test]
-    fn multiwriter_keeps_draining_when_a_sink_errors() {
-        // A sink that always errors must NOT abort the io::copy drain — otherwise a
-        // mid-build log-write failure (e.g. disk full) would leave the child's
-        // stderr pipe unread and hang `wait()`. The healthy sink still gets it all.
-        struct FailingSink;
-        impl std::io::Write for FailingSink {
-            fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
-                Err(std::io::Error::other("sink full"))
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Err(std::io::Error::other("sink full"))
-            }
-        }
+    fn build_capture_fans_full_input_out_to_both_sinks() {
+        let input = vec![b'x'; 200_000];
+        let mut diagnostic = Vec::new();
+        let mut primary = Vec::new();
+        let mut reader: &[u8] = &input;
+        let outcome = drain_build_stderr(&mut reader, &mut diagnostic, &mut primary);
+
+        assert!(!outcome.diagnostic_failed);
+        assert!(!outcome.primary_failed);
+        assert_eq!(diagnostic, input);
+        assert_eq!(primary, input);
+    }
+
+    #[test]
+    fn build_capture_diagnostic_failure_warns_once_without_changing_primary_output() {
         let input = vec![b'y'; 200_000];
-        let mut healthy: Vec<u8> = Vec::new();
-        {
-            let mut sink = MultiWriter(FailingSink, &mut healthy);
-            let mut reader: &[u8] = &input;
-            // Completes to EOF and does not error despite the failing sink.
-            std::io::copy(&mut reader, &mut sink).unwrap();
+        let mut primary = Vec::new();
+        let mut reader: &[u8] = &input;
+        let outcome = drain_build_stderr(&mut reader, &mut failing_sink(), &mut primary);
+        let mut stderr = Vec::new();
+        report_build_diagnostic_failure(outcome.diagnostic_failed, &mut stderr);
+
+        assert!(!outcome.primary_failed);
+        assert_eq!(primary, input);
+        let warning = String::from_utf8(stderr).unwrap();
+        assert_eq!(warning.matches("xtask.nix.build_diagnostics").count(), 1);
+        assert_eq!(warning.lines().count(), 1);
+        assert!(!warning.contains("sensitive"));
+    }
+
+    #[test]
+    fn build_capture_primary_failure_is_not_silenced() {
+        let input = b"complete build output";
+        let mut diagnostic = Vec::new();
+        let mut reader: &[u8] = input;
+        let outcome = drain_build_stderr(&mut reader, &mut diagnostic, &mut failing_sink());
+
+        assert!(!outcome.diagnostic_failed);
+        assert!(outcome.primary_failed);
+        assert_eq!(diagnostic, input);
+    }
+    #[test]
+    fn build_capture_read_failure_fails_the_primary_output_contract() {
+        struct FailingReader(bool);
+        impl io::Read for FailingReader {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                if self.0 {
+                    Err(io::Error::other("sensitive read failure"))
+                } else {
+                    self.0 = true;
+                    buf[..4].copy_from_slice(b"part");
+                    Ok(4)
+                }
+            }
         }
-        assert_eq!(healthy, input);
+
+        let mut diagnostic = Vec::new();
+        let mut primary = Vec::new();
+        let outcome = drain_build_stderr(&mut FailingReader(false), &mut diagnostic, &mut primary);
+        assert!(outcome.primary_failed);
+        assert_eq!(diagnostic, b"part");
+        assert_eq!(primary, b"part");
+    }
+
+    #[test]
+    fn build_directory_population_fails_closed_but_diagnostics_are_best_effort() {
+        let gcroot_error = prepare_build_dirs_with(
+            || Err(io::Error::new(io::ErrorKind::PermissionDenied, "injected")),
+            || Ok(()),
+        )
+        .unwrap_err();
+        assert_eq!(gcroot_error.kind(), io::ErrorKind::PermissionDenied);
+
+        let diagnostic_failure = prepare_build_dirs_with(
+            || Ok(()),
+            || Err(io::Error::new(io::ErrorKind::PermissionDenied, "injected")),
+        )
+        .unwrap();
+        assert!(diagnostic_failure);
+        let primary = StepResult::fail("nix-e2e").detail("original build failure");
+        let before = serde_json::to_string(&primary).unwrap();
+        let mut stderr = Vec::new();
+        report_build_diagnostic_failure(diagnostic_failure, &mut stderr);
+        assert_eq!(serde_json::to_string(&primary).unwrap(), before);
+        let warning = String::from_utf8(stderr).unwrap();
+        assert_eq!(warning.matches("xtask.nix.build_diagnostics").count(), 1);
+        assert_eq!(warning.lines().count(), 1);
+        assert!(!warning.contains("injected"));
     }
 
     #[test]
@@ -939,7 +1109,7 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
             ".#checks.x86_64-linux.e2e",
             &status,
             Some(".xtask/diagnostics/e2e/failure-excerpt.log"),
-            ".xtask/diagnostics/e2e/build.log",
+            Some(".xtask/diagnostics/e2e/build.log"),
         );
         assert!(with.contains(".#checks.x86_64-linux.e2e"));
         assert!(with.contains("exited with"));
@@ -952,10 +1122,14 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
             ".#checks.x86_64-linux.e2e",
             &status,
             None,
-            ".xtask/diagnostics/e2e/build.log",
+            Some(".xtask/diagnostics/e2e/build.log"),
         );
         assert!(without.contains("full build log: .xtask/diagnostics/e2e/build.log"));
         assert!(!without.contains("failure-excerpt.log"));
+
+        let unavailable = failure_detail(".#checks.x86_64-linux.e2e", &status, None, None);
+        assert!(!unavailable.contains("failure-excerpt.log"));
+        assert!(!unavailable.contains("build.log"));
     }
 
     #[test]
@@ -1067,6 +1241,8 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         let dest = tmp.join("dest");
         std::fs::create_dir_all(&src).unwrap();
         std::fs::write(src.join("capture-sqlite.tar.gz"), b"new").unwrap();
+        let primary = StepResult::fail("nix-e2e").detail("original build failure");
+        let before = serde_json::to_string(&primary).unwrap();
         for failed_operation in ["remove", "copy", "permissions"] {
             let mut stderr = Vec::new();
             let _ = super::lift_e2e_diagnostics_with_ops(
@@ -1108,22 +1284,53 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
             assert_eq!(warning.matches("xtask.nix.e2e_diagnostics").count(), 1);
             assert_eq!(warning.lines().count(), 1);
             assert!(!warning.contains("sensitive"));
+            assert_eq!(serde_json::to_string(&primary).unwrap(), before);
         }
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
-    fn ancillary_warning_retained_output_rescue_preserves_primary_failure() {
-        let expected = StepResult::fail("nix-e2e").detail("nix build failed");
-        let expected_json = serde_json::to_string(&expected).unwrap();
-        let mut stderr = Vec::new();
-        let actual =
-            super::failed_build_after_rescue("nix-e2e", "nix build failed".to_owned(), || {
-                super::report_rescue_failure(true, &mut stderr)
-            });
-        assert_eq!(serde_json::to_string(&actual).unwrap(), expected_json);
-        let warning = String::from_utf8(stderr).unwrap();
-        assert_eq!(warning.matches("xtask.nix.e2e_rescue").count(), 1);
-        assert_eq!(warning.lines().count(), 1);
+    fn ancillary_warning_build_diagnostic_losses_aggregate_once() {
+        let status = std::process::Command::new("false").status().unwrap();
+        for failed in ["capture", "excerpt", "rescue"] {
+            let mut stderr = Vec::new();
+            let result = failed_build_after_diagnostics_with(
+                FailedBuildDiagnostics {
+                    step_name: "nix-e2e",
+                    installable: ".#checks.x86_64-linux.e2e",
+                    status: &status,
+                    log_path: ".xtask/diagnostics/e2e/build.log",
+                    capture_failed: failed == "capture",
+                },
+                || {
+                    if failed == "capture" {
+                        panic!("an unreliable capture must not be read");
+                    }
+                    if failed == "excerpt" {
+                        return Err(io::Error::other("sensitive excerpt failure"));
+                    }
+                    Ok(".xtask/diagnostics/e2e/failure-excerpt.log".to_owned())
+                },
+                || failed == "rescue",
+                &mut stderr,
+            );
+            let expected_detail = failure_detail(
+                ".#checks.x86_64-linux.e2e",
+                &status,
+                (failed == "rescue").then_some(".xtask/diagnostics/e2e/failure-excerpt.log"),
+                (failed != "capture").then_some(".xtask/diagnostics/e2e/build.log"),
+            );
+            assert!(!result.ok);
+            let detail = result.detail.unwrap();
+            assert_eq!(detail, expected_detail);
+            if failed == "capture" {
+                assert!(!detail.contains("failure-excerpt.log"));
+                assert!(!detail.contains("build.log"));
+            }
+            let warning = String::from_utf8(stderr).unwrap();
+            assert_eq!(warning.matches("xtask.nix.build_diagnostics").count(), 1);
+            assert_eq!(warning.lines().count(), 1);
+            assert!(!warning.contains("sensitive"));
+        }
     }
 }

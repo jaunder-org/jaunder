@@ -7,9 +7,46 @@
 //! is five lines. That split is what lets every transport failure be tested offline.
 
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
 
 use serde_json::Value;
+
+#[derive(Debug, Clone)]
+pub struct GitError {
+    pub operation: &'static str,
+    pub path: PathBuf,
+    pub source: Arc<dyn std::error::Error + Send + Sync>,
+}
+
+impl PartialEq for GitError {
+    fn eq(&self, other: &Self) -> bool {
+        self.operation == other.operation
+            && self.path == other.path
+            && format!("{:#}", self.source) == format!("{:#}", other.source)
+    }
+}
+
+impl Eq for GitError {}
+
+impl std::fmt::Display for GitError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{} at {}: {:#}",
+            self.operation,
+            self.path.display(),
+            self.source
+        )
+    }
+}
+
+impl std::error::Error for GitError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApiError {
@@ -26,6 +63,7 @@ pub enum ApiError {
     Transport(String),
     Malformed(String),
     GraphQlErrors(String),
+    Git(GitError),
 }
 
 impl ApiError {
@@ -52,6 +90,7 @@ impl ApiError {
             ApiError::Transport(m) => format!("transport: {m}"),
             ApiError::Malformed(m) => format!("malformed response: {m}"),
             ApiError::GraphQlErrors(m) => format!("graphql: {m}"),
+            ApiError::Git(error) => format!("git: {error}"),
         }
     }
 }

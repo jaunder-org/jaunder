@@ -72,24 +72,37 @@ fn prune_with(
             return;
         }
     };
+    let population = entries.map(|entry| {
+        entry.map(|entry| {
+            let path = entry.path();
+            let modified = entry.metadata().and_then(|metadata| metadata.modified());
+            (path, modified)
+        })
+    });
+    prune_entries_with(population, &mut remove, stderr);
+}
+
+fn prune_entries_with(
+    entries: impl IntoIterator<
+        Item = std::io::Result<(PathBuf, std::io::Result<std::time::SystemTime>)>,
+    >,
+    mut remove: impl FnMut(&Path) -> std::io::Result<()>,
+    stderr: &mut impl Write,
+) {
     let mut failed = false;
     let mut files = Vec::new();
     for entry in entries {
-        let entry = match entry {
+        let (path, modified) = match entry {
             Ok(entry) => entry,
             Err(_) => {
                 failed = true;
                 continue;
             }
         };
-        let modified = match entry.metadata().and_then(|metadata| metadata.modified()) {
-            Ok(modified) => modified,
-            Err(_) => {
-                failed = true;
-                continue;
-            }
-        };
-        files.push((modified, entry.path()));
+        match modified {
+            Ok(modified) => files.push((modified, path)),
+            Err(_) => failed = true,
+        }
     }
     files.sort_by_key(|file| std::cmp::Reverse(file.0));
     for (_, path) in files.into_iter().skip(RUN_HISTORY_LIMIT) {
@@ -112,29 +125,54 @@ fn kill_timed_out_child(kill: impl FnOnce() -> std::io::Result<()>, stderr: &mut
 
 /// Count `\n` bytes (wc -l semantics) by streaming, so a huge output file never
 /// lands in memory all at once.
-fn count_lines(path: &Path) -> u64 {
-    let Ok(f) = File::open(path) else {
-        return 0;
-    };
+fn count_lines(path: &Path) -> std::io::Result<u64> {
+    let f = File::open(path)?;
     let mut reader = BufReader::new(f);
     let mut buf = [0u8; 64 * 1024];
     let mut count = 0u64;
     loop {
-        match reader.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => count += buf[..n].iter().filter(|&&b| b == b'\n').count() as u64,
-            Err(_) => break,
+        match reader.read(&mut buf)? {
+            0 => break,
+            n => count += buf[..n].iter().filter(|&&b| b == b'\n').count() as u64,
         }
     }
-    count
+    Ok(count)
 }
 
 fn stream_of(path: &Path) -> Stream {
-    let bytes = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    stream_of_with(
+        path,
+        || fs::metadata(path).map(|metadata| metadata.len()),
+        || count_lines(path),
+        &mut std::io::stderr(),
+    )
+}
+
+fn stream_of_with(
+    path: &Path,
+    metadata: impl FnOnce() -> std::io::Result<u64>,
+    count: impl FnOnce() -> std::io::Result<u64>,
+    stderr: &mut impl Write,
+) -> Stream {
+    let mut failed = false;
+    let bytes = metadata().unwrap_or_else(|_| {
+        failed = true;
+        0
+    });
+    let lines = count().unwrap_or_else(|_| {
+        failed = true;
+        0
+    });
+    if failed {
+        let _ = writeln!(
+            stderr,
+            "devtool: warning: devtool.run.stream_summary: ignored failure while summarizing captured output"
+        );
+    }
     Stream {
         path: path.display().to_string(),
         bytes,
-        lines: count_lines(path),
+        lines,
     }
 }
 
@@ -509,5 +547,107 @@ mod tests {
         }
         assert_eq!(warning.lines().count(), 2);
         assert!(!warning.contains("sensitive"));
+    }
+    #[test]
+    fn ancillary_warning_history_population_failures_warn_once_per_attempt() {
+        let missing = tmp().join("missing");
+        let mut stderr = Vec::new();
+        prune_with(
+            &missing,
+            |_| unreachable!("an unreadable population has no removal candidates"),
+            &mut stderr,
+        );
+        let warning = String::from_utf8(stderr).unwrap();
+        assert_eq!(warning.matches("devtool.run.history_prune").count(), 1);
+        assert_eq!(warning.lines().count(), 1);
+
+        for population in [
+            vec![Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "sensitive directory entry",
+            ))],
+            vec![Ok((
+                PathBuf::from("sensitive"),
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "sensitive metadata or modified time",
+                )),
+            ))],
+        ] {
+            let mut stderr = Vec::new();
+            prune_entries_with(
+                population,
+                |_| unreachable!("failed population members are never removed"),
+                &mut stderr,
+            );
+            let warning = String::from_utf8(stderr).unwrap();
+            assert_eq!(warning.matches("devtool.run.history_prune").count(), 1);
+            assert_eq!(warning.lines().count(), 1);
+            assert!(!warning.contains("sensitive"));
+        }
+    }
+
+    #[test]
+    fn ancillary_warning_stream_summary_failures_preserve_fallback_and_primary_code() {
+        for metadata_fails in [true, false] {
+            let primary_code = 17;
+            let mut stderr = Vec::new();
+            let stream = stream_of_with(
+                Path::new("/sensitive/output"),
+                || {
+                    if metadata_fails {
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            "sensitive metadata",
+                        ))
+                    } else {
+                        Ok(7)
+                    }
+                },
+                || {
+                    if metadata_fails {
+                        Ok(9)
+                    } else {
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "sensitive read",
+                        ))
+                    }
+                },
+                &mut stderr,
+            );
+            assert_eq!(primary_code, 17);
+            assert_eq!(stream.bytes, if metadata_fails { 0 } else { 7 });
+            assert_eq!(stream.lines, if metadata_fails { 9 } else { 0 });
+            let warning = String::from_utf8(stderr).unwrap();
+            assert_eq!(warning.matches("devtool.run.stream_summary").count(), 1);
+            assert_eq!(warning.lines().count(), 1);
+            assert!(!warning.contains("sensitive"));
+        }
+        let missing = tmp().join("missing-output");
+        let mut stderr = Vec::new();
+        let stream = stream_of_with(
+            &missing,
+            || fs::metadata(&missing).map(|metadata| metadata.len()),
+            || count_lines(&missing),
+            &mut stderr,
+        );
+        assert_eq!((stream.bytes, stream.lines), (0, 0));
+        let warning = String::from_utf8(stderr).unwrap();
+        assert_eq!(warning.matches("devtool.run.stream_summary").count(), 1);
+        assert_eq!(warning.lines().count(), 1);
+
+        let unreadable = tmp();
+        let mut stderr = Vec::new();
+        let stream = stream_of_with(
+            &unreadable,
+            || fs::metadata(&unreadable).map(|metadata| metadata.len()),
+            || count_lines(&unreadable),
+            &mut stderr,
+        );
+        assert_eq!(stream.lines, 0);
+        let warning = String::from_utf8(stderr).unwrap();
+        assert_eq!(warning.matches("devtool.run.stream_summary").count(), 1);
+        assert_eq!(warning.lines().count(), 1);
     }
 }

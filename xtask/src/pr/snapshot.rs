@@ -353,33 +353,28 @@ pub fn resolution_failure(err: &ApiError) -> ResolutionFailure {
 
 pub struct GhSource;
 
-impl PrSource for GhSource {
-    fn resolve(&self, requested: Option<PrNumber>) -> Result<Subject, ApiError> {
-        let dir = std::path::Path::new(".");
-        let url = crate::git::remote_url(dir, "origin")
-            .ok()
-            .flatten()
-            .ok_or(ApiError::NotFound)?;
+impl GhSource {
+    fn resolve_with(
+        requested: Option<PrNumber>,
+        dir: &std::path::Path,
+        remote_url: impl FnOnce() -> anyhow::Result<Option<String>>,
+        current_branch: impl FnOnce() -> anyhow::Result<Option<String>>,
+        find_pr: impl FnOnce(&str, &str, &str) -> Result<Value, ApiError>,
+    ) -> Result<Subject, ApiError> {
+        let url = required_git_fact("reading origin remote", dir, remote_url())?;
         let (owner, repo) = parse_remote(&url).ok_or(ApiError::NotFound)?;
         let number = match requested {
-            Some(n) => n,
+            Some(number) => number,
             None => {
-                let branch = crate::git::current_branch(dir)
-                    .ok()
-                    .flatten()
-                    .ok_or(ApiError::NotFound)?;
-                let slug = format!("{owner}/{repo}");
-                let found = gh::run_gh(&[
-                    "pr", "list", "--head", &branch, "--state", "open", "--repo", &slug, "--json",
-                    "number",
-                ])?;
-                let n = found
+                let branch = required_git_fact("reading current branch", dir, current_branch())?;
+                let found = find_pr(&owner, &repo, &branch)?;
+                let number = found
                     .as_array()
-                    .and_then(|a| a.first())
-                    .and_then(|o| o.get("number"))
+                    .and_then(|items| items.first())
+                    .and_then(|item| item.get("number"))
                     .and_then(Value::as_u64)
                     .ok_or(ApiError::NotFound)?;
-                PrNumber(n)
+                PrNumber(number)
             }
         };
         Ok(Subject {
@@ -387,6 +382,43 @@ impl PrSource for GhSource {
             repo,
             number,
         })
+    }
+}
+
+fn required_git_fact(
+    operation: &'static str,
+    dir: &std::path::Path,
+    fact: anyhow::Result<Option<String>>,
+) -> Result<String, ApiError> {
+    match fact {
+        Ok(Some(value)) => Ok(value),
+        Ok(None) => Err(ApiError::NotFound),
+        Err(source) => Err(ApiError::Git(crate::pr::gh::GitError {
+            operation,
+            path: dir.to_path_buf(),
+            source: std::sync::Arc::from(
+                source.reallocate_into_boxed_dyn_error_without_backtrace(),
+            ),
+        })),
+    }
+}
+
+impl PrSource for GhSource {
+    fn resolve(&self, requested: Option<PrNumber>) -> Result<Subject, ApiError> {
+        let dir = std::path::Path::new(".");
+        Self::resolve_with(
+            requested,
+            dir,
+            || crate::git::remote_url(dir, "origin"),
+            || crate::git::current_branch(dir),
+            |owner, repo, branch| {
+                let slug = format!("{owner}/{repo}");
+                gh::run_gh(&[
+                    "pr", "list", "--head", branch, "--state", "open", "--repo", &slug, "--json",
+                    "number",
+                ])
+            },
+        )
     }
 
     fn snapshot(&self, subject: &Subject) -> Result<PrSnapshot, ApiError> {
@@ -433,6 +465,17 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(include_str!(concat!("testdata/", $name)))
                 .expect("fixture parses")
         };
+    }
+
+    fn io_error_kind(error: &(dyn std::error::Error + 'static)) -> Option<std::io::ErrorKind> {
+        let mut current = Some(error);
+        while let Some(error) = current {
+            if let Some(error) = error.downcast_ref::<std::io::Error>() {
+                return Some(error.kind());
+            }
+            current = error.source();
+        }
+        None
     }
 
     #[test]
@@ -520,6 +563,77 @@ mod tests {
             picked.created_at, newest,
             "must pick the newest, not the first"
         );
+    }
+    #[test]
+    fn gh_source_resolve_distinguishes_absent_git_facts_from_failures() {
+        let dir = std::path::Path::new("/repo");
+        let absent_remote = GhSource::resolve_with(
+            Some(PrNumber(7)),
+            dir,
+            || Ok(None),
+            || unreachable!(),
+            |_, _, _| unreachable!(),
+        );
+        assert!(matches!(absent_remote, Err(ApiError::NotFound)));
+
+        let remote_failure = GhSource::resolve_with(
+            Some(PrNumber(7)),
+            dir,
+            || {
+                Err(anyhow::Error::new(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "injected remote",
+                )))
+            },
+            || unreachable!(),
+            |_, _, _| unreachable!(),
+        )
+        .unwrap_err();
+        match remote_failure {
+            ApiError::Git(error) => {
+                assert_eq!(error.operation, "reading origin remote");
+                assert_eq!(error.path, dir);
+                assert_eq!(
+                    io_error_kind(error.source.as_ref()),
+                    Some(std::io::ErrorKind::PermissionDenied)
+                );
+            }
+            other => panic!("expected typed Git failure, got {other:?}"),
+        }
+
+        let absent_branch = GhSource::resolve_with(
+            None,
+            dir,
+            || Ok(Some("https://github.com/acme/project".to_owned())),
+            || Ok(None),
+            |_, _, _| unreachable!(),
+        );
+        assert!(matches!(absent_branch, Err(ApiError::NotFound)));
+
+        let branch_failure = GhSource::resolve_with(
+            None,
+            dir,
+            || Ok(Some("https://github.com/acme/project".to_owned())),
+            || {
+                Err(anyhow::Error::new(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "injected branch",
+                )))
+            },
+            |_, _, _| unreachable!(),
+        )
+        .unwrap_err();
+        match branch_failure {
+            ApiError::Git(error) => {
+                assert_eq!(error.operation, "reading current branch");
+                assert_eq!(error.path, dir);
+                assert_eq!(
+                    io_error_kind(error.source.as_ref()),
+                    Some(std::io::ErrorKind::PermissionDenied)
+                );
+            }
+            other => panic!("expected typed Git failure, got {other:?}"),
+        }
     }
 
     #[test]
