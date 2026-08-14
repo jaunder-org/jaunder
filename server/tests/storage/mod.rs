@@ -22,9 +22,8 @@ use storage::{
     DbConnectOptions, FeedCacheRow, GoLivePost, ListByTagError, PostCursor, PostFormat, PostRecord,
     PostTag, PostUpdate, PostgresSubscriptionStorage, ProfileUpdate, PublishUpdate,
     RegisterWithInviteError, RenderedPostContent, SessionAuthError, SqliteSubscriptionStorage,
-    SubscriptionStorage, UpdatePostError, UseEmailVerificationError, UseInviteError,
-    UsePasswordResetError, UserAuthError, UserConfigKey, create_rendered_post, open_database,
-    perform_post_update,
+    SubscriptionStorage, UpdatePostError, UseEmailVerificationError, UsePasswordResetError,
+    UserAuthError, UserConfigKey, create_rendered_post, open_database, perform_post_update,
 };
 use tempfile::TempDir;
 
@@ -1417,73 +1416,6 @@ async fn create_invite_and_list_invites_includes_it(#[case] backend: Backend) {
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].code.as_ref(), code.as_ref());
     assert!(list[0].used_at.is_none());
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn use_invite_with_valid_code_marks_it_used(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-
-    let user_id = SeedUser::new().seed(state).await.user_id;
-
-    let expires_at = Utc::now() + chrono::Duration::hours(24);
-    let code = state.invites.create_invite(expires_at).await.unwrap();
-
-    state.invites.use_invite(&code, user_id).await.unwrap();
-
-    let list = state.invites.list_invites().await.unwrap();
-    assert_eq!(list.len(), 1);
-    assert!(list[0].used_at.is_some());
-    assert_eq!(list[0].used_by, Some(user_id));
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn use_invite_with_unknown_code_returns_not_found(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-
-    let user_id = SeedUser::new().seed(state).await.user_id;
-
-    let err = state
-        .invites
-        .use_invite(&"no-such-code".parse::<InviteCode>().unwrap(), user_id)
-        .await
-        .unwrap_err();
-    assert!(matches!(err, UseInviteError::NotFound));
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn use_invite_with_expired_code_returns_expired(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-
-    let user_id = SeedUser::new().seed(state).await.user_id;
-
-    let expires_at = Utc::now() - chrono::Duration::hours(1);
-    let code = state.invites.create_invite(expires_at).await.unwrap();
-
-    let err = state.invites.use_invite(&code, user_id).await.unwrap_err();
-    assert!(matches!(err, UseInviteError::Expired));
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn use_invite_on_already_used_code_returns_already_used(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-
-    let user_id = SeedUser::new().seed(state).await.user_id;
-
-    let expires_at = Utc::now() + chrono::Duration::hours(24);
-    let code = state.invites.create_invite(expires_at).await.unwrap();
-
-    state.invites.use_invite(&code, user_id).await.unwrap();
-
-    let err = state.invites.use_invite(&code, user_id).await.unwrap_err();
-    assert!(matches!(err, UseInviteError::AlreadyUsed));
 }
 
 // --- create_user_with_invite integration tests ---

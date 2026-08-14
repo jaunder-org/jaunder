@@ -44,10 +44,10 @@ mod atomic;
 pub use atomic::PostgresAtomicOps;
 
 mod open;
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) use open::open_postgres_database_with_pool;
 pub use open::resolved_postgres_options;
-pub(crate) use open::{
-    database_is_empty, open_postgres_database, open_postgres_database_with_pool,
-};
+pub(crate) use open::{database_is_empty, open_postgres_database};
 
 pub(crate) mod backup;
 

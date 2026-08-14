@@ -204,12 +204,16 @@ Playwright, and the repository `cargo xtask` gate.
 - Modify: `storage/src/atomic.rs`
 - Modify: `storage/src/helpers.rs`
 - Modify: `storage/src/postgres/atomic.rs`
+- Modify: `storage/src/postgres/mod.rs`
 - Modify: `storage/src/sqlite/atomic.rs`
+- Modify: `storage/src/sqlite/mod.rs`
 - Modify: `storage/src/users.rs`
 - Modify: `server/src/commands.rs`
 - Test: in-file unit tests in `common/src/password.rs` and
   `server/src/commands.rs`
 - Test: `server/tests/misc/commands.rs`
+- Modify: `server/tests/storage/mod.rs`
+- Modify: `xtask/src/steps/sqlx_newtype_decode_check.rs`
 
 **Interfaces:**
 
@@ -230,7 +234,7 @@ Playwright, and the repository `cargo xtask` gate.
   amendments: the four `common/src/password.rs` hash/verify mappings and
   `server/src/commands.rs` account mappings at lines 219, 247, and 255.
 
-- [ ] **Step 1: Write the backend-parametric claim regression tests**
+- [x] **Step 1: Write the backend-parametric claim regression tests**
 
   In `storage/src/email.rs`, add
   `use_email_verification_with_closed_pool_returns_internal`; seed a
@@ -243,7 +247,7 @@ Playwright, and the repository `cargo xtask` gate.
   `ConfirmPasswordResetError::Internal(_)`. Keep the existing NotFound, Expired,
   and AlreadyUsed cases unchanged.
 
-- [ ] **Step 2: Add typed-source red tests for all seven amendments**
+- [x] **Step 2: Add typed-source red tests for all seven amendments**
 
   Add narrow private hash/verify operation parameters in `common::password` and
   the storage helper/atomic/auth call paths without changing any public
@@ -258,7 +262,7 @@ Playwright, and the repository `cargo xtask` gate.
   retains the concrete source while preserving the current human context. These
   tests pin the four password mappings plus command lines 219, 247, and 255.
 
-- [ ] **Step 3: Run the focused red tests**
+- [x] **Step 3: Run the focused red tests**
 
   ```bash
   devtool run -- cargo nextest run -p common password
@@ -273,14 +277,14 @@ Playwright, and the repository `cargo xtask` gate.
   the password-reset test reaches storage instead of proving only malformed
   token rejection.
 
-- [ ] **Step 4: Remove the obsolete invite claim surface cleanly**
+- [x] **Step 4: Remove the obsolete invite claim surface cleanly**
 
   Delete the trait method, error enum, generic implementation, dedicated
   `use_invite_*` tests, imports, and any explicit re-export. Use LSP references
   before deletion; the only registration path left is atomic
   `create_user_with_invite`.
 
-- [ ] **Step 5: Preserve every typed source**
+- [x] **Step 5: Preserve every typed source**
 
   Keep token-hash validation as the expected `NotFound` path. Change both email
   query error mappings—the atomic claim and the disambiguation read—to
@@ -290,7 +294,7 @@ Playwright, and the repository `cargo xtask` gate.
   `anyhow!("{e}")` mappings with `anyhow::Context`; do not stringify at an
   intermediate layer.
 
-- [ ] **Step 6: Run the complete claim and password contract**
+- [x] **Step 6: Run the complete claim and password contract**
 
   ```bash
   devtool run -- cargo nextest run -p common password
@@ -306,10 +310,10 @@ Playwright, and the repository `cargo xtask` gate.
   unchanged; all seven concrete sources remain downcastable; no
   declaration/reference to `UseInviteError` or `use_invite` remains.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
   ```bash
-  git add common/src/password.rs storage/src/invites.rs storage/src/email.rs storage/src/atomic.rs storage/src/helpers.rs storage/src/postgres/atomic.rs storage/src/sqlite/atomic.rs storage/src/users.rs server/src/commands.rs server/tests/misc/commands.rs
+  git add common/src/password.rs storage/src/invites.rs storage/src/email.rs storage/src/atomic.rs storage/src/helpers.rs storage/src/postgres/atomic.rs storage/src/postgres/mod.rs storage/src/sqlite/atomic.rs storage/src/sqlite/mod.rs storage/src/users.rs server/src/commands.rs server/tests/misc/commands.rs server/tests/storage/mod.rs xtask/src/steps/sqlx_newtype_decode_check.rs
   git commit -m "fix(storage): preserve typed claim and password failures"
   ```
 

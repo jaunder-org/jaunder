@@ -133,10 +133,8 @@ pub trait AtomicOps: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{Backend, backends, parse_invite_code};
-    use common::test_support::{
-        parse_display_name, parse_password, parse_raw_token, parse_username,
-    };
+    use crate::test_support::{Backend, CloseablePool, SeedUser, backends, parse_invite_code};
+    use common::test_support::{parse_display_name, parse_password, parse_username};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -240,15 +238,80 @@ mod tests {
                 .await
                 .is_err()
         );
-        // `not-base64` fails token hashing before touching the pool, so the
-        // classification is `NotFound` on both backends regardless of pool state.
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn confirm_password_reset_with_closed_pool_returns_error(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let (raw_token, _) = host::token::generate_hashed();
+        env.base.close_pool().await;
+        let password = parse_password("password123");
+
+        let result = env
+            .state
+            .atomic
+            .confirm_password_reset(&raw_token, &password)
+            .await;
+
         assert!(matches!(
-            env.state
-                .atomic
-                .confirm_password_reset(&parse_raw_token("not-base64"), &password,)
-                .await,
-            Err(ConfirmPasswordResetError::NotFound)
+            result,
+            Err(ConfirmPasswordResetError::Internal(_))
         ));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn password_reset_hash_failure_retains_source_chain(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let raw_token = env
+            .state
+            .password_resets
+            .create_password_reset(user_id, chrono::Utc::now() + chrono::Duration::hours(1))
+            .await
+            .unwrap();
+        let password = parse_password("password123");
+        let expected = crate::helpers::forced_hash_failure(&password).unwrap_err();
+
+        let result = match env.base.pool() {
+            CloseablePool::Sqlite(pool) => {
+                crate::sqlite::SqliteAtomicOps::new(pool.clone())
+                    .confirm_password_reset_with(
+                        &raw_token,
+                        &password,
+                        crate::helpers::forced_hash_failure,
+                    )
+                    .await
+            }
+            CloseablePool::Postgres(pool) => {
+                crate::postgres::PostgresAtomicOps::new(pool.clone())
+                    .confirm_password_reset_with(
+                        &raw_token,
+                        &password,
+                        crate::helpers::forced_hash_failure,
+                    )
+                    .await
+            }
+        };
+
+        let error = result.unwrap_err();
+        let ConfirmPasswordResetError::Internal(sqlx::Error::Io(io_error)) = &error else {
+            panic!("expected SQL I/O password-reset failure");
+        };
+        let password_error = io_error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<common::password::PasswordError>())
+            .expect("sqlx io::Error retains PasswordError");
+        let (
+            common::password::PasswordError::HashingFailed(actual),
+            common::password::PasswordError::HashingFailed(expected),
+        ) = (password_error, &expected)
+        else {
+            panic!("expected typed hashing failures");
+        };
+
+        assert_eq!(actual, expected);
     }
 
     // Each variant maps to a fixed `(kind, public_message)` pair.

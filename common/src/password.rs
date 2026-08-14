@@ -28,9 +28,9 @@ pub enum PasswordError {
     #[error("password must be at most {MAX_LENGTH} characters")]
     PasswordTooLong,
     #[error("hashing failed: {0}")]
-    HashingFailed(String),
+    HashingFailed(#[source] argon2::password_hash::Error),
     #[error("verification failed: {0}")]
-    VerificationFailed(String),
+    VerificationFailed(#[source] argon2::password_hash::Error),
 }
 
 impl FromStr for Password {
@@ -106,31 +106,11 @@ impl Password {
     ///
     /// Returns `Err` if Argon2 hashing fails.
     pub fn hash(&self) -> Result<String, PasswordError> {
-        use argon2::{
-            PasswordHasher,
-            password_hash::{SaltString, rand_core::OsRng},
-        };
+        self.hash_with(hash_operation)
+    }
 
-        let salt = SaltString::generate(&mut OsRng);
-
-        // Production uses the crate defaults (m=19456, t=2). Under `cheap-kdf`
-        // (test builds only) use the minimum memory cost so the suite is not
-        // dominated by KDF time. `verify()` derives cost from the stored hash, so
-        // it needs no branch.
-        #[cfg(feature = "cheap-kdf")]
-        let hasher = {
-            use argon2::{Algorithm, Argon2, Params, Version};
-            let params = Params::new(Params::MIN_M_COST, 1, 1, None)
-                .map_err(|e| PasswordError::HashingFailed(e.to_string()))?;
-            Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
-        };
-        #[cfg(not(feature = "cheap-kdf"))]
-        let hasher = argon2::Argon2::default();
-
-        hasher
-            .hash_password(self.0.as_bytes(), &salt)
-            .map(|h| h.to_string())
-            .map_err(|e| PasswordError::HashingFailed(e.to_string()))
+    fn hash_with(&self, operation: HashOperation) -> Result<String, PasswordError> {
+        operation(self).map_err(PasswordError::HashingFailed)
     }
 
     /// Verifies the password against a stored Argon2 hash.
@@ -142,16 +122,53 @@ impl Password {
     ///
     /// Returns `Err` if Argon2 verification fails (e.g., the hash string is malformed).
     pub fn verify(&self, hash: &str) -> Result<bool, PasswordError> {
-        use argon2::{Argon2, PasswordHash, PasswordVerifier};
+        self.verify_with(hash, verify_operation)
+    }
 
-        let parsed = PasswordHash::new(hash)
-            .map_err(|e| PasswordError::VerificationFailed(e.to_string()))?;
-        match Argon2::default().verify_password(self.0.as_bytes(), &parsed) {
+    fn verify_with(&self, hash: &str, operation: VerifyOperation) -> Result<bool, PasswordError> {
+        match operation(self, hash) {
             Ok(()) => Ok(true),
             Err(argon2::password_hash::Error::Password) => Ok(false),
-            Err(e) => Err(PasswordError::VerificationFailed(e.to_string())),
+            Err(error) => Err(PasswordError::VerificationFailed(error)),
         }
     }
+}
+
+type HashOperation = fn(&Password) -> Result<String, argon2::password_hash::Error>;
+type VerifyOperation = fn(&Password, &str) -> Result<(), argon2::password_hash::Error>;
+
+fn hash_operation(password: &Password) -> Result<String, argon2::password_hash::Error> {
+    use argon2::{
+        PasswordHasher,
+        password_hash::{SaltString, rand_core::OsRng},
+    };
+
+    let salt = SaltString::generate(&mut OsRng);
+
+    // Production uses the crate defaults (m=19456, t=2). Under `cheap-kdf`
+    // (test builds only) use the minimum memory cost so the suite is not
+    // dominated by KDF time. `verify()` derives cost from the stored hash, so
+    // it needs no branch.
+    #[cfg(feature = "cheap-kdf")]
+    let hasher = {
+        use argon2::{Algorithm, Argon2, Params, Version};
+        let params = Params::new(Params::MIN_M_COST, 1, 1, None)
+            .map_err(argon2::password_hash::Error::from)?;
+        Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
+    };
+    #[cfg(not(feature = "cheap-kdf"))]
+    let hasher = argon2::Argon2::default();
+
+    hasher
+        .hash_password(password.0.as_bytes(), &salt)
+        .map(|hash| hash.to_string())
+}
+
+fn verify_operation(password: &Password, hash: &str) -> Result<(), argon2::password_hash::Error> {
+    use argon2::{Argon2, PasswordHash, PasswordVerifier};
+
+    let parsed = PasswordHash::new(hash)?;
+    Argon2::default().verify_password(password.0.as_bytes(), &parsed)
 }
 
 #[cfg(test)]
@@ -311,17 +328,41 @@ mod tests {
     }
 
     #[test]
+    fn hashing_failure_retains_argon2_source() {
+        fn fail(_: &Password) -> Result<String, argon2::password_hash::Error> {
+            Err(argon2::password_hash::Error::Algorithm)
+        }
+
+        let password: Password = "password1".parse().expect("minimum length");
+        let error = password.hash_with(fail).unwrap_err();
+        let source = std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<argon2::password_hash::Error>());
+
+        assert_eq!(source, Some(&argon2::password_hash::Error::Algorithm));
+    }
+
+    #[test]
+    fn password_mismatch_is_false_not_an_error() {
+        fn mismatch(_: &Password, _: &str) -> Result<(), argon2::password_hash::Error> {
+            Err(argon2::password_hash::Error::Password)
+        }
+
+        let password: Password = "password1".parse().expect("minimum length");
+        assert!(!password.verify_with("unused", mismatch).unwrap());
+    }
+
+    #[test]
     fn verify_returns_error_for_non_password_argon2_failure() {
         // v=1 is not a supported argon2 version (only 16 and 19 are valid).
         // PasswordHash::new parses it; verify_password returns Error::Version,
         // which is not Error::Password, so the Err(e) arm in verify() is hit.
-        let p: Password = "password1".parse().expect("minimum length");
+        let password: Password = "password1".parse().expect("minimum length");
         let hash =
             "$argon2id$v=1$m=65536,t=2,p=1$c29tZXNhbHQ$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-        let result = p.verify(hash);
-        assert!(
-            matches!(result.unwrap_err(), PasswordError::VerificationFailed(_)),
-            "non-Password argon2 error must return VerificationFailed"
-        );
+        let error = password.verify(hash).unwrap_err();
+        let source = std::error::Error::source(&error)
+            .and_then(|source| source.downcast_ref::<argon2::password_hash::Error>());
+
+        assert_eq!(source, Some(&argon2::password_hash::Error::Version));
     }
 }
