@@ -254,7 +254,7 @@
         pkgs = nixpkgs.legacyPackages.${system};
         toolchain = fenix.packages.${system}.fromToolchainFile {
           file = ./rust-toolchain.toml;
-          sha256 = "sha256-gh/xTkxKHL4eiRXzWv8KP7vfjSk61Iq48x47BEDFgfk=";
+          sha256 = "sha256-A1abGIbOtcBSdrUMhDGrER3pRM1hQP4fp9gh3Y4PKc8=";
         };
 
         craneLib = (crane.mkLib pkgs).overrideToolchain toolchain;
@@ -773,7 +773,12 @@
               ${e2eRunAndCapture {
                 backend = "sqlite";
                 jaunderDb = "sqlite:/var/lib/jaunder/data/jaunder.db";
-                inherit browser traceId traceParent extraEnv;
+                inherit
+                  browser
+                  traceId
+                  traceParent
+                  extraEnv
+                  ;
               }}
             '';
           };
@@ -896,7 +901,12 @@
               ${e2eRunAndCapture {
                 backend = "postgres";
                 jaunderDb = "postgres://jaunder:testpassword@127.0.0.1/jaunder";
-                inherit browser traceId traceParent extraEnv;
+                inherit
+                  browser
+                  traceId
+                  traceParent
+                  extraEnv
+                  ;
               }}
             '';
           };
@@ -921,10 +931,26 @@
         # diagnostic packages, and the `e2e-checks` aggregate all extend
         # automatically.
         e2eCombos = [
-          { backend = "sqlite";   browser = "chromium"; traceDigit = "1"; }
-          { backend = "sqlite";   browser = "firefox";  traceDigit = "2"; }
-          { backend = "postgres"; browser = "chromium"; traceDigit = "3"; }
-          { backend = "postgres"; browser = "firefox";  traceDigit = "4"; }
+          {
+            backend = "sqlite";
+            browser = "chromium";
+            traceDigit = "1";
+          }
+          {
+            backend = "sqlite";
+            browser = "firefox";
+            traceDigit = "2";
+          }
+          {
+            backend = "postgres";
+            browser = "chromium";
+            traceDigit = "3";
+          }
+          {
+            backend = "postgres";
+            browser = "firefox";
+            traceDigit = "4";
+          }
         ];
 
         mkE2eCombo =
@@ -940,8 +966,7 @@
           let
             mk = if backend == "sqlite" then mkE2eSqliteCheck else mkE2ePostgresCheck;
             traceId = pkgs.lib.concatStrings (pkgs.lib.genList (_: traceDigit) 32);
-            traceParent =
-              "00-${traceId}-${pkgs.lib.concatStrings (pkgs.lib.genList (_: traceDigit) 16)}-01";
+            traceParent = "00-${traceId}-${pkgs.lib.concatStrings (pkgs.lib.genList (_: traceDigit) 16)}-01";
           in
           mk {
             checkName = "jaunder-e2e-${backend}-${browser}${nameSuffix}";
@@ -950,8 +975,7 @@
             # derivation hash. The variable itself is inert: nothing reads
             # JAUNDER_E2E_SALT. Changing the hash is its whole job. Spliced here
             # rather than per-family so every combo salts alike.
-            extraEnv =
-              extraEnv + pkgs.lib.optionalString (e2eSalt != "") " JAUNDER_E2E_SALT=${e2eSalt}";
+            extraEnv = extraEnv + pkgs.lib.optionalString (e2eSalt != "") " JAUNDER_E2E_SALT=${e2eSalt}";
             inherit
               browser
               traceId
@@ -1132,6 +1156,11 @@
               commonArgs
               // {
                 inherit cargoArtifacts;
+                # Crane defaults Clippy to release mode, but `--all-targets`
+                # activates the test-only `cheap-kdf` feature whose optimized-build
+                # guard must fail. Lint test targets in the development profile;
+                # production package builds remain release-mode.
+                CARGO_PROFILE = "dev";
                 cargoClippyExtraArgs = "--all-targets -- -D warnings";
               }
             );
@@ -1154,8 +1183,7 @@
                 );
                 CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
                 cargoClippyExtraArgs =
-                  "-p web -p client -p csr --features csr -- -D warnings "
-                  + "-A clippy::too_many_arguments";
+                  "-p web -p client -p csr --features csr -- -D warnings " + "-A clippy::too_many_arguments";
               }
             );
             # The non-compiling static checks (#188), unified behind one `devtool
@@ -1460,9 +1488,7 @@
             # none of them run mutants. This shell is `ciInputs` plus that one
             # tool, so the weekly job gets it without the pull-request path paying
             # for it. See .github/workflows/mutants.yml.
-            mutants = pkgs.mkShell (
-              shellEnv // { buildInputs = ciInputs ++ [ pkgs.cargo-mutants ]; }
-            );
+            mutants = pkgs.mkShell (shellEnv // { buildInputs = ciInputs ++ [ pkgs.cargo-mutants ]; });
             # Full interactive shell for local development.
             default = pkgs.mkShell (shellEnv // { buildInputs = ciInputs ++ devOnly; });
           };

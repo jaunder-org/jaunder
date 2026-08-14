@@ -867,8 +867,8 @@ mod tests {
     #[test]
     fn rendered_html_partial_eq_str_and_ref() {
         let h = RenderedHtml::from_trusted("<p>x</p>");
-        assert!(h == "<p>x</p>"); // PartialEq<&str>
-        assert!(h == *"<p>x</p>"); // PartialEq<str>
+        assert_eq!(h, "<p>x</p>"); // PartialEq<&str>
+        assert_eq!(h, *"<p>x</p>"); // PartialEq<str>
         assert!(h != "<p>y</p>"); // PartialEq<&str>, unequal
         assert!(h != *"<p>y</p>"); // PartialEq<str>, unequal
     }
