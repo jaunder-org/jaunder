@@ -1,13 +1,76 @@
+use std::str::FromStr;
+
 use chrono::{DateTime, Utc};
+use macros::StrNewtype;
 use sha2::{Digest, Sha256};
+use thiserror::Error;
 
 use crate::etag::ETag;
+use crate::feed::feed_path::FeedSurface;
 use crate::ids::PostId;
 use crate::post_summary::PostSummary;
 use crate::post_title::PostTitle;
 use crate::render::RenderedHtml;
+use crate::site::SiteTitle;
 use crate::tag::TagLabel;
 use crate::tagged_url::{CanonicalUrl, FeedUrl, HubUrl, PermalinkUrl};
+
+/// Human-readable title of a public Syndication Feed document.
+#[derive(Clone, Debug, PartialEq, Eq, StrNewtype)]
+pub struct FeedTitle(String);
+
+/// Error returned for an empty [`FeedTitle`].
+#[derive(Debug, Error)]
+#[error("feed title cannot be empty")]
+pub struct InvalidFeedTitle;
+
+impl FromStr for FeedTitle {
+    type Err = InvalidFeedTitle;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let value = value.trim();
+        if value.is_empty() {
+            return Err(InvalidFeedTitle);
+        }
+        Ok(Self(value.to_owned()))
+    }
+}
+
+impl FeedTitle {
+    /// Composes the title for one Syndication Feed surface.
+    #[must_use]
+    pub fn for_surface(site_title: &SiteTitle, surface: &FeedSurface) -> Self {
+        match surface {
+            FeedSurface::Site => Self(site_title.to_string()),
+            FeedSurface::SiteTag { tag } => Self(format!("{site_title} — #{tag}")),
+            FeedSurface::User { username } => Self(format!("{site_title} — @{username}")),
+            FeedSurface::UserTag { username, tag } => {
+                Self(format!("{site_title} — @{username} #{tag}"))
+            }
+        }
+    }
+}
+
+/// Optional nonblank descriptive text for a public Syndication Feed.
+#[derive(Clone, Debug, PartialEq, Eq, StrNewtype)]
+pub struct FeedDescription(String);
+
+/// Error returned for an empty [`FeedDescription`].
+#[derive(Debug, Error)]
+#[error("feed description cannot be empty")]
+pub struct InvalidFeedDescription;
+
+impl FromStr for FeedDescription {
+    type Err = InvalidFeedDescription;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let value = value.trim();
+        if value.is_empty() {
+            return Err(InvalidFeedDescription);
+        }
+        Ok(Self(value.to_owned()))
+    }
+}
 
 /// Feed-level metadata: what a rendered feed document says about itself.
 ///
@@ -82,8 +145,61 @@ pub fn feed_etag(items: &[FeedItem], generated_at: DateTime<Utc>) -> ETag {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::feed::FeedSurface;
+    use crate::site::SiteTitle;
     use crate::test_support::{parse_post_title, parse_url};
     use chrono::TimeZone;
+
+    #[test]
+    fn feed_title_parses_trims_and_rejects_blank() {
+        assert_eq!("  A Feed  ".parse::<FeedTitle>().unwrap(), "A Feed");
+        assert!("".parse::<FeedTitle>().is_err());
+        assert!("   ".parse::<FeedTitle>().is_err());
+    }
+
+    #[test]
+    fn feed_description_parses_trims_and_rejects_blank() {
+        assert_eq!(
+            "  Posts from Alice  ".parse::<FeedDescription>().unwrap(),
+            "Posts from Alice"
+        );
+        assert!("".parse::<FeedDescription>().is_err());
+        assert!("\t\n".parse::<FeedDescription>().is_err());
+    }
+
+    #[test]
+    fn feed_title_composes_every_surface() {
+        let site = "Jaunder".parse::<SiteTitle>().unwrap();
+        assert_eq!(FeedTitle::for_surface(&site, &FeedSurface::Site), "Jaunder");
+        assert_eq!(
+            FeedTitle::for_surface(
+                &site,
+                &FeedSurface::SiteTag {
+                    tag: "rust".parse().unwrap(),
+                },
+            ),
+            "Jaunder — #rust"
+        );
+        assert_eq!(
+            FeedTitle::for_surface(
+                &site,
+                &FeedSurface::User {
+                    username: "alice".parse().unwrap(),
+                },
+            ),
+            "Jaunder — @alice"
+        );
+        assert_eq!(
+            FeedTitle::for_surface(
+                &site,
+                &FeedSurface::UserTag {
+                    username: "alice".parse().unwrap(),
+                    tag: "rust".parse().unwrap(),
+                },
+            ),
+            "Jaunder — @alice #rust"
+        );
+    }
 
     fn item(id: PostId, ts: DateTime<Utc>) -> FeedItem {
         FeedItem {
