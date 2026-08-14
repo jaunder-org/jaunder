@@ -1064,7 +1064,8 @@ Playwright, and the repository `cargo xtask` gate.
 - Modify: `host/src/error.rs`
 - Create: `server/tests/misc/client_telemetry.rs`
 - Modify: `server/tests/misc/mod.rs`
-- Modify: `server/tests/helpers/http.rs`
+- Modify: `server/Cargo.toml`
+- Modify: `Cargo.lock`
 
 **Interfaces:**
 
@@ -1086,7 +1087,7 @@ Playwright, and the repository `cargo xtask` gate.
   It emits the bounded fixed WARN and calls the private metric helper with
   `Swallowed/Client` exactly once.
 
-- [ ] **Step 1: Add pure limiter tests**
+- [x] **Step 1: Add pure limiter tests**
 
   With manual time, assert: five immediate accepts; sixth reject; one token
   after one minute; separate users independent; a full bucket retained before 15
@@ -1095,7 +1096,7 @@ Playwright, and the repository `cargo xtask` gate.
   most 64; a new limiter has zero buckets/ring entries and no inherited token
   state.
 
-- [ ] **Step 2: Add backend-parametric HTTP rejection tests**
+- [x] **Step 2: Add backend-parametric HTTP rejection tests**
 
   Through a fresh `Backend::setup()` router assert exact status codes: missing,
   malformed, expired, and unknown session cookie => 401; valid Bearer and valid
@@ -1105,14 +1106,14 @@ Playwright, and the repository `cargo xtask` gate.
   => 500; sixth accepted-user event => 429. Assert every rejection emits no
   intake warning, `jaunder.errors`, or `session_validation` metric.
 
-- [ ] **Step 3: Add backend-parametric acceptance tests**
+- [x] **Step 3: Add backend-parametric acceptance tests**
 
   A valid cookie event returns 204 and emits one fixed WARN plus exactly one
   `jaunder.errors{disposition=swallowed,origin=client}`. With the same valid
   cookie plus Bearer/Basic headers, cookie authentication wins. Assert the
   route's test constructor supplies only session storage and limiter extensions.
 
-- [ ] **Step 4: Run and observe route absence**
+- [x] **Step 4: Run and observe route absence**
 
   ```bash
   devtool run -- cargo nextest run -p jaunder client_telemetry
@@ -1120,7 +1121,7 @@ Playwright, and the repository `cargo xtask` gate.
 
   Expected before implementation: FAIL/404.
 
-- [ ] **Step 5: Implement parsing, guard, limiter, handler, and composition**
+- [x] **Step 5: Implement parsing, guard, limiter, handler, and composition**
 
   Apply the body limit before unbounded buffering. Authenticate before emitting
   any diagnostic. The dedicated guard maps storage internal errors to 500
@@ -1129,12 +1130,12 @@ Playwright, and the repository `cargo xtask` gate.
   `ErrorKind`/`ErrorClass` and call `host::error::report_client_swallowed`; the
   handler cannot call the private metric helper directly.
 
-- [ ] **Step 6: Verify both backends and commit**
+- [x] **Step 6: Verify both backends and commit**
 
   ```bash
   devtool run -- cargo nextest run -p jaunder client_telemetry
   devtool run -- cargo xtask check
-  git add host/src/auth.rs host/src/error.rs server/src/client_telemetry.rs server/src/lib.rs server/tests
+  git add Cargo.lock docs/superpowers/plans/2026-08-13-issue-58-error-swallowing-audit.md host/src/auth.rs host/src/error.rs server/Cargo.toml server/src/client_telemetry.rs server/src/lib.rs server/tests/misc/client_telemetry.rs server/tests/misc/mod.rs
   git commit -m "feat(server): ingest bounded client diagnostics"
   ```
 

@@ -1915,6 +1915,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "host",
+ "http-body-util",
  "leptos",
  "leptos_axum",
  "lettre",

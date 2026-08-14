@@ -11,6 +11,7 @@
 use std::error::Error;
 use std::sync::LazyLock;
 
+use common::client_telemetry::ClientSourceKind;
 use opentelemetry::metrics::Counter;
 use opentelemetry::{KeyValue, global};
 
@@ -197,6 +198,46 @@ pub fn report_swallowed(
         class,
         ErrorDisposition::Swallowed,
         TelemetryOrigin::Server,
+    );
+}
+fn client_source_kind_as_str(source_kind: ClientSourceKind) -> &'static str {
+    match source_kind {
+        ClientSourceKind::StorageUnavailable => "storage_unavailable",
+        ClientSourceKind::StorageOperation => "storage_operation",
+        ClientSourceKind::InvalidSeed => "invalid_seed",
+        ClientSourceKind::DialogUnavailable => "dialog_unavailable",
+        ClientSourceKind::FormDataCreate => "form_data_create",
+        ClientSourceKind::FormDataAppend => "form_data_append",
+    }
+}
+
+/// Atomically reports one accepted, bounded browser-side swallowed failure.
+///
+/// Unlike [`report_swallowed`], this interface cannot accept arbitrary source
+/// text: the wire's closed source kind is mapped to a fixed tracing field here.
+pub fn report_client_swallowed(
+    kind: ErrorKind,
+    class: ErrorClass,
+    context: &'static str,
+    source_kind: ClientSourceKind,
+) {
+    let source_kind = client_source_kind_as_str(source_kind);
+    let kind_name = kind.as_metric_str();
+    let class_name = class.as_metric_str();
+    tracing::warn!(
+        error.kind = kind_name,
+        error.class = class_name,
+        error.disposition = "swallowed",
+        telemetry.origin = "client",
+        error.context = context,
+        error.source_kind = source_kind,
+        "client error swallowed after reporting",
+    );
+    record_error(
+        kind,
+        class,
+        ErrorDisposition::Swallowed,
+        TelemetryOrigin::Client,
     );
 }
 
@@ -777,6 +818,22 @@ mod tests {
         assert_eq!(TelemetryOrigin::Client.as_str(), "client");
         assert_eq!(ErrorClass::Bug.as_metric_str(), "bug");
         assert_eq!(ErrorClass::External.as_metric_str(), "external");
+    }
+    #[test]
+    fn client_source_kinds_map_to_fixed_bounded_strings() {
+        use common::client_telemetry::ClientSourceKind;
+
+        let cases = [
+            (ClientSourceKind::StorageUnavailable, "storage_unavailable"),
+            (ClientSourceKind::StorageOperation, "storage_operation"),
+            (ClientSourceKind::InvalidSeed, "invalid_seed"),
+            (ClientSourceKind::DialogUnavailable, "dialog_unavailable"),
+            (ClientSourceKind::FormDataCreate, "form_data_create"),
+            (ClientSourceKind::FormDataAppend, "form_data_append"),
+        ];
+        for (source_kind, expected) in cases {
+            assert_eq!(super::client_source_kind_as_str(source_kind), expected);
+        }
     }
 
     #[test]

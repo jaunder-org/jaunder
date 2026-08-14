@@ -2,6 +2,7 @@ pub mod assets;
 pub mod atompub;
 pub mod backup;
 pub mod cli;
+pub mod client_telemetry;
 pub mod commands;
 pub mod context;
 pub mod feed;
@@ -74,10 +75,15 @@ pub fn create_router(
     let server_fn_mailer = mailer;
     let serve_assets = ServeEmbed::<StaticAssets>::new();
     let storage_path_ext = Arc::new(storage_path);
+    let client_telemetry = crate::client_telemetry::router(
+        sessions_ext.clone(),
+        Arc::new(crate::client_telemetry::ClientTelemetryLimiter::new()),
+    );
     let app = Router::new()
         .nest_service("/style", serve_assets)
         .merge(crate::media::router())
         .merge(crate::atompub::router())
+        .merge(client_telemetry)
         .route(
             "/api/{*fn_name}",
             axum::routing::post(move |req: axum::extract::Request| {
