@@ -23,6 +23,8 @@ import {
 import { allowEngineDependentBoot, allowSecondBoot } from "./bootBudget";
 import { SEL } from "./selectors";
 import { createPostViaApi } from "./posts";
+import { applySeededSession, createSessionViaTool } from "./seed";
+import { expectVisual } from "./visual";
 
 test("owner: pre-paint auth marks html.authed and / stays the enhanced public timeline", async ({
   page,
@@ -125,16 +127,19 @@ test("seeded: re-seed as the same user after logout boots authed", async ({
   await expect(page.locator("html")).toHaveAttribute("data-user", username);
 });
 
-test("owner: /app cockpit boots straight into the personalized feed", async ({
-  registeredPage,
-}) => {
-  // Directly bookmarkable (D6): a direct hit to /app boots into the feed + composer
-  // with zero intermediate clicks (pre-paint html.authed → the client boots authed).
-  const page = await registeredPage("/app");
+test(
+  "owner: /app cockpit boots straight into the personalized feed",
+  { tag: "@visual" },
+  async ({ page, firstNav }) => {
+    const session = await createSessionViaTool("testlogin");
+    await applySeededSession(page.context(), session);
+    await goto(page, "/app", { timeout: firstNav });
 
-  await expect(page.locator(".j-topbar .j-sub")).toHaveText("Your home feed");
-  await expect(page.locator(SEL.postBody)).toBeVisible();
-});
+    await expect(page.locator(".j-topbar .j-sub")).toHaveText("Your home feed");
+    await expect(page.locator(SEL.postBody)).toBeVisible();
+    await expectVisual(page, "authenticated-cockpit.png");
+  },
+);
 
 test("owner: jaunder_home_redirect='app' makes the pre-paint script redirect / → /app", async ({
   page,

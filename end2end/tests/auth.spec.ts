@@ -11,6 +11,7 @@ import {
   stallServerFn,
 } from "./helpers";
 import { SEL } from "./selectors";
+import { expectVisual } from "./visual";
 
 test("register page shows form", async ({ page }) => {
   // Holdout (spec D6): proves /register renders.
@@ -87,13 +88,14 @@ test("register with open policy succeeds", async ({ page }) => {
   await expect(page.locator(SEL.error)).not.toBeVisible();
 });
 
-test("login page shows form", async ({ page }) => {
+test("login page shows form", { tag: "@visual" }, async ({ page }) => {
   // Holdout (spec D6): proves /login renders.
   await goto(page, "/login");
 
   await expect(page.locator("h1")).toHaveText("Login");
   await expect(page.locator(SEL.username)).toBeVisible();
   await expect(page.locator(SEL.password)).toBeVisible();
+  await expectVisual(page, "login-page.png");
 });
 
 test("login with valid credentials succeeds", async ({

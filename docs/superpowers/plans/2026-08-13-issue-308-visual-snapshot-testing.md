@@ -335,13 +335,13 @@ feat(xtask): update visual snapshots in fresh browsers (#308)
 - Snapshot names are stable semantic names, one per state. Let Playwright append
   project/platform identity; do not encode storage backend.
 
-- [ ] **Step 1: Add the four tagged comparisons**
+- [x] **Step 1: Add the four tagged comparisons**
 
 Import only the needed visual/seed/session helpers. Do not create parallel
 visual setup paths. Ensure the screenshot is taken after the behavioral state is
 proven, before the empty-editor test mutates its textarea.
 
-- [ ] **Step 2: Type-check and prove the resolved project graph**
+- [x] **Step 2: Type-check and prove the resolved project graph**
 
 Run:
 
@@ -372,7 +372,7 @@ devtool run -- jq -e '([.config.projects[] | select(.name == "chromium-visual" o
 Expected: both pass. The exact `jq` predicate proves both visual overrides
 resolve to zero while both ordinary siblings inherit the ambient retry value.
 
-- [ ] **Step 3: Generate both browser baseline sets**
+- [x] **Step 3: Generate both browser baseline sets**
 
 Run:
 
@@ -384,7 +384,7 @@ Expected: PASS with release CSR. Chromium and Firefox each run against a
 separately logged fresh lifecycle; both Playwright and panic-gate results pass.
 Exactly eight PNGs are created: four states × two browser projects.
 
-- [ ] **Step 4: Prove fresh-run byte stability**
+- [x] **Step 4: Prove fresh-run byte stability**
 
 Record SHA-256 hashes for all eight PNGs, run the Step 3 command again, and
 compare hashes.
@@ -393,7 +393,7 @@ Expected: all eight hashes are unchanged. Any changed image is a determinism
 defect; fix the state/font/capture seam rather than tolerating pixels or adding
 masks.
 
-- [ ] **Step 5: Prove exact failure and one-attempt behavior**
+- [x] **Step 5: Prove exact failure and one-attempt behavior**
 
 Temporarily replace the expected Chromium login PNG with a different valid state
 PNG, preserving the original for restoration. Run
@@ -406,7 +406,7 @@ despite the ambient retry setting. No other visual state is scheduled by the
 positional filter. Restore the exact original PNG, rerun the same filtered
 command under the same retry environment, and require PASS.
 
-- [ ] **Step 6: Prove both browser comparisons in the VM path**
+- [x] **Step 6: Prove both browser comparisons in the VM path**
 
 Run:
 
@@ -419,13 +419,13 @@ Expected: both pass, each running its visual prerequisite before ordinary/admin
 tests against the committed shared baseline. The Firefox run must not update
 snapshots.
 
-- [ ] **Step 7: Gate, inspect images, stage, and commit Task 4**
+- [x] **Step 7: Gate, inspect images, stage, and commit Task 4**
 
 Open or otherwise inspect every generated PNG; confirm the intended complete
 desktop state, no clipping, correct pinned typography, and that only the
 timestamp is masked in the public timeline. Run
-`devtool run -- cargo xtask check`. Stage the four specs and all eight PNGs.
-Commit:
+`devtool run -- cargo xtask check`. Stage the four specs, all eight PNGs, and
+this plan. Commit:
 
 ```text
 test(e2e): baseline four visual browser states (#308)
