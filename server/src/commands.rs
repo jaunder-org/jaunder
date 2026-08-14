@@ -775,7 +775,6 @@ mod tests {
     use common::test_support::parse_invite_ttl_hours;
     use rstest::*;
     use rstest_reuse::*;
-    use storage::DbConnectOptions;
     use storage::test_support::{
         Backend, PostgresDbGuard, TestEnv, backends, sqlite_url, unique_postgres_url,
     };
@@ -802,6 +801,13 @@ mod tests {
             },
             guard,
         )
+    }
+
+    fn sqlite_storage_args(temp: &TempDir) -> StorageArgs {
+        StorageArgs {
+            storage_path: temp.path().to_path_buf(),
+            db: crate::test_support::sqlite_db_options(temp.path()),
+        }
     }
 
     #[test]
@@ -997,15 +1003,11 @@ mod tests {
     #[tokio::test]
     async fn cmd_site_config_set_upserts_and_get_and_list_read_back() {
         let temp = TempDir::new().expect("temp dir");
-        let db_path = temp.path().join("jaunder.db");
-        let db_url = format!("sqlite:{}", db_path.display());
-        let opts: DbConnectOptions = db_url.parse().expect("parse sqlite url");
+        let storage_args = sqlite_storage_args(&temp);
         // Handlers use open_existing_database, so the DB must already exist.
-        storage::open_database(&opts).await.expect("open db");
-        let storage_args = StorageArgs {
-            storage_path: temp.path().to_path_buf(),
-            db: opts,
-        };
+        storage::open_database(&storage_args.db)
+            .await
+            .expect("open db");
 
         cmd_site_config_set(
             &storage_args,
@@ -1053,16 +1055,10 @@ mod tests {
     #[tokio::test]
     async fn cmd_user_invite_creates_invite_expiring_in_the_future() {
         let temp = TempDir::new().expect("temp dir");
-        let db_path = temp.path().join("jaunder.db");
-        let db_url = format!("sqlite:{}", db_path.display());
-        let opts: DbConnectOptions = db_url.parse().expect("parse sqlite url");
-
-        let state = storage::open_database(&opts).await.expect("open db");
-
-        let storage_args = StorageArgs {
-            storage_path: temp.path().to_path_buf(),
-            db: opts,
-        };
+        let storage_args = sqlite_storage_args(&temp);
+        let state = storage::open_database(&storage_args.db)
+            .await
+            .expect("open db");
 
         let before = chrono::Utc::now();
         cmd_user_invite(&storage_args, Some(parse_invite_ttl_hours("24")))
@@ -1083,21 +1079,15 @@ mod tests {
         // Exercises the base-URL branch of the reveal: when a base URL is set, the
         // command prints a ready-to-send invitation link rather than the bare code.
         let temp = TempDir::new().expect("temp dir");
-        let db_path = temp.path().join("jaunder.db");
-        let db_url = format!("sqlite:{}", db_path.display());
-        let opts: DbConnectOptions = db_url.parse().expect("parse sqlite url");
-
-        let state = storage::open_database(&opts).await.expect("open db");
+        let storage_args = sqlite_storage_args(&temp);
+        let state = storage::open_database(&storage_args.db)
+            .await
+            .expect("open db");
         state
             .site_config
             .set(SiteConfigKey::SiteBaseUrl, "https://example.com")
             .await
             .expect("set base_url");
-
-        let storage_args = StorageArgs {
-            storage_path: temp.path().to_path_buf(),
-            db: opts,
-        };
 
         cmd_user_invite(&storage_args, Some(parse_invite_ttl_hours("24")))
             .await
@@ -1115,12 +1105,7 @@ mod tests {
         // port 0 avoids a fixed-port clash; we never enter the serve loop.
         let temp = TempDir::new().expect("temp dir");
         let db_path = temp.path().join("jaunder.db");
-        let db_url = format!("sqlite:{}", db_path.display());
-        let opts: DbConnectOptions = db_url.parse().expect("parse sqlite url");
-        let storage = StorageArgs {
-            storage_path: temp.path().to_path_buf(),
-            db: opts,
-        };
+        let storage = sqlite_storage_args(&temp);
         assert!(
             !db_path.exists(),
             "database must not exist before prepare_server"
@@ -1144,12 +1129,7 @@ mod tests {
         // would auto-init — proving the refusal precedes that.
         let temp = TempDir::new().expect("temp dir");
         let db_path = temp.path().join("jaunder.db");
-        let db_url = format!("sqlite:{}", db_path.display());
-        let opts: DbConnectOptions = db_url.parse().expect("parse sqlite url");
-        let storage = StorageArgs {
-            storage_path: temp.path().to_path_buf(),
-            db: opts,
-        };
+        let storage = sqlite_storage_args(&temp);
         let start = runtime_file::require_start_time_at(std::path::Path::new("/proc/self/stat"))
             .expect("read own start-time");
         std::fs::write(

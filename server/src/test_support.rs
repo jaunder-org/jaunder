@@ -31,14 +31,19 @@ pub(crate) async fn migrated_sqlite_pool(db_path: &Path) -> sqlx::SqlitePool {
     pool
 }
 
+/// Connect options for `jaunder.db` inside `dir`.
+pub(crate) fn sqlite_db_options(dir: &Path) -> DbConnectOptions {
+    format!("sqlite:{}", dir.join("jaunder.db").display())
+        .parse()
+        .expect("db options")
+}
+
 /// Creates a migrated `jaunder.db` inside `dir`, returning its connect options
 /// (for handing to a subsystem that opens its own connection, e.g. the backup
 /// worker) alongside an open pool (for building storage handles on the same DB).
 pub(crate) async fn migrated_sqlite_db(dir: &Path) -> (DbConnectOptions, sqlx::SqlitePool) {
     let db_path = dir.join("jaunder.db");
-    let options = format!("sqlite:{}", db_path.display())
-        .parse()
-        .expect("db options");
+    let options = sqlite_db_options(dir);
     let pool = migrated_sqlite_pool(&db_path).await;
     (options, pool)
 }
