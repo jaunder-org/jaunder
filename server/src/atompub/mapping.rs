@@ -906,7 +906,7 @@ mod tests {
     #[test]
     fn post_to_entry_timestamps() {
         let now = Utc::now();
-        let post = make_post(MakePost {
+        let mut post = make_post(MakePost {
             post_id: 7,
             title: Some("Title"),
             slug: "slug",
@@ -916,6 +916,7 @@ mod tests {
             summary: None,
             tags: vec![],
         });
+        post.updated_at = now;
 
         let entry = post_to_entry(&post, &parse_url("https://example.com/"));
 
