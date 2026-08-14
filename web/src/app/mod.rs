@@ -2,6 +2,12 @@
 //! their pure projector twin. `render` is the host-compiled shell projector
 //! (shared with `server::projector`); `component` is the wasm-only reactive shell.
 
+mod seed;
+pub use seed::decode_projector_seed;
+
+#[cfg(any(target_arch = "wasm32", test))]
+mod theme;
+
 mod render;
 pub use render::{
     DEFAULT_THEME, DISCOVERY_MARKER_ATTR, GLUE_URL, PREPAINT_SCRIPT, SPA_SHELL, WASM_URL,

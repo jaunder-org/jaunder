@@ -4,7 +4,9 @@
 #![recursion_limit = "512"]
 
 use client::perf::{BOOT_ENTRY, BOOT_MOUNT_DONE, BOOT_RENDER_START, BOOT_SEED_PARSED, mark};
+use common::client_telemetry::{ClientErrorContext, ClientSourceKind};
 use common::seed::PageSeed;
+
 use leptos::prelude::*;
 use web::app::App;
 
@@ -25,6 +27,20 @@ extern "C" {
     fn mark_ready();
 }
 
+fn projector_seed() -> Option<PageSeed> {
+    let json = client::dom::text_content_by_id("jaunder-seed");
+    let Ok(seed) = web::app::decode_projector_seed(json.as_deref()) else {
+        let source_kind = ClientSourceKind::InvalidSeed;
+        client::telemetry::report_swallowed(
+            client::telemetry::error_kind(source_kind),
+            ClientErrorContext::ProjectorSeedDecode,
+            source_kind,
+        );
+        return None;
+    };
+    seed
+}
+
 /// Boot the CSR client (#179). Adopts the public projector's data blob (#178):
 /// reads `#jaunder-seed`, drops the projector-painted `#app` container, and mounts
 /// [`App`] with the seed in context so the public pages render their first paint from
@@ -32,8 +48,7 @@ extern "C" {
 /// flash-free. On the static SPA shell (no blob, no `#app`) the seed is `None` and
 /// this is an ordinary `mount_to_body`.
 fn mount() {
-    let seed = client::dom::text_content_by_id("jaunder-seed")
-        .and_then(|json| serde_json::from_str::<PageSeed>(&json).ok());
+    let seed = projector_seed();
     mark(BOOT_SEED_PARSED);
     // App re-renders the identical content from `seed`, so removing the
     // server-painted copy avoids a duplicate paint without a visible flash (the

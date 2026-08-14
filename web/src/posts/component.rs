@@ -42,6 +42,7 @@ use crate::timeline::{
     wire_timeline_resolve,
 };
 use crate::topbar::Topbar;
+use common::client_telemetry::ClientErrorContext;
 use common::feed::FeedSurface;
 use common::ids::PostId;
 use common::pagination::PageSize;
@@ -229,6 +230,63 @@ fn marker_matches(author: &Username) -> bool {
         .map(|user| &user.username)
         == Some(author)
 }
+fn dispatch_after_confirm(message: &str, context: ClientErrorContext, dispatch: impl FnOnce()) {
+    match client::dialog::confirm(message) {
+        Ok(outcome) => {
+            if outcome.should_dispatch() {
+                dispatch();
+            }
+        }
+        Err(error) => {
+            let source_kind = error.source_kind();
+            client::telemetry::report_swallowed(
+                client::telemetry::error_kind(source_kind),
+                context,
+                source_kind,
+            );
+        }
+    }
+}
+fn primary_post_action(
+    is_draft: bool,
+    post_id: PostId,
+    publish_action: ServerAction<Publish>,
+    unpublish_action: ServerAction<Unpublish>,
+) -> AnyView {
+    if is_draft {
+        view! {
+            <button
+                type="button"
+                class="j-btn"
+                on:click=move |_| {
+                    dispatch_after_confirm(
+                        "Publish this draft?",
+                        ClientErrorContext::PublishConfirm,
+                        || {
+                            publish_action.dispatch(Publish { post_id });
+                        },
+                    );
+                }
+            >
+                "Publish"
+            </button>
+        }
+        .into_any()
+    } else {
+        view! {
+            <button
+                type="button"
+                class="j-btn"
+                on:click=move |_| {
+                    unpublish_action.dispatch(Unpublish { post_id });
+                }
+            >
+                "Unpublish"
+            </button>
+        }
+        .into_any()
+    }
+}
 
 #[component]
 pub fn PostCard<'a>(
@@ -296,39 +354,7 @@ pub fn PostCard<'a>(
         },
     );
 
-    // The primary lifecycle action adapts to draft state (#23): a draft gets
-    // Publish (dispatching Publish behind a confirm), a published post keeps
-    // Unpublish. Edit and Delete are identical either way.
-    let primary_action = if is_draft {
-        view! {
-            <button
-                type="button"
-                class="j-btn"
-                on:click=move |_| {
-                    let confirmed = client::dialog::confirm("Publish this draft?");
-                    if confirmed {
-                        publish_action.dispatch(Publish { post_id });
-                    }
-                }
-            >
-                "Publish"
-            </button>
-        }
-        .into_any()
-    } else {
-        view! {
-            <button
-                type="button"
-                class="j-btn"
-                on:click=move |_| {
-                    unpublish_action.dispatch(Unpublish { post_id });
-                }
-            >
-                "Unpublish"
-            </button>
-        }
-        .into_any()
-    };
+    let primary_action = primary_post_action(is_draft, post_id, publish_action, unpublish_action);
 
     // Additive action column (#181, ADR-0044 D4): edit / publish-or-unpublish /
     // delete. The timestamp deliberately stays in the (coincident) content-column
@@ -345,10 +371,13 @@ pub fn PostCard<'a>(
                     type="button"
                     class="j-btn is-danger"
                     on:click=move |_| {
-                        let confirmed = client::dialog::confirm("Delete this post?");
-                        if confirmed {
-                            delete_action.dispatch(Delete { post_id });
-                        }
+                        dispatch_after_confirm(
+                            "Delete this post?",
+                            ClientErrorContext::DeleteConfirm,
+                            || {
+                                delete_action.dispatch(Delete { post_id });
+                            },
+                        );
                     }
                 >
                     "Delete"

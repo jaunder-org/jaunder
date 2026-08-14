@@ -6,7 +6,11 @@
 //! the slot. The browser adapter owns one reporter for the page and keeps all
 //! fetch construction and self-failure handling inside this module.
 
+mod classification;
 mod reporter;
+pub use classification::{
+    ConfirmOutcome, DialogError, StorageError, UploadError, UploadOutcome, error_kind, event,
+};
 
 pub use reporter::{Completion, ConsoleSink, Reporter, Transport};
 

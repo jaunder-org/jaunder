@@ -6,6 +6,7 @@
 /// The default theme, shared with the pure projector so the server-painted shell
 /// and this reactive `AppShell` agree on the initial `data-theme`.
 use super::DEFAULT_THEME;
+use common::client_telemetry::ClientErrorContext;
 
 /// The localStorage key holding the persisted theme. Local to `web` — unlike the
 /// auth marker's key, it is not shared with the pre-paint script or any other layer.
@@ -35,6 +36,27 @@ use leptos_router::{
     ParamSegment, StaticSegment,
     components::{Outlet, ParentRoute, Route, Router, Routes},
 };
+fn report_storage_error(context: ClientErrorContext, error: client::storage::StorageError) {
+    let source_kind = error.source_kind();
+    client::telemetry::report_swallowed(
+        client::telemetry::error_kind(source_kind),
+        context,
+        source_kind,
+    );
+}
+fn provide_theme_context() {
+    let resolution = super::theme::resolve_theme(client::storage::get(THEME_KEY), DEFAULT_THEME);
+    if let Some(error) = resolution.error {
+        report_storage_error(ClientErrorContext::ThemeStorageRead, error);
+    }
+    let theme = RwSignal::new(resolution.theme);
+    provide_context(theme);
+    Effect::new(move |_| {
+        if let Err(error) = client::storage::set(THEME_KEY, &theme.get()) {
+            report_storage_error(ClientErrorContext::ThemeStorageWrite, error);
+        }
+    });
+}
 
 #[component]
 fn AppShell() -> impl IntoView {
@@ -75,24 +97,7 @@ pub fn App() -> impl IntoView {
     // document reload. Chrome updates reactively via the shared session context, which
     // those components set/clear on success.
 
-    let theme = RwSignal::new(DEFAULT_THEME.to_string());
-
-    // On WASM: restore theme from localStorage on startup. A read failure (storage
-    // unavailable) falls back to the default theme — cosmetic, nothing to recover.
-    if let Ok(Some(val)) = client::storage::get(THEME_KEY)
-        && !val.is_empty()
-    {
-        theme.set(val);
-    }
-
-    provide_context(theme);
-
-    // On WASM: persist theme to localStorage whenever it changes. Theme persistence
-    // is cosmetic, so a write failure (e.g. quota) is deliberately ignored at this
-    // caller rather than surfaced — the primitive reports it; we choose not to act.
-    Effect::new(move |_| {
-        let _ = client::storage::set(THEME_KEY, &theme.get());
-    });
+    provide_theme_context();
 
     view! {
         <Title text="Jaunder" />

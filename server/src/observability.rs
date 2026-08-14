@@ -18,9 +18,9 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 fn default_filter(verbose: bool) -> EnvFilter {
     if verbose {
-        EnvFilter::new("jaunder=debug,web=debug,common=debug,tower_http=debug,sqlx=info")
+        EnvFilter::new("jaunder=debug,host=debug,web=debug,common=debug,tower_http=debug,sqlx=info")
     } else {
-        EnvFilter::new("jaunder=warn,web=warn,common=warn,tower_http=warn,sqlx=warn")
+        EnvFilter::new("jaunder=warn,host=warn,web=warn,common=warn,tower_http=warn,sqlx=warn")
     }
 }
 
@@ -1681,6 +1681,25 @@ mod tests {
             warn_str.contains("LevelFilter::WARN"),
             "warn_str: {warn_str}"
         );
+    }
+
+    #[test]
+    fn default_filter_keeps_host_error_reports() {
+        let output = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let subscriber = tracing_subscriber::registry()
+            .with(default_filter(false))
+            .with(
+                fmt::layer()
+                    .with_ansi(false)
+                    .with_writer(Shared(output.clone())),
+            );
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::warn!(target: "host::error", "host-warning");
+        });
+
+        let output = String::from_utf8(output.lock().expect("trace lock").clone()).expect("utf8");
+        assert!(output.contains("host-warning"), "trace: {output}");
     }
 
     #[test]

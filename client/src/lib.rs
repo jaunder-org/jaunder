@@ -13,8 +13,7 @@
 //!
 //! See docs/adr/0069-client-crate-wasm-only-home.md.
 
-/// Generic browser `localStorage` key/value primitive (#514). Raw string KV, no
-/// domain types — the single `web`/`csr` home for `web_sys::Storage` access.
+/// Generic browser `localStorage` key/value primitive (#514).
 #[cfg(target_arch = "wasm32")]
 pub mod storage;
 
@@ -23,7 +22,6 @@ pub mod storage;
 pub mod telemetry;
 
 /// Raw browser confirm-dialog primitive (`window.confirm`, #516).
-/// `web-sys` only, no domain types — unconditional (no `csr` gate).
 #[cfg(target_arch = "wasm32")]
 pub mod dialog;
 
@@ -45,6 +43,6 @@ pub mod perf;
 pub mod reactive;
 
 /// Browser file-picker → `MultipartData` glue (#520), living here so `web` names
-/// no `web_sys` type. Behind `csr` because it needs leptos's `NodeRef`.
+/// no `web_sys` type.
 #[cfg(all(target_arch = "wasm32", feature = "csr"))]
 pub mod upload;

@@ -1143,16 +1143,25 @@ Playwright, and the repository `cargo xtask` gate.
 
 **Files:**
 
+- Modify: `client/src/lib.rs`
 - Modify: `client/src/storage.rs`
 - Modify: `client/src/dialog.rs`
 - Modify: `client/src/upload.rs`
+- Create: `client/src/telemetry/classification.rs`
+- Modify: `client/src/telemetry/mod.rs`
 - Modify: `csr/src/lib.rs`
+- Modify: `server/src/observability.rs`
 - Modify: `web/src/app/component.rs`
+- Modify: `web/src/app/mod.rs`
+- Create: `web/src/app/seed.rs`
+- Create: `web/src/app/theme.rs`
 - Modify: `web/src/auth/marker_storage.rs`
 - Modify: `web/src/posts/component.rs`
 - Modify: `web/src/media/component.rs`
 - Create: `end2end/tests/client-telemetry.spec.ts`
 - Modify: `end2end/tests/capture-trace.ts`
+- Modify: `end2end/tests/capture.ts`
+- Modify: `end2end/tests/fixtures.ts`
 
 **Interfaces:**
 
@@ -1164,21 +1173,23 @@ Playwright, and the repository `cargo xtask` gate.
   static context stay at the caller.
 - Dialog and FormData primitives distinguish cancellation/absence from thrown
   API failure so callers can report only the latter.
+- The default server tracing filter admits `host` WARN/DEBUG targets; otherwise
+  the shared host reporter's warning is filtered before the diagnostic layer.
 
-- [ ] **Step 1: Add pure/host classification tests**
+- [x] **Step 1: Add pure/host classification tests**
 
   Pin the mapping from `StorageError`, seed decode failure, dialog throw,
   FormData construction/append failure, and expected no-file/cancel paths to
   either one closed event or no event. Keep arbitrary browser exception text
   local-only.
 
-- [ ] **Step 2: Refine browser primitive return types**
+- [x] **Step 2: Refine browser primitive return types**
 
   Change `confirm` and upload helpers only enough to separate expected
   user/no-file outcomes from browser exceptions. Migrate every caller in the
   same change; no compatibility aliases or silent `Option` shims remain.
 
-- [ ] **Step 3: Wire all audited continued callers**
+- [x] **Step 3: Wire all audited continued callers**
 
   Report failed theme/session-marker access, projector seed JSON decode, dialog
   exception, and FormData creation/append before preserving the existing visible
@@ -1186,21 +1197,23 @@ Playwright, and the repository `cargo xtask` gate.
   cancellation, parse mismatch used as feature detection, or failures already
   rendered explicitly.
 
-- [ ] **Step 4: Add a real browser-to-server proof**
+- [x] **Step 4: Add a real browser-to-server proof**
 
   Use existing Playwright fault injection to force one audited browser operation
   to fail while authenticated. Assert the console warning occurs before the
   keepalive request starts, the caller's user-visible state is unchanged, and
-  the captured server warning/metric has `swallowed/client`. Close the page
-  after the request starts; do not require delivery after termination.
+  the captured server warning has `swallowed/client`; Task 8's in-process intake
+  proof pins the matching metric point because the e2e collector's only
+  configured pipeline is traces. Close the page after the request starts; do not
+  require delivery after termination.
 
-- [ ] **Step 5: Verify and commit**
+- [x] **Step 5: Verify and commit**
 
   ```bash
   devtool run -- cargo nextest run -p client telemetry
   devtool run -- cargo xtask e2e-local client-telemetry.spec.ts
   devtool run -- cargo xtask check
-  git add client/src csr/src web/src end2end
+  git add client/src/lib.rs client/src/storage.rs client/src/dialog.rs client/src/upload.rs client/src/telemetry/classification.rs client/src/telemetry/mod.rs csr/src/lib.rs server/src/observability.rs web/src/app/component.rs web/src/app/mod.rs web/src/app/seed.rs web/src/app/theme.rs web/src/auth/marker_storage.rs web/src/posts/component.rs web/src/media/component.rs end2end/tests/client-telemetry.spec.ts end2end/tests/capture-trace.ts end2end/tests/capture.ts end2end/tests/fixtures.ts docs/superpowers/plans/2026-08-13-issue-58-error-swallowing-audit.md
   git commit -m "fix(client): report swallowed browser failures"
   ```
 
