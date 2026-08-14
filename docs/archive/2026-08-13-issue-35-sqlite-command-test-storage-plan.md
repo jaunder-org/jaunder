@@ -19,7 +19,7 @@ separately triaged issue.
 Projects.
 
 **Spec:**
-[`2026-08-13-issue-35-sqlite-command-test-storage-spec.md`](../specs/2026-08-13-issue-35-sqlite-command-test-storage-spec.md)
+[`2026-08-13-issue-35-sqlite-command-test-storage-spec.md`](2026-08-13-issue-35-sqlite-command-test-storage-spec.md)
 
 ## Review header
 
