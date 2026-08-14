@@ -416,7 +416,7 @@ Post's current `published_at` is non-null; pulling it back to draft makes the
 slug editable on a later update, and scheduling or publishing freezes it again
 (`storage/src/{sqlite,postgres}/posts.rs::update_post`,
 [scheduled publishing](adr/0027-scheduled-publishing-time-gated-visibility.md),
-[current-state slug freeze](adr/drafts/current-publication-state-slug-freeze.md)).
+[current-state slug freeze](adr/0130-current-publication-state-slug-freeze.md)).
 
 **Visibility is two orthogonal predicates on the same reads.** _Time_: a post is
 draft (`published_at` NULL), scheduled (future), or live (past); every public

@@ -62,7 +62,7 @@ _scheduled_ (`NOT NULL AND > now`), _live_ (`NOT NULL AND <= now`).
    stable.
 
 > **Amended by the
-> [current-publication-state slug-freeze decision](drafts/current-publication-state-slug-freeze.md).**
+> [current-publication-state slug-freeze decision](0130-current-publication-state-slug-freeze.md).**
 > This ADR originally made the slug final once `published_at` had ever been set.
 > Issue #549 adopts the narrower rule already enforced by storage: the slug is
 > frozen while the current `published_at` is non-null, and becomes editable on a

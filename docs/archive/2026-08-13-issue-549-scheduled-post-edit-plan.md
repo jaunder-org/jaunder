@@ -23,7 +23,7 @@ TypeScript e2e.
 [`docs/archive/2026-08-13-issue-549-scheduled-post-edit-spec.md`](2026-08-13-issue-549-scheduled-post-edit-spec.md).
 **ADRs:** ADR-0027 (amended by this issue), ADR-0055, ADR-0065, ADR-0070,
 ADR-0072, ADR-0083, ADR-0105, ADR-0113, and the approved draft
-[`docs/adr/drafts/current-publication-state-slug-freeze.md`](../adr/drafts/current-publication-state-slug-freeze.md).
+[`docs/adr/0130-current-publication-state-slug-freeze.md`](../adr/0130-current-publication-state-slug-freeze.md).
 
 ## Review header
 

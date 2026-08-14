@@ -56,7 +56,7 @@ ambiguous and could not preserve the original instant.
    unscheduled update remains in the editor and shows the existing save result.
 10. Slug mutability follows current publication state, revising ADR-0027's
     stronger historical wording
-    ([decision draft](../adr/drafts/current-publication-state-slug-freeze.md)).
+    ([decision draft](../adr/0130-current-publication-state-slug-freeze.md)).
     The update that clears a schedule preserves the frozen slug because the
     pre-update `published_at` is non-null. When the resulting draft is reopened,
     its slug control is visible and a later draft save may change it;
