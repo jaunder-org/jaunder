@@ -225,17 +225,51 @@ pub fn init_storage(path: &Path) -> io::Result<()> {
 // Database helpers
 // ---------------------------------------------------------------------------
 
+fn read_sql_slow_threshold_env() -> Result<Option<String>, std::env::VarError> {
+    match std::env::var("JAUNDER_SQL_SLOW_MS") {
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error @ std::env::VarError::NotUnicode(_)) => Err(error),
+    }
+}
+
+fn write_sql_threshold_fallback(mut writer: impl std::io::Write) -> std::io::Result<()> {
+    writeln!(
+        writer,
+        "storage.observability.sql_slow_threshold: invalid configured value; using 5s"
+    )
+}
+
+fn warn_sql_threshold() {
+    let _ = write_sql_threshold_fallback(std::io::stderr().lock());
+}
+
+fn sql_slow_query_threshold_with(
+    mut read: impl FnMut() -> Result<Option<String>, std::env::VarError>,
+    mut warn: impl FnMut(),
+) -> std::time::Duration {
+    match read() {
+        Ok(Some(value)) => {
+            if let Ok(value) = value.parse::<u64>() {
+                std::time::Duration::from_millis(value)
+            } else {
+                warn();
+                std::time::Duration::from_secs(5)
+            }
+        }
+        Ok(None) => std::time::Duration::from_secs(5),
+        Err(_) => {
+            warn();
+            std::time::Duration::from_secs(5)
+        }
+    }
+}
+
 /// Slow-query log threshold shared by both `SQLite` and Postgres backends.
 ///
-/// Reads `JAUNDER_SQL_SLOW_MS` (milliseconds), defaulting to 100ms.
+/// Reads `JAUNDER_SQL_SLOW_MS` (milliseconds), defaulting to five seconds.
 pub(crate) fn sql_slow_query_threshold() -> std::time::Duration {
-    std::env::var("JAUNDER_SQL_SLOW_MS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .map_or(
-            std::time::Duration::from_millis(100),
-            std::time::Duration::from_millis,
-        )
+    sql_slow_query_threshold_with(read_sql_slow_threshold_env, warn_sql_threshold)
 }
 
 /// Opens (or creates) the database described by `opts`, runs pending
@@ -334,10 +368,10 @@ mod tests {
     }
 
     #[test]
-    fn sql_slow_query_threshold_defaults_to_100ms() {
+    fn sql_slow_query_threshold_defaults_to_five_seconds() {
         with_env(|env| {
             env.remove("JAUNDER_SQL_SLOW_MS");
-            assert_eq!(sql_slow_query_threshold(), Duration::from_millis(100));
+            assert_eq!(sql_slow_query_threshold(), Duration::from_secs(5));
         });
     }
 
@@ -346,6 +380,52 @@ mod tests {
         with_env(|env| {
             env.set("JAUNDER_SQL_SLOW_MS", "250");
             assert_eq!(sql_slow_query_threshold(), Duration::from_millis(250));
+        });
+    }
+
+    #[test]
+    fn nonnumeric_sql_slow_threshold_uses_default_with_one_fixed_nonrecursive_fallback() {
+        let mut output = Vec::new();
+        let threshold = sql_slow_query_threshold_with(
+            || Ok(Some("not-a-number".to_owned())),
+            || write_sql_threshold_fallback(&mut output).expect("write fallback"),
+        );
+        assert_eq!(threshold, Duration::from_secs(5));
+        assert_eq!(
+            String::from_utf8(output).expect("fallback utf8"),
+            "storage.observability.sql_slow_threshold: invalid configured value; using 5s\n"
+        );
+    }
+
+    #[test]
+    fn invalid_unicode_sql_slow_threshold_uses_default_with_one_redacted_nonrecursive_fallback() {
+        let mut output = Vec::new();
+        let threshold = sql_slow_query_threshold_with(
+            || {
+                Err(std::env::VarError::NotUnicode(std::ffi::OsString::from(
+                    "injected invalid unicode",
+                )))
+            },
+            || write_sql_threshold_fallback(&mut output).expect("write fallback"),
+        );
+        assert_eq!(threshold, Duration::from_secs(5));
+        assert_eq!(
+            String::from_utf8(output).expect("fallback utf8"),
+            "storage.observability.sql_slow_threshold: invalid configured value; using 5s\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn production_sql_threshold_reader_warns_for_invalid_unicode() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        with_env(|env| {
+            env.set(
+                "JAUNDER_SQL_SLOW_MS",
+                std::ffi::OsString::from_vec(vec![0xff]),
+            );
+            assert_eq!(sql_slow_query_threshold(), Duration::from_secs(5));
         });
     }
 

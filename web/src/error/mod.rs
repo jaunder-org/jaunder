@@ -11,5 +11,8 @@ mod wire;
 #[cfg(all(test, feature = "server"))]
 pub(crate) use server::project;
 #[cfg(feature = "server")]
-pub use server::{ErrorClass, ErrorKind, InternalError, InternalResult, server_boundary};
+pub use server::{
+    ErrorClass, ErrorKind, InternalError, InternalResult, SwallowedSource, report_swallowed,
+    server_boundary,
+};
 pub use wire::{WebError, WebResult};

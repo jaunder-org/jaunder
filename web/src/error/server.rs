@@ -10,7 +10,9 @@ use leptos::server_fn::error::ServerFnErrorErr;
 // The server-side error carrier lives in `host` (ADR-0058); `web` keeps only the
 // wire type and the `kind → WebError` projection. Re-exported so every vertical's
 // `InternalError::storage(…)`/`?` call site names it unchanged through `web::error`.
-pub use host::error::{ErrorClass, ErrorKind, InternalError, InternalResult};
+pub use host::error::{
+    ErrorClass, ErrorKind, InternalError, InternalResult, SwallowedSource, report_swallowed,
+};
 
 /// Emits the boundary telemetry for a failed `#[server]` **argument decode**.
 ///

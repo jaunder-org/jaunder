@@ -324,6 +324,7 @@ Playwright, and the repository `cargo xtask` gate.
 - Modify: `host/src/metrics.rs`
 - Modify: `host/src/error.rs`
 - Modify: `web/src/error/server.rs`
+- Modify: `web/src/error/mod.rs`
 - Modify: `server/src/observability.rs`
 - Modify: `storage/src/db.rs`
 
@@ -381,14 +382,14 @@ Playwright, and the repository `cargo xtask` gate.
   and subscriber installation. The panic fallback remains an additional
   non-recursion proof.
 
-- [ ] **Step 1: Add metric-label tests**
+- [x] **Step 1: Add metric-label tests**
 
   Extend the existing in-memory OTel tests to assert a boundary failure produces
   one `jaunder.errors` data point with `error.kind`, `error.class`,
   `error.disposition=boundary`, and `telemetry.origin=server`. Add exhaustive
   enum mapping assertions for both new labels.
 
-- [ ] **Step 2: Add swallowed reporter event+metric tests**
+- [x] **Step 2: Add swallowed reporter event+metric tests**
 
   Use a PII-safe test error and captured tracing subscriber. Call
   `report_swallowed(ErrorKind::Storage, ErrorClass::Transient, "server.test.cleanup", SwallowedSource::Error(&source))`;
@@ -398,7 +399,7 @@ Playwright, and the repository `cargo xtask` gate.
   `swallowed/server`. Add a bounded-source-kind case proving no arbitrary text
   field is required.
 
-- [ ] **Step 3: Add fifteen independent observability source/non-recursion
+- [x] **Step 3: Add fifteen independent observability source/non-recursion
       tests**
 
   Introduce narrow private operation adapters for diagnostic open, tracer/meter
@@ -446,32 +447,37 @@ Playwright, and the repository `cargo xtask` gate.
   1-6 and 8-15 close all fourteen amendments; case 7 retains the separate panic
   fallback contract.
 
-- [ ] **Step 4: Run tests and verify the new contract fails**
+- [x] **Step 4: Record the red-phase disposition**
 
   ```bash
   devtool run -- cargo nextest run -p host error
-  devtool run -- cargo nextest run -p web boundary_failure
+  devtool run -- cargo nextest run -p web --features server boundary_failure
   devtool run -- cargo nextest run -p jaunder observability
-  devtool run -- cargo nextest run -p storage observability_config
+  devtool run -- cargo nextest run -p storage sql_slow_query_threshold
   ```
 
   Expected before implementation: disposition/origin and typed exporter errors
   do not exist, and the fifteen independent assertions do not all pass.
 
-- [ ] **Step 5: Implement the closed metric enums and atomic reporter**
+  Resume note: implementation was already present when the controller resumed,
+  so no truthful pre-implementation run remained. Reverting production code
+  solely to manufacture a red result would not recover that sequencing evidence;
+  Step 6 supplies the delivery evidence.
+
+- [x] **Step 5: Implement the closed metric enums and atomic reporter**
 
   Keep kind/class conversion private to `host::error`; do not accept
   caller-provided metric strings. Render a reviewed typed source once. Keep
   per-site context on the tracing event only. Keep all diagnostic/configuration
   self-failures on fixed fallback sinks and out of this reporter.
 
-- [ ] **Step 6: Migrate the existing boundary emitter and verify**
+- [x] **Step 6: Migrate the existing boundary emitter and verify**
 
   ```bash
   devtool run -- cargo nextest run -p host error
-  devtool run -- cargo nextest run -p web boundary_failure
+  devtool run -- cargo nextest run -p web --features server boundary_failure
   devtool run -- cargo nextest run -p jaunder observability
-  devtool run -- cargo nextest run -p storage observability_config
+  devtool run -- cargo nextest run -p storage sql_slow_query_threshold
   devtool run -- cargo xtask check
   ```
 
@@ -480,10 +486,10 @@ Playwright, and the repository `cargo xtask` gate.
   the panic fallback preserve their primary outcome and produce zero recursive
   error measurements.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
   ```bash
-  git add host/src/error.rs host/src/metrics.rs web/src/error/server.rs server/src/observability.rs storage/src/db.rs
+  git add host/src/error.rs host/src/metrics.rs web/src/error/mod.rs web/src/error/server.rs server/src/observability.rs storage/src/db.rs
   git commit -m "feat(host): report swallowed error events atomically"
   ```
 
