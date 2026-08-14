@@ -96,8 +96,8 @@ impl FromStr for FeedDescription {
 /// ```
 #[derive(Debug, Clone)]
 pub struct FeedMetadata {
-    pub title: String,
-    pub description: Option<String>,
+    pub title: FeedTitle,
+    pub description: Option<FeedDescription>,
     pub canonical_url: CanonicalUrl,
     pub self_url: FeedUrl,
     pub hub_url: Option<HubUrl>,

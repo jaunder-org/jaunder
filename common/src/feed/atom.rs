@@ -63,10 +63,13 @@ pub fn render_atom(meta: &FeedMetadata, items: &[FeedItem]) -> String {
         .collect();
 
     let feed = Feed {
-        title: Text::plain(meta.title.clone()),
+        title: Text::plain(meta.title.to_string()),
         id: meta.self_url.to_string(),
         updated: meta.updated_at.fixed_offset(),
-        subtitle: meta.description.clone().map(Text::plain),
+        subtitle: meta
+            .description
+            .as_ref()
+            .map(|description| Text::plain(description.to_string())),
         links,
         entries,
         ..Default::default()
@@ -85,10 +88,11 @@ mod tests {
     use crate::render::RenderedHtml;
     use crate::test_support::{parse_post_summary, parse_post_title, parse_url};
 
-    fn meta(hub: Option<&str>) -> FeedMetadata {
+    fn meta(hub: Option<&str>, description: Option<&str>) -> FeedMetadata {
         FeedMetadata {
-            title: "Site".into(),
-            description: Some("A site".into()),
+            title: "Site".parse::<crate::feed::FeedTitle>().unwrap(),
+            description: description
+                .map(|value| value.parse::<crate::feed::FeedDescription>().unwrap()),
             canonical_url: parse_url("https://example.com/"),
             self_url: parse_url("https://example.com/feed.atom"),
             hub_url: hub.map(parse_url),
@@ -111,34 +115,46 @@ mod tests {
 
     #[test]
     fn renders_empty_atom() {
-        let out = render_atom(&meta(None), &[]);
+        let out = render_atom(&meta(None, Some("A site")), &[]);
         assert!(out.contains("<feed"));
         assert!(!out.contains("<entry>"));
+    }
+    #[test]
+    fn serializes_feed_title_and_description_presence() {
+        let without = render_atom(&meta(None, None), &[]);
+        assert!(without.contains("<title>Site</title>"));
+        assert!(!without.contains("<subtitle"));
+
+        let with = render_atom(&meta(None, Some("A site")), &[]);
+        assert!(with.contains("<subtitle>A site</subtitle>"));
     }
 
     #[test]
     fn emits_self_link() {
-        let out = render_atom(&meta(None), &[]);
+        let out = render_atom(&meta(None, Some("A site")), &[]);
         assert!(out.contains("rel=\"self\""));
         assert!(out.contains("href=\"https://example.com/feed.atom\""));
     }
 
     #[test]
     fn includes_hub_link_when_set() {
-        let out = render_atom(&meta(Some("https://hub.example.com/")), &[item()]);
+        let out = render_atom(
+            &meta(Some("https://hub.example.com/"), Some("A site")),
+            &[item()],
+        );
         assert!(out.contains("rel=\"hub\""));
         assert!(out.contains("https://hub.example.com/"));
     }
 
     #[test]
     fn omits_hub_link_when_unset() {
-        let out = render_atom(&meta(None), &[item()]);
+        let out = render_atom(&meta(None, Some("A site")), &[item()]);
         assert!(!out.contains("rel=\"hub\""));
     }
 
     #[test]
     fn includes_tags_as_categories() {
-        let out = render_atom(&meta(None), &[item()]);
+        let out = render_atom(&meta(None, Some("A site")), &[item()]);
         assert!(out.contains("term=\"rust\""));
     }
 
@@ -147,7 +163,7 @@ mod tests {
         // #560 / AC5: the entry `atom:id` and alternate `<link>` render the composed
         // *absolute* permalink — never a relative `/…` atom:id (RFC-4287 requires an
         // absolute IRI).
-        let out = render_atom(&meta(None), &[item()]);
+        let out = render_atom(&meta(None, Some("A site")), &[item()]);
         assert!(
             out.contains("https://example.com/~alice/posts/1"),
             "entry permalink should be absolute: {out}"

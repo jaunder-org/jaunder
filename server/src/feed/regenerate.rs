@@ -1,6 +1,7 @@
 use chrono::Utc;
 use common::feed::{
-    FeedFormat, FeedItem, FeedMetadata, FeedPath, FeedSurface, HybridWindow, feed_etag, parse,
+    FeedFormat, FeedItem, FeedMetadata, FeedPath, FeedSurface, FeedTitle, HybridWindow, feed_etag,
+    parse,
 };
 use common::tagged_url::{BaseUrl, CanonicalUrl, FeedUrl, Permalink, compose};
 use storage::{FeedCacheRow, FeedCacheStorage, PostRecord, PostStorage, SiteConfigStorage};
@@ -87,7 +88,7 @@ pub async fn regenerate_feed(
     let canonical_url: CanonicalUrl = compose(base, &canonical_path);
 
     let updated_at = items.iter().map(|i| i.updated_at).max().unwrap_or(now);
-    let title = compute_title(&identity.title, &surface);
+    let title = FeedTitle::for_surface(&identity.title, &surface);
 
     let meta = FeedMetadata {
         title,
@@ -161,17 +162,6 @@ fn build_feed_items(base: &BaseUrl, records: &[PostRecord]) -> Vec<FeedItem> {
         .collect()
 }
 
-fn compute_title(site_title: &str, surface: &FeedSurface) -> String {
-    match surface {
-        FeedSurface::Site => site_title.to_string(),
-        FeedSurface::SiteTag { tag } => format!("{site_title} — #{tag}"),
-        FeedSurface::User { username } => format!("{site_title} — @{username}"),
-        FeedSurface::UserTag { username, tag } => {
-            format!("{site_title} — @{username} #{tag}")
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,7 +178,7 @@ mod tests {
 
     // guard:no-backend — mock store
     #[tokio::test]
-    async fn regenerate_site_feed_emits_base_anchored_canonical_url() {
+    async fn regenerate_user_tag_feed_emits_typed_composed_title_and_base_anchored_url() {
         use common::site::SiteIdentity;
 
         let mut site_config = storage::MockSiteConfigStorage::new();
@@ -218,16 +208,18 @@ mod tests {
             &site_config,
             &posts,
             &feed_cache,
-            &"/feed.rss".parse::<FeedPath>().expect("valid feed path"),
+            &"/~alice/tags/rust/feed.json"
+                .parse::<FeedPath>()
+                .expect("valid feed path"),
         )
         .await
-        .expect("site feed regenerates");
+        .expect("user-tag feed regenerates");
 
-        // The `FeedSurface::Site` arm anchors the canonical URL at `{base}/`.
-        assert!(
-            row.body.contains("https://example.com/"),
-            "canonical base-anchored URL missing: {}",
-            row.body
+        let body: serde_json::Value = serde_json::from_str(&row.body).expect("JSON Feed body");
+        assert_eq!(body["title"], "Jaunder — @alice #rust");
+        assert_eq!(
+            body["home_page_url"],
+            "https://example.com/~alice/tags/rust/"
         );
     }
 
@@ -269,32 +261,5 @@ mod tests {
         .expect_err("regeneration without base_url must error");
 
         assert!(matches!(err, RegenerateError::BaseUrlRequired));
-    }
-
-    #[test]
-    fn compute_title_for_each_surface() {
-        assert_eq!(compute_title("Jaunder", &FeedSurface::Site), "Jaunder");
-        let site_tag = compute_title(
-            "Jaunder",
-            &FeedSurface::SiteTag {
-                tag: "rust".parse().unwrap(),
-            },
-        );
-        assert!(site_tag.contains("rust"));
-        let user = compute_title(
-            "My Blog",
-            &FeedSurface::User {
-                username: "alice".parse().unwrap(),
-            },
-        );
-        assert!(user.contains("My Blog") && user.contains("alice"));
-        let user_tag = compute_title(
-            "Jaunder",
-            &FeedSurface::UserTag {
-                username: "alice".parse().unwrap(),
-                tag: "rust".parse().unwrap(),
-            },
-        );
-        assert!(user_tag.contains("alice") && user_tag.contains("rust"));
     }
 }

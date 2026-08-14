@@ -299,7 +299,7 @@ pub struct FeedMetadata {
 `&surface`; the old server-local `compute_title` function is deleted. Renderers
 convert only where their external builder/value API requires `String`.
 
-- [ ] **Step 1: Add exact failing Syndication serialization tests**
+- [x] **Step 1: Add exact failing Syndication serialization tests**
 
 Change each renderer fixture to accept `description: Option<&str>` and parse
 `FeedTitle`/`FeedDescription`. Add assertions:
@@ -338,7 +338,7 @@ canonical-URL assertion, updated for the user-tag canonical URL. This test must
 call `regenerate_feed`; a constructor-only assertion does not satisfy the
 contract.
 
-- [ ] **Step 2: Run the focused renderer/server tests and verify RED**
+- [x] **Step 2: Run the focused renderer/server tests and verify RED**
 
 Run:
 
@@ -350,7 +350,7 @@ devtool run -- cargo nextest run -p jaunder -E 'test(feed::regenerate::tests)'
 Expected: FAIL because `FeedMetadata` still accepts primitive fields and the new
 presence assertions are not all implemented.
 
-- [ ] **Step 3: Migrate `FeedMetadata`, renderers, and regeneration**
+- [x] **Step 3: Migrate `FeedMetadata`, renderers, and regeneration**
 
 Change the two field types, migrate all LSP-reported struct literals, and keep
 external conversions at these boundaries:
@@ -365,18 +365,18 @@ Replace `compute_title(&identity.title, &surface)` with
 plus its now-redundant server-local four-arm unit test. Preserve
 `description: None` in production.
 
-- [ ] **Step 4: Run focused tests and verify GREEN**
+- [x] **Step 4: Run focused tests and verify GREEN**
 
 Run the same two commands from Step 2.
 
 Expected: PASS with exact title text and both description states pinned.
 
-- [ ] **Step 5: Mark Task 2 complete**
+- [x] **Step 5: Mark Task 2 complete**
 
 Check every preceding Task 2 step, then check this completion checkpoint before
 staging or running the commit gate.
 
-- [ ] **Step 6: Gate and commit**
+- [x] **Step 6: Gate and commit**
 
 Follow `jaunder-commit`, run the full per-commit
 `devtool run -- cargo xtask check`, stage its mechanical changes, and commit:
