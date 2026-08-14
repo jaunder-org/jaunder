@@ -2,7 +2,7 @@
 
 - Issue: [#1041](https://github.com/jaunder-org/jaunder/issues/1041)
 - Spec:
-  [`2026-08-14-issue-1041-terse-gate-output.md`](../specs/2026-08-14-issue-1041-terse-gate-output.md)
+  [`2026-08-14-issue-1041-terse-gate-output-spec.md`](2026-08-14-issue-1041-terse-gate-output-spec.md)
 
 ## Tasks
 
