@@ -10,7 +10,7 @@ use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 
-use common::atompub::{Entry, FeedMeta, entry_to_xml, render_feed};
+use common::atompub::{CollectionFeedTitle, Entry, FeedMeta, entry_to_xml, render_feed};
 use common::etag::ETag;
 use common::ids::PostId;
 use common::pagination::PageSize;
@@ -187,7 +187,7 @@ pub async fn collection_get(
     let meta = FeedMeta {
         // The collection URL *is* the feed's atom:id.
         id: collection_url.clone().retag(),
-        title: format!("{username}'s posts"),
+        title: CollectionFeedTitle::posts(&username),
         updated,
         self_url: collection_url.clone(),
         // The collection URL *is* its own first page.

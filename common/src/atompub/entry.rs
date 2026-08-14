@@ -27,6 +27,7 @@ use std::collections::BTreeMap;
 use atom_syndication::extension::Extension;
 use atom_syndication::{Content, Entry, Feed, Link, Text};
 
+use super::title::CollectionFeedTitle;
 use super::{APP_NS, AtomPubError, J_NS};
 use crate::media::{ContentType, Filename};
 use crate::tagged_url::{
@@ -340,7 +341,7 @@ pub struct FeedMeta {
     /// Stable feed id — the absolute collection IRI (#560, require-base).
     pub id: EntryIdUrl,
     /// Human-readable collection title.
-    pub title: String,
+    pub title: CollectionFeedTitle,
     /// Feed `updated` timestamp.
     pub updated: UtcInstant,
     /// `rel="self"` href (the absolute collection URL for this page).
@@ -390,7 +391,7 @@ pub fn render_feed(meta: &FeedMeta, entries: &[Entry]) -> Result<String, AtomPub
 
     let feed = Feed {
         id: meta.id.to_string(),
-        title: Text::plain(meta.title.clone()),
+        title: Text::plain(meta.title.to_string()),
         updated: meta.updated.value().fixed_offset(),
         links,
         entries: entries.to_vec(),
@@ -1080,7 +1081,7 @@ mod tests {
 
         let meta = FeedMeta {
             id: parse_url("https://example.com/atompub/alice/posts"),
-            title: "Alice's Posts".to_string(),
+            title: CollectionFeedTitle::posts(&"alice".parse().unwrap()),
             updated: parse_utc_instant("2026-05-31T12:00:00Z"),
             self_url: parse_url("https://example.com/atompub/alice/posts"),
             first: Some(parse_url("https://example.com/atompub/alice/posts?page=1")),
@@ -1093,7 +1094,10 @@ mod tests {
         // Feed structure and metadata
         assert!(out.contains("<feed"), "out: {out}");
         assert!(out.contains("xmlns:app"), "out: {out}");
-        assert!(out.contains("Alice"), "out: {out}");
+        assert!(
+            out.contains("<title>alice&apos;s posts</title>"),
+            "out: {out}"
+        );
         assert!(
             out.contains("xmlns=\"http://www.w3.org/2005/Atom\""),
             "out: {out}"
@@ -1140,7 +1144,7 @@ mod tests {
 
         let meta = FeedMeta {
             id: parse_url("https://example.com/atompub/bob/posts"),
-            title: "Bob's Posts".to_string(),
+            title: CollectionFeedTitle::posts(&"bob".parse().unwrap()),
             updated: parse_utc_instant("2026-05-31T13:00:00Z"),
             self_url: parse_url("https://example.com/atompub/bob/posts"),
             first: None,
@@ -1152,7 +1156,10 @@ mod tests {
 
         // Required elements present
         assert!(out.contains("<feed"), "out: {out}");
-        assert!(out.contains("Bob"), "out: {out}");
+        assert!(
+            out.contains("<title>bob&apos;s posts</title>"),
+            "out: {out}"
+        );
         assert!(out.contains("rel=\"self\""), "out: {out}");
 
         // Optional paging links absent
@@ -1168,7 +1175,7 @@ mod tests {
     fn feed_meta_updated_is_serialized_as_rfc3339_utc() {
         let meta = FeedMeta {
             id: parse_url("https://example.com/atompub/alice/posts"),
-            title: "Alice's Posts".to_string(),
+            title: CollectionFeedTitle::posts(&"alice".parse().unwrap()),
             updated: parse_utc_instant("2026-05-31T12:00:00Z"),
             self_url: parse_url("https://example.com/atompub/alice/posts"),
             first: None,

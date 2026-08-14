@@ -8,6 +8,7 @@
 use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 
+use super::title::{CollectionTitle, WorkspaceTitle};
 use super::xml::{write_empty_element, write_text_element};
 use super::{APP_NS, ATOM_NS, J_NS};
 use crate::tag::Tag;
@@ -19,7 +20,7 @@ pub struct CollectionDecl {
     /// The collection's absolute IRI (#560, require-base).
     pub href: CollectionHrefUrl,
     /// User-facing title of the collection.
-    pub title: String,
+    pub title: CollectionTitle,
     /// Media types accepted by the collection (e.g. "application/atom+xml;type=entry").
     pub accept: Vec<String>,
     /// Category scheme/terms available for entries in this collection.
@@ -31,7 +32,7 @@ pub struct CollectionDecl {
 #[derive(Debug, Clone)]
 pub struct ServiceDocument {
     /// Workspace title (typically a username).
-    pub workspace_title: String,
+    pub workspace_title: WorkspaceTitle,
     /// The entries/posts collection.
     pub posts_collection: CollectionDecl,
     /// The media collection.
@@ -112,17 +113,18 @@ mod tests {
 
     /// A representative two-collection service document used by the serializer tests.
     fn sample_doc() -> ServiceDocument {
+        let username = "alice".parse().unwrap();
         ServiceDocument {
-            workspace_title: "Alice".into(),
+            workspace_title: crate::atompub::WorkspaceTitle::for_user(&username),
             posts_collection: CollectionDecl {
                 href: parse_url("https://h/atompub/alice/posts"),
-                title: "Posts".into(),
+                title: crate::atompub::CollectionTitle::posts(),
                 accept: vec!["application/atom+xml;type=entry".into()],
                 categories: vec!["rust".parse().unwrap(), "leptos".parse().unwrap()],
             },
             media_collection: CollectionDecl {
                 href: parse_url("https://h/atompub/alice/media"),
-                title: "Media".into(),
+                title: crate::atompub::CollectionTitle::media(),
                 accept: vec![
                     "image/png".into(),
                     "image/jpeg".into(),
@@ -143,6 +145,15 @@ mod tests {
         assert!(out.contains("image/webp"));
         assert!(out.contains("app:categories"));
         assert!(out.contains("fixed=\"no\""));
+    }
+
+    #[test]
+    fn service_document_serializes_exact_workspace_and_collection_titles() {
+        let out = render_service_document(&sample_doc());
+        assert!(out.contains("<atom:title>alice</atom:title>"), "out: {out}");
+        assert!(out.contains("<atom:title>Posts</atom:title>"), "out: {out}");
+        assert!(out.contains("<atom:title>Media</atom:title>"), "out: {out}");
+        assert_eq!(out.matches("<atom:title>").count(), 3, "out: {out}");
     }
 
     #[test]

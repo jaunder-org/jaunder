@@ -431,7 +431,7 @@ pub struct FeedMeta {
 }
 ```
 
-- [ ] **Step 1: Add exact failing AtomPub title serialization tests**
+- [x] **Step 1: Add exact failing AtomPub title serialization tests**
 
 Migrate fixtures to the named constructors, then pin the serializer output:
 
@@ -448,24 +448,26 @@ fn service_document_serializes_exact_workspace_and_collection_titles() {
 
 In `entry.rs`, strengthen `render_feed_wraps_entries_with_paging` from a
 fragment assertion to the exact Collection feed title assertion
-`contains("<title>alice's posts</title>")`, constructing its title from a parsed
-`alice` `Username`. Update the Bob fixture to a parsed `bob` username and assert
-`<title>bob's posts</title>` so both typed construction and serialization remain
-covered.
+`contains("<title>alice&apos;s posts</title>")`, constructing its title from a
+parsed `alice` `Username`. Update the Bob fixture to a parsed `bob` username and
+assert `<title>bob&apos;s posts</title>` so both typed construction and XML
+serialization remain covered.
 
-- [ ] **Step 2: Run focused AtomPub tests and verify RED**
+- [x] **Step 2: Run focused AtomPub tests and verify RED**
 
 Run:
 
 ```bash
 devtool run -- cargo nextest run -p common -E 'test(atompub::service::tests) | test(atompub::entry::tests::render_feed)'
-devtool run -- cargo nextest run -p jaunder -E 'test(atompub::atompub_service::service_document_returns_200_with_app_password) | test(atompub::atompub_posts::collection_lists_user_posts)'
+devtool run -- cargo nextest run -p jaunder -E 'test(atompub::atompub_service::service_document_returns_200_with_app_password::case_1_sqlite) | test(atompub::atompub_posts::collection_lists_user_posts::case_1_sqlite)'
 ```
 
 Expected: FAIL until the structs and server construction sites accept the new
-value types.
+value types. The per-commit gate exercises both SQLite and ephemeral PostgreSQL;
+the focused host command selects SQLite so it has no external database
+prerequisite.
 
-- [ ] **Step 3: Migrate Service Document title fields and callers**
+- [x] **Step 3: Migrate Service Document title fields and callers**
 
 Change `ServiceDocument.workspace_title` and `CollectionDecl.title`. In
 `server/src/atompub/service.rs`, keep `AuthUser.username` typed instead of
@@ -484,25 +486,25 @@ remain byte-for-byte unchanged.
 Borrow the typed strings in `write_text_element`; do not allocate a second
 intermediate `String`.
 
-- [ ] **Step 4: Migrate Collection feed title and caller**
+- [x] **Step 4: Migrate Collection feed title and caller**
 
 Change `FeedMeta.title`; construct it in `server/src/atompub/posts.rs` with
 `CollectionFeedTitle::posts(username)` where `username` remains `&Username`.
 Convert to owned text only in `atom_syndication::Text::plain`.
 
-- [ ] **Step 5: Run focused tests and verify GREEN**
+- [x] **Step 5: Run focused tests and verify GREEN**
 
 Run the same two commands from Step 2.
 
 Expected: PASS with the exact three Service Document titles and exact Collection
 feed title preserved.
 
-- [ ] **Step 6: Mark Task 3 complete**
+- [x] **Step 6: Mark Task 3 complete**
 
 Check every preceding Task 3 step, then check this completion checkpoint before
 staging or running the commit gate.
 
-- [ ] **Step 7: Gate and commit**
+- [x] **Step 7: Gate and commit**
 
 Follow `jaunder-commit`, run `devtool run -- cargo xtask check`, stage any
 formatter changes, and commit:
