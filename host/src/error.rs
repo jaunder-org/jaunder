@@ -215,6 +215,22 @@ pub struct InternalError {
     source: Option<anyhow::Error>,
 }
 
+impl std::fmt::Display for InternalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Display is safe for a public boundary: operator sources are available
+        // only through `Error::source`, never rendered here.
+        f.write_str(&self.public_message)
+    }
+}
+
+impl Error for InternalError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.source
+            .as_ref()
+            .map(|source| source.as_ref() as &(dyn Error + 'static))
+    }
+}
+
 /// A transparent [`Error`] wrapper around a `Box<dyn Error + Send + Sync>` so an
 /// already-boxed error can be carried as an `anyhow` source (the box itself does
 /// not implement `Error`). Forwards `Display` and `source`, so it is invisible

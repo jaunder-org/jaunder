@@ -358,11 +358,11 @@ pub async fn collection_post(
     // A reused idempotency key returns the original post as `200` — skipping category
     // re-application (the original already carries its tags).
     if let Err(storage::PerformCreationError::IdempotencyConflict) = &created {
-        let key = idem.ok_or(HandlerError::Internal)?;
+        let key = idem.ok_or(HandlerError::Invariant)?;
         let post_id = posts
             .post_id_for_idempotency_key(auth_user.user_id, key)
             .await?
-            .ok_or(HandlerError::Internal)?;
+            .ok_or(HandlerError::Invariant)?;
         // If the original was soft-deleted between the create and this replay, a
         // stale-key retry deserves a 404 rather than a 500.
         let post = posts
@@ -378,7 +378,7 @@ pub async fn collection_post(
     let post = posts
         .get_post_by_id(created.post_id, &viewer)
         .await?
-        .ok_or(HandlerError::Internal)?;
+        .ok_or(HandlerError::Invariant)?;
     post_entry_response(StatusCode::CREATED, &post, &base, &username)
 }
 
@@ -478,7 +478,7 @@ pub async fn member_put(
     let post = posts
         .get_post_by_id(post_id, &viewer)
         .await?
-        .ok_or(HandlerError::Internal)?;
+        .ok_or(HandlerError::Invariant)?;
 
     let base = required_base_url(site_config.as_ref()).await?;
     let entry_out = post_to_entry(&post, &base);

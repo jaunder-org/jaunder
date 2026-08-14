@@ -16,6 +16,125 @@ use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
 
 use crate::helpers::{MultipartFile, create_user_and_session, make_app, post_multipart};
 
+/// Captures one request-boundary error event and its `jaunder.errors` point.
+///
+/// Task 3 established these event/metric fields; request-boundary tests reuse the
+/// same real tracing subscriber and in-memory `OTel` exporter rather than mocking
+/// either reporting path.
+#[macro_export]
+macro_rules! assert_error_signal {
+    (
+        $future:expr,
+        event = $event_marker:literal,
+        event_kind = $event_kind:literal,
+        event_class = $event_class:literal,
+        metric_kind = $metric_kind:literal,
+        metric_class = $metric_class:literal,
+        disposition = $disposition:literal,
+        context = $context:literal
+    ) => {{
+        #[derive(Clone)]
+        struct CapturedWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+        impl std::io::Write for CapturedWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0
+                    .lock()
+                    .expect("event capture lock")
+                    .extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for CapturedWriter {
+            type Writer = Self;
+
+            fn make_writer(&'writer self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        use opentelemetry_sdk::metrics::{
+            InMemoryMetricExporter, PeriodicReader, SdkMeterProvider,
+            data::{AggregatedMetrics, MetricData},
+        };
+
+        let exporter = InMemoryMetricExporter::default();
+        let reader = PeriodicReader::builder(exporter.clone()).build();
+        let provider = SdkMeterProvider::builder().with_reader(reader).build();
+        opentelemetry::global::set_meter_provider(provider.clone());
+
+        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(CapturedWriter(output.clone()))
+            .finish();
+        let value = {
+            let _guard = tracing::subscriber::set_default(subscriber);
+            $future.await
+        };
+        provider.force_flush().expect("flush error metrics");
+
+        let text = String::from_utf8(output.lock().expect("event capture lock").clone())
+            .expect("captured events are UTF-8");
+        let events: Vec<_> = text
+            .lines()
+            .filter(|line| line.contains($event_marker))
+            .collect();
+        assert_eq!(events.len(), 1, "exactly one error event: {text}");
+        let event = events[0].to_owned();
+        assert!(
+            event.contains(&format!(r#""error.kind":"{}""#, $event_kind)),
+            "event kind: {event}"
+        );
+        assert!(
+            event.contains(&format!(r#""error.class":"{}""#, $event_class)),
+            "event class: {event}"
+        );
+        if !$context.is_empty() {
+            assert!(event.contains($context), "event context: {event}");
+        }
+
+        let metrics = exporter.get_finished_metrics().expect("finished metrics");
+        let points: Vec<_> = metrics
+            .iter()
+            .flat_map(opentelemetry_sdk::metrics::data::ResourceMetrics::scope_metrics)
+            .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+            .filter(|metric| metric.name() == "jaunder.errors")
+            .filter_map(|metric| match metric.data() {
+                AggregatedMetrics::U64(MetricData::Sum(sum)) => Some(sum),
+                _ => None,
+            })
+            .flat_map(opentelemetry_sdk::metrics::data::Sum::data_points)
+            .map(|point| {
+                (
+                    point.value(),
+                    point
+                        .attributes()
+                        .map(|kv| (kv.key.as_str().to_owned(), kv.value.to_string()))
+                        .collect::<std::collections::BTreeMap<_, _>>(),
+                )
+            })
+            .filter(|(_, attributes)| {
+                attributes.get("error.kind").map(String::as_str) == Some($metric_kind)
+                    && attributes.get("error.class").map(String::as_str) == Some($metric_class)
+                    && attributes.get("error.disposition").map(String::as_str) == Some($disposition)
+                    && attributes.get("telemetry.origin").map(String::as_str) == Some("server")
+            })
+            .collect();
+        assert_eq!(points.len(), 1, "one matching jaunder.errors point");
+        assert_eq!(points[0].0, 1, "error metric increments exactly once");
+
+        (value, event)
+    }};
+}
+
 // ---------------------------------------------------------------------------
 // Serve tests
 // ---------------------------------------------------------------------------
@@ -74,6 +193,53 @@ async fn serve_returns_200_with_cache_headers(#[case] backend: Backend) {
     );
 }
 
+#[apply(backends)]
+#[tokio::test]
+async fn serve_returns_404_when_recorded_file_disappears_after_router_setup(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_user_and_session(&state).await.cookie();
+    let storage = TempDir::new().unwrap();
+    let (status, body) = post_multipart(
+        &state,
+        &storage,
+        <web::media::Upload as ServerFn>::PATH,
+        MultipartFile {
+            filename: "disappearing.png",
+            content_type: "image/png",
+            bytes: b"DISAPPEARING_MEDIA",
+        },
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "seed upload");
+    let upload: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let url = upload["url"].as_str().expect("uploaded media URL");
+
+    // Build the router while both metadata and bytes exist, then remove only the
+    // bytes. This deterministically exercises the post-lookup disappearance path
+    // on every platform and does not depend on chmod semantics under root.
+    let app = make_app(&state, &storage);
+    let file_path = storage.path().join(url.trim_start_matches('/'));
+    tokio::fs::remove_file(&file_path)
+        .await
+        .expect("remove seeded media file");
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(url)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
 // Shape B — both URIs are served by the same handler and must 404; identical
 // setup + assertion, only the request URI varies.
 #[apply(backends_matrix)]
@@ -100,6 +266,46 @@ async fn serve_returns_404(backend: Backend, #[case] uri: &str) {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+// guard:no-backend — pure constructed I/O classification
+#[tokio::test]
+async fn media_open_classifies_only_not_found_as_404_and_reports_other_io_once() {
+    let missing = jaunder::media::classify_media_open_error(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "missing sentinel",
+    ));
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    assert!(
+        std::error::Error::source(&missing).is_none(),
+        "expected absence is not an internal source"
+    );
+
+    let denied = jaunder::media::classify_media_open_error(std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "permission sentinel",
+    ));
+    assert_eq!(denied.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let source = std::error::Error::source(&denied)
+        .and_then(|source| source.downcast_ref::<std::io::Error>())
+        .expect("PermissionDenied remains a typed I/O source");
+    assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied);
+    assert_eq!(source.to_string(), "permission sentinel");
+
+    let ((), event) = crate::assert_error_signal!(
+        async { denied.emit_boundary_failure() },
+        event = "server function failed",
+        event_kind = "Internal",
+        event_class = "Bug",
+        metric_kind = "internal",
+        metric_class = "bug",
+        disposition = "boundary",
+        context = ""
+    );
+    assert!(
+        event.contains("permission sentinel"),
+        "typed source: {event}"
+    );
 }
 
 #[apply(backends)]

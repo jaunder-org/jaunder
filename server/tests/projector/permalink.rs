@@ -114,3 +114,35 @@ async fn permalink_invalid_segment_serves_shell(#[case] backend: Backend) {
         .unwrap();
     assert!(String::from_utf8_lossy(&body).contains("test-shell"));
 }
+
+#[apply(backends)]
+#[tokio::test]
+async fn permalink_storage_failure_keeps_500_and_reports_boundary_once(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
+    let (u, y, m, d, slug, ..) = seed_published_post(&state).await;
+    let uri = format!("/~{u}/{y}/{m}/{d}/{slug}");
+    let app = projector_app(&state);
+    base.close_pool().await;
+
+    let (response, event) = crate::assert_error_signal!(
+        async { app.oneshot(get(&uri)).await.expect("request") },
+        event = "server function failed",
+        event_kind = "Storage",
+        event_class = "Bug",
+        metric_kind = "storage",
+        metric_class = "bug",
+        disposition = "boundary",
+        context = ""
+    );
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        response.headers().get(header::CACHE_CONTROL).is_none(),
+        "500 is not cached"
+    );
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    assert!(body.is_empty(), "500 body remains sanitized");
+    assert!(event.contains("pool"), "typed storage source: {event}");
+}

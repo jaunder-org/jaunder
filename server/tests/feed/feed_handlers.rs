@@ -8,11 +8,45 @@ use tower::ServiceExt;
 
 use rstest::*;
 use rstest_reuse::*;
+use std::error::Error;
+use std::sync::Arc;
 
 use crate::helpers::{make_app, setup_with_base_url};
 use storage::test_support::{
     Backend, SeedRawPost, SeedUser, TestEnv, backends, backends_matrix, fp,
 };
+
+fn with_feed_cache(
+    state: &Arc<storage::AppState>,
+    feed_cache: Arc<dyn storage::FeedCacheStorage>,
+) -> Arc<storage::AppState> {
+    Arc::new(storage::AppState {
+        site_config: state.site_config.clone(),
+        users: state.users.clone(),
+        sessions: state.sessions.clone(),
+        invites: state.invites.clone(),
+        atomic: state.atomic.clone(),
+        email_verifications: state.email_verifications.clone(),
+        password_resets: state.password_resets.clone(),
+        posts: state.posts.clone(),
+        subscriptions: state.subscriptions.clone(),
+        audiences: state.audiences.clone(),
+        media: state.media.clone(),
+        user_config: state.user_config.clone(),
+        feed_cache,
+        feed_events: state.feed_events.clone(),
+    })
+}
+
+fn typed_source<T: Error + 'static>(error: &web::error::InternalError) -> Option<&T> {
+    let mut current: &(dyn Error + 'static) = error;
+    loop {
+        if let Some(source) = current.downcast_ref::<T>() {
+            return Some(source);
+        }
+        current = current.source()?;
+    }
+}
 
 #[apply(backends)]
 #[tokio::test]
@@ -283,4 +317,111 @@ async fn handler_returns_correct_content_type_per_format(#[case] backend: Backen
             "content type for {ext}"
         );
     }
+}
+
+// guard:no-backend — pure source-preserving boundary adapters
+#[test]
+fn feed_failure_adapters_retain_typed_sources() {
+    let cache = jaunder::feed::handlers::map_feed_cache_failure(storage::FeedCacheError::Db(
+        sqlx::Error::PoolClosed,
+    ));
+    let cache_source = typed_source::<storage::FeedCacheError>(&cache)
+        .expect("typed feed-cache source reaches boundary carrier");
+    assert!(matches!(
+        cache_source
+            .source()
+            .and_then(|source| source.downcast_ref()),
+        Some(sqlx::Error::PoolClosed)
+    ));
+
+    let regeneration = jaunder::feed::handlers::map_regeneration_failure(
+        jaunder::feed::regenerate::RegenerateError::Storage(Box::new(sqlx::Error::PoolClosed)),
+    );
+    let regeneration_source =
+        typed_source::<jaunder::feed::regenerate::RegenerateError>(&regeneration)
+            .expect("typed regeneration source reaches boundary carrier");
+    assert!(matches!(
+        regeneration_source
+            .source()
+            .and_then(|source| source.downcast_ref()),
+        Some(sqlx::Error::PoolClosed)
+    ));
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn handler_cache_read_failure_is_sanitized_and_reports_boundary_once(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base } = backend.setup().await;
+    let app = make_app(&state, &base);
+    base.close_pool().await;
+    let request = Request::builder()
+        .method("GET")
+        .uri("/feed.rss")
+        .body(Body::empty())
+        .expect("build request");
+
+    let (response, event) = crate::assert_error_signal!(
+        async { app.oneshot(request).await.expect("request") },
+        event = "server function failed",
+        event_kind = "Storage",
+        event_class = "Bug",
+        metric_kind = "storage",
+        metric_class = "bug",
+        disposition = "boundary",
+        context = ""
+    );
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    assert!(body.is_empty(), "cache failure body is sanitized: {body:?}");
+    assert!(
+        event.contains("pool"),
+        "typed cache source reaches event: {event}"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn handler_regeneration_failure_is_sanitized_and_reports_boundary_once(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let mut cache = storage::MockFeedCacheStorage::new();
+    cache.expect_get().times(1).return_once(|_| Ok(None));
+    let state = with_feed_cache(&state, Arc::new(cache));
+    let app = make_app(&state, &base);
+    base.close_pool().await;
+    let request = Request::builder()
+        .method("GET")
+        .uri("/feed.rss")
+        .body(Body::empty())
+        .expect("build request");
+
+    let (response, event) = crate::assert_error_signal!(
+        async { app.oneshot(request).await.expect("request") },
+        event = "server function failed",
+        event_kind = "Storage",
+        event_class = "Bug",
+        metric_kind = "storage",
+        metric_class = "bug",
+        disposition = "boundary",
+        context = ""
+    );
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    assert!(
+        body.is_empty(),
+        "regeneration failure body is sanitized: {body:?}"
+    );
+    assert!(
+        event.contains("pool"),
+        "typed regeneration source reaches event: {event}"
+    );
 }

@@ -615,15 +615,21 @@ Playwright, and the repository `cargo xtask` gate.
 
 **Files:**
 
+- Modify: `Cargo.lock`
 - Modify: `common/src/atompub/error.rs`
 - Modify: `common/src/atompub/entry.rs`
+- Modify: `host/src/error.rs`
 - Modify: `server/src/atompub/guards.rs`
 - Modify: `server/src/atompub/error.rs`
+- Modify: `server/src/atompub/media.rs`
+- Modify: `server/src/atompub/mod.rs`
+- Modify: `server/src/atompub/posts.rs`
 - Modify: `server/src/feed/handlers.rs`
 - Modify: `server/src/media.rs`
 - Modify: `server/src/projector/document.rs`
 - Modify: `server/src/projector/handlers.rs`
 - Modify: `storage/src/media_manager.rs`
+- Modify: `web/Cargo.toml`
 - Modify: `web/src/media/api.rs`
 - Test: `server/tests/atompub/atompub_service.rs`
 - Test: `server/tests/feed/feed_handlers.rs`
@@ -667,7 +673,7 @@ Playwright, and the repository `cargo xtask` gate.
   `read_dir`/`next_entry`; and all three media extract/multipart/upload
   mappings.
 
-- [ ] **Step 1: Add AtomPub propagation red tests**
+- [x] **Step 1: Add AtomPub propagation red tests**
 
   Call the private serialization helper with `Err(atom_syndication::Error)` and
   invalid UTF-8 bytes separately; assert `AtomPubError::source` downcasts to the
@@ -676,7 +682,7 @@ Playwright, and the repository `cargo xtask` gate.
   request fails, while a successful `Ok(None)` still selects the documented
   unconfigured-base-url response.
 
-- [ ] **Step 2: Add media propagation and classification red tests**
+- [x] **Step 2: Add media propagation and classification red tests**
 
   Give the dedup probe a narrow private directory-reader adapter. Inject initial
   `read_dir` failure and a `next_entry` failure after one entry separately;
@@ -692,7 +698,7 @@ Playwright, and the repository `cargo xtask` gate.
   assert NotFound maps to 404 while PermissionDenied remains downcastable, maps
   to 500, and emits one boundary event.
 
-- [ ] **Step 3: Add projector, feed, and PageSeed proofs**
+- [x] **Step 3: Add projector, feed, and PageSeed proofs**
 
   Extend projector tests with captured events/metrics for permalink, timeline,
   and tag error arms. Mock `fetch_user_posts`/storage failure in `profile`;
@@ -709,12 +715,12 @@ Playwright, and the repository `cargo xtask` gate.
   serialization structurally infallible; this is the required proof, not an
   injectable impossible failure.
 
-- [ ] **Step 4: Run and observe every missing contract**
+- [x] **Step 4: Run and observe every missing contract**
 
   ```bash
   devtool run -- cargo nextest run -p common atompub
   devtool run -- cargo nextest run -p storage media_manager
-  devtool run -- cargo nextest run -p web media
+  devtool run -- cargo nextest run -p web --features server media
   devtool run -- cargo nextest run -p jaunder atompub
   devtool run -- cargo nextest run -p jaunder media
   devtool run -- cargo nextest run -p jaunder projector
@@ -725,7 +731,12 @@ Playwright, and the repository `cargo xtask` gate.
   sources are string-erased, exposed, or swallowed; projector reporting is
   incomplete; non-NotFound media I/O is misclassified.
 
-- [ ] **Step 5: Implement the owning-domain mappings**
+  Red-phase result: common, storage, and server failed on the missing typed
+  variants and classifier seams. The original web command returned green without
+  compiling its `feature = "server"` tests; the corrected command above now
+  exercises that contract explicitly.
+
+- [x] **Step 5: Implement the owning-domain mappings**
 
   Add typed AtomPub variants and propagate the identity-store result. Return
   `Result` from the dedup probe and use `?` for both enumeration operations.
@@ -736,18 +747,18 @@ Playwright, and the repository `cargo xtask` gate.
   diagnostics. Never report propagated dedup, extractor, multipart, upload,
   feed, or AtomPub failures as swallowed.
 
-- [ ] **Step 6: Add deterministic disappearance HTTP coverage**
+- [x] **Step 6: Add deterministic disappearance HTTP coverage**
 
   Seed a media record and file, build the router, remove the file after lookup
   setup, and assert 404. Do not depend on chmod/root behavior. Preserve existing
   cache and range behavior.
 
-- [ ] **Step 7: Verify all request-boundary contracts**
+- [x] **Step 7: Verify all request-boundary contracts**
 
   ```bash
   devtool run -- cargo nextest run -p common atompub
   devtool run -- cargo nextest run -p storage media_manager
-  devtool run -- cargo nextest run -p web media
+  devtool run -- cargo nextest run -p web --features server media
   devtool run -- cargo nextest run -p jaunder atompub
   devtool run -- cargo nextest run -p jaunder media
   devtool run -- cargo nextest run -p jaunder projector
@@ -759,10 +770,10 @@ Playwright, and the repository `cargo xtask` gate.
   PageSeed exhaustive proof passes; public status/body/cache/range behavior is
   unchanged except the required sanitized/non-NotFound 500 corrections.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
   ```bash
-  git add common/src/atompub/error.rs common/src/atompub/entry.rs server/src/atompub/error.rs server/src/atompub/guards.rs server/src/feed/handlers.rs server/src/media.rs server/src/projector/document.rs server/src/projector/handlers.rs storage/src/media_manager.rs web/src/media/api.rs server/tests/atompub/atompub_service.rs server/tests/feed/feed_handlers.rs server/tests/misc/media_handlers.rs server/tests/projector/permalink.rs server/tests/projector/listing.rs server/tests/projector/tags.rs
+  git add Cargo.lock common/src/atompub/error.rs common/src/atompub/entry.rs docs/superpowers/plans/2026-08-13-issue-58-error-swallowing-audit.md host/src/error.rs server/src/atompub/error.rs server/src/atompub/guards.rs server/src/atompub/media.rs server/src/atompub/mod.rs server/src/atompub/posts.rs server/src/feed/handlers.rs server/src/media.rs server/src/projector/document.rs server/src/projector/handlers.rs storage/src/media_manager.rs web/Cargo.toml web/src/media/api.rs server/tests/atompub/atompub_service.rs server/tests/feed/feed_handlers.rs server/tests/misc/media_handlers.rs server/tests/projector/permalink.rs server/tests/projector/listing.rs server/tests/projector/tags.rs
   git commit -m "fix(server): preserve request-boundary failure sources"
   ```
 

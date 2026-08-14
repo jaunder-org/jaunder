@@ -16,6 +16,7 @@ use common::visibility::ViewerIdentity;
 use crate::soft_path::SoftPath;
 use std::sync::Arc;
 use storage::{PostStorage, UserStorage, fetch_post_record};
+use web::error::{SwallowedSource, report_swallowed};
 use web::timeline::{
     fetch_local_timeline, fetch_posts_by_tag, fetch_user_posts, fetch_user_posts_by_tag,
 };
@@ -114,7 +115,7 @@ async fn profile(
     // shell and let the client route it. A valid username (even an unknown one, which
     // yields an empty profile) is cached like any other public page.
     let seed = match username.into() {
-        Some(username) => fetch_user_posts(
+        Some(username) => match fetch_user_posts(
             posts.as_ref(),
             &ViewerIdentity::Anonymous,
             &username,
@@ -122,8 +123,18 @@ async fn profile(
             Some(PageSize::default()),
         )
         .await
-        .ok()
-        .map(|page| PageSeed::Profile { username, page }),
+        {
+            Ok(page) => Some(PageSeed::Profile { username, page }),
+            Err(error) => {
+                report_swallowed(
+                    error.kind(),
+                    error.class(),
+                    "server.projector.profile",
+                    SwallowedSource::Error(&error),
+                );
+                None
+            }
+        },
         None => None,
     };
     match seed {
@@ -157,10 +168,13 @@ async fn site_tag(
         Some(PageSize::default()),
     )
     .await;
-    tag_response(result, &headers, &shell, |page| PageSeed::SiteTag {
-        tag,
-        page,
-    })
+    tag_response(
+        result,
+        &headers,
+        &shell,
+        "server.projector.site_tag",
+        |page| PageSeed::SiteTag { tag, page },
+    )
 }
 
 async fn user_tag(
@@ -191,9 +205,15 @@ async fn user_tag(
         Some(PageSize::default()),
     )
     .await;
-    tag_response(result, &headers, &shell, |page| PageSeed::UserTag {
-        username,
-        tag,
-        page,
-    })
+    tag_response(
+        result,
+        &headers,
+        &shell,
+        "server.projector.user_tag",
+        |page| PageSeed::UserTag {
+            username,
+            tag,
+            page,
+        },
+    )
 }

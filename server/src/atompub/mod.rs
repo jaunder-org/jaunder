@@ -12,9 +12,8 @@ mod guards;
 mod router;
 
 pub use error::HandlerError;
-// `base_url` is deliberately absent: `required_base_url`, its only caller, sits
-// beside it in `guards.rs`, so re-exporting it here would be an import nothing
-// consumes — and `unused_imports` is denied. It keeps its `pub(crate)` on the
-// definition, so no visibility narrowed; only an unreachable path went away.
-pub(crate) use guards::{require_user_match, required_base_url};
+// Public only so the integration contract can inject an identity-store failure
+// at the narrowing seam; application handlers consume it within this module.
+pub(crate) use guards::require_user_match;
+pub use guards::required_base_url;
 pub use router::router;

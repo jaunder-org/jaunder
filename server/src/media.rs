@@ -1,3 +1,4 @@
+use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -7,6 +8,8 @@ use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use axum::{Extension, Router};
 use serde::Deserialize;
+use thiserror::Error;
+
 use tokio::fs;
 use tokio_util::io::ReaderStream;
 
@@ -18,6 +21,7 @@ use common::media::{
 };
 use storage::{MediaError, MediaStorage};
 use web::auth::AuthUser;
+use web::error::InternalError;
 
 use crate::soft_path::SoftPath;
 
@@ -51,6 +55,47 @@ pub fn map_error(err: &anyhow::Error) -> StatusCode {
         Some(MediaError::PayloadTooLarge) => StatusCode::PAYLOAD_TOO_LARGE,
         Some(MediaError::InsufficientStorage) => StatusCode::INSUFFICIENT_STORAGE,
         Some(MediaError::Internal(_)) | None => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+/// Pure classification of a media-file open failure.
+#[derive(Debug, Error)]
+pub enum MediaOpenError {
+    #[error("media file not found")]
+    NotFound,
+    #[error("failed to open media file")]
+    Internal(#[source] io::Error),
+}
+
+impl MediaOpenError {
+    /// The public status selected by the open-error classification.
+    #[must_use]
+    pub fn status(&self) -> StatusCode {
+        match self {
+            Self::NotFound => StatusCode::NOT_FOUND,
+            Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    /// Emits the internal branch at the raw-Axum boundary. Expected absence is
+    /// represented by `NotFound` and intentionally produces no error event.
+    pub fn emit_boundary_failure(self) {
+        if let Self::Internal(error) = self {
+            InternalError::server(error)
+                .with_context("boundary", "server.media.open")
+                .emit_boundary_failure();
+        }
+    }
+}
+
+/// Maps only `io::ErrorKind::NotFound` to public absence. Every other I/O error
+/// remains typed for the internal 500 boundary.
+#[must_use]
+pub fn classify_media_open_error(error: io::Error) -> MediaOpenError {
+    if error.kind() == io::ErrorKind::NotFound {
+        MediaOpenError::NotFound
+    } else {
+        MediaOpenError::Internal(error)
     }
 }
 
@@ -114,10 +159,15 @@ async fn serve_response(
     req_headers: axum::http::HeaderMap,
 ) -> Result<Response, StatusCode> {
     let (source, hash, filename, file_path) = resolve_media_path(&storage_path, &params)?;
-
-    if !file_path.exists() {
-        return Err(StatusCode::NOT_FOUND);
-    }
+    let file = match fs::File::open(&file_path).await {
+        Ok(file) => file,
+        Err(error) => {
+            let error = classify_media_open_error(error);
+            let status = error.status();
+            error.emit_boundary_failure();
+            return Err(status);
+        }
+    };
 
     // ETag / If-None-Match check.
     let etag = ETag::from_content_hash(&hash);
@@ -144,9 +194,6 @@ async fn serve_response(
 
     let disposition = content_disposition(&content_type, &filename.decoded());
 
-    let file = fs::File::open(&file_path)
-        .await
-        .map_err(|_| StatusCode::NOT_FOUND)?;
     let stream = ReaderStream::new(file);
     let body = axum::body::Body::from_stream(stream);
 
@@ -373,7 +420,9 @@ mod tests {
             StatusCode::INSUFFICIENT_STORAGE
         );
         assert_eq!(
-            map_error(&anyhow::anyhow!(MediaError::Internal("error".to_owned()))),
+            map_error(&anyhow::anyhow!(MediaError::Internal(Box::new(
+                std::io::Error::other("error"),
+            )))),
             StatusCode::INTERNAL_SERVER_ERROR
         );
         assert_eq!(
