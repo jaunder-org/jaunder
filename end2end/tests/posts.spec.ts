@@ -1395,7 +1395,9 @@ test.describe("scheduled editor local time", () => {
       post: { post: { published_at: string } };
     };
     const original = beforePreview.post.post.published_at;
-    expect(original).toContain(".123456789");
+    // PostgreSQL normalizes to microseconds while SQLite retains nanoseconds.
+    // Both must retain sub-minute precision; equality below proves the editor is lossless.
+    expect(original).toContain(".123456");
 
     await click(page, SEL.publishButton("true"));
     await page.waitForURL((url) => !url.pathname.endsWith("/edit"));

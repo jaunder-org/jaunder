@@ -636,7 +636,8 @@ ADR-0072, ADR-0083, ADR-0105, ADR-0113, and the approved draft
   });
   expect(before.ok()).toBeTruthy();
   const original = (await before.json()).post.post.published_at as string;
-  expect(original).toContain(".123456789");
+  // PostgreSQL normalizes to microseconds while SQLite retains nanoseconds.
+  expect(original).toContain(".123456");
 
   await click(page, SEL.publishButton("true")); // do not touch publishAt
   await page.waitForURL((url) => !url.pathname.endsWith("/edit"));
@@ -649,9 +650,11 @@ ADR-0072, ADR-0083, ADR-0105, ADR-0113, and the approved draft
   ```
 
   This assertion crosses the real component dispatch, `Update` server function,
-  and storage backend. Comparing the preview's canonical string before and after
-  detects both minute reparsing and fractional-precision loss while the explicit
-  timezone makes `01:30` a repeated wall-clock value.
+  and storage backend. PostgreSQL normalizes the seeded nanoseconds to
+  microseconds while SQLite retains them, so the pre-save assertion requires
+  sub-minute precision common to both. Comparing the fetched canonical string
+  before and after detects minute reparsing or any further fractional-precision
+  loss, while the explicit timezone makes `01:30` a repeated wall-clock value.
 
   In the same timezone-scoped describe, put the management flow in a separate
   test. Expand the composer-scheduled test (or add one adjacent test reusing its
