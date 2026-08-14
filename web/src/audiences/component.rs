@@ -9,7 +9,7 @@ use super::api::{
 use crate::error::WebResult;
 // `crate::forms::Field` (the validated-input field) is aliased to avoid colliding with
 // `reactive_stores::Field` (the keyed-store field used by `AudienceRow`).
-use crate::forms::{Field as ValidatedField, request_submit_gate};
+use crate::forms::{Field as ValidatedField, server_action_submit};
 use crate::icon::Icons;
 use crate::reactive::{Invalidator, invalidator_scope};
 use crate::topbar::Topbar;
@@ -232,20 +232,11 @@ fn AudienceHeader(audience_id: AudienceId, name: AudienceName) -> impl IntoView 
     // row is already valid (submit enabled); clearing it disables Rename and — once
     // touched — shows the newtype's own message inline.
     let name = ValidatedField::<AudienceName>::prefilled(&name);
-    let (rename_disabled, dispatch_rename) = request_submit_gate(
-        rename_action.pending().into(),
-        Callback::new(move |()| {
-            name.parsed()
-                .map(|name| RenameAudienceRequest { audience_id, name })
-        }),
-        Callback::new(move |request| {
-            rename_action.dispatch(Rename { request });
-        }),
-    );
-    let submit_rename = move |event: leptos::ev::SubmitEvent| {
-        event.prevent_default();
-        dispatch_rename.run(());
-    };
+    let (rename_disabled, submit_rename) = server_action_submit(rename_action, move || {
+        name.parsed().map(|name| Rename {
+            request: RenameAudienceRequest { audience_id, name },
+        })
+    });
 
     view! {
         <div class="j-audience-head">
@@ -375,28 +366,16 @@ fn MemberToggle(
         subscription_id,
     };
     let remove_request = request.clone();
-    let (remove_disabled, dispatch_remove) = request_submit_gate(
-        remove_action.pending().into(),
-        Callback::new(move |()| Some(remove_request.clone())),
-        Callback::new(move |request| {
-            remove_action.dispatch(RemoveSubscriber { request });
-        }),
-    );
-    let submit_remove = move |event: leptos::ev::SubmitEvent| {
-        event.prevent_default();
-        dispatch_remove.run(());
-    };
-    let (add_disabled, dispatch_add) = request_submit_gate(
-        add_action.pending().into(),
-        Callback::new(move |()| Some(request.clone())),
-        Callback::new(move |request| {
-            add_action.dispatch(AddSubscriber { request });
-        }),
-    );
-    let submit_add = move |event: leptos::ev::SubmitEvent| {
-        event.prevent_default();
-        dispatch_add.run(());
-    };
+    let (remove_disabled, submit_remove) = server_action_submit(remove_action, move || {
+        Some(RemoveSubscriber {
+            request: remove_request.clone(),
+        })
+    });
+    let (add_disabled, submit_add) = server_action_submit(add_action, move || {
+        Some(AddSubscriber {
+            request: request.clone(),
+        })
+    });
 
     view! {
         {if is_member {

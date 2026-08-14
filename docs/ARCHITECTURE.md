@@ -1007,26 +1007,29 @@ newtype's `FromStr`** ([ADR-0065](adr/0065-client-side-domain-validation.md)) �
 never a re-implemented rule. The chokepoint is the pure `forms::field_error<T>`
 (`web/src/forms/field.rs:11`) driving a parent-owned `Field<T>`
 (`web/src/forms/field.rs:22`), rendered by `<ValidatedInput<T>>` /
-`<ValidatedTextarea<T>>` (`web/src/forms/component.rs:80,155`) or bound directly
-for a bespoke layout. The chrome both shells wrap themselves in, `Labelled`
-(`web/src/forms/component.rs:20`), is deliberately **not** generic over `T`: it
-takes the validity as two erased signals (`error`, `touched`) rather than a
-`Field<T>` ([ADR-0117](adr/0117-labelled-takes-erased-signals.md)), because a
-generic component _with children_ needs its close tag to match the opening
-generics token-for-token at every call site. ADR-0117 records as an open
-question whether that burden alone still justifies the shape. The visible
-message is gated on a `touched` flag; submit is gated disable-until-valid.
-Typing the arg moves validation into arg-**decode**, so a malformed request from
-a non-browser client fails before the fn body — the defense-in-depth path, not
-the user path.
+`<ValidatedTextarea<T>>` (`web/src/forms/component.rs:110,185`) or bound
+directly for a bespoke layout. The chrome both shells wrap themselves in,
+`Labelled` (`web/src/forms/component.rs:56`), is deliberately **not** generic
+over `T`: it takes the validity as two erased signals (`error`, `touched`)
+rather than a `Field<T>`
+([ADR-0117](adr/0117-labelled-takes-erased-signals.md)), because a generic
+component _with children_ needs its close tag to match the opening generics
+token-for-token at every call site. ADR-0117 records as an open question whether
+that burden alone still justifies the shape. The visible message is gated on a
+`touched` flag; submit is gated disable-until-valid. Typing the arg moves
+validation into arg-**decode**, so a malformed request from a non-browser client
+fails before the fn body — the defense-in-depth path, not the user path.
 
 [Cohesive request aggregates](adr/0129-request-aggregate-server-function-inputs.md)
 are the server-fn boundary rule: multiple caller-supplied values forming one
-cohesive operation cross as one typed request aggregate. Wasm forms manually
-assemble the generated action input from parsed fields before `ServerAction`
-dispatch. Aggregates exclude ambient request context and injected dependencies;
-native `<form>` submission retains submit and Enter-key behavior without
-`ActionForm`'s string harvest and redundant client-side decode.
+cohesive operation cross as one typed request aggregate. Wasm forms give
+`forms::server_action_submit` one constructor for the generated action input;
+the adapter derives disabled state and dispatch from that constructor and owns
+pending-state and native-submit/default-prevention wiring. The constructor
+assembles parsed fields before `ServerAction` dispatch. Aggregates exclude
+ambient request context and injected dependencies; native `<form>` submission
+retains submit and Enter-key behavior without `ActionForm`'s string harvest and
+redundant client-side decode.
 
 The current population is `LoginRequest`, `RegistrationRequest`,
 `CreateInviteRequest`, `ConfirmPasswordResetRequest`, `RenameAudienceRequest`,

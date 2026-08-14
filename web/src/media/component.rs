@@ -14,7 +14,7 @@ use super::{
     format_bytes, get_usage, list_mine, storage_usage_percent, upload,
 };
 use crate::error::{WebError, WebResult};
-use crate::forms::request_submit_gate;
+use crate::forms::server_action_submit;
 use crate::topbar::Topbar;
 
 /// A media upload control: a button that opens the file picker and immediately
@@ -132,10 +132,15 @@ pub fn MediaPage() -> impl IntoView {
         }
     });
     let upload_version = RwSignal::new(0u32);
-    // Which item the last Delete click was about. `DeleteResult` carries only the
-    // referencing post ids, so the refusal branch cannot otherwise name the item it
-    // must offer a force-delete for.
-    let delete_target = RwSignal::new(Option::<Item>::None);
+    // `Action::input()` is cleared when its future settles. Retain the submitted
+    // aggregate while it is in flight so a refusal can offer the same request with
+    // `force` enabled, without making the form's validity constructor stateful.
+    let last_delete_request = RwSignal::new(Option::<DeleteMediaRequest>::None);
+    Effect::new(move |_| {
+        if let Some(input) = delete_action.input().get() {
+            last_delete_request.set(Some(input.request));
+        }
+    });
 
     let usage = Resource::new(
         move || (successful_deletes.get(), upload_version.get()),
@@ -164,12 +169,11 @@ pub fn MediaPage() -> impl IntoView {
                 />
             </div>
             <MediaUsagePanel usage=usage />
-            <MediaListPanel
-                media_list=media_list
+            <MediaListPanel media_list=media_list delete_action=delete_action />
+            <MediaDeleteOutcome
                 delete_action=delete_action
-                delete_target=delete_target
+                last_delete_request=last_delete_request
             />
-            <MediaDeleteOutcome delete_action=delete_action delete_target=delete_target />
         </div>
     }
 }
@@ -227,10 +231,7 @@ fn MediaUsagePanel(usage: Resource<WebResult<UsageData>>) -> impl IntoView {
 #[component]
 fn MediaListPanel(
     media_list: Resource<WebResult<Vec<Item>>>,
-    /// Threaded through to each row's delete form.
     delete_action: ServerAction<Delete>,
-    /// Set by a row's Delete click so a refusal can name the item it was about.
-    delete_target: RwSignal<Option<Item>>,
 ) -> impl IntoView {
     view! {
         <Suspense fallback=|| {
@@ -257,11 +258,7 @@ fn MediaListPanel(
                                 <tbody>
                                     {items
                                         .into_iter()
-                                        .map(|item| render_media_row(
-                                            &item,
-                                            delete_action,
-                                            delete_target,
-                                        ))
+                                        .map(|item| render_media_row(&item, delete_action))
                                         .collect::<Vec<_>>()}
                                 </tbody>
                             </table>
@@ -281,8 +278,7 @@ fn MediaListPanel(
 #[component]
 fn MediaDeleteOutcome(
     delete_action: ServerAction<Delete>,
-    /// The item the refused delete was about, so the refusal can offer a force.
-    delete_target: RwSignal<Option<Item>>,
+    last_delete_request: RwSignal<Option<DeleteMediaRequest>>,
 ) -> impl IntoView {
     view! {
         {move || {
@@ -307,9 +303,9 @@ fn MediaDeleteOutcome(
                                 )}
                             </p>
                             {move || {
-                                delete_target
+                                last_delete_request
                                     .get()
-                                    .map(|item| force_delete_form(&item, delete_action))
+                                    .map(|request| force_delete_form(request, delete_action))
                             }}
                         }
                             .into_any()
@@ -320,27 +316,19 @@ fn MediaDeleteOutcome(
     }
 }
 
-/// The force-delete submission rendered after an ordinary delete refuses a
-/// referenced item. It dispatches the same aggregate with `force: Some(true)`.
-fn force_delete_form(item: &Item, delete_action: ServerAction<Delete>) -> impl IntoView + use<> {
-    let display_name = item.filename.decoded().into_owned();
-    let request = DeleteMediaRequest {
-        sha256: item.sha256.clone(),
-        filename: item.filename.clone(),
-        source: item.source,
-        force: Some(true),
-    };
-    let (disabled, dispatch_delete) = request_submit_gate(
-        delete_action.pending().into(),
-        Callback::new(move |()| Some(request.clone())),
-        Callback::new(move |request| {
-            delete_action.dispatch(Delete { request });
-        }),
-    );
-    let submit = move |event: leptos::ev::SubmitEvent| {
-        event.prevent_default();
-        dispatch_delete.run(());
-    };
+/// The force-delete submission rendered after an ordinary delete refuses a referenced
+/// item. It redispatches the action's last submitted aggregate with `force: Some(true)`.
+fn force_delete_form(
+    mut request: DeleteMediaRequest,
+    delete_action: ServerAction<Delete>,
+) -> impl IntoView + use<> {
+    let display_name = request.filename.decoded().into_owned();
+    request.force = Some(true);
+    let (disabled, submit) = server_action_submit(delete_action, move || {
+        Some(Delete {
+            request: request.clone(),
+        })
+    });
 
     view! {
         <form on:submit=submit>
@@ -357,36 +345,24 @@ fn force_delete_form(item: &Item, delete_action: ServerAction<Delete>) -> impl I
 }
 
 /// One row of the media table: the link, metadata, and typed ordinary-delete form.
-fn render_media_row(
-    item: &Item,
-    delete_action: ServerAction<Delete>,
-    delete_target: RwSignal<Option<Item>>,
-) -> impl IntoView + use<> {
+fn render_media_row(item: &Item, delete_action: ServerAction<Delete>) -> impl IntoView + use<> {
     let url = item.url.to_string();
     let display_name = item.filename.decoded().into_owned();
     let source = item.source.to_string();
     let size_label = format_bytes(item.size_bytes);
     let created_at = item.created_at.to_string();
     let content_type = item.content_type.to_string();
-    let target = item.clone();
     let request = DeleteMediaRequest {
         sha256: item.sha256.clone(),
         filename: item.filename.clone(),
         source: item.source,
         force: None,
     };
-    let (disabled, dispatch_delete) = request_submit_gate(
-        delete_action.pending().into(),
-        Callback::new(move |()| Some((target.clone(), request.clone()))),
-        Callback::new(move |(target, request)| {
-            delete_target.set(Some(target));
-            delete_action.dispatch(Delete { request });
-        }),
-    );
-    let submit = move |event: leptos::ev::SubmitEvent| {
-        event.prevent_default();
-        dispatch_delete.run(());
-    };
+    let (disabled, submit) = server_action_submit(delete_action, move || {
+        Some(Delete {
+            request: request.clone(),
+        })
+    });
 
     view! {
         <tr>

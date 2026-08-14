@@ -9,7 +9,9 @@
 #[cfg(target_arch = "wasm32")]
 mod component;
 mod field;
+#[cfg(any(test, target_arch = "wasm32"))]
+mod submit_gate;
 
 #[cfg(target_arch = "wasm32")]
-pub use component::{ValidatedInput, ValidatedTextarea};
-pub use field::{Field, field_error, pair_submit_gate, request_submit_gate};
+pub use component::{ValidatedInput, ValidatedTextarea, server_action_submit};
+pub use field::{Field, field_error};

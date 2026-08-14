@@ -4,6 +4,42 @@ use std::str::FromStr;
 use leptos::prelude::*;
 
 use super::field::Field;
+use super::submit_gate::request_submit_gate;
+use server_fn::ServerFn;
+
+/// Wire a native form to a generated [`ServerAction`] through one input constructor.
+///
+/// `request` returns the complete generated server-function input `S`. The action
+/// therefore supplies its own pending state and dispatch operation; callers supply
+/// only the operation-specific construction of a validated request. The returned
+/// handler owns the native-form `prevent_default` glue.
+///
+/// [`request_submit_gate`] remains the host-tested policy seam: the same constructor
+/// controls both disabled state and dispatch, and a pending or invalid form dispatches
+/// nothing. This wasm-only adapter removes the repeated Leptos wiring from each form.
+pub fn server_action_submit<S, F>(
+    action: ServerAction<S>,
+    request: F,
+) -> (Signal<bool>, impl Fn(leptos::ev::SubmitEvent))
+where
+    S: ServerFn + Send + Sync + Clone + 'static,
+    S::Output: Send + Sync + 'static,
+    S::Error: Send + Sync + 'static,
+    F: Fn() -> Option<S> + Send + Sync + 'static,
+{
+    let (disabled, dispatch) = request_submit_gate(
+        action.pending().into(),
+        Callback::new(move |()| request()),
+        Callback::new(move |input| {
+            action.dispatch(input);
+        }),
+    );
+    let submit = move |event: leptos::ev::SubmitEvent| {
+        event.prevent_default();
+        dispatch.run(());
+    };
+    (disabled, submit)
+}
 
 /// The chrome shared by every ADR-0065 validated field: the wrapping `<label>` — which
 /// associates the control *implicitly*, so no `for=`/`id=` pair is emitted and none can

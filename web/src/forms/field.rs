@@ -156,52 +156,6 @@ where
     }
 }
 
-/// Couples a form's disabled state and dispatched payload to one request
-/// constructor (ADR-0113). The constructor may parse any number or shape of
-/// fields; the sole no-request arm stays here beside the gate.
-#[must_use]
-pub fn request_submit_gate<R>(
-    pending: Signal<bool>,
-    request: Callback<(), Option<R>>,
-    on_submit: Callback<R>,
-) -> (Signal<bool>, Callback<()>)
-where
-    R: 'static,
-{
-    let disabled = Signal::derive(move || pending.get() || request.run(()).is_none());
-    let submit = Callback::new(move |()| {
-        if !pending.get()
-            && let Some(request) = request.run(())
-        {
-            on_submit.run(request);
-        }
-    });
-    (disabled, submit)
-}
-
-/// Couples a two-field form's disabled state and dispatched payload to the same
-/// `parsed()` sources (ADR-0113). The callback receives only validated values;
-/// the sole unreachable-to-users `None` arm lives here beside the gate.
-#[must_use]
-pub fn pair_submit_gate<A, B>(
-    first: Field<A>,
-    second: Field<B>,
-    pending: Signal<bool>,
-    on_submit: Callback<(A, B)>,
-) -> (Signal<bool>, Callback<()>)
-where
-    A: FromStr + 'static,
-    A::Err: Display,
-    B: FromStr + 'static,
-    B::Err: Display,
-{
-    request_submit_gate(
-        pending,
-        Callback::new(move |()| first.parsed().zip(second.parsed())),
-        on_submit,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -456,83 +410,6 @@ mod tests {
         field.set_input("Bad Slug!");
         assert!(!field.is_touched());
 
-        drop(owner);
-    }
-
-    #[test]
-    fn request_submit_gate_uses_one_constructor_for_gate_and_payload() {
-        let owner = Owner::new();
-        owner.set();
-        let input = RwSignal::new(String::new());
-        let seen = RwSignal::new(None::<String>);
-        let (disabled, submit) = request_submit_gate(
-            Signal::derive(|| false),
-            Callback::new(move |()| input.with(|value| (!value.is_empty()).then(|| value.clone()))),
-            Callback::new(move |value| seen.set(Some(value))),
-        );
-
-        assert!(disabled.get());
-        submit.run(());
-        assert_eq!(seen.get(), None);
-
-        input.set("request".to_owned());
-        assert!(!disabled.get());
-        submit.run(());
-        assert_eq!(seen.get().as_deref(), Some("request"));
-        drop(owner);
-    }
-    #[test]
-    fn pair_submit_gate_dispatches_the_same_parsed_values_that_enable_it() {
-        let owner = Owner::new();
-        owner.set();
-        let username = Field::<Username>::new();
-        let email = Field::<Email>::new();
-        username.set_input("alice");
-        email.set_input("alice@example.com");
-        let seen = RwSignal::new(None::<(String, String)>);
-        let (disabled, submit) = pair_submit_gate(
-            username,
-            email,
-            Signal::derive(|| false),
-            Callback::new(move |(username, email): (Username, Email)| {
-                seen.set(Some((username.to_string(), email.to_string())));
-            }),
-        );
-
-        assert!(!disabled.get());
-        submit.run(());
-        assert_eq!(
-            seen.get(),
-            Some(("alice".to_owned(), "alice@example.com".to_owned()))
-        );
-        drop(owner);
-    }
-
-    #[test]
-    fn pair_submit_gate_blocks_invalid_or_pending_without_dispatch() {
-        let owner = Owner::new();
-        owner.set();
-        let username = Field::<Username>::new();
-        let email = Field::<Email>::new();
-        let pending = RwSignal::new(false);
-        let calls = RwSignal::new(0_u32);
-        let (disabled, submit) = pair_submit_gate(
-            username,
-            email,
-            pending.into(),
-            Callback::new(move |_: (Username, Email)| calls.update(|n| *n += 1)),
-        );
-
-        assert!(disabled.get());
-        submit.run(());
-        assert_eq!(calls.get(), 0);
-
-        username.set_input("alice");
-        email.set_input("alice@example.com");
-        pending.set(true);
-        assert!(disabled.get());
-        submit.run(());
-        assert_eq!(calls.get(), 0);
         drop(owner);
     }
 }

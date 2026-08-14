@@ -2,7 +2,7 @@
 
 use super::{Create, CreateInviteRequest, Info, list};
 use crate::error::WebError;
-use crate::forms::{Field, ValidatedInput, request_submit_gate};
+use crate::forms::{Field, ValidatedInput, server_action_submit};
 use crate::registration::get_policy;
 use crate::topbar::Topbar;
 use common::email::Email;
@@ -68,30 +68,22 @@ fn InviteCreateForm(action: ServerAction<Create>) -> impl IntoView {
     // Optional TTL: empty dispatches `None` for the server's 168-hour default. A
     // non-empty value is dispatched only after `Field::parsed()` validates it.
     let ttl = Field::<InviteTtlHours>::optional();
-    let (disabled, dispatch) = request_submit_gate(
-        action.pending().into(),
-        Callback::new(move |()| {
-            let expires_in_hours = ttl
-                .value
-                .with(|value| value.trim().is_empty())
-                .then_some(None)
-                .or_else(|| ttl.parsed().map(Some));
-            recipient
-                .parsed()
-                .zip(expires_in_hours)
-                .map(|(recipient_email, expires_in_hours)| CreateInviteRequest {
+    let (disabled, submit) = server_action_submit(action, move || {
+        let expires_in_hours = ttl
+            .value
+            .with(|value| value.trim().is_empty())
+            .then_some(None)
+            .or_else(|| ttl.parsed().map(Some));
+        recipient
+            .parsed()
+            .zip(expires_in_hours)
+            .map(|(recipient_email, expires_in_hours)| Create {
+                request: CreateInviteRequest {
                     expires_in_hours,
                     recipient_email,
-                })
-        }),
-        Callback::new(move |request| {
-            action.dispatch(Create { request });
-        }),
-    );
-    let submit = move |event: leptos::ev::SubmitEvent| {
-        event.prevent_default();
-        dispatch.run(());
-    };
+                },
+            })
+    });
 
     view! {
         <form on:submit=submit>

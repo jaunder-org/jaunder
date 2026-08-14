@@ -5,7 +5,7 @@
 
 use super::{Login, LoginRequest, LoginResponse, Logout, SessionUser, clear_session, set_session};
 use crate::error::WebError;
-use crate::forms::{Field, ValidatedInput, pair_submit_gate};
+use crate::forms::{Field, ValidatedInput, server_action_submit};
 use crate::topbar::Topbar;
 use common::password::ProfferedPassword;
 use common::username::Username;
@@ -60,24 +60,18 @@ pub fn LoginPage() -> impl IntoView {
 fn LoginForm(action: ServerAction<Login>) -> impl IntoView {
     let username = Field::<Username>::new();
     let password = Field::<ProfferedPassword>::new();
-    let (disabled, dispatch) = pair_submit_gate(
-        username,
-        password,
-        action.pending().into(),
-        Callback::new(move |(username, password)| {
-            action.dispatch(Login {
+    let (disabled, submit) = server_action_submit(action, move || {
+        username
+            .parsed()
+            .zip(password.parsed())
+            .map(|(username, password)| Login {
                 request: LoginRequest {
                     username,
                     password,
                     label: None,
                 },
-            });
-        }),
-    );
-    let submit = move |event: leptos::ev::SubmitEvent| {
-        event.prevent_default();
-        dispatch.run(());
-    };
+            })
+    });
 
     view! {
         <form class="j-card" on:submit=submit>

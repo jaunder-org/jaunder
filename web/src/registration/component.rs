@@ -6,7 +6,7 @@
 use super::{Register, RegistrationRequest, get_policy};
 use crate::auth::{SessionUser, set_session};
 use crate::error::WebError;
-use crate::forms::{Field, ValidatedInput, pair_submit_gate};
+use crate::forms::{Field, ValidatedInput, server_action_submit};
 use crate::topbar::Topbar;
 use common::invite::ProfferedInviteCode;
 use common::password::ProfferedPassword;
@@ -114,24 +114,18 @@ fn RegistrationForm(
     let parsed_invite = (!invite_code.is_empty())
         .then(|| invite_code.parse::<ProfferedInviteCode>().ok())
         .flatten();
-    let (disabled, dispatch) = pair_submit_gate(
-        username,
-        password,
-        action.pending().into(),
-        Callback::new(move |(username, password)| {
-            action.dispatch(Register {
+    let (disabled, submit) = server_action_submit(action, move || {
+        username
+            .parsed()
+            .zip(password.parsed())
+            .map(|(username, password)| Register {
                 request: RegistrationRequest {
                     username,
                     password,
                     invite_code: parsed_invite.clone(),
                 },
-            });
-        }),
-    );
-    let submit = move |event: leptos::ev::SubmitEvent| {
-        event.prevent_default();
-        dispatch.run(());
-    };
+            })
+    });
 
     view! {
         <form class="j-card" on:submit=submit>
