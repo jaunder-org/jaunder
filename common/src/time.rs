@@ -115,6 +115,30 @@ impl fmt::Display for PermalinkDate {
     }
 }
 
+/// Formats a UTC instant for a browser `<input type="datetime-local">` in the
+/// ambient local timezone, at the control's minute precision.
+///
+/// This is display text only: converting it back cannot preserve seconds,
+/// subsecond precision, or which instant an ambiguous fall-back wall-clock
+/// represented.
+#[must_use]
+pub fn local_datetime_from_utc(instant: UtcInstant) -> String {
+    local_datetime_from_utc_in(instant, &Local)
+}
+
+/// The timezone-parametric core of [`local_datetime_from_utc`], kept private so
+/// formatting can be tested against deterministic offsets.
+fn local_datetime_from_utc_in<Tz: TimeZone>(instant: UtcInstant, tz: &Tz) -> String
+where
+    Tz::Offset: fmt::Display,
+{
+    instant
+        .value()
+        .with_timezone(tz)
+        .format("%Y-%m-%dT%H:%M")
+        .to_string()
+}
+
 /// Converts a `<input type="datetime-local">` value — a naive local wall-clock such
 /// as `"2026-07-01T13:30"` (seconds optional) — into a [`UtcInstant`], interpreting
 /// it in the ambient local timezone. `None` for an empty/whitespace or unparseable
@@ -296,9 +320,25 @@ mod tests {
     }
 
     #[test]
+    fn utc_instant_formats_as_local_datetime_control_value() {
+        let instant = "2026-07-01T08:30:45Z".parse().unwrap();
+        let tz = chrono::FixedOffset::east_opt(5 * 3600).unwrap();
+        assert_eq!(local_datetime_from_utc_in(instant, &tz), "2026-07-01T13:30");
+    }
+
+    #[test]
+    fn local_datetime_format_crosses_the_local_date_boundary() {
+        let instant = "2026-07-02T04:00:00Z".parse().unwrap();
+        let tz = chrono::FixedOffset::west_opt(5 * 3600).unwrap();
+        assert_eq!(local_datetime_from_utc_in(instant, &tz), "2026-07-01T23:00");
+    }
+
+    #[test]
     fn public_wrapper_uses_the_ambient_zone() {
         // The exact instant depends on the host timezone, so assert only shape: a
         // well-formed local time (never a DST gap at 13:30) parses; empty/garbage don't.
+        let local = local_datetime_from_utc("2026-07-01T08:30:45Z".parse().unwrap());
+        assert!(NaiveDateTime::parse_from_str(&local, "%Y-%m-%dT%H:%M").is_ok());
         assert!(utc_instant_from_local("2026-07-01T13:30").is_some());
         assert_eq!(utc_instant_from_local(""), None);
         assert_eq!(utc_instant_from_local("garbage"), None);

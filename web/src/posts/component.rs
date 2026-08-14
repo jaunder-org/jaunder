@@ -29,8 +29,8 @@ use crate::posts::{
     ComposeState, Create, Delete, DraftRowDisplay, ListingRoute, PermalinkRoute, Publish,
     SavedPost, Unpublish, UnpublishedPage, UnpublishedPost, draft_row_display, get,
     get_audience_selection, get_default_audience_selection, get_preview, list_drafts, notify,
-    notify_with_fallback, parse_permalink_route, publish_redirect, seeded_page, submit_gate,
-    tag_query, user_query, user_tag_query, with_post_id,
+    notify_with_fallback, parse_permalink_route, publication_from_local, publish_redirect,
+    seeded_page, submit_gate, tag_query, user_query, user_tag_query, with_post_id,
 };
 use crate::subscriptions::SubscribeButton;
 use crate::taglist::TagCtx as TagContext;
@@ -553,8 +553,9 @@ fn CompactComposer(
         state.body,
         Signal::derive(move || !state.summary_field.is_valid()),
         Callback::new(move |(body, publish): (PostBody, bool)| {
+            let publication = publication_from_local(publish, &state.publish_at.get());
             create_action.dispatch(Create {
-                post: state.inputs(body, publish, None),
+                post: state.inputs(body, publication, None),
             });
         }),
     );
@@ -630,8 +631,9 @@ fn FullComposer(
         state.body,
         Signal::derive(move || !slug_field.is_valid() || !state.summary_field.is_valid()),
         Callback::new(move |(body, publish): (PostBody, bool)| {
+            let publication = publication_from_local(publish, &state.publish_at.get());
             create_action.dispatch(Create {
-                post: state.inputs(body, publish, slug_field.parsed()),
+                post: state.inputs(body, publication, slug_field.parsed()),
             });
         }),
     );
@@ -1113,9 +1115,10 @@ fn EditPostForm(
         state.body,
         Signal::derive(move || !slug_field.is_valid() || !state.summary_field.is_valid()),
         Callback::new(move |(body, publish): (PostBody, bool)| {
+            let publication = publication_from_local(publish, &state.publish_at.get());
             action.dispatch(super::Update {
                 post_id,
-                post: state.inputs(body, publish, slug_field.parsed()),
+                post: state.inputs(body, publication, slug_field.parsed()),
             });
         }),
     );

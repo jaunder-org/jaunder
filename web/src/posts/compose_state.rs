@@ -15,11 +15,32 @@ use common::post_summary::PostSummary;
 use common::render::PostFormat;
 use common::seed::{AuthoredPost, TagSummary};
 use common::slug::Slug;
-use common::time::utc_instant_from_local;
+use common::time::{UtcInstant, utc_instant_from_local};
 use common::visibility::{AudienceBase, AudienceSelection};
 
 use crate::forms::Field;
 use crate::posts::PostInputs;
+
+/// The author's explicit publication choice for a create or update.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PublicationIntent {
+    Draft,
+    PublishNow,
+    PublishAt(UtcInstant),
+}
+
+/// Map the create form's publish button and optional local schedule to a typed
+/// publication choice while preserving its existing invalid-value fallback.
+#[must_use]
+pub fn publication_from_local(publish: bool, value: &str) -> PublicationIntent {
+    if !publish {
+        PublicationIntent::Draft
+    } else if let Some(at) = utc_instant_from_local(value) {
+        PublicationIntent::PublishAt(at)
+    } else {
+        PublicationIntent::PublishNow
+    }
+}
 
 /// Every signal the composer edits.
 ///
@@ -67,23 +88,33 @@ impl ComposeState {
 
     /// The create/update payload for this composer's current contents.
     ///
-    /// `publish` distinguishes "Save draft" from "Publish"; `slug_override` is
-    /// `None` for the compact shape, which renders no slug field.
+    /// `publication` maps explicitly to the server wire pair; `slug_override`
+    /// is `None` for the compact shape, which renders no slug field.
     ///
-    /// **Infallible by construction**: the caller already holds a parsed [`PostBody`],
-    /// so there is no rejection left to represent and no error arm to swallow. A blank
-    /// body is unrepresentable (#811, ADR-0105), and the only way to obtain the
-    /// `PostBody` this takes is through [`submit_gate`] — the same call that decides
-    /// whether the control is enabled. See
+    /// **Infallible by construction**: the caller already holds a parsed
+    /// [`PostBody`], so there is no rejection left to represent and no error arm
+    /// to swallow. A blank body is unrepresentable (#811, ADR-0105), and the only
+    /// way to obtain the `PostBody` this takes is through [`submit_gate`] — the
+    /// same call that decides whether the control is enabled. See
     /// `docs/adr/0113-submit-gate-owns-its-parse.md`.
     #[must_use]
-    pub fn inputs(&self, body: PostBody, publish: bool, slug_override: Option<Slug>) -> PostInputs {
+    pub fn inputs(
+        &self,
+        body: PostBody,
+        publication: PublicationIntent,
+        slug_override: Option<Slug>,
+    ) -> PostInputs {
+        let (publish, publish_at) = match publication {
+            PublicationIntent::Draft => (false, None),
+            PublicationIntent::PublishNow => (true, None),
+            PublicationIntent::PublishAt(at) => (true, Some(at)),
+        };
         PostInputs {
             body,
             format: self.format.get(),
             slug_override,
             publish,
-            publish_at: utc_instant_from_local(&self.publish_at.get()),
+            publish_at,
             tags: Some(self.tags.get().into_iter().map(|t| t.display).collect()),
             summary: self.summary_field.parsed(),
             audience: Some(self.audience.get()),
@@ -174,10 +205,11 @@ pub fn submit_gate(
 
 #[cfg(test)]
 mod tests {
-    use super::{ComposeState, submit_gate};
+    use super::{ComposeState, PublicationIntent, publication_from_local, submit_gate};
     use crate::forms::Field;
     use common::post_body::PostBody;
     use common::render::PostFormat;
+    use common::time::UtcInstant;
     use common::visibility::AudienceBase;
     use leptos::prelude::*;
 
@@ -191,21 +223,26 @@ mod tests {
     }
 
     #[test]
-    fn inputs_carry_the_edited_body_and_the_publish_flag() {
+    fn inputs_map_every_publication_intent_to_the_wire_contract() {
         with_owner(|| {
             let state = ComposeState::new();
             let body: PostBody = "hello".parse().expect("a non-blank body parses");
+            let scheduled_at: UtcInstant = "2999-02-03T10:15:00Z".parse().unwrap();
 
-            let draft = state.inputs(body.clone(), false, None);
+            let draft = state.inputs(body.clone(), PublicationIntent::Draft, None);
             assert_eq!(draft.body.as_ref(), "hello");
             assert!(!draft.publish);
+            assert_eq!(draft.publish_at, None);
             assert_eq!(draft.format, PostFormat::Markdown);
             assert!(draft.slug_override.is_none());
 
-            assert!(
-                state.inputs(body, true, None).publish,
-                "publish flag passes through"
-            );
+            let now = state.inputs(body.clone(), PublicationIntent::PublishNow, None);
+            assert!(now.publish);
+            assert_eq!(now.publish_at, None);
+
+            let scheduled = state.inputs(body, PublicationIntent::PublishAt(scheduled_at), None);
+            assert!(scheduled.publish);
+            assert_eq!(scheduled.publish_at, Some(scheduled_at));
         });
     }
 
@@ -341,15 +378,26 @@ mod tests {
         });
     }
 
-    /// Empty means "publish now": the naive-local conversion must yield `None`
-    /// rather than an epoch instant, or every unscheduled post would backdate.
     #[test]
-    fn an_empty_publish_at_schedules_nothing() {
-        with_owner(|| {
-            let state = ComposeState::new();
-            let body: PostBody = "body".parse().expect("a non-blank body parses");
-            assert!(state.inputs(body, true, None).publish_at.is_none());
-        });
+    fn publication_from_local_preserves_create_form_behavior() {
+        assert_eq!(
+            publication_from_local(false, "2999-02-03T10:15"),
+            PublicationIntent::Draft,
+            "draft wins even when the schedule field has a value",
+        );
+        assert_eq!(
+            publication_from_local(true, ""),
+            PublicationIntent::PublishNow,
+        );
+        assert_eq!(
+            publication_from_local(true, "not-a-date"),
+            PublicationIntent::PublishNow,
+            "invalid input retains the existing publish-now fallback",
+        );
+        assert!(matches!(
+            publication_from_local(true, "2999-02-03T10:15"),
+            PublicationIntent::PublishAt(_),
+        ));
     }
 
     /// The editor's entry point: an existing post's fields land in the bundle. Uses
