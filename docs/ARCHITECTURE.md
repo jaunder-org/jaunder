@@ -59,9 +59,13 @@ from all three, in `macros`
 
 Every `client` module that touches the browser carries
 `#[cfg(target_arch = "wasm32")]`, so a host build of the crate is an
-all-but-empty rlib with no coverage-measured browser glue. The one exception is
-`client::perf`, whose mark names are plain `&str` data and are therefore pinned
-by host tests ([ADR-0069](adr/0069-client-crate-wasm-only-home.md)).
+all-but-empty rlib with no coverage-measured browser glue. Target-independent
+data such as `client::perf` mark names stays pinned by host tests. Irreducible
+browser primitives run separately in headless Chromium through the Linux-only
+`wasm-tests` Nix check, while user-flow coverage remains in Playwright e2e.
+`wasm-tests` is behavioral pass/fail execution and does not add wasm lines to
+the host coverage denominator
+([ADR-0069](adr/0069-client-crate-wasm-only-home.md)).
 
 Two sibling trees are outside the root workspace, each its own cargo workspace:
 `xtask/` (the host-only dev/CI driver, also named in the root
@@ -1928,8 +1932,8 @@ The ladder has two rungs, both driven by `xtask` (`xtask/src/lib.rs:452`,
 
 - **`cargo xtask check`** runs the host static checks in **Fix** mode
   (formatters auto-fix), then every repo-shape and type-safety gate, then the
-  host unit tests, and — unless `--no-test` — the Nix `coverage` and `doctests`
-  derivations.
+  host unit tests, and — unless `--no-test` — the Nix `wasm-tests`, `coverage`,
+  and `doctests` derivations.
 - **`cargo xtask validate`** runs the same set **verify-only**, adds
   `wasm-budget` (kept out of `check` because it costs a `nix build .#site`,
   #836), and — unless `--no-e2e` — the e2e aggregate.
@@ -1951,13 +1955,14 @@ local escapes; CI is the non-bypassable authority.
 The heavy checks are Nix flake check derivations — the hermetic layer. xtask
 realizes each via
 `nix build -L --keep-failed --accept-flake-config --out-link .xtask/gcroots/<check>`
-(`xtask/src/steps/nix.rs:361`): cachix-substituted (an unchanged re-run is a
+(`xtask/src/steps/nix.rs:416`): cachix-substituted (an unchanged re-run is a
 substitution) and GC-rooted by the out-link, so garbage collection cannot evict
-a warm gate. Each heavy check is a **producer/consumer pair** — `nix-coverage` +
-`nix-coverage-gate`, `nix-doctests` + `nix-doctests-gate` — where the producer
-is contractually unable to fail and the verdict is read from the sandbox's
-`status.json` (`xtask/src/steps/nix.rs:19`, `:54`). xtask itself is host-only;
-Nix never invokes it back ([ADR-0034](adr/0034-ci-e2e-matrix-distribution.md)).
+a warm gate. `wasm-tests` returns the browser test verdict directly. Coverage
+and doctests use producer/consumer pairs — `nix-coverage` + `nix-coverage-gate`,
+`nix-doctests` + `nix-doctests-gate` — whose producers cannot fail; xtask reads
+each verdict from the sandbox's `status.json` (`xtask/src/steps/nix.rs`). xtask
+itself is host-only; Nix never invokes it back
+([ADR-0034](adr/0034-ci-e2e-matrix-distribution.md)).
 
 ### What the ladder actually runs
 

@@ -79,3 +79,35 @@ pub fn remove(key: &str) -> Result<(), StorageError> {
         .remove_item(key)
         .map_err(StorageError::Operation)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{get, remove, set};
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+    const TEST_KEY: &str = "jaunder-wasm-test-storage-lifecycle";
+
+    #[wasm_bindgen_test]
+    fn local_storage_lifecycle() {
+        let stale_cleanup = remove(TEST_KEY);
+        let initial = get(TEST_KEY);
+        let stored = set(TEST_KEY, "stored-value");
+        let observed = get(TEST_KEY);
+        let removed = remove(TEST_KEY);
+        let after_remove = get(TEST_KEY);
+        let final_cleanup = remove(TEST_KEY);
+
+        assert!(stale_cleanup.is_ok(), "stale cleanup: {stale_cleanup:?}");
+        assert!(matches!(initial, Ok(None)), "initial state: {initial:?}");
+        assert!(stored.is_ok(), "store: {stored:?}");
+        assert!(matches!(&observed, Ok(Some(value)) if value == "stored-value"));
+        assert!(removed.is_ok(), "remove: {removed:?}");
+        assert!(
+            matches!(after_remove, Ok(None)),
+            "state after remove: {after_remove:?}"
+        );
+        assert!(final_cleanup.is_ok(), "final cleanup: {final_cleanup:?}");
+    }
+}

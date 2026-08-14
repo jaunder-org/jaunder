@@ -209,6 +209,22 @@ Every HTTP endpoint must have both an integration test and an end-to-end test.
 Unit tests belong in the same file as the code being tested. End-to-end tests
 belong in `end2end/` and use Playwright.
 
+### Wasm-only browser unit tests
+
+Keep pure logic host-testable: move target-independent behavior into `common` or
+another host-compiled module and test it there. Use `wasm-bindgen-test` only
+when the contract is an irreducible browser primitive such as `window`, DOM, or
+`localStorage`. Put that test beside its implementation, configure the module
+with `wasm_bindgen_test_configure!(run_in_browser)`, and do not rely on the
+runner's Node default.
+
+Run these tests hermetically with
+`nix build -L --accept-flake-config .#checks.x86_64-linux.wasm-tests`, or
+through the normal test-enabled `cargo xtask check`/`validate` gate. The
+dedicated check uses Nix-store Chromium and chromedriver paths; it executes
+browser behavior but does not contribute wasm lines to the host coverage
+denominator.
+
 For tests requiring a database, use the shared harness: `#[apply(backends)]`
 with `backend.setup().await`, which returns a `TestEnv { state, base }` carrying
 a fully migrated `AppState` (ADR-0033). Do **not** hand-roll a pool.
@@ -273,16 +289,17 @@ consumes fails the test.
 
 ### Local checks: `cargo xtask`
 
-The driver for all checks is `cargo xtask`. The host runs only the static
-checks + clippy; **all tests, coverage, and e2e run in the Nix checks that match
-CI**. When `cargo xtask validate` is green, you may push.
+The driver for all checks is `cargo xtask`. Host-side steps cover static checks,
+clippy, and the standalone `xtask`/`tools` workspaces; root-workspace tests,
+coverage, wasm browser tests, and e2e run in hermetic Nix checks that match CI.
+When `cargo xtask validate` is green, you may push.
 
-| Command                         | Runs                                                                                                                                            | Formatting    |
-| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
-| `cargo xtask check --no-test`   | host static checks + clippy                                                                                                                     | auto-fixes    |
-| `cargo xtask check`             | + the Nix `coverage` check (full instrumented test suite — SQLite + PostgreSQL together under an ephemeral PostgreSQL — plus the coverage gate) | auto-fixes    |
-| `cargo xtask validate --no-e2e` | static (verify-only) + coverage — the pre-push gate (the `.githooks/pre-push` hook runs this)                                                   | never mutates |
-| `cargo xtask validate`          | + e2e (all four `{sqlite,postgres}×{chromium,firefox}` combos) — the full local gate                                                            | never mutates |
+| Command                         | Runs                                                                                                                                   | Formatting    |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| `cargo xtask check --no-test`   | host static checks + clippy                                                                                                            | auto-fixes    |
+| `cargo xtask check`             | + the Nix `wasm-tests`, `coverage`/`coverage-gate`, and `doctests`/`doctests-gate` checks                                              | auto-fixes    |
+| `cargo xtask validate --no-e2e` | the same test-enabled checks in verify-only mode — the pre-push gate (the `.githooks/pre-push` hook and Validate CI job run this path) | never mutates |
+| `cargo xtask validate`          | + e2e (all four `{sqlite,postgres}×{chromium,firefox}` combinations and the live elisp integration suite) — the full local gate        | never mutates |
 
 `check` is the inner-loop fixer: it auto-fixes **formatting**, and nothing else.
 It has no coverage baseline to heal — the coverage gate is stateless (ADR-0050),
@@ -799,6 +816,10 @@ request; it is deliberately **not** part of per-commit `check`/`validate`
   implementation the host verify ladder runs, so there is no hand-duplicated
   sibling to drift (#188)
 - `checks.x86_64-linux.deny` — cargo-deny
+- `checks.x86_64-linux.wasm-tests` — `wasm-bindgen-test` cases executed in
+  headless Nix-store Chromium through the matching Nix-store chromedriver. This
+  is behavioral pass/fail execution for irreducible browser code, not wasm line
+  coverage.
 - `checks.x86_64-linux.coverage` and `.coverage-gate` — the instrumented test
   suite (SQLite and PostgreSQL together under an ephemeral PostgreSQL) and the
   verdict over its report. **This is where the Rust test suite runs**; there is
