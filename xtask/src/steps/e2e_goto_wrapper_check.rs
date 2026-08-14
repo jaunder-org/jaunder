@@ -288,7 +288,7 @@ fn detail(found: &Audit) -> Option<String> {
 /// Convert an audit and any file-read failures into the step result. Successful
 /// checks carry no detail; the derived census is useful only when there is a problem
 /// to investigate.
-fn step(mut read_errors: Vec<String>, found: &Audit) -> StepResult {
+fn audit_step_result(mut read_errors: Vec<String>, found: &Audit) -> StepResult {
     match (read_errors.is_empty(), detail(found)) {
         (true, None) => StepResult::ok(STEP),
         (_, problems) => {
@@ -323,12 +323,12 @@ pub fn run(result: &mut CommandResult) {
     // One walk of the tree supplies both failures and the census attached to failure
     // diagnostics.
     let found = audit(&scanned);
-    result.push(step(read_errors, &found));
+    result.push(audit_step_result(read_errors, &found));
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{audit, census, problems, step, violations};
+    use super::{audit, audit_step_result, census, problems, violations};
 
     #[test]
     fn flags_a_raw_page_goto() {
@@ -439,7 +439,7 @@ mod tests {
             "// e2e-goto-wrapper:allow the probe owns this raw load\nawait page.goto(url);\n"
                 .to_string(),
         )]);
-        let result = step(Vec::new(), &found);
+        let result = audit_step_result(Vec::new(), &found);
         assert!(result.ok);
         assert_eq!(result.detail, None);
     }
