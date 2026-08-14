@@ -15,6 +15,12 @@ export const SEL = {
   /** Post summary textarea (compose + edit). Keyed on `name` since #568 — the
    * shared `<ValidatedTextarea>` emits no id. */
   postSummary: 'textarea[name="summary"]',
+  /** Post slug override input (compose + draft edit). */
+  postSlug: 'input[name="slug_override"]',
+  /** Post schedule input (compose + unpublished edit). */
+  publishAt: 'input[name="publish_at"]',
+  /** Clear-schedule action shown only while editing a scheduled Post. */
+  clearSchedule: 'button:has-text("Clear schedule")',
   /** Publish/unpublish submit button; `value` is the boolean string. */
   publishButton: (value: string) => `button[name="publish"][value="${value}"]`,
   /** A `.j-seg` format-toggle button, by its visible label. The label is a

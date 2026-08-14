@@ -55,8 +55,8 @@ pub use page_state::{
 // wasm-only component.
 pub use compose_state::{ComposeState, PublicationIntent, publication_from_local, submit_gate};
 pub use edit_state::{
-    InvalidSchedule, LoadedPublication, ScheduledEditState, loaded_publication,
-    scheduled_submit_gate,
+    EditPublicationState, InvalidSchedule, LoadedPublication, ScheduledEditState, edit_submit_gate,
+    loaded_publication,
 };
 
 // The API surface — re-exported so external call sites and the server-fn

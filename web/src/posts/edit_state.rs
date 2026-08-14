@@ -1,10 +1,10 @@
 use common::post_body::PostBody;
-use common::time::{UtcInstant, utc_instant_from_local};
+use common::time::{UtcInstant, local_datetime_from_utc, strict_utc_instant_from_local};
 use leptos::prelude::*;
 use thiserror::Error;
 
 use crate::forms::Field;
-use crate::posts::compose_state::PublicationIntent;
+use crate::posts::compose_state::{PublicationIntent, publication_from_local, submit_gate};
 
 /// The publication state captured when the editor response was assembled.
 ///
@@ -45,6 +45,17 @@ pub struct ScheduledEditState {
     edited: RwSignal<bool>,
 }
 
+/// The complete publication branch and branch-specific signals for one loaded editor.
+///
+/// Keeping the schedule signal inside the enum makes an impossible
+/// `Scheduled-without-ScheduledEditState` combination unrepresentable.
+#[derive(Clone, Copy)]
+pub enum EditPublicationState {
+    Draft(RwSignal<String>),
+    Scheduled(ScheduledEditState),
+    Live,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("Enter a valid local date and time")]
 pub struct InvalidSchedule;
@@ -82,19 +93,102 @@ impl ScheduledEditState {
             return Ok(PublicationIntent::Draft);
         }
 
-        utc_instant_from_local(&value)
+        strict_utc_instant_from_local(&value)
             .map(PublicationIntent::PublishAt)
             .ok_or(InvalidSchedule)
     }
 }
 
-/// Bind a scheduled editor's enabled state and dispatch to one derived payload.
+impl EditPublicationState {
+    #[must_use]
+    pub fn from_loaded(loaded: LoadedPublication, draft_publish_at: RwSignal<String>) -> Self {
+        match loaded {
+            LoadedPublication::Draft => Self::Draft(draft_publish_at),
+            LoadedPublication::Scheduled(original) => Self::Scheduled(ScheduledEditState::new(
+                original,
+                local_datetime_from_utc(original),
+            )),
+            LoadedPublication::Live => Self::Live,
+        }
+    }
+
+    #[must_use]
+    pub fn loaded(self) -> LoadedPublication {
+        match self {
+            Self::Draft(_) => LoadedPublication::Draft,
+            Self::Scheduled(schedule) => LoadedPublication::Scheduled(schedule.original),
+            Self::Live => LoadedPublication::Live,
+        }
+    }
+
+    #[must_use]
+    pub fn scheduled(self) -> Option<ScheduledEditState> {
+        match self {
+            Self::Scheduled(schedule) => Some(schedule),
+            Self::Draft(_) | Self::Live => None,
+        }
+    }
+}
+
+/// Bind every loaded editor branch to one derived payload and dispatch callback.
 ///
-/// Both outputs consume the same memoized schedule result and payload. A click
-/// therefore cannot reparse a minute-precision display or disagree with the
-/// disabled state about body, summary, or schedule validity (ADR-0113).
+/// Draft buttons map through the existing create-form converter, live Save always
+/// maps to `PublishNow`, and scheduled Save uses the exact-preserving strict state.
+/// The component receives one uniform callback and never selects persisted intent.
 #[must_use]
-pub fn scheduled_submit_gate(
+pub fn edit_submit_gate(
+    body: Field<PostBody>,
+    also_blocked: Signal<bool>,
+    publication: EditPublicationState,
+    on_submit: Callback<(PostBody, PublicationIntent)>,
+) -> (
+    Signal<bool>,
+    Signal<Option<InvalidSchedule>>,
+    Callback<bool>,
+) {
+    match publication {
+        EditPublicationState::Draft(publish_at) => {
+            let (disabled, on_click) = submit_gate(
+                body,
+                also_blocked,
+                Callback::new(move |(body, publish): (PostBody, bool)| {
+                    on_submit.run((body, publication_from_local(publish, &publish_at.get())));
+                }),
+            );
+            (
+                disabled,
+                Signal::derive(|| None::<InvalidSchedule>),
+                on_click,
+            )
+        }
+        EditPublicationState::Scheduled(schedule) => {
+            let (disabled, schedule_error, on_click) =
+                scheduled_submit_gate(body, also_blocked, schedule, on_submit);
+            (
+                disabled,
+                schedule_error,
+                Callback::new(move |_: bool| on_click.run(())),
+            )
+        }
+        EditPublicationState::Live => {
+            let (disabled, on_click) = submit_gate(
+                body,
+                also_blocked,
+                Callback::new(move |(body, _): (PostBody, bool)| {
+                    on_submit.run((body, PublicationIntent::PublishNow));
+                }),
+            );
+            (
+                disabled,
+                Signal::derive(|| None::<InvalidSchedule>),
+                on_click,
+            )
+        }
+    }
+}
+
+/// The scheduled arm of [`edit_submit_gate`].
+fn scheduled_submit_gate(
     body: Field<PostBody>,
     also_blocked: Signal<bool>,
     schedule: ScheduledEditState,
@@ -156,6 +250,61 @@ mod tests {
             loaded_publication(Some(instant("2026-08-13T11:59:59Z")), fetched_at),
             LoadedPublication::Live,
         );
+    }
+    #[test]
+    fn edit_submit_gate_routes_all_loaded_publication_states() {
+        with_owner(|| {
+            let body = Field::<PostBody>::new();
+            body.set_input("body");
+            let seen = RwSignal::new(None);
+            let draft_schedule = RwSignal::new("2999-02-03T10:15".to_owned());
+            let draft = EditPublicationState::from_loaded(LoadedPublication::Draft, draft_schedule);
+            assert_eq!(draft.loaded(), LoadedPublication::Draft);
+            assert!(draft.scheduled().is_none());
+            let (disabled, schedule_error, click) = edit_submit_gate(
+                body,
+                Signal::derive(|| false),
+                draft,
+                Callback::new(move |(_, intent)| seen.set(Some(intent))),
+            );
+            assert!(!disabled.get());
+            assert_eq!(schedule_error.get(), None);
+            click.run(false);
+            assert_eq!(seen.get(), Some(PublicationIntent::Draft));
+            click.run(true);
+            assert!(matches!(seen.get(), Some(PublicationIntent::PublishAt(_))));
+
+            let original = instant("2999-11-03T05:30:00.123456789Z");
+            let scheduled = EditPublicationState::from_loaded(
+                LoadedPublication::Scheduled(original),
+                RwSignal::new(String::new()),
+            );
+            assert_eq!(scheduled.loaded(), LoadedPublication::Scheduled(original));
+            assert!(scheduled.scheduled().is_some());
+            let (_, _, click) = edit_submit_gate(
+                body,
+                Signal::derive(|| false),
+                scheduled,
+                Callback::new(move |(_, intent)| seen.set(Some(intent))),
+            );
+            click.run(true);
+            assert_eq!(seen.get(), Some(PublicationIntent::PublishAt(original)));
+
+            let live = EditPublicationState::from_loaded(
+                LoadedPublication::Live,
+                RwSignal::new(String::new()),
+            );
+            assert_eq!(live.loaded(), LoadedPublication::Live);
+            assert!(live.scheduled().is_none());
+            let (_, _, click) = edit_submit_gate(
+                body,
+                Signal::derive(|| false),
+                live,
+                Callback::new(move |(_, intent)| seen.set(Some(intent))),
+            );
+            click.run(false);
+            assert_eq!(seen.get(), Some(PublicationIntent::PublishNow));
+        });
     }
 
     #[test]

@@ -1,3 +1,4 @@
+import type { Page } from "@playwright/test";
 import {
   test,
   expect,
@@ -5,6 +6,7 @@ import {
   slowBrowserTimeoutMs,
 } from "./fixtures";
 import {
+  BASE_URL,
   goto,
   click,
   waitForSelector,
@@ -30,6 +32,26 @@ const TIMELINE_OVERFLOW_COUNT = 1;
 const LOCAL_TIMELINE_AUTHOR_COUNT = 26;
 const HOME_FEED_SELF_COUNT = 51;
 const HOME_FEED_OTHER_COUNT = 2;
+
+async function openPostFromDrafts(page: Page, title: string): Promise<string> {
+  await navigateInApp(page, () => click(page, '.j-nav a[href="/drafts"]'), {
+    url: "/drafts",
+    ready: '.j-topbar h1:has-text("Drafts")',
+  });
+  const row = page.locator("li", { hasText: title });
+  await expect(row).toBeVisible();
+  const permalinkLink = row.locator('a:has-text("Permalink")');
+  const permalinkHref = await permalinkLink.getAttribute("href");
+  expect(
+    permalinkHref,
+    `draft row for "${title}" has no permalink`,
+  ).toBeTruthy();
+  await navigateInApp(page, () => permalinkLink.click(), {
+    url: permalinkHref!,
+    ready: "article.j-post",
+  });
+  return openEditor(page);
+}
 
 test("authenticated user can create a post through the UI", async ({
   registeredPage,
@@ -236,7 +258,7 @@ test("authenticated user can save a draft through the UI", async ({
 
   await page.fill(SEL.postBody, "*draft*");
   await click(page, '.j-seg button:has-text("Org")');
-  await page.fill('input[name="slug_override"]', "Draft-Slug");
+  await page.fill(SEL.postSlug, "Draft-Slug");
   await click(page, SEL.publishButton("false"));
   await waitForSelector(page, SEL.saveSummary);
 
@@ -526,8 +548,8 @@ test("editing a published post freezes the slug", async ({
   });
 
   // Published post should have neither unpublished-only option control.
-  await expect(page.locator('input[name="slug_override"]')).not.toBeVisible();
-  await expect(page.locator('input[name="publish_at"]')).not.toBeVisible();
+  await expect(page.locator(SEL.postSlug)).not.toBeVisible();
+  await expect(page.locator(SEL.publishAt)).not.toBeVisible();
 
   // Save the published post (body already pre-filled from loaded post; slug stays frozen)
   await click(page, SEL.publishButton("true"));
@@ -1288,10 +1310,8 @@ test("scheduling a post shows a Scheduled-for badge on the drafts page", async (
   const FUTURE_DATETIME_LOCAL = "2999-01-01T09:00";
 
   const page = await registeredPage("/posts/new");
-  const slug = page.locator('input[name="slug_override"]');
-  const slugLabel = page.locator(
-    'label.j-field-row:has(input[name="slug_override"])',
-  );
+  const slug = page.locator(SEL.postSlug);
+  const slugLabel = page.locator(`label.j-field-row:has(${SEL.postSlug})`);
   await expect(slugLabel).toHaveCount(1);
   await expect(slugLabel.locator(":scope > .j-field-label")).toHaveText("Slug");
   await expect(slug).not.toHaveAttribute("id", /.+/);
@@ -1301,9 +1321,9 @@ test("scheduling a post shows a Scheduled-for badge on the drafts page", async (
     await slugLabel.evaluate((label) => label.style.gridTemplateColumns),
   ).toBe("auto 1fr");
 
-  const schedule = page.locator('input[name="publish_at"]');
+  const schedule = page.locator(SEL.publishAt);
   const scheduleLabel = page.locator(
-    'label.j-field-label:has(input[name="publish_at"])',
+    `label.j-field-label:has(${SEL.publishAt})`,
   );
   await expect(scheduleLabel).toHaveCount(1);
   await expect(scheduleLabel).toContainText("Publish at (optional)");
@@ -1344,6 +1364,157 @@ test("scheduling a post shows a Scheduled-for badge on the drafts page", async (
   });
   await expect(page.locator("article.j-post")).toContainText("Scheduled Draft");
 });
+test.describe("scheduled editor local time", () => {
+  test.use({ timezoneId: "America/New_York" });
+
+  test("saving an untouched repeated local time preserves its exact instant", async ({
+    registeredPage,
+  }) => {
+    const EXACT_FOLD_INSTANT = "2999-11-03T05:30:00.123456789Z";
+    const page = await registeredPage("/posts/new");
+    const created = await createPostViaApi(page, {
+      body: "# Exact Scheduled Post\n\nbody",
+      publish: true,
+      publishAt: EXACT_FOLD_INSTANT,
+    });
+
+    await openPostFromDrafts(page, "Exact Scheduled Post");
+    await expect(page.locator(SEL.publishAt)).toHaveValue("2999-11-03T01:30");
+
+    const before = await page.request.post(
+      `${BASE_URL}/api/posts/get_preview`,
+      {
+        form: { post_id: String(created.post_id) },
+      },
+    );
+    expect(
+      before.ok(),
+      `get_preview failed before untouched save (${before.status()}): ${await before.text()}`,
+    ).toBeTruthy();
+    const beforePreview = (await before.json()) as {
+      post: { post: { published_at: string } };
+    };
+    const original = beforePreview.post.post.published_at;
+    expect(original).toContain(".123456789");
+
+    await click(page, SEL.publishButton("true"));
+    await page.waitForURL((url) => !url.pathname.endsWith("/edit"));
+
+    const after = await page.request.post(`${BASE_URL}/api/posts/get_preview`, {
+      form: { post_id: String(created.post_id) },
+    });
+    expect(
+      after.ok(),
+      `get_preview failed after untouched save (${after.status()}): ${await after.text()}`,
+    ).toBeTruthy();
+    const afterPreview = (await after.json()) as {
+      post: { post: { published_at: string } };
+    };
+    expect(afterPreview.post.post.published_at).toBe(original);
+  });
+
+  test("create scheduling retains the DST-gap normalization contract", async ({
+    registeredPage,
+  }) => {
+    const page = await registeredPage("/posts/new");
+    await page.fill(SEL.postBody, "# Create Gap Contract\n\nbody");
+    await page.fill(SEL.publishAt, "2027-03-14T02:30");
+    await click(page, SEL.publishButton("true"));
+    await waitForSelector(page, SEL.saveSummary);
+
+    await navigateInApp(page, () => click(page, '.j-nav a[href="/drafts"]'), {
+      url: "/drafts",
+      ready: '.j-topbar h1:has-text("Drafts")',
+    });
+    const scheduledRow = page.locator("li", { hasText: "Create Gap Contract" });
+    await expect(scheduledRow).toBeVisible();
+    await expect(scheduledRow.locator(".j-badge-scheduled")).toContainText(
+      "Scheduled for",
+    );
+  });
+
+  test("an author can reschedule, clear, draft, and reschedule a Post", async ({
+    registeredPage,
+  }) => {
+    const ORIGINAL_SCHEDULE = "2999-01-01T09:00";
+    const REPLACEMENT_SCHEDULE = "2999-02-03T10:15";
+    const FINAL_SCHEDULE = "2999-04-05T11:30";
+    const page = await registeredPage("/posts/new");
+
+    await page.fill(
+      SEL.postBody,
+      "# Scheduled Draft\n\nbody for scheduled editor management",
+    );
+    await page.fill(SEL.publishAt, ORIGINAL_SCHEDULE);
+    await click(page, SEL.publishButton("true"));
+    await waitForSelector(page, SEL.saveSummary);
+
+    await openPostFromDrafts(page, "Scheduled Draft");
+    await expect(page.locator(SEL.publishAt)).toHaveValue(ORIGINAL_SCHEDULE);
+    await expect(page.locator(SEL.clearSchedule)).toBeVisible();
+    await expect(page.locator(SEL.publishButton("true"))).toHaveText("Save");
+    await expect(page.locator(SEL.publishButton("false"))).toHaveCount(0);
+    await expect(page.locator(SEL.postSlug)).toHaveCount(0);
+
+    await page.fill(SEL.publishAt, REPLACEMENT_SCHEDULE);
+    await click(page, SEL.publishButton("true"));
+    await page.waitForURL((url) => !url.pathname.endsWith("/edit"));
+
+    await openPostFromDrafts(page, "Scheduled Draft");
+    await expect(page.locator(SEL.publishAt)).toHaveValue(REPLACEMENT_SCHEDULE);
+
+    await page.fill(SEL.publishAt, "2027-03-14T02:30");
+    await expect(page.locator(SEL.error)).toContainText(
+      "Enter a valid local date and time",
+    );
+    await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
+    expect(new URL(page.url()).pathname).toMatch(/\/edit$/);
+
+    await openPostFromDrafts(page, "Scheduled Draft");
+    await expect(page.locator(SEL.publishAt)).toHaveValue(REPLACEMENT_SCHEDULE);
+    await click(page, SEL.clearSchedule);
+    await expect(page.locator(SEL.publishAt)).toHaveValue("");
+    expect(new URL(page.url()).pathname).toMatch(/\/edit$/);
+
+    await openPostFromDrafts(page, "Scheduled Draft");
+    await expect(page.locator(SEL.publishAt)).toHaveValue(REPLACEMENT_SCHEDULE);
+    await click(page, SEL.clearSchedule);
+    await click(page, SEL.publishButton("true"));
+    await waitForSelector(page, SEL.saveSummary);
+    const pullbackSummary = page.locator(SEL.saveSummary);
+    await expect(pullbackSummary).toContainText("Draft saved.");
+    await expect(
+      pullbackSummary.locator('[data-test="slug-value"]'),
+    ).toHaveAttribute("data-slug", "scheduled-draft");
+    await expect(pullbackSummary.locator(SEL.permalinkLink)).toHaveAttribute(
+      "href",
+      /\/scheduled-draft$/,
+    );
+    expect(new URL(page.url()).pathname).toMatch(/\/edit$/);
+
+    await followPermalink(page, pullbackSummary);
+    await openEditor(page);
+    await expect(page.locator(SEL.postSlug)).toBeVisible();
+    await page.fill(SEL.postSlug, "scheduled-draft-reopened");
+    await click(page, SEL.publishButton("false"));
+    await waitForSelector(page, SEL.saveSummary);
+    const draftPermalink = await followPermalink(
+      page,
+      page.locator(SEL.saveSummary),
+    );
+    expect(draftPermalink).toContain("/scheduled-draft-reopened");
+    expect(page.url()).toContain("/scheduled-draft-reopened");
+
+    await openEditor(page);
+    await page.fill(SEL.publishAt, FINAL_SCHEDULE);
+    await click(page, SEL.publishButton("true"));
+    await page.waitForURL((url) => !url.pathname.endsWith("/edit"));
+
+    await openPostFromDrafts(page, "Scheduled Draft");
+    await expect(page.locator(SEL.publishAt)).toHaveValue(FINAL_SCHEDULE);
+    await expect(page.locator(SEL.postSlug)).toHaveCount(0);
+  });
+});
 
 test("scheduling from the edit page shows a Scheduled-for badge on the drafts page", async ({
   registeredPage,
@@ -1383,17 +1554,15 @@ test("scheduling from the edit page shows a Scheduled-for badge on the drafts pa
   await expect(page.locator(SEL.topbarHeading)).toHaveText("Edit Post");
 
   // The post is still a draft, so the slug and schedule controls are rendered.
-  const slug = page.locator('input[name="slug_override"]');
-  const slugLabel = page.locator(
-    'label.j-field-row:has(input[name="slug_override"])',
-  );
+  const slug = page.locator(SEL.postSlug);
+  const slugLabel = page.locator(`label.j-field-row:has(${SEL.postSlug})`);
   await expect(slugLabel).toContainText("Slug");
   await expect(slug).not.toHaveAttribute("id", /.+/);
   await expect(slugLabel).not.toHaveAttribute("for", /.+/);
 
-  const schedule = page.locator('input[name="publish_at"]');
+  const schedule = page.locator(SEL.publishAt);
   const scheduleLabel = page.locator(
-    'label.j-field-label:has(input[name="publish_at"])',
+    `label.j-field-label:has(${SEL.publishAt})`,
   );
   await expect(scheduleLabel).toContainText("Publish at (optional)");
   await expect(schedule).not.toHaveAttribute("id", /.+/);

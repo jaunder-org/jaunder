@@ -39,10 +39,11 @@ const FORMAT_PROBE_TEXT = "emphasis";
 /** Create a post via `POST /api/posts/create`. Wraps the request in
  *  `withTimedAction` so it appears in the OTEL trace, asserts success with a
  *  contextful message, and returns the typed JSON. `publish` defaults to `true`;
- *  `slug` maps to the `slug_override` wire field; `tags` is sent only when
- *  provided (matching the current no-tag call sites). The fields are nested under
- *  a `post` wrapper (#299): the endpoint takes a single typed input struct, and
- *  the wire key is the parameter's name. */
+ *  `slug` maps to the `slug_override` wire field; `publishAt` carries an exact
+ *  RFC3339 instant when supplied; `tags` is sent only when provided (matching
+ *  the current no-tag call sites). The fields are nested under a `post` wrapper
+ *  (#299): the endpoint takes a single typed input struct, and the wire key is
+ *  the parameter's name. */
 export async function createPostViaApi(
   page: Page,
   opts: {
@@ -50,6 +51,7 @@ export async function createPostViaApi(
     tags?: string[];
     publish?: boolean;
     slug?: string | null;
+    publishAt?: string;
   },
 ): Promise<{ post_id: number; permalink: string }> {
   const res = await withTimedAction(page, "api.posts.create", () =>
@@ -60,6 +62,7 @@ export async function createPostViaApi(
           format: "markdown",
           slug_override: opts.slug ?? null,
           publish: opts.publish ?? true,
+          ...(opts.publishAt ? { publish_at: opts.publishAt } : {}),
           ...(opts.tags ? { tags: opts.tags } : {}),
         },
       },
@@ -103,7 +106,7 @@ export async function composePost(
       await page.fill(SEL.postSummary, opts.summary);
     }
     if (opts.slug !== undefined) {
-      await page.fill('input[name="slug_override"]', opts.slug);
+      await page.fill(SEL.postSlug, opts.slug);
     }
     await click(page, SEL.publishButton(opts.publish ? "true" : "false"));
     await waitForSelector(page, SEL.saveSummary);

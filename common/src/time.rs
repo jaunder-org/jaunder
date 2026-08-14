@@ -142,9 +142,11 @@ where
 /// Converts a `<input type="datetime-local">` value — a naive local wall-clock such
 /// as `"2026-07-01T13:30"` (seconds optional) — into a [`UtcInstant`], interpreting
 /// it in the ambient local timezone. `None` for an empty/whitespace or unparseable
-/// input, or a local time that doesn't exist (a DST spring-forward gap). An
-/// *ambiguous* time (a fall-back fold) resolves to its earliest instant rather than
-/// `None`, so a real (if doubled) wall-clock isn't lost.
+/// input. An ambiguous time resolves to the earliest mapped instant.
+///
+/// This preserves the create form's established conversion contract. In browsers,
+/// Chrono follows JavaScript's normalization of nonexistent spring-forward wall
+/// times; scheduled editing uses [`strict_utc_instant_from_local`] instead.
 ///
 /// Lives here beside [`UtcInstant`] (rather than in `web`) because `chrono` is
 /// already wasm-available through `common`; on the browser `chrono::Local` reads the
@@ -156,9 +158,20 @@ pub fn utc_instant_from_local(local: &str) -> Option<UtcInstant> {
     utc_instant_from_local_in(local, &Local)
 }
 
-/// The timezone-parametric core of [`utc_instant_from_local`], so the local→UTC
-/// conversion is host-testable against a fixed offset instead of the ambient zone.
-fn utc_instant_from_local_in<Tz: TimeZone>(local: &str, tz: &Tz) -> Option<UtcInstant> {
+/// Converts a local wall-clock value only when the resulting instant projects back
+/// to the same local value.
+///
+/// The round trip rejects browser-normalized DST-gap values while retaining
+/// Chrono's earliest mapping for a real fall-back ambiguity.
+#[must_use]
+pub fn strict_utc_instant_from_local(local: &str) -> Option<UtcInstant> {
+    strict_utc_instant_from_local_in(local, &Local)
+}
+
+fn mapped_local_datetime_in<Tz: TimeZone>(
+    local: &str,
+    tz: &Tz,
+) -> Option<(NaiveDateTime, DateTime<Tz>)> {
     let trimmed = local.trim();
     if trimmed.is_empty() {
         return None;
@@ -166,9 +179,20 @@ fn utc_instant_from_local_in<Tz: TimeZone>(local: &str, tz: &Tz) -> Option<UtcIn
     let naive = NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%dT%H:%M")
         .or_else(|_| NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%dT%H:%M:%S"))
         .ok()?;
-    tz.from_local_datetime(&naive)
-        .earliest()
-        .map(|dt| UtcInstant::from(dt.with_timezone(&Utc)))
+    Some((naive, tz.from_local_datetime(&naive).earliest()?))
+}
+
+/// The timezone-parametric core of [`utc_instant_from_local`].
+fn utc_instant_from_local_in<Tz: TimeZone>(local: &str, tz: &Tz) -> Option<UtcInstant> {
+    mapped_local_datetime_in(local, tz)
+        .map(|(_, mapped)| UtcInstant::from(mapped.with_timezone(&Utc)))
+}
+
+/// The timezone-parametric core of [`strict_utc_instant_from_local`].
+fn strict_utc_instant_from_local_in<Tz: TimeZone>(local: &str, tz: &Tz) -> Option<UtcInstant> {
+    let (naive, mapped) = mapped_local_datetime_in(local, tz)?;
+    (mapped.with_timezone(tz).naive_local() == naive)
+        .then(|| UtcInstant::from(mapped.with_timezone(&Utc)))
 }
 
 #[cfg(test)]
