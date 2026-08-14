@@ -925,8 +925,11 @@ mod tests {
     };
     use rstest::*;
     use rstest_reuse::*;
-    use storage::test_support::{
-        Backend, PostgresDbGuard, TestEnv, backends, sqlite_url, unique_postgres_url,
+    use storage::{
+        DbConnectOptions,
+        test_support::{
+            Backend, PostgresDbGuard, TestEnv, backends, sqlite_url, unique_postgres_url,
+        },
     };
     use tempfile::TempDir;
 
