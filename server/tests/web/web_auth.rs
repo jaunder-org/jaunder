@@ -12,9 +12,24 @@ use rstest_reuse::*;
 
 use crate::helpers::{
     create_user_and_session, post_form_with_bearer, post_form_with_secure_flag,
-    post_server_fn_with_secure_flag, post_server_fn_with_ua, token_from_set_cookie,
+    post_server_fn_request_fixture_with_secure_flag, post_server_fn_with_secure_flag,
+    post_server_fn_with_ua, token_from_set_cookie,
 };
 use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
+
+#[derive(serde::Serialize)]
+struct LoginDecodeFixture<'a> {
+    username: &'a str,
+    password: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    label: Option<&'a str>,
+}
+
+#[derive(serde::Serialize)]
+struct RegistrationDecodeFixture<'a> {
+    username: &'a str,
+    password: &'a str,
+}
 
 /// The session token a login/register response established, read from its
 /// `Set-Cookie` header — the only channel that carries it (#533). Tests reach the
@@ -487,10 +502,13 @@ async fn login_rejects_whitespace_only_label(#[case] backend: Backend) {
     // A whitespace-only label is rejected at the typed-wire-arg decode
     // (SessionLabel's FromStr trims, then rejects empty) — it must not fall
     // through to the User-Agent branch. Surfaces as 500, the session-fn convention.
-    let (status, _, body) = post_form_with_secure_flag(
+    let (status, _, body) = post_server_fn_request_fixture_with_secure_flag::<web::auth::Login, _>(
         &state,
-        <web::auth::Login as ServerFn>::PATH,
-        "request%5Busername%5D=alice&request%5Bpassword%5D=password123&request%5Blabel%5D=%20%20",
+        &LoginDecodeFixture {
+            username: "alice",
+            password: "password123",
+            label: Some("  "),
+        },
         None,
         true,
     )
@@ -521,10 +539,13 @@ async fn login_rejects_overlong_label(#[case] backend: Backend) {
     // Past MAX_SESSION_LABEL_CHARS (255) the label is rejected at decode rather
     // than silently truncated, matching create_app_password_rejects_overlong_label.
     let overlong = "a".repeat(256);
-    let (status, _, body) = post_form_with_secure_flag(
+    let (status, _, body) = post_server_fn_request_fixture_with_secure_flag::<web::auth::Login, _>(
         &state,
-        <web::auth::Login as ServerFn>::PATH,
-        format!("request%5Busername%5D=alice&request%5Bpassword%5D=password123&request%5Blabel%5D={overlong}"),
+        &LoginDecodeFixture {
+            username: "alice",
+            password: "password123",
+            label: Some(&overlong),
+        },
         None,
         true,
     )
@@ -690,14 +711,17 @@ async fn register_invalid_username_returns_error(#[case] backend: Backend) {
 
     // "alice doe" lowercases to "alice doe" which fails Username parse
     // because Username only allows [a-z0-9_-]+.
-    let (status, _set_cookie, _body) = post_form_with_secure_flag(
-        &state,
-        <web::registration::Register as ServerFn>::PATH,
-        "request%5Busername%5D=alice%20doe&request%5Bpassword%5D=password123",
-        None,
-        true,
-    )
-    .await;
+    let (status, _set_cookie, _body) =
+        post_server_fn_request_fixture_with_secure_flag::<web::registration::Register, _>(
+            &state,
+            &RegistrationDecodeFixture {
+                username: "alice doe",
+                password: "password123",
+            },
+            None,
+            true,
+        )
+        .await;
 
     assert_ne!(
         status,
@@ -717,14 +741,17 @@ async fn register_short_password_returns_error(#[case] backend: Backend) {
         .await
         .expect("failed to set registration policy");
 
-    let (status, _set_cookie, _body) = post_form_with_secure_flag(
-        &state,
-        <web::registration::Register as ServerFn>::PATH,
-        "request%5Busername%5D=alice&request%5Bpassword%5D=short",
-        None,
-        true,
-    )
-    .await;
+    let (status, _set_cookie, _body) =
+        post_server_fn_request_fixture_with_secure_flag::<web::registration::Register, _>(
+            &state,
+            &RegistrationDecodeFixture {
+                username: "alice",
+                password: "short",
+            },
+            None,
+            true,
+        )
+        .await;
 
     assert_ne!(
         status,
@@ -773,14 +800,18 @@ async fn login_nested_request_rejects_invalid_username_before_handler(#[case] ba
         .unwrap()
         .len();
 
-    let (status, _set_cookie, body) = post_form_with_secure_flag(
-        &state,
-        <web::auth::Login as ServerFn>::PATH,
-        "request%5Busername%5D=alice%20doe&request%5Bpassword%5D=password123",
-        None,
-        true,
-    )
-    .await;
+    let (status, _set_cookie, body) =
+        post_server_fn_request_fixture_with_secure_flag::<web::auth::Login, _>(
+            &state,
+            &LoginDecodeFixture {
+                username: "alice doe",
+                password: "password123",
+                label: None,
+            },
+            None,
+            true,
+        )
+        .await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert!(body.contains("server_function"), "body: {body}");
@@ -825,14 +856,18 @@ async fn login_nested_request_rejects_short_password_before_handler(#[case] back
         .unwrap()
         .len();
 
-    let (status, set_cookie, body) = post_form_with_secure_flag(
-        &state,
-        <web::auth::Login as ServerFn>::PATH,
-        "request%5Busername%5D=alice&request%5Bpassword%5D=short",
-        None,
-        true,
-    )
-    .await;
+    let (status, set_cookie, body) =
+        post_server_fn_request_fixture_with_secure_flag::<web::auth::Login, _>(
+            &state,
+            &LoginDecodeFixture {
+                username: "alice",
+                password: "short",
+                label: None,
+            },
+            None,
+            true,
+        )
+        .await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert!(set_cookie.is_none(), "decode rejection minted a session");

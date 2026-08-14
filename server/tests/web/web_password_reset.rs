@@ -9,10 +9,16 @@ use storage::AppState;
 
 use crate::helpers::{
     SeededSession, assert_no_email, assert_one_absolute_link_email, create_session_for,
-    create_user_and_session, post_form_with_mailer, post_server_fn_with_mailer,
-    setup_with_base_url,
+    create_user_and_session, post_form_with_mailer, post_server_fn_request_fixture_with_mailer,
+    post_server_fn_with_mailer, setup_with_base_url,
 };
 use storage::test_support::{Backend, SeedUser, TestEnv, backends};
+
+#[derive(serde::Serialize)]
+struct ConfirmPasswordResetDecodeFixture<'a> {
+    token: &'a str,
+    new_password: &'a str,
+}
 
 use rstest::*;
 use rstest_reuse::*;
@@ -230,14 +236,17 @@ async fn confirm_password_reset_with_invalid_token_returns_error(#[case] backend
     let TestEnv { state, base: _base } = backend.setup().await;
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let (status, _body) = post_form_with_mailer(
-        &state,
-        &mailer,
-        <web::password_reset::Confirm as ServerFn>::PATH,
-        "request%5Btoken%5D=not-a-real-token&request%5Bnew_password%5D=newpassword456",
-        None,
-    )
-    .await;
+    let (status, _body) =
+        post_server_fn_request_fixture_with_mailer::<web::password_reset::Confirm, _, _>(
+            &state,
+            &mailer,
+            &ConfirmPasswordResetDecodeFixture {
+                token: "not-a-real-token",
+                new_password: "newpassword456",
+            },
+            None,
+        )
+        .await;
 
     assert_ne!(status, StatusCode::OK);
 }
@@ -252,14 +261,17 @@ async fn confirm_nested_request_rejects_malformed_token_before_handler(#[case] b
     // `bad!token` is outside base64url, so `RawToken` rejects it (at wire-decode once
     // `token` is typed). `new_password` is valid-length, so the failure isolates to the
     // token.
-    let (status, response_body) = post_form_with_mailer(
-        &state,
-        &mailer,
-        <web::password_reset::Confirm as ServerFn>::PATH,
-        "request%5Btoken%5D=bad!token&request%5Bnew_password%5D=newpassword456",
-        None,
-    )
-    .await;
+    let (status, response_body) =
+        post_server_fn_request_fixture_with_mailer::<web::password_reset::Confirm, _, _>(
+            &state,
+            &mailer,
+            &ConfirmPasswordResetDecodeFixture {
+                token: "bad!token",
+                new_password: "newpassword456",
+            },
+            None,
+        )
+        .await;
 
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert!(
@@ -337,15 +349,17 @@ async fn confirm_nested_request_rejects_short_password_before_handler(#[case] ba
         .await
         .unwrap();
 
-    let body = format!("request%5Btoken%5D={raw_token}&request%5Bnew_password%5D=short");
-    let (status, response_body) = post_form_with_mailer(
-        &state,
-        &mailer,
-        <web::password_reset::Confirm as ServerFn>::PATH,
-        body,
-        None,
-    )
-    .await;
+    let (status, response_body) =
+        post_server_fn_request_fixture_with_mailer::<web::password_reset::Confirm, _, _>(
+            &state,
+            &mailer,
+            &ConfirmPasswordResetDecodeFixture {
+                token: raw_token.as_ref(),
+                new_password: "short",
+            },
+            None,
+        )
+        .await;
 
     // A decode rejection is HTTP 500 with a body tagged `server_function` — distinct
     // from an in-body failure, which projects to `validation`/`unauthorized`/etc.

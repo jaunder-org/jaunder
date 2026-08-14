@@ -14,9 +14,16 @@ use rstest_reuse::*;
 
 use crate::helpers::{
     create_operator_and_session, create_session_for, create_user_and_session, post_form,
-    post_form_with_mailer, post_server_fn, post_server_fn_with_mailer, session_cookie,
+    post_server_fn, post_server_fn_request_fixture_with_mailer, post_server_fn_with_mailer,
+    session_cookie,
 };
 use storage::test_support::{Backend, SeedUser, TestEnv, backends};
+
+#[derive(serde::Serialize)]
+struct CreateInviteDecodeFixture<'a> {
+    expires_in_hours: &'a str,
+    recipient_email: &'a str,
+}
 
 // ── Profile tests (M2.10.5, M2.10.6) ─────────────────────────────────────
 
@@ -335,11 +342,13 @@ async fn create_invite_invalid_recipient_returns_error(#[case] backend: Backend)
     let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let (status, _) = post_form_with_mailer(
+    let (status, _) = post_server_fn_request_fixture_with_mailer::<web::invites::Create, _, _>(
         &state,
         &mailer,
-        <web::invites::Create as ServerFn>::PATH,
-        "request%5Bexpires_in_hours%5D=24&request%5Brecipient_email%5D=not-an-email",
+        &CreateInviteDecodeFixture {
+            expires_in_hours: "24",
+            recipient_email: "not-an-email",
+        },
         Some(&cookie),
     )
     .await;
@@ -397,11 +406,13 @@ async fn create_invite_large_hours_returns_error(#[case] backend: Backend) {
     let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let (status, _) = post_form_with_mailer(
+    let (status, _) = post_server_fn_request_fixture_with_mailer::<web::invites::Create, _, _>(
         &state,
         &mailer,
-        <web::invites::Create as ServerFn>::PATH,
-        "request%5Bexpires_in_hours%5D=18446744073709551615&request%5Brecipient_email%5D=invitee@example.com", // u64::MAX
+        &CreateInviteDecodeFixture {
+            expires_in_hours: "18446744073709551615", // u64::MAX
+            recipient_email: "invitee@example.com",
+        },
         Some(&cookie),
     )
     .await;
@@ -472,11 +483,13 @@ async fn create_invite_empty_hours_uses_default(#[case] backend: Backend) {
     let cookie = create_operator_and_session(&state).await.cookie();
     let mailer = Arc::new(CapturingMailSender::new());
 
-    let (status, body) = post_form_with_mailer(
+    let (status, body) = post_server_fn_request_fixture_with_mailer::<web::invites::Create, _, _>(
         &state,
         &mailer,
-        <web::invites::Create as ServerFn>::PATH,
-        "request%5Bexpires_in_hours%5D=&request%5Brecipient_email%5D=invitee@example.com", // empty-present
+        &CreateInviteDecodeFixture {
+            expires_in_hours: "", // empty-present
+            recipient_email: "invitee@example.com",
+        },
         Some(&cookie),
     )
     .await;

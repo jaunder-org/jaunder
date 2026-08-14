@@ -1,13 +1,21 @@
 use axum::http::StatusCode;
-use common::ids::AudienceId;
+use common::ids::{AudienceId, SubscriptionId};
 use common::test_support::parse_audience_name;
 use server_fn::ServerFn;
 
 use rstest::*;
 use rstest_reuse::*;
 
-use crate::helpers::{create_user_and_session, post_form, post_server_fn};
+use crate::helpers::{
+    create_user_and_session, post_form, post_server_fn, post_server_fn_request_fixture,
+};
 use storage::test_support::{Backend, SeedUser, TestEnv, backends};
+
+#[derive(serde::Serialize)]
+struct RenameAudienceDecodeFixture<'a> {
+    audience_id: AudienceId,
+    name: &'a str,
+}
 
 /// Parses the JSON-encoded `i64` that `create_audience` returns.
 fn parse_id(body: &str) -> i64 {
@@ -158,10 +166,12 @@ async fn rename_audience_empty_name_is_rejected(#[case] backend: Backend) {
     .await;
     let aud_id = parse_id(&body);
 
-    let (status, _body) = post_form(
+    let (status, _body) = post_server_fn_request_fixture::<web::audiences::Rename, _>(
         &state,
-        <web::audiences::Rename as ServerFn>::PATH,
-        &format!("request%5Baudience_id%5D={aud_id}&request%5Bname%5D=%20%20"),
+        &RenameAudienceDecodeFixture {
+            audience_id: AudienceId::from(aud_id),
+            name: "  ",
+        },
         Some(&cookie),
     )
     .await;
@@ -502,29 +512,17 @@ async fn list_my_subscribers_resolves_usernames(#[case] backend: Backend) {
 async fn audience_endpoints_require_authentication(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
-    let endpoints = [
+    let direct_endpoints = [
         (<web::audiences::Create as ServerFn>::PATH, "name=Friends"),
-        (
-            <web::audiences::Rename as ServerFn>::PATH,
-            "audience_id=1&name=X",
-        ),
         (<web::audiences::Delete as ServerFn>::PATH, "audience_id=1"),
         (<web::audiences::ListMine as ServerFn>::PATH, ""),
         (<web::audiences::ListMySubscribers as ServerFn>::PATH, ""),
-        (
-            <web::audiences::AddSubscriber as ServerFn>::PATH,
-            "audience_id=1&subscription_id=1",
-        ),
-        (
-            <web::audiences::RemoveSubscriber as ServerFn>::PATH,
-            "audience_id=1&subscription_id=1",
-        ),
         (
             <web::audiences::ListMembers as ServerFn>::PATH,
             "audience_id=1",
         ),
     ];
-    for (uri, body) in endpoints {
+    for (uri, body) in direct_endpoints {
         let (status, _body) = post_form(&state, uri, body, None).await;
         assert_eq!(
             status,
@@ -532,6 +530,49 @@ async fn audience_endpoints_require_authentication(#[case] backend: Backend) {
             "{uri} must require authentication"
         );
     }
+
+    let (status, _body) = post_server_fn(
+        &state,
+        &web::audiences::Rename {
+            request: web::audiences::RenameAudienceRequest {
+                audience_id: AudienceId::from(1),
+                name: parse_audience_name("Friends"),
+            },
+        },
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "rename must require authentication"
+    );
+
+    let request = web::audiences::AudienceMembershipRequest {
+        audience_id: AudienceId::from(1),
+        subscription_id: SubscriptionId::from(1),
+    };
+    let (status, _body) = post_server_fn(
+        &state,
+        &web::audiences::AddSubscriber {
+            request: request.clone(),
+        },
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "add subscriber must require authentication"
+    );
+
+    let (status, _body) =
+        post_server_fn(&state, &web::audiences::RemoveSubscriber { request }, None).await;
+    assert_eq!(
+        status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "remove subscriber must require authentication"
+    );
 }
 
 // A cross-author ADD is asymmetric with the scoped-away reads/removes: `add_member`
