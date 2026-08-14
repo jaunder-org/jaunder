@@ -37,6 +37,7 @@ mod page_state;
 // so the payload is host-tested and so each composer shape can be its own
 // `#[component]` over one prop rather than seven (#301, ADR-0070 §6).
 mod compose_state;
+mod edit_state;
 
 // Re-exported at the (public) `crate::posts::…` path so the pure `parse` fns are
 // reachable exported items on the host build too — consumed only by the wasm-only
@@ -50,16 +51,21 @@ pub use page_state::{
     user_query, user_tag_query, with_post_id,
 };
 
-// Same reason again: the composer bundle's only caller is the wasm-only `component`.
-pub use compose_state::{ComposeState, submit_gate};
+// Same reason again: the composer and editor state seams are consumed by the
+// wasm-only component.
+pub use compose_state::{ComposeState, PublicationIntent, publication_from_local, submit_gate};
+pub use edit_state::{
+    EditPublicationState, InvalidSchedule, LoadedPublication, ScheduledEditState, edit_submit_gate,
+    loaded_publication,
+};
 
 // The API surface — re-exported so external call sites and the server-fn
 // registrar keep the stable `crate::posts::…` paths despite living in `api.rs`.
 pub use api::{
-    Create, Delete, Get, GetAudienceSelection, GetDefaultAudienceSelection, GetPreview, ListDrafts,
-    PostInputs, Publish, SavedPost, Unpublish, UnpublishedPage, UnpublishedPost, Update, create,
-    delete, get, get_audience_selection, get_default_audience_selection, get_preview, list_drafts,
-    publish, unpublish, update,
+    Create, Delete, EditPostPreview, Get, GetAudienceSelection, GetDefaultAudienceSelection,
+    GetPreview, ListDrafts, PostInputs, Publish, SavedPost, Unpublish, UnpublishedPage,
+    UnpublishedPost, Update, create, delete, get, get_audience_selection,
+    get_default_audience_selection, get_preview, list_drafts, publish, unpublish, update,
 };
 
 // Re-exported for the `server` crate's public projector, which maps the fetched

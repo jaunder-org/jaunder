@@ -84,6 +84,17 @@ pub struct SavedPost {
     pub permalink: RootRelativeUrl,
 }
 
+/// The author-only payload used to seed the Post editor.
+///
+/// `fetched_at` is captured by the server with the Post so the client can
+/// distinguish a scheduled Post from a live one without comparing against the
+/// browser clock. The loaded editor keeps that classification for its lifetime.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EditPostPreview {
+    pub post: AuthoredPost,
+    pub fetched_at: UtcInstant,
+}
+
 /// One of the author's not-yet-public posts, as a row in an [`UnpublishedPage`].
 ///
 /// Named for the predicate the listing selects on, not for "draft": `list_drafts`
@@ -254,9 +265,10 @@ pub async fn get(username: Username, date: PermalinkDate, slug: Slug) -> WebResu
     Ok(authored_post(post, true))
 }
 
-/// Retrieves a draft preview for the authenticated author.
+/// Retrieves a Post and a same-response time snapshot for its authenticated
+/// author to edit.
 #[macros::server]
-pub async fn get_preview(post_id: PostId) -> WebResult<AuthoredPost> {
+pub async fn get_preview(post_id: PostId) -> WebResult<EditPostPreview> {
     let auth = require_auth()
         .await
         .map_err(|e| private_post_not_found_error(&e))?;
@@ -271,7 +283,11 @@ pub async fn get_preview(post_id: PostId) -> WebResult<AuthoredPost> {
         return Err(not_found_error());
     }
 
-    Ok(authored_post(post, true))
+    let fetched_at = UtcInstant::from(Utc::now());
+    Ok(EditPostPreview {
+        post: authored_post(post, true),
+        fetched_at,
+    })
 }
 
 /// Updates an existing post for the authenticated author.

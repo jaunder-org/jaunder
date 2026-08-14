@@ -26,11 +26,13 @@ use crate::media::MediaUpload;
 // `super::Update` at its use sites; `Get` is not needed in this file at all, and
 // is named here only so a future author does not add it to the list.
 use crate::posts::{
-    ComposeState, Create, Delete, DraftRowDisplay, ListingRoute, PermalinkRoute, Publish,
-    SavedPost, Unpublish, UnpublishedPage, UnpublishedPost, draft_row_display, get,
-    get_audience_selection, get_default_audience_selection, get_preview, list_drafts, notify,
-    notify_with_fallback, parse_permalink_route, publish_redirect, seeded_page, submit_gate,
-    tag_query, user_query, user_tag_query, with_post_id,
+    ComposeState, Create, Delete, DraftRowDisplay, EditPublicationState, InvalidSchedule,
+    ListingRoute, LoadedPublication, PermalinkRoute, PublicationIntent, Publish, SavedPost,
+    ScheduledEditState, Unpublish, UnpublishedPage, UnpublishedPost, draft_row_display,
+    edit_submit_gate, get, get_audience_selection, get_default_audience_selection, get_preview,
+    list_drafts, loaded_publication, notify, notify_with_fallback, parse_permalink_route,
+    publication_from_local, publish_redirect, seeded_page, submit_gate, tag_query, user_query,
+    user_tag_query, with_post_id,
 };
 use crate::subscriptions::SubscribeButton;
 use crate::taglist::TagCtx as TagContext;
@@ -553,8 +555,9 @@ fn CompactComposer(
         state.body,
         Signal::derive(move || !state.summary_field.is_valid()),
         Callback::new(move |(body, publish): (PostBody, bool)| {
+            let publication = publication_from_local(publish, &state.publish_at.get());
             create_action.dispatch(Create {
-                post: state.inputs(body, publish, None),
+                post: state.inputs(body, publication, None),
             });
         }),
     );
@@ -630,8 +633,9 @@ fn FullComposer(
         state.body,
         Signal::derive(move || !slug_field.is_valid() || !state.summary_field.is_valid()),
         Callback::new(move |(body, publish): (PostBody, bool)| {
+            let publication = publication_from_local(publish, &state.publish_at.get());
             create_action.dispatch(Create {
-                post: state.inputs(body, publish, slug_field.parsed()),
+                post: state.inputs(body, publication, slug_field.parsed()),
             });
         }),
     );
@@ -649,7 +653,13 @@ fn FullComposer(
                 />
             </div>
             <aside class="j-compose-aside">
-                <ComposeOptions state=state slug_field=slug_field is_published=false />
+                <ComposeOptions
+                    state=state
+                    slug_field=slug_field
+                    publication=LoadedPublication::Draft
+                    scheduled=None
+                    schedule_error=Signal::derive(|| None::<InvalidSchedule>)
+                />
                 <MediaSection />
                 <div style="margin-top:auto;display:flex;align-items:center;gap:8px">
                     <button
@@ -1064,8 +1074,12 @@ pub fn EditPostPage() -> impl IntoView {
             {move || Suspend::new(async move {
                 match post.await {
                     Ok(fetched) => {
-                        state.seed_from(&fetched);
-                        slug_field.value.set(fetched.post.slug.to_string());
+                        state.seed_from(&fetched.post);
+                        slug_field.value.set(fetched.post.post.slug.to_string());
+                        let publication = EditPublicationState::from_loaded(
+                            loaded_publication(fetched.post.post.published_at, fetched.fetched_at),
+                            state.publish_at,
+                        );
                         if let Ok(selection) = current_audience.await {
                             state.audience.set(selection);
                         }
@@ -1075,8 +1089,8 @@ pub fn EditPostPage() -> impl IntoView {
                             <EditPostForm
                                 state=state
                                 slug_field=slug_field
-                                post_id=fetched.post.post_id
-                                is_published=fetched.post.published_at.is_some()
+                                post_id=fetched.post.post.post_id
+                                publication=publication
                                 action=update_post_action
                             />
                         }
@@ -1090,9 +1104,7 @@ pub fn EditPostPage() -> impl IntoView {
     }
 }
 
-/// The editor's form: body column plus the options aside ([`ComposeOptions`], which
-/// hides the slug and schedule once the post is published), the media column
-/// ([`MediaSection`]) and the save controls.
+/// The editor's form: body column, publication-aware options, media, and save controls.
 /// Split out of [`EditPostPage`] (#301), which keeps only the fetch and its branch.
 #[component]
 fn EditPostForm(
@@ -1101,21 +1113,22 @@ fn EditPostForm(
     /// [`ComposeState::seed_from`].
     slug_field: Field<Slug>,
     post_id: PostId,
-    /// A published post shows neither the slug nor the schedule control: its URL is
-    /// already public, and it has no publish time left to choose.
-    is_published: bool,
+    /// Publication branch and branch-specific signals fixed when the response loaded.
+    publication: EditPublicationState,
     action: ServerAction<super::Update>,
 ) -> impl IntoView {
-    // Same one-call gate as the composer; see `submit_gate`. The predicate must
-    // include the body clause (#860): without it, clearing the textarea leaves Save
-    // enabled and silently inert.
-    let (save_disabled, dispatch_update) = submit_gate(
+    let also_blocked =
+        Signal::derive(move || !slug_field.is_valid() || !state.summary_field.is_valid());
+    let loaded_publication = publication.loaded();
+    let scheduled = publication.scheduled();
+    let (save_disabled, schedule_error, dispatch_update) = edit_submit_gate(
         state.body,
-        Signal::derive(move || !slug_field.is_valid() || !state.summary_field.is_valid()),
-        Callback::new(move |(body, publish): (PostBody, bool)| {
+        also_blocked,
+        publication,
+        Callback::new(move |(body, publication): (PostBody, PublicationIntent)| {
             action.dispatch(super::Update {
                 post_id,
-                post: state.inputs(body, publish, slug_field.parsed()),
+                post: state.inputs(body, publication, slug_field.parsed()),
             });
         }),
     );
@@ -1132,11 +1145,17 @@ fn EditPostForm(
                 />
             </div>
             <aside class="j-compose-aside">
-                <ComposeOptions state=state slug_field=slug_field is_published=is_published />
+                <ComposeOptions
+                    state=state
+                    slug_field=slug_field
+                    publication=loaded_publication
+                    scheduled=scheduled
+                    schedule_error=schedule_error
+                />
                 <MediaSection />
                 <div class="j-edit-form-actions">
                     <EditSaveActions
-                        is_published=is_published
+                        publication=loaded_publication
                         disabled=save_disabled
                         on_save=dispatch_update
                     />
@@ -1146,38 +1165,24 @@ fn EditPostForm(
     }
 }
 
-/// The editor's save controls: a lone "Save" once the post is published, "Save draft" +
-/// "Publish" while it is still a draft.
+/// The editor's save controls: "Save draft" + "Publish" for a loaded draft, and
+/// a lone "Save" for scheduled or live Posts.
 ///
 /// Split out of [`EditPostPage`] (#306) so that page's `view!` carries only the
-/// post-resolved and audience-seeding decisions; the published/draft branch lives here.
+/// post-resolved and audience-seeding decisions; the publication branch lives here.
 /// `on_save` is a plain data callback (the `publish` flag), not a view closure —
 /// ADR-0083 §3 rules out passing markup as a prop.
 #[component]
 fn EditSaveActions(
-    /// Whether the post being edited is already published.
-    is_published: bool,
-    /// Whether saving is currently blocked by an invalid slug or summary.
+    /// Publication state fixed when the editor response was assembled.
+    publication: LoadedPublication,
+    /// Whether saving is currently blocked by invalid form state.
     disabled: Signal<bool>,
-    /// Dispatches the update; the argument is the `publish` flag.
+    /// Dispatches the update; the argument is the draft editor's `publish` flag.
     on_save: Callback<bool>,
 ) -> impl IntoView {
     view! {
-        {if is_published {
-            view! {
-                <button
-                    class="j-btn is-primary"
-                    type="button"
-                    name="publish"
-                    value="true"
-                    prop:disabled=move || disabled.get()
-                    on:click=move |_| on_save.run(true)
-                >
-                    "Save"
-                </button>
-            }
-                .into_any()
-        } else {
+        {if matches!(publication, LoadedPublication::Draft) {
             view! {
                 <button
                     class="j-btn"
@@ -1201,37 +1206,46 @@ fn EditSaveActions(
                 </button>
             }
                 .into_any()
+        } else {
+            view! {
+                <button
+                    class="j-btn is-primary"
+                    type="button"
+                    name="publish"
+                    value="true"
+                    prop:disabled=move || disabled.get()
+                    on:click=move |_| on_save.run(true)
+                >
+                    "Save"
+                </button>
+            }
+                .into_any()
         }}
     }
 }
 
-/// The options aside shared by the two full-page compose shapes: slug and schedule
-/// while the post is still a draft, then summary, tags, audience and format.
+/// The options aside shared by the full-page composer and editor.
 ///
-/// Shared by [`FullComposer`] and [`EditPostForm`] (#863): one aside and one field
-/// order — the two shapes never render on the same page, and separate copies would
-/// have to be edited in lockstep.
-///
-/// Emits a single wrapping `<div>` on purpose: both asides are flex columns with
-/// `gap:18px`, so a bare fragment would put 18px between every field.
+/// The immutable loaded publication state owns which controls exist: drafts show
+/// slug and schedule, scheduled Posts show only their schedule, and live Posts show
+/// neither. The remaining fields are common to every branch.
 #[component]
 fn ComposeOptions(
     state: ComposeState,
     /// Page-level rather than held by [`ComposeState`] — see
     /// [`ComposeState::seed_from`].
     slug_field: Field<Slug>,
-    /// A published post shows neither the slug nor the schedule control: its URL is
-    /// already public, and it has no publish time left to choose. The composer passes
-    /// `false` — a post being composed is not yet published.
-    is_published: bool,
+    publication: LoadedPublication,
+    scheduled: Option<ScheduledEditState>,
+    schedule_error: Signal<Option<InvalidSchedule>>,
 ) -> impl IntoView {
     view! {
         <div>
             <div class="j-sb-head" style="padding:0 0 10px">
                 "Options"
             </div>
-            {(!is_published)
-                .then(|| {
+            {match publication {
+                LoadedPublication::Draft => {
                     view! {
                         <label class="j-field-row" style="grid-template-columns:auto 1fr">
                             <span class="j-field-label">"Slug"</span>
@@ -1253,27 +1267,25 @@ fn ComposeOptions(
                                     .is_touched()
                                     .then(|| slug_field.error.get())
                                     .flatten()
-                                    .map(|msg| {
-                                        view! { <span class="error">{msg}</span> }
-                                    })
+                                    .map(|msg| view! { <span class="error">{msg}</span> })
                             }}
                         </label>
-                        // Optional schedule: a future time schedules the post;
-                        // a past time backdates it; empty publishes immediately.
-                        <div style="margin-top:10px">
-                            <label class="j-field-label">
-                                "Publish at (optional)"
-                                <input
-                                    type="datetime-local"
-                                    name="publish_at"
-                                    class="j-field-val"
-                                    prop:value=state.publish_at
-                                    on:input=move |ev| state.publish_at.set(event_target_value(&ev))
-                                />
-                            </label>
-                        </div>
+                        <ScheduleControl state=state scheduled=None schedule_error=schedule_error />
                     }
-                })}
+                        .into_any()
+                }
+                LoadedPublication::Scheduled(_) => {
+                    view! {
+                        <ScheduleControl
+                            state=state
+                            scheduled=scheduled
+                            schedule_error=schedule_error
+                        />
+                    }
+                        .into_any()
+                }
+                LoadedPublication::Live => ().into_any(),
+            }}
             <div style="margin-top:10px">
                 <ValidatedTextarea<PostSummary>
                     label="Summary"
@@ -1289,6 +1301,65 @@ fn ComposeOptions(
                 <AudiencePicker selection=state.audience />
             </div>
             <FormatToggle format=state.format style="margin-top:10px" />
+        </div>
+    }
+}
+
+/// The draft/scheduled publication-time control.
+///
+/// A scheduled editor writes through [`ScheduledEditState`] so changing display
+/// text marks the exact loaded instant as replaced. A draft writes the composer's
+/// ordinary optional schedule field.
+#[component]
+fn ScheduleControl(
+    state: ComposeState,
+    scheduled: Option<ScheduledEditState>,
+    schedule_error: Signal<Option<InvalidSchedule>>,
+) -> impl IntoView {
+    view! {
+        <div style="margin-top:10px">
+            {match scheduled {
+                Some(schedule) => {
+                    view! {
+                        <label class="j-field-label">
+                            "Publish at"
+                            <input
+                                type="datetime-local"
+                                name="publish_at"
+                                class="j-field-val"
+                                prop:value=schedule.value
+                                on:input=move |ev| schedule.set_input(event_target_value(&ev))
+                            />
+                            {move || {
+                                schedule_error
+                                    .get()
+                                    .map(|err| {
+                                        view! { <span class="error">{err.to_string()}</span> }
+                                    })
+                            }}
+                        </label>
+                        <button class="j-btn" type="button" on:click=move |_| schedule.clear()>
+                            "Clear schedule"
+                        </button>
+                    }
+                        .into_any()
+                }
+                None => {
+                    view! {
+                        <label class="j-field-label">
+                            "Publish at (optional)"
+                            <input
+                                type="datetime-local"
+                                name="publish_at"
+                                class="j-field-val"
+                                prop:value=state.publish_at
+                                on:input=move |ev| state.publish_at.set(event_target_value(&ev))
+                            />
+                        </label>
+                    }
+                        .into_any()
+                }
+            }}
         </div>
     }
 }

@@ -115,12 +115,38 @@ impl fmt::Display for PermalinkDate {
     }
 }
 
+/// Formats a UTC instant for a browser `<input type="datetime-local">` in the
+/// ambient local timezone, at the control's minute precision.
+///
+/// This is display text only: converting it back cannot preserve seconds,
+/// subsecond precision, or which instant an ambiguous fall-back wall-clock
+/// represented.
+#[must_use]
+pub fn local_datetime_from_utc(instant: UtcInstant) -> String {
+    local_datetime_from_utc_in(instant, &Local)
+}
+
+/// The timezone-parametric core of [`local_datetime_from_utc`], kept private so
+/// formatting can be tested against deterministic offsets.
+fn local_datetime_from_utc_in<Tz: TimeZone>(instant: UtcInstant, tz: &Tz) -> String
+where
+    Tz::Offset: fmt::Display,
+{
+    instant
+        .value()
+        .with_timezone(tz)
+        .format("%Y-%m-%dT%H:%M")
+        .to_string()
+}
+
 /// Converts a `<input type="datetime-local">` value — a naive local wall-clock such
 /// as `"2026-07-01T13:30"` (seconds optional) — into a [`UtcInstant`], interpreting
 /// it in the ambient local timezone. `None` for an empty/whitespace or unparseable
-/// input, or a local time that doesn't exist (a DST spring-forward gap). An
-/// *ambiguous* time (a fall-back fold) resolves to its earliest instant rather than
-/// `None`, so a real (if doubled) wall-clock isn't lost.
+/// input. An ambiguous time resolves to the earliest mapped instant.
+///
+/// This preserves the create form's established conversion contract. In browsers,
+/// Chrono follows JavaScript's normalization of nonexistent spring-forward wall
+/// times; scheduled editing uses [`strict_utc_instant_from_local`] instead.
 ///
 /// Lives here beside [`UtcInstant`] (rather than in `web`) because `chrono` is
 /// already wasm-available through `common`; on the browser `chrono::Local` reads the
@@ -132,9 +158,20 @@ pub fn utc_instant_from_local(local: &str) -> Option<UtcInstant> {
     utc_instant_from_local_in(local, &Local)
 }
 
-/// The timezone-parametric core of [`utc_instant_from_local`], so the local→UTC
-/// conversion is host-testable against a fixed offset instead of the ambient zone.
-fn utc_instant_from_local_in<Tz: TimeZone>(local: &str, tz: &Tz) -> Option<UtcInstant> {
+/// Converts a local wall-clock value only when the resulting instant projects back
+/// to the same local value.
+///
+/// The round trip rejects browser-normalized DST-gap values while retaining
+/// Chrono's earliest mapping for a real fall-back ambiguity.
+#[must_use]
+pub fn strict_utc_instant_from_local(local: &str) -> Option<UtcInstant> {
+    strict_utc_instant_from_local_in(local, &Local)
+}
+
+fn mapped_local_datetime_in<Tz: TimeZone>(
+    local: &str,
+    tz: &Tz,
+) -> Option<(NaiveDateTime, DateTime<Tz>)> {
     let trimmed = local.trim();
     if trimmed.is_empty() {
         return None;
@@ -142,9 +179,20 @@ fn utc_instant_from_local_in<Tz: TimeZone>(local: &str, tz: &Tz) -> Option<UtcIn
     let naive = NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%dT%H:%M")
         .or_else(|_| NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%dT%H:%M:%S"))
         .ok()?;
-    tz.from_local_datetime(&naive)
-        .earliest()
-        .map(|dt| UtcInstant::from(dt.with_timezone(&Utc)))
+    Some((naive, tz.from_local_datetime(&naive).earliest()?))
+}
+
+/// The timezone-parametric core of [`utc_instant_from_local`].
+fn utc_instant_from_local_in<Tz: TimeZone>(local: &str, tz: &Tz) -> Option<UtcInstant> {
+    mapped_local_datetime_in(local, tz)
+        .map(|(_, mapped)| UtcInstant::from(mapped.with_timezone(&Utc)))
+}
+
+/// The timezone-parametric core of [`strict_utc_instant_from_local`].
+fn strict_utc_instant_from_local_in<Tz: TimeZone>(local: &str, tz: &Tz) -> Option<UtcInstant> {
+    let (naive, mapped) = mapped_local_datetime_in(local, tz)?;
+    (mapped.with_timezone(tz).naive_local() == naive)
+        .then(|| UtcInstant::from(mapped.with_timezone(&Utc)))
 }
 
 #[cfg(test)]
@@ -296,9 +344,25 @@ mod tests {
     }
 
     #[test]
+    fn utc_instant_formats_as_local_datetime_control_value() {
+        let instant = "2026-07-01T08:30:45Z".parse().unwrap();
+        let tz = chrono::FixedOffset::east_opt(5 * 3600).unwrap();
+        assert_eq!(local_datetime_from_utc_in(instant, &tz), "2026-07-01T13:30");
+    }
+
+    #[test]
+    fn local_datetime_format_crosses_the_local_date_boundary() {
+        let instant = "2026-07-02T04:00:00Z".parse().unwrap();
+        let tz = chrono::FixedOffset::west_opt(5 * 3600).unwrap();
+        assert_eq!(local_datetime_from_utc_in(instant, &tz), "2026-07-01T23:00");
+    }
+
+    #[test]
     fn public_wrapper_uses_the_ambient_zone() {
         // The exact instant depends on the host timezone, so assert only shape: a
         // well-formed local time (never a DST gap at 13:30) parses; empty/garbage don't.
+        let local = local_datetime_from_utc("2026-07-01T08:30:45Z".parse().unwrap());
+        assert!(NaiveDateTime::parse_from_str(&local, "%Y-%m-%dT%H:%M").is_ok());
         assert!(utc_instant_from_local("2026-07-01T13:30").is_some());
         assert_eq!(utc_instant_from_local(""), None);
         assert_eq!(utc_instant_from_local("garbage"), None);

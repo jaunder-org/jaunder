@@ -61,6 +61,13 @@ _scheduled_ (`NOT NULL AND > now`), _live_ (`NOT NULL AND <= now`).
    non-NULL the slug is final, which is what makes a scheduled post's URL
    stable.
 
+> **Amended by the
+> [current-publication-state slug-freeze decision](0130-current-publication-state-slug-freeze.md).**
+> This ADR originally made the slug final once `published_at` had ever been set.
+> Issue #549 adopts the narrower rule already enforced by storage: the slug is
+> frozen while the current `published_at` is non-null, and becomes editable on a
+> later update after the Post is pulled back to draft.
+
 ## Consequences
 
 - Good: one rule for time-visibility; future-dated posts are uniformly hidden
@@ -76,3 +83,7 @@ _scheduled_ (`NOT NULL AND > now`), _live_ (`NOT NULL AND <= now`).
   audience visibility — both predicates gate the same queries.
 - Deferred (#15): full scheduled-post management UI (scheduled list, in-place
   reschedule, pull-back-to-draft).
+
+> **Deferral narrowed by issue #549.** The edit page now supports in-place
+> rescheduling and pullback to draft. Issue #15 retains only the dedicated
+> scheduled-Post listing and broader management surface.
