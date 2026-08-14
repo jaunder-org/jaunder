@@ -1,4 +1,4 @@
-use axum::http::StatusCode;
+use axum::http::{StatusCode, header};
 use tower::ServiceExt;
 
 use rstest::*;
@@ -6,7 +6,7 @@ use rstest_reuse::*;
 
 use storage::test_support::{Backend, TestEnv, backends};
 
-use super::fixtures::{get, projector_app, seed_tagged_post};
+use super::fixtures::{TEST_SHELL, get, projector_app, seed_tagged_post};
 
 #[apply(backends)]
 #[tokio::test]
@@ -77,4 +77,38 @@ async fn user_tag_invalid_serves_shell(#[case] backend: Backend) {
         .await
         .unwrap();
     assert!(String::from_utf8_lossy(&body).contains("test-shell"));
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn site_tag_storage_failure_keeps_no_store_shell_and_reports_once(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
+    seed_tagged_post(&state).await;
+    let app = projector_app(&state);
+    base.close_pool().await;
+
+    let (response, event) = crate::assert_error_signal!(
+        async { app.oneshot(get("/tags/rust")).await.expect("request") },
+        event = "error swallowed after reporting",
+        event_kind = "storage",
+        event_class = "bug",
+        metric_kind = "storage",
+        metric_class = "bug",
+        disposition = "swallowed",
+        context = "server.projector.site_tag"
+    );
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        Some("no-store")
+    );
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    assert_eq!(body.as_ref(), TEST_SHELL.as_bytes(), "exact CSR shell body");
+    assert!(event.contains("pool"), "typed storage source: {event}");
 }

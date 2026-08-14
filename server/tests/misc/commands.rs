@@ -12,8 +12,8 @@ use common::test_support::{parse_invite_ttl_hours, parse_session_label};
 use common::username::Username;
 use jaunder::cli::{Cli, Commands, StorageArgs};
 use jaunder::commands::{
-    cmd_app_password_create, cmd_backup, cmd_init, cmd_restore, cmd_serve, cmd_smtp_test,
-    cmd_user_create, cmd_user_invite, prepare_server,
+    app_password_create, cmd_app_password_create, cmd_backup, cmd_init, cmd_restore, cmd_serve,
+    cmd_smtp_test, cmd_user_create, cmd_user_invite, prepare_server,
 };
 use storage::{BackupMode, open_database, open_existing_database};
 use tempfile::TempDir;
@@ -26,8 +26,8 @@ use crate::misc::backup_fixture::{
     assert_backup_fixture_restored, assert_target_unmodified, populate_backup_fixture,
 };
 use storage::test_support::{
-    Backend, PostgresDbGuard, backends, nonexistent_postgres_url, noop_mailer, sqlite_url,
-    unique_postgres_url,
+    Backend, PostgresDbGuard, SeedUser, backends, nonexistent_postgres_url, noop_mailer,
+    sqlite_url, unique_postgres_url,
 };
 
 async fn storage_args(backend: Backend, base: &TempDir) -> (StorageArgs, Option<PostgresDbGuard>) {
@@ -111,6 +111,10 @@ async fn cmd_init_fails_on_invalid_path(#[case] backend: Backend) {
 #[tokio::test]
 async fn cmd_serve_fails_when_not_initialized(#[case] backend: Backend) {
     let base = TempDir::new().unwrap();
+    let expected = match &backend {
+        Backend::Sqlite => "jaunder init",
+        Backend::Postgres => "jaunder create-pg-db",
+    };
     let args = uninitialized_storage_args(backend, &base);
     let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
 
@@ -118,8 +122,131 @@ async fn cmd_serve_fails_when_not_initialized(#[case] backend: Backend) {
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(
-        msg.contains("jaunder init"),
-        "expected error to mention 'jaunder init', got: {msg}"
+        msg.contains(expected),
+        "expected error to mention '{expected}', got: {msg}"
+    );
+}
+
+fn assert_database_open_source(error: &anyhow::Error, command: &str) {
+    assert!(
+        error.to_string().contains("run `jaunder init` first"),
+        "{command} must retain initialization guidance: {error:#}"
+    );
+    assert!(
+        error
+            .chain()
+            .any(|source| source.downcast_ref::<sqlx::Error>().is_some()),
+        "{command} must retain its typed SQLx source: {error:#}"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn command_source_chain_cmd_user_create_open(#[case] backend: Backend) {
+    let base = TempDir::new().expect("temp dir");
+    let args = uninitialized_storage_args(backend, &base);
+    let username: Username = "alice".parse().expect("username");
+    let password: Password = "password123".parse().expect("password");
+
+    let error = cmd_user_create(&args, &username, Some(password), None, false)
+        .await
+        .unwrap_err();
+
+    assert_database_open_source(&error, "cmd_user_create");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn command_source_chain_cmd_app_password_create_open(#[case] backend: Backend) {
+    let base = TempDir::new().expect("temp dir");
+    let args = uninitialized_storage_args(backend, &base);
+    let username: Username = "alice".parse().expect("username");
+
+    let error = cmd_app_password_create(&args, &username, &parse_session_label("integration"))
+        .await
+        .unwrap_err();
+
+    assert_database_open_source(&error, "cmd_app_password_create");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn command_source_chain_cmd_user_invite_open(#[case] backend: Backend) {
+    let base = TempDir::new().expect("temp dir");
+    let args = uninitialized_storage_args(backend, &base);
+
+    let error = cmd_user_invite(&args, None).await.unwrap_err();
+
+    assert_database_open_source(&error, "cmd_user_invite");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn command_source_chain_cmd_smtp_test_open(#[case] backend: Backend) {
+    let base = TempDir::new().expect("temp dir");
+    let args = uninitialized_storage_args(backend, &base);
+
+    let error = cmd_smtp_test(&args, "to@example.com").await.unwrap_err();
+
+    assert_database_open_source(&error, "cmd_smtp_test");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn command_source_chain_cmd_smtp_test_invalid_sender(#[case] backend: Backend) {
+    let base = TempDir::new().expect("temp dir");
+    let (args, _pg) = storage_args(backend, &base).await;
+    cmd_init(&args, false).await.expect("initialize");
+    let state = open_existing_database(&args.db).await.expect("open");
+    state
+        .site_config
+        .set(SiteConfigKey::SmtpHost, "mail.example.com")
+        .await
+        .expect("set host");
+    state
+        .site_config
+        .set(SiteConfigKey::SmtpSender, "Acme, Inc <noreply@example.com>")
+        .await
+        .expect("set sender");
+
+    let error = cmd_smtp_test(&args, "to@example.com").await.unwrap_err();
+
+    assert_eq!(error.to_string(), "failed to build SMTP transport");
+    assert!(
+        error.chain().any(|source| source
+            .downcast_ref::<lettre::address::AddressError>()
+            .is_some()),
+        "cmd_smtp_test must retain the address source: {error:#}"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn command_source_chain_cmd_smtp_test_send(#[case] backend: Backend) {
+    let base = TempDir::new().expect("temp dir");
+    let (args, _pg) = storage_args(backend, &base).await;
+    cmd_init(&args, false).await.expect("initialize");
+    let state = open_existing_database(&args.db).await.expect("open");
+    for (key, value) in [
+        (SiteConfigKey::SmtpHost, "127.0.0.1"),
+        (SiteConfigKey::SmtpPort, "1"),
+        (SiteConfigKey::SmtpTlsMode, "plain"),
+    ] {
+        state
+            .site_config
+            .set(key, value)
+            .await
+            .expect("set SMTP config");
+    }
+
+    let error = cmd_smtp_test(&args, "to@example.com").await.unwrap_err();
+
+    assert_eq!(error.to_string(), "failed to send test email");
+    assert!(
+        error.chain().any(|source| source
+            .downcast_ref::<lettre::transport::smtp::Error>()
+            .is_some()),
+        "cmd_smtp_test must retain the send source: {error:#}"
     );
 }
 
@@ -289,6 +416,50 @@ async fn cmd_app_password_create_errors_for_unknown_user(#[case] backend: Backen
 
 #[apply(backends)]
 #[tokio::test]
+async fn typed_account_command_source_app_password_lookup(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    env.base.close_pool().await;
+    let username: Username = "alice".parse().expect("valid username");
+    let label = parse_session_label("CLI");
+
+    let error = app_password_create(&env.state, &username, &label)
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.to_string(), "failed to look up user");
+    assert!(
+        error
+            .chain()
+            .any(|source| source.downcast_ref::<sqlx::Error>().is_some())
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn typed_account_command_source_app_password_session_create(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let user = SeedUser::new().seed(&env.state).await;
+    env.base
+        .pool()
+        .execute("ALTER TABLE sessions RENAME TO sessions_broken")
+        .await
+        .unwrap();
+    let label = parse_session_label("CLI");
+
+    let error = app_password_create(&env.state, &user.username, &label)
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.to_string(), "failed to create app password");
+    assert!(
+        error
+            .chain()
+            .any(|source| source.downcast_ref::<sqlx::Error>().is_some())
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn cmd_user_create_creates_retrievable_user(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
     let (args, _pg) = storage_args(backend, &base).await;
@@ -308,6 +479,30 @@ async fn cmd_user_create_creates_retrievable_user(#[case] backend: Backend) {
         .expect("db query");
     assert!(user.is_some(), "user should exist after creation");
     assert_eq!(user.expect("user present").username, "alice");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn typed_account_command_source_cmd_user_create(#[case] backend: Backend) {
+    let base = TempDir::new().expect("temp dir");
+    let (args, _pg) = storage_args(backend, &base).await;
+    cmd_init(&args, false).await.expect("init");
+    let username: Username = "alice".parse().expect("valid username");
+    let password: Password = "force-hash-error-for-test-coverage"
+        .parse()
+        .expect("valid password");
+
+    let error = cmd_user_create(&args, &username, Some(password), None, false)
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.to_string(), "failed to create user");
+    assert_eq!(
+        error
+            .chain()
+            .find_map(|source| source.downcast_ref::<argon2::password_hash::Error>()),
+        Some(&argon2::password_hash::Error::Version)
+    );
 }
 
 // M6.1.7: creating a user with --operator sets is_operator to true.

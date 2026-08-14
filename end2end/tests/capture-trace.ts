@@ -34,6 +34,22 @@
 import type { BrowserContext, Page, Request } from "@playwright/test";
 import { MOUNTED_ATTR } from "./mount";
 
+/** A browser request observed at its start, before completion or page teardown. */
+export type RequestStartRecord = {
+  method: string;
+  url: string;
+  resourceType: string;
+  sequence: number;
+  startedMs: number;
+};
+
+/** A browser console warning observed while its page was alive. */
+export type ConsoleWarningRecord = {
+  text: string;
+  sequence: number;
+  emittedMs: number;
+};
+
 export type RequestRecord = {
   method: string;
   url: string;
@@ -78,8 +94,10 @@ export type PagePerfSummary = {
 export type Phase = "pretest" | "test";
 
 export type CaptureSink = {
+  requestStarts: RequestStartRecord[];
   requests: RequestRecord[];
   navigations: NavigationRecord[];
+  consoleWarnings: ConsoleWarningRecord[];
 };
 
 /** One `performance.mark` the CSR client emitted, document-relative. */
@@ -200,12 +218,22 @@ export async function attachTraceCapture(
   context: BrowserContext,
 ): Promise<TraceCapture> {
   const sinks: Record<Phase, CaptureSink> = {
-    pretest: { requests: [], navigations: [] },
-    test: { requests: [], navigations: [] },
+    pretest: {
+      requestStarts: [],
+      requests: [],
+      navigations: [],
+      consoleWarnings: [],
+    },
+    test: {
+      requestStarts: [],
+      requests: [],
+      navigations: [],
+      consoleWarnings: [],
+    },
   };
   let phase: Phase = "pretest";
 
-  const requestStarts = new Map<Request, number>();
+  const requestStartedMs = new Map<Request, number>();
   const requestPhase = new Map<Request, Phase>();
   const navigationRequestIds = new Map<Request, number>();
   const navigationPhase = new Map<number, Phase>();
@@ -213,6 +241,7 @@ export async function attachTraceCapture(
   const documentTimings = new Map<number, DocumentTiming>();
   const pendingHarvests: Promise<void>[] = [];
   let nextNavigationId = 1;
+  let nextRecordSequence = 1;
 
   /**
    * Snapshot this document's marks and `.wasm` resource timing before the next
@@ -395,11 +424,20 @@ export async function attachTraceCapture(
   }, MOUNTED_ATTR);
 
   context.on("request", (request) => {
-    requestStarts.set(request, Date.now());
-    // Tag at START — see the module header. A pre-test request that finishes
-    // after the phase switch must still be filed under `pretest`.
+    const startedMs = Date.now();
+    requestStartedMs.set(request, startedMs);
+    // Tag and expose the request at START. Keep this separate from completion:
+    // keepalive diagnostics may outlive their page, and the browser contract only
+    // guarantees that delivery starts before teardown.
     requestPhase.set(request, phase);
-
+    sinks[phase].requestStarts.push({
+      method: request.method(),
+      url: request.url(),
+      resourceType: request.resourceType(),
+      startedMs,
+      sequence: nextRecordSequence,
+    });
+    nextRecordSequence += 1;
     const frame = request.frame();
     const isMainFrame = frame !== null && frame.parentFrame() === null;
     if (
@@ -428,7 +466,7 @@ export async function attachTraceCapture(
   });
 
   const recordCompletion = (request: Request, failed: boolean) => {
-    const startedMs = requestStarts.get(request) ?? Date.now();
+    const startedMs = requestStartedMs.get(request) ?? Date.now();
     const endedMs = Date.now();
     const failureText = failed ? request.failure()?.errorText : undefined;
     sinks[requestPhase.get(request) ?? phase].requests.push({
@@ -465,6 +503,15 @@ export async function attachTraceCapture(
   // test's own navigations are never committed and `navigation_count` reads 0.
   const attachPage = (page: Page) => {
     const state = stateFor(page);
+    page.on("console", (message) => {
+      if (message.type() !== "warning") return;
+      sinks[phase].consoleWarnings.push({
+        text: message.text(),
+        emittedMs: Date.now(),
+        sequence: nextRecordSequence,
+      });
+      nextRecordSequence += 1;
+    });
 
     page.on("framenavigated", (frame) => {
       if (frame !== page.mainFrame()) return;

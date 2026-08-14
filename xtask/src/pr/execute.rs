@@ -14,18 +14,31 @@ pub fn execute(number: Option<u64>, cfg: watch::WatchConfig, landing: bool) -> R
     // single parseable document and a human still sees progress live. The same events
     // are serialized into the report, so nothing here is stderr-only.
     let mut sink = |e: &Event| eprintln!("  {} [{}] {}", e.at, e.kind.as_str(), e.detail);
-    execute_with(
-        &snapshot::GhSource,
-        &land::GhArmer,
-        &watch::SystemClock,
-        Invocation {
-            git: &GitFacts::read(std::path::Path::new(".")),
-            number,
-            cfg,
-            landing,
+    dispatch_with_git_facts(
+        || GitFacts::read(std::path::Path::new("."), landing),
+        |git| {
+            execute_with(
+                &snapshot::GhSource,
+                &land::GhArmer,
+                &watch::SystemClock,
+                Invocation {
+                    git,
+                    number,
+                    cfg,
+                    landing,
+                },
+                &mut sink,
+            )
         },
-        &mut sink,
     )
+}
+
+fn dispatch_with_git_facts<T>(
+    read: impl FnOnce() -> Result<GitFacts>,
+    dispatch: impl FnOnce(&GitFacts) -> Result<T>,
+) -> Result<T> {
+    let git = read()?;
+    dispatch(&git)
 }
 
 /// Establish the subject, guard it, and hand off to `watch` or `land`.
@@ -194,6 +207,31 @@ mod tests {
             self.calls.set(self.calls.get() + 1);
             Ok(())
         }
+    }
+
+    #[test]
+    fn pr_land_git_fact_failure_returns_before_dispatch_or_arming() {
+        let dispatched = std::cell::Cell::new(false);
+        let error = dispatch_with_git_facts::<()>(
+            || {
+                Err(anyhow::Error::new(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "injected local Git failure",
+                )))
+            },
+            |_| {
+                dispatched.set(true);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert!(!dispatched.get());
+        assert_eq!(
+            error
+                .downcast_ref::<std::io::Error>()
+                .map(std::io::Error::kind),
+            Some(std::io::ErrorKind::PermissionDenied)
+        );
     }
 
     fn invocation(git: &GitFacts, landing: bool) -> Invocation<'_> {

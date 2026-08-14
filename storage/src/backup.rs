@@ -401,9 +401,19 @@ impl TemporaryBackupDirectory {
     }
 }
 
+fn finish_temporary_directory_cleanup<T>(primary: T, cleanup: std::io::Result<()>) -> T {
+    crate::helpers::preserve_after_secondary(
+        primary,
+        cleanup,
+        host::error::ErrorKind::Internal,
+        host::error::ErrorClass::Transient,
+        "storage.backup.temporary_directory_cleanup",
+    )
+}
+
 impl Drop for TemporaryBackupDirectory {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
+        finish_temporary_directory_cleanup((), fs::remove_dir_all(&self.path));
     }
 }
 
@@ -827,6 +837,39 @@ mod tests {
         };
         assert!(!path.exists(), "directory should be removed after drop");
         Ok(())
+    }
+
+    #[test]
+    fn continuation_reporting_temporary_backup_cleanup_failure_preserves_primary_results_and_reports_once()
+     {
+        let cleanup = || {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "cleanup denied",
+            ))
+        };
+        let (success, trace) = crate::helpers::swallowed_test::capture(|| {
+            finish_temporary_directory_cleanup(Ok::<_, BackupError>(41_u8), cleanup())
+        });
+        assert_eq!(success.expect("primary success"), 41);
+        crate::helpers::swallowed_test::assert_one_report(
+            &trace,
+            "storage.backup.temporary_directory_cleanup",
+        );
+
+        let (failure, trace) = crate::helpers::swallowed_test::capture(|| {
+            finish_temporary_directory_cleanup(
+                Err::<u8, _>(BackupError::InvalidBackup("primary sentinel".to_owned())),
+                cleanup(),
+            )
+        });
+        assert!(
+            matches!(failure, Err(BackupError::InvalidBackup(message)) if message == "primary sentinel")
+        );
+        crate::helpers::swallowed_test::assert_one_report(
+            &trace,
+            "storage.backup.temporary_directory_cleanup",
+        );
     }
 
     #[test]

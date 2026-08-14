@@ -955,6 +955,17 @@ nix build .#checks.x86_64-linux.e2e-elisp-integration
   explicitly.
 - Keep data transformations pure where possible so they are easy to test and
   reason about.
+- Never erase an **unexpected** failure into absence, a domain miss, a default,
+  or a successful fallback. Propagate infrastructure/I/O/browser/subprocess/
+  invariant/decode failures with their typed source. If preserving the primary
+  result or an intentional degradation requires continuing, use the owning
+  runtime's swallowed-error reporter and add a why-comment; the reporter emits
+  the warning and metric atomically. Expected validation/domain rejection may
+  still become ordinary control flow. This is a semantic rule, not a ban on
+  `.ok()`, `unwrap_or`, `let _`, `Err(_)`, or `map_err`. In `xtask`/`devtool`,
+  fail correctness-affecting operations and write a contextual stderr warning
+  only for legitimate ancillary/cleanup failure. Never report a diagnostic
+  transport/export failure through itself.
 - Comment for intent, not mechanics. A comment should state **what the code
   intends to achieve** (so a reviewer can judge whether it is fit for purpose)
   and, where the code takes a path that is not, at first glance, the obvious

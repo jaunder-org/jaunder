@@ -11,28 +11,28 @@ use crate::feed_events::{
 /// Postgres-backed feed-event storage.
 pub type PostgresFeedEventStorage = FeedEventStore<Postgres>;
 
-/// Deletes `feed_events` rows whose `feed_url` could not be parsed into a
-/// [`FeedPath`] — only reachable via DB tampering/corruption, since `enqueue`
-/// takes a validated `FeedPath`. Such a row names no identifiable feed, so it is
-/// purged to keep the worker draining rather than wedged on it forever; any real
-/// regeneration need re-enqueues via the write/go-live path. Best-effort: a
-/// delete failure is logged, never propagated — the corrupt ids are already
-/// excluded from the returned batch, so the worker proceeds regardless.
-async fn purge_corrupt(pool: &Pool<Postgres>, ids: &[FeedEventId]) {
+fn finish_purge(
+    primary: Vec<FeedEventRecord>,
+    purge: Result<(), sqlx::Error>,
+) -> Vec<FeedEventRecord> {
+    crate::feed_events::finish_corrupt_purge(
+        primary,
+        purge,
+        "storage.postgres.feed_events.purge_corrupt",
+    )
+}
+
+/// Deletes claimed rows whose `feed_url` cannot decode. Partitioning reports
+/// the aggregate decode failure; only a failed cleanup is reported here.
+async fn purge_corrupt(pool: &Pool<Postgres>, ids: &[FeedEventId]) -> Result<(), sqlx::Error> {
     if ids.is_empty() {
-        return;
+        return Ok(());
     }
-    tracing::warn!("feed_events: purging rows with an unparseable feed_url");
-    if let Err(e) = sqlx::query("DELETE FROM feed_events WHERE id = ANY($1)")
+    sqlx::query("DELETE FROM feed_events WHERE id = ANY($1)")
         .bind(ids)
         .execute(pool)
-        .await
-    {
-        // cov:ignore-start — defensive log; the delete is best-effort and the
-        // corrupt ids are already excluded from the batch, so this never blocks.
-        tracing::warn!(error = %e, "feed_events: purge of corrupt rows failed");
-        // cov:ignore-stop
-    }
+        .await?;
+    Ok(())
 }
 
 #[async_trait]
@@ -66,8 +66,8 @@ impl FeedEventDialect for Postgres {
         .await?;
 
         let (records, corrupt) = partition_claimed(rows);
-        purge_corrupt(pool, &corrupt).await;
-        Ok(records)
+        let purge = purge_corrupt(pool, &corrupt).await;
+        Ok(finish_purge(records, purge))
     }
 
     async fn mark_regenerated(
@@ -124,5 +124,35 @@ impl FeedEventDialect for Postgres {
             .execute(pool)
             .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn continuation_reporting_corrupt_purge_failure_preserves_valid_batch_and_reports_once() {
+        let now = Utc::now();
+        let valid = vec![FeedEventRecord {
+            id: FeedEventId::from(17),
+            feed_path: "/feed.rss".parse().expect("valid feed path"),
+            status: common::feed::FeedEventStatus::Claimed,
+            attempts: 0,
+            last_error: None,
+            next_attempt_at: now,
+            claimed_at: Some(now),
+            created_at: now,
+            regenerated_at: None,
+            pinged_at: None,
+        }];
+        let (records, trace) = crate::helpers::swallowed_test::capture(|| {
+            finish_purge(valid.clone(), Err(sqlx::Error::PoolClosed))
+        });
+        assert_eq!(records, valid);
+        crate::helpers::swallowed_test::assert_one_report(
+            &trace,
+            "storage.postgres.feed_events.purge_corrupt",
+        );
     }
 }

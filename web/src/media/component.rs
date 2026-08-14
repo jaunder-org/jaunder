@@ -6,7 +6,9 @@
 
 use leptos::prelude::*;
 
+use common::client_telemetry::ClientErrorContext;
 use common::pagination::{PageOffset, PageSize};
+
 use common::root_relative_url::RootRelativeUrl;
 
 use super::{
@@ -42,32 +44,39 @@ pub fn MediaUpload(
     // stays here is the browser wiring that cannot run on the host — the file picker
     // and `spawn_local`.
     let state = UploadState::new(show_result);
-    let callbacks = UploadCallbacks {
-        on_uploaded,
-        on_error,
-    };
     let file_input = NodeRef::<leptos::html::Input>::new();
-
-    let open_picker = move |_| {
-        if let Some(input) = file_input.get() {
-            input.click();
-        }
-    };
 
     // The event carries nothing we need — the picked file is read from `file_input`.
     let on_file_change = move |_: leptos::ev::Event| {
         use leptos::task::spawn_local;
 
-        // The browser glue — reading the picked file and wrapping it as multipart — lives
-        // in `client::upload` so this crate names no `web_sys` type (#520).
-        let Some(form_data) = client::upload::picked_file_multipart(file_input) else {
+        // Reading the picker and wrapping multipart data are browser glue. No
+        // selection is expected no-action; browser exceptions are reported once.
+        let outcome = match client::upload::picked_file_multipart(file_input) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let source_kind = error.source_kind();
+                client::telemetry::report_swallowed(
+                    client::telemetry::error_kind(source_kind),
+                    ClientErrorContext::MediaFormData,
+                    source_kind,
+                );
+                return;
+            }
+        };
+        let Some(form_data) = outcome.into_ready() else {
             return;
         };
-
         state.begin();
 
         spawn_local(async move {
-            state.settle(upload(form_data).await, callbacks);
+            state.settle(
+                upload(form_data).await,
+                UploadCallbacks {
+                    on_uploaded,
+                    on_error,
+                },
+            );
         });
     };
 
@@ -77,7 +86,11 @@ pub fn MediaUpload(
             type="button"
             class="j-btn"
             disabled=move || state.uploading.get()
-            on:click=open_picker
+            on:click=move |_| {
+                if let Some(input) = file_input.get() {
+                    input.click();
+                }
+            }
         >
             {move || if state.uploading.get() { "Uploading\u{2026}" } else { "Attach media" }}
         </button>

@@ -315,8 +315,8 @@ pub fn set_j_slug(entry: &mut Entry, slug: &str) {
 fn to_xml_string(
     written: Result<Vec<u8>, atom_syndication::Error>,
 ) -> Result<String, AtomPubError> {
-    let bytes = written.map_err(|e| AtomPubError::new(e.to_string()))?;
-    String::from_utf8(bytes).map_err(|e| AtomPubError::new(e.to_string()))
+    let bytes = written.map_err(AtomPubError::Writer)?;
+    String::from_utf8(bytes).map_err(AtomPubError::Utf8)
 }
 
 /// Serializes an [`Entry`] to a standalone `AtomPub` `<entry>` document.
@@ -1258,5 +1258,28 @@ mod tests {
         let out = entry_to_xml(&entry).expect("serialize");
         assert!(!out.contains("xmlns:app"), "out: {out}");
         assert!(!out.contains("app:draft"), "out: {out}");
+    }
+
+    #[test]
+    fn serialization_writer_failure_retains_typed_source() {
+        let error = to_xml_string(Err(atom_syndication::Error::Eof))
+            .expect_err("writer failure must propagate");
+
+        let source = std::error::Error::source(&error).expect("writer source");
+        assert!(matches!(
+            source.downcast_ref::<atom_syndication::Error>(),
+            Some(atom_syndication::Error::Eof)
+        ));
+    }
+
+    #[test]
+    fn serialization_invalid_utf8_retains_typed_source() {
+        let error = to_xml_string(Ok(vec![0xff])).expect_err("invalid UTF-8 must propagate");
+
+        let source = std::error::Error::source(&error).expect("UTF-8 source");
+        let source = source
+            .downcast_ref::<std::string::FromUtf8Error>()
+            .expect("typed FromUtf8Error");
+        assert_eq!(source.as_bytes(), &[0xff]);
     }
 }

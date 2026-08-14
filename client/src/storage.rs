@@ -7,40 +7,15 @@
 //! additionally distinguishes an absent key (`Ok(None)`) from a store it could not
 //! read (`Err`).
 
-use std::fmt;
-use wasm_bindgen::JsValue;
+pub use crate::telemetry::StorageError;
 
-/// Why a `localStorage` operation could not complete.
-#[derive(Debug, Clone)]
-pub enum StorageError {
-    /// `window.localStorage` could not be obtained: there is no `window` (non-browser
-    /// context) or no storage object (`None`), or the browser denied access and threw
-    /// (`Some(err)` — e.g. storage disabled / a sandboxed origin).
-    Unavailable(Option<JsValue>),
-    /// The `getItem` / `setItem` / `removeItem` call itself threw — e.g. a
-    /// `QuotaExceededError` on a write.
-    Operation(JsValue),
-}
-
-impl fmt::Display for StorageError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unavailable(None) => write!(f, "localStorage is unavailable"),
-            Self::Unavailable(Some(err)) => write!(f, "localStorage is unavailable: {err:?}"),
-            Self::Operation(err) => write!(f, "localStorage operation failed: {err:?}"),
-        }
-    }
-}
-
-impl std::error::Error for StorageError {}
-
-/// The window's `localStorage`, or a [`StorageError::Unavailable`] explaining why not.
+/// The window's `localStorage`, or a [`StorageError::Unavailable`].
 fn local_storage() -> Result<web_sys::Storage, StorageError> {
     web_sys::window()
-        .ok_or(StorageError::Unavailable(None))?
+        .ok_or(StorageError::Unavailable)?
         .local_storage()
-        .map_err(|err| StorageError::Unavailable(Some(err)))?
-        .ok_or(StorageError::Unavailable(None))
+        .map_err(|_| StorageError::Unavailable)?
+        .ok_or(StorageError::Unavailable)
 }
 
 /// Read the string stored under `key`. `Ok(None)` means the key is absent; `Err`
@@ -53,7 +28,7 @@ fn local_storage() -> Result<web_sys::Storage, StorageError> {
 pub fn get(key: &str) -> Result<Option<String>, StorageError> {
     local_storage()?
         .get_item(key)
-        .map_err(StorageError::Operation)
+        .map_err(|_| StorageError::Operation)
 }
 
 /// Store `value` under `key`.
@@ -61,11 +36,11 @@ pub fn get(key: &str) -> Result<Option<String>, StorageError> {
 /// # Errors
 ///
 /// [`StorageError::Unavailable`] if `localStorage` cannot be obtained;
-/// [`StorageError::Operation`] if the `setItem` call throws (e.g. `QuotaExceededError`).
+/// [`StorageError::Operation`] if the `setItem` call throws.
 pub fn set(key: &str, value: &str) -> Result<(), StorageError> {
     local_storage()?
         .set_item(key, value)
-        .map_err(StorageError::Operation)
+        .map_err(|_| StorageError::Operation)
 }
 
 /// Remove any value stored under `key`.
@@ -73,11 +48,11 @@ pub fn set(key: &str, value: &str) -> Result<(), StorageError> {
 /// # Errors
 ///
 /// [`StorageError::Unavailable`] if `localStorage` cannot be obtained;
-/// [`StorageError::Operation`] if the `removeItem` call throws.
+/// [`StorageError::Operation`] if the `removeItem` call itself throws.
 pub fn remove(key: &str) -> Result<(), StorageError> {
     local_storage()?
         .remove_item(key)
-        .map_err(StorageError::Operation)
+        .map_err(|_| StorageError::Operation)
 }
 
 #[cfg(test)]

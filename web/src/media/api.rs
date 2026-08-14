@@ -20,10 +20,11 @@ use common::media::UploadResponse;
 #[cfg(feature = "server")]
 use {
     crate::auth::require_auth,
-    crate::error::InternalError,
+    crate::error::{ErrorClass, ErrorKind, InternalError},
     // Server-only: the delete guard's key. The CSR build never runs a query.
     common::media::MediaRef,
     leptos::prelude::*,
+    leptos::server_fn::error::ServerFnErrorErr,
     leptos_axum::extract,
     std::path::PathBuf,
     std::sync::Arc,
@@ -177,21 +178,66 @@ pub async fn delete(request: DeleteMediaRequest) -> WebResult<DeleteResult> {
     })
 }
 
-/// Maps a media upload `anyhow::Error` (carrying a `storage::MediaError`) to an
-/// `InternalError`, so the error boundary projects it to the right `WebError`: a bad
-/// request / too-large / over-quota is client validation (`WebError::Validation`),
-/// an internal or unknown failure masks as a server error (`WebError::Server`). The
-/// upload metric is already emitted inside `storage::MediaManager`, so this is a
-/// pure classification.
+/// Maps an owned media upload failure to its bounded public classification while
+/// retaining the complete `anyhow` chain for the operator boundary.
 #[cfg(feature = "server")]
-fn map_media_error(err: &anyhow::Error) -> InternalError {
-    match err.downcast_ref::<MediaError>() {
-        Some(MediaError::BadRequest(message)) => InternalError::validation(message.clone()),
-        Some(MediaError::PayloadTooLarge) => InternalError::validation("payload too large"),
-        Some(MediaError::InsufficientStorage) => InternalError::validation("insufficient storage"),
-        // A `MediaError::Internal` or a non-`MediaError` upload failure (e.g. a mid-stream
-        // IO fault, which downcasts to `None`) masks as a generic server error.
-        Some(MediaError::Internal(_)) | None => InternalError::server_message(err.to_string()),
+fn map_media_error(err: anyhow::Error) -> InternalError {
+    let (kind, class, public_message) = match err.downcast_ref::<MediaError>() {
+        Some(MediaError::BadRequest(message)) => {
+            (ErrorKind::Validation, ErrorClass::Client, message.clone())
+        }
+        Some(MediaError::PayloadTooLarge) => (
+            ErrorKind::Validation,
+            ErrorClass::Client,
+            "payload too large".to_owned(),
+        ),
+        Some(MediaError::InsufficientStorage) => (
+            ErrorKind::Validation,
+            ErrorClass::Client,
+            "insufficient storage".to_owned(),
+        ),
+        Some(MediaError::Internal(_)) | None => (
+            ErrorKind::Internal,
+            ErrorClass::Bug,
+            "server operation failed".to_owned(),
+        ),
+    };
+    InternalError::masked(kind, class, public_message, err)
+}
+
+/// Preserves the typed server-fn extractor rejection for a missing storage-path
+/// extension. Missing composition state is a server invariant, never validation.
+#[cfg(feature = "server")]
+fn map_storage_path_extract_error(error: ServerFnErrorErr) -> InternalError {
+    InternalError::server(error).with_context("stage", "storage_path_extension")
+}
+
+/// Classifies every current multer error semantically. Malformed client framing
+/// and configured size limits are validation; stream I/O, poisoned shared state,
+/// and future unknown variants are server failures. Both paths retain the typed
+/// multer error by ownership.
+#[cfg(feature = "server")]
+fn map_multipart_error(error: multer::Error) -> InternalError {
+    let client = matches!(
+        &error,
+        multer::Error::UnknownField { .. }
+            | multer::Error::IncompleteFieldData { .. }
+            | multer::Error::IncompleteHeaders
+            | multer::Error::ReadHeaderFailed(_)
+            | multer::Error::DecodeHeaderName { .. }
+            | multer::Error::DecodeHeaderValue { .. }
+            | multer::Error::IncompleteStream
+            | multer::Error::FieldSizeExceeded { .. }
+            | multer::Error::StreamSizeExceeded { .. }
+            | multer::Error::NoMultipart
+            | multer::Error::DecodeContentType(_)
+            | multer::Error::NoBoundary
+    );
+    if client {
+        let message = format!("bad multipart: {error}");
+        InternalError::validation_source(message, error)
+    } else {
+        InternalError::server(error).with_context("stage", "multipart")
     }
 }
 
@@ -207,7 +253,7 @@ pub async fn upload(data: MultipartData) -> WebResult<UploadResponse> {
     // context value, so pull it via the request extractor rather than expect_context.
     let axum::Extension(storage_path) = extract::<axum::Extension<Arc<PathBuf>>>()
         .await
-        .map_err(|e| InternalError::server_message(format!("storage_path extract: {e}")))?;
+        .map_err(map_storage_path_extract_error)?;
 
     // `into_inner()` is `Some` on the server (the parsed multipart body).
     let mut multipart = data
@@ -217,13 +263,12 @@ pub async fn upload(data: MultipartData) -> WebResult<UploadResponse> {
     let field = multipart
         .next_field()
         .await
-        .map_err(|e| InternalError::validation(format!("bad multipart: {e}")))?
+        .map_err(map_multipart_error)?
         .ok_or_else(|| InternalError::validation("no file field"))?;
 
     // The `file_name()`/`content_type()` borrows must end before `field` is moved
     // into `upload` as the byte stream.
-    let filename =
-        MediaManager::validate_filename(field.file_name()).map_err(|e| map_media_error(&e))?;
+    let filename = MediaManager::validate_filename(field.file_name()).map_err(map_media_error)?;
     // `multer::Field::content_type()` yields `Option<&mime::Mime>`; render it to a
     // `String` so it outlives the field being moved into `upload` as the stream.
     let content_type = field.content_type().map(ToString::to_string);
@@ -232,39 +277,156 @@ pub async fn upload(data: MultipartData) -> WebResult<UploadResponse> {
     manager
         .upload(auth.user_id, &filename, content_type.as_deref(), field)
         .await
-        .map_err(|e| map_media_error(&e))
+        .map_err(map_media_error)
 }
 
 #[cfg(all(test, feature = "server"))]
 mod tests {
-    use super::{MediaError, map_media_error};
-    use crate::error::ErrorKind;
+    use super::{MediaError, map_media_error, map_multipart_error, map_storage_path_extract_error};
+    use crate::error::{ErrorKind, InternalError};
+    use leptos::server_fn::error::ServerFnErrorErr;
+    use std::error::Error;
+    use std::fmt;
+
+    fn typed_source<T: Error + 'static>(error: &InternalError) -> Option<&T> {
+        let mut current: &(dyn Error + 'static) = error;
+        loop {
+            if let Some(source) = current.downcast_ref::<T>() {
+                return Some(source);
+            }
+            current = current.source()?;
+        }
+    }
+
+    #[derive(Debug)]
+    struct UploadSource;
+
+    impl fmt::Display for UploadSource {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("upload ownership sentinel")
+        }
+    }
+
+    impl Error for UploadSource {}
 
     #[test]
     fn map_media_error_classifies_each_arm() {
         // A bad request / too-large / over-quota is client validation.
         assert_eq!(
-            map_media_error(&anyhow::anyhow!(MediaError::BadRequest("bad".to_owned()))).kind(),
+            map_media_error(anyhow::anyhow!(MediaError::BadRequest("bad".to_owned()))).kind(),
             ErrorKind::Validation
         );
         assert_eq!(
-            map_media_error(&anyhow::anyhow!(MediaError::PayloadTooLarge)).kind(),
+            map_media_error(anyhow::anyhow!(MediaError::PayloadTooLarge)).kind(),
             ErrorKind::Validation
         );
         assert_eq!(
-            map_media_error(&anyhow::anyhow!(MediaError::InsufficientStorage)).kind(),
+            map_media_error(anyhow::anyhow!(MediaError::InsufficientStorage)).kind(),
             ErrorKind::Validation
         );
         // An internal storage fault masks as a generic server error.
         assert_eq!(
-            map_media_error(&anyhow::anyhow!(MediaError::Internal("boom".to_owned()))).kind(),
+            map_media_error(anyhow::anyhow!(MediaError::Internal(Box::new(
+                std::io::Error::other("boom"),
+            ))))
+            .kind(),
             ErrorKind::Internal
         );
         // A non-`MediaError` failure (e.g. a mid-stream IO fault) downcasts to `None`
         // and also masks as a server error — the fallback arm.
         assert_eq!(
-            map_media_error(&anyhow::anyhow!("io boom")).kind(),
+            map_media_error(anyhow::anyhow!("io boom")).kind(),
             ErrorKind::Internal
+        );
+    }
+
+    #[test]
+    fn missing_storage_path_extension_retains_extractor_rejection() {
+        let rejection =
+            ServerFnErrorErr::ServerError("missing storage path Extension sentinel".to_owned());
+
+        let mapped = map_storage_path_extract_error(rejection);
+
+        assert_eq!(mapped.kind(), ErrorKind::Internal);
+        let source = typed_source::<ServerFnErrorErr>(&mapped)
+            .expect("extractor rejection remains a typed source");
+        assert!(
+            source
+                .to_string()
+                .contains("missing storage path Extension sentinel")
+        );
+    }
+
+    #[test]
+    fn multipart_error_classification_is_exhaustive() {
+        let client_errors = [
+            multer::Error::UnknownField {
+                field_name: Some("file".to_owned()),
+            },
+            multer::Error::IncompleteFieldData {
+                field_name: Some("file".to_owned()),
+            },
+            multer::Error::IncompleteHeaders,
+            multer::Error::ReadHeaderFailed(httparse::Error::HeaderName),
+            multer::Error::DecodeHeaderName {
+                name: "bad name".to_owned(),
+                cause: Box::new(std::io::Error::other("header-name sentinel")),
+            },
+            multer::Error::DecodeHeaderValue {
+                value: vec![0xff],
+                cause: Box::new(std::io::Error::other("header-value sentinel")),
+            },
+            multer::Error::IncompleteStream,
+            multer::Error::FieldSizeExceeded {
+                limit: 1,
+                field_name: Some("file".to_owned()),
+            },
+            multer::Error::StreamSizeExceeded { limit: 1 },
+            multer::Error::NoMultipart,
+            multer::Error::DecodeContentType(
+                "not a content type"
+                    .parse::<mime::Mime>()
+                    .expect_err("invalid MIME"),
+            ),
+            multer::Error::NoBoundary,
+        ];
+
+        for error in client_errors {
+            let mapped = map_multipart_error(error);
+            assert_eq!(mapped.kind(), ErrorKind::Validation);
+        }
+
+        let infrastructure_errors = [
+            multer::Error::StreamReadFailed(Box::new(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "stream-read sentinel",
+            ))),
+            multer::Error::LockFailure,
+        ];
+        for error in infrastructure_errors {
+            let expected = error.to_string();
+            let mapped = map_multipart_error(error);
+            assert_eq!(mapped.kind(), ErrorKind::Internal);
+            let source = typed_source::<multer::Error>(&mapped)
+                .expect("infrastructure multipart error remains typed");
+            assert_eq!(source.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn upload_mapping_takes_ownership_and_retains_typed_source() {
+        let mapped = map_media_error(anyhow::Error::new(UploadSource));
+
+        assert_eq!(mapped.kind(), ErrorKind::Internal);
+        assert!(
+            typed_source::<UploadSource>(&mapped).is_some(),
+            "owned upload source reaches InternalError"
+        );
+        assert!(
+            mapped
+                .operator_message()
+                .contains("upload ownership sentinel"),
+            "operator message renders the owned source"
         );
     }
 }

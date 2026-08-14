@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
@@ -124,21 +125,33 @@ pub fn run(out: &str) -> Result<()> {
         "--output",
         raw_crap.to_str().unwrap(),
     ]))?;
-    // Best-effort: a failed or absent CRAP report must NOT abort the emit — the
-    // producer always succeeds and the gate reads status.json. Default to an
-    // empty report so `crap-report.json` always exists for the install phase.
-    let crap_json = fs::read_to_string(&raw_crap)
-        .ok()
-        .and_then(|raw| normalize_crap_paths(&raw, &abs_root).ok())
-        .unwrap_or_else(|| {
-            // Breadcrumb so a genuinely-broken `cargo crap` is distinguishable
-            // from "no CRAP changes" (both yield an empty report downstream).
-            eprintln!("devtool: cargo crap produced no usable report; emitting empty CRAP report");
-            "{\n  \"entries\": []\n}\n".to_string()
-        });
+    let crap_json = crap_artifact_with(
+        || {
+            let raw = fs::read_to_string(&raw_crap)?;
+            normalize_crap_paths(&raw, &abs_root)
+        },
+        &mut std::io::stderr(),
+    );
     fs::write(out.join("crap-report.json"), crap_json)?;
 
     Ok(())
+}
+const EMPTY_CRAP_REPORT: &str = "{\n  \"entries\": []\n}\n";
+
+/// Resolve the optional CRAP artifact without changing the coverage producer's
+/// primary success result. A read or normalization failure emits one redacted
+/// warning and yields the same empty report expected by the install phase.
+fn crap_artifact_with(load: impl FnOnce() -> Result<String>, stderr: &mut impl Write) -> String {
+    match load() {
+        Ok(report) => report,
+        Err(_) => {
+            let _ = writeln!(
+                stderr,
+                "devtool: warning: devtool.coverage.crap_artifact: ignored failure while loading optional CRAP report"
+            );
+            EMPTY_CRAP_REPORT.to_owned()
+        }
+    }
 }
 
 /// Strip the absolute sandbox prefix from each CRAP entry's `.file` (ports the
@@ -215,5 +228,28 @@ FAIL [ 0.04s] jaunder::web web_posts::get_post_carries_tags::case_2_postgres
         let got = super::normalize_crap_paths(raw, "/build/source").unwrap();
         assert!(got.contains("\"server/src/a.rs\""));
         assert!(!got.contains("/build/source"));
+    }
+
+    #[test]
+    fn ancillary_warning_crap_artifact_failures_preserve_empty_report() {
+        for source in ["read", "normalize"] {
+            let mut stderr = Vec::new();
+            let report = crap_artifact_with(
+                || anyhow::bail!("sensitive injected {source} failure"),
+                &mut stderr,
+            );
+
+            assert_eq!(report, EMPTY_CRAP_REPORT);
+            let warning = String::from_utf8(stderr).unwrap();
+            assert_eq!(warning.matches("devtool.coverage.crap_artifact").count(), 1);
+            assert_eq!(warning.lines().count(), 1);
+            assert!(!warning.contains(source));
+            assert!(!warning.contains("sensitive"));
+        }
+
+        let mut stderr = Vec::new();
+        let report = crap_artifact_with(|| Ok("complete".to_owned()), &mut stderr);
+        assert_eq!(report, "complete");
+        assert!(stderr.is_empty());
     }
 }

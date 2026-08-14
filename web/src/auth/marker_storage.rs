@@ -11,26 +11,44 @@
 //! layer is entitled to make on the primitive's truthful `Result`.
 
 use super::marker::{MARKER_KEY, SessionUser, decode_marker, encode_marker};
+use common::client_telemetry::ClientErrorContext;
 
-/// Get + decode the marker. `None` when absent, malformed, **or** the store could
-/// not be read — an unreadable marker is treated as "no marker" (anonymous chrome),
-/// which the reconcile `Effect` corrects if the session says otherwise.
+fn report_storage_error(context: ClientErrorContext, error: client::storage::StorageError) {
+    let source_kind = error.source_kind();
+    client::telemetry::report_swallowed(
+        client::telemetry::error_kind(source_kind),
+        context,
+        source_kind,
+    );
+}
+
+/// Get + decode the marker. `None` when absent, malformed, or the store could
+/// not be read. Only the unexpected storage failure is reported; an absent or
+/// malformed advisory marker remains ordinary anonymous control flow.
 #[must_use]
 pub fn get() -> Option<SessionUser> {
-    client::storage::get(MARKER_KEY)
-        .ok()
-        .flatten()
-        .and_then(|raw| decode_marker(&raw))
+    match client::storage::get(MARKER_KEY) {
+        Ok(raw) => raw.and_then(|raw| decode_marker(&raw)),
+        Err(error) => {
+            report_storage_error(ClientErrorContext::SessionMarkerRead, error);
+            None
+        }
+    }
 }
 
 /// Write the marker for `user`. A failed write is non-fatal — the reconcile
-/// `Effect` re-writes it on the next load.
+/// `Effect` re-writes it on the next load — but is reported before continuing.
 pub fn set(user: &SessionUser) {
-    let _ = client::storage::set(MARKER_KEY, &encode_marker(user));
+    if let Err(error) = client::storage::set(MARKER_KEY, &encode_marker(user)) {
+        report_storage_error(ClientErrorContext::SessionMarkerWrite, error);
+    }
 }
 
-/// Remove the marker. A failed removal is non-fatal — the reconcile `Effect` clears
-/// a stale marker against a dead session on the next load.
+/// Remove the marker. A failed removal is non-fatal — the reconcile `Effect`
+/// clears a stale marker against a dead session on the next load — but is
+/// reported before continuing.
 pub fn remove() {
-    let _ = client::storage::remove(MARKER_KEY);
+    if let Err(error) = client::storage::remove(MARKER_KEY) {
+        report_storage_error(ClientErrorContext::SessionMarkerRemove, error);
+    }
 }

@@ -5,6 +5,8 @@ use axum::{
 use common::tag::TagLabel;
 use rstest::*;
 use rstest_reuse::*;
+use std::error::Error;
+use std::sync::Arc;
 use tower::ServiceExt;
 
 use crate::helpers::{
@@ -12,6 +14,28 @@ use crate::helpers::{
     setup_with_base_url,
 };
 use storage::test_support::{Backend, TestEnv, backends};
+
+fn with_site_config(
+    state: &Arc<storage::AppState>,
+    site_config: Arc<dyn storage::SiteConfigStorage>,
+) -> Arc<storage::AppState> {
+    Arc::new(storage::AppState {
+        site_config,
+        users: state.users.clone(),
+        sessions: state.sessions.clone(),
+        invites: state.invites.clone(),
+        atomic: state.atomic.clone(),
+        email_verifications: state.email_verifications.clone(),
+        password_resets: state.password_resets.clone(),
+        posts: state.posts.clone(),
+        subscriptions: state.subscriptions.clone(),
+        audiences: state.audiences.clone(),
+        media: state.media.clone(),
+        user_config: state.user_config.clone(),
+        feed_cache: state.feed_cache.clone(),
+        feed_events: state.feed_events.clone(),
+    })
+}
 
 #[apply(backends)]
 #[tokio::test]
@@ -162,4 +186,75 @@ async fn service_document_requires_authentication(#[case] backend: Backend) {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+// guard:no-backend — injected storage failure before HTTP projection
+#[tokio::test]
+async fn required_base_url_preserves_storage_error_source() {
+    let mut site_config = storage::MockSiteConfigStorage::new();
+    site_config
+        .expect_get_identity()
+        .times(1)
+        .return_once(|| Err(sqlx::Error::PoolClosed));
+
+    let error = jaunder::atompub::required_base_url(&site_config)
+        .await
+        .expect_err("storage failure is not an unconfigured base URL");
+
+    let source = error
+        .source()
+        .and_then(|source| source.downcast_ref::<sqlx::Error>())
+        .expect("typed sqlx source");
+    assert!(matches!(source, sqlx::Error::PoolClosed));
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn service_document_unconfigured_base_url_keeps_documented_500(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
+    let session = create_user_and_session(&state).await;
+    let response = make_app(&state, &base)
+        .oneshot(
+            atompub_at(&session, "GET", "/atompub/service")
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("request");
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        body_string(response).await.is_empty(),
+        "500 body stays masked"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn service_document_identity_storage_error_keeps_500_and_is_not_absence(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base } = backend.setup().await;
+    let session = create_user_and_session(&state).await;
+    let mut failing = storage::MockSiteConfigStorage::new();
+    failing
+        .expect_get_identity()
+        .times(1)
+        .return_once(|| Err(sqlx::Error::PoolClosed));
+    let state = with_site_config(&state, Arc::new(failing));
+
+    let response = make_app(&state, &base)
+        .oneshot(
+            atompub_at(&session, "GET", "/atompub/service")
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("request");
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        body_string(response).await.is_empty(),
+        "500 body stays masked"
+    );
 }

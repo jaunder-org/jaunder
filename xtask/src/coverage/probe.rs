@@ -17,6 +17,7 @@
 
 use std::fmt;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -79,18 +80,36 @@ pub fn probe_verdict(base: &str, junk: &str, rs: &str) -> Result<(), DriftError>
 /// The whole point of an RAII guard here is the panic path: a bare cleanup call at
 /// the end of `run_probe` would leak the worktree if any `?` bailed or a panic
 /// unwound through it.
-struct WorktreeGuard {
+type WorktreeRemover<'a> =
+    Box<dyn Fn(&Path, &Path) -> std::io::Result<std::process::ExitStatus> + 'a>;
+
+struct WorktreeGuard<'a> {
     repo_root: PathBuf,
     path: PathBuf,
+    remove: WorktreeRemover<'a>,
+    stderr: Box<dyn Write + 'a>,
 }
 
-impl Drop for WorktreeGuard {
+impl Drop for WorktreeGuard<'_> {
     fn drop(&mut self) {
-        let _ = git::at(&self.repo_root)
-            .args(["-c", "core.hooksPath="])
-            .args(["worktree", "remove", "--force"])
-            .arg(&self.path)
-            .status();
+        let status = (self.remove)(&self.repo_root, &self.path);
+        report_worktree_cleanup(status, &mut self.stderr);
+    }
+}
+
+fn report_worktree_cleanup(
+    status: std::io::Result<std::process::ExitStatus>,
+    stderr: &mut impl Write,
+) {
+    let failed = match status {
+        Ok(status) => !status.success(),
+        Err(_) => true,
+    };
+    if failed {
+        let _ = writeln!(
+            stderr,
+            "xtask: warning: xtask.coverage.probe_worktree_cleanup: ignored failure while removing probe worktree"
+        );
     }
 }
 
@@ -121,19 +140,56 @@ pub fn probe_source() -> StepResult {
 /// *committed* filter (what CI/PRs carry), not local uncommitted edits. Probe files
 /// are `git add`-ed, not left untracked — nix ignores untracked new files even on a
 /// dirty tree (see the module docs / spec).
+fn worktree_registered_with(tmp: &Path, query: impl FnOnce() -> Result<Vec<u8>>) -> Result<bool> {
+    let tmp = tmp.to_str().context("worktree path is not UTF-8")?;
+    let fields = query()?;
+    Ok(fields.split(|byte| *byte == 0).any(|field| {
+        std::str::from_utf8(field)
+            .ok()
+            .and_then(|field| field.strip_prefix("worktree "))
+            == Some(tmp)
+    }))
+}
+
+fn remove_registered_worktree_with(
+    registered: bool,
+    remove: impl FnOnce() -> std::io::Result<std::process::ExitStatus>,
+) -> Result<()> {
+    if !registered {
+        return Ok(());
+    }
+    let status = remove().context("removing registered stale coverage-probe worktree")?;
+    if !status.success() {
+        anyhow::bail!("removing registered stale coverage-probe worktree failed with {status}");
+    }
+    Ok(())
+}
+
 fn run_probe() -> Result<()> {
     let repo_root = std::env::current_dir().context("resolving cwd")?;
     let tmp = repo_root.join(".xtask/coverage-probe.worktree");
     fs::create_dir_all(repo_root.join(".xtask")).context("creating .xtask")?;
-    // Clear any leftover from a prior crash (ignore failure — usually nothing there).
-    // Silence output: a "not a working tree" fatal is the normal no-leftover case and
-    // would be misleading noise in the CI log.
-    let _ = git::at(&repo_root)
-        .args(["-c", "core.hooksPath=", "worktree", "remove", "--force"])
-        .arg(&tmp)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    let registered = worktree_registered_with(&tmp, || {
+        let output = git::at(&repo_root)
+            .args(["worktree", "list", "--porcelain", "-z"])
+            .output()
+            .context("querying registered Git worktrees")?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "querying registered Git worktrees failed with {}",
+                output.status
+            );
+        }
+        Ok(output.stdout)
+    })?;
+    remove_registered_worktree_with(registered, || {
+        git::at(&repo_root)
+            .args(["-c", "core.hooksPath=", "worktree", "remove", "--force"])
+            .arg(&tmp)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+    })?;
 
     let tmp_str = tmp.to_str().context("worktree path is not UTF-8")?;
     git_run(
@@ -143,6 +199,16 @@ fn run_probe() -> Result<()> {
     let _guard = WorktreeGuard {
         repo_root: repo_root.clone(),
         path: tmp.clone(),
+        remove: Box::new(|repo_root, path| {
+            git::at(repo_root)
+                .args(["-c", "core.hooksPath="])
+                .args(["worktree", "remove", "--force"])
+                .arg(path)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+        }),
+        stderr: Box::new(std::io::stderr()),
     };
 
     // Dirty an EXCLUDED tracked file so *every* eval runs against a dirty tree:
@@ -239,6 +305,56 @@ mod tests {
     }
 
     #[test]
+    fn stale_cleanup_uses_git_registration_not_directory_presence() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let tmp = Path::new("/repo/.xtask/coverage-probe.worktree");
+        let registered = worktree_registered_with(tmp, || {
+            Ok(b"worktree /repo/.xtask/coverage-probe.worktree\0HEAD abc\0".to_vec())
+        })
+        .unwrap();
+        assert!(
+            registered,
+            "a vanished directory can remain registered by Git"
+        );
+
+        let removed = std::cell::Cell::new(false);
+        remove_registered_worktree_with(registered, || {
+            removed.set(true);
+            Ok(std::process::ExitStatus::from_raw(0))
+        })
+        .unwrap();
+        assert!(removed.get());
+
+        let absent = worktree_registered_with(tmp, || {
+            Ok(b"worktree /repo/another-worktree\0HEAD def\0".to_vec())
+        })
+        .unwrap();
+        remove_registered_worktree_with(absent, || {
+            unreachable!("confirmed unregistered paths require no removal")
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn stale_worktree_registry_query_failure_is_typed() {
+        let error =
+            worktree_registered_with(Path::new("/repo/.xtask/coverage-probe.worktree"), || {
+                Err(anyhow::Error::new(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "injected registry failure",
+                )))
+            })
+            .unwrap_err();
+        assert_eq!(
+            error
+                .downcast_ref::<std::io::Error>()
+                .map(std::io::Error::kind),
+            Some(std::io::ErrorKind::PermissionDenied)
+        );
+    }
+
+    #[test]
     fn display_names_the_broken_invariant() {
         let j = DriftError::AdmitsJunk {
             base: "b".into(),
@@ -247,5 +363,35 @@ mod tests {
         assert!(j.to_string().contains("admits") && j.to_string().contains("junk"));
         let s = DriftError::DropsSource { base: "b".into() };
         assert!(s.to_string().contains("drops") && s.to_string().contains("source"));
+    }
+
+    #[test]
+    fn ancillary_warning_probe_worktree_cleanup_preserves_verdict() {
+        let verdict = probe_verdict("d-base", "d-base", "d-rs");
+        let mut stderr = Vec::new();
+        {
+            let guard = WorktreeGuard {
+                repo_root: PathBuf::from("/repo"),
+                path: PathBuf::from("/repo/worktree"),
+                remove: Box::new(|_, _| {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "sensitive injected path",
+                    ))
+                }),
+                stderr: Box::new(&mut stderr),
+            };
+            drop(guard);
+        }
+        assert_eq!(verdict, Ok(()));
+        let warning = String::from_utf8(stderr).unwrap();
+        assert_eq!(
+            warning
+                .matches("xtask.coverage.probe_worktree_cleanup")
+                .count(),
+            1
+        );
+        assert_eq!(warning.lines().count(), 1);
+        assert!(!warning.contains("sensitive"));
     }
 }

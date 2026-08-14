@@ -116,7 +116,7 @@ pub async fn collection_post(
             &MediaSource::Upload,
         )
         .await?
-        .ok_or(HandlerError::Internal)?;
+        .ok_or(HandlerError::Invariant)?;
 
     let base = required_base_url(site_config.as_ref()).await?;
     let entry = media_link_entry(&record, &base, &username);

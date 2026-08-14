@@ -1,3 +1,4 @@
+use std::env::VarError;
 use std::io;
 use std::sync::Arc;
 
@@ -5,6 +6,7 @@ use log::LevelFilter;
 use sqlx::ConnectOptions;
 use sqlx::PgPool;
 use sqlx::postgres::PgConnectOptions;
+use thiserror::Error;
 
 use super::{
     PostgresAtomicOps, PostgresAudienceStorage, PostgresEmailVerificationStorage,
@@ -36,12 +38,59 @@ fn make_postgres_app_state(pool: PgPool) -> Arc<crate::AppState> {
     })
 }
 
-fn postgres_password_from_env() -> io::Result<Option<String>> {
-    if let Ok(path) = std::env::var("JAUNDER_DB_PASSWORD_FILE") {
-        return std::fs::read_to_string(path).map(|s| Some(s.trim_end().to_owned()));
+#[derive(Debug, Error)]
+enum PostgresPasswordError {
+    #[error("JAUNDER_DB_PASSWORD_FILE is not valid Unicode")]
+    FileVariable(#[source] VarError),
+    #[error("JAUNDER_DB_PASSWORD is not valid Unicode")]
+    Variable(#[source] VarError),
+    #[error("configured PostgreSQL password file could not be read")]
+    FileRead(#[source] io::Error),
+}
+
+fn postgres_password_from_ops(
+    mut read_variable: impl FnMut(&str) -> Result<String, VarError>,
+    mut read_file: impl FnMut(&str) -> io::Result<String>,
+) -> Result<Option<String>, PostgresPasswordError> {
+    match read_variable("JAUNDER_DB_PASSWORD_FILE") {
+        Ok(path) => {
+            let password = read_file(&path).map_err(PostgresPasswordError::FileRead)?;
+            return Ok(Some(password.trim_end().to_owned()));
+        }
+        Err(VarError::NotPresent) => {}
+        Err(error @ VarError::NotUnicode(_)) => {
+            return Err(PostgresPasswordError::FileVariable(error));
+        }
     }
 
-    Ok(std::env::var("JAUNDER_DB_PASSWORD").ok())
+    match read_variable("JAUNDER_DB_PASSWORD") {
+        Ok(password) => Ok(Some(password)),
+        Err(VarError::NotPresent) => Ok(None),
+        Err(error @ VarError::NotUnicode(_)) => Err(PostgresPasswordError::Variable(error)),
+    }
+}
+
+fn read_password_variable(name: &str) -> Result<String, VarError> {
+    std::env::var(name)
+}
+
+fn read_password_file(path: &str) -> io::Result<String> {
+    std::fs::read_to_string(path)
+}
+
+fn postgres_password_from_env() -> Result<Option<String>, PostgresPasswordError> {
+    postgres_password_from_ops(read_password_variable, read_password_file)
+}
+
+fn apply_postgres_password(
+    options: &PgConnectOptions,
+    password: Result<Option<String>, PostgresPasswordError>,
+) -> sqlx::Result<PgConnectOptions> {
+    let mut options = options.clone();
+    if let Some(password) = password.map_err(|error| sqlx::Error::Configuration(Box::new(error)))? {
+        options = options.password(&password);
+    }
+    Ok(options)
 }
 
 /// Resolve final Postgres options, applying password overrides from env
@@ -49,15 +98,11 @@ fn postgres_password_from_env() -> io::Result<Option<String>> {
 ///
 /// # Errors
 ///
-/// Returns `sqlx::Error::Io` if the password file env var points at an
-/// unreadable file.
+/// Returns a configuration error retaining the typed environment or file source
+/// when a configured password input cannot be read.
 pub fn resolved_postgres_options(options: &PgConnectOptions) -> sqlx::Result<PgConnectOptions> {
-    let mut options = options.clone();
-    if let Some(password) = postgres_password_from_env().map_err(sqlx::Error::Io)? {
-        options = options.password(&password);
-    }
-    options = options.log_slow_statements(LevelFilter::Warn, crate::db::sql_slow_query_threshold());
-    Ok(options)
+    let options = apply_postgres_password(options, postgres_password_from_env())?;
+    Ok(options.log_slow_statements(LevelFilter::Warn, crate::db::sql_slow_query_threshold()))
 }
 
 #[tracing::instrument(name = "storage.postgres.open_database", skip(options))]
@@ -141,7 +186,6 @@ mod tests {
 
         // The point of the test: `&[Tag]` binds directly, with no `Vec<String>` strip.
         let wanted = vec![parse_tag("alpha"), parse_tag("gamma")];
-
         let found = sqlx::query_scalar::<_, Tag>(
             "SELECT tag_slug FROM tags WHERE tag_slug = ANY($1) ORDER BY tag_slug",
         )
@@ -151,6 +195,32 @@ mod tests {
         .expect("array bind");
 
         assert_eq!(found, wanted);
+    }
+
+    fn assert_configuration_source<T: std::error::Error + 'static>(
+        result: sqlx::Result<PgConnectOptions>,
+        forbidden: &str,
+    ) {
+        let error = result.expect_err("option resolution must fail");
+        assert!(
+            matches!(&error, sqlx::Error::Configuration(_)),
+            "credential input failures are configuration failures"
+        );
+        assert!(
+            !error.to_string().contains(forbidden),
+            "configuration context must not render credential bytes"
+        );
+
+        let mut source: &(dyn std::error::Error + 'static) = &error;
+        let mut found = false;
+        while let Some(next) = source.source() {
+            if next.downcast_ref::<T>().is_some() {
+                found = true;
+                break;
+            }
+            source = next;
+        }
+        assert!(found, "typed source must remain downcastable");
     }
 
     #[test]
@@ -206,18 +276,49 @@ mod tests {
     }
 
     #[test]
-    fn resolved_postgres_options_returns_io_error_when_password_file_unreadable() {
+    fn postgres_password_from_env_invalid_file_variable_fails_closed() {
+        let marker = "file-credential-byte-marker";
+        let password = postgres_password_from_ops(
+            |key| {
+                assert_eq!(key, "JAUNDER_DB_PASSWORD_FILE");
+                Err(VarError::NotUnicode(std::ffi::OsString::from(marker)))
+            },
+            |_| unreachable!("an invalid file variable cannot name a file"),
+        );
+        let base: PgConnectOptions = "postgres://user@localhost/db".parse().unwrap();
+
+        assert_configuration_source::<VarError>(apply_postgres_password(&base, password), marker);
+    }
+
+    #[test]
+    fn postgres_password_from_env_invalid_direct_variable_fails_closed() {
+        let marker = "direct-credential-byte-marker";
+        let password = postgres_password_from_ops(
+            |key| match key {
+                "JAUNDER_DB_PASSWORD_FILE" => Err(VarError::NotPresent),
+                "JAUNDER_DB_PASSWORD" => {
+                    Err(VarError::NotUnicode(std::ffi::OsString::from(marker)))
+                }
+                _ => unreachable!("only the two credential variables are read"),
+            },
+            |_| unreachable!("an absent file variable cannot cause a file read"),
+        );
+        let base: PgConnectOptions = "postgres://user@localhost/db".parse().unwrap();
+
+        assert_configuration_source::<VarError>(apply_postgres_password(&base, password), marker);
+    }
+
+    #[test]
+    fn resolved_postgres_options_retains_io_source_when_password_file_unreadable() {
         with_env(|env| {
             env.remove("JAUNDER_DB_PASSWORD");
-            env.set(
-                "JAUNDER_DB_PASSWORD_FILE",
-                "/nonexistent/path/to/db-password",
-            );
+            let missing_path = "/nonexistent/path/to/db-password";
+            env.set("JAUNDER_DB_PASSWORD_FILE", missing_path);
 
             let base: PgConnectOptions = "postgres://user@localhost/db".parse().unwrap();
             let result = resolved_postgres_options(&base);
 
-            assert!(matches!(result, Err(sqlx::Error::Io(_))));
+            assert_configuration_source::<io::Error>(result, missing_path);
         });
     }
 }

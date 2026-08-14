@@ -1,5 +1,5 @@
 import { test, expect } from "./fixtures";
-import { goto } from "./helpers";
+import { failServerFn, goto, signInAsNewUser } from "./helpers";
 import { allowSecondBoot } from "./bootBudget";
 import { SEL } from "./selectors";
 
@@ -169,6 +169,26 @@ test("default post format round-trips through the typed dispatch", async ({
     "markdown",
     "the second flip proves the persisted value is the selected one and not a constant, and it needs the same load for the same reason: nothing in the app navigates to /profile",
   );
+});
+
+// #58: the default-format request is authoritative. A transport failure must
+// not seed the direct-bound control with Markdown and thereby make Save capable
+// of overwriting the persisted preference with a value the server never returned.
+test("failed default post format load shows an error and gates Save", async ({
+  page,
+}) => {
+  await signInAsNewUser(page);
+  await failServerFn(page, "profile/get_default_post_format");
+  await goto(page, "/profile");
+
+  const control = page.locator(".j-card", {
+    hasText: "Default Post Format",
+  });
+  await expect(control.locator("p.error")).toHaveText(
+    "Could not load the default post format.",
+  );
+  await expect(control.locator(FORMAT_SELECT)).toHaveCount(0);
+  await expect(control.locator(FORMAT_SAVE)).toBeDisabled();
 });
 
 // #545: clearing the box removes the bio end-to-end. Under the typed Option<Bio>

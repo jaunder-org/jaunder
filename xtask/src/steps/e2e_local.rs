@@ -20,6 +20,8 @@
 //! capture paths (via `test-support capture-path`) the server writes, and
 //! `seed.ts`'s bare-`test-support` `seedPostsViaTool` resolves the same binary +
 //! DB — VM parity for the mail/websub/pagination specs.
+use std::env;
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -27,6 +29,7 @@ use std::process::{Child, Command, Stdio};
 use std::thread::{JoinHandle, sleep};
 use std::time::Duration;
 
+use anyhow::Context as _;
 use xshell::{Shell, cmd};
 
 use crate::git;
@@ -113,11 +116,24 @@ impl ServerChild {
             anyhow::bail!(failures.join("; "))
         }
     }
+
+    fn stop_for_drop_with(
+        &mut self,
+        stop: impl FnOnce(&mut Self) -> anyhow::Result<()>,
+        stderr: &mut impl Write,
+    ) {
+        if stop(self).is_err() {
+            let _ = writeln!(
+                stderr,
+                "xtask: warning: xtask.e2e.server_cleanup: ignored failure while stopping e2e-local server during drop"
+            );
+        }
+    }
 }
 
 impl Drop for ServerChild {
     fn drop(&mut self) {
-        let _ = self.stop();
+        self.stop_for_drop_with(|server| server.stop(), &mut std::io::stderr());
     }
 }
 
@@ -184,6 +200,51 @@ fn normal_invocations(test_filter: Option<&str>) -> Vec<PlaywrightInvocation> {
                 ]),
             },
         ],
+    }
+}
+
+fn resolve_e2e_env(
+    root: &Path,
+    workers: Result<String, env::VarError>,
+    path: Option<OsString>,
+    stderr: &mut impl Write,
+) -> anyhow::Result<(String, OsString)> {
+    let workers = match workers {
+        Ok(value) => value,
+        Err(env::VarError::NotPresent) => "1".to_owned(),
+        Err(env::VarError::NotUnicode(_)) => {
+            let _ = writeln!(
+                stderr,
+                "xtask: warning: xtask.e2e.workers_config: ignored invalid-Unicode JAUNDER_E2E_WORKERS; using 1"
+            );
+            "1".to_owned()
+        }
+    };
+    let inherited = path
+        .ok_or(env::VarError::NotPresent)
+        .map_err(|error| anyhow::Error::new(error).context("reading PATH for e2e-local"))?;
+    let mut paths = Vec::new();
+    paths.push(root.join("target/debug"));
+    paths.extend(env::split_paths(&inherited));
+    let path = env::join_paths(paths).context("prepending target/debug to e2e-local PATH")?;
+    Ok((workers, path))
+}
+
+fn resolve_e2e_env_for_run(
+    result: &mut CommandResult,
+    root: &Path,
+    workers: Result<String, env::VarError>,
+    path: Option<OsString>,
+    stderr: &mut impl Write,
+) -> Option<(String, OsString)> {
+    match resolve_e2e_env(root, workers, path, stderr) {
+        Ok(values) => Some(values),
+        Err(error) => {
+            result.push(StepResult::fail("e2e-local-env").detail(format!(
+                "cannot configure Playwright environment: {error:#}"
+            )));
+            None
+        }
     }
 }
 
@@ -301,6 +362,8 @@ fn run_lifecycle(
     result: &mut CommandResult,
     root: &Path,
     lifecycle: &BrowserLifecycle,
+    workers: &str,
+    path: &OsString,
 ) {
     let browser = lifecycle.browser;
     let tmpdir_step = step_name(browser, "tmpdir");
@@ -406,12 +469,8 @@ fn run_lifecycle(
     }
     result.push(StepResult::ok(&seed_step));
 
-    let workers = std::env::var("JAUNDER_E2E_WORKERS").unwrap_or_else(|_| "1".to_owned());
-    let path = format!(
-        "{}/target/debug:{}",
-        root.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    // Playwright uses the environment resolved before any subprocess. The DB,
+    // capture directory, and target/debug-prefixed PATH match the VM contract.
     sh.change_dir(root.join("end2end"));
     let mut playwright_result = Ok(());
     for invocation in &lifecycle.invocations {
@@ -420,9 +479,9 @@ fn run_lifecycle(
             .env("JAUNDER_E2E_BASE_URL", &base_url)
             .env("JAUNDER_DB", &db)
             .env("JAUNDER_CAPTURE_DIR", &capture)
-            .env("JAUNDER_E2E_WORKERS", &workers)
+            .env("JAUNDER_E2E_WORKERS", workers)
             .env("PLAYWRIGHT_HTML_OPEN", "never")
-            .env("PATH", &path)
+            .env("PATH", path)
             .run()
             .is_err()
         {
@@ -451,6 +510,20 @@ pub fn run(
     test_filter: Option<&str>,
     update_visual_snapshots: bool,
 ) {
+    // Resolve the whole Playwright environment before any subprocess. Missing
+    // PATH is a configuration failure, not a late empty command search.
+    let env_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask manifest directory has a workspace parent");
+    let Some((workers, path)) = resolve_e2e_env_for_run(
+        result,
+        env_root,
+        env::var("JAUNDER_E2E_WORKERS"),
+        env::var_os("PATH"),
+        &mut std::io::stderr(),
+    ) else {
+        return;
+    };
     let plan = e2e_local_plan(test_filter, update_visual_snapshots);
     super::build_csr::run(sh, result, plan.release_csr);
     if !result.ok {
@@ -473,13 +546,14 @@ pub fn run(
     }
 
     for lifecycle in &plan.lifecycles {
-        run_lifecycle(sh, result, Path::new(&root), lifecycle);
+        run_lifecycle(sh, result, Path::new(&root), lifecycle, &workers, &path);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use std::process::Command;
 
     #[test]
@@ -659,6 +733,128 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn e2e_env_invalid_unicode_workers_warns_once_and_keeps_default() {
+        let mut stderr = Vec::new();
+        let mut result = CommandResult::new("e2e-local");
+        let before = serde_json::to_string(&result).unwrap();
+        let (workers, path) = resolve_e2e_env_for_run(
+            &mut result,
+            Path::new("/repo"),
+            Err(env::VarError::NotUnicode(OsString::from("sensitive"))),
+            Some(OsString::from("/usr/bin")),
+            &mut stderr,
+        )
+        .unwrap();
+        assert_eq!(serde_json::to_string(&result).unwrap(), before);
+        assert_eq!(workers, "1");
+        assert_eq!(
+            env::split_paths(&path).collect::<Vec<_>>(),
+            vec![
+                PathBuf::from("/repo/target/debug"),
+                PathBuf::from("/usr/bin")
+            ]
+        );
+        let warning = String::from_utf8(stderr).unwrap();
+        assert_eq!(warning.matches("xtask.e2e.workers_config").count(), 1);
+        assert!(!warning.contains("sensitive"));
+    }
+    #[test]
+    fn e2e_env_prefix_is_workspace_root_even_for_subdirectory_invocation() {
+        let subdirectory_cwd = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        assert_ne!(subdirectory_cwd, workspace_root);
+        let mut result = CommandResult::new("e2e-local");
+        let (_, path) = resolve_e2e_env_for_run(
+            &mut result,
+            workspace_root,
+            Err(env::VarError::NotPresent),
+            Some(OsString::from("/usr/bin")),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            env::split_paths(&path).next().unwrap(),
+            workspace_root.join("target/debug")
+        );
+        assert!(result.ok);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn e2e_env_non_unicode_path_is_preserved_and_absence_is_typed() {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+        let inherited = OsString::from_vec(vec![b'/', b'x', 0xff]);
+        let mut stderr = Vec::new();
+        let mut result = CommandResult::new("e2e-local");
+        let (_, path) = resolve_e2e_env_for_run(
+            &mut result,
+            Path::new("/repo"),
+            Err(env::VarError::NotPresent),
+            Some(inherited.clone()),
+            &mut stderr,
+        )
+        .unwrap();
+        let paths = env::split_paths(&path).collect::<Vec<_>>();
+        assert_eq!(
+            paths[1].as_os_str().as_bytes(),
+            inherited.as_os_str().as_bytes()
+        );
+        assert!(stderr.is_empty());
+
+        let mut owner = CommandResult::new("e2e-local");
+        assert!(
+            resolve_e2e_env_for_run(
+                &mut owner,
+                Path::new("/repo"),
+                Err(env::VarError::NotPresent),
+                None,
+                &mut Vec::new(),
+            )
+            .is_none()
+        );
+        assert!(!owner.ok);
+        let owner_json = serde_json::to_string(&owner).unwrap();
+        assert!(
+            owner_json.contains("reading PATH for e2e-local"),
+            "{owner_json}"
+        );
+
+        let error = resolve_e2e_env(
+            Path::new("/repo"),
+            Err(env::VarError::NotPresent),
+            None,
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<env::VarError>(),
+            Some(env::VarError::NotPresent)
+        ));
+    }
+
+    #[test]
+    fn ancillary_warning_server_drop_failure_preserves_primary_result() {
+        let child = Command::new("sleep")
+            .arg("60")
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn sleep");
+        let capture = tempfile::tempfile().expect("capture file");
+        let mut guard = ServerChild::new(child, capture).expect("server guard");
+        let primary = CommandResult::new("e2e-local");
+        let before = serde_json::to_string(&primary).unwrap();
+        let mut stderr = Vec::new();
+        guard.stop_for_drop_with(|_| anyhow::bail!("sensitive stop failure"), &mut stderr);
+        assert_eq!(serde_json::to_string(&primary).unwrap(), before);
+        let warning = String::from_utf8(stderr).unwrap();
+        assert_eq!(warning.matches("xtask.e2e.server_cleanup").count(), 1);
+        assert_eq!(warning.lines().count(), 1);
+        assert!(!warning.contains("sensitive"));
+        drop(guard);
     }
 
     #[test]

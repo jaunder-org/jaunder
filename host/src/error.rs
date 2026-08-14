@@ -9,6 +9,11 @@
 //! unconditional — no `#[cfg(feature = "server")]` gating.
 
 use std::error::Error;
+use std::sync::LazyLock;
+
+use common::client_telemetry::ClientSourceKind;
+use opentelemetry::metrics::Counter;
+use opentelemetry::{KeyValue, global};
 
 pub type InternalResult<T> = Result<T, InternalError>;
 
@@ -84,6 +89,158 @@ impl ErrorClass {
     }
 }
 
+/// Whether an error escaped through a public boundary or was intentionally
+/// continued after reporting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorDisposition {
+    /// The primary operation returned the failure.
+    Boundary,
+    /// The primary outcome was preserved after the failure was reported.
+    Swallowed,
+}
+
+impl ErrorDisposition {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Boundary => "boundary",
+            Self::Swallowed => "swallowed",
+        }
+    }
+}
+
+/// The bounded runtime in which the error event originated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TelemetryOrigin {
+    /// Native server or command execution.
+    Server,
+    /// Authenticated browser-side intake.
+    Client,
+}
+
+impl TelemetryOrigin {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Server => "server",
+            Self::Client => "client",
+        }
+    }
+}
+
+/// The reviewed source attached to a continued-after-error event.
+///
+/// `Error` is reserved for source chains whose rendering is known to be
+/// PII-safe. `Redacted` records that a source existed without accepting
+/// arbitrary caller text.
+#[derive(Clone, Copy)]
+pub enum SwallowedSource<'a> {
+    /// A reviewed, PII-safe typed source chain.
+    Error(&'a (dyn Error + 'static)),
+    /// A source whose text must not be exported.
+    Redacted,
+}
+static ERROR_COUNTER: LazyLock<Counter<u64>> = LazyLock::new(|| {
+    global::meter("jaunder")
+        .u64_counter("jaunder.errors")
+        .build()
+});
+
+fn record_error(
+    kind: ErrorKind,
+    class: ErrorClass,
+    disposition: ErrorDisposition,
+    origin: TelemetryOrigin,
+) {
+    ERROR_COUNTER.add(
+        1,
+        &[
+            KeyValue::new("error.kind", kind.as_metric_str()),
+            KeyValue::new("error.class", class.as_metric_str()),
+            KeyValue::new("error.disposition", disposition.as_str()),
+            KeyValue::new("telemetry.origin", origin.as_str()),
+        ],
+    );
+}
+
+fn render_source(source: &(dyn Error + 'static)) -> String {
+    let mut rendered = source.to_string();
+    let mut next = source.source();
+    while let Some(cause) = next {
+        rendered.push_str(": ");
+        rendered.push_str(&cause.to_string());
+        next = cause.source();
+    }
+    rendered
+}
+
+/// Atomically reports an unexpected native failure whose caller intentionally
+/// preserves its primary outcome.
+pub fn report_swallowed(
+    kind: ErrorKind,
+    class: ErrorClass,
+    context: &'static str,
+    source: SwallowedSource<'_>,
+) {
+    let source = match source {
+        SwallowedSource::Error(source) => render_source(source),
+        SwallowedSource::Redacted => "redacted".to_owned(),
+    };
+    tracing::warn!(
+        error.kind = kind.as_metric_str(), // cov:ignore
+        error.class = class.as_metric_str(), // cov:ignore
+        error.disposition = "swallowed",
+        telemetry.origin = "server",
+        error.context = context,
+        error.source = %source,
+        "error swallowed after reporting",
+    );
+    record_error(
+        kind,
+        class,
+        ErrorDisposition::Swallowed,
+        TelemetryOrigin::Server,
+    );
+}
+fn client_source_kind_as_str(source_kind: ClientSourceKind) -> &'static str {
+    match source_kind {
+        ClientSourceKind::StorageUnavailable => "storage_unavailable",
+        ClientSourceKind::StorageOperation => "storage_operation",
+        ClientSourceKind::InvalidSeed => "invalid_seed",
+        ClientSourceKind::DialogUnavailable => "dialog_unavailable",
+        ClientSourceKind::FormDataCreate => "form_data_create",
+        ClientSourceKind::FormDataAppend => "form_data_append",
+    }
+}
+
+/// Atomically reports one accepted, bounded browser-side swallowed failure.
+///
+/// Unlike [`report_swallowed`], this interface cannot accept arbitrary source
+/// text: the wire's closed source kind is mapped to a fixed tracing field here.
+pub fn report_client_swallowed(
+    kind: ErrorKind,
+    class: ErrorClass,
+    context: &'static str,
+    source_kind: ClientSourceKind,
+) {
+    let source_kind = client_source_kind_as_str(source_kind);
+    let kind_name = kind.as_metric_str();
+    let class_name = class.as_metric_str();
+    tracing::warn!(
+        error.kind = kind_name,
+        error.class = class_name,
+        error.disposition = "swallowed",
+        telemetry.origin = "client",
+        error.context = context,
+        error.source_kind = source_kind,
+        "client error swallowed after reporting",
+    );
+    record_error(
+        kind,
+        class,
+        ErrorDisposition::Swallowed,
+        TelemetryOrigin::Client,
+    );
+}
+
 /// Server-side error carrier: the exact wire `public_message` plus structured,
 /// queryable operator data (`kind`, `class`, `context`) and the preserved
 /// `source` cause chain (carried via `anyhow`, never stringified eagerly). The
@@ -97,6 +254,22 @@ pub struct InternalError {
     context: Vec<(&'static str, String)>,
     public_message: String,
     source: Option<anyhow::Error>,
+}
+
+impl std::fmt::Display for InternalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Display is safe for a public boundary: operator sources are available
+        // only through `Error::source`, never rendered here.
+        f.write_str(&self.public_message)
+    }
+}
+
+impl Error for InternalError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.source
+            .as_ref()
+            .map(|source| source.as_ref() as &(dyn Error + 'static))
+    }
 }
 
 /// A transparent [`Error`] wrapper around a `Box<dyn Error + Send + Sync>` so an
@@ -295,9 +468,9 @@ impl InternalError {
     /// Emits the structured boundary observability for a failed server function:
     /// discrete, queryable tracing fields (not one concatenated string) at the
     /// level derived from the error class, and the `jaunder.errors` metric with
-    /// the bounded `error.kind`/`error.class` attributes. `context` is emitted as
-    /// a single serialized field; promoting each k/v to a span field is deferred
-    /// to §4.6 (kq8w.22). Called by `web`'s `server_boundary`; the outward wire
+    /// bounded kind, class, disposition, and origin attributes. `context` is
+    /// emitted as a single serialized field; promoting each k/v to a span field
+    /// is deferred to §4.6 (kq8w.22). Called by `web`'s `server_boundary`; the outward wire
     /// projection stays in `web`.
     ///
     /// **Which server fn failed is not a field here.** The event is emitted inside
@@ -336,7 +509,12 @@ impl InternalError {
             tracing::Level::WARN => emit!(warn),
             _ => emit!(error),
         }
-        crate::metrics::error(self.kind.as_metric_str(), self.class.as_metric_str());
+        record_error(
+            self.kind,
+            self.class,
+            ErrorDisposition::Boundary,
+            TelemetryOrigin::Server,
+        );
     }
 }
 
@@ -403,7 +581,10 @@ validation_from!(
 
 #[cfg(test)]
 mod tests {
-    use super::{ErrorClass, ErrorKind, InternalError};
+    use super::{
+        ErrorClass, ErrorDisposition, ErrorKind, InternalError, SwallowedSource, TelemetryOrigin,
+        report_swallowed,
+    };
     use std::error::Error;
     use std::fmt;
 
@@ -416,6 +597,31 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct SharedWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for SharedWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("capture lock")
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        // cov:ignore-start
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        } // cov:ignore-stop
+    }
+
+    impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for SharedWriter {
+        type Writer = Self;
+
+        fn make_writer(&'writer self) -> Self::Writer {
+            self.clone()
+        }
+    }
     impl Error for SourceError {}
 
     #[derive(Debug)]
@@ -605,8 +811,29 @@ mod tests {
         assert_eq!(ErrorKind::External.as_metric_str(), "external");
         assert_eq!(ErrorClass::Client.as_metric_str(), "client");
         assert_eq!(ErrorClass::Transient.as_metric_str(), "transient");
+
+        assert_eq!(ErrorDisposition::Boundary.as_str(), "boundary");
+        assert_eq!(ErrorDisposition::Swallowed.as_str(), "swallowed");
+        assert_eq!(TelemetryOrigin::Server.as_str(), "server");
+        assert_eq!(TelemetryOrigin::Client.as_str(), "client");
         assert_eq!(ErrorClass::Bug.as_metric_str(), "bug");
         assert_eq!(ErrorClass::External.as_metric_str(), "external");
+    }
+    #[test]
+    fn client_source_kinds_map_to_fixed_bounded_strings() {
+        use common::client_telemetry::ClientSourceKind;
+
+        let cases = [
+            (ClientSourceKind::StorageUnavailable, "storage_unavailable"),
+            (ClientSourceKind::StorageOperation, "storage_operation"),
+            (ClientSourceKind::InvalidSeed, "invalid_seed"),
+            (ClientSourceKind::DialogUnavailable, "dialog_unavailable"),
+            (ClientSourceKind::FormDataCreate, "form_data_create"),
+            (ClientSourceKind::FormDataAppend, "form_data_append"),
+        ];
+        for (source_kind, expected) in cases {
+            assert_eq!(super::client_source_kind_as_str(source_kind), expected);
+        }
     }
 
     #[test]
@@ -633,6 +860,104 @@ mod tests {
             source: SourceError,
         })
         .emit_boundary_failure();
+    }
+    #[tokio::test]
+    async fn report_swallowed_emits_one_warn_and_one_metric() {
+        use opentelemetry::global;
+        use opentelemetry_sdk::metrics::{
+            InMemoryMetricExporter, PeriodicReader, SdkMeterProvider,
+            data::{AggregatedMetrics, MetricData},
+        };
+
+        let exporter = InMemoryMetricExporter::default();
+        let reader = PeriodicReader::builder(exporter.clone()).build();
+        let provider = SdkMeterProvider::builder().with_reader(reader).build();
+        global::set_meter_provider(provider.clone());
+
+        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(SharedWriter(output.clone()))
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            let source = OuterError {
+                source: SourceError,
+            };
+            report_swallowed(
+                ErrorKind::Storage,
+                ErrorClass::Transient,
+                "server.test.cleanup",
+                SwallowedSource::Error(&source),
+            );
+        });
+        provider.force_flush().expect("flush");
+
+        let text =
+            String::from_utf8(output.lock().expect("capture lock").clone()).expect("utf8 output");
+        let warn_events: Vec<_> = text
+            .lines()
+            .filter(|line| line.contains(r#""level":"WARN""#))
+            .collect();
+        assert_eq!(warn_events.len(), 1, "exactly one WARN event: {text}");
+        let event = warn_events[0];
+        assert!(event.contains(r#""error.kind":"storage""#));
+        assert!(event.contains(r#""error.class":"transient""#));
+        assert!(event.contains(r#""error.disposition":"swallowed""#));
+        assert!(event.contains(r#""telemetry.origin":"server""#));
+        assert!(event.contains(r#""error.context":"server.test.cleanup""#));
+        assert!(event.contains(r#""error.source":"outer failure: source context""#));
+
+        let metrics = exporter.get_finished_metrics().expect("metrics");
+        let points: Vec<_> = metrics
+            .iter()
+            .flat_map(opentelemetry_sdk::metrics::data::ResourceMetrics::scope_metrics)
+            .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+            .filter(|metric| metric.name() == "jaunder.errors")
+            .filter_map(|metric| match metric.data() {
+                AggregatedMetrics::U64(MetricData::Sum(sum)) => Some(sum),
+                _ => None, // cov:ignore
+            })
+            .flat_map(opentelemetry_sdk::metrics::data::Sum::data_points)
+            .collect();
+        assert_eq!(points.len(), 1);
+        let attrs: std::collections::BTreeSet<_> = points[0]
+            .attributes()
+            .map(|kv| (kv.key.as_str().to_owned(), kv.value.to_string()))
+            .collect();
+        assert_eq!(
+            attrs,
+            [
+                ("error.kind".to_owned(), "storage".to_owned()),
+                ("error.class".to_owned(), "transient".to_owned()),
+                ("error.disposition".to_owned(), "swallowed".to_owned()),
+                ("telemetry.origin".to_owned(), "server".to_owned()),
+            ]
+            .into_iter()
+            .collect()
+        );
+    }
+
+    #[test]
+    fn report_swallowed_redacted_source_needs_no_arbitrary_text() {
+        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_ansi(false)
+            .with_writer(SharedWriter(output.clone()))
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            report_swallowed(
+                ErrorKind::Internal,
+                ErrorClass::Bug,
+                "server.test.redacted",
+                SwallowedSource::Redacted,
+            );
+        });
+        let text =
+            String::from_utf8(output.lock().expect("capture lock").clone()).expect("utf8 output");
+        assert!(text.contains(r#""error.source":"redacted""#));
     }
 
     #[test]

@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
  * inherits `JAUNDER_CAPTURE_DIR` in both host and VM runs. Exits non-zero (throwing
  * here) if `JAUNDER_CAPTURE_DIR` is unset, so a misconfigured run fails loudly.
  */
-export function capturePathViaTool(stream: "mail" | "websub"): string {
+export function capturePathViaTool(stream: "mail" | "websub" | "diag"): string {
   return execFileSync("test-support", ["capture-path", stream], {
     stdio: "pipe",
     env: process.env,

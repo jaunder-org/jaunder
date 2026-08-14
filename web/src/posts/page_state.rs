@@ -1,5 +1,5 @@
-//! Host-compiled, host-tested decision logic for the posts vertical's listing pages
-//! (#306, ADR-0083).
+//! Host-compiled, host-tested decision logic for the posts vertical's pages
+//! (#306/#58, ADR-0083).
 //!
 //! The tag and user-timeline pages each carried the same shaped setup in their
 //! wasm-only component bodies: decide whether a projector seed applies to the route
@@ -19,6 +19,11 @@
 //! only `Effect::new` and `spawn_local` permanent wasm-only status — so it is
 //! exercised under a reactive `Owner` exactly as [`crate::media::UploadCallbacks`]'s
 //! twin is.
+//!
+//! The named-audience picker's load and submit decision is another pure fold:
+//! [`NamedAudienceState`] keeps unresolved, genuinely loaded-empty, populated,
+//! and failed results distinct so only a real successful load can authorize a
+//! create or update.
 
 use std::future::Future;
 
@@ -29,9 +34,50 @@ use common::root_relative_url::RootRelativeUrl;
 use common::seed::{PageSeed, TimelinePage};
 use common::tag::Tag;
 use common::username::Username;
+use common::visibility::AudienceSelection;
 
+use crate::audiences;
 use crate::error::{WebError, WebResult};
 use crate::posts::SavedPost;
+
+/// Resolution state for the named audiences offered by the post editor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NamedAudienceState {
+    /// The audience request has not settled.
+    Loading,
+    /// The server returned the author's audiences, including a genuine empty list.
+    Ready(Vec<audiences::Summary>),
+    /// The audience request failed.
+    Failed,
+}
+
+impl NamedAudienceState {
+    /// Fold the audience resource's unresolved/resolved shape into page state.
+    #[must_use]
+    pub fn resolve(result: Option<Result<Vec<audiences::Summary>, WebError>>) -> Self {
+        match result {
+            None => Self::Loading,
+            Some(Ok(audiences)) => Self::Ready(audiences),
+            Some(Err(_)) => Self::Failed,
+        }
+    }
+
+    /// Borrow the current selection only after a successful audience load.
+    ///
+    /// A loaded-empty list is still successful: the base selection remains a
+    /// real author choice. Loading and failure return no payload, so callers
+    /// cannot dispatch either as an invented empty named selection.
+    #[must_use]
+    pub const fn selection_for_submit<'a>(
+        &self,
+        selection: &'a AudienceSelection,
+    ) -> Option<&'a AudienceSelection> {
+        match self {
+            Self::Loading | Self::Failed => None,
+            Self::Ready(_) => Some(selection),
+        }
+    }
+}
 
 /// Which listing page is rendering, carrying the route segments it has **already**
 /// parsed (`None` = the segment was absent or would not parse).
@@ -566,5 +612,57 @@ mod tests {
             notify_with_fallback(unsupplied, None);
             assert!(never.get(), "the sink was writable all along");
         });
+    }
+
+    #[test]
+    fn audience_picker_loading_and_failed_states_cannot_submit() {
+        let selection = AudienceSelection {
+            base: common::visibility::AudienceBase::Subscribers,
+            named: vec![common::ids::AudienceId::from(7)],
+        };
+        let loading = NamedAudienceState::resolve(None);
+        let failed = NamedAudienceState::resolve(Some(Err(WebError::server_message("boom"))));
+
+        assert_eq!(loading, NamedAudienceState::Loading);
+        assert_eq!(failed, NamedAudienceState::Failed);
+        assert_eq!(loading.selection_for_submit(&selection), None);
+        assert_eq!(failed.selection_for_submit(&selection), None);
+    }
+
+    #[test]
+    fn audience_picker_ready_empty_is_a_real_loaded_state() {
+        let selection = AudienceSelection {
+            base: common::visibility::AudienceBase::Subscribers,
+            named: Vec::new(),
+        };
+        let state = NamedAudienceState::resolve(Some(Ok(Vec::new())));
+
+        assert_eq!(state, NamedAudienceState::Ready(Vec::new()));
+        assert_eq!(
+            state.selection_for_submit(&selection),
+            Some(&selection),
+            "loaded-empty still authorizes the real base selection"
+        );
+    }
+
+    #[test]
+    fn audience_picker_ready_nonempty_preserves_named_selection() {
+        let audience_id = common::ids::AudienceId::from(7);
+        let audiences = vec![audiences::Summary {
+            audience_id,
+            name: "Confidants".parse().unwrap(),
+        }];
+        let selection = AudienceSelection {
+            base: common::visibility::AudienceBase::Subscribers,
+            named: vec![audience_id],
+        };
+        let state = NamedAudienceState::resolve(Some(Ok(audiences.clone())));
+
+        assert_eq!(state, NamedAudienceState::Ready(audiences));
+        assert_eq!(
+            state.selection_for_submit(&selection),
+            Some(&selection),
+            "a successful load must not discard the named choice"
+        );
     }
 }

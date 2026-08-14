@@ -103,27 +103,42 @@ pub(crate) enum StartupCheck {
 /// map the outcome.
 pub(crate) fn check_startup_mutex(path: &Path) -> std::io::Result<StartupCheck> {
     let contents = match std::fs::read_to_string(path) {
-        Ok(c) => c,
-        // No file: the common fresh-start case.
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(StartupCheck::Proceed),
-        // Exists but unreadable (e.g. it's a directory): our own file is unusable, so
-        // warn + overwrite (Stale) — not a hard fail, since it isn't the /proc mechanism.
-        Err(e) => {
-            tracing::warn!(path = %path.display(), error = %e, "unreadable runtime file");
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(StartupCheck::Proceed);
+        }
+        Err(error) => {
+            host::error::report_swallowed(
+                host::error::ErrorKind::Internal,
+                host::error::ErrorClass::Transient,
+                "server.runtime_file.read",
+                host::error::SwallowedSource::Error(&error),
+            );
             return Ok(StartupCheck::Stale);
         }
     };
-    let (Some(pid), Some(recorded)) = serde_json::from_str::<serde_json::Value>(&contents)
-        .ok()
-        .map_or((None, None), |v| {
-            (
-                v["pid"].as_u64().and_then(|p| u32::try_from(p).ok()),
-                v["start_time"].as_u64(),
-            )
-        })
-    else {
-        tracing::warn!(path = %path.display(), "stale runtime file (unusable); overwriting");
-        return Ok(StartupCheck::Stale);
+    let decoded = serde_json::from_str::<serde_json::Value>(&contents);
+    let (pid, recorded) = match decoded {
+        Ok(value) => {
+            let pid = value["pid"]
+                .as_u64()
+                .and_then(|pid| u32::try_from(pid).ok());
+            let recorded = value["start_time"].as_u64();
+            if let (Some(pid), Some(recorded)) = (pid, recorded) {
+                (pid, recorded)
+            } else {
+                let error = std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "runtime file has invalid identity fields",
+                );
+                report_runtime_decode(&error);
+                return Ok(StartupCheck::Stale);
+            }
+        }
+        Err(error) => {
+            report_runtime_decode(&error);
+            return Ok(StartupCheck::Stale);
+        }
     };
     Ok(if holder_is_live(pid, recorded)? {
         StartupCheck::Refuse { pid }
@@ -133,12 +148,38 @@ pub(crate) fn check_startup_mutex(path: &Path) -> std::io::Result<StartupCheck> 
     })
 }
 
+fn report_runtime_decode(error: &(dyn std::error::Error + 'static)) {
+    host::error::report_swallowed(
+        host::error::ErrorKind::Internal,
+        host::error::ErrorClass::Bug,
+        "server.runtime_file.decode",
+        host::error::SwallowedSource::Error(error),
+    );
+}
+
+fn remove_file(path: &Path) -> std::io::Result<()> {
+    std::fs::remove_file(path)
+}
+
 /// Best-effort removal of the runtime file at `path`, ignoring errors (it may
 /// already be gone). Shared by `RuntimeFileGuard::drop` and the forced-shutdown
 /// path in `cmd_serve`, which must remove explicitly because `process::exit`
 /// skips `Drop`.
 pub(crate) fn remove_runtime_file(path: &Path) {
-    let _ = std::fs::remove_file(path);
+    remove_runtime_file_with(path, remove_file);
+}
+
+fn remove_runtime_file_with(path: &Path, remove: fn(&Path) -> std::io::Result<()>) {
+    match remove(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => host::error::report_swallowed(
+            host::error::ErrorKind::Internal,
+            host::error::ErrorClass::Transient,
+            "server.runtime_file.remove",
+            host::error::SwallowedSource::Error(&error),
+        ),
+    }
 }
 
 /// RAII guard: writes the runtime file on construction, removes it on `Drop`.
@@ -161,8 +202,13 @@ impl RuntimeFileGuard {
     pub fn write(path: PathBuf, addr: SocketAddr, start_time: u64) -> Self {
         match write_atomic(&path, addr, start_time) {
             Ok(()) => Self { path: Some(path) },
-            Err(e) => {
-                tracing::warn!(path = %path.display(), error = %e, "failed to write runtime file");
+            Err(error) => {
+                host::error::report_swallowed(
+                    host::error::ErrorKind::Internal,
+                    host::error::ErrorClass::Transient,
+                    "server.runtime_file.write",
+                    host::error::SwallowedSource::Error(&error),
+                );
                 Self { path: None }
             }
         }
@@ -209,6 +255,68 @@ mod tests {
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 34567)
     }
 
+    #[derive(Clone)]
+    struct SharedWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for SharedWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("trace lock").extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for SharedWriter {
+        type Writer = Self;
+
+        fn make_writer(&'writer self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    fn capture<T>(operation: impl FnOnce() -> T) -> (T, String) {
+        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_ansi(false)
+            .with_writer(SharedWriter(output.clone()))
+            .finish();
+        let value = tracing::subscriber::with_default(subscriber, operation);
+        std::io::Write::flush(&mut SharedWriter(output.clone())).expect("flush trace");
+        let text =
+            String::from_utf8(output.lock().expect("trace lock").clone()).expect("utf8 trace");
+        (value, text)
+    }
+
+    fn assert_one_report(trace: &str, context: &str) {
+        assert_eq!(
+            trace.matches(r#""error.disposition":"swallowed""#).count(),
+            1,
+            "trace: {trace}"
+        );
+        assert!(
+            trace.contains(&format!(r#""error.context":"{context}""#)),
+            "trace: {trace}"
+        );
+    }
+
+    fn denied_remove(_: &Path) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "remove denied",
+        ))
+    }
+
+    fn missing_remove(_: &Path) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "already absent",
+        ))
+    }
+
     #[test]
     fn writes_ip_and_port_json() {
         let dir = TempDir::new().unwrap();
@@ -231,13 +339,13 @@ mod tests {
     }
 
     #[test]
-    fn write_failure_yields_inert_guard() {
-        // A non-existent parent directory makes the atomic write fail.
+    fn write_failure_yields_inert_guard_and_reports_once() {
         let path = std::path::Path::new("/nonexistent-jaunder-xyz/sub/runtime.json").to_path_buf();
-        let guard = RuntimeFileGuard::write(path.clone(), addr(), 0);
+        let (guard, trace) = capture(|| RuntimeFileGuard::write(path.clone(), addr(), 0));
         assert!(!path.exists());
-        drop(guard); // inert: must not panic and must not create the file
-        assert!(!path.exists());
+        assert!(guard.path().is_none());
+        drop(guard);
+        assert_one_report(&trace, "server.runtime_file.write");
     }
 
     #[test]
@@ -274,6 +382,16 @@ mod tests {
         remove_runtime_file(&path);
         remove_runtime_file(&path);
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn removal_failure_reports_once_but_not_found_is_silent() {
+        let path = Path::new("/private/runtime.json");
+        let ((), trace) = capture(|| remove_runtime_file_with(path, denied_remove));
+        assert_one_report(&trace, "server.runtime_file.remove");
+
+        let ((), trace) = capture(|| remove_runtime_file_with(path, missing_remove));
+        assert!(trace.is_empty(), "NotFound is expected: {trace}");
     }
 
     #[test]
@@ -429,16 +547,31 @@ mod tests {
     }
 
     #[test]
-    fn check_startup_mutex_unreadable_file_is_stale() {
-        // A path that exists but can't be read_to_string'd (a directory) is a
-        // non-NotFound I/O error: treated as a stale/unusable own file, not a fresh
-        // start and not a hard fail.
+    fn startup_mutex_read_failure_is_stale_and_reports_once() {
         let dir = TempDir::new().unwrap();
-        let p = dir.path().join("runtime.json");
-        std::fs::create_dir(&p).unwrap();
-        assert!(matches!(
-            check_startup_mutex(&p).unwrap(),
-            StartupCheck::Stale
-        ));
+        let path = dir.path().join("runtime.json");
+        std::fs::create_dir(&path).unwrap();
+        let (result, trace) = capture(|| check_startup_mutex(&path));
+        assert!(matches!(result.unwrap(), StartupCheck::Stale));
+        assert_one_report(&trace, "server.runtime_file.read");
+    }
+
+    #[test]
+    fn startup_mutex_decode_failure_is_stale_and_reports_once() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("runtime.json");
+        std::fs::write(&path, "not json").unwrap();
+        let (result, trace) = capture(|| check_startup_mutex(&path));
+        assert!(matches!(result.unwrap(), StartupCheck::Stale));
+        assert_one_report(&trace, "server.runtime_file.decode");
+    }
+
+    #[test]
+    fn startup_mutex_not_found_proceeds_without_report() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("runtime.json");
+        let (result, trace) = capture(|| check_startup_mutex(&path));
+        assert!(matches!(result.unwrap(), StartupCheck::Proceed));
+        assert!(trace.is_empty(), "NotFound is expected: {trace}");
     }
 }

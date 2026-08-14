@@ -206,6 +206,136 @@ impl<DB: Database> UserStore<DB> {
     pub fn new(pool: Pool<DB>) -> Self {
         Self { pool }
     }
+
+    pub(crate) async fn authenticate_with(
+        &self,
+        username: &Username,
+        password: &Password,
+        verify_operation: crate::helpers::VerifyPasswordOperation,
+    ) -> Result<UserRecord, UserAuthError>
+    where
+        DB: Backend,
+        (
+            UserId,
+            Username,
+            Option<DisplayName>,
+            Option<Bio>,
+            DateTime<Utc>,
+            Option<DateTime<Utc>>,
+            StoredPasswordHash,
+            Option<Email>,
+            bool,
+            bool,
+        ): for<'r> sqlx::FromRow<'r, DB::Row>,
+        for<'r> UserId: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+        usize: sqlx::ColumnIndex<DB::Row>,
+        for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        String: sqlx::Type<DB>,
+        for<'q> String: sqlx::Encode<'q, DB>,
+        for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+        for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    {
+        let row = sqlx::query_as::<
+            _,
+            (
+                UserId,
+                Username,
+                Option<DisplayName>,
+                Option<Bio>,
+                DateTime<Utc>,
+                Option<DateTime<Utc>>,
+                StoredPasswordHash,
+                Option<Email>,
+                bool,
+                bool,
+            ),
+        >(
+            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at,
+                    password_hash, email, email_verified, is_operator
+             FROM users WHERE username = $1",
+        )
+        .bind(username)
+        .fetch_optional(&self.pool)
+        .instrument(tracing::info_span!(
+            "storage.user.authenticate.lookup_user",
+            db.system = DB::DB_SYSTEM
+        ))
+        .await
+        .map_err(|e| UserAuthError::Internal(Box::new(e)))?;
+
+        let Some((
+            user_id,
+            username,
+            display_name,
+            bio,
+            created_at,
+            _last_authenticated_at,
+            hash,
+            email,
+            email_verified,
+            is_operator,
+        )) = row
+        else {
+            // Equalize timing with the present-user path to avoid a username
+            // enumeration oracle (§2.1): perform a dummy Argon2 verification
+            // before rejecting. The result is intentionally discarded.
+            if let Err(error) = crate::helpers::verify_password_with(
+                password.clone(),
+                crate::helpers::dummy_password_hash().clone(),
+                verify_operation,
+            )
+            .await
+            {
+                host::error::report_swallowed(
+                    host::error::ErrorKind::Internal,
+                    host::error::ErrorClass::Bug,
+                    "storage.user.authenticate.dummy_verify",
+                    host::error::SwallowedSource::Error(&error),
+                );
+            }
+            return Err(UserAuthError::InvalidCredentials);
+        };
+
+        let valid = crate::helpers::verify_password_with(password.clone(), hash, verify_operation)
+            .instrument(tracing::info_span!(
+                "storage.user.authenticate.verify_password",
+                db.system = DB::DB_SYSTEM
+            ))
+            .await
+            .map_err(|e| UserAuthError::Internal(Box::new(e)))?;
+
+        if !valid {
+            return Err(UserAuthError::InvalidCredentials);
+        }
+
+        let now = Utc::now();
+
+        sqlx::query("UPDATE users SET last_authenticated_at = $1 WHERE user_id = $2")
+            .bind(now)
+            .bind(user_id)
+            .execute(&self.pool)
+            .instrument(tracing::info_span!(
+                "storage.user.authenticate.update_last_authenticated_at",
+                db.system = DB::DB_SYSTEM
+            ))
+            .await
+            .map_err(|e| UserAuthError::Internal(Box::new(e)))?;
+
+        Ok(crate::helpers::build_user_record(
+            crate::helpers::UserRecordParts {
+                user_id,
+                username,
+                display_name,
+                bio,
+                created_at,
+                last_authenticated_at: Some(now),
+                email,
+                email_verified,
+                is_operator,
+            },
+        ))
+    }
 }
 
 #[async_trait]
@@ -304,96 +434,8 @@ where
         username: &Username,
         password: &Password,
     ) -> Result<UserRecord, UserAuthError> {
-        let row = sqlx::query_as::<
-            _,
-            (
-                UserId,
-                Username,
-                Option<DisplayName>,
-                Option<Bio>,
-                DateTime<Utc>,
-                Option<DateTime<Utc>>,
-                StoredPasswordHash,
-                Option<Email>,
-                bool,
-                bool,
-            ),
-        >(
-            "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at,
-                    password_hash, email, email_verified, is_operator
-             FROM users WHERE username = $1",
-        )
-        .bind(username)
-        .fetch_optional(&self.pool)
-        .instrument(tracing::info_span!(
-            "storage.user.authenticate.lookup_user",
-            db.system = DB::DB_SYSTEM
-        ))
-        .await
-        .map_err(|e| UserAuthError::Internal(Box::new(e)))?;
-
-        let Some((
-            user_id,
-            username,
-            display_name,
-            bio,
-            created_at,
-            _last_authenticated_at,
-            hash,
-            email,
-            email_verified,
-            is_operator,
-        )) = row
-        else {
-            // Equalize timing with the present-user path to avoid a username
-            // enumeration oracle (§2.1): perform a dummy Argon2 verification
-            // before rejecting. The result is intentionally discarded.
-            let _ = crate::helpers::verify_password(
-                password.clone(),
-                crate::helpers::dummy_password_hash().clone(),
-            )
-            .await;
-            return Err(UserAuthError::InvalidCredentials);
-        };
-
-        let valid = crate::helpers::verify_password(password.clone(), hash)
-            .instrument(tracing::info_span!(
-                "storage.user.authenticate.verify_password",
-                db.system = DB::DB_SYSTEM
-            ))
+        self.authenticate_with(username, password, common::password::Password::verify)
             .await
-            .map_err(|e| UserAuthError::Internal(Box::new(e)))?;
-
-        if !valid {
-            return Err(UserAuthError::InvalidCredentials);
-        }
-
-        let now = Utc::now();
-
-        sqlx::query("UPDATE users SET last_authenticated_at = $1 WHERE user_id = $2")
-            .bind(now)
-            .bind(user_id)
-            .execute(&self.pool)
-            .instrument(tracing::info_span!(
-                "storage.user.authenticate.update_last_authenticated_at",
-                db.system = DB::DB_SYSTEM
-            ))
-            .await
-            .map_err(|e| UserAuthError::Internal(Box::new(e)))?;
-
-        Ok(crate::helpers::build_user_record(
-            crate::helpers::UserRecordParts {
-                user_id,
-                username,
-                display_name,
-                bio,
-                created_at,
-                last_authenticated_at: Some(now),
-                email,
-                email_verified,
-                is_operator,
-            },
-        ))
     }
 
     async fn get_user(&self, user_id: UserId) -> sqlx::Result<Option<UserRecord>> {
@@ -794,27 +836,92 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn authenticate_with_verify_error_returns_internal_error(#[case] backend: Backend) {
+    async fn authentication_password_source_chain_is_preserved(#[case] backend: Backend) {
         let env = backend.setup().await;
+        let username = parse_username("alice");
+        let password = parse_password("password123");
         env.state
             .users
-            .create_user(
-                &parse_username("alice"),
-                &parse_password("password123"),
-                None,
-                false,
-            )
+            .create_user(&username, &password, None, false)
             .await
             .unwrap();
-        let result = env
-            .state
-            .users
-            .authenticate(
-                &parse_username("alice"),
-                &parse_password("force-verify-error-for-test-coverage"),
-            )
-            .await;
-        assert!(matches!(result, Err(UserAuthError::Internal(_))));
+        let expected = crate::helpers::forced_verify_failure(
+            &password,
+            crate::helpers::dummy_password_hash().as_ref(),
+        )
+        .unwrap_err();
+
+        let result = match env.base.pool() {
+            CloseablePool::Sqlite(pool) => {
+                UserStore::new(pool.clone())
+                    .authenticate_with(&username, &password, crate::helpers::forced_verify_failure)
+                    .await
+            }
+            CloseablePool::Postgres(pool) => {
+                UserStore::new(pool.clone())
+                    .authenticate_with(&username, &password, crate::helpers::forced_verify_failure)
+                    .await
+            }
+        };
+
+        let error = result.unwrap_err();
+        let UserAuthError::Internal(source) = &error else {
+            panic!("expected internal authentication failure");
+        };
+        let io_error = source
+            .downcast_ref::<std::io::Error>()
+            .expect("UserAuthError retains io::Error");
+        let password_error = io_error
+            .get_ref()
+            .and_then(|source| source.downcast_ref::<common::password::PasswordError>())
+            .expect("io::Error retains PasswordError");
+        let (
+            common::password::PasswordError::VerificationFailed(actual),
+            common::password::PasswordError::VerificationFailed(expected),
+        ) = (password_error, &expected)
+        else {
+            panic!("expected typed verification failures");
+        };
+
+        assert_eq!(actual, expected);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn continuation_reporting_absent_user_dummy_verify_failure_preserves_invalid_credentials_and_reports_once(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let username = parse_username("absent");
+        let password = parse_password("password123");
+        let operation = async {
+            match env.base.pool() {
+                CloseablePool::Sqlite(pool) => {
+                    UserStore::new(pool.clone())
+                        .authenticate_with(
+                            &username,
+                            &password,
+                            crate::helpers::forced_verify_failure,
+                        )
+                        .await
+                }
+                CloseablePool::Postgres(pool) => {
+                    UserStore::new(pool.clone())
+                        .authenticate_with(
+                            &username,
+                            &password,
+                            crate::helpers::forced_verify_failure,
+                        )
+                        .await
+                }
+            }
+        };
+        let (result, trace) = crate::helpers::swallowed_test::capture_async(operation).await;
+        assert!(matches!(result, Err(UserAuthError::InvalidCredentials)));
+        crate::helpers::swallowed_test::assert_one_report(
+            &trace,
+            "storage.user.authenticate.dummy_verify",
+        );
     }
 
     // Each variant maps to a fixed `(kind, public_message)` pair.

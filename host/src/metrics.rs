@@ -51,7 +51,6 @@ struct Instruments {
     registrations: Counter<u64>,
     invites: Counter<u64>,
     password_resets: Counter<u64>,
-    errors: Counter<u64>,
     email_sent: Counter<u64>,
     email_send_duration: Histogram<u64>,
     media_uploads: Counter<u64>,
@@ -77,7 +76,6 @@ static M: LazyLock<Instruments> = LazyLock::new(|| {
         registrations: m.u64_counter("jaunder.auth.registrations").build(),
         invites: m.u64_counter("jaunder.auth.invites").build(),
         password_resets: m.u64_counter("jaunder.auth.password_resets").build(),
-        errors: m.u64_counter("jaunder.errors").build(),
         email_sent: m.u64_counter("jaunder.email.sent").build(),
         email_send_duration: m
             .u64_histogram("jaunder.email.send_duration")
@@ -146,16 +144,6 @@ pub fn invite(event: InviteEvent) {
 
 pub fn password_reset(event: PasswordResetEvent) {
     M.password_resets.add(1, &kv("event", event.as_str()));
-}
-
-pub fn error(kind: &'static str, class: &'static str) {
-    M.errors.add(
-        1,
-        &[
-            KeyValue::new("error.kind", kind),
-            KeyValue::new("error.class", class),
-        ],
-    );
 }
 
 pub fn email_sent(kind: EmailKind, result: SendResult) {
@@ -293,7 +281,7 @@ mod tests {
         );
         invite(InviteEvent::Redeemed);
         password_reset(PasswordResetEvent::Requested);
-        error("storage", "server");
+        crate::error::InternalError::storage(sqlx::Error::RowNotFound).emit_boundary_failure();
         email_sent(EmailKind::Verification, SendResult::Success);
         email_send_duration_ms(12);
         media_upload(UploadOutcome::Deduplicated);
@@ -342,6 +330,13 @@ mod tests {
     }
 
     fn attrs(pairs: [(&str, &str); 2]) -> BTreeSet<(String, String)> {
+        pairs
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect()
+    }
+
+    fn attrs4(pairs: [(&str, &str); 4]) -> BTreeSet<(String, String)> {
         pairs
             .into_iter()
             .map(|(k, v)| (k.to_owned(), v.to_owned()))
@@ -417,6 +412,16 @@ mod tests {
             "Err did not record result=failure; got {email:?}"
         );
 
+        let errors = counter_attributes(&metrics, "jaunder.errors");
+        assert_eq!(
+            errors,
+            vec![attrs4([
+                ("error.kind", "storage"),
+                ("error.class", "bug"),
+                ("error.disposition", "boundary"),
+                ("telemetry.origin", "server"),
+            ])]
+        );
         // `counter_attributes` reads counters only. Asking it about a histogram
         // yields nothing rather than panicking — worth pinning, because a silent
         // empty result is how the two assertions above would go vacuously true if

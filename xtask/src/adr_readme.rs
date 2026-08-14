@@ -9,6 +9,7 @@
 //! parity gate. No behavior lives in more than one place.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -79,26 +80,53 @@ struct AdrFile {
 /// (`parse_adr_dir` wants "reading <dir>", `format_problems` wants
 /// "cannot read <dir>").
 fn adr_files(repo: &Path) -> Result<Vec<AdrFile>> {
-    let mut files = Vec::new();
-    for ent in std::fs::read_dir(repo.join(ADR_DIR))? {
-        let ent = ent?;
-        if !ent.file_type().map(|t| t.is_file()).unwrap_or(false) {
-            continue;
-        }
-        let filename = ent.file_name().to_string_lossy().into_owned();
-        if !filename.ends_with(".md") {
-            continue;
-        }
-        let Some(num) = ids::leading_number(&filename) else {
-            continue;
-        };
-        files.push(AdrFile {
-            num,
-            filename,
-            path: ent.path(),
-        });
+    adr_files_from(
+        std::fs::read_dir(repo.join(ADR_DIR))?,
+        std::fs::DirEntry::path,
+        std::fs::DirEntry::file_name,
+        std::fs::DirEntry::file_type,
+    )
+}
+
+fn adr_files_from<T>(
+    entries: impl IntoIterator<Item = std::io::Result<T>>,
+    path_of: impl Fn(&T) -> PathBuf,
+    file_name: impl Fn(&T) -> OsString,
+    file_type: impl Fn(&T) -> std::io::Result<std::fs::FileType>,
+) -> Result<Vec<AdrFile>> {
+    entries
+        .into_iter()
+        .map(|entry| {
+            let entry = entry?;
+            qualify_adr_file(path_of(&entry), file_name(&entry), file_type(&entry))
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(|files| files.into_iter().flatten().collect())
+}
+
+fn qualify_adr_file(
+    path: PathBuf,
+    filename: OsString,
+    file_type: std::io::Result<std::fs::FileType>,
+) -> Result<Option<AdrFile>> {
+    if !file_type
+        .with_context(|| format!("reading file type {}", path.display()))?
+        .is_file()
+    {
+        return Ok(None);
     }
-    Ok(files)
+    let filename = filename.to_string_lossy().into_owned();
+    if !filename.ends_with(".md") {
+        return Ok(None);
+    }
+    let Some(num) = ids::leading_number(&filename) else {
+        return Ok(None);
+    };
+    Ok(Some(AdrFile {
+        num,
+        filename,
+        path,
+    }))
 }
 
 /// The title text of a `# ADR-NNNN: Title` (or legacy `# NNNN. Title`) heading,
@@ -212,9 +240,13 @@ fn parse_row(line: &str) -> Option<TableRow> {
 
 /// Parse the ADR files under `repo/docs/adr`, sorted ascending by number.
 pub fn parse_adr_dir(repo: &Path) -> Result<Vec<AdrEntry>> {
+    parse_adr_files(repo, adr_files(repo))
+}
+
+fn parse_adr_files(repo: &Path, files: Result<Vec<AdrFile>>) -> Result<Vec<AdrEntry>> {
     let dir = repo.join(ADR_DIR);
     let mut entries = Vec::new();
-    for f in adr_files(repo).with_context(|| format!("reading {}", dir.display()))? {
+    for f in files.with_context(|| format!("reading {}", dir.display()))? {
         let content = std::fs::read_to_string(&f.path)
             .with_context(|| format!("reading {}", f.path.display()))?;
         entries.push(AdrEntry {
@@ -480,10 +512,17 @@ pub fn parity_problems(entries: &[AdrEntry], existing: &[TableRow]) -> Vec<Strin
 /// Read `repo`'s README + ADR directory and compute the parity problems. Errors
 /// when the README is unreadable or the table markers are absent.
 pub fn parity_report(repo: &Path) -> Result<Vec<String>> {
+    parity_report_with(repo, || adr_files(repo))
+}
+
+fn parity_report_with(
+    repo: &Path,
+    files: impl FnOnce() -> Result<Vec<AdrFile>>,
+) -> Result<Vec<String>> {
     let readme_path = repo.join(README);
     let readme = std::fs::read_to_string(&readme_path)
         .with_context(|| format!("reading {}", readme_path.display()))?;
-    let entries = parse_adr_dir(repo)?;
+    let entries = parse_adr_files(repo, files())?;
     let existing = parse_table_block(&extract_block(&readme)?);
     Ok(parity_problems(&entries, &existing))
 }
@@ -945,6 +984,49 @@ mod tests {
                 (2, "0002-b.md", "Second", "superseded"),
             ]
         );
+    }
+
+    #[test]
+    fn fail_closed_population_unreadable_adr_readme_file_type() {
+        struct Fake {
+            path: PathBuf,
+            name: OsString,
+        }
+        let repo = scratch_repo("adr-file-type-owner");
+        std::fs::create_dir_all(repo.join(ADR_DIR)).unwrap();
+        std::fs::write(repo.join(README), format!("# ADRs\n{BEGIN}\n{END}\n")).unwrap();
+        let path = repo.join("docs/adr/0001-unreadable.md");
+        let report = parity_report_with(&repo, || {
+            adr_files_from(
+                [Ok(Fake {
+                    path: path.clone(),
+                    name: OsString::from("0001-unreadable.md"),
+                })],
+                |entry| entry.path.clone(),
+                |entry| entry.name.clone(),
+                |_| {
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "injected",
+                    ))
+                },
+            )
+        });
+        let error = match report {
+            Ok(_) => panic!("injected file-type failure must fail the parity population"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error
+                .downcast_ref::<std::io::Error>()
+                .map(std::io::Error::kind),
+            Some(std::io::ErrorKind::PermissionDenied)
+        );
+        let step = crate::steps::adr_check::parity_step(Err(error));
+        assert!(!step.ok);
+        let detail = step.detail.unwrap();
+        assert!(detail.contains(&path.display().to_string()), "{detail}");
+        let _ = std::fs::remove_dir_all(&repo);
     }
 
     #[test]

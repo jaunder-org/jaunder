@@ -1,9 +1,21 @@
 use async_trait::async_trait;
 use chrono::Utc;
-use std::path::PathBuf;
+use std::{
+    io::{self, Write},
+    path::{Path, PathBuf},
+};
 
 use super::{WebSubClient, WebSubError};
 use common::tagged_url::{FeedUrl, HubUrl};
+
+type OpenOperation<W> = fn(&Path) -> io::Result<W>;
+
+fn open_capture(path: &Path) -> io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+}
 
 /// A [`WebSubClient`] that appends each ping as a JSON line to a file on disk
 /// instead of contacting a hub.  Used for the `websub.jsonl` stream of the
@@ -17,14 +29,16 @@ impl FileCapturingWebSubClient {
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
     }
-}
 
-#[async_trait]
-impl WebSubClient for FileCapturingWebSubClient {
-    async fn send_publish(&self, hub_url: &HubUrl, feed_url: &FeedUrl) -> Result<(), WebSubError> {
-        use std::io::Write;
-
-        // Value::to_string is infallible for this all-string structure.
+    fn send_publish_with<W>(
+        &self,
+        hub_url: &HubUrl,
+        feed_url: &FeedUrl,
+        open: OpenOperation<W>,
+    ) -> Result<(), WebSubError>
+    where
+        W: Write,
+    {
         let mut line = serde_json::json!({
             "hub_url": hub_url,
             "feed_url": feed_url,
@@ -33,16 +47,17 @@ impl WebSubClient for FileCapturingWebSubClient {
         .to_string();
         line.push('\n');
 
-        // A direct blocking append is acceptable here: this client only runs in
-        // the e2e capture path, writing one small line per worker tick.
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)
-            .map_err(|e| WebSubError::Http(e.to_string()))?;
+        let mut file = open(&self.path).map_err(|source| WebSubError::Http(Box::new(source)))?;
         file.write_all(line.as_bytes())
-            .map_err(|e| WebSubError::Http(e.to_string()))?;
-        Ok(())
+            .and_then(|()| file.flush())
+            .map_err(|source| WebSubError::Http(Box::new(source)))
+    }
+}
+
+#[async_trait]
+impl WebSubClient for FileCapturingWebSubClient {
+    async fn send_publish(&self, hub_url: &HubUrl, feed_url: &FeedUrl) -> Result<(), WebSubError> {
+        self.send_publish_with(hub_url, feed_url, open_capture)
     }
 }
 
@@ -50,6 +65,64 @@ impl WebSubClient for FileCapturingWebSubClient {
 mod tests {
     use super::*;
     use common::test_support::parse_url;
+
+    struct FailingWriter {
+        write_succeeds: bool,
+    }
+
+    impl Write for FailingWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if self.write_succeeds {
+                Ok(bytes.len())
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "capture write denied",
+                ))
+            }
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "capture flush denied",
+            ))
+        }
+    }
+
+    #[test]
+    fn file_capture_write_failure_preserves_typed_io_source() {
+        let client = FileCapturingWebSubClient::new("/private/websub.jsonl");
+        let open: OpenOperation<FailingWriter> = |_| {
+            Ok(FailingWriter {
+                write_succeeds: false,
+            })
+        };
+        let error = client
+            .send_publish_with(&hub_url(), &feed_url("alice"), open)
+            .expect_err("injected write must propagate");
+        let source = std::error::Error::source(&error)
+            .and_then(|error| error.downcast_ref::<io::Error>())
+            .expect("typed I/O source");
+        assert_eq!(source.kind(), io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn file_capture_flush_failure_preserves_typed_io_source() {
+        let client = FileCapturingWebSubClient::new("/private/websub.jsonl");
+        let open: OpenOperation<FailingWriter> = |_| {
+            Ok(FailingWriter {
+                write_succeeds: true,
+            })
+        };
+        let error = client
+            .send_publish_with(&hub_url(), &feed_url("alice"), open)
+            .expect_err("injected flush must propagate");
+        let source = std::error::Error::source(&error)
+            .and_then(|error| error.downcast_ref::<io::Error>())
+            .expect("typed I/O source");
+        assert_eq!(source.kind(), io::ErrorKind::WriteZero);
+    }
 
     /// The hub every test in this module pings; its value is incidental.
     fn hub_url() -> HubUrl {

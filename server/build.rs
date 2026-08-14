@@ -25,6 +25,10 @@
 //!   handler finds no asset and serves the SPA shell for every path — the CSR
 //!   client can't boot, but the build is green until a bundle is staged.
 
+#[path = "src/build_staging.rs"]
+mod build_staging;
+
+use build_staging::prepare_staging_with;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -101,31 +105,36 @@ fn main() {
     println!("cargo:rerun-if-changed={}", public_src.display());
 
     // Start from a clean staging dir (OUT_DIR persists across incremental
-    // builds, so clear any stale copy before re-staging).
-    let _ = fs::remove_dir_all(&site_dir);
-    fs::create_dir_all(&site_dir)
-        .unwrap_or_else(|e| panic!("creating {}: {e}", site_dir.display()));
+    // builds, so clear any stale copy before re-staging). A cleanup failure must
+    // abort before recreation or copying; otherwise stale assets can survive.
+    prepare_staging_with(
+        &site_dir,
+        |path| fs::remove_dir_all(path),
+        |path| fs::create_dir_all(path),
+        || {
+            let pkg_ok = pkg_src.is_dir() && pkg_src.join("jaunder.wasm").is_file();
 
-    let pkg_ok = pkg_src.is_dir() && pkg_src.join("jaunder.wasm").is_file();
+            match decide_pkg_action(pkg_ok, bundle_declared) {
+                PkgAction::Stage => copy_tree(&pkg_src, &site_dir.join("pkg")),
+                PkgAction::FailClosed => panic!(
+                    "JAUNDER_CSR_BUNDLE_DIR is set to {} but that dir is missing or has no jaunder.wasm; \
+                     a release binary must never ship without its CSR bundle (#237, ADR-0003/0008)",
+                    pkg_src.display()
+                ),
+                PkgAction::TolerateEmpty => println!(
+                    "cargo:warning=CSR bundle not found at {} (JAUNDER_CSR_BUNDLE_DIR unset); \
+                     staging an empty embedded site. Run `cargo xtask build-csr` to populate it.",
+                    pkg_src.display()
+                ),
+            }
 
-    match decide_pkg_action(pkg_ok, bundle_declared) {
-        PkgAction::Stage => copy_tree(&pkg_src, &site_dir.join("pkg")),
-        PkgAction::FailClosed => panic!(
-            "JAUNDER_CSR_BUNDLE_DIR is set to {} but that dir is missing or has no jaunder.wasm; \
-             a release binary must never ship without its CSR bundle (#237, ADR-0003/0008)",
-            pkg_src.display()
-        ),
-        PkgAction::TolerateEmpty => println!(
-            "cargo:warning=CSR bundle not found at {} (JAUNDER_CSR_BUNDLE_DIR unset); \
-             staging an empty embedded site. Run `cargo xtask build-csr` to populate it.",
-            pkg_src.display()
-        ),
-    }
-
-    // Public assets land at the site root (`public/favicon.ico` → site/favicon.ico).
-    if public_src.is_dir() {
-        copy_tree(&public_src, &site_dir);
-    }
+            // Public assets land at the site root (`public/favicon.ico` → site/favicon.ico).
+            if public_src.is_dir() {
+                copy_tree(&public_src, &site_dir);
+            }
+        },
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
 }
 
 /// Recursively copy `src`'s contents into `dst`, skipping any file whose name

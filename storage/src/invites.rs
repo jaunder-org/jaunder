@@ -4,7 +4,6 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use host::invite::InviteCode;
 use sqlx::{Database, Pool};
-use thiserror::Error;
 
 use crate::backend::Backend;
 use common::ids::UserId;
@@ -24,20 +23,6 @@ pub struct InviteRecord {
     pub used_by: Option<UserId>,
 }
 
-/// Errors that can occur when consuming an invite code.
-#[derive(Debug, Error)]
-pub enum UseInviteError {
-    /// The invite code does not exist.
-    #[error("invite code not found")]
-    NotFound,
-    /// The invite code has passed its expiration date.
-    #[error("invite code has expired")]
-    Expired,
-    /// The invite code has already been consumed.
-    #[error("invite code has already been used")]
-    AlreadyUsed,
-}
-
 /// Async operations on the `invites` table.
 ///
 /// This trait manages the lifecycle of invite codes used for registration.
@@ -47,13 +32,6 @@ pub trait InviteStorage: Send + Sync {
     ///
     /// Returns the generated [`InviteCode`].
     async fn create_invite(&self, expires_at: DateTime<Utc>) -> sqlx::Result<InviteCode>;
-
-    /// Marks an invite code as used by a specific user.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`UseInviteError`] if the code is invalid, expired, or already used.
-    async fn use_invite(&self, code: &InviteCode, user_id: UserId) -> Result<(), UseInviteError>;
 
     /// Returns a list of all invite codes in the system.
     async fn list_invites(&self) -> sqlx::Result<Vec<InviteRecord>>;
@@ -105,49 +83,6 @@ where
         Ok(code)
     }
 
-    async fn use_invite(&self, code: &InviteCode, user_id: UserId) -> Result<(), UseInviteError> {
-        let now = Utc::now();
-
-        // Atomically claim the invite in one statement: the UPDATE succeeds only
-        // when the invite exists, is unused, and has not expired. No prior read
-        // is needed, so two concurrent requests cannot both succeed and the
-        // SQLite read-then-write lock upgrade (ADR-0021) is avoided.
-        let claimed = sqlx::query_as::<_, crate::helpers::InviteRow>(
-            "UPDATE invites SET used_at = $1, used_by = $2 \
-             WHERE code = $3 AND used_at IS NULL AND expires_at > $4 \
-             RETURNING code, created_at, expires_at, used_at, used_by",
-        )
-        .bind(now)
-        .bind(user_id)
-        .bind(code)
-        .bind(now)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|_| UseInviteError::NotFound)?;
-
-        if claimed.is_some() {
-            return Ok(());
-        }
-
-        // Zero rows affected — read the row to return the precise error.
-        let row = sqlx::query_as::<_, crate::helpers::InviteRow>(
-            "SELECT code, created_at, expires_at, used_at, used_by \
-             FROM invites WHERE code = $1",
-        )
-        .bind(code)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|_| UseInviteError::NotFound)?
-        .ok_or(UseInviteError::NotFound)?;
-
-        let record = crate::helpers::invite_record_from_row(row);
-        if record.used_at.is_some() {
-            return Err(UseInviteError::AlreadyUsed);
-        }
-        // Present and unused but the claim failed ⇒ expired.
-        Err(UseInviteError::Expired)
-    }
-
     async fn list_invites(&self) -> sqlx::Result<Vec<InviteRecord>> {
         let rows = sqlx::query_as::<_, crate::helpers::InviteRow>(
             "SELECT code, created_at, expires_at, used_at, used_by FROM invites",
@@ -168,7 +103,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{Backend, CloseablePool, TestEnv, backends, parse_invite_code};
+    use crate::test_support::{Backend, CloseablePool, TestEnv, backends};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -241,16 +176,6 @@ mod tests {
         let expires_at = chrono::Utc::now();
         let result = state.invites.create_invite(expires_at).await;
         assert!(result.is_err());
-    }
-
-    #[apply(backends)]
-    #[tokio::test]
-    async fn use_invite_with_closed_pool_returns_error(#[case] backend: Backend) {
-        let TestEnv { state, base } = backend.setup().await;
-        base.close_pool().await;
-        let code = parse_invite_code("code");
-        let result = state.invites.use_invite(&code, UserId::from(1)).await;
-        assert!(matches!(result, Err(UseInviteError::NotFound)));
     }
 
     #[apply(backends)]

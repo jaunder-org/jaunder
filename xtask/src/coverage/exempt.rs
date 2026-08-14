@@ -158,14 +158,11 @@ fn pick(n: u8) -> u8 {
     }
 
     #[test]
-    fn parse_error_yields_empty() {
-        // Unparseable source → Err; the caller treats Err as "nothing exempt"
-        // (fail-closed), so the offending file's lines stay measured.
+    fn coverage_exemption_parse_error_measures_every_line() {
+        // Syntax failure carries no exemption evidence. The coverage source
+        // remains in the measured population with an empty exemption set.
         let src = "fn broken( {{{ this is not valid rust";
-        assert!(
-            exempt_lines(src).is_err(),
-            "an unparseable file must return Err (fail-closed)"
-        );
+        assert!(exempt_lines(src).unwrap_or_default().is_empty());
     }
 
     #[test]

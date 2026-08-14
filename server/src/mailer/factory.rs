@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use common::mailer::{MailSender, NoopMailSender};
-use storage::{SiteConfigStorage, load_smtp_config};
+use storage::{SiteConfigStorage, SmtpConfig, load_smtp_config};
 
 use super::{FileMailSender, LettreMailSender};
 
@@ -9,8 +9,13 @@ use super::{FileMailSender, LettreMailSender};
 ///
 /// In e2e tests, a `Some` capture path (resolved from `JAUNDER_CAPTURE_DIR` at the
 /// composition root — see the `host` crate) short-circuits to the file-capture
-/// transport. Otherwise (`None`, the production default) falls back to the configured
-/// SMTP transport, or the no-op sender if configuration is absent or invalid.
+/// SMTP transport. Absent SMTP configuration alone selects the no-op sender;
+/// configuration reads and construction failures propagate with their sources.
+///
+/// # Errors
+///
+/// Propagates site-config read failures and failures constructing a present
+/// SMTP configuration. An absent SMTP configuration is not an error.
 ///
 /// Lives in `server` (not `storage`) because it depends on lettre and
 /// file-capture transports — concerns that the storage crate is deliberately
@@ -19,17 +24,24 @@ use super::{FileMailSender, LettreMailSender};
 pub async fn build_mailer(
     site_config: &dyn SiteConfigStorage,
     mail_capture: Option<std::path::PathBuf>,
-) -> Arc<dyn MailSender> {
+) -> anyhow::Result<Arc<dyn MailSender>> {
+    build_mailer_with(site_config, mail_capture, LettreMailSender::from_config).await
+}
+
+async fn build_mailer_with(
+    site_config: &dyn SiteConfigStorage,
+    mail_capture: Option<std::path::PathBuf>,
+    build_smtp: impl FnOnce(&SmtpConfig) -> Result<LettreMailSender, super::BuildMailerError>,
+) -> anyhow::Result<Arc<dyn MailSender>> {
     if let Some(path) = mail_capture {
-        return Arc::new(FileMailSender::new(path)) as Arc<dyn MailSender>;
+        return Ok(Arc::new(FileMailSender::new(path)) as Arc<dyn MailSender>);
     }
-    match load_smtp_config(site_config).await {
-        Ok(Some(cfg)) => match LettreMailSender::from_config(&cfg) {
-            Ok(sender) => Arc::new(sender) as Arc<dyn MailSender>,
-            Err(_) => Arc::new(NoopMailSender) as Arc<dyn MailSender>,
-        },
-        Ok(None) | Err(_) => Arc::new(NoopMailSender) as Arc<dyn MailSender>,
-    }
+
+    let Some(config) = load_smtp_config(site_config).await? else {
+        return Ok(Arc::new(NoopMailSender) as Arc<dyn MailSender>);
+    };
+
+    Ok(Arc::new(build_smtp(&config)?) as Arc<dyn MailSender>)
 }
 
 #[cfg(test)]
@@ -38,8 +50,9 @@ mod tests {
     use rstest_reuse::*;
 
     use super::*;
-    use storage::SiteConfigKey;
+    use common::smtp_port::SmtpPort;
     use storage::test_support::{Backend, backends};
+    use storage::{SiteConfigKey, SmtpTlsMode};
 
     // guard:no-backend — builds a mailer over a mockall SiteConfigStorage whose reads
     // are all absent; no live database backend
@@ -48,7 +61,9 @@ mod tests {
         // No smtp.host → load_smtp_config returns Ok(None) → NoopMailSender arm
         let mut store = storage::MockSiteConfigStorage::new();
         store.expect_get_smtp_config().returning(|| Ok(None));
-        let sender = build_mailer(&store, None).await;
+        let sender = build_mailer(&store, None)
+            .await
+            .expect("absent SMTP selects the no-op sender");
         // NoopMailSender always returns NotConfigured; verify send_email is callable
         let msg = common::mailer::EmailMessage {
             from: None,
@@ -72,8 +87,106 @@ mod tests {
             .set(SiteConfigKey::SmtpHost, "localhost")
             .await
             .unwrap();
-        let _sender = build_mailer(store, None).await;
-        // Just verify build_mailer runs without panic; actual SMTP send requires a server.
+        build_mailer(store, None)
+            .await
+            .expect("present valid SMTP builds the transport");
+        // Actual SMTP send requires a server.
+    }
+
+    fn smtp_config(tls_mode: SmtpTlsMode) -> SmtpConfig {
+        SmtpConfig {
+            host: "mail.example.com".parse().expect("valid host"),
+            port: SmtpPort::default(),
+            tls_mode,
+            username: None,
+            password: None,
+            sender: "Jaunder <noreply@example.com>"
+                .parse()
+                .expect("valid sender"),
+        }
+    }
+
+    fn transport_build_error() -> lettre::transport::smtp::Error {
+        lettre::transport::smtp::client::TlsParametersBuilder::new("mail.example.com".to_owned())
+            .set_min_tls_version(lettre::transport::smtp::client::TlsVersion::Tlsv10)
+            .build_rustls()
+            .err()
+            .expect("rustls rejects TLS 1.0")
+    }
+
+    // guard:no-backend — mock storage injects the read failure; no live database
+    #[tokio::test]
+    async fn mailer_source_chain_retains_config_read_error() {
+        let mut store = storage::MockSiteConfigStorage::new();
+        store.expect_get_smtp_config().return_once(|| {
+            Err(sqlx::Error::Io(std::io::Error::other(
+                "injected SMTP config read failure",
+            )))
+        });
+
+        let error = build_mailer(&store, None)
+            .await
+            .err()
+            .expect("config read failure must fail startup");
+
+        assert!(
+            error
+                .chain()
+                .any(|source| source.downcast_ref::<sqlx::Error>().is_some()),
+            "typed SQLx source must remain downcastable: {error:#}"
+        );
+    }
+
+    // guard:no-backend — mock storage supplies typed config; no live database
+    #[tokio::test]
+    async fn mailer_source_chain_retains_invalid_sender_error() {
+        let config = SmtpConfig {
+            sender: "Acme, Inc <noreply@example.com>"
+                .parse()
+                .expect("common mailbox accepts the display name"),
+            ..smtp_config(SmtpTlsMode::Plain)
+        };
+        let mut store = storage::MockSiteConfigStorage::new();
+        store
+            .expect_get_smtp_config()
+            .return_once(move || Ok(Some(config)));
+
+        let error = build_mailer(&store, None)
+            .await
+            .err()
+            .expect("invalid sender must fail startup");
+
+        assert!(
+            error.chain().any(|source| source
+                .downcast_ref::<lettre::address::AddressError>()
+                .is_some()),
+            "typed address source must remain downcastable: {error:#}"
+        );
+    }
+
+    // guard:no-backend — private constructor operation injects the lettre failure
+    #[tokio::test]
+    async fn mailer_source_chain_retains_transport_build_error() {
+        let mut store = storage::MockSiteConfigStorage::new();
+        store
+            .expect_get_smtp_config()
+            .return_once(|| Ok(Some(smtp_config(SmtpTlsMode::StartTls))));
+
+        let error = build_mailer_with(&store, None, |_| {
+            Err(super::super::BuildMailerError::Transport(
+                transport_build_error(),
+            ))
+        })
+        .await
+        .err()
+        .expect("transport construction failure must fail startup");
+
+        assert!(
+            error.chain().any(|source| source
+                .downcast_ref::<lettre::transport::smtp::Error>()
+                .is_some()),
+            "typed lettre transport source must remain downcastable: {error:#}"
+        );
     }
 
     #[fixture]
@@ -90,7 +203,9 @@ mod tests {
     async fn build_mailer_selects_file_sender_when_path_given(capture_dir: tempfile::TempDir) {
         let path = capture_dir.path().join("mail.jsonl");
         let store = storage::MockSiteConfigStorage::new();
-        let sender = build_mailer(&store, Some(path.clone())).await;
+        let sender = build_mailer(&store, Some(path.clone()))
+            .await
+            .expect("capture path selects file sender");
         let msg = common::mailer::EmailMessage {
             from: None,
             to: vec!["x@example.com".parse().unwrap()],

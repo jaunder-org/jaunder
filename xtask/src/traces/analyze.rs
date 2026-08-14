@@ -25,8 +25,7 @@ fn count(raw: &Value, key: &str) -> u64 {
     get_attr(raw, key).parse().unwrap_or(0)
 }
 
-/// A finite `f64` field of a JSON object, else `None` (Node's `asFiniteNumber` /
-/// `Number.isFinite` guards).
+/// Read a finite JSON number; malformed and non-finite values are excluded.
 fn field_f64(v: &Value, key: &str) -> Option<f64> {
     v.get(key).and_then(Value::as_f64).filter(|n| n.is_finite())
 }
@@ -271,11 +270,11 @@ fn entry<'a, V>(groups: &'a mut Vec<(String, V)>, key: &str, init: impl Fn() -> 
 
 /// Section 3 — action hotspots from `e2e.action_top_json`. No `< 0` guard (Node
 /// only checks `isFinite`); empty names are skipped.
-fn action_hotspot_rows(spans: &[Span]) -> Vec<HotspotRow> {
+fn action_hotspot_rows(spans: &[Span]) -> Result<Vec<HotspotRow>> {
     let mut groups: Vec<(String, Agg)> = Vec::new();
     for s in e2e_tests(spans) {
-        let actions = parse_json_attr(&s.raw, "e2e.action_top_json");
-        let Some(arr) = actions.as_array() else {
+        let actions = parse_json_attr(&s.raw, "e2e.action_top_json", &s.source)?;
+        let Some(arr) = actions.as_ref().and_then(Value::as_array) else {
             continue;
         };
         for action in arr {
@@ -289,7 +288,7 @@ fn action_hotspot_rows(spans: &[Span]) -> Vec<HotspotRow> {
             entry(&mut groups, name, Agg::default).add(dur);
         }
     }
-    hotspot_rows(groups)
+    Ok(hotspot_rows(groups))
 }
 
 /// The navigation phase fields aggregated as `navigation.<label>` (Node `addPhase`
@@ -310,12 +309,12 @@ const NAV_PHASES: [(&str, &str); 5] = [
 
 /// Section 4 — navigation phase totals + slow navigation targets from
 /// `e2e.navigation_top_json`. Phases and targets drop negative/non-finite values.
-fn navigation_sections(spans: &[Span]) -> (Vec<HotspotRow>, Vec<TargetRow>) {
+fn navigation_sections(spans: &[Span]) -> Result<(Vec<HotspotRow>, Vec<TargetRow>)> {
     let mut phase_groups: Vec<(String, Agg)> = Vec::new();
     let mut url_groups: Vec<(String, Agg)> = Vec::new();
     for s in e2e_tests(spans) {
-        let navs = parse_json_attr(&s.raw, "e2e.navigation_top_json");
-        let Some(arr) = navs.as_array() else {
+        let navs = parse_json_attr(&s.raw, "e2e.navigation_top_json", &s.source)?;
+        let Some(arr) = navs.as_ref().and_then(Value::as_array) else {
             continue;
         };
         for nav in arr {
@@ -349,7 +348,7 @@ fn navigation_sections(spans: &[Span]) -> (Vec<HotspotRow>, Vec<TargetRow>) {
         })
         .collect();
     sort_desc_by(&mut target_rows, |r| r.max_ms);
-    (phase_rows, target_rows)
+    Ok((phase_rows, target_rows))
 }
 
 /// The fewest `bootPhases` entries a fully decomposed navigation carries.
@@ -377,7 +376,7 @@ const MIN_BOOT_PHASES: usize = 3;
 /// `dropped` sums `e2e.navigation_top_dropped`, because `e2e.navigation_top_json`
 /// is the top 20 *by duration* per test — a biased sample, not a census. Without it
 /// a truncated capture reads as complete coverage.
-fn boot_coverage_rows(spans: &[Span]) -> Vec<BootCoverageRow> {
+fn boot_coverage_rows(spans: &[Span]) -> Result<Vec<BootCoverageRow>> {
     let mut rows: Vec<BootCoverageRow> = Vec::new();
     for s in e2e_tests(spans) {
         let project = project_label(&s.project);
@@ -400,8 +399,8 @@ fn boot_coverage_rows(spans: &[Span]) -> Vec<BootCoverageRow> {
         };
         let row = &mut rows[idx];
         row.dropped += count(&s.raw, "e2e.navigation_top_dropped");
-        let navs = parse_json_attr(&s.raw, "e2e.navigation_top_json");
-        let Some(arr) = navs.as_array() else {
+        let navs = parse_json_attr(&s.raw, "e2e.navigation_top_json", &s.source)?;
+        let Some(arr) = navs.as_ref().and_then(Value::as_array) else {
             continue;
         };
         for nav in arr {
@@ -418,12 +417,12 @@ fn boot_coverage_rows(spans: &[Span]) -> Vec<BootCoverageRow> {
             }
         }
     }
-    rows
+    Ok(rows)
 }
 
 /// Section 6 — long-task hotspots by task name + per-project totals from
 /// `e2e.long_tasks_json`. Negative/non-finite durations are dropped.
-fn long_task_sections(spans: &[Span]) -> (Vec<HotspotRow>, Vec<LongTaskProjectRow>) {
+fn long_task_sections(spans: &[Span]) -> Result<(Vec<HotspotRow>, Vec<LongTaskProjectRow>)> {
     #[derive(Default)]
     struct ProjAgg {
         tests: usize,
@@ -434,8 +433,8 @@ fn long_task_sections(spans: &[Span]) -> (Vec<HotspotRow>, Vec<LongTaskProjectRo
     let mut name_groups: Vec<(String, Agg)> = Vec::new();
     let mut proj_groups: Vec<(String, ProjAgg)> = Vec::new();
     for s in e2e_tests(spans) {
-        let tasks = parse_json_attr(&s.raw, "e2e.long_tasks_json");
-        let Some(arr) = tasks.as_array() else {
+        let tasks = parse_json_attr(&s.raw, "e2e.long_tasks_json", &s.source)?;
+        let Some(arr) = tasks.as_ref().and_then(Value::as_array) else {
             continue;
         };
         let pa = entry(
@@ -478,12 +477,12 @@ fn long_task_sections(spans: &[Span]) -> (Vec<HotspotRow>, Vec<LongTaskProjectRo
         })
         .collect();
     sort_desc_by(&mut project_rows, |r| r.avg_per_test_ms);
-    (hotspots, project_rows)
+    Ok((hotspots, project_rows))
 }
 
 /// Section 7 — resource initiator hotspots + slow assets from
 /// `e2e.resource_summary_json.topSlow`. Negative/non-finite durations dropped.
-fn resource_sections(spans: &[Span]) -> (Vec<HotspotRow>, Vec<AssetRow>) {
+fn resource_sections(spans: &[Span]) -> Result<(Vec<HotspotRow>, Vec<AssetRow>)> {
     struct AssetAgg {
         initiator: String,
         agg: Agg,
@@ -491,8 +490,12 @@ fn resource_sections(spans: &[Span]) -> (Vec<HotspotRow>, Vec<AssetRow>) {
     let mut init_groups: Vec<(String, Agg)> = Vec::new();
     let mut asset_groups: Vec<(String, AssetAgg)> = Vec::new();
     for s in e2e_tests(spans) {
-        let summary = parse_json_attr(&s.raw, "e2e.resource_summary_json");
-        let Some(items) = summary.get("topSlow").and_then(Value::as_array) else {
+        let summary = parse_json_attr(&s.raw, "e2e.resource_summary_json", &s.source)?;
+        let Some(items) = summary
+            .as_ref()
+            .and_then(|value| value.get("topSlow"))
+            .and_then(Value::as_array)
+        else {
             continue;
         };
         for item in items {
@@ -537,7 +540,7 @@ fn resource_sections(spans: &[Span]) -> (Vec<HotspotRow>, Vec<AssetRow>) {
         })
         .collect();
     sort_desc_by(&mut asset_rows, |r| r.max_ms);
-    (initiator_rows, asset_rows)
+    Ok((initiator_rows, asset_rows))
 }
 
 /// Per-test span coverage: how much of each attempt's wall-clock lands inside a
@@ -618,13 +621,13 @@ pub fn analyze_spans(
     spans: Vec<Span>,
     project_filter: Option<String>,
     reported: &ReportedDurations,
-) -> Analysis {
+) -> Result<Analysis> {
     let coverage = span_coverage(&spans, reported);
     let coverage_note = coverage_note(&spans, reported, &coverage);
-    let mut analysis = analyze_spans_inner(spans, project_filter);
+    let mut analysis = analyze_spans_inner(spans, project_filter)?;
     analysis.span_coverage = coverage;
     analysis.span_coverage_note = coverage_note;
-    analysis
+    Ok(analysis)
 }
 
 /// Explain an empty coverage section, so "no report supplied" is never mistaken
@@ -655,7 +658,7 @@ fn coverage_note(
     ))
 }
 
-fn analyze_spans_inner(spans: Vec<Span>, project_filter: Option<String>) -> Analysis {
+fn analyze_spans_inner(spans: Vec<Span>, project_filter: Option<String>) -> Result<Analysis> {
     let mut slowest_spans: Vec<SlowSpanRow> = spans
         .iter()
         .map(|s| SlowSpanRow {
@@ -744,13 +747,13 @@ fn analyze_spans_inner(spans: Vec<Span>, project_filter: Option<String>) -> Anal
     sort_desc_by(&mut trace_totals, |r| r.total_ms);
 
     // Sections 3, 4, 6, 7 — the JSON-attribute hotspots.
-    let action_hotspots = action_hotspot_rows(&spans);
-    let (navigation_phase_hotspots, navigation_targets) = navigation_sections(&spans);
-    let boot_coverage = boot_coverage_rows(&spans);
-    let (long_task_hotspots, long_task_by_project) = long_task_sections(&spans);
-    let (resource_initiators, resource_assets) = resource_sections(&spans);
+    let action_hotspots = action_hotspot_rows(&spans)?;
+    let (navigation_phase_hotspots, navigation_targets) = navigation_sections(&spans)?;
+    let boot_coverage = boot_coverage_rows(&spans)?;
+    let (long_task_hotspots, long_task_by_project) = long_task_sections(&spans)?;
+    let (resource_initiators, resource_assets) = resource_sections(&spans)?;
 
-    Analysis {
+    Ok(Analysis {
         span_count: spans.len(),
         project_filter,
         slowest_spans,
@@ -768,7 +771,7 @@ fn analyze_spans_inner(spans: Vec<Span>, project_filter: Option<String>) -> Anal
         // Filled in by `analyze_spans`, which owns the report join.
         span_coverage: Vec::new(),
         span_coverage_note: None,
-    }
+    })
 }
 
 /// Read + parse every input, then analyze. `filters.project` is carried into
@@ -786,7 +789,7 @@ pub fn analyze(
     for input in inputs {
         spans.extend(read_spans(input, &filters)?);
     }
-    Ok(analyze_spans(spans, filters.project, reported))
+    analyze_spans(spans, filters.project, reported)
 }
 
 #[cfg(test)]
@@ -797,7 +800,17 @@ mod tests {
     const FIXTURE: &str = include_str!("testdata/otel-traces-sample.jsonl");
 
     fn fixture_spans() -> Vec<Span> {
-        parse_spans(FIXTURE, &Filters::default(), "sample").unwrap()
+        let mut spans = parse_spans(FIXTURE, &Filters::default(), "sample").unwrap();
+        for span in &mut spans {
+            if span.project == "chromium"
+                && let Some(attributes) = span.raw["attributes"].as_array_mut()
+            {
+                attributes.retain(|attribute| {
+                    attribute["key"].as_str() != Some("e2e.navigation_top_json")
+                });
+            }
+        }
+        spans
     }
 
     // --- span coverage (#794, AC-4) -----------------------------------------
@@ -915,7 +928,8 @@ mod tests {
     #[test]
     fn coverage_note_distinguishes_no_report_from_no_lifecycle_spans() {
         // An empty section and a missing report must not look alike.
-        let no_report = analyze_spans(lifecycle_tree(), None, &ReportedDurations::default());
+        let no_report =
+            analyze_spans(lifecycle_tree(), None, &ReportedDurations::default()).unwrap();
         assert!(
             no_report
                 .span_coverage_note
@@ -924,7 +938,7 @@ mod tests {
                 .contains("playwright-report")
         );
 
-        let no_lifecycle = analyze_spans(fixture_spans(), None, &reported(500.0));
+        let no_lifecycle = analyze_spans(fixture_spans(), None, &reported(500.0)).unwrap();
         assert!(
             no_lifecycle
                 .span_coverage_note
@@ -936,7 +950,7 @@ mod tests {
 
     #[test]
     fn coverage_note_is_absent_when_the_section_has_rows() {
-        let analysis = analyze_spans(lifecycle_tree(), None, &reported(500.0));
+        let analysis = analyze_spans(lifecycle_tree(), None, &reported(500.0)).unwrap();
         assert!(analysis.span_coverage_note.is_none());
         assert_eq!(analysis.span_coverage.len(), 1);
     }
@@ -1053,7 +1067,7 @@ mod tests {
             vec![full_nav(), nav(None, None, None)],
         ));
 
-        let rows = boot_coverage_rows(&spans);
+        let rows = boot_coverage_rows(&spans).unwrap();
         let ff = row_for(&rows, "firefox");
         assert_eq!((ff.navigations, ff.mounted, ff.full_marks), (2, 2, 0));
         let chr = row_for(&rows, "chromium");
@@ -1068,7 +1082,7 @@ mod tests {
         let mut spans = boot_span("sqlite", "firefox", 0, vec![full_nav()]);
         spans.extend(boot_span("postgres", "firefox", 0, vec![full_nav()]));
 
-        let rows = boot_coverage_rows(&spans);
+        let rows = boot_coverage_rows(&spans).unwrap();
         assert_eq!(rows.len(), 2, "sqlite and postgres must not be pooled");
         assert!(rows.iter().all(|r| r.project == "firefox"));
         assert!(rows.iter().any(|r| r.source == "sqlite"));
@@ -1081,7 +1095,7 @@ mod tests {
         // `commitToMountMs` is non-null iff `committedMs` AND `mountedMs` were both
         // set (`end2end/tests/fixtures.ts:618-621`), so it is the mounted proxy.
         let spans = boot_span("sqlite", "firefox", 0, vec![nav(None, Some(3), Some(40.0))]);
-        let rows = boot_coverage_rows(&spans);
+        let rows = boot_coverage_rows(&spans).unwrap();
         assert_eq!(rows[0].navigations, 1);
         assert_eq!(
             rows[0].mounted, 0,
@@ -1114,7 +1128,7 @@ mod tests {
             vec![nav(Some(1.0), Some(3), None)],
         ));
 
-        let rows = boot_coverage_rows(&spans);
+        let rows = boot_coverage_rows(&spans).unwrap();
         assert_eq!(row_for(&rows, "firefox").full_marks, 1, "4 phases is full");
         assert_eq!(
             row_for(&rows, "chromium").full_marks,
@@ -1136,7 +1150,7 @@ mod tests {
         let mut spans = boot_span("sqlite", "firefox", 3, vec![full_nav()]);
         spans.extend(boot_span("sqlite", "firefox", 5, vec![full_nav()]));
 
-        let rows = boot_coverage_rows(&spans);
+        let rows = boot_coverage_rows(&spans).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].navigations, 2);
         assert_eq!(rows[0].dropped, 8, "dropped accumulates across tests");
@@ -1147,7 +1161,7 @@ mod tests {
         let spans = fixture_spans();
         let n = spans.len();
         assert!(n > 0, "fixture must have spans");
-        let a = analyze_spans(spans, None, &ReportedDurations::default());
+        let a = analyze_spans(spans, None, &ReportedDurations::default()).unwrap();
         assert_eq!(a.span_count, n);
         // Every span present (not sliced), sorted by duration descending.
         assert_eq!(a.slowest_spans.len(), n);
@@ -1161,7 +1175,7 @@ mod tests {
 
     #[test]
     fn slowest_e2e_tests_only_e2e_test_spans() {
-        let a = analyze_spans(fixture_spans(), None, &ReportedDurations::default());
+        let a = analyze_spans(fixture_spans(), None, &ReportedDurations::default()).unwrap();
         // Two e2e.test spans in the fixture; the HTTP spans are excluded.
         assert_eq!(a.slowest_e2e_tests.len(), 2);
         // Slowest first: firefox (5000ms) then chromium (3000ms).
@@ -1176,7 +1190,7 @@ mod tests {
 
     #[test]
     fn by_project_groups_and_averages() {
-        let a = analyze_spans(fixture_spans(), None, &ReportedDurations::default());
+        let a = analyze_spans(fixture_spans(), None, &ReportedDurations::default()).unwrap();
         // One row per project, each with a single test; sorted by avg_ms desc.
         assert_eq!(a.by_project.len(), 2);
         let ff = &a.by_project[0];
@@ -1192,7 +1206,7 @@ mod tests {
 
     #[test]
     fn trace_totals_sum_per_trace() {
-        let a = analyze_spans(fixture_spans(), None, &ReportedDurations::default());
+        let a = analyze_spans(fixture_spans(), None, &ReportedDurations::default()).unwrap();
         assert_eq!(a.trace_totals.len(), 2);
         // Trace 1: e2e.test 5000 + GET 200 = 5200 (2 spans); largest first.
         let t1 = &a.trace_totals[0];
@@ -1205,7 +1219,7 @@ mod tests {
 
     #[test]
     fn action_hotspots_from_action_top_json() {
-        let a = analyze_spans(fixture_spans(), None, &ReportedDurations::default());
+        let a = analyze_spans(fixture_spans(), None, &ReportedDurations::default()).unwrap();
         // "click" appears in both e2e tests (120.5 firefox, 60 chromium); "fill"
         // only in firefox. Sorted by max desc → click, fill.
         assert_eq!(a.action_hotspots.len(), 2);
@@ -1219,8 +1233,8 @@ mod tests {
 
     #[test]
     fn navigation_phase_and_targets() {
-        let a = analyze_spans(fixture_spans(), None, &ReportedDurations::default());
-        // Only the firefox span has valid navigation JSON (chromium's is malformed).
+        let a = analyze_spans(fixture_spans(), None, &ReportedDurations::default()).unwrap();
+        // Only the Firefox span carries navigation JSON; absence remains optional.
         let total = a
             .navigation_phase_hotspots
             .iter()
@@ -1242,7 +1256,7 @@ mod tests {
 
     #[test]
     fn long_tasks_hotspots_and_by_project() {
-        let a = analyze_spans(fixture_spans(), None, &ReportedDurations::default());
+        let a = analyze_spans(fixture_spans(), None, &ReportedDurations::default()).unwrap();
         // "longtask" in both (90 firefox, 70 chromium); "self" only firefox; the
         // chromium "bad" task (-10) is dropped by the <0 guard.
         let longtask = &a.long_task_hotspots[0];
@@ -1263,7 +1277,7 @@ mod tests {
 
     #[test]
     fn resource_initiators_and_assets() {
-        let a = analyze_spans(fixture_spans(), None, &ReportedDurations::default());
+        let a = analyze_spans(fixture_spans(), None, &ReportedDurations::default()).unwrap();
         // Initiators: fetch (300) then script (120 + 110), sorted by max desc.
         assert_eq!(a.resource_initiators[0].name, "fetch");
         assert_eq!(a.resource_initiators[0].max_ms, 300.0);
@@ -1294,7 +1308,8 @@ mod tests {
             spans,
             filters.project.clone(),
             &ReportedDurations::default(),
-        );
+        )
+        .unwrap();
         // Carried for the render header.
         assert_eq!(a.project_filter.as_deref(), Some("firefox"));
         // Only the firefox e2e.test survives; the chromium one is filtered out.
@@ -1308,21 +1323,23 @@ mod tests {
     }
 
     #[test]
-    fn analyze_reads_files() {
+    fn trace_json_attr_analyze_fails_on_malformed_present_value() {
         let dir = std::env::temp_dir().join(format!("traces-analyze-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("otel-traces.jsonl");
         std::fs::write(&file, FIXTURE).unwrap();
 
-        let via_file = analyze(&[file], Filters::default(), &ReportedDurations::default()).unwrap();
-        let via_spans = analyze_spans(fixture_spans(), None, &ReportedDurations::default());
+        let error =
+            analyze(&[file], Filters::default(), &ReportedDurations::default()).unwrap_err();
         std::fs::remove_dir_all(&dir).ok();
 
-        assert_eq!(via_file.span_count, via_spans.span_count);
-        assert_eq!(via_file.slowest_spans.len(), via_spans.slowest_spans.len());
-        assert_eq!(
-            via_file.slowest_spans.first().map(|r| r.duration_ms),
-            via_spans.slowest_spans.first().map(|r| r.duration_ms),
+        let detail = format!("{error:#}");
+        assert!(detail.contains("e2e.navigation_top_json"), "{detail}");
+        assert!(detail.contains("otel-traces.jsonl"), "{detail}");
+        assert!(
+            error
+                .downcast_ref::<crate::traces::parse::MalformedJsonAttr>()
+                .is_some()
         );
     }
 }

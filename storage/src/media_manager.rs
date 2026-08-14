@@ -3,12 +3,13 @@
 //! result. Relocated from `server` (#517) so a `web` `#[server]` fn can construct
 //! it directly — its work is persistence and its deps are all `storage`'s.
 
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use bytes::Bytes;
 use chrono::Utc;
-use futures_util::{Stream, StreamExt};
+use futures_util::{Stream, StreamExt, TryStreamExt, stream};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::fs;
@@ -33,8 +34,8 @@ pub enum MediaError {
     PayloadTooLarge,
     #[error("Insufficient storage")]
     InsufficientStorage,
-    #[error("Internal server error: {0}")]
-    Internal(String),
+    #[error("Internal server error")]
+    Internal(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 // `UploadResponse` is defined in `common::media`, not here — it is the `#[server]` fn's
@@ -208,30 +209,66 @@ impl MediaManager {
         Ok(())
     }
 
+    fn finish_temp_cleanup<T>(primary: T, cleanup: io::Result<()>, context: &'static str) -> T {
+        crate::helpers::preserve_after_secondary(
+            primary,
+            cleanup,
+            host::error::ErrorKind::Internal,
+            host::error::ErrorClass::Transient,
+            context,
+        )
+    }
+
     /// Content-addresses the temp file at `target_path`, deduplicating against
     /// already-stored identical content. Returns `true` when the bytes were
     /// deduplicated (the target already existed, or an identical file was
     /// hard-linked) and `false` when this is a freshly stored file.
     async fn handle_deduplication(
         &self,
-        tmp_path: &PathBuf,
-        target_path: &PathBuf,
-        hash_dir: &PathBuf,
+        tmp_path: &Path,
+        target_path: &Path,
+        hash_dir: &Path,
     ) -> anyhow::Result<bool> {
         if target_path.exists() {
-            let _ = fs::remove_file(tmp_path).await;
-            Ok(true)
+            return Self::finish_temp_cleanup(
+                Ok(true),
+                fs::remove_file(tmp_path).await,
+                "storage.media.dedup_temp_cleanup",
+            );
+        }
+
+        // A new hash has no directory yet. Create it before enumeration so
+        // `NotFound` is not confused with an expected empty directory; after
+        // this point every `read_dir`/`next_entry` error is unexpected and must
+        // propagate.
+        fs::create_dir_all(hash_dir).await?;
+        let existing_file = self.first_file_in_dir(hash_dir).await;
+        Self::finish_deduplication_from_result(tmp_path, target_path, existing_file).await
+    }
+
+    async fn finish_deduplication_from_result(
+        tmp_path: &Path,
+        target_path: &Path,
+        existing_file: io::Result<Option<PathBuf>>,
+    ) -> anyhow::Result<bool> {
+        Self::finish_deduplication(tmp_path, target_path, existing_file?).await
+    }
+
+    async fn finish_deduplication(
+        tmp_path: &Path,
+        target_path: &Path,
+        existing_file: Option<PathBuf>,
+    ) -> anyhow::Result<bool> {
+        if let Some(existing) = existing_file {
+            fs::hard_link(&existing, target_path).await?;
+            Self::finish_temp_cleanup(
+                Ok(true),
+                fs::remove_file(tmp_path).await,
+                "storage.media.dedup_temp_cleanup",
+            )
         } else {
-            let existing_file = self.first_file_in_dir(hash_dir).await;
-            fs::create_dir_all(hash_dir).await?;
-            if let Some(existing) = existing_file {
-                fs::hard_link(&existing, target_path).await?;
-                let _ = fs::remove_file(tmp_path).await;
-                Ok(true)
-            } else {
-                fs::rename(tmp_path, target_path).await?;
-                Ok(false)
-            }
+            fs::rename(tmp_path, target_path).await?;
+            Ok(false)
         }
     }
 
@@ -257,7 +294,7 @@ impl MediaManager {
             Ok(()) | Err(CreateMediaError::AlreadyExists) => Ok(()),
             Err(CreateMediaError::Internal(e)) => {
                 tracing::error!(error = %e, "create_media failed");
-                Err(anyhow::anyhow!(MediaError::Internal(e.to_string())))
+                Err(anyhow::anyhow!(MediaError::Internal(Box::new(e))))
             }
         }
     }
@@ -278,8 +315,11 @@ impl MediaManager {
             .check_quota(user_id, metadata.size_bytes, user_quota)
             .await
         {
-            let _ = fs::remove_file(tmp_path).await;
-            return Err(e);
+            return Self::finish_temp_cleanup(
+                Err(e),
+                fs::remove_file(tmp_path).await,
+                "storage.media.quota_temp_cleanup",
+            );
         }
         let relative_path = media_path(
             &MediaSource::Upload,
@@ -300,7 +340,7 @@ impl MediaManager {
             // cov:ignore-stop
             .to_path_buf();
         let deduplicated = self
-            .handle_deduplication(&tmp_path.to_path_buf(), &target_path, &hash_dir)
+            .handle_deduplication(tmp_path, &target_path, &hash_dir)
             .await?;
         self.register_in_db(
             user_id,
@@ -416,15 +456,32 @@ impl MediaManager {
         Ok((sha256_hex, bytes_written))
     }
 
-    async fn first_file_in_dir(&self, dir: &Path) -> Option<PathBuf> {
-        let mut read_dir = fs::read_dir(dir).await.ok()?;
-        while let Ok(Some(entry)) = read_dir.next_entry().await {
-            let path = entry.path();
+    async fn directory_entries(dir: &Path) -> io::Result<impl Stream<Item = io::Result<PathBuf>>> {
+        let read_dir = fs::read_dir(dir).await?;
+        Ok(stream::try_unfold(read_dir, |mut read_dir| async move {
+            read_dir
+                .next_entry()
+                .await
+                .map(|entry| entry.map(|entry| (entry.path(), read_dir)))
+        }))
+    }
+
+    async fn first_file_in_dir(&self, dir: &Path) -> io::Result<Option<PathBuf>> {
+        Self::first_file_in_entries(Self::directory_entries(dir).await).await
+    }
+
+    async fn first_file_in_entries<S>(entries: io::Result<S>) -> io::Result<Option<PathBuf>>
+    where
+        S: Stream<Item = io::Result<PathBuf>>,
+    {
+        let entries = entries?;
+        futures_util::pin_mut!(entries);
+        while let Some(path) = entries.try_next().await? {
             if path.is_file() {
-                return Some(path);
+                return Ok(Some(path));
             }
         }
-        None
+        Ok(None)
     }
 }
 
@@ -465,7 +522,9 @@ mod tests {
             UploadOutcome::QuotaExceeded
         ));
         assert!(matches!(
-            MediaManager::upload_outcome(Some(&MediaError::Internal("x".to_owned()))),
+            MediaManager::upload_outcome(Some(&MediaError::Internal(Box::new(
+                std::io::Error::other("x"),
+            )))),
             UploadOutcome::Error
         ));
         assert!(matches!(
@@ -536,6 +595,47 @@ mod tests {
         assert!(matches!(media_err, MediaError::Internal(_)));
     }
 
+    #[test]
+    fn continuation_reporting_cleanup_failures_preserve_quota_and_dedup_results_and_report_once() {
+        let cleanup_error = || {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "temp cleanup denied",
+            ))
+        };
+        let quota = anyhow::anyhow!(MediaError::InsufficientStorage);
+        let (result, trace) = crate::helpers::swallowed_test::capture(|| {
+            MediaManager::finish_temp_cleanup(
+                Err::<UploadResponse, _>(quota),
+                cleanup_error(),
+                "storage.media.quota_temp_cleanup",
+            )
+        });
+        assert!(matches!(
+            result
+                .expect_err("quota error must remain primary")
+                .downcast_ref::<MediaError>(),
+            Some(MediaError::InsufficientStorage)
+        ));
+        crate::helpers::swallowed_test::assert_one_report(
+            &trace,
+            "storage.media.quota_temp_cleanup",
+        );
+
+        let (result, trace) = crate::helpers::swallowed_test::capture(|| {
+            MediaManager::finish_temp_cleanup(
+                Ok::<bool, anyhow::Error>(true),
+                cleanup_error(),
+                "storage.media.dedup_temp_cleanup",
+            )
+        });
+        assert!(result.expect("deduplication remains successful"));
+        crate::helpers::swallowed_test::assert_one_report(
+            &trace,
+            "storage.media.dedup_temp_cleanup",
+        );
+    }
+
     // guard:no-backend — mock store; the DB is unused by the dir scan
     #[tokio::test]
     async fn first_file_in_dir_skips_subdirs_and_finds_a_file() {
@@ -543,16 +643,16 @@ mod tests {
         let dir = temp.path();
         let manager = mock_manager(Arc::new(dir.to_path_buf()));
 
-        assert_eq!(manager.first_file_in_dir(dir).await, None);
+        assert_eq!(manager.first_file_in_dir(dir).await.unwrap(), None);
 
         // Dir with a subdir (should be ignored by is_file())
         let subdir = dir.join("subdir");
         fs::create_dir(&subdir).await.unwrap();
-        assert_eq!(manager.first_file_in_dir(dir).await, None);
+        assert_eq!(manager.first_file_in_dir(dir).await.unwrap(), None);
 
         let file = dir.join("test.txt");
         fs::write(&file, "hello").await.unwrap();
-        assert_eq!(manager.first_file_in_dir(dir).await, Some(file));
+        assert_eq!(manager.first_file_in_dir(dir).await.unwrap(), Some(file));
     }
 
     // guard:no-backend — mock store; dedup is a pure filesystem operation
@@ -616,6 +716,69 @@ mod tests {
 
         assert!(!tmp_path3.exists());
         assert!(target_path3.exists());
+    }
+
+    // guard:no-backend — injected directory enumeration failure
+    #[tokio::test]
+    async fn dedup_initial_directory_read_failure_propagates_before_success() {
+        let temp = TempDir::new().unwrap();
+        let media_dir = temp.path().join("media");
+        let tmp_dir = media_dir.join("tmp");
+        fs::create_dir_all(&tmp_dir).await.unwrap();
+        let tmp_path = tmp_dir.join("upload");
+        fs::write(&tmp_path, b"payload").await.unwrap();
+        let target_path = media_dir.join("hash").join("upload.png");
+        let entries: std::io::Result<futures_util::stream::Empty<std::io::Result<PathBuf>>> =
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "initial directory read sentinel",
+            ));
+
+        let existing_file = MediaManager::first_file_in_entries(entries).await;
+        let error =
+            MediaManager::finish_deduplication_from_result(&tmp_path, &target_path, existing_file)
+                .await
+                .expect_err("dedup must not report success");
+
+        let source = error
+            .downcast_ref::<std::io::Error>()
+            .expect("typed initial read error");
+        assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(source.to_string(), "initial directory read sentinel");
+        assert!(tmp_path.exists(), "failed probe must not consume upload");
+        assert!(!target_path.exists(), "failed probe must not create target");
+    }
+
+    // guard:no-backend — injected later directory enumeration failure
+    #[tokio::test]
+    async fn dedup_later_next_entry_failure_propagates_before_success() {
+        let temp = TempDir::new().unwrap();
+        let media_dir = temp.path().join("media");
+        let tmp_dir = media_dir.join("tmp");
+        let hash_dir = media_dir.join("hash");
+        fs::create_dir_all(&tmp_dir).await.unwrap();
+        fs::create_dir_all(hash_dir.join("subdir")).await.unwrap();
+        let tmp_path = tmp_dir.join("upload");
+        fs::write(&tmp_path, b"payload").await.unwrap();
+        let target_path = hash_dir.join("upload.png");
+        let entries = Ok(futures_util::stream::iter([
+            Ok(hash_dir.join("subdir")),
+            Err(std::io::Error::other("later next-entry sentinel")),
+        ]));
+
+        let existing_file = MediaManager::first_file_in_entries(entries).await;
+        let error =
+            MediaManager::finish_deduplication_from_result(&tmp_path, &target_path, existing_file)
+                .await
+                .expect_err("dedup must not report success after partial enumeration");
+
+        let source = error
+            .downcast_ref::<std::io::Error>()
+            .expect("typed next-entry error");
+        assert_eq!(source.kind(), std::io::ErrorKind::Other);
+        assert_eq!(source.to_string(), "later next-entry sentinel");
+        assert!(tmp_path.exists(), "failed probe must not consume upload");
+        assert!(!target_path.exists(), "failed probe must not create target");
     }
 
     #[apply(backends)]

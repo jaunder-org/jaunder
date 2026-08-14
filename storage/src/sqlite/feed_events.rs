@@ -15,30 +15,31 @@ fn placeholders(n: usize) -> String {
     std::iter::repeat_n("?", n).collect::<Vec<_>>().join(",")
 }
 
-/// Deletes `feed_events` rows whose `feed_url` could not be parsed into a
-/// [`FeedPath`] — only reachable via DB tampering/corruption, since `enqueue`
-/// takes a validated `FeedPath`. Such a row names no identifiable feed, so it is
-/// purged to keep the worker draining rather than wedged on it forever; any real
-/// regeneration need re-enqueues via the write/go-live path. Best-effort: a
-/// delete failure is logged, never propagated — the corrupt ids are already
-/// excluded from the returned batch, so the worker proceeds regardless.
-async fn purge_corrupt(pool: &Pool<Sqlite>, ids: &[FeedEventId]) {
+fn finish_purge(
+    primary: Vec<FeedEventRecord>,
+    purge: Result<(), sqlx::Error>,
+) -> Vec<FeedEventRecord> {
+    crate::feed_events::finish_corrupt_purge(
+        primary,
+        purge,
+        "storage.sqlite.feed_events.purge_corrupt",
+    )
+}
+
+/// Deletes claimed rows whose `feed_url` cannot decode. Partitioning reports
+/// the aggregate decode failure; only a failed cleanup is reported here.
+async fn purge_corrupt(pool: &Pool<Sqlite>, ids: &[FeedEventId]) -> Result<(), sqlx::Error> {
     if ids.is_empty() {
-        return;
+        return Ok(());
     }
-    tracing::warn!("feed_events: purging rows with an unparseable feed_url");
     let ph = placeholders(ids.len());
     let sql = format!("DELETE FROM feed_events WHERE id IN ({ph})");
-    let mut q = sqlx::query(&sql);
+    let mut query = sqlx::query(&sql);
     for id in ids {
-        q = q.bind(*id);
+        query = query.bind(*id);
     }
-    if let Err(e) = q.execute(pool).await {
-        // cov:ignore-start — defensive log; the delete is best-effort and the
-        // corrupt ids are already excluded from the batch, so this never blocks.
-        tracing::warn!(error = %e, "feed_events: purge of corrupt rows failed");
-        // cov:ignore-stop
-    }
+    query.execute(pool).await?;
+    Ok(())
 }
 
 #[async_trait]
@@ -72,8 +73,8 @@ impl FeedEventDialect for Sqlite {
         .await?;
 
         let (records, corrupt) = partition_claimed(rows);
-        purge_corrupt(pool, &corrupt).await;
-        Ok(records)
+        let purge = purge_corrupt(pool, &corrupt).await;
+        Ok(finish_purge(records, purge))
     }
 
     async fn mark_regenerated(
@@ -155,12 +156,39 @@ impl FeedEventDialect for Sqlite {
 mod tests {
     use std::sync::Arc;
 
-    use crate::FeedEventError;
+    use super::finish_purge;
     use crate::test_support::{Backend, fp, sqlite_only};
-    use chrono::Duration;
+    use crate::{FeedEventError, FeedEventRecord, FeedEventStatus};
+    use chrono::{Duration, Utc};
+    use common::ids::FeedEventId;
 
     use rstest::*;
     use rstest_reuse::*;
+
+    #[test]
+    fn continuation_reporting_corrupt_purge_failure_preserves_valid_batch_and_reports_once() {
+        let now = Utc::now();
+        let valid = vec![FeedEventRecord {
+            id: FeedEventId::from(17),
+            feed_path: fp("/feed.rss"),
+            status: FeedEventStatus::Claimed,
+            attempts: 0,
+            last_error: None,
+            next_attempt_at: now,
+            claimed_at: Some(now),
+            created_at: now,
+            regenerated_at: None,
+            pinged_at: None,
+        }];
+        let (records, trace) = crate::helpers::swallowed_test::capture(|| {
+            finish_purge(valid.clone(), Err(sqlx::Error::PoolClosed))
+        });
+        assert_eq!(records, valid);
+        crate::helpers::swallowed_test::assert_one_report(
+            &trace,
+            "storage.sqlite.feed_events.purge_corrupt",
+        );
+    }
 
     #[apply(sqlite_only)]
     // reason: reproduces the SQLite-specific issue #18 claim_pending_batch lock flake

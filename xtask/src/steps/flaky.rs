@@ -60,20 +60,40 @@ pub fn collect(result: &mut CommandResult, backend: &str, browser: &str) {
 }
 
 /// Append the flaky table to `$GITHUB_STEP_SUMMARY` when running under GitHub
-/// Actions. Best-effort: no env var (a local run) or an unwritable file is a
-/// silent no-op.
+/// Actions. No env var is an expected local no-op; an attempted write failure
+/// emits one fixed warning without changing the flaky result.
 fn append_step_summary(command: &str, specs: &[FlakySpec]) {
-    let Ok(summary_path) = std::env::var("GITHUB_STEP_SUMMARY") else {
+    append_step_summary_with(
+        command,
+        specs,
+        std::env::var_os("GITHUB_STEP_SUMMARY"),
+        |path, body| {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)?
+                .write_all(body)
+        },
+        &mut std::io::stderr(),
+    );
+}
+
+fn append_step_summary_with(
+    command: &str,
+    specs: &[FlakySpec],
+    summary_path: Option<std::ffi::OsString>,
+    write_summary: impl FnOnce(&std::ffi::OsStr, &[u8]) -> std::io::Result<()>,
+    stderr: &mut impl Write,
+) {
+    let Some(summary_path) = summary_path else {
         return;
     };
-    let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(summary_path)
-    else {
-        return;
-    };
-    let _ = file.write_all(render_summary(command, specs).as_bytes());
+    if write_summary(&summary_path, render_summary(command, specs).as_bytes()).is_err() {
+        let _ = writeln!(
+            stderr,
+            "xtask: warning: xtask.flaky.step_summary: ignored failure while appending flaky-test summary"
+        );
+    }
 }
 
 /// Render the Markdown block for the run summary. Pure, so it is unit-tested.
@@ -224,5 +244,31 @@ mod tests {
         let md = render_summary("e2e-sqlite-firefox", &specs);
         assert!(md.starts_with("### Flaky \u{2014} e2e-sqlite-firefox: 1\n"));
         assert!(md.contains("- `tests/x.spec.ts:5` \u{203a} t\n"));
+    }
+    #[test]
+    fn ancillary_warning_summary_write_preserves_primary_result_and_json() {
+        let specs = parse_flaky(REPORT);
+        let mut result = CommandResult::new("e2e");
+        result.push(StepResult::ok("flaky-scan").detail("2 flaky test(s)"));
+        result.flaky = specs.clone();
+        let before = serde_json::to_string(&result).unwrap();
+        let mut stderr = Vec::new();
+        append_step_summary_with(
+            &result.command,
+            &specs,
+            Some(std::ffi::OsString::from("/sensitive/summary")),
+            |_, _| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "sensitive",
+                ))
+            },
+            &mut stderr,
+        );
+        assert_eq!(serde_json::to_string(&result).unwrap(), before);
+        let warning = String::from_utf8(stderr).unwrap();
+        assert_eq!(warning.matches("xtask.flaky.step_summary").count(), 1);
+        assert_eq!(warning.lines().count(), 1);
+        assert!(!warning.contains("sensitive"));
     }
 }

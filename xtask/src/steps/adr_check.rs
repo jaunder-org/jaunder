@@ -25,7 +25,7 @@ use crate::result::{CommandResult, StepResult};
 /// Push the `adr-format`, `adr-readme-parity` and `adr-view-parity` steps.
 pub fn run(result: &mut CommandResult) {
     result.push(format_step());
-    result.push(parity_step());
+    result.push(parity_step(adr_readme::parity_report(Path::new("."))));
     result.push(view_parity_step());
 }
 
@@ -38,9 +38,9 @@ fn format_step() -> StepResult {
     }
 }
 
-fn parity_step() -> StepResult {
+pub(crate) fn parity_step(report: anyhow::Result<Vec<String>>) -> StepResult {
     const RECOVERY: &str = "  recovery: cargo xtask adr sync-readme";
-    match adr_readme::parity_report(Path::new(".")) {
+    match report {
         Ok(problems) if problems.is_empty() => StepResult::ok("adr-readme-parity"),
         Ok(problems) => StepResult::fail("adr-readme-parity")
             .detail(format!("{}\n{RECOVERY}", problems.join("\n"))),

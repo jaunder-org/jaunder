@@ -131,3 +131,35 @@ this ADR; the typed sources preserved per #3 are exactly what it will classify.
   SQLite/Postgres storage dedup** (analysis §1.1, `jaunder-kq8w.3`); the
   `authenticate` source-preservation in particular is noted there so the merge
   does not silently re-stringify.
+
+## Addendum (2026-08-13): unexpected failures propagate or report (issue #58)
+
+Preserving a typed source in an error enum is insufficient if a caller erases
+the error before it reaches the T1→T2→T3 pipeline. The same typed-source
+invariant therefore governs every continued-after-error path:
+
+- An expected validation or domain rejection may deliberately become ordinary
+  control flow (`Option`, a domain variant, or a documented fallback).
+- An unexpected infrastructure, I/O, browser, subprocess, invariant, or decode
+  failure must propagate with its typed source.
+- If preserving the primary result or an intentional degradation makes
+  continuation correct, the site reports the failure before continuing and
+  states why continuation is safe. A comment without a diagnostic is not
+  observability.
+
+The rule is semantic. The spellings `.ok()`, `unwrap_or`, `let _`, `Err(_)`, and
+`map_err` each express valid expected control flow as well as concealment, so no
+broad syntax gate polices them. Clippy continues to reject bare unused
+`must_use` results; review and behavior tests distinguish the error semantics.
+
+Native runtime continuation goes through one `host::error` reporting interface
+that emits the fixed warning and error-event metric atomically. Client-side
+continuation uses the bounded authenticated intake recorded in ADR-0011.
+Short-lived developer tools instead fail correctness-affecting operations or
+write a contextual stderr warning for legitimate ancillary/cleanup failure.
+Diagnostic self-failure uses only its fallback sink: reporting a reporter
+failure through the same path would recurse.
+
+The PII rule remains unchanged. A native typed source is rendered only after its
+source chain is reviewed as PII-safe; the client intake cannot carry arbitrary
+source text at all.

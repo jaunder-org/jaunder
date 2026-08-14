@@ -230,21 +230,24 @@ fn warmth_rank(warmth: &str) -> u8 {
 
 /// Group every navigation in `spans` into `(source, project, cacheWarmth)`
 /// populations and take the medians.
-pub fn boot_phase_rows(spans: &[Span]) -> Vec<BootPhaseRow> {
+pub fn boot_phase_rows(spans: &[Span]) -> Result<Vec<BootPhaseRow>> {
     type Key = (String, String, String);
     let mut groups: Vec<(Key, Population)> = Vec::new();
 
     for span in spans.iter().filter(|span| span.name == "e2e.test") {
-        let navs = parse_json_attr(&span.raw, "e2e.navigation_top_json");
-        let Some(navs) = navs.as_array() else {
+        let navs = parse_json_attr(&span.raw, "e2e.navigation_top_json", &span.source)?;
+        // Both independently optional attributes are validated before either
+        // absence can skip the span: a malformed present sibling is never hidden.
+        let marks_json = parse_json_attr(&span.raw, "e2e.boot_marks_json", &span.source)?;
+        let Some(navs) = navs.as_ref().and_then(Value::as_array) else {
             continue;
         };
         // Boot marks are keyed by navigation id and live on their own attribute:
         // `mount_done.startTime` must come from somewhere other than the segments
         // for the closure check to mean anything.
-        let marks_json = parse_json_attr(&span.raw, "e2e.boot_marks_json");
         let marks_by_nav: BTreeMap<i64, Vec<Value>> = marks_json
-            .as_array()
+            .as_ref()
+            .and_then(Value::as_array)
             .map(|entries| {
                 entries
                     .iter()
@@ -338,7 +341,7 @@ pub fn boot_phase_rows(spans: &[Span]) -> Vec<BootPhaseRow> {
                 &right.cache_warmth,
             ))
     });
-    rows
+    Ok(rows)
 }
 
 /// The span's `e2e.project`, or `-` when unset (matching `analyze`'s label).
@@ -455,7 +458,7 @@ pub fn boot_phases(inputs: &[PathBuf]) -> Result<Vec<BootPhaseRow>> {
     for input in inputs {
         spans.extend(read_spans(input, &Filters::default())?);
     }
-    Ok(boot_phase_rows(&spans))
+    boot_phase_rows(&spans)
 }
 
 #[cfg(test)]
@@ -580,7 +583,7 @@ mod tests {
     fn boot_phase_segments_sum_to_the_boot_total_within_a_millisecond() {
         // The closure property spec D8 rests on: the six segments ARE the boot
         // total, taken independently from `mount_done.startTime`.
-        let rows = boot_phase_rows(&one_nav_span("sqlite", "chromium", 105.0));
+        let rows = boot_phase_rows(&one_nav_span("sqlite", "chromium", 105.0)).unwrap();
         assert_eq!(rows.len(), 1);
         let row = &rows[0];
         assert_eq!(
@@ -605,7 +608,7 @@ mod tests {
         // `commitToMountMs` is `Date.now()`-derived and every segment is
         // `timeOrigin`-derived; the skew is real, bidirectional harness overhead
         // and gets its own figure rather than a segment (spec D8, AC14).
-        let rows = boot_phase_rows(&one_nav_span("sqlite", "chromium", 105.0));
+        let rows = boot_phase_rows(&one_nav_span("sqlite", "chromium", 105.0)).unwrap();
         assert_eq!(rows[0].commit_to_mount_ms, Some(155.0));
         assert_eq!(rows[0].frame_skew_ms, Some(50.0));
         assert!(
@@ -627,7 +630,7 @@ mod tests {
             vec![nav(1, "warm", 105.0, Some(160.0))],
             vec![(1, boot_marks(200.0))],
         );
-        let rows = boot_phase_rows(&spans);
+        let rows = boot_phase_rows(&spans).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].navigations, 1);
         assert_eq!(rows[0].closure_violations, 1);
@@ -650,7 +653,7 @@ mod tests {
             ],
             vec![(1, boot_marks(105.0)), (2, boot_marks(95.0))],
         );
-        let rows = boot_phase_rows(&spans);
+        let rows = boot_phase_rows(&spans).unwrap();
         assert_eq!(rows.len(), 2, "cold and warm are never pooled");
         assert_eq!(rows[0].cache_warmth, "cold", "cold sorts first");
         assert_eq!(rows[0].boot_total_ms, Some(105.0));
@@ -664,7 +667,7 @@ mod tests {
         // (`traces/run.rs:99-101`), so on project alone sqlite pools with postgres.
         let mut spans = one_nav_span("sqlite", "firefox", 105.0);
         spans.extend(one_nav_span("postgres", "firefox", 205.0));
-        let rows = boot_phase_rows(&spans);
+        let rows = boot_phase_rows(&spans).unwrap();
         assert_eq!(rows.len(), 2, "sqlite and postgres must not be pooled");
         assert!(rows.iter().all(|r| r.project == "firefox"));
         assert!(rows.iter().any(|r| r.source == "sqlite"));
@@ -702,7 +705,8 @@ mod tests {
             "chromium",
             vec![navigation],
             vec![(1, marks)],
-        ));
+        ))
+        .unwrap();
         assert_eq!(
             rows[0].decomposed, 1,
             "a fourth mark must not break closure"
@@ -749,7 +753,8 @@ mod tests {
             "chromium",
             vec![navigation],
             vec![(1, marks)],
-        ));
+        ))
+        .unwrap();
         let labels: Vec<&str> = rows[0].segments.iter().map(|s| s.label.as_str()).collect();
         assert_eq!(
             labels[4],
@@ -776,7 +781,7 @@ mod tests {
             .enumerate()
             .map(|(index, total)| (index as i64 + 1, boot_marks(*total)))
             .collect();
-        let rows = boot_phase_rows(&test_span("sqlite", "chromium", navs, marks));
+        let rows = boot_phase_rows(&test_span("sqlite", "chromium", navs, marks)).unwrap();
         assert_eq!(rows[0].decomposed, 4);
         assert_eq!(
             rows[0].boot_total_ms,
@@ -798,7 +803,7 @@ mod tests {
             vec![dark_nav(1, "cold"), dark_nav(2, "warm")],
             vec![(1, vec![]), (2, vec![])],
         );
-        let rows = boot_phase_rows(&spans);
+        let rows = boot_phase_rows(&spans).unwrap();
         assert_eq!(rows.len(), 2, "the population is still reported");
         assert!(rows.iter().all(|r| r.decomposed == 0));
         assert!(rows.iter().all(|r| r.boot_total_ms.is_none()));
@@ -814,7 +819,7 @@ mod tests {
     fn boot_phase_render_names_every_population_and_its_violations() {
         let mut spans = one_nav_span("sqlite", "chromium", 105.0);
         spans.extend(one_nav_span("postgres", "firefox", 205.0));
-        let out = render(&boot_phase_rows(&spans));
+        let out = render(&boot_phase_rows(&spans).unwrap());
         assert!(out.contains("sqlite / chromium / warm"));
         assert!(out.contains("postgres / firefox / warm"));
         assert!(out.contains("closure violations: 0"));
@@ -841,5 +846,56 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].decomposed, 1);
+    }
+
+    #[test]
+    fn trace_json_attr_boot_phases_fail_on_malformed_present_value() {
+        let dir =
+            std::env::temp_dir().join(format!("traces-boot-phases-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("otel-traces.jsonl");
+        let mut raw = one_nav_span("inline", "chromium", 105.0)[0].raw.clone();
+        let attributes = raw
+            .get_mut("attributes")
+            .and_then(Value::as_array_mut)
+            .unwrap();
+        let navigation = attributes
+            .iter_mut()
+            .find(|attr| attr.get("key").and_then(Value::as_str) == Some("e2e.navigation_top_json"))
+            .unwrap();
+        navigation["value"]["stringValue"] = Value::String("{not json".to_owned());
+        let line = json!({
+            "resourceSpans": [{ "scopeSpans": [{ "spans": [raw] }] }]
+        });
+        std::fs::write(&file, format!("{line}\n")).unwrap();
+
+        let error = boot_phases(&[file]).unwrap_err();
+        std::fs::remove_dir_all(&dir).ok();
+        let detail = format!("{error:#}");
+        assert!(detail.contains("e2e.navigation_top_json"), "{detail}");
+        assert!(detail.contains("otel-traces.jsonl"), "{detail}");
+        assert!(
+            error
+                .downcast_ref::<crate::traces::parse::MalformedJsonAttr>()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn trace_json_attr_absent_navigation_does_not_hide_malformed_boot_marks() {
+        let mut span = one_nav_span("inline", "chromium", 105.0).remove(0);
+        let attributes = span.raw["attributes"].as_array_mut().unwrap();
+        attributes.retain(|attr| {
+            attr.get("key").and_then(Value::as_str) != Some("e2e.navigation_top_json")
+        });
+        let marks = attributes
+            .iter_mut()
+            .find(|attr| attr.get("key").and_then(Value::as_str) == Some("e2e.boot_marks_json"))
+            .unwrap();
+        marks["value"]["stringValue"] = Value::String("{not json".to_owned());
+        let error = boot_phase_rows(&[span]).unwrap_err();
+        let detail = format!("{error:#}");
+        assert!(detail.contains("e2e.boot_marks_json"), "{detail}");
+        assert!(detail.contains("inline"), "{detail}");
     }
 }

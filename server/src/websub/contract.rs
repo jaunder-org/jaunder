@@ -4,12 +4,10 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum WebSubError {
-    #[error("HTTP error: {0}")]
-    Http(String),
+    #[error("WebSub transport failed")]
+    Http(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("hub returned non-2xx: {status}")]
     HubRefused { status: u16 },
-    #[error("timeout after {0:?}")]
-    Timeout(std::time::Duration),
 }
 
 #[async_trait]

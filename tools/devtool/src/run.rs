@@ -5,7 +5,7 @@
 //! latter silently overwrites the exit status with the last pipe stage's.
 
 use std::fs::{self, File};
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -54,54 +54,125 @@ fn alloc_id() -> String {
     format!("{millis}-{}", std::process::id())
 }
 
-/// Keep only the newest `RUN_HISTORY_LIMIT` files in `dir`; best-effort, so a
-/// race or a stat error never fails an otherwise-successful run. Called after the
-/// new files are written — they are newest, so they are never pruned.
+/// Keep only the newest history files. Enumeration/stat/removal failures are
+/// aggregated into one stderr warning and never change the child result.
 fn prune(dir: &Path) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
+    prune_with(dir, |path| fs::remove_file(path), &mut std::io::stderr());
+}
+
+fn prune_with(
+    dir: &Path,
+    mut remove: impl FnMut(&Path) -> std::io::Result<()>,
+    stderr: &mut impl Write,
+) {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => {
+            report_cleanup_failure(true, "devtool.run.history_prune", stderr);
+            return;
+        }
     };
-    let mut files: Vec<(std::time::SystemTime, PathBuf)> = entries
-        .filter_map(|e| e.ok())
-        .filter_map(|e| {
-            let modified = e.metadata().ok()?.modified().ok()?;
-            Some((modified, e.path()))
+    let population = entries.map(|entry| {
+        entry.map(|entry| {
+            let path = entry.path();
+            let modified = entry.metadata().and_then(|metadata| metadata.modified());
+            (path, modified)
         })
-        .collect();
-    if files.len() <= RUN_HISTORY_LIMIT {
-        return;
+    });
+    prune_entries_with(population, &mut remove, stderr);
+}
+
+fn prune_entries_with(
+    entries: impl IntoIterator<
+        Item = std::io::Result<(PathBuf, std::io::Result<std::time::SystemTime>)>,
+    >,
+    mut remove: impl FnMut(&Path) -> std::io::Result<()>,
+    stderr: &mut impl Write,
+) {
+    let mut failed = false;
+    let mut files = Vec::new();
+    for entry in entries {
+        let (path, modified) = match entry {
+            Ok(entry) => entry,
+            Err(_) => {
+                failed = true;
+                continue;
+            }
+        };
+        match modified {
+            Ok(modified) => files.push((modified, path)),
+            Err(_) => failed = true,
+        }
     }
-    files.sort_by_key(|f| std::cmp::Reverse(f.0)); // newest first
+    files.sort_by_key(|file| std::cmp::Reverse(file.0));
     for (_, path) in files.into_iter().skip(RUN_HISTORY_LIMIT) {
-        let _ = fs::remove_file(path);
+        failed |= remove(&path).is_err();
     }
+    report_cleanup_failure(failed, "devtool.run.history_prune", stderr);
+}
+
+fn report_cleanup_failure(failed: bool, key: &str, stderr: &mut impl Write) {
+    if failed {
+        let _ = writeln!(
+            stderr,
+            "devtool: warning: {key}: ignored failure during runner cleanup"
+        );
+    }
+}
+fn kill_timed_out_child(kill: impl FnOnce() -> std::io::Result<()>, stderr: &mut impl Write) {
+    report_cleanup_failure(kill().is_err(), "devtool.run.timeout_kill", stderr);
 }
 
 /// Count `\n` bytes (wc -l semantics) by streaming, so a huge output file never
 /// lands in memory all at once.
-fn count_lines(path: &Path) -> u64 {
-    let Ok(f) = File::open(path) else {
-        return 0;
-    };
+fn count_lines(path: &Path) -> std::io::Result<u64> {
+    let f = File::open(path)?;
     let mut reader = BufReader::new(f);
     let mut buf = [0u8; 64 * 1024];
     let mut count = 0u64;
     loop {
-        match reader.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => count += buf[..n].iter().filter(|&&b| b == b'\n').count() as u64,
-            Err(_) => break,
+        match reader.read(&mut buf)? {
+            0 => break,
+            n => count += buf[..n].iter().filter(|&&b| b == b'\n').count() as u64,
         }
     }
-    count
+    Ok(count)
 }
 
 fn stream_of(path: &Path) -> Stream {
-    let bytes = fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    stream_of_with(
+        path,
+        || fs::metadata(path).map(|metadata| metadata.len()),
+        || count_lines(path),
+        &mut std::io::stderr(),
+    )
+}
+
+fn stream_of_with(
+    path: &Path,
+    metadata: impl FnOnce() -> std::io::Result<u64>,
+    count: impl FnOnce() -> std::io::Result<u64>,
+    stderr: &mut impl Write,
+) -> Stream {
+    let mut failed = false;
+    let bytes = metadata().unwrap_or_else(|_| {
+        failed = true;
+        0
+    });
+    let lines = count().unwrap_or_else(|_| {
+        failed = true;
+        0
+    });
+    if failed {
+        let _ = writeln!(
+            stderr,
+            "devtool: warning: devtool.run.stream_summary: ignored failure while summarizing captured output"
+        );
+    }
     Stream {
         path: path.display().to_string(),
         bytes,
-        lines: count_lines(path),
+        lines,
     }
 }
 
@@ -156,7 +227,7 @@ fn wait_with_timeout(
             return Ok((status, false));
         }
         if Instant::now() >= deadline {
-            let _ = child.kill();
+            kill_timed_out_child(|| child.kill(), &mut std::io::stderr());
             let status = child.wait().map_err(wait_err)?;
             return Ok((status, true));
         }
@@ -435,5 +506,148 @@ mod tests {
                 .exists(),
             "newest should remain"
         );
+    }
+
+    #[test]
+    fn ancillary_warning_run_cleanup_preserves_primary_code() {
+        let dir = tmp();
+        for i in 0..=RUN_HISTORY_LIMIT {
+            let path = dir.join(format!("{i:04}.out"));
+            std::fs::write(&path, b"x").unwrap();
+            set_mtime(
+                &path,
+                std::time::UNIX_EPOCH + std::time::Duration::from_secs(i as u64),
+            );
+        }
+        let primary_code = 124;
+        let mut stderr = Vec::new();
+        prune_with(
+            &dir,
+            |_| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "sensitive",
+                ))
+            },
+            &mut stderr,
+        );
+        kill_timed_out_child(
+            || {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "sensitive",
+                ))
+            },
+            &mut stderr,
+        );
+        assert_eq!(primary_code, 124);
+        let warning = String::from_utf8(stderr).unwrap();
+        for key in ["devtool.run.history_prune", "devtool.run.timeout_kill"] {
+            assert_eq!(warning.matches(key).count(), 1);
+        }
+        assert_eq!(warning.lines().count(), 2);
+        assert!(!warning.contains("sensitive"));
+    }
+    #[test]
+    fn ancillary_warning_history_population_failures_warn_once_per_attempt() {
+        let missing = tmp().join("missing");
+        let mut stderr = Vec::new();
+        prune_with(
+            &missing,
+            |_| unreachable!("an unreadable population has no removal candidates"),
+            &mut stderr,
+        );
+        let warning = String::from_utf8(stderr).unwrap();
+        assert_eq!(warning.matches("devtool.run.history_prune").count(), 1);
+        assert_eq!(warning.lines().count(), 1);
+
+        for population in [
+            vec![Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "sensitive directory entry",
+            ))],
+            vec![Ok((
+                PathBuf::from("sensitive"),
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "sensitive metadata or modified time",
+                )),
+            ))],
+        ] {
+            let mut stderr = Vec::new();
+            prune_entries_with(
+                population,
+                |_| unreachable!("failed population members are never removed"),
+                &mut stderr,
+            );
+            let warning = String::from_utf8(stderr).unwrap();
+            assert_eq!(warning.matches("devtool.run.history_prune").count(), 1);
+            assert_eq!(warning.lines().count(), 1);
+            assert!(!warning.contains("sensitive"));
+        }
+    }
+
+    #[test]
+    fn ancillary_warning_stream_summary_failures_preserve_fallback_and_primary_code() {
+        for metadata_fails in [true, false] {
+            let primary_code = 17;
+            let mut stderr = Vec::new();
+            let stream = stream_of_with(
+                Path::new("/sensitive/output"),
+                || {
+                    if metadata_fails {
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            "sensitive metadata",
+                        ))
+                    } else {
+                        Ok(7)
+                    }
+                },
+                || {
+                    if metadata_fails {
+                        Ok(9)
+                    } else {
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "sensitive read",
+                        ))
+                    }
+                },
+                &mut stderr,
+            );
+            assert_eq!(primary_code, 17);
+            assert_eq!(stream.bytes, if metadata_fails { 0 } else { 7 });
+            assert_eq!(stream.lines, if metadata_fails { 9 } else { 0 });
+            let warning = String::from_utf8(stderr).unwrap();
+            assert_eq!(warning.matches("devtool.run.stream_summary").count(), 1);
+            assert_eq!(warning.lines().count(), 1);
+            assert!(!warning.contains("sensitive"));
+        }
+        let missing = tmp().join("missing-output");
+        let mut stderr = Vec::new();
+        let stream = stream_of_with(
+            &missing,
+            || fs::metadata(&missing).map(|metadata| metadata.len()),
+            || count_lines(&missing),
+            &mut stderr,
+        );
+        assert_eq!((stream.bytes, stream.lines), (0, 0));
+        let warning = String::from_utf8(stderr).unwrap();
+        assert_eq!(warning.matches("devtool.run.stream_summary").count(), 1);
+        assert_eq!(warning.lines().count(), 1);
+
+        let unreadable = tmp();
+        let mut stderr = Vec::new();
+        let stream = stream_of_with(
+            &unreadable,
+            || fs::metadata(&unreadable).map(|metadata| metadata.len()),
+            || count_lines(&unreadable),
+            &mut stderr,
+        );
+        assert_eq!(stream.lines, 0);
+        let warning = String::from_utf8(stderr).unwrap();
+        assert_eq!(warning.matches("devtool.run.stream_summary").count(), 1);
+        assert_eq!(warning.lines().count(), 1);
     }
 }

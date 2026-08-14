@@ -1,5 +1,6 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use thiserror::Error;
 
 /// The error type for the raw `AtomPub` HTTP handlers.
 ///
@@ -10,24 +11,32 @@ use axum::response::{IntoResponse, Response};
 /// they are converted (see the `From` impls), so a `500` is never a blank,
 /// un-diagnosable response. The logged error is infrastructure detail (a
 /// storage/IO failure), not user content, so it carries no PII.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum HandlerError {
     /// Malformed request input (bad entry XML, bad cursor, empty filename). `400`.
+    #[error("bad request")]
     BadRequest,
     /// The caller may not act on another user's resources. `403`.
+    #[error("forbidden")]
     Forbidden,
     /// The addressed resource is missing, deleted, or hidden from this user. `404`.
+    #[error("not found")]
     NotFound,
     /// A conditional request (`If-Match`) did not match the current `ETag`. `412`.
+    #[error("precondition failed")]
     PreconditionFailed,
-    /// A status already decided by a subsystem that maps its own errors (e.g. the
-    /// media upload pipeline via `media::map_error`), passed through unchanged.
+    /// A status already decided by a subsystem that maps its own errors.
+    #[error("HTTP status {0}")]
     Status(StatusCode),
-    /// A composed `AtomPub` URL was requested but `site.base_url` is unset, so no
-    /// spec-valid absolute `atom:id` can be emitted (#560). Logged on response. `500`.
+    /// A composed URL was requested while `site.base_url` is unset. `500`.
+    #[error("site.base_url is required")]
     BaseUrlRequired,
-    /// A genuine internal failure (storage/IO). Logged on construction. `500`.
-    Internal,
+    /// A genuine internal failure with its typed source retained. `500`.
+    #[error("AtomPub internal failure")]
+    Internal(#[source] Box<dyn std::error::Error + Send + Sync>),
+    /// A source-less invariant failure. `500`.
+    #[error("AtomPub invariant failure")]
+    Invariant,
 }
 
 impl IntoResponse for HandlerError {
@@ -42,7 +51,9 @@ impl IntoResponse for HandlerError {
                 tracing::error!("AtomPub requires site.base_url to be configured");
                 StatusCode::INTERNAL_SERVER_ERROR
             }
-            HandlerError::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+            HandlerError::Internal(_) | HandlerError::Invariant => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         };
         status.into_response()
     }
@@ -54,10 +65,17 @@ fn log_internal<E: std::error::Error>(err: &E) {
     tracing::error!(error = %err, "AtomPub handler internal error");
 }
 
+fn internal<E>(err: E) -> HandlerError
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    log_internal(&err);
+    HandlerError::Internal(Box::new(err))
+}
+
 impl From<sqlx::Error> for HandlerError {
     fn from(err: sqlx::Error) -> Self {
-        log_internal(&err);
-        HandlerError::Internal
+        internal(err)
     }
 }
 
@@ -78,10 +96,9 @@ impl From<common::atompub::AtomError> for HandlerError {
 
 impl From<common::atompub::AtomPubError> for HandlerError {
     /// Failing to *write* a document we composed is ours, not the request's, so it
-    /// logs and becomes a `500` rather than blaming the client.
+    /// retains its source and becomes a `500` rather than blaming the client.
     fn from(err: common::atompub::AtomPubError) -> Self {
-        log_internal(&err);
-        HandlerError::Internal
+        internal(err)
     }
 }
 
@@ -89,8 +106,7 @@ impl From<storage::TaggingError> for HandlerError {
     /// In the create/update flow the post and tags are freshly resolved, so any
     /// `TaggingError` is an internal inconsistency or DB failure.
     fn from(err: storage::TaggingError) -> Self {
-        log_internal(&err);
-        HandlerError::Internal
+        internal(err)
     }
 }
 
@@ -117,13 +133,10 @@ impl From<common::post_body::InvalidPostBody> for HandlerError {
 impl From<storage::PerformCreationError> for HandlerError {
     fn from(err: storage::PerformCreationError) -> Self {
         use storage::PerformCreationError as E;
-        match &err {
+        match err {
             E::EmptyPost | E::InvalidSlug(_) => HandlerError::BadRequest,
             // Exhausted/CreatedNotFound/Storage are all internal failures.
-            _ => {
-                log_internal(&err);
-                HandlerError::Internal
-            }
+            error => internal(error),
         }
     }
 }
@@ -131,13 +144,10 @@ impl From<storage::PerformCreationError> for HandlerError {
 impl From<storage::PerformUpdateError> for HandlerError {
     fn from(err: storage::PerformUpdateError) -> Self {
         use storage::PerformUpdateError as E;
-        match &err {
+        match err {
             E::EmptyPost => HandlerError::BadRequest,
             E::NotFound | E::Unauthorized => HandlerError::NotFound,
-            E::Storage(_) => {
-                log_internal(&err);
-                HandlerError::Internal
-            }
+            error @ E::Storage(_) => internal(error),
         }
     }
 }
@@ -145,12 +155,9 @@ impl From<storage::PerformUpdateError> for HandlerError {
 impl From<storage::DeleteMediaError> for HandlerError {
     fn from(err: storage::DeleteMediaError) -> Self {
         use storage::DeleteMediaError as E;
-        match &err {
+        match err {
             E::NotFound => HandlerError::NotFound,
-            E::Internal(_) => {
-                log_internal(&err);
-                HandlerError::Internal
-            }
+            error @ E::Internal(_) => internal(error),
         }
     }
 }
@@ -188,7 +195,9 @@ mod tests {
     fn a_serialization_failure_is_internal_not_a_bad_request() {
         // Writing a document is the server's job, so a failure there must not be
         // reported as the client having sent something wrong.
-        let err = common::atompub::AtomPubError::new("x");
+        let err = common::atompub::AtomPubError::Utf8(
+            String::from_utf8(vec![0xff]).expect_err("invalid UTF-8"),
+        );
         assert_eq!(status(err.into()), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -210,7 +219,7 @@ mod tests {
             StatusCode::PRECONDITION_FAILED
         );
         assert_eq!(
-            status(HandlerError::Internal),
+            status(HandlerError::Invariant),
             StatusCode::INTERNAL_SERVER_ERROR
         );
         assert_eq!(

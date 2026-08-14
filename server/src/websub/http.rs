@@ -47,13 +47,7 @@ impl WebSubClient for HttpWebSubClient {
             .form(&form)
             .send()
             .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    WebSubError::Timeout(self.timeout)
-                } else {
-                    WebSubError::Http(e.to_string())
-                }
-            })?;
+            .map_err(|error| WebSubError::Http(Box::new(error)))?;
         let status = res.status();
         if status.is_success() {
             Ok(())
@@ -184,18 +178,26 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, WebSubError::Http(_)));
+        let source = std::error::Error::source(&err)
+            .and_then(|error| error.downcast_ref::<reqwest::Error>())
+            .expect("typed reqwest source");
+        assert!(!source.is_timeout());
     }
 
     #[tokio::test]
-    async fn returns_timeout_when_hub_does_not_respond() {
+    async fn returns_typed_http_error_when_hub_does_not_respond() {
         // A hub that never replies + a tiny client timeout deterministically
-        // exercises the `is_timeout` branch.
+        // proves timeout transport failures retain the reqwest source.
         let addr = spawn_hanging_hub().await;
         let c = HttpWebSubClient::with_timeout(Duration::from_millis(100));
         let err = c
             .send_publish(&hub_at(addr), &feed_url())
             .await
             .unwrap_err();
-        assert!(matches!(err, WebSubError::Timeout(_)));
+        assert!(matches!(err, WebSubError::Http(_)));
+        let source = std::error::Error::source(&err)
+            .and_then(|error| error.downcast_ref::<reqwest::Error>())
+            .expect("typed reqwest source");
+        assert!(source.is_timeout());
     }
 }

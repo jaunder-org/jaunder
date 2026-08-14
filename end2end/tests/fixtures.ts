@@ -34,6 +34,7 @@ import {
 import {
   attachTraceCapture,
   type BootMark,
+  type CaptureSink,
   type DocumentTiming,
   type NavigationRecord,
   type PagePerfSummary,
@@ -356,6 +357,7 @@ const test = base.extend<{
   testSpanId: string;
   tracedContext: NewTracedContext;
   bootTiming: () => Promise<DocumentTiming | undefined>;
+  browserTrace: () => CaptureSink | undefined;
   firstNav: number;
   registeredPage: RegisteredPage;
   user: TestUser;
@@ -414,6 +416,13 @@ const test = base.extend<{
       const newest = navigations.at(-1);
       return newest === undefined ? undefined : capture.timingFor(newest.id);
     });
+  },
+
+  // Lazy access to the already-attached context capture. Keeping this as a
+  // function preserves `_autoPerfSpan`'s ordering while allowing a test to
+  // synchronize on console and request-start records before page teardown.
+  browserTrace: async ({ testSpanId }, use) => {
+    await use(() => captureByTestSpanId.get(testSpanId)?.sinkFor("test"));
   },
 
   // The sanctioned way for a spec to open an extra browser context — see

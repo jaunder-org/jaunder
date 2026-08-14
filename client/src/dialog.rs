@@ -1,10 +1,27 @@
-//! Raw browser dialog primitives (`window.confirm`). Wasm-only; no domain types.
+//! Raw browser dialog primitive (`window.confirm`).
 
-/// Show a native confirm dialog; `true` only if the user confirmed. `false` off-DOM
-/// or if the dialog can't be shown.
-#[must_use]
-pub fn confirm(message: &str) -> bool {
-    web_sys::window()
-        .and_then(|w| w.confirm_with_message(message).ok())
-        .unwrap_or(false)
+pub use crate::telemetry::{ConfirmOutcome, DialogError};
+
+/// Show a native confirm dialog.
+///
+/// Cancellation and an absent browser window are expected no-action outcomes;
+/// only a thrown `window.confirm` call returns [`DialogError`].
+///
+/// # Errors
+///
+/// Returns [`DialogError`] when the browser throws while opening the dialog.
+pub fn confirm(message: &str) -> Result<ConfirmOutcome, DialogError> {
+    let Some(window) = web_sys::window() else {
+        return Ok(ConfirmOutcome::Unavailable);
+    };
+    window
+        .confirm_with_message(message)
+        .map(|confirmed| {
+            if confirmed {
+                ConfirmOutcome::Confirmed
+            } else {
+                ConfirmOutcome::Cancelled
+            }
+        })
+        .map_err(|_| DialogError)
 }

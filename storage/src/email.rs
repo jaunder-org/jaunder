@@ -161,15 +161,11 @@ where
         let now = Utc::now();
 
         // Atomically claim the token: the UPDATE succeeds only when the token
-        // exists, has not yet been used, and has not expired.  This single
-        // statement is the "claim" — no separate read is needed first, so two
-        // concurrent requests cannot both succeed.  RETURNING gives us the
-        // data we need without a second round-trip.
-        // The `email` column decodes straight into `Email` via the sqlx bridge
-        // (#438), which validates through `FromStr`. A genuine storage fault (e.g.
-        // a closed pool) maps to `NotFound`, but a corrupt/migrated `email` value
-        // is a data-integrity fault, so its `ColumnDecode` error is surfaced as
-        // `Internal`.
+        // exists, has not yet been used, and has not expired. This single
+        // statement is the claim, so two concurrent requests cannot both
+        // succeed. RETURNING supplies the verified address without a second
+        // round-trip. SQL and decode failures are infrastructure failures;
+        // only a successful `Ok(None)` is a domain miss to disambiguate below.
         let claimed = sqlx::query_as::<_, (UserId, Email)>(
             "UPDATE email_verifications SET used_at = $1
              WHERE token_hash = $2 AND used_at IS NULL AND expires_at > $3
@@ -180,23 +176,21 @@ where
         .bind(now)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::ColumnDecode { .. } => UseEmailVerificationError::Internal(e),
-            _ => UseEmailVerificationError::NotFound,
-        })?;
+        .map_err(UseEmailVerificationError::Internal)?;
 
         if let Some((user_id, email)) = claimed {
             return Ok((user_id, email));
         }
 
-        // Zero rows affected — inspect the row to return the right error.
+        // A successful claim miss is the only path that reaches the domain
+        // classifier. Failure to read the row remains an infrastructure error.
         let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
             "SELECT used_at, expires_at FROM email_verifications WHERE token_hash = $1",
         )
         .bind(&token_hash)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|_| UseEmailVerificationError::NotFound)?;
+        .map_err(UseEmailVerificationError::Internal)?;
 
         Err(crate::helpers::email_verification_claim_error(row))
     }
@@ -206,7 +200,7 @@ where
 mod tests {
     use super::*;
     use crate::test_support::{Backend, CloseablePool, SeedUser, TestEnv, backends};
-    use common::test_support::{parse_email, parse_raw_token};
+    use common::test_support::parse_email;
     use rstest::*;
     use rstest_reuse::*;
 
@@ -329,13 +323,31 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn use_email_verification_with_closed_pool_returns_error(#[case] backend: Backend) {
-        let TestEnv { state, base } = backend.setup().await;
-        base.close_pool().await;
-        let result = state
+    async fn use_email_verification_with_closed_pool_returns_internal(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let email = parse_email("alice@example.com");
+        let raw_token = env
+            .state
             .email_verifications
-            .use_email_verification(&parse_raw_token("dGVzdA"))
+            .create_email_verification(
+                user_id,
+                &email,
+                chrono::Utc::now() + chrono::Duration::hours(1),
+            )
+            .await
+            .unwrap();
+        env.base.close_pool().await;
+
+        let result = env
+            .state
+            .email_verifications
+            .use_email_verification(&raw_token)
             .await;
-        assert!(matches!(result, Err(UseEmailVerificationError::NotFound)));
+
+        assert!(matches!(
+            result,
+            Err(UseEmailVerificationError::Internal(_))
+        ));
     }
 }

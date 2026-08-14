@@ -19,6 +19,7 @@ reactive_stores.workspace = true
 # codec cannot be gated to the `server` feature (`multer` stays server-only inside
 # `server_fn`). (#517)
 server_fn = { workspace = true, features = ["multipart"] }
+multer = { version = "3.1", optional = true }
 
 axum = { workspace = true, optional = true }
 client = { path = "../client" }
@@ -43,6 +44,8 @@ storage = { workspace = true, features = ["test-utils"] }
 # way server_fn's default Url codec does, so the wire-reject test exercises the
 # real path. Version-matched to the leptos-transitive vendor to avoid a rebuild.
 serde_qs = "0.15"
+httparse = "1"
+mime = "0.3"
 sqlx = { workspace = true }
 tokio = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -58,6 +61,7 @@ server = [
     # (leptos_axum-0.8.10/Cargo.toml:74-79), so unification supplies it. Actually shedding
     # the SSR stack means replacing `leptos_axum` (#677).
     "dep:leptos_axum",
+    "dep:multer",
     "dep:axum",
     "dep:chrono",
     "dep:storage",

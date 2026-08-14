@@ -51,6 +51,22 @@ pub struct Credential {
     /// The request transport that supplied this credential.
     pub transport: CredentialTransport,
 }
+/// Resolves only the ordinary browser `session=` cookie from request headers.
+///
+/// Authorization headers are deliberately outside this parser's surface. A
+/// malformed or absent cookie returns `None`; callers decide whether another
+/// credential source is appropriate for their endpoint.
+#[must_use]
+pub fn resolve_session_cookie(headers: &http::HeaderMap) -> Option<RawToken> {
+    let token = headers
+        .get(http::header::COOKIE)?
+        .to_str()
+        .ok()?
+        .split(';')
+        .map(str::trim)
+        .find_map(|cookie| cookie.strip_prefix("session="))?;
+    RawToken::from_str(token).ok()
+}
 
 /// A resolved credential and request context relevant after authentication.
 #[derive(Debug)]
@@ -176,6 +192,26 @@ mod tests {
         assert_eq!(credential.token, "bearer-token");
         assert_eq!(credential.transport, CredentialTransport::Bearer);
         assert!(session_cookie_present);
+    }
+    #[test]
+    fn resolve_session_cookie_reads_only_the_cookie() {
+        let mut headers = headers_with(http::header::COOKIE, "other=x; session=cookie-token");
+        headers.insert(
+            http::header::AUTHORIZATION,
+            http::HeaderValue::from_static("Bearer bearer-token"),
+        );
+
+        assert_eq!(
+            resolve_session_cookie(&headers).expect("session cookie"),
+            "cookie-token"
+        );
+        assert!(
+            resolve_session_cookie(&headers_with(
+                http::header::AUTHORIZATION,
+                "Bearer bearer-token"
+            ))
+            .is_none()
+        );
     }
 
     #[test]

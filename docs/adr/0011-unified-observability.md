@@ -394,3 +394,50 @@ So no operator lost the function's identity on any sink. The other five fields
 were genuine per-failure data and were left unchanged, as were the PII rules
 governing them. No event's existence or level changed; one duplicated field
 went.
+
+## Addendum (2026-08-13): error disposition and bounded client diagnostics (issue #58)
+
+`jaunder.errors` counts **error events**, not unique root causes. Its bounded
+attribute set now distinguishes:
+
+- `error.disposition = boundary | swallowed`; and
+- `telemetry.origin = server | client`.
+
+The existing server boundary emits `boundary/server`. An unexpected failure that
+deliberately preserves the primary result emits `swallowed/server` through one
+`host::error` interface that couples the warning and metric. A root failure can
+consequently produce both a boundary event and a later client-concealment event;
+dashboards must group by disposition rather than interpret an ungrouped sum as
+unique incidents. Static error context remains a tracing field, not a metric
+label.
+
+The Rust WASM client does not install an OpenTelemetry SDK or export OTLP. A
+single client reporting interface logs locally, then submits one versioned,
+closed-enum event to an authenticated same-origin raw HTTP intake. The server
+validates and rate-limits it before emitting the normal tracing warning and
+`swallowed/client` metric through its existing provider. The wire admits no
+arbitrary source text, URL, route, identifier, or user value; client telemetry
+is untrusted operational evidence and never a correctness or security input.
+
+The intake accepts only the ordinary browser `session=` cookie, not the Bearer
+or Basic/app-password credentials supported by the general API authenticator. It
+accepts one JSON event up to 1,024 encoded bytes. Delivery is deliberately best
+effort: session/storage outage, page termination, rate limiting, or delivery
+failure can leave only the local console warning. The client has one request in
+flight, never persists or queues events, and starts a credentialed keepalive
+fetch without awaiting it.
+
+A per-user in-memory token bucket admits five immediate events and one
+additional event per minute. A round-robin identity ring holds exactly one entry
+per bucket. A full bucket idle for 15 minutes is stale; each request advances
+through at most 64 ring entries, so every identity is eventually revisited
+without an unbounded request-time scan. Restart constructs an empty limiter. The
+dedicated guard suppresses the general `session_validation` application metric
+for this intake. A 429 leaves only generic HTTP request observability and
+status: it emits no tracing warning or application metric of any kind that an
+attacker could amplify.
+
+Browser auto-instrumentation, a browser OTel SDK, direct OTLP export, a public
+collector, and a dynamically traceparent-stamped CSR shell remain outside this
+decision. Diagnostic transport/export failure and panic diagnostics use only
+their local fallback sink so observability cannot recurse through itself.

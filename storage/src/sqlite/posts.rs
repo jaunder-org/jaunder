@@ -11,6 +11,32 @@ use crate::{PostDialect, PostRecord, PostStore, TaggingError, UpdatePostError, U
 use common::ids::{PostId, TagId, UserId};
 use common::tag::{Tag, TagLabel};
 
+pub(crate) fn finish_post_update(
+    primary: Result<PostRecord, UpdatePostError>,
+    rollback: Result<(), sqlx::Error>,
+) -> Result<PostRecord, UpdatePostError> {
+    crate::helpers::preserve_after_secondary(
+        primary,
+        rollback,
+        host::error::ErrorKind::Storage,
+        host::error::ErrorClass::Transient,
+        "storage.sqlite.post_update.rollback",
+    )
+}
+
+pub(crate) fn finish_post_tags(
+    primary: Result<(), TaggingError>,
+    rollback: Result<(), sqlx::Error>,
+) -> Result<(), TaggingError> {
+    crate::helpers::preserve_after_secondary(
+        primary,
+        rollback,
+        host::error::ErrorKind::Storage,
+        host::error::ErrorClass::Transient,
+        "storage.sqlite.post_tags.rollback",
+    )
+}
+
 /// SQLite-backed post storage.
 pub type SqlitePostStorage = PostStore<Sqlite>;
 
@@ -138,10 +164,13 @@ impl PostDialect for Sqlite {
                 sqlx::query("COMMIT").execute(&mut *conn).await?;
                 post_record_from_row(row).map_err(UpdatePostError::Internal)
             }
-            Err(error) => {
-                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-                Err(error)
-            }
+            Err(error) => finish_post_update(
+                Err(error),
+                sqlx::query("ROLLBACK")
+                    .execute(&mut *conn)
+                    .await
+                    .map(|_| ()),
+            ),
         }
     }
 
@@ -213,10 +242,45 @@ impl PostDialect for Sqlite {
                 sqlx::query("COMMIT").execute(&mut *conn).await?;
                 Ok(())
             }
-            Err(error) => {
-                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
-                Err(error)
-            }
+            Err(error) => finish_post_tags(
+                Err(error),
+                sqlx::query("ROLLBACK")
+                    .execute(&mut *conn)
+                    .await
+                    .map(|_| ()),
+            ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn continuation_reporting_rollback_failures_preserve_post_domain_errors_and_report_once() {
+        let (update, trace) = crate::helpers::swallowed_test::capture(|| {
+            finish_post_update(
+                Err(UpdatePostError::Unauthorized),
+                Err(sqlx::Error::PoolClosed),
+            )
+        });
+        assert!(matches!(update, Err(UpdatePostError::Unauthorized)));
+        crate::helpers::swallowed_test::assert_one_report(
+            &trace,
+            "storage.sqlite.post_update.rollback",
+        );
+
+        let (tagging, trace) = crate::helpers::swallowed_test::capture(|| {
+            finish_post_tags(
+                Err(TaggingError::PostNotFound),
+                Err(sqlx::Error::PoolClosed),
+            )
+        });
+        assert!(matches!(tagging, Err(TaggingError::PostNotFound)));
+        crate::helpers::swallowed_test::assert_one_report(
+            &trace,
+            "storage.sqlite.post_tags.rollback",
+        );
     }
 }

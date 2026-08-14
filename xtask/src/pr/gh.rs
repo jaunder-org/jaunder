@@ -6,9 +6,47 @@
 //! a pure function over `(exit, stdout, stderr)` and the subprocess wrapper around it
 //! is five lines. That split is what lets every transport failure be tested offline.
 
+use std::io::Write;
+use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Arc;
 
 use serde_json::Value;
+
+#[derive(Debug, Clone)]
+pub struct GitError {
+    pub operation: &'static str,
+    pub path: PathBuf,
+    pub source: Arc<dyn std::error::Error + Send + Sync>,
+}
+
+impl PartialEq for GitError {
+    fn eq(&self, other: &Self) -> bool {
+        self.operation == other.operation
+            && self.path == other.path
+            && format!("{:#}", self.source) == format!("{:#}", other.source)
+    }
+}
+
+impl Eq for GitError {}
+
+impl std::fmt::Display for GitError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{} at {}: {:#}",
+            self.operation,
+            self.path.display(),
+            self.source
+        )
+    }
+}
+
+impl std::error::Error for GitError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApiError {
@@ -25,6 +63,7 @@ pub enum ApiError {
     Transport(String),
     Malformed(String),
     GraphQlErrors(String),
+    Git(GitError),
 }
 
 impl ApiError {
@@ -51,6 +90,7 @@ impl ApiError {
             ApiError::Transport(m) => format!("transport: {m}"),
             ApiError::Malformed(m) => format!("malformed response: {m}"),
             ApiError::GraphQlErrors(m) => format!("graphql: {m}"),
+            ApiError::Git(error) => format!("git: {error}"),
         }
     }
 }
@@ -204,23 +244,40 @@ pub fn run_gh_raw(args: &[&str]) -> Result<(), ApiError> {
     }
 }
 
-/// When the exhausted rate-limit bucket resets, via the REST `rate_limit` endpoint —
-/// which is unmetered, so it still answers while another bucket is limited.
-///
-/// Reads **whichever bucket is actually exhausted**: this module's calls span both
-/// `graphql` (the PR snapshot) and `core` (the ruleset, workflow runs, `pr list`), so
-/// hardcoding one would hand back the wrong reset for half of them. Best-effort — any
-/// failure yields `None` rather than becoming an error of its own.
+/// When the exhausted rate-limit bucket resets, via the REST `rate_limit` endpoint.
+/// A failed best-effort lookup preserves the original [`ApiError::RateLimited`] and
+/// emits one fixed, redacted warning.
 pub fn rate_limit_reset() -> Option<u64> {
-    let (exit, out, err) = spawn(&["api", "rate_limit"]).ok()?;
-    let resources = classify(exit, &out, &err).ok()?;
-    let resources = resources.get("resources")?;
-    ["graphql", "core"]
-        .iter()
-        .filter_map(|bucket| resources.get(bucket))
-        .filter(|b| b.get("remaining").and_then(Value::as_u64) == Some(0))
-        .filter_map(|b| b.get("reset").and_then(Value::as_u64))
-        .max()
+    rate_limit_reset_with(|| spawn(&["api", "rate_limit"]), &mut std::io::stderr())
+}
+
+fn rate_limit_reset_with(
+    spawn_reset: impl FnOnce() -> Result<(i32, String, String), ApiError>,
+    stderr: &mut impl Write,
+) -> Option<u64> {
+    let attempt = (|| -> Result<Option<u64>, ApiError> {
+        let (exit, out, err) = spawn_reset()?;
+        let body = classify(exit, &out, &err)?;
+        let resources = body.get("resources").ok_or_else(|| {
+            ApiError::Malformed("rate_limit response omitted resources".to_owned())
+        })?;
+        Ok(["graphql", "core"]
+            .iter()
+            .filter_map(|bucket| resources.get(bucket))
+            .filter(|bucket| bucket.get("remaining").and_then(Value::as_u64) == Some(0))
+            .filter_map(|bucket| bucket.get("reset").and_then(Value::as_u64))
+            .max())
+    })();
+    match attempt {
+        Ok(reset) => reset,
+        Err(_) => {
+            let _ = writeln!(
+                stderr,
+                "xtask: warning: xtask.pr.rate_limit_reset: ignored failure while looking up rate-limit reset"
+            );
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -381,5 +438,37 @@ mod tests {
         assert!(!ApiError::NotFound.is_transient());
         assert!(ApiError::Transport("x".into()).is_transient());
         assert!(ApiError::Malformed("x".into()).is_transient());
+    }
+
+    fn assert_reset_failure_warns_once(
+        attempt: impl FnOnce() -> Result<(i32, String, String), ApiError>,
+    ) {
+        let original = ApiError::RateLimited { reset_unix: None };
+        let mut stderr = Vec::new();
+        let reset = rate_limit_reset_with(attempt, &mut stderr);
+        assert_eq!(enrich_rate_limit(original.clone(), reset), original);
+        let warning = String::from_utf8(stderr).unwrap();
+        assert_eq!(warning.matches("xtask.pr.rate_limit_reset").count(), 1);
+        assert_eq!(warning.lines().count(), 1);
+        assert!(!warning.contains("sensitive"));
+    }
+
+    #[test]
+    fn rate_limit_reset_spawn_failure_preserves_the_rate_limit() {
+        assert_reset_failure_warns_once(|| Err(ApiError::GhMissing));
+    }
+
+    #[test]
+    fn rate_limit_reset_nonzero_and_malformed_responses_warn_once_each() {
+        assert_reset_failure_warns_once(|| {
+            Ok((
+                1,
+                r#"{"message":"rate limit exceeded","status":"403"}"#.to_owned(),
+                "sensitive transport text".to_owned(),
+            ))
+        });
+        assert_reset_failure_warns_once(|| {
+            Ok((0, "sensitive malformed body".to_owned(), String::new()))
+        });
     }
 }

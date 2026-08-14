@@ -36,31 +36,36 @@ client and an AtomPub API as first-class publishing surfaces.
 
 Shared code is split by compile target, not by convenience: `common` is the
 target-agnostic domain crate, `host` is its host-only sibling, and `client` is
-the symmetric wasm-only peer. `host` never compiles to wasm, so it uses
-`std::fs`/`std::env` without the `#[cfg]` gating `common` would demand
-([ADR-0058](adr/0058-host-crate-layering.md)). `client` holds only raw browser
-glue (`web_sys`/`js_sys`/`wasm_bindgen` and wasm-side Leptos plumbing) and no
-domain types; `web` and `csr` depend on `client`, never the reverse
+the symmetric browser-infrastructure peer. `host` never compiles to wasm, so it
+uses `std::fs`/`std::env` without the `#[cfg]` gating `common` would demand
+([ADR-0058](adr/0058-host-crate-layering.md)). `client` holds raw browser glue
+(`web_sys`/`js_sys`/`wasm_bindgen` and wasm-side Leptos plumbing), plus two
+host-testable browser contracts; it contains no application domain types. `web`
+and `csr` depend on `client`, never the reverse
 ([ADR-0069](adr/0069-client-crate-wasm-only-home.md)). Proc-macros live apart
 from all three, in `macros`
 ([ADR-0062](adr/0062-macros-crate-proc-macro-home.md)).
 
-| Crate          | Target      | Responsibility                                                                                                                                                                                                   |
-| -------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `common`       | host + wasm | Shared domain logic and types: validated newtypes, rendering, visibility, feed/AtomPub serialization.                                                                                                            |
-| `storage`      | host        | Storage traits, record types, SQL migrations, and the SQLite/PostgreSQL backends ([ADR-0019](adr/0019-generic-storage-backend-via-dialect.md)).                                                                  |
-| `server`       | host        | The `jaunder` binary: Axum router, CLI, background workers, integration tests.                                                                                                                                   |
-| `web`          | host + wasm | Leptos components and `#[server]` functions — the UI and its server halves, split host/wasm at the file level ([ADR-0070](adr/0070-web-vertical-wasm-only-component-files.md)).                                  |
-| `csr`          | wasm        | The client-side-rendering entry point: mounts `web` in the browser ([ADR-0041](adr/0041-public-projector-and-csr-client.md)).                                                                                    |
-| `host`         | host        | Strictly-host-focused shared code: error carrier, capture dir, auth/token parsing, invites, metrics ([ADR-0058](adr/0058-host-crate-layering.md)).                                                               |
-| `client`       | wasm        | Strictly-browser shared infrastructure: `localStorage`, confirm dialog, DOM primitives, file upload, reactive revalidation, and the CSR performance marks ([ADR-0069](adr/0069-client-crate-wasm-only-home.md)). |
-| `macros`       | build-time  | The workspace's proc-macro home: newtype, `text_enum`, sqlx-bridge and server-fn derives ([ADR-0062](adr/0062-macros-crate-proc-macro-home.md)).                                                                 |
-| `test-support` | host        | A seed binary linking `storage` for out-of-process e2e seeding ([ADR-0046](adr/0046-test-support-seed-binary.md)).                                                                                               |
+| Crate          | Target      | Responsibility                                                                                                                                                                                           |
+| -------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `common`       | host + wasm | Shared domain logic and types: validated newtypes, rendering, visibility, feed/AtomPub serialization.                                                                                                    |
+| `storage`      | host        | Storage traits, record types, SQL migrations, and the SQLite/PostgreSQL backends ([ADR-0019](adr/0019-generic-storage-backend-via-dialect.md)).                                                          |
+| `server`       | host        | The `jaunder` binary: Axum router, CLI, background workers, integration tests.                                                                                                                           |
+| `web`          | host + wasm | Leptos components and `#[server]` functions — the UI and its server halves, split host/wasm at the file level ([ADR-0070](adr/0070-web-vertical-wasm-only-component-files.md)).                          |
+| `csr`          | wasm        | The client-side-rendering entry point: mounts `web` in the browser ([ADR-0041](adr/0041-public-projector-and-csr-client.md)).                                                                            |
+| `host`         | host        | Strictly-host-focused shared code: error carrier, capture dir, auth/token parsing, invites, metrics ([ADR-0058](adr/0058-host-crate-layering.md)).                                                       |
+| `client`       | host + wasm | Browser infrastructure: `localStorage`, dialogs, DOM/file-upload glue, reactive revalidation, CSR performance marks, and bounded client telemetry ([ADR-0069](adr/0069-client-crate-wasm-only-home.md)). |
+| `macros`       | build-time  | The workspace's proc-macro home: newtype, `text_enum`, sqlx-bridge and server-fn derives ([ADR-0062](adr/0062-macros-crate-proc-macro-home.md)).                                                         |
+| `test-support` | host        | A seed binary linking `storage` for out-of-process e2e seeding ([ADR-0046](adr/0046-test-support-seed-binary.md)).                                                                                       |
 
 Every `client` module that touches the browser carries
 `#[cfg(target_arch = "wasm32")]`, so a host build of the crate is an
-all-but-empty rlib with no coverage-measured browser glue. Target-independent
-data such as `client::perf` mark names stays pinned by host tests. Irreducible
+all-but-empty rlib with no coverage-measured browser glue. Two
+transport-independent contracts compile and are tested on the host:
+`client::perf` owns its mark-name table, while `client::telemetry` owns the
+one-flight reporter over injected console and transport seams. The reporter may
+consume only the closed, data-free `common::client_telemetry` wire types; the
+crate remains free of application-domain DTOs, newtypes, and enums. Irreducible
 browser primitives run separately in headless Chromium through the Linux-only
 `wasm-tests` Nix check, while user-flow coverage remains in Playwright e2e.
 `wasm-tests` is behavioral pass/fail execution and does not add wasm lines to
@@ -1260,19 +1265,42 @@ command, and export failures are logged, never propagated
 
 ### Errors at the boundary
 
-The carrier owns its own observability: `InternalError::emit_boundary_failure`
-(`host/src/error.rs`) logs five discrete tracing fields — `error.kind`,
-`error.class`, `error.public`, `error.source` (the preserved typed chain,
-rendered once), `error.context` — at the level derived from the error class, and
-emits the `jaunder.errors` metric with the bounded kind/class attributes.
-`server_boundary` (`web/src/error/server.rs`) calls it and then performs only
-the outward wire projection, returning the masked public error
-([ADR-0017](adr/0017-error-handling-and-the-public-boundary.md)). Which fn
-failed is not a field: the event is raised inside the enclosing
-`web.<vertical>.<ident>` span, and both configured sinks render span context.
-The carrier (`host::error::InternalError`: `ErrorKind`, `ErrorClass`, `anyhow`
-source chain) is the T1 layer of
-[ADR-0059](adr/0059-thin-web-shell-error-layering.md).
+The carrier owns its boundary observability:
+`InternalError::emit_boundary_failure` (`host/src/error.rs`) logs five discrete
+tracing fields — `error.kind`, `error.class`, `error.public`, `error.source`
+(the preserved typed chain, rendered once), `error.context` — at the level
+derived from the error class, and emits the `jaunder.errors` metric. The metric
+is an error-event counter whose bounded attributes include kind/class plus
+`error.disposition = boundary | swallowed` and
+`telemetry.origin = server | client`; it is not a unique-root-cause count.
+`server_boundary` (`web/src/error/server.rs`) calls it with `boundary/server`,
+then performs only the outward wire projection and returns the masked public
+error. Which fn failed is not a field: the event is raised inside the enclosing
+`web.<vertical>.<ident>` span, and both configured sinks render span context
+([ADR-0011](adr/0011-unified-observability.md),
+[ADR-0017](adr/0017-error-handling-and-the-public-boundary.md)).
+
+An unexpected native failure that deliberately preserves the primary result goes
+through one `host::error` reporting interface, which couples the fixed warning
+and `swallowed/server` metric so a caller cannot forget either side. Diagnostic
+self-failure uses only its console/stderr fallback; routing it through the same
+reporter would recurse.
+
+The authenticated raw client-telemetry intake accepts one versioned, closed-enum
+JSON event of at most 1,024 bytes from the Rust WASM client. A dedicated guard
+accepts only the browser `session=` cookie, not Bearer or Basic/app-password
+credentials. A per-user token bucket admits a burst of five and refills one per
+minute; a one-entry-per-bucket round-robin ring prunes full buckets idle for 15
+minutes in bounded 64-entry passes. The dedicated guard does not emit the
+general `session_validation` metric. An accepted event becomes the fixed warning
+plus a `swallowed/client` metric; a 429 leaves only generic HTTP request
+observability and status.
+
+The client logs locally first and permits one credentialed keepalive request in
+flight; concurrent events are dropped, never queued or persisted. Delivery is
+best-effort and carries no arbitrary source text or user value. This is a
+bounded diagnostics transport, not a browser OTel SDK or direct OTLP exporter.
+All client data remains untrusted operational evidence.
 
 ### Scoped server diagnostics (e2e capture)
 
@@ -1747,6 +1775,21 @@ which stays `downcast_ref`-able so the boundary can still classify a
 `sqlx::Error` by SQLSTATE or pool timeout; and where there is genuinely no
 underlying error object, the offending _value_ is carried as context rather than
 a source being invented.
+
+Preservation also governs continued-after-error paths. Expected validation or
+domain rejection may become ordinary control flow; an unexpected infrastructure,
+I/O, browser, subprocess, invariant, or decode failure must propagate with its
+typed source. If an intentional degradation or preservation of the primary
+result requires continuing, the site reports the failure before continuing and
+explains why continuation is correct. This is a semantic judgement rather than a
+ban on `.ok()`, `unwrap_or`, `let _`, `Err(_)`, or `map_err`, each of which also
+expresses legitimate expected control flow
+([ADR-0017](adr/0017-error-handling-and-the-public-boundary.md)).
+
+Short-lived `xtask`/`devtool` processes do not install the application OTel
+provider: a population/correctness failure fails the command, while a legitimate
+ancillary or cleanup failure preserves the primary result and writes its typed
+source with static context to stderr.
 
 Internal detail reaches a client only through the masking boundary (§2). The
 leaky public constructors `WebError::storage`/`WebError::server` are removed —

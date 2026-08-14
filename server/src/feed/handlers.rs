@@ -12,6 +12,7 @@ use storage::{FeedCacheStorage, PostStorage, SiteConfigStorage};
 
 use super::regenerate::regenerate_feed;
 use crate::soft_path::SoftPath;
+use web::error::InternalError;
 
 fn parse_format(ext: &str) -> Option<FeedFormat> {
     match ext {
@@ -20,6 +21,20 @@ fn parse_format(ext: &str) -> Option<FeedFormat> {
         "json" => Some(FeedFormat::Json),
         _ => None,
     }
+}
+
+/// Retains a cache-read failure as the typed source of the sanitized boundary
+/// carrier.
+#[must_use]
+pub fn map_feed_cache_failure(error: storage::FeedCacheError) -> InternalError {
+    InternalError::storage(error).with_context("boundary", "server.feed.cache_read")
+}
+
+/// Retains a regeneration failure as the typed source of the sanitized boundary
+/// carrier.
+#[must_use]
+pub fn map_regeneration_failure(error: super::regenerate::RegenerateError) -> InternalError {
+    InternalError::storage(error).with_context("boundary", "server.feed.regenerate")
 }
 
 async fn serve(
@@ -50,12 +65,18 @@ async fn serve(
             .await
             {
                 Ok(row) => row,
-                Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                Err(error) => {
+                    let error = map_regeneration_failure(error);
+                    error.emit_boundary_failure();
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                 }
             }
         }
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(error) => {
+            let error = map_feed_cache_failure(error);
+            error.emit_boundary_failure();
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
     };
 
     if let Some(etag) = headers.get(header::IF_NONE_MATCH)

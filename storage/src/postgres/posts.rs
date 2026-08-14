@@ -11,6 +11,32 @@ use crate::{PostDialect, PostRecord, PostStore, TaggingError, UpdatePostError, U
 use common::ids::{PostId, TagId, UserId};
 use common::tag::{Tag, TagLabel};
 
+pub(crate) fn finish_post_update_rejection(
+    primary: Result<PostRecord, UpdatePostError>,
+    rollback: Result<(), sqlx::Error>,
+) -> Result<PostRecord, UpdatePostError> {
+    crate::helpers::preserve_after_secondary(
+        primary,
+        rollback,
+        host::error::ErrorKind::Storage,
+        host::error::ErrorClass::Transient,
+        "storage.postgres.post_update.rollback_domain_rejection",
+    )
+}
+
+pub(crate) fn finish_post_tags_not_found(
+    primary: Result<(), TaggingError>,
+    rollback: Result<(), sqlx::Error>,
+) -> Result<(), TaggingError> {
+    crate::helpers::preserve_after_secondary(
+        primary,
+        rollback,
+        host::error::ErrorKind::Storage,
+        host::error::ErrorClass::Transient,
+        "storage.postgres.post_tags.rollback_not_found",
+    )
+}
+
 /// Postgres-backed post storage.
 pub type PostgresPostStorage = PostStore<Postgres>;
 
@@ -61,12 +87,16 @@ impl PostDialect for Postgres {
 
         match existing {
             None => {
-                tx.rollback().await.ok();
-                return Err(UpdatePostError::NotFound);
+                return finish_post_update_rejection(
+                    Err(UpdatePostError::NotFound),
+                    tx.rollback().await,
+                );
             }
             Some((owner_id, deleted_at)) if owner_id != editor_user_id || deleted_at.is_some() => {
-                tx.rollback().await.ok();
-                return Err(UpdatePostError::Unauthorized);
+                return finish_post_update_rejection(
+                    Err(UpdatePostError::Unauthorized),
+                    tx.rollback().await,
+                );
             }
             Some(_) => {}
         }
@@ -153,8 +183,10 @@ impl PostDialect for Postgres {
         .fetch_optional(&mut *tx)
         .await?;
         if exists.is_none() {
-            tx.rollback().await.ok();
-            return Err(TaggingError::PostNotFound);
+            return finish_post_tags_not_found(
+                Err(TaggingError::PostNotFound),
+                tx.rollback().await,
+            );
         }
 
         let rows = sqlx::query_as::<_, (PostId, TagId, Tag, TagLabel)>(SELECT_POST_TAGS)
@@ -194,5 +226,48 @@ impl PostDialect for Postgres {
 
         tx.commit().await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn continuation_reporting_rollback_failures_preserve_post_domain_rejections_and_report_once() {
+        for primary in [UpdatePostError::NotFound, UpdatePostError::Unauthorized] {
+            let expected = match primary {
+                UpdatePostError::NotFound => "not-found",
+                UpdatePostError::Unauthorized => "unauthorized",
+                UpdatePostError::Internal(_) => unreachable!("test variants are domain errors"),
+            };
+            let (result, trace) = crate::helpers::swallowed_test::capture(|| {
+                finish_post_update_rejection(Err(primary), Err(sqlx::Error::PoolClosed))
+            });
+            assert!(
+                matches!(
+                    (&result, expected),
+                    (Err(UpdatePostError::NotFound), "not-found")
+                        | (Err(UpdatePostError::Unauthorized), "unauthorized")
+                ),
+                "primary variant changed: {result:?}"
+            );
+            crate::helpers::swallowed_test::assert_one_report(
+                &trace,
+                "storage.postgres.post_update.rollback_domain_rejection",
+            );
+        }
+
+        let (result, trace) = crate::helpers::swallowed_test::capture(|| {
+            finish_post_tags_not_found(
+                Err(TaggingError::PostNotFound),
+                Err(sqlx::Error::PoolClosed),
+            )
+        });
+        assert!(matches!(result, Err(TaggingError::PostNotFound)));
+        crate::helpers::swallowed_test::assert_one_report(
+            &trace,
+            "storage.postgres.post_tags.rollback_not_found",
+        );
     }
 }

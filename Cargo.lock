@@ -523,10 +523,13 @@ name = "client"
 version = "0.1.0"
 dependencies = [
  "common",
+ "js-sys",
  "leptos",
  "serde",
+ "serde_json",
  "server_fn",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "wasm-bindgen-test",
  "web-sys",
 ]
@@ -1913,6 +1916,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "host",
+ "http-body-util",
  "leptos",
  "leptos_axum",
  "lettre",
@@ -4386,6 +4390,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
@@ -5413,6 +5418,7 @@ dependencies = [
  "common",
  "host",
  "http",
+ "httparse",
  "leptos",
  "leptos_axum",
  "leptos_dom",
@@ -5420,6 +5426,8 @@ dependencies = [
  "leptos_router",
  "macros",
  "maud",
+ "mime",
+ "multer",
  "reactive_stores",
  "serde",
  "serde_json",

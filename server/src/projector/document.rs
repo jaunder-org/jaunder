@@ -5,6 +5,7 @@ use axum::{
 use common::etag::ETag;
 use common::seed::{PageSeed, TimelinePage};
 use web::app::{PREPAINT_SCRIPT, render_head, render_shell};
+use web::error::{SwallowedSource, report_swallowed};
 use web::posts::authored_post;
 
 use super::Shell;
@@ -91,7 +92,12 @@ pub(super) fn permalink_response(
         // No *public* post here: a draft its author must see, or nothing at all.
         // Serve the shell so the CSR client resolves it with the session.
         Ok(None) => shell_response(shell),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Err(error) => {
+            error
+                .with_context("boundary", "server.projector.permalink")
+                .emit_boundary_failure();
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
     }
 }
 
@@ -106,7 +112,12 @@ pub(super) fn timeline_response(
 ) -> Response {
     match result {
         Ok(page) => cacheable(headers, &into_seed(page)),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Err(error) => {
+            error
+                .with_context("boundary", "server.projector.timeline")
+                .emit_boundary_failure();
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
     }
 }
 
@@ -120,11 +131,20 @@ pub(super) fn tag_response(
     result: web::error::InternalResult<TimelinePage>,
     headers: &HeaderMap,
     shell: &Shell,
+    context: &'static str,
     into_seed: impl FnOnce(TimelinePage) -> PageSeed,
 ) -> Response {
     match result {
         Ok(page) => cacheable(headers, &into_seed(page)),
-        Err(_) => shell_response(shell),
+        Err(error) => {
+            report_swallowed(
+                error.kind(),
+                error.class(),
+                context,
+                SwallowedSource::Error(&error),
+            );
+            shell_response(shell)
+        }
     }
 }
 
@@ -159,6 +179,7 @@ mod tests {
             Err(web::error::InternalError::validation("boom")),
             &HeaderMap::new(),
             &shell,
+            "server.projector.test_tag",
             // `into_seed` is never called on the error path; any constructor works.
             PageSeed::SiteTimeline,
         );

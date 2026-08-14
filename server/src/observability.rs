@@ -1,5 +1,6 @@
 use std::time::{Duration, Instant};
 
+use anyhow::Context as _;
 use axum::Router;
 use axum::http::HeaderName;
 use host::capture;
@@ -17,25 +18,194 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 fn default_filter(verbose: bool) -> EnvFilter {
     if verbose {
-        EnvFilter::new("jaunder=debug,web=debug,common=debug,tower_http=debug,sqlx=info")
+        EnvFilter::new("jaunder=debug,host=debug,web=debug,common=debug,tower_http=debug,sqlx=info")
     } else {
-        EnvFilter::new("jaunder=warn,web=warn,common=warn,tower_http=warn,sqlx=warn")
+        EnvFilter::new("jaunder=warn,host=warn,web=warn,common=warn,tower_http=warn,sqlx=warn")
     }
 }
 
+fn read_env(name: &str) -> Result<Option<String>, std::env::VarError> {
+    match std::env::var(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error @ std::env::VarError::NotUnicode(_)) => Err(error),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum FallbackKind {
+    DiagLogOpen,
+    TracerExporterSetup,
+    MeterExporterSetup,
+    MeterShutdown,
+    TracerShutdown,
+    SubscriberInstall,
+    PanicDiagWrite,
+    OtlpEndpoint,
+    LogFilter,
+    SlowThreshold,
+    LogFormat,
+}
+
+impl FallbackKind {
+    fn parts(self) -> (&'static str, &'static str) {
+        match self {
+            Self::DiagLogOpen => (
+                "server.observability.diag_log_open",
+                "diagnostic log disabled",
+            ),
+            Self::TracerExporterSetup => (
+                "server.observability.tracer_exporter_setup",
+                "tracing export disabled",
+            ),
+            Self::MeterExporterSetup => (
+                "server.observability.meter_exporter_setup",
+                "metrics export disabled",
+            ),
+            Self::MeterShutdown => (
+                "server.observability.meter_shutdown",
+                "telemetry shutdown failed",
+            ),
+            Self::TracerShutdown => (
+                "server.observability.tracer_shutdown",
+                "telemetry shutdown failed",
+            ),
+            Self::SubscriberInstall => (
+                "server.observability.subscriber_install",
+                "subscriber installation failed; continuing",
+            ),
+            Self::PanicDiagWrite => (
+                "server.observability.panic_diag_write",
+                "diagnostic write failed",
+            ),
+            Self::OtlpEndpoint => (
+                "server.observability.otlp_endpoint",
+                "invalid configured value; export disabled",
+            ),
+            Self::LogFilter => (
+                "server.observability.log_filter",
+                "invalid configured value; using default filter",
+            ),
+            Self::SlowThreshold => (
+                "server.observability.slow_threshold",
+                "invalid configured value; using 5s",
+            ),
+            Self::LogFormat => (
+                "server.observability.log_format",
+                "invalid configured value; using pretty format",
+            ),
+        }
+    }
+}
+
+fn write_fallback(mut writer: impl std::io::Write, kind: FallbackKind) -> std::io::Result<()> {
+    let (context, message) = kind.parts();
+    writeln!(writer, "{context}: {message}")
+}
+#[cfg(test)]
+struct TestFallbackCapture {
+    owner: std::thread::ThreadId,
+    output: Vec<u8>,
+}
+
+#[cfg(test)]
+static TEST_FALLBACK_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+#[cfg(test)]
+static TEST_FALLBACK_OUTPUT: std::sync::Mutex<Option<TestFallbackCapture>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+fn capture_fallbacks<R>(operation: impl FnOnce() -> R) -> (R, String) {
+    let _serial = TEST_FALLBACK_SERIAL
+        .lock()
+        .expect("fallback capture serial");
+    {
+        let mut capture = TEST_FALLBACK_OUTPUT.lock().expect("fallback capture lock");
+        assert!(capture.is_none(), "nested fallback capture");
+        *capture = Some(TestFallbackCapture {
+            owner: std::thread::current().id(),
+            output: Vec::new(),
+        });
+    }
+    let result = operation();
+    let output = TEST_FALLBACK_OUTPUT
+        .lock()
+        .expect("fallback capture lock")
+        .take()
+        .expect("capture")
+        .output;
+    (result, String::from_utf8(output).expect("fallback utf8"))
+}
+
+fn fallback(kind: FallbackKind) {
+    #[cfg(test)]
+    let captured = {
+        let owner = std::thread::current().id();
+        let mut output = TEST_FALLBACK_OUTPUT.lock().expect("fallback capture lock");
+        output
+            .as_mut()
+            .filter(|capture| capture.owner == owner)
+            .is_some_and(|capture| write_fallback(&mut capture.output, kind).is_ok())
+    };
+    #[cfg(test)]
+    if captured {
+        return;
+    }
+    let _ = write_fallback(std::io::stderr().lock(), kind);
+}
+
+fn write_exporter_fallback(
+    writer: impl std::io::Write,
+    kind: FallbackKind,
+    _error: &anyhow::Error,
+) -> std::io::Result<()> {
+    write_fallback(writer, kind)
+}
+
+fn exporter_fallback(kind: FallbackKind, error: &anyhow::Error) {
+    let _ = write_exporter_fallback(std::io::stderr().lock(), kind, error);
+}
+
+fn resolved_filter_with(
+    verbose: bool,
+    mut read: impl FnMut(&str) -> Result<Option<String>, std::env::VarError>,
+    mut warn: impl FnMut(),
+) -> EnvFilter {
+    for name in ["JAUNDER_LOG_FILTER", "RUST_LOG"] {
+        match read(name) {
+            Ok(Some(value)) if value.trim().is_empty() => warn(),
+            Ok(Some(value)) => match EnvFilter::try_new(&value) {
+                Ok(filter) => return filter,
+                Err(_) => warn(),
+            },
+            Ok(None) => {}
+            Err(_) => warn(),
+        }
+    }
+    default_filter(verbose)
+}
+
 fn resolved_filter(verbose: bool) -> EnvFilter {
-    EnvFilter::try_from_env("JAUNDER_LOG_FILTER")
-        .or_else(|_| EnvFilter::try_from_default_env())
-        .unwrap_or_else(|_| default_filter(verbose))
+    resolved_filter_with(verbose, read_env, || fallback(FallbackKind::LogFilter))
+}
+
+fn use_json_format_with(
+    mut read: impl FnMut(&str) -> Result<Option<String>, std::env::VarError>,
+    mut warn: impl FnMut(),
+) -> bool {
+    match read("JAUNDER_LOG_FORMAT") {
+        Ok(Some(value)) if matches!(value.as_str(), "json" | "JSON") => true,
+        Ok(Some(value)) if value == "pretty" => false,
+        Ok(Some(_)) | Err(_) => {
+            warn();
+            false
+        }
+        Ok(None) => false,
+    }
 }
 
 fn use_json_format() -> bool {
-    matches!(
-        std::env::var("JAUNDER_LOG_FORMAT")
-            .unwrap_or_else(|_| "pretty".to_owned())
-            .as_str(),
-        "json" | "JSON"
-    )
+    use_json_format_with(read_env, || fallback(FallbackKind::LogFormat))
 }
 
 /// Trim an optional env value and drop it if it is empty (or whitespace-only) —
@@ -47,14 +217,45 @@ fn trimmed_non_empty(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn otel_exporter_otlp_endpoint_with(
+    mut read: impl FnMut(&str) -> Result<Option<String>, std::env::VarError>,
+    mut warn: impl FnMut(),
+) -> Option<String> {
+    match read("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT") {
+        Ok(Some(value)) => {
+            return if let Some(value) = trimmed_non_empty(Some(value)) {
+                Some(value)
+            } else {
+                warn();
+                None
+            };
+        }
+        Err(_) => {
+            warn();
+            return None;
+        }
+        Ok(None) => {}
+    }
+
+    match read("OTEL_EXPORTER_OTLP_ENDPOINT") {
+        Ok(Some(value)) => {
+            if let Some(value) = trimmed_non_empty(Some(value)) {
+                Some(value)
+            } else {
+                warn();
+                None
+            }
+        }
+        Ok(None) => None,
+        Err(_) => {
+            warn();
+            None
+        }
+    }
+}
+
 fn otel_exporter_otlp_endpoint() -> Option<String> {
-    // Precedence is by presence: the fallback runs on the raw `.ok()` before the
-    // trim, so a *set* primary var wins even if it later trims to empty.
-    trimmed_non_empty(
-        std::env::var("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT")
-            .ok()
-            .or_else(|| std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok()),
-    )
+    otel_exporter_otlp_endpoint_with(read_env, || fallback(FallbackKind::OtlpEndpoint))
 }
 
 /// The scoped diagnostic-log path (`<JAUNDER_CAPTURE_DIR>/diag.log`), if capture is on.
@@ -64,6 +265,25 @@ fn otel_exporter_otlp_endpoint() -> Option<String> {
 /// production, so the whole feature is inert there (see the `host` crate).
 fn diag_log_file() -> Option<std::path::PathBuf> {
     capture::file(capture::Stream::Diag)
+}
+
+fn open_diag_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+}
+fn open_diag_file_with<T>(
+    path: &std::path::Path,
+    open: impl FnOnce(&std::path::Path) -> std::io::Result<T>,
+    mut warn: impl FnMut(),
+) -> Option<T> {
+    if let Ok(value) = open(path) {
+        Some(value)
+    } else {
+        warn();
+        None
+    }
 }
 
 /// Build the scoped diagnostic layer: a JSON `fmt` layer writing to `make_writer`,
@@ -164,73 +384,126 @@ impl<'a> DiagPanicRecord<'a> {
 /// without any shared lock. We chain to the previous hook so the default stderr →
 /// journald path still fires — the journal stays the fallback artifact and catches any
 /// panic that fires before this hook is installed (issue #144).
-fn install_diag_panic_hook(path: Option<std::path::PathBuf>) {
+type WritePanicDiagOperation = fn(&mut std::fs::File, &[u8]) -> std::io::Result<()>;
+
+fn write_panic_diag(file: &mut std::fs::File, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    file.write_all(bytes)
+}
+fn install_diag_panic_hook_with(
+    path: Option<std::path::PathBuf>,
+    open: fn(&std::path::Path) -> std::io::Result<std::fs::File>,
+    write: WritePanicDiagOperation,
+    warn: fn(FallbackKind),
+) {
     let Some(path) = path else {
         return;
     };
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-        {
-            use std::io::Write;
-            let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
-            let thread = std::thread::current()
-                .name()
-                .unwrap_or("unnamed")
-                .to_owned();
-            let _ = file.write_all(
-                DiagPanicRecord::from_panic(info, &thread, &timestamp)
-                    .to_line()
-                    .as_bytes(),
-            );
+        match open(&path) {
+            Ok(mut file) => {
+                let timestamp =
+                    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+                let thread = std::thread::current()
+                    .name()
+                    .unwrap_or("unnamed")
+                    .to_owned();
+                let line = DiagPanicRecord::from_panic(info, &thread, &timestamp).to_line();
+                if write(&mut file, line.as_bytes()).is_err() {
+                    warn(FallbackKind::PanicDiagWrite);
+                }
+            }
+            Err(_) => warn(FallbackKind::PanicDiagWrite),
         }
         previous(info);
     }));
 }
 
+fn install_diag_panic_hook(path: Option<std::path::PathBuf>) {
+    install_diag_panic_hook_with(path, open_diag_file, write_panic_diag, fallback);
+}
+
 fn build_otel_tracer(
     endpoint: &str,
-) -> Result<opentelemetry_sdk::trace::SdkTracerProvider, String> {
+) -> anyhow::Result<opentelemetry_sdk::trace::SdkTracerProvider> {
     let exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
         .with_endpoint(endpoint)
         .build()
-        .map_err(|error| format!("failed to build OTLP span exporter: {error}"))?;
+        .context("failed to build OTLP span exporter")?;
     let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
         .with_batch_exporter(exporter)
         .build();
-    // Clone into the global registry; keep the original handle so the caller can
-    // flush it on exit (a one-shot process exits before the batch processor's
-    // interval fires).
     opentelemetry::global::set_tracer_provider(provider.clone());
     Ok(provider)
 }
 
 fn build_otel_meter(
     endpoint: &str,
-) -> Result<opentelemetry_sdk::metrics::SdkMeterProvider, String> {
+) -> anyhow::Result<opentelemetry_sdk::metrics::SdkMeterProvider> {
     let exporter = opentelemetry_otlp::MetricExporter::builder()
         .with_tonic()
         .with_endpoint(endpoint)
         .build()
-        .map_err(|error| format!("failed to build OTLP metric exporter: {error}"))?;
+        .context("failed to build OTLP metric exporter")?;
     let provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
         .with_periodic_exporter(exporter)
         .build();
-    // Clone into the global registry; keep the original handle for flush-on-exit
-    // (the periodic reader otherwise only exports on its interval).
     opentelemetry::global::set_meter_provider(provider.clone());
     Ok(provider)
 }
+fn setup_otel_tracer_with<T>(
+    endpoint: &str,
+    build: impl FnOnce(&str) -> anyhow::Result<T>,
+    on_error: impl FnOnce(&anyhow::Error),
+) -> Option<T> {
+    match build(endpoint) {
+        Ok(provider) => Some(provider),
+        Err(error) => {
+            on_error(&error);
+            None
+        }
+    }
+}
+
+fn setup_otel_meter_with<T>(
+    endpoint: &str,
+    build: impl FnOnce(&str) -> anyhow::Result<T>,
+    on_error: impl FnOnce(&anyhow::Error),
+) -> Option<T> {
+    match build(endpoint) {
+        Ok(provider) => Some(provider),
+        Err(error) => {
+            on_error(&error);
+            None
+        }
+    }
+}
+
+fn slow_op_threshold_with(
+    mut read: impl FnMut(&str) -> Result<Option<String>, std::env::VarError>,
+    mut warn: impl FnMut(),
+) -> Duration {
+    match read("JAUNDER_SLOW_OP_MS") {
+        Ok(Some(value)) => {
+            if let Ok(value) = value.parse::<u64>() {
+                Duration::from_millis(value)
+            } else {
+                warn();
+                Duration::from_secs(5)
+            }
+        }
+        Ok(None) => Duration::from_secs(5),
+        Err(_) => {
+            warn();
+            Duration::from_secs(5)
+        }
+    }
+}
 
 pub fn slow_op_threshold() -> Duration {
-    std::env::var("JAUNDER_SLOW_OP_MS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .map_or(Duration::from_secs(5), Duration::from_millis)
+    slow_op_threshold_with(read_env, || fallback(FallbackKind::SlowThreshold))
 }
 
 #[derive(Clone, Copy)]
@@ -308,6 +581,12 @@ fn slow_span_report(started_at: Option<SpanStartedAt>, threshold: Duration) -> O
     slow_span_values(started_at?.0.elapsed(), threshold)
 }
 
+fn install_subscriber_with<E>(install: impl FnOnce() -> Result<(), E>, mut warn: impl FnMut()) {
+    if install().is_err() {
+        warn();
+    }
+}
+
 fn init_tracing_impl(verbose: bool) -> TelemetryGuard {
     // Forward any existing `log` macros to tracing so we can migrate in
     // phases without duplicate logging calls. A failure here is non-fatal (it
@@ -341,20 +620,8 @@ fn init_tracing_impl(verbose: bool) -> TelemetryGuard {
     // The path is resolved once here and reused for the panic hook installed below.
     let diag_path = diag_log_file();
     let diag_log_layer = diag_path.as_ref().and_then(|path| {
-        match std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-        {
-            Ok(file) => Some(diag_layer(std::sync::Arc::new(file))),
-            Err(error) => {
-                eprintln!(
-                    "diag log disabled; could not open {}: {error}",
-                    path.display()
-                );
-                None
-            }
-        }
+        open_diag_file_with(path, open_diag_file, || fallback(FallbackKind::DiagLogOpen))
+            .map(|file| diag_layer(std::sync::Arc::new(file)))
     });
 
     // Resolve the endpoint once; traces and metrics share it. The provider
@@ -362,55 +629,50 @@ fn init_tracing_impl(verbose: bool) -> TelemetryGuard {
     // them before exit.
     let endpoint = otel_exporter_otlp_endpoint();
 
-    let tracer = endpoint
-        .as_deref()
-        .and_then(|endpoint| match build_otel_tracer(endpoint) {
-            Ok(provider) => Some(provider),
-            Err(error) => {
-                eprintln!(
-                    "OTel disabled because exporter setup failed (endpoint {endpoint}): {error}"
-                );
-                None
-            }
-        });
+    let tracer = endpoint.as_deref().and_then(|endpoint| {
+        setup_otel_tracer_with(endpoint, build_otel_tracer, |error| {
+            exporter_fallback(FallbackKind::TracerExporterSetup, error);
+        })
+    });
     let otel_layer = tracer
         .as_ref()
         .map(|provider| tracing_opentelemetry::layer().with_tracer(provider.tracer("jaunder")));
 
     // Metrics share the OTLP endpoint with traces; setup failure is non-fatal.
-    let meter = endpoint
-        .as_deref()
-        .and_then(|endpoint| match build_otel_meter(endpoint) {
-            Ok(provider) => Some(provider),
-            Err(error) => {
-                eprintln!(
-                    "OTel metrics disabled because exporter setup failed (endpoint {endpoint}): {error}"
-                );
-                None
-            }
-        });
+    let meter = endpoint.as_deref().and_then(|endpoint| {
+        setup_otel_meter_with(endpoint, build_otel_meter, |error| {
+            exporter_fallback(FallbackKind::MeterExporterSetup, error);
+        })
+    });
 
     // `try_init` fails only if a global subscriber is already installed. That
     // leaves the process running without our configured layers, which is worth
     // knowing about; emit to stderr since tracing itself is what failed to come
     // up.
-    if let Err(error) = tracing_subscriber::registry()
-        .with(env_filter)
-        .with(slow_span_layer)
-        .with(fmt_layer)
-        .with(diag_log_layer)
-        .with(otel_layer)
-        .try_init()
-    {
-        eprintln!("tracing subscriber init failed (continuing without it): {error}");
-    }
+    install_subscriber_with(
+        || {
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(slow_span_layer)
+                .with(fmt_layer)
+                .with(diag_log_layer)
+                .with(otel_layer)
+                .try_init()
+        },
+        || fallback(FallbackKind::SubscriberInstall),
+    );
 
     // Install the scoped-diag panic hook (a no-op when disabled). It is independent of
     // the subscriber above and deliberately does not route through it — see
     // `install_diag_panic_hook` for the deadlock-safety reasoning.
     install_diag_panic_hook(diag_path);
 
-    TelemetryGuard { meter, tracer }
+    TelemetryGuard {
+        meter,
+        tracer,
+        meter_shutdown: shutdown_meter,
+        tracer_shutdown: shutdown_tracer,
+    }
 }
 
 #[must_use]
@@ -433,26 +695,55 @@ pub fn init_tracing(verbose: bool) -> TelemetryGuard {
 ///
 /// Both fields are `None` when no OTLP endpoint is configured, making the guard
 /// an inert no-op (the common dev/test case).
+type MeterShutdownOperation =
+    fn(&opentelemetry_sdk::metrics::SdkMeterProvider) -> opentelemetry_sdk::error::OTelSdkResult;
+type TracerShutdownOperation =
+    fn(&opentelemetry_sdk::trace::SdkTracerProvider) -> opentelemetry_sdk::error::OTelSdkResult;
+
 pub struct TelemetryGuard {
     meter: Option<opentelemetry_sdk::metrics::SdkMeterProvider>,
     tracer: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
+    meter_shutdown: MeterShutdownOperation,
+    tracer_shutdown: TracerShutdownOperation,
+}
+
+fn shutdown_meter(
+    provider: &opentelemetry_sdk::metrics::SdkMeterProvider,
+) -> opentelemetry_sdk::error::OTelSdkResult {
+    provider.shutdown()
+}
+
+fn shutdown_tracer(
+    provider: &opentelemetry_sdk::trace::SdkTracerProvider,
+) -> opentelemetry_sdk::error::OTelSdkResult {
+    provider.shutdown()
+}
+
+fn finish_meter_shutdown(
+    provider: &opentelemetry_sdk::metrics::SdkMeterProvider,
+    operation: MeterShutdownOperation,
+) {
+    if operation(provider).is_err() {
+        fallback(FallbackKind::MeterShutdown);
+    }
+}
+
+fn finish_tracer_shutdown(
+    provider: &opentelemetry_sdk::trace::SdkTracerProvider,
+    operation: TracerShutdownOperation,
+) {
+    if operation(provider).is_err() {
+        fallback(FallbackKind::TracerShutdown);
+    }
 }
 
 impl Drop for TelemetryGuard {
     fn drop(&mut self) {
-        // A telemetry-export failure (e.g. the collector is unreachable) must
-        // never change the command's outcome, so errors are logged, not
-        // propagated — mirroring the non-fatal exporter-setup handling in
-        // `init_tracing_impl`.
-        if let Some(meter) = self.meter.take()
-            && let Err(error) = meter.shutdown()
-        {
-            eprintln!("OTel meter provider shutdown failed during flush: {error}");
+        if let Some(meter) = self.meter.as_ref() {
+            finish_meter_shutdown(meter, self.meter_shutdown);
         }
-        if let Some(tracer) = self.tracer.take()
-            && let Err(error) = tracer.shutdown()
-        {
-            eprintln!("OTel tracer provider shutdown failed during flush: {error}");
+        if let Some(tracer) = self.tracer.as_ref() {
+            finish_tracer_shutdown(tracer, self.tracer_shutdown);
         }
     }
 }
@@ -536,6 +827,7 @@ mod tests {
     use common::test_support::with_env;
     use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
     use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
+    use std::io::Write as _;
     use std::sync::{Arc, Mutex};
     use tower::ServiceExt;
 
@@ -568,12 +860,79 @@ mod tests {
 
     #[test]
     fn shared_writer_captures_writes() {
-        use std::io::Write;
         let buf = Arc::new(Mutex::new(Vec::new()));
         let mut writer = Shared(buf.clone());
         writer.write_all(b"captured").expect("write");
         writer.flush().expect("flush");
         assert_eq!(&*buf.lock().expect("lock"), b"captured");
+    }
+
+    fn assert_error_metric_count<R>(expected: usize, operation: impl FnOnce() -> R) -> R {
+        let exporter = InMemoryMetricExporter::default();
+        let reader = PeriodicReader::builder(exporter.clone()).build();
+        let provider = SdkMeterProvider::builder().with_reader(reader).build();
+        opentelemetry::global::set_meter_provider(provider.clone());
+        let result = operation();
+        provider.force_flush().expect("flush error metrics");
+        let metrics = exporter.get_finished_metrics().expect("metrics");
+        let points = metrics
+            .iter()
+            .flat_map(opentelemetry_sdk::metrics::data::ResourceMetrics::scope_metrics)
+            .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+            .filter(|metric| metric.name() == "jaunder.errors")
+            .count();
+        assert_eq!(points, expected, "unexpected jaunder.errors metric count");
+        result
+    }
+
+    fn assert_zero_error_metrics<R>(operation: impl FnOnce() -> R) -> R {
+        assert_error_metric_count(0, operation)
+    }
+
+    fn assert_fixed_fallback(output: &str, kind: FallbackKind) {
+        let (context, message) = kind.parts();
+        assert_eq!(output, format!("{context}: {message}\n"));
+    }
+    fn invalid_unicode_env() -> std::env::VarError {
+        std::env::VarError::NotUnicode(std::ffi::OsString::from("injected invalid unicode"))
+    }
+
+    fn push_fallback(output: &mut Vec<u8>, kind: FallbackKind) {
+        write_fallback(output, kind).expect("write fallback");
+    }
+
+    fn fail_diag_open(_path: &std::path::Path) -> std::io::Result<std::fs::File> {
+        Err(std::io::Error::other(
+            "injected panic diagnostic open failure",
+        ))
+    }
+
+    fn fail_diag_write(_file: &mut std::fs::File, _bytes: &[u8]) -> std::io::Result<()> {
+        Err(std::io::Error::other(
+            "injected panic diagnostic write failure",
+        ))
+    }
+
+    #[test]
+    fn diagnostic_open_failure_continues_with_one_fixed_fallback_and_zero_metrics() {
+        let mut output = Vec::new();
+        let opened = assert_zero_error_metrics(|| {
+            open_diag_file_with(
+                std::path::Path::new("injected-diag-path"),
+                |_| Err::<(), _>(std::io::Error::other("injected open failure")),
+                || {
+                    write_fallback(&mut output, FallbackKind::DiagLogOpen).expect("write fallback");
+                },
+            )
+        });
+        assert!(
+            opened.is_none(),
+            "startup continuation disables only diag log"
+        );
+        assert_fixed_fallback(
+            &String::from_utf8(output).expect("fallback utf8"),
+            FallbackKind::DiagLogOpen,
+        );
     }
 
     #[test]
@@ -698,17 +1057,54 @@ mod tests {
     }
 
     #[test]
-    fn diag_panic_hook_tolerates_unwritable_path() {
-        // A directory can't be opened as a file, so the hook's append fails — it must
-        // swallow that and let the panic propagate cleanly (covers the open-failure
-        // arm inside the hook, which the writable-path test never reaches).
+    fn panic_diagnostic_writer_failure_chains_hook_once_with_fixed_fallback_and_zero_metrics() {
         with_env(|_env| {
+            let original = std::panic::take_hook();
+            let chained_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let chained_calls_in_hook = chained_calls.clone();
+            std::panic::set_hook(Box::new(move |_| {
+                chained_calls_in_hook.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }));
             let dir = tempfile::TempDir::new().expect("tempdir");
-            let previous = std::panic::take_hook();
-            install_diag_panic_hook(Some(dir.path().to_path_buf()));
-            let result = std::panic::catch_unwind(|| panic!("boom-into-directory"));
-            std::panic::set_hook(previous);
+            install_diag_panic_hook_with(
+                Some(dir.path().join("panic.jsonl")),
+                open_diag_file,
+                fail_diag_write,
+                fallback,
+            );
+            let (result, output) = assert_zero_error_metrics(|| {
+                capture_fallbacks(|| std::panic::catch_unwind(|| panic!("boom-under-test")))
+            });
+            std::panic::set_hook(original);
+
             assert!(result.is_err(), "panic still propagates when capture fails");
+            assert_eq!(
+                chained_calls.load(std::sync::atomic::Ordering::SeqCst),
+                1,
+                "the original hook must run exactly once"
+            );
+            assert_fixed_fallback(&output, FallbackKind::PanicDiagWrite);
+        });
+    }
+
+    #[test]
+    fn panic_diagnostic_open_failure_uses_fixed_fallback_and_zero_metrics() {
+        with_env(|_env| {
+            let original = std::panic::take_hook();
+            std::panic::set_hook(Box::new(|_| {}));
+            install_diag_panic_hook_with(
+                Some(std::path::PathBuf::from("injected-panic-diag")),
+                fail_diag_open,
+                write_panic_diag,
+                fallback,
+            );
+            let (result, output) = assert_zero_error_metrics(|| {
+                capture_fallbacks(|| std::panic::catch_unwind(|| panic!("boom-under-test")))
+            });
+            std::panic::set_hook(original);
+
+            assert!(result.is_err(), "panic still propagates when capture fails");
+            assert_fixed_fallback(&output, FallbackKind::PanicDiagWrite);
         });
     }
 
@@ -722,15 +1118,12 @@ mod tests {
     fn slow_span_values_returns_some_when_equal_or_above_threshold() {
         let equal = slow_span_values(Duration::from_millis(500), Duration::from_millis(500));
         assert_eq!(equal, Some((500, 500)));
-
         let above = slow_span_values(Duration::from_millis(750), Duration::from_millis(500));
         assert_eq!(above, Some((750, 500)));
     }
 
     #[test]
     fn slow_span_report_is_none_when_start_time_absent() {
-        // A live registry always records SpanStartedAt in on_new_span, so this
-        // guard is unreachable through the layer; cover it directly here.
         assert_eq!(slow_span_report(None, Duration::from_millis(1)), None);
     }
 
@@ -761,6 +1154,43 @@ mod tests {
     }
 
     #[test]
+    fn nonnumeric_slow_threshold_uses_default_with_one_fixed_fallback_and_zero_metrics() {
+        let mut output = Vec::new();
+        let threshold = assert_zero_error_metrics(|| {
+            slow_op_threshold_with(
+                |name| {
+                    assert_eq!(name, "JAUNDER_SLOW_OP_MS");
+                    Ok(Some("not-a-number".to_owned()))
+                },
+                || push_fallback(&mut output, FallbackKind::SlowThreshold),
+            )
+        });
+        assert_eq!(threshold, Duration::from_secs(5));
+        assert_fixed_fallback(
+            &String::from_utf8(output).expect("fallback utf8"),
+            FallbackKind::SlowThreshold,
+        );
+    }
+
+    #[test]
+    fn invalid_unicode_slow_threshold_uses_default_with_one_redacted_fallback_and_zero_metrics() {
+        let mut output = Vec::new();
+        let threshold = assert_zero_error_metrics(|| {
+            slow_op_threshold_with(
+                |name| {
+                    assert_eq!(name, "JAUNDER_SLOW_OP_MS");
+                    Err(invalid_unicode_env())
+                },
+                || push_fallback(&mut output, FallbackKind::SlowThreshold),
+            )
+        });
+        assert_eq!(threshold, Duration::from_secs(5));
+        assert_fixed_fallback(
+            &String::from_utf8(output).expect("fallback utf8"),
+            FallbackKind::SlowThreshold,
+        );
+    }
+    #[test]
     fn otlp_endpoint_prefers_jaunder_specific_setting() {
         with_env(|env| {
             env.set("OTEL_EXPORTER_OTLP_ENDPOINT", "http://fallback:4317");
@@ -768,7 +1198,6 @@ mod tests {
                 "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
                 "http://preferred:4317",
             );
-
             assert_eq!(
                 otel_exporter_otlp_endpoint().as_deref(),
                 Some("http://preferred:4317")
@@ -781,12 +1210,91 @@ mod tests {
         with_env(|env| {
             env.remove("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
             env.set("OTEL_EXPORTER_OTLP_ENDPOINT", "http://fallback:4317");
-
             assert_eq!(
                 otel_exporter_otlp_endpoint().as_deref(),
                 Some("http://fallback:4317")
             );
         });
+    }
+
+    #[test]
+    fn blank_primary_endpoint_disables_export_with_one_fixed_fallback() {
+        let mut output = Vec::new();
+        let endpoint = otel_exporter_otlp_endpoint_with(
+            |name| {
+                assert_eq!(
+                    name, "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
+                    "blank primary endpoint must stop precedence resolution"
+                );
+                Ok(Some("   ".to_owned()))
+            },
+            || push_fallback(&mut output, FallbackKind::OtlpEndpoint),
+        );
+        assert!(endpoint.is_none());
+        assert_fixed_fallback(
+            &String::from_utf8(output).expect("fallback utf8"),
+            FallbackKind::OtlpEndpoint,
+        );
+    }
+
+    #[test]
+    fn blank_secondary_endpoint_disables_export_with_one_fixed_fallback() {
+        let mut output = Vec::new();
+        let endpoint = otel_exporter_otlp_endpoint_with(
+            |name| match name {
+                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT" => Ok(None),
+                "OTEL_EXPORTER_OTLP_ENDPOINT" => Ok(Some("   ".to_owned())),
+                _ => unreachable!("the endpoint reader receives only the two known names"),
+            },
+            || push_fallback(&mut output, FallbackKind::OtlpEndpoint),
+        );
+        assert!(endpoint.is_none());
+        assert_fixed_fallback(
+            &String::from_utf8(output).expect("fallback utf8"),
+            FallbackKind::OtlpEndpoint,
+        );
+    }
+
+    #[test]
+    fn invalid_unicode_primary_endpoint_does_not_select_secondary_and_records_zero_metrics() {
+        let mut output = Vec::new();
+        let endpoint = assert_zero_error_metrics(|| {
+            otel_exporter_otlp_endpoint_with(
+                |name| {
+                    assert_eq!(
+                        name, "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
+                        "invalid primary endpoint must stop precedence resolution"
+                    );
+                    Err(invalid_unicode_env())
+                },
+                || push_fallback(&mut output, FallbackKind::OtlpEndpoint),
+            )
+        });
+        assert!(endpoint.is_none(), "invalid primary disables export");
+        assert_fixed_fallback(
+            &String::from_utf8(output).expect("fallback utf8"),
+            FallbackKind::OtlpEndpoint,
+        );
+    }
+
+    #[test]
+    fn invalid_unicode_secondary_endpoint_disables_export_and_records_zero_metrics() {
+        let mut output = Vec::new();
+        let endpoint = assert_zero_error_metrics(|| {
+            otel_exporter_otlp_endpoint_with(
+                |name| match name {
+                    "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT" => Ok(None),
+                    "OTEL_EXPORTER_OTLP_ENDPOINT" => Err(invalid_unicode_env()),
+                    _ => unreachable!("the endpoint reader receives only the two known names"),
+                },
+                || push_fallback(&mut output, FallbackKind::OtlpEndpoint),
+            )
+        });
+        assert!(endpoint.is_none(), "invalid secondary disables export");
+        assert_fixed_fallback(
+            &String::from_utf8(output).expect("fallback utf8"),
+            FallbackKind::OtlpEndpoint,
+        );
     }
 
     #[test]
@@ -805,15 +1313,209 @@ mod tests {
         });
     }
 
+    #[test]
+    fn use_json_format_accepts_pretty() {
+        with_env(|env| {
+            env.set("JAUNDER_LOG_FORMAT", "pretty");
+            assert!(!use_json_format());
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn production_env_reader_rejects_invalid_unicode() {
+        use std::os::unix::ffi::OsStringExt as _;
+
+        with_env(|env| {
+            env.set(
+                "JAUNDER_LOG_FORMAT",
+                std::ffi::OsString::from_vec(vec![0xff]),
+            );
+            assert!(!use_json_format());
+        });
+    }
+
+    #[test]
+    fn invalid_unicode_log_format_uses_pretty_with_one_redacted_fallback_and_zero_metrics() {
+        let mut output = Vec::new();
+        let use_json = assert_zero_error_metrics(|| {
+            use_json_format_with(
+                |name| {
+                    assert_eq!(name, "JAUNDER_LOG_FORMAT");
+                    Err(invalid_unicode_env())
+                },
+                || push_fallback(&mut output, FallbackKind::LogFormat),
+            )
+        });
+        assert!(!use_json, "pretty format remains the invalid-value default");
+        assert_fixed_fallback(
+            &String::from_utf8(output).expect("fallback utf8"),
+            FallbackKind::LogFormat,
+        );
+    }
+
+    #[test]
+    fn resolved_filter_accepts_valid_jaunder_directive() {
+        with_env(|env| {
+            env.set("JAUNDER_LOG_FILTER", "jaunder=info");
+            env.remove("RUST_LOG");
+            assert_eq!(
+                format!("{:?}", resolved_filter(false)),
+                format!("{:?}", EnvFilter::new("jaunder=info"))
+            );
+        });
+    }
+
+    #[test]
+    fn invalid_log_filter_directive_uses_default_with_one_fixed_fallback_and_zero_metrics() {
+        let mut output = Vec::new();
+        let filter = assert_zero_error_metrics(|| {
+            resolved_filter_with(
+                false,
+                |name| match name {
+                    "JAUNDER_LOG_FILTER" => Ok(Some("[not-a-directive".to_owned())),
+                    "RUST_LOG" => Ok(None),
+                    _ => unreachable!("the filter reader receives only the two known names"),
+                },
+                || push_fallback(&mut output, FallbackKind::LogFilter),
+            )
+        });
+        assert_eq!(
+            format!("{filter:?}"),
+            format!("{:?}", default_filter(false))
+        );
+        assert_fixed_fallback(
+            &String::from_utf8(output).expect("fallback utf8"),
+            FallbackKind::LogFilter,
+        );
+    }
+
+    #[test]
+    fn invalid_unicode_jaunder_log_filter_uses_default_with_one_redacted_fallback_and_zero_metrics()
+    {
+        let mut output = Vec::new();
+        let filter = assert_zero_error_metrics(|| {
+            resolved_filter_with(
+                false,
+                |name| match name {
+                    "JAUNDER_LOG_FILTER" => Err(invalid_unicode_env()),
+                    "RUST_LOG" => Ok(None),
+                    _ => unreachable!("the filter reader receives only the two known names"),
+                },
+                || push_fallback(&mut output, FallbackKind::LogFilter),
+            )
+        });
+        assert_eq!(
+            format!("{filter:?}"),
+            format!("{:?}", default_filter(false))
+        );
+        assert_fixed_fallback(
+            &String::from_utf8(output).expect("fallback utf8"),
+            FallbackKind::LogFilter,
+        );
+    }
+
+    #[test]
+    fn invalid_unicode_rust_log_uses_default_with_one_redacted_fallback_and_zero_metrics() {
+        let mut output = Vec::new();
+        let filter = assert_zero_error_metrics(|| {
+            resolved_filter_with(
+                false,
+                |name| match name {
+                    "JAUNDER_LOG_FILTER" => Ok(None),
+                    "RUST_LOG" => Err(invalid_unicode_env()),
+                    _ => unreachable!("the filter reader receives only the two known names"),
+                },
+                || push_fallback(&mut output, FallbackKind::LogFilter),
+            )
+        });
+        assert_eq!(
+            format!("{filter:?}"),
+            format!("{:?}", default_filter(false))
+        );
+        assert_fixed_fallback(
+            &String::from_utf8(output).expect("fallback utf8"),
+            FallbackKind::LogFilter,
+        );
+    }
+
     #[tokio::test]
     async fn build_otel_tracer_accepts_valid_endpoint() {
         let tracer = build_otel_tracer("http://127.0.0.1:4317");
         assert!(tracer.is_ok());
     }
 
+    #[test]
+    fn tracer_exporter_failure_preserves_typed_source_at_fallback_and_records_zero_metrics() {
+        let injected = build_otel_tracer("not a valid endpoint").expect_err("invalid endpoint");
+        let mut output = Vec::new();
+        let source_seen = std::cell::Cell::new(false);
+        let provider = assert_zero_error_metrics(|| {
+            setup_otel_tracer_with(
+                "injected endpoint",
+                move |_| Err::<(), _>(injected),
+                |error| {
+                    assert_eq!(error.to_string(), "failed to build OTLP span exporter");
+                    assert!(
+                        error
+                            .downcast_ref::<opentelemetry_otlp::ExporterBuildError>()
+                            .is_some(),
+                        "concrete OTLP exporter error was erased before fallback"
+                    );
+                    source_seen.set(true);
+                    write_exporter_fallback(&mut output, FallbackKind::TracerExporterSetup, error)
+                        .expect("write fallback");
+                },
+            )
+        });
+        assert!(
+            provider.is_none(),
+            "startup continues with tracing export disabled"
+        );
+        assert!(source_seen.get(), "typed source reached fallback seam");
+        assert_fixed_fallback(
+            &String::from_utf8(output).expect("fallback utf8"),
+            FallbackKind::TracerExporterSetup,
+        );
+    }
+
     #[tokio::test]
     async fn build_otel_meter_accepts_valid_endpoint() {
         assert!(build_otel_meter("http://127.0.0.1:4317").is_ok());
+    }
+
+    #[test]
+    fn meter_exporter_failure_preserves_typed_source_at_fallback_and_records_zero_metrics() {
+        let injected = build_otel_meter("not a valid endpoint").expect_err("invalid endpoint");
+        let mut output = Vec::new();
+        let source_seen = std::cell::Cell::new(false);
+        let provider = assert_zero_error_metrics(|| {
+            setup_otel_meter_with(
+                "injected endpoint",
+                move |_| Err::<(), _>(injected),
+                |error| {
+                    assert_eq!(error.to_string(), "failed to build OTLP metric exporter");
+                    assert!(
+                        error
+                            .downcast_ref::<opentelemetry_otlp::ExporterBuildError>()
+                            .is_some(),
+                        "concrete OTLP exporter error was erased before fallback"
+                    );
+                    source_seen.set(true);
+                    write_exporter_fallback(&mut output, FallbackKind::MeterExporterSetup, error)
+                        .expect("write fallback");
+                },
+            )
+        });
+        assert!(
+            provider.is_none(),
+            "startup continues with metrics export disabled"
+        );
+        assert!(source_seen.get(), "typed source reached fallback seam");
+        assert_fixed_fallback(
+            &String::from_utf8(output).expect("fallback utf8"),
+            FallbackKind::MeterExporterSetup,
+        );
     }
 
     #[tokio::test]
@@ -850,12 +1552,7 @@ mod tests {
             let dir = tempfile::TempDir::new().expect("tempdir");
             env.set(host::capture::DIR_ENV, dir.path());
             let path = dir.path().join("diag.log");
-            // `init_tracing_impl` installs the global panic hook when the env is set;
-            // save/restore it so it can't fire on a later test writing to this TempDir.
             let previous = std::panic::take_hook();
-            // `OpenOptions::create` makes the file on open — independent of whether this
-            // process's `try_init` wins the global-subscriber slot — so the sink's file
-            // exists even when a prior test already installed the subscriber.
             init_tracing_impl(false);
             std::panic::set_hook(previous);
             assert!(path.exists(), "diag file should be created when env is set");
@@ -864,17 +1561,33 @@ mod tests {
 
     #[test]
     fn init_tracing_impl_survives_unopenable_diag_path() {
-        with_env(|env| {
-            // Point JAUNDER_CAPTURE_DIR at a regular FILE: `capture::file` can't create
-            // the dir and opening `<file>/diag.log` fails, exercising the non-fatal
-            // `Err`/`eprintln` arm without taking down startup. (Pointing at a directory
-            // succeeds — `capture::file` create_dir_all's it and joins `diag.log`.)
-            let file = tempfile::NamedTempFile::new().expect("temp file");
-            env.set(host::capture::DIR_ENV, file.path());
-            let previous = std::panic::take_hook();
-            init_tracing_impl(false);
-            std::panic::set_hook(previous);
-        });
+        const CHILD: &str = "JAUNDER_TEST_DIAG_OPEN_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            assert_error_metric_count(1, || {
+                let guard = init_tracing_impl(false);
+                drop(guard);
+            });
+            return;
+        }
+
+        let file = tempfile::NamedTempFile::new().expect("temp file");
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .arg("--exact")
+            .arg("observability::tests::init_tracing_impl_survives_unopenable_diag_path")
+            .arg("--nocapture")
+            .env(CHILD, "1")
+            .env(host::capture::DIR_ENV, file.path())
+            .env_remove("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT")
+            .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+            .output()
+            .expect("run isolated diag-open test");
+        assert!(output.status.success(), "child status: {}", output.status);
+        let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+        assert_eq!(
+            stderr.matches("server.observability.diag_log_open").count(),
+            1,
+            "stderr: {stderr}"
+        );
     }
 
     #[test]
@@ -924,16 +1637,30 @@ mod tests {
     }
 
     #[test]
-    fn init_tracing_impl_reports_failure_when_already_initialized() {
-        with_env(|env| {
-            env.remove("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
-            env.remove("OTEL_EXPORTER_OTLP_ENDPOINT");
-            // First call installs the global subscriber and log bridge; the second
-            // finds both already set and exercises the non-fatal error branches
-            // (reported to stderr rather than silently dropped).
-            init_tracing_impl(false);
-            init_tracing_impl(false);
-        });
+    fn subscriber_install_failure_is_nonfatal_in_subprocess() {
+        const CHILD: &str = "JAUNDER_TEST_SUBSCRIBER_INSTALL_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            tracing::subscriber::set_global_default(tracing_subscriber::registry())
+                .expect("install test subscriber");
+            assert_zero_error_metrics(|| {
+                let guard = init_tracing_impl(false);
+                drop(guard);
+            });
+            return;
+        }
+
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .arg("--exact")
+            .arg("observability::tests::subscriber_install_failure_is_nonfatal_in_subprocess")
+            .arg("--nocapture")
+            .env(CHILD, "1")
+            .env_remove("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT")
+            .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+            .output()
+            .expect("run isolated subscriber test");
+        assert!(output.status.success(), "child status: {}", output.status);
+        let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
+        assert_fixed_fallback(&stderr, FallbackKind::SubscriberInstall);
     }
 
     #[test]
@@ -954,6 +1681,25 @@ mod tests {
             warn_str.contains("LevelFilter::WARN"),
             "warn_str: {warn_str}"
         );
+    }
+
+    #[test]
+    fn default_filter_keeps_host_error_reports() {
+        let output = Arc::new(Mutex::new(Vec::<u8>::new()));
+        let subscriber = tracing_subscriber::registry()
+            .with(default_filter(false))
+            .with(
+                fmt::layer()
+                    .with_ansi(false)
+                    .with_writer(Shared(output.clone())),
+            );
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::warn!(target: "host::error", "host-warning");
+        });
+
+        let output = String::from_utf8(output.lock().expect("trace lock").clone()).expect("utf8");
+        assert!(output.contains("host-warning"), "trace: {output}");
     }
 
     #[test]
@@ -1064,6 +1810,8 @@ mod tests {
         drop(TelemetryGuard {
             meter: Some(provider),
             tracer: None,
+            meter_shutdown: shutdown_meter,
+            tracer_shutdown: shutdown_tracer,
         });
 
         let metrics = exporter.get_finished_metrics().expect("metrics");
@@ -1087,6 +1835,8 @@ mod tests {
         drop(TelemetryGuard {
             meter: None,
             tracer: Some(provider),
+            meter_shutdown: shutdown_meter,
+            tracer_shutdown: shutdown_tracer,
         });
 
         let spans = exporter.get_finished_spans().expect("spans");
@@ -1103,40 +1853,58 @@ mod tests {
         drop(TelemetryGuard {
             meter: None,
             tracer: None,
+            meter_shutdown: shutdown_meter,
+            tracer_shutdown: shutdown_tracer,
         });
     }
 
     #[tokio::test]
-    async fn guard_drop_swallows_shutdown_errors() {
+    async fn meter_shutdown_failure_preserves_primary_result_with_one_fallback_and_zero_metrics() {
         let meter = SdkMeterProvider::builder()
             .with_reader(PeriodicReader::builder(InMemoryMetricExporter::default()).build())
             .build();
+        let (primary, output) = assert_zero_error_metrics(|| {
+            capture_fallbacks(|| {
+                let primary: Result<&str, &str> = Ok("preserved");
+                drop(TelemetryGuard {
+                    meter: Some(meter),
+                    tracer: None,
+                    meter_shutdown: |_| {
+                        Err(opentelemetry_sdk::error::OTelSdkError::InternalFailure(
+                            "injected meter shutdown failure".to_owned(),
+                        ))
+                    },
+                    tracer_shutdown: shutdown_tracer,
+                });
+                primary
+            })
+        });
+        assert_eq!(primary, Ok("preserved"));
+        assert_fixed_fallback(&output, FallbackKind::MeterShutdown);
+    }
+
+    #[tokio::test]
+    async fn tracer_shutdown_failure_preserves_primary_result_with_one_fallback_and_zero_metrics() {
         let tracer = SdkTracerProvider::builder()
             .with_batch_exporter(InMemorySpanExporter::default())
             .build();
-
-        // Shut both down once cleanly, then assert a second shutdown reports an
-        // error — that is exactly the condition the guard's Drop must swallow.
-        // Asserting it here keeps the test meaningful even if a future OTel
-        // version made shutdown() idempotently return Ok (the Drop Err arms would
-        // otherwise go silently uncovered).
-        meter.shutdown().expect("first meter shutdown succeeds");
-        tracer.shutdown().expect("first tracer shutdown succeeds");
-        assert!(
-            meter.shutdown().is_err(),
-            "second meter shutdown should error"
-        );
-        assert!(
-            tracer.shutdown().is_err(),
-            "second tracer shutdown should error"
-        );
-
-        // The guard's Drop now calls shutdown() on already-shut-down providers; it
-        // must log and swallow the error, not panic or propagate. Covers both Err
-        // arms in Drop.
-        drop(TelemetryGuard {
-            meter: Some(meter),
-            tracer: Some(tracer),
+        let (primary, output) = assert_zero_error_metrics(|| {
+            capture_fallbacks(|| {
+                let primary: Result<&str, &str> = Ok("preserved");
+                drop(TelemetryGuard {
+                    meter: None,
+                    tracer: Some(tracer),
+                    meter_shutdown: shutdown_meter,
+                    tracer_shutdown: |_| {
+                        Err(opentelemetry_sdk::error::OTelSdkError::InternalFailure(
+                            "injected tracer shutdown failure".to_owned(),
+                        ))
+                    },
+                });
+                primary
+            })
         });
+        assert_eq!(primary, Ok("preserved"));
+        assert_fixed_fallback(&output, FallbackKind::TracerShutdown);
     }
 }

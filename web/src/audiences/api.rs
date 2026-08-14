@@ -123,12 +123,19 @@ pub async fn list_my_subscribers() -> WebResult<Vec<SubscriberSummary>> {
         // channel. Resolve it to a username for display; fall back to the
         // raw reference if it cannot be resolved.
         let label = match row.subscriber_ref.parse::<i64>() {
-            Ok(uid) => users
-                .get_user(UserId::from(uid))
-                .await
-                .ok()
-                .flatten()
-                .map_or_else(|| row.subscriber_ref.clone(), |u| u.username.to_string()),
+            Ok(uid) => match users.get_user(UserId::from(uid)).await {
+                Ok(Some(user)) => user.username.to_string(),
+                Ok(None) => row.subscriber_ref.clone(),
+                Err(error) => {
+                    host::error::report_swallowed(
+                        host::error::ErrorKind::Storage,
+                        host::error::ErrorClass::Transient,
+                        "web.audiences.subscriber_label_lookup",
+                        host::error::SwallowedSource::Error(&error),
+                    );
+                    row.subscriber_ref.clone()
+                }
+            },
             Err(_) => row.subscriber_ref.clone(),
         };
         out.push(SubscriberSummary {

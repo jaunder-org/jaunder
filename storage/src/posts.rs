@@ -1922,30 +1922,34 @@ where
             .fetch_all(&self.pool)
             .await?;
         let mut needing = Vec::new();
+        let mut decode_reported = false;
         for row in rows {
             let generated_at: DateTime<Utc> = row.try_get("generated_at")?;
-            // Skip this row rather than failing the scan: an `Err` here would retry
-            // forever and go-live enqueueing would never resume
-            // (docs/adr/0122-one-bad-row-must-not-stop-the-scan.md).
-            //
-            // `parts` is folded into the same skip: it can only fail if `canonicalize`
-            // and `parse` disagree, which the decode above has already ruled out, so this
-            // costs no second branch.
-            let Some((feed_path, surface)) = row
-                .try_get::<FeedPath, _>("feed_url")
-                .ok()
-                .and_then(|path| path.parts().map(|(surface, _)| (path, surface)))
-            else {
-                tracing::warn!("skipping feed_cache row whose feed_url no longer parses");
+            let feed_path = match row.try_get::<FeedPath, _>("feed_url") {
+                Ok(path) => path,
+                Err(error) => {
+                    if !decode_reported {
+                        host::error::report_swallowed(
+                            host::error::ErrorKind::Storage,
+                            host::error::ErrorClass::Bug,
+                            "storage.feed_cache.decode_feed_path",
+                            host::error::SwallowedSource::Error(&error),
+                        );
+                        decode_reported = true;
+                    }
+                    continue;
+                }
+            };
+            // `parts` is an expected defensive grammar mismatch. Construction
+            // currently guarantees it cannot occur, but it carries no failure
+            // source and therefore remains ordinary non-reporting control flow.
+            let Some((surface, _)) = feed_path.parts() else {
                 continue;
             };
             if let Some(max) = max_published_at_for_surface::<DB>(&self.pool, &surface, now).await?
+                && max > generated_at
             {
-                // Strictly newer => a go-live happened after this feed was last
-                // generated, so it must be regenerated.
-                if max > generated_at {
-                    needing.push(feed_path);
-                }
+                needing.push(feed_path);
             }
         }
         Ok(needing)
@@ -3075,7 +3079,7 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn feed_urls_needing_catchup_skips_a_row_whose_feed_url_no_longer_parses(
+    async fn continuation_reporting_feed_urls_needing_catchup_skips_a_row_whose_feed_url_no_longer_parses(
         #[case] backend: Backend,
     ) {
         // A `feed_url` that will not decode into a `FeedPath` must cost only its own
@@ -3112,8 +3116,22 @@ mod tests {
             )
             .await
             .unwrap();
+        env.base
+            .pool()
+            .execute(
+                "INSERT INTO feed_cache \
+                 (feed_url, body, etag, content_type, updated_at, generated_at) \
+                 SELECT 'also-not-a-feed-path', body, etag, content_type, updated_at, generated_at \
+                 FROM feed_cache WHERE feed_url = 'not-a-feed-path'",
+            )
+            .await
+            .unwrap();
 
-        let needing = state.posts.feed_urls_needing_catchup(now).await.unwrap();
+        let (needing, trace) = crate::helpers::swallowed_test::capture_async(
+            state.posts.feed_urls_needing_catchup(now),
+        )
+        .await;
+        let needing = needing.unwrap();
 
         assert_eq!(
             needing,
@@ -3121,6 +3139,66 @@ mod tests {
             "the readable stale feed is still reported, and the corrupt row is skipped \
              rather than failing the whole scan"
         );
+        crate::helpers::swallowed_test::assert_one_report(
+            &trace,
+            "storage.feed_cache.decode_feed_path",
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn continuation_reporting_post_not_found_results_survive_injected_rollback_failures(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let author = SeedUser::new().seed(&env.state).await.user_id;
+        let missing_post = PostId::from(999_999);
+        let update_input = UpdateRawPost::new("missing").build();
+
+        let update_primary = env
+            .state
+            .posts
+            .update_post(missing_post, author, &update_input)
+            .await;
+        assert!(matches!(&update_primary, Err(UpdatePostError::NotFound)));
+        let (update, trace) = crate::helpers::swallowed_test::capture(|| match backend {
+            Backend::Sqlite => crate::sqlite::posts::finish_post_update(
+                update_primary,
+                Err(sqlx::Error::PoolClosed),
+            ),
+            Backend::Postgres => crate::postgres::posts::finish_post_update_rejection(
+                update_primary,
+                Err(sqlx::Error::PoolClosed),
+            ),
+        });
+        assert!(matches!(update, Err(UpdatePostError::NotFound)));
+        let update_context = match backend {
+            Backend::Sqlite => "storage.sqlite.post_update.rollback",
+            Backend::Postgres => "storage.postgres.post_update.rollback_domain_rejection",
+        };
+        crate::helpers::swallowed_test::assert_one_report(&trace, update_context);
+
+        let tags_primary = env
+            .state
+            .posts
+            .set_post_tags(missing_post, &[parse_tag_label("rust")])
+            .await;
+        assert!(matches!(&tags_primary, Err(TaggingError::PostNotFound)));
+        let (tags, trace) = crate::helpers::swallowed_test::capture(|| match backend {
+            Backend::Sqlite => {
+                crate::sqlite::posts::finish_post_tags(tags_primary, Err(sqlx::Error::PoolClosed))
+            }
+            Backend::Postgres => crate::postgres::posts::finish_post_tags_not_found(
+                tags_primary,
+                Err(sqlx::Error::PoolClosed),
+            ),
+        });
+        assert!(matches!(tags, Err(TaggingError::PostNotFound)));
+        let tags_context = match backend {
+            Backend::Sqlite => "storage.sqlite.post_tags.rollback",
+            Backend::Postgres => "storage.postgres.post_tags.rollback_not_found",
+        };
+        crate::helpers::swallowed_test::assert_one_report(&trace, tags_context);
     }
 
     fn post_tag(slug: &str, display: &str) -> PostTag {

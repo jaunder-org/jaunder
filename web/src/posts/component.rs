@@ -27,12 +27,12 @@ use crate::media::MediaUpload;
 // is named here only so a future author does not add it to the list.
 use crate::posts::{
     ComposeState, Create, Delete, DraftRowDisplay, EditPublicationState, InvalidSchedule,
-    ListingRoute, LoadedPublication, PermalinkRoute, PublicationIntent, Publish, SavedPost,
-    ScheduledEditState, Unpublish, UnpublishedPage, UnpublishedPost, draft_row_display,
-    edit_submit_gate, get, get_audience_selection, get_default_audience_selection, get_preview,
-    list_drafts, loaded_publication, notify, notify_with_fallback, parse_permalink_route,
-    publication_from_local, publish_redirect, seeded_page, submit_gate, tag_query, user_query,
-    user_tag_query, with_post_id,
+    ListingRoute, LoadedPublication, NamedAudienceState, PermalinkRoute, PublicationIntent,
+    Publish, SavedPost, ScheduledEditState, Unpublish, UnpublishedPage, UnpublishedPost,
+    draft_row_display, edit_submit_gate, get, get_audience_selection,
+    get_default_audience_selection, get_preview, list_drafts, loaded_publication, notify,
+    notify_with_fallback, parse_permalink_route, publication_from_local, publish_redirect,
+    seeded_page, submit_gate, tag_query, user_query, user_tag_query, with_post_id,
 };
 use crate::subscriptions::SubscribeButton;
 use crate::taglist::TagCtx as TagContext;
@@ -42,6 +42,7 @@ use crate::timeline::{
     wire_timeline_resolve,
 };
 use crate::topbar::Topbar;
+use common::client_telemetry::ClientErrorContext;
 use common::feed::FeedSurface;
 use common::ids::PostId;
 use common::pagination::PageSize;
@@ -229,6 +230,63 @@ fn marker_matches(author: &Username) -> bool {
         .map(|user| &user.username)
         == Some(author)
 }
+fn dispatch_after_confirm(message: &str, context: ClientErrorContext, dispatch: impl FnOnce()) {
+    match client::dialog::confirm(message) {
+        Ok(outcome) => {
+            if outcome.should_dispatch() {
+                dispatch();
+            }
+        }
+        Err(error) => {
+            let source_kind = error.source_kind();
+            client::telemetry::report_swallowed(
+                client::telemetry::error_kind(source_kind),
+                context,
+                source_kind,
+            );
+        }
+    }
+}
+fn primary_post_action(
+    is_draft: bool,
+    post_id: PostId,
+    publish_action: ServerAction<Publish>,
+    unpublish_action: ServerAction<Unpublish>,
+) -> AnyView {
+    if is_draft {
+        view! {
+            <button
+                type="button"
+                class="j-btn"
+                on:click=move |_| {
+                    dispatch_after_confirm(
+                        "Publish this draft?",
+                        ClientErrorContext::PublishConfirm,
+                        || {
+                            publish_action.dispatch(Publish { post_id });
+                        },
+                    );
+                }
+            >
+                "Publish"
+            </button>
+        }
+        .into_any()
+    } else {
+        view! {
+            <button
+                type="button"
+                class="j-btn"
+                on:click=move |_| {
+                    unpublish_action.dispatch(Unpublish { post_id });
+                }
+            >
+                "Unpublish"
+            </button>
+        }
+        .into_any()
+    }
+}
 
 #[component]
 pub fn PostCard<'a>(
@@ -296,39 +354,7 @@ pub fn PostCard<'a>(
         },
     );
 
-    // The primary lifecycle action adapts to draft state (#23): a draft gets
-    // Publish (dispatching Publish behind a confirm), a published post keeps
-    // Unpublish. Edit and Delete are identical either way.
-    let primary_action = if is_draft {
-        view! {
-            <button
-                type="button"
-                class="j-btn"
-                on:click=move |_| {
-                    let confirmed = client::dialog::confirm("Publish this draft?");
-                    if confirmed {
-                        publish_action.dispatch(Publish { post_id });
-                    }
-                }
-            >
-                "Publish"
-            </button>
-        }
-        .into_any()
-    } else {
-        view! {
-            <button
-                type="button"
-                class="j-btn"
-                on:click=move |_| {
-                    unpublish_action.dispatch(Unpublish { post_id });
-                }
-            >
-                "Unpublish"
-            </button>
-        }
-        .into_any()
-    };
+    let primary_action = primary_post_action(is_draft, post_id, publish_action, unpublish_action);
 
     // Additive action column (#181, ADR-0044 D4): edit / publish-or-unpublish /
     // delete. The timestamp deliberately stays in the (coincident) content-column
@@ -345,10 +371,13 @@ pub fn PostCard<'a>(
                     type="button"
                     class="j-btn is-danger"
                     on:click=move |_| {
-                        let confirmed = client::dialog::confirm("Delete this post?");
-                        if confirmed {
-                            delete_action.dispatch(Delete { post_id });
-                        }
+                        dispatch_after_confirm(
+                            "Delete this post?",
+                            ClientErrorContext::DeleteConfirm,
+                            || {
+                                delete_action.dispatch(Delete { post_id });
+                            },
+                        );
                     }
                 >
                     "Delete"
@@ -367,6 +396,17 @@ pub fn PostCard<'a>(
     }
 }
 
+/// Start the named-audience load and project every resource outcome into the
+/// explicit host-tested state consumed by both the picker and its submit gate.
+fn load_named_audiences() -> RwSignal<NamedAudienceState> {
+    let state = RwSignal::new(NamedAudienceState::Loading);
+    let named = Resource::new(|| (), |()| list_mine());
+    Effect::new(move |_| {
+        state.set(NamedAudienceState::resolve(named.get()));
+    });
+    state
+}
+
 /// Per-post visibility control for the editor.
 ///
 /// Drives a shared `selection` signal: a mutually-exclusive base
@@ -377,36 +417,40 @@ pub fn PostCard<'a>(
 /// while Private is chosen to make that explicit.
 #[component]
 pub fn AudiencePicker(selection: RwSignal<AudienceSelection>) -> impl IntoView {
-    // The named audiences the author owns, consumed directly in the checkbox
-    // view below. `None` (unresolved) and `Some(Err)` both fold to an empty
-    // list, so the multiselect renders no rows until the fetch lands.
-    let named = Resource::new(|| (), |()| list_mine());
+    let named = load_named_audiences();
+    view! { <AudiencePickerWithState selection=selection named=named /> }
+}
 
-    // Each base variant paired with its UI caption in one place, so the two
-    // can't drift out of order.
-    let base_options = [
-        (AudienceBase::Public, "Public"),
-        (AudienceBase::Subscribers, "Subscribers"),
-        (AudienceBase::Private, "Private (only me)"),
-    ];
+/// The picker view over a load state shared with its owning action gate.
+#[component]
+fn AudiencePickerWithState(
+    selection: RwSignal<AudienceSelection>,
+    named: RwSignal<NamedAudienceState>,
+) -> impl IntoView {
+    let change_base = move |ev| {
+        if let Ok(base) = AudienceBase::try_from(event_target_value(&ev).as_str()) {
+            selection.update(|current| current.base = base);
+        }
+    };
 
     view! {
         <div class="j-field-row" style="grid-template-columns:auto 1fr">
             <label class="j-field-label" for="audience-base">
                 "Audience"
             </label>
-            <select
-                id="audience-base"
-                class="j-field-val"
-                on:change=move |ev| {
-                    if let Ok(base) = AudienceBase::try_from(event_target_value(&ev).as_str()) {
-                        selection.update(|sel| sel.base = base);
+            <select id="audience-base" class="j-field-val" on:change=change_base>
+                <For
+                    // Each base variant is paired with its caption here, so the
+                    // values and visible order cannot drift apart.
+                    each=|| {
+                        [
+                            (AudienceBase::Public, "Public"),
+                            (AudienceBase::Subscribers, "Subscribers"),
+                            (AudienceBase::Private, "Private (only me)"),
+                        ]
                     }
-                }
-            >
-                {base_options
-                    .into_iter()
-                    .map(|(base, label)| {
+                    key=|(base, _)| *base
+                    children=move |(base, label)| {
                         view! {
                             <option
                                 value=base.to_string()
@@ -415,28 +459,90 @@ pub fn AudiencePicker(selection: RwSignal<AudienceSelection>) -> impl IntoView {
                                 {label}
                             </option>
                         }
-                    })
-                    .collect_view()}
+                    }
+                />
             </select>
         </div>
-        {move || {
-            let audiences = named.get().and_then(Result::ok).unwrap_or_default();
-            if audiences.is_empty() {
-                ().into_any()
-            } else {
-                let rows = audiences
-                    .into_iter()
-                    .map(|a| audience_checkbox(a, selection))
-                    .collect_view();
+        <NamedAudienceOptions named=named selection=selection />
+    }
+}
+
+/// Loading, failure, or successfully loaded named-audience options.
+#[component]
+fn NamedAudienceOptions(
+    named: RwSignal<NamedAudienceState>,
+    selection: RwSignal<AudienceSelection>,
+) -> impl IntoView {
+    view! {
+        <Show
+            when=move || named.with(|state| matches!(state, NamedAudienceState::Loading))
+            fallback=move || {
                 view! {
-                    <div style="margin-top:8px">
-                        <span class="j-field-label">"Also share with"</span>
-                        {rows}
-                    </div>
+                    <Show
+                        when=move || named.with(|state| matches!(state, NamedAudienceState::Failed))
+                        fallback=move || {
+                            view! { <ReadyNamedAudienceOptions named=named selection=selection /> }
+                        }
+                    >
+                        <p class="error">"Could not load named audiences."</p>
+                    </Show>
                 }
-                    .into_any()
             }
-        }}
+        >
+            <p class="j-loading">"Loading\u{2026}"</p>
+        </Show>
+    }
+}
+
+/// A successful named-audience load, split between genuine empty and rows.
+#[component]
+fn ReadyNamedAudienceOptions(
+    named: RwSignal<NamedAudienceState>,
+    selection: RwSignal<AudienceSelection>,
+) -> impl IntoView {
+    view! {
+        <Show
+            when=move || {
+                named
+                    .with(|state| {
+                        matches!(
+                            state,
+                            NamedAudienceState::Ready(audiences)
+                            if audiences.is_empty()
+                        )
+                    })
+            }
+            fallback=move || {
+                view! { <NamedAudienceRows named=named selection=selection /> }
+            }
+        >
+            <p class="j-sub">"No named audiences."</p>
+        </Show>
+    }
+}
+
+/// Checkbox rows for a successfully loaded, non-empty named-audience list.
+#[component]
+fn NamedAudienceRows(
+    named: RwSignal<NamedAudienceState>,
+    selection: RwSignal<AudienceSelection>,
+) -> impl IntoView {
+    let audiences = move || {
+        named.with(|state| match state {
+            NamedAudienceState::Ready(audiences) => audiences.clone(),
+            NamedAudienceState::Loading | NamedAudienceState::Failed => Vec::new(),
+        })
+    };
+
+    view! {
+        <div style="margin-top:8px">
+            <span class="j-field-label">"Also share with"</span>
+            <For
+                each=audiences
+                key=|audience| audience.audience_id
+                children=move |audience| audience_checkbox(audience, selection)
+            />
+        </div>
     }
 }
 
@@ -626,17 +732,29 @@ fn FullComposer(
     placeholder: &'static str,
 ) -> impl IntoView {
     let slug_field = Field::<Slug>::optional();
-    // Same one-call gate as the compact shape; see `submit_gate`. The predicate must
-    // include the body clause (#860): without it an empty body leaves both buttons
-    // enabled and clicking them does nothing.
+    let named = load_named_audiences();
+    // The one-call form gate also carries the named-audience load decision: a
+    // failed or unresolved picker cannot dispatch as though an empty list had
+    // loaded. The callback repeats the pure guard so direct invocation cannot
+    // bypass the disabled buttons.
     let (submit_disabled, dispatch) = submit_gate(
         state.body,
-        Signal::derive(move || !slug_field.is_valid() || !state.summary_field.is_valid()),
+        Signal::derive(move || {
+            !slug_field.is_valid()
+                || !state.summary_field.is_valid()
+                || state.audience.with(|selection| {
+                    named.with(|state| state.selection_for_submit(selection).is_none())
+                })
+        }),
         Callback::new(move |(body, publish): (PostBody, bool)| {
             let publication = publication_from_local(publish, &state.publish_at.get());
-            create_action.dispatch(Create {
-                post: state.inputs(body, publication, slug_field.parsed()),
-            });
+            if state.audience.with(|selection| {
+                named.with(|state| state.selection_for_submit(selection).is_some())
+            }) {
+                create_action.dispatch(Create {
+                    post: state.inputs(body, publication, slug_field.parsed()),
+                });
+            }
         }),
     );
     view! {
@@ -659,6 +777,7 @@ fn FullComposer(
                     publication=LoadedPublication::Draft
                     scheduled=None
                     schedule_error=Signal::derive(|| None::<InvalidSchedule>)
+                    named=named
                 />
                 <MediaSection />
                 <div style="margin-top:auto;display:flex;align-items:center;gap:8px">
@@ -1035,6 +1154,7 @@ pub fn EditPostPage() -> impl IntoView {
     // page-level here — unlike the composer, where only the full shape has one.
     let state = ComposeState::new();
     let slug_field = Field::<Slug>::optional();
+    let named = load_named_audiences();
     // The redirect-on-publish effect reacts to the client-only ServerAction
     // dispatch. Whether a settled update redirects at all, and to where, is the
     // host-tested `publish_redirect` (#306), leaving this the bare `Effect`
@@ -1092,6 +1212,7 @@ pub fn EditPostPage() -> impl IntoView {
                                 post_id=fetched.post.post.post_id
                                 publication=publication
                                 action=update_post_action
+                                named=named
                             />
                         }
                             .into_any()
@@ -1115,10 +1236,20 @@ fn EditPostForm(
     post_id: PostId,
     /// Publication branch and branch-specific signals fixed when the response loaded.
     publication: EditPublicationState,
+    /// The named-audience load shared by the picker and the action gate.
+    named: RwSignal<NamedAudienceState>,
     action: ServerAction<super::Update>,
 ) -> impl IntoView {
-    let also_blocked =
-        Signal::derive(move || !slug_field.is_valid() || !state.summary_field.is_valid());
+    // The body/field gate also waits for a real named-audience load. Repeating
+    // the pure guard in the callback prevents a direct invocation from
+    // dispatching while Loading or Failed.
+    let also_blocked = Signal::derive(move || {
+        !slug_field.is_valid()
+            || !state.summary_field.is_valid()
+            || state.audience.with(|selection| {
+                named.with(|state| state.selection_for_submit(selection).is_none())
+            })
+    });
     let loaded_publication = publication.loaded();
     let scheduled = publication.scheduled();
     let (save_disabled, schedule_error, dispatch_update) = edit_submit_gate(
@@ -1126,10 +1257,14 @@ fn EditPostForm(
         also_blocked,
         publication,
         Callback::new(move |(body, publication): (PostBody, PublicationIntent)| {
-            action.dispatch(super::Update {
-                post_id,
-                post: state.inputs(body, publication, slug_field.parsed()),
-            });
+            if state.audience.with(|selection| {
+                named.with(|state| state.selection_for_submit(selection).is_some())
+            }) {
+                action.dispatch(super::Update {
+                    post_id,
+                    post: state.inputs(body, publication, slug_field.parsed()),
+                });
+            }
         }),
     );
     view! {
@@ -1151,6 +1286,7 @@ fn EditPostForm(
                     publication=loaded_publication
                     scheduled=scheduled
                     schedule_error=schedule_error
+                    named=named
                 />
                 <MediaSection />
                 <div class="j-edit-form-actions">
@@ -1238,6 +1374,8 @@ fn ComposeOptions(
     publication: LoadedPublication,
     scheduled: Option<ScheduledEditState>,
     schedule_error: Signal<Option<InvalidSchedule>>,
+    /// The named-audience load shared by the picker and the action gate.
+    named: RwSignal<NamedAudienceState>,
 ) -> impl IntoView {
     view! {
         <div>
@@ -1298,7 +1436,7 @@ fn ComposeOptions(
                 <TagInput tags=state.tags />
             </div>
             <div style="margin-top:10px">
-                <AudiencePicker selection=state.audience />
+                <AudiencePickerWithState selection=state.audience named=named />
             </div>
             <FormatToggle format=state.format style="margin-top:10px" />
         </div>
