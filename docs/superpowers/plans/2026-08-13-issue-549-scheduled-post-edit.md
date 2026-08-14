@@ -743,7 +743,7 @@ ADR-0072, ADR-0083, ADR-0105, ADR-0113, and the approved draft
   repair it in the owning task, rerun that task's focused checks, and make a
   gated fixup commit before repeating this task.
 
-- [ ] **Step 1: Run the full local gate**
+- [x] **Step 1: Run the full local gate**
 
   Run: `devtool run -- cargo xtask validate`
 
@@ -751,7 +751,7 @@ ADR-0072, ADR-0083, ADR-0105, ADR-0113, and the approved draft
   `{sqlite,postgres} × {chromium,firefox}` e2e combinations. This is the proof
   for acceptance criteria 13–14 and backend/browser parity.
 
-- [ ] **Step 2: Confirm plan completion**
+- [x] **Step 2: Confirm plan completion**
 
   Verify every checkbox above is ticked, the branch is clean, and the final
   checked tree is the committed tree. Do not archive the spec/plan here;
