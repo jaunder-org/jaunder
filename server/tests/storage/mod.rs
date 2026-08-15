@@ -18,11 +18,11 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use storage::{
     AppState, AudienceError, ConfirmPasswordResetError, CreatePostError, CreateUserError,
-    DbConnectOptions, FeedCacheRow, GoLivePost, ListByTagError, PostCursor, PostFormat, PostRecord,
-    PostTag, PostUpdate, PostgresSubscriptionStorage, ProfileUpdate, PublishUpdate,
-    RegisterWithInviteError, RenderedPostContent, SessionAuthError, SqliteSubscriptionStorage,
-    SubscriptionStorage, UpdatePostError, UseEmailVerificationError, UsePasswordResetError,
-    UserAuthError, UserConfigKey, create_rendered_post, open_database, perform_post_update,
+    FeedCacheRow, GoLivePost, ListByTagError, PostCursor, PostFormat, PostRecord, PostTag,
+    PostUpdate, PostgresSubscriptionStorage, ProfileUpdate, PublishUpdate, RegisterWithInviteError,
+    RenderedPostContent, SessionAuthError, SqliteSubscriptionStorage, SubscriptionStorage,
+    UpdatePostError, UseEmailVerificationError, UsePasswordResetError, UserAuthError,
+    UserConfigKey, create_rendered_post, perform_post_update,
 };
 
 use rstest::*;
@@ -34,9 +34,10 @@ use rstest_reuse::*;
 use crate::helpers::create_session_for;
 use storage::test_support::{
     Backend, PostgresDbGuard, SeedRawPost, SeedUser, TestEnv, UpdateRawPost, backends, fp,
-    recorded_postgres_url, seed_users, sqlite_url, template_postgres_url,
+    seed_users, template_postgres_url,
 };
 
+mod database;
 mod fixtures;
 
 use fixtures::{
@@ -788,21 +789,6 @@ async fn set_overwrites_existing_value(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
-async fn second_open_on_migrated_database_succeeds(#[case] backend: Backend) {
-    let env = backend.setup().await;
-
-    // Re-open the *same* per-test database the setup just migrated, addressed by
-    // its backend URL, to prove a second `open_database` (re-running migrations)
-    // is idempotent on both backends.
-    let opts = match backend {
-        Backend::Sqlite => sqlite_url(&env.base),
-        Backend::Postgres => recorded_postgres_url(&env.base).parse().unwrap(),
-    };
-    open_database(&opts).await.unwrap();
-}
-
-#[apply(backends)]
-#[tokio::test]
 async fn create_user_duplicate_and_authenticate_work(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
@@ -1012,18 +998,6 @@ async fn confirm_password_reset_bogus_token_returns_not_found_without_hashing(
         )
         .await;
     assert!(matches!(result, Err(ConfirmPasswordResetError::NotFound)));
-}
-
-#[test]
-fn postgres_url_is_accepted_at_parse_time() {
-    let result = "postgres://localhost/test".parse::<DbConnectOptions>();
-    assert!(result.is_ok());
-}
-
-#[test]
-fn unsupported_url_is_rejected_at_parse_time() {
-    let result = "mysql://localhost/test".parse::<DbConnectOptions>();
-    assert!(result.is_err());
 }
 
 #[apply(backends)]

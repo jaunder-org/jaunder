@@ -242,18 +242,18 @@ Run the global per-commit protocol. Commit:
 - Produces:
   `storage::database::{second_open_on_migrated_database_succeeds, postgres_url_is_accepted_at_parse_time, unsupported_url_is_rejected_at_parse_time}`.
 
-- [ ] **Step 1: Move the three bodies and minimal imports**
+- [x] **Step 1: Move the three bodies and minimal imports**
 
 Keep the two plain `#[test]` functions plain. Give the backend-parametrized test
 all three required rstest/template imports.
 
-- [ ] **Step 2: Prove the concern**
+- [x] **Step 2: Prove the concern**
 
 Run:
 `devtool run -- devtool pg run -- cargo nextest run -p jaunder storage::database`
 Expected: PASS for both backends plus both parse-time tests.
 
-- [ ] **Step 3: Gate and commit**
+- [x] **Step 3: Gate and commit**
 
 Run the global per-commit protocol. Commit:
 `refactor(server/tests): split database storage tests (#950)`.
