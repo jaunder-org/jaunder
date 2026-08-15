@@ -95,7 +95,17 @@ test("rejects malformed initializer completion detail", () => {
       {
         name: "jaunder.wasm.init_done",
         startTime: 30,
-        detail: { path: "other", apiMs: Number.NaN },
+        detail: { path: "streaming", apiMs: Number.NaN },
+      },
+    ]),
+  ).toEqual({ startMs: 10, doneMs: 30, apiMs: null, path: null });
+  expect(
+    wasmInitFromMarks([
+      { name: "jaunder.wasm.init_start", startTime: 10 },
+      {
+        name: "jaunder.wasm.init_done",
+        startTime: 30,
+        detail: { path: "buffered", apiMs: -1 },
       },
     ]),
   ).toEqual({ startMs: 10, doneMs: 30, apiMs: null, path: null });

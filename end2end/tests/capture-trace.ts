@@ -155,18 +155,20 @@ export function wasmInitFromMarks(
     "apiMs" in detail
       ? detail
       : null;
-  const path =
+  const candidatePath =
     completion?.path === "streaming"
       ? "streaming"
       : completion?.path === "buffered"
         ? "buffered"
         : null;
-  const apiMs =
-    path !== null &&
-    typeof completion?.apiMs === "number" &&
-    Number.isFinite(completion.apiMs)
+  const candidateApiMs =
+    typeof completion?.apiMs === "number" && Number.isFinite(completion.apiMs)
       ? completion.apiMs
       : null;
+  const valid =
+    candidatePath !== null && candidateApiMs !== null && candidateApiMs >= 0;
+  const path = valid ? candidatePath : null;
+  const apiMs = valid ? candidateApiMs : null;
   return {
     startMs: start?.startTime ?? null,
     doneMs: done?.startTime ?? null,
