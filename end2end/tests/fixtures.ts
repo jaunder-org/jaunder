@@ -98,9 +98,14 @@ type NavigationSummary = {
   /** Decomposition of `commitToMountMs`. All document-relative (see
    *  `capture-trace.ts`), so comparable to each other but not to the wall-clock
    *  fields above. `null` where the document did not report the input. */
+  wasmTimingSchema: "direct-init-v1";
   wasmFetchStartMs: number | null;
   wasmFetchMs: number | null;
-  wasmInstantiateMs: number | null;
+  wasmInitStartMs: number | null;
+  wasmInitStartToBootEntryMs: number | null;
+  wasmApiMs: number | null;
+  wasmInitMs: number | null;
+  wasmInitPath: "streaming" | "buffered" | null;
   /** Wasm response sizes. `decoded` is the compiler's input; `encoded` is what
    *  crossed the wire. A `decoded > encoded` pair means the engine received the
    *  precompressed `jaunder.wasm.br`; equal sizes mean identity. Recorded because
@@ -125,8 +130,11 @@ type NavigationSummary = {
  * interval, and reporting `{}` would read as "measured, all zero".
  */
 function bootPhasesFrom(marks: BootMark[]): Record<string, number> | null {
-  if (marks.length < 2) return null;
-  const sorted = [...marks].sort(
+  const bootMarks = marks.filter((mark) =>
+    mark.name.startsWith("jaunder.boot."),
+  );
+  if (bootMarks.length < 2) return null;
+  const sorted = [...bootMarks].sort(
     (left, right) => left.startTime - right.startTime,
   );
   const phases: Record<string, number> = {};
@@ -688,9 +696,18 @@ const test = base.extend<{
           // follows. Sizing mount cost needs both (#801).
           const timing = capture.timingFor(navigation.id);
           const wasm = timing?.wasm ?? null;
-          const bootEntry = timing?.marks.find((mark) =>
-            mark.name.endsWith(".boot.entry"),
+          const bootEntry = timing?.marks.find(
+            (mark) => mark.name === "jaunder.boot.entry",
           );
+          const wasmInit = timing?.wasmInit;
+          const wasmInitMs =
+            wasmInit?.startMs !== null &&
+            wasmInit?.startMs !== undefined &&
+            wasmInit.doneMs !== null &&
+            wasmInit.doneMs !== undefined &&
+            wasmInit.doneMs >= wasmInit.startMs
+              ? wasmInit.doneMs - wasmInit.startMs
+              : null;
           // Positional, not `startedMs >`: navigations are pushed in start order,
           // and two can share a `Date.now()` millisecond. A `>` search skips the
           // tied neighbour and lands on the one after it, widening the window so
@@ -711,12 +728,18 @@ const test = base.extend<{
             wasmDecodedBytes: wasm?.decodedBodySize ?? null,
             wasmEncodedBytes: wasm?.encodedBodySize ?? null,
             wasmTransferBytes: wasm?.transferSize ?? null,
-            // Rust cannot see its own fetch or instantiation — it only starts
-            // running at `boot.entry` — so this span is derived, not marked.
-            wasmInstantiateMs:
-              wasm !== null && bootEntry !== undefined
-                ? bootEntry.startTime - wasm.responseEndMs
+            wasmTimingSchema: "direct-init-v1",
+            wasmInitStartMs: wasmInit?.startMs ?? null,
+            wasmInitStartToBootEntryMs:
+              wasmInit?.startMs !== null &&
+              wasmInit?.startMs !== undefined &&
+              bootEntry !== undefined &&
+              bootEntry.startTime >= wasmInit.startMs
+                ? bootEntry.startTime - wasmInit.startMs
                 : null,
+            wasmApiMs: wasmInit?.apiMs ?? null,
+            wasmInitMs,
+            wasmInitPath: wasmInit?.path ?? null,
             bootPhases: bootPhasesFrom(timing?.marks ?? []),
             mountToSettledMs: mountToSettledMs(
               navigation,

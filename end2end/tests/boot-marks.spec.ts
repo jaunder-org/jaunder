@@ -6,7 +6,11 @@
 // pure" is how the guard stops guarding. The assertions here are still pure, so the
 // merge invariant is proven by their logic, not by any browser behavior (#818).
 import { test, expect } from "./fixtures";
-import { mergeDocumentTiming, type DocumentTiming } from "./capture-trace";
+import {
+  mergeDocumentTiming,
+  wasmInitFromMarks,
+  type DocumentTiming,
+} from "./capture-trace";
 import { goto } from "./helpers";
 
 const wasm = {
@@ -66,6 +70,37 @@ test.describe("mergeDocumentTiming", () => {
   });
 });
 
+test("keeps a completion harvest that arrives after the fullest boot marks", () => {
+  const bootSnapshot: DocumentTiming = { marks: marks(4), wasm };
+  const completionSnapshot: DocumentTiming = {
+    marks: marks(4),
+    wasm,
+    wasmInit: {
+      startMs: 10,
+      doneMs: 30,
+      apiMs: 12,
+      path: "streaming",
+    },
+  };
+
+  expect(mergeDocumentTiming(bootSnapshot, completionSnapshot)).toEqual(
+    completionSnapshot,
+  );
+});
+
+test("rejects malformed initializer completion detail", () => {
+  expect(
+    wasmInitFromMarks([
+      { name: "jaunder.wasm.init_start", startTime: 10 },
+      {
+        name: "jaunder.wasm.init_done",
+        startTime: 30,
+        detail: { path: "other", apiMs: Number.NaN },
+      },
+    ]),
+  ).toEqual({ startMs: 10, doneMs: 30, apiMs: null, path: null });
+});
+
 // The regression guard for #818's actual defect. Unthresholded on purpose: it
 // asserts the mechanism works at all, which needs no knowledge of the coverage
 // distribution and so can ship before the distribution exists. Gradual erosion is
@@ -99,27 +134,19 @@ test("boot fetches the wasm once and the harness captures the full mark set", as
   // `settle()` covers.
   await goto(page, "/");
 
-  // The failure mode this exists for is silent (#866): a `<link rel="preload">`
-  // whose request mode does not match wasm-bindgen's own `fetch` does not error,
-  // it downloads the 2.2 MB bundle TWICE — strictly worse than having no preload.
-  // Nothing else in the suite would notice.
-  //
-  // Proven able to fail, by mutation, rather than assumed (#866). Pointing the
-  // preload at `/pkg/jaunder.wasm?mutation-proof` — same pathname, distinct URL,
-  // so no cache coalescing — reddened this with
-  //   "expected exactly one /pkg/jaunder.wasm request, got 2"
-  // naming both URLs. Reverted afterwards. A guard that has never been red is
-  // not a guard.
-  //
-  // Note what did NOT reproduce it: a `crossorigin="anonymous"` mismatch against
-  // wasm-bindgen's same-origin `init()` fetch. Chromium coalesced that and made
-  // one request. So this asserts the property, not that specific hazard, and
-  // firefox is not known to behave the same way.
+  // The failure mode this exists for is silent (#866): a preload whose request
+  // mode differs from wasm-bindgen's fetch can download the bundle twice.
   expect(
     wasmRequests.length,
     `expected exactly one /pkg/jaunder.wasm request, got ${wasmRequests.length}: ${wasmRequests.join(", ")}`,
   ).toBe(1);
 
+  // `init_done` is emitted after the fire-and-forget initializer's promise
+  // resolves. Wait for that specific mark, not network idle, before settlement.
+  await page.waitForFunction(
+    (name) => performance.getEntriesByName(name, "mark").length !== 0,
+    "jaunder.wasm.init_done",
+  );
   const timing = await bootTiming();
   expect(
     timing,
@@ -135,7 +162,23 @@ test("boot fetches the wasm once and the harness captures the full mark set", as
   expect(names.every((name) => name.startsWith("jaunder."))).toBe(true);
   expect(new Set(names).size).toBe(names.length);
 
-  // The wasm resource entry is the other half of the decomposition — without it
-  // `wasmInstantiateMs` is null and the boot total cannot be closed.
+  // Resource timing remains a delivery diagnostic. Direct initializer marks
+  // supply the independent initialization measurements below.
   expect(timing?.wasm ?? null).not.toBeNull();
+
+  const completionDetail = await page.evaluate(() => {
+    const entry = performance
+      .getEntriesByType("mark")
+      .find(
+        (mark) => mark.name === "jaunder.wasm.init_done",
+      ) as PerformanceMark;
+    return entry.detail;
+  });
+  expect(completionDetail).toMatchObject({ path: "streaming" });
+  expect(timing?.wasmInit).toMatchObject({
+    path: "streaming",
+  });
+  expect(timing?.wasmInit?.startMs).not.toBeNull();
+  expect(timing?.wasmInit?.doneMs).not.toBeNull();
+  expect(timing?.wasmInit?.apiMs).not.toBeNull();
 });

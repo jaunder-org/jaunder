@@ -412,7 +412,13 @@ fn boot_coverage_rows(spans: &[Span]) -> Result<Vec<BootCoverageRow>> {
                 .get("bootPhases")
                 .and_then(Value::as_object)
                 .map_or(0, |phases| phases.len());
-            if phases >= MIN_BOOT_PHASES && field_f64(nav, "wasmInstantiateMs").is_some() {
+            let current =
+                nav.get("wasmTimingSchema").and_then(Value::as_str) == Some("direct-init-v1");
+            if current
+                && phases >= MIN_BOOT_PHASES
+                && field_f64(nav, "wasmInitStartMs").is_some()
+                && field_f64(nav, "wasmInitStartToBootEntryMs").is_some()
+            {
                 row.full_marks += 1;
             }
         }
@@ -981,14 +987,12 @@ mod tests {
 
     // --- boot-decomposition coverage (#818) ---------------------------------
 
-    /// One navigation entry of `e2e.navigation_top_json`, carrying only the three
-    /// fields the coverage section reads. `phases` is a *count* — `bootPhasesFrom`
-    /// (`end2end/tests/fixtures.ts`) emits one entry per adjacent mark pair, and the
-    /// names are irrelevant here.
+    /// One navigation entry of `e2e.navigation_top_json`, carrying only the
+    /// current schema fields the coverage section reads.
     fn nav(
         commit_to_mount_ms: Option<f64>,
         phases: Option<usize>,
-        wasm_instantiate_ms: Option<f64>,
+        wasm_init_start_ms: Option<f64>,
     ) -> serde_json::Value {
         let boot_phases = match phases {
             None => serde_json::Value::Null,
@@ -999,9 +1003,11 @@ mod tests {
             ),
         };
         serde_json::json!({
+            "wasmTimingSchema": "direct-init-v1",
             "commitToMountMs": commit_to_mount_ms,
             "bootPhases": boot_phases,
-            "wasmInstantiateMs": wasm_instantiate_ms,
+            "wasmInitStartMs": wasm_init_start_ms,
+            "wasmInitStartToBootEntryMs": wasm_init_start_ms,
         })
     }
 
@@ -1120,7 +1126,8 @@ mod tests {
             0,
             vec![nav(Some(1.0), Some(2), Some(40.0))],
         ));
-        // Decomposed but with no derived instantiate span: not a full mark set.
+        // A current navigation missing either exclusive pre-boot segment is not
+        // a full mark set.
         spans.extend(boot_span(
             "sqlite",
             "webkit",
@@ -1138,7 +1145,7 @@ mod tests {
         assert_eq!(
             row_for(&rows, "webkit").full_marks,
             0,
-            "a null wasmInstantiateMs is short",
+            "missing exclusive fields is short",
         );
     }
 

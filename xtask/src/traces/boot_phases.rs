@@ -22,12 +22,14 @@ use tabled::{Table, Tabled};
 
 use super::parse::{Filters, Span, parse_json_attr, read_spans};
 
-/// Spec D8's first three segments, all read straight off the navigation summary.
-/// Segments 4-6 are the `bootPhases` intervals, discovered rather than listed.
-const WASM_SEGMENTS: [(&str, &str); 3] = [
-    ("document_start->wasm_fetch_start", "wasmFetchStartMs"),
-    ("wasm_fetch", "wasmFetchMs"),
-    ("wasm_instantiate", "wasmInstantiateMs"),
+/// Spec D5's two exclusive pre-Rust-boot segments. Resource delivery and direct
+/// initializer timings are diagnostics; neither closes the boot decomposition.
+const EXCLUSIVE_SEGMENTS: [(&str, &str); 2] = [
+    ("wasm_init_start", "wasmInitStartMs"),
+    (
+        "wasm_init_start_to_boot_entry",
+        "wasmInitStartToBootEntryMs",
+    ),
 ];
 
 /// How far the segments may miss `mount_done.startTime` before the navigation is
@@ -71,6 +73,14 @@ pub struct BootPhaseRow {
     pub cache_warmth: String,
     pub navigations: usize,
     pub decomposed: usize,
+    pub current: usize,
+    pub direct_complete: usize,
+    pub direct_missing: usize,
+    pub streaming: usize,
+    pub buffered: usize,
+    pub legacy: usize,
+    pub wasm_api_ms: Option<f64>,
+    pub wasm_init_ms: Option<f64>,
     /// Navigations whose segments missed `mount_done.startTime` by more than
     /// [`CLOSURE_TOLERANCE_MS`]. Excluded from every median and counted here —
     /// never silently included, never silently dropped.
@@ -137,8 +147,11 @@ fn mark_starts(marks: &[Value]) -> BTreeMap<String, f64> {
         .collect()
 }
 
-/// Decompose one navigation against its own marks (spec D8's six segments).
+/// Decompose one current navigation against its own marks (spec D5).
 fn decompose(nav: &Value, marks: &[Value]) -> NavOutcome {
+    if nav.get("wasmTimingSchema").and_then(Value::as_str) != Some("direct-init-v1") {
+        return NavOutcome::NotDecomposed;
+    }
     let starts = mark_starts(marks);
     // The decomposition target, taken independently of the segments so the
     // closure check has something to close *against*.
@@ -149,9 +162,9 @@ fn decompose(nav: &Value, marks: &[Value]) -> NavOutcome {
     else {
         return NavOutcome::NotDecomposed;
     };
-
     let mut segments: Vec<(String, f64)> = Vec::new();
-    for (label, field) in WASM_SEGMENTS {
+
+    for (label, field) in EXCLUSIVE_SEGMENTS {
         let Some(value) = field_f64(nav, field) else {
             return NavOutcome::NotDecomposed;
         };
@@ -214,6 +227,13 @@ fn decompose(nav: &Value, marks: &[Value]) -> NavOutcome {
 #[derive(Default)]
 struct Population {
     navigations: usize,
+    current: usize,
+    direct_complete: usize,
+    streaming: usize,
+    buffered: usize,
+    legacy: usize,
+    wasm_api_ms: Vec<f64>,
+    wasm_init_ms: Vec<f64>,
     closure_violations: usize,
     decomposed: Vec<Decomposition>,
 }
@@ -275,6 +295,29 @@ pub fn boot_phase_rows(spans: &[Span]) -> Result<Vec<BootPhaseRow>> {
                 }
             };
             population.navigations += 1;
+            if nav.get("wasmTimingSchema").and_then(Value::as_str) != Some("direct-init-v1") {
+                population.legacy += 1;
+                continue;
+            }
+            population.current += 1;
+            let api_ms = field_f64(nav, "wasmApiMs");
+            let init_ms = field_f64(nav, "wasmInitMs");
+            let path = nav.get("wasmInitPath").and_then(Value::as_str);
+            if let (Some(api_ms), Some(init_ms), Some(path @ ("streaming" | "buffered"))) =
+                (api_ms, init_ms, path)
+                && api_ms >= 0.0
+                && init_ms >= 0.0
+                && api_ms <= init_ms
+            {
+                population.direct_complete += 1;
+                population.wasm_api_ms.push(api_ms);
+                population.wasm_init_ms.push(init_ms);
+                match path {
+                    "streaming" => population.streaming += 1,
+                    "buffered" => population.buffered += 1,
+                    _ => unreachable!("path was narrowed above"),
+                }
+            }
 
             let marks = nav
                 .get("id")
@@ -295,12 +338,20 @@ pub fn boot_phase_rows(spans: &[Span]) -> Result<Vec<BootPhaseRow>> {
     let mut rows: Vec<BootPhaseRow> = groups
         .into_iter()
         .map(
-            |((source, project, cache_warmth), population)| BootPhaseRow {
+            |((source, project, cache_warmth), mut population)| BootPhaseRow {
                 source,
                 project,
                 cache_warmth,
                 navigations: population.navigations,
                 decomposed: population.decomposed.len(),
+                current: population.current,
+                direct_complete: population.direct_complete,
+                direct_missing: population.current - population.direct_complete,
+                streaming: population.streaming,
+                buffered: population.buffered,
+                legacy: population.legacy,
+                wasm_api_ms: median(&mut population.wasm_api_ms),
+                wasm_init_ms: median(&mut population.wasm_init_ms),
                 closure_violations: population.closure_violations,
                 segments: segment_medians(&population.decomposed),
                 boot_total_ms: median(
@@ -406,6 +457,18 @@ pub fn render(rows: &[BootPhaseRow]) -> String {
             "navigations: {}  decomposed: {}  closure violations: {}\n",
             row.navigations, row.decomposed, row.closure_violations
         ));
+        out.push_str(&format!(
+            "current: {}  direct complete: {}  direct missing: {}  streaming: {}  buffered: {}  legacy: {}\n\
+             median wasmApiMs: {}  median wasmInitMs: {}\n",
+            row.current,
+            row.direct_complete,
+            row.direct_missing,
+            row.streaming,
+            row.buffered,
+            row.legacy,
+            optional_ms(row.wasm_api_ms),
+            optional_ms(row.wasm_init_ms),
+        ));
         // Loud, because an empty table and "the instrument was dark" look
         // identical otherwise — and that is the #818 failure mode itself.
         if row.decomposed == 0 {
@@ -467,12 +530,9 @@ mod tests {
     use crate::traces::parse::parse_spans;
     use serde_json::json;
 
-    /// The canonical timeline every fixture navigation shares:
-    /// wasm fetch starts at 10, runs 20 (response end 30), instantiate 5 →
-    /// `boot.entry` at 35, then 15 / 25 / `tail` to `mount_done`.
-    const FETCH_START: f64 = 10.0;
-    const FETCH: f64 = 20.0;
-    const INSTANTIATE: f64 = 5.0;
+    /// The canonical timeline: initialization starts at 10, then reaches
+    /// `boot.entry` at 35; Rust phases then reach `mount_done`.
+    const INIT_START: f64 = 10.0;
     const ENTRY: f64 = 35.0;
     const SEED_PARSED: f64 = 50.0;
     const RENDER_START: f64 = 75.0;
@@ -481,8 +541,6 @@ mod tests {
         json!({ "name": name, "startTime": start_time })
     }
 
-    /// The four `jaunder.*` boot marks for a navigation whose `mount_done` lands
-    /// at `mount_done_ms`.
     fn boot_marks(mount_done_ms: f64) -> Vec<Value> {
         vec![
             mark("jaunder.boot.entry", ENTRY),
@@ -492,8 +550,6 @@ mod tests {
         ]
     }
 
-    /// The `bootPhases` object for [`boot_marks`] — the same shape `bootPhasesFrom`
-    /// emits: a `Record<string, number>` keyed `"<from>-><to>"`.
     fn boot_phases_object(mount_done_ms: f64) -> Value {
         json!({
             "jaunder.boot.entry->jaunder.boot.seed_parsed": SEED_PARSED - ENTRY,
@@ -502,28 +558,23 @@ mod tests {
         })
     }
 
-    /// A fully decomposed navigation ending at `mount_done_ms`.
     fn nav(id: i64, warmth: &str, mount_done_ms: f64, commit_to_mount_ms: Option<f64>) -> Value {
         json!({
             "id": id,
             "cacheWarmth": warmth,
+            "wasmTimingSchema": "direct-init-v1",
             "commitToMountMs": commit_to_mount_ms,
-            "wasmFetchStartMs": FETCH_START,
-            "wasmFetchMs": FETCH,
-            "wasmInstantiateMs": INSTANTIATE,
+            "wasmInitStartMs": INIT_START,
+            "wasmInitStartToBootEntryMs": ENTRY - INIT_START,
             "bootPhases": boot_phases_object(mount_done_ms),
         })
     }
-
-    /// A navigation with no boot marks at all — firefox before the #818 fix.
+    /// An unversioned navigation with no boot marks — retained raw legacy input.
     fn dark_nav(id: i64, warmth: &str) -> Value {
         json!({
             "id": id,
             "cacheWarmth": warmth,
             "commitToMountMs": 300.0,
-            "wasmFetchStartMs": Value::Null,
-            "wasmFetchMs": Value::Null,
-            "wasmInstantiateMs": Value::Null,
             "bootPhases": Value::Null,
         })
     }
@@ -581,8 +632,8 @@ mod tests {
 
     #[test]
     fn boot_phase_segments_sum_to_the_boot_total_within_a_millisecond() {
-        // The closure property spec D8 rests on: the six segments ARE the boot
-        // total, taken independently from `mount_done.startTime`.
+        // The exclusive pre-boot segments plus Rust intervals close to
+        // `mount_done.startTime`.
         let rows = boot_phase_rows(&one_nav_span("sqlite", "chromium", 105.0)).unwrap();
         assert_eq!(rows.len(), 1);
         let row = &rows[0];
@@ -592,8 +643,8 @@ mod tests {
         );
         assert_eq!(
             row.segments.len(),
-            6,
-            "three wasm segments + three intervals"
+            5,
+            "two exclusive segments + three intervals"
         );
         let sum: f64 = row.segments.iter().map(|s| s.median_ms).sum();
         assert_eq!(row.boot_total_ms, Some(105.0));
@@ -689,10 +740,10 @@ mod tests {
         let navigation = json!({
             "id": 1,
             "cacheWarmth": "warm",
+            "wasmTimingSchema": "direct-init-v1",
             "commitToMountMs": 155.0,
-            "wasmFetchStartMs": FETCH_START,
-            "wasmFetchMs": FETCH,
-            "wasmInstantiateMs": INSTANTIATE,
+            "wasmInitStartMs": INIT_START,
+            "wasmInitStartToBootEntryMs": ENTRY - INIT_START,
             "bootPhases": {
                 "jaunder.boot.entry->jaunder.boot.seed_parsed": SEED_PARSED - ENTRY,
                 "jaunder.boot.seed_parsed->jaunder.boot.render_start": RENDER_START - SEED_PARSED,
@@ -714,13 +765,13 @@ mod tests {
         assert_eq!(rows[0].closure_violations, 0);
         assert_eq!(
             rows[0].segments.len(),
-            7,
-            "three wasm segments + four intervals"
+            6,
+            "two exclusive segments + four intervals"
         );
         // And in `startTime` order, not the object's key order.
         let labels: Vec<&str> = rows[0].segments.iter().map(|s| s.label.as_str()).collect();
-        assert_eq!(labels[3], "jaunder.boot.entry->jaunder.boot.seed_parsed");
-        assert_eq!(labels[6], "jaunder.boot.hydrated->jaunder.boot.mount_done");
+        assert_eq!(labels[2], "jaunder.boot.entry->jaunder.boot.seed_parsed");
+        assert_eq!(labels[5], "jaunder.boot.hydrated->jaunder.boot.mount_done");
     }
 
     #[test]
@@ -738,10 +789,10 @@ mod tests {
         let navigation = json!({
             "id": 1,
             "cacheWarmth": "warm",
+            "wasmTimingSchema": "direct-init-v1",
             "commitToMountMs": 155.0,
-            "wasmFetchStartMs": FETCH_START,
-            "wasmFetchMs": FETCH,
-            "wasmInstantiateMs": INSTANTIATE,
+            "wasmInitStartMs": INIT_START,
+            "wasmInitStartToBootEntryMs": ENTRY - INIT_START,
             "bootPhases": {
                 "jaunder.boot.entry->jaunder.boot.seed_parsed": SEED_PARSED - ENTRY,
                 "jaunder.boot.seed_parsed->jaunder.boot.render_start": 0.0,
@@ -757,11 +808,11 @@ mod tests {
         .unwrap();
         let labels: Vec<&str> = rows[0].segments.iter().map(|s| s.label.as_str()).collect();
         assert_eq!(
-            labels[4],
+            labels[3],
             "jaunder.boot.seed_parsed->jaunder.boot.render_start"
         );
         assert_eq!(
-            labels[5],
+            labels[4],
             "jaunder.boot.render_start->jaunder.boot.mount_done"
         );
     }
@@ -897,5 +948,46 @@ mod tests {
         let detail = format!("{error:#}");
         assert!(detail.contains("e2e.boot_marks_json"), "{detail}");
         assert!(detail.contains("inline"), "{detail}");
+    }
+
+    #[test]
+    fn direct_diagnostics_count_only_valid_current_completions() {
+        let mut streaming = nav(1, "warm", 105.0, Some(155.0));
+        streaming["wasmApiMs"] = json!(10.0);
+        streaming["wasmInitMs"] = json!(20.0);
+        streaming["wasmInitPath"] = json!("streaming");
+
+        let mut malformed = nav(2, "warm", 105.0, Some(155.0));
+        malformed["wasmApiMs"] = json!(30.0);
+        malformed["wasmInitMs"] = json!(20.0);
+        malformed["wasmInitPath"] = json!("buffered");
+
+        let legacy = dark_nav(3, "warm");
+        let rows = boot_phase_rows(&test_span(
+            "sqlite",
+            "chromium",
+            vec![streaming, malformed, legacy],
+            vec![
+                (1, boot_marks(105.0)),
+                (2, boot_marks(105.0)),
+                (3, Vec::new()),
+            ],
+        ))
+        .unwrap();
+        let row = &rows[0];
+        assert_eq!(
+            (
+                row.navigations,
+                row.current,
+                row.direct_complete,
+                row.direct_missing
+            ),
+            (3, 2, 1, 1)
+        );
+        assert_eq!((row.streaming, row.buffered, row.legacy), (1, 0, 1));
+        assert_eq!(
+            (row.wasm_api_ms, row.wasm_init_ms),
+            (Some(10.0), Some(20.0))
+        );
     }
 }
