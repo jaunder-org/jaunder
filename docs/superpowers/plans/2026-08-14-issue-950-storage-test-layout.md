@@ -205,22 +205,22 @@ Run the global per-commit protocol. Commit:
 - Consumes: Task 1's self-contained `raw_exec`.
 - Produces: the exact `pub(super)` interface under Shared fixture interface.
 
-- [ ] **Step 1: Create the fixture module**
+- [x] **Step 1: Create the fixture module**
 
 Move the eight helper bodies without editing them. Add `use chrono::Utc;` plus
 their required `common`, `sqlx`, `storage`, and `tempfile` imports. Keep helper
 imports explicit in every consumer; do not re-export them from `mod.rs`.
 
-- [ ] **Step 2: Compile every residual callsite**
+- [x] **Step 2: Compile every residual callsite**
 
 Import the moved helpers explicitly into `mod.rs` while residual cleanup tests
 still live there. Do not move one-concern helpers.
 
-- [ ] **Step 3: Prove the fixture seam**
+- [x] **Step 3: Prove the fixture seam**
 
 Run the full storage command from Task 1. Expected: PASS, 310 cases.
 
-- [ ] **Step 4: Gate and commit**
+- [x] **Step 4: Gate and commit**
 
 Run the global per-commit protocol. Commit:
 `refactor(server/tests): extract storage test fixtures (#950)`.

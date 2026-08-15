@@ -1,7 +1,6 @@
 use chrono::{Datelike, Utc};
 use common::config_key::SiteConfigKey;
 use common::ids::{AudienceId, ChannelId, FeedEventId, PostId, UserId};
-use common::password::Password;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::test_support::{
@@ -15,7 +14,7 @@ use common::visibility::{
     AudienceTarget, Channel, SubscriptionPolicy, SubscriptionStatus, TargetKind, ViewerIdentity,
 };
 use host::invite::InviteCode;
-use sqlx::{PgPool, SqlitePool};
+use sqlx::PgPool;
 use std::sync::Arc;
 use storage::{
     AppState, AudienceError, ConfirmPasswordResetError, CreatePostError, CreateUserError,
@@ -25,7 +24,6 @@ use storage::{
     SubscriptionStorage, UpdatePostError, UseEmailVerificationError, UsePasswordResetError,
     UserAuthError, UserConfigKey, create_rendered_post, open_database, perform_post_update,
 };
-use tempfile::TempDir;
 
 use rstest::*;
 // `#[template]`/`#[apply]` come from the `rstest_reuse` companion crate; the
@@ -39,38 +37,19 @@ use storage::test_support::{
     recorded_postgres_url, seed_users, sqlite_url, template_postgres_url,
 };
 
+mod fixtures;
+
+use fixtures::{
+    anon_by_tag, anon_published, channel_id_by_name, local_channel_id, open_pool, password,
+    raw_exec, username,
+};
+
 // The Postgres-backed cases below (the `::postgres` expansion of each
 // `#[apply(backends)]` test) run against PostgreSQL when `JAUNDER_PG_TEST_URL`
 // is set; each acquires its own database (a template clone via
 // `unique_postgres_url`/`template_postgres_url`, see helpers), so they run
 // safely under the default in-process parallelism. No `--test-threads=1` is
 // needed (jaunder-qguq).
-
-// ── Anonymous-viewer listing helpers ─────────────────────────────────────────
-//
-// 51 listing calls in this file pass the same five arguments — no cursor,
-// `&ViewerIdentity::Anonymous`, `Utc::now()` — and differ only in what they list and
-// how many rows they want. Spelling all five out per call site buried the one or two
-// that actually vary; #696 made it visible, because typing the limit pushed every such
-// call past the line width and rustfmt exploded each into seven lines.
-//
-// These return the rows directly rather than the `Result`: the few tests that assert on
-// an *error* call the store directly, and that difference is the point — a call that
-// goes through a helper is one that expects rows.
-
-async fn anon_by_tag(state: &AppState, tag: &Tag, limit: &str) -> Vec<PostRecord> {
-    state
-        .posts
-        .list_posts_by_tag(
-            tag,
-            None,
-            parse_row_limit(limit),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .expect("list_posts_by_tag failed")
-}
 
 async fn anon_user_by_tag(
     state: &AppState,
@@ -90,19 +69,6 @@ async fn anon_user_by_tag(
         )
         .await
         .expect("list_user_posts_by_tag failed")
-}
-
-async fn anon_published(state: &AppState, limit: &str) -> Vec<PostRecord> {
-    state
-        .posts
-        .list_published(
-            None,
-            parse_row_limit(limit),
-            &ViewerIdentity::Anonymous,
-            Utc::now(),
-        )
-        .await
-        .expect("list_published failed")
 }
 
 async fn anon_published_by_user(
@@ -145,20 +111,6 @@ async fn tags_of(state: &AppState, post_id: PostId) -> Vec<PostTag> {
         .expect("get_post_by_id failed")
         .expect("post exists")
         .tags
-}
-
-async fn open_pool(base: &TempDir) -> SqlitePool {
-    let DbConnectOptions::Sqlite(opts) = sqlite_url(base) else {
-        panic!("expected sqlite options");
-    };
-    let pool = SqlitePool::connect_with(opts.create_if_missing(true))
-        .await
-        .unwrap();
-    sqlx::migrate!("../storage/migrations/sqlite")
-        .run(&pool)
-        .await
-        .unwrap();
-    pool
 }
 
 async fn open_pg_pool() -> (PgPool, PostgresDbGuard) {
@@ -245,39 +197,6 @@ async fn statuses_seed_maps_to_enum(#[case] backend: Backend) {
         "missing seed for {}",
         SubscriptionStatus::Active
     );
-}
-
-// Sibling of `lookup_names`: a raw SELECT of the seeded `local` channel id.
-// The `local` channel is a lookup row present in every clone, so reading it via
-// the per-test recorded URL (Postgres) or the same DB file (SQLite) both work;
-// we use the established same-DB helpers for consistency — deliberately not the
-// trait method `local_channel_id()`, which is what the test below asserts
-// against, so it cannot also be the source of the expectation.
-async fn local_channel_id(backend: Backend, env: &TestEnv) -> ChannelId {
-    channel_id_by_name(backend, env, "local").await
-}
-
-// Reads a `channels` row's id by name, on the FK-enabled pool for `backend`.
-// Generalizes `local_channel_id` so a test can also reach a channel it seeded
-// itself (e.g. the non-local `activitypub` row the impostor viewer sits on).
-async fn channel_id_by_name(backend: Backend, env: &TestEnv, name: &str) -> ChannelId {
-    // Test-only, no untrusted input: inlining the name sidesteps the
-    // SQLite/Postgres placeholder divergence, as `raw_exec` does.
-    let sql = format!("SELECT channel_id FROM channels WHERE name = '{name}'");
-    let sql = sql.as_str();
-    match backend {
-        Backend::Sqlite => sqlx::query_scalar::<_, ChannelId>(sql)
-            .fetch_one(&open_pool(&env.base).await)
-            .await
-            .unwrap(),
-        Backend::Postgres => {
-            let pool = env.base.pool().postgres();
-            sqlx::query_scalar::<_, ChannelId>(sql)
-                .fetch_one(pool)
-                .await
-                .unwrap()
-        }
-    }
 }
 
 // The production `SubscriptionStorage::local_channel_id()` accessor must return
@@ -800,14 +719,6 @@ async fn audience_delete_cascades_memberships(#[case] backend: Backend) {
         0,
         "delete_audience must cascade-remove its membership rows"
     );
-}
-
-fn username(s: &str) -> Username {
-    s.parse().unwrap()
-}
-
-fn password(s: &str) -> Password {
-    s.parse().unwrap()
 }
 
 #[apply(backends)]
@@ -5705,25 +5616,6 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
 }
 
 // ── Composite same-owner FK enforcement ───────────────────────────────────────
-
-// Run a statement on the FK-enabled pool for `backend`. These small per-backend
-// helpers mirror `open_pool`/`open_pg_pool`: `raw_exec` unwraps; `raw_try_exec`
-// returns the Result so the test can assert rejection. Inlining integer ids via
-// `format!` is safe here (test-only, no untrusted input) and sidesteps the
-// SQLite/Postgres placeholder divergence.
-async fn raw_exec(backend: Backend, env: &TestEnv, sql: &str) {
-    let result = match backend {
-        Backend::Sqlite => sqlx::query(sql)
-            .execute(&open_pool(&env.base).await)
-            .await
-            .map(|_| ()),
-        Backend::Postgres => sqlx::query(sql)
-            .execute(env.base.pool().postgres())
-            .await
-            .map(|_| ()),
-    };
-    result.unwrap_or_else(|e| panic!("raw exec failed: {e}\nSQL: {sql}"));
-}
 
 async fn raw_try_exec(backend: Backend, env: &TestEnv, sql: &str) -> Result<(), sqlx::Error> {
     match backend {
