@@ -1,6 +1,6 @@
 use chrono::{Datelike, Utc};
 use common::config_key::SiteConfigKey;
-use common::ids::{AudienceId, FeedEventId, PostId, UserId};
+use common::ids::{AudienceId, PostId, UserId};
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::test_support::{
@@ -34,6 +34,7 @@ use storage::test_support::{
 
 mod audiences;
 mod database;
+mod feed_events;
 mod fixtures;
 mod fk_constraints;
 mod lookups;
@@ -388,36 +389,6 @@ async fn confirm_password_reset_bogus_token_returns_not_found_without_hashing(
         )
         .await;
     assert!(matches!(result, Err(ConfirmPasswordResetError::NotFound)));
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn feed_events_marks_run(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-    let fe = &state.feed_events;
-
-    // Enqueue + claim to obtain real ids, then exercise every
-    // FeedEventDialect mark_* method on this backend. Each is an independent
-    // `UPDATE … WHERE id IN (…)`, so they all run regardless of row state.
-    fe.enqueue(&fp("/feed.rss")).await.unwrap();
-    let claimed = fe
-        .claim_pending_batch(50, chrono::Duration::minutes(5))
-        .await
-        .unwrap();
-    let ids: Vec<FeedEventId> = claimed.iter().map(|r| r.id).collect();
-    assert!(!ids.is_empty());
-
-    fe.mark_regenerated(&ids).await.unwrap();
-    fe.mark_pinged(&ids).await.unwrap();
-    fe.mark_failed(
-        &ids,
-        "boom",
-        chrono::Utc::now() + chrono::Duration::minutes(1),
-    )
-    .await
-    .unwrap();
-    fe.mark_exhausted(&ids, "gave up").await.unwrap();
 }
 
 // --- UserStorage integration tests ---

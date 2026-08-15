@@ -472,17 +472,17 @@ Run the global per-commit protocol. Commit:
 - Consumes shared `backends`, `Backend`, `TestEnv`, and `fp`.
 - Produces `storage::feed_events::feed_events_marks_run`.
 
-- [ ] **Step 1: Move the queue test unchanged**
+- [x] **Step 1: Move the queue test unchanged**
 
 Retain enqueue, claim, and all four mark operations.
 
-- [ ] **Step 2: Prove the concern**
+- [x] **Step 2: Prove the concern**
 
 Run:
 `devtool run -- devtool pg run -- cargo nextest run -p jaunder storage::feed_events`
 Expected: PASS, two backend cases.
 
-- [ ] **Step 3: Gate and commit**
+- [x] **Step 3: Gate and commit**
 
 Run the global per-commit protocol. Commit:
 `refactor(server/tests): split feed event storage tests (#950)`.
