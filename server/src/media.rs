@@ -156,25 +156,7 @@ async fn serve_handler(
     Path(address): Path<ServeAddress>,
     req_headers: axum::http::HeaderMap,
 ) -> Result<Response, StatusCode> {
-    let result = serve_response(media, storage_path, address, req_headers).await;
-    if let Some(outcome) = serve_result(&result) {
-        host::metrics::media_served(outcome);
-    }
-    result
-}
-
-/// Maps a serve outcome to its bounded `result` attribute.
-fn serve_result(result: &Result<Response, StatusCode>) -> Option<host::metrics::ServeResult> {
-    match result {
-        Ok(response) if response.status() == StatusCode::NOT_MODIFIED => {
-            Some(host::metrics::ServeResult::NotModified)
-        }
-        Ok(_) => Some(host::metrics::ServeResult::Ok),
-        Err(status) if *status == StatusCode::NOT_FOUND => {
-            Some(host::metrics::ServeResult::NotFound)
-        }
-        Err(_) => None,
-    }
+    serve_response(media, storage_path, address, req_headers).await
 }
 
 /// Serves a stored media file with long-lived cache headers and `ETag` support.
@@ -334,26 +316,6 @@ mod tests {
     use super::*;
     use common::test_support::{parse_content_hash, parse_content_type};
     use std::path::Path;
-
-    #[test]
-    fn serve_result_maps_each_outcome() {
-        use host::metrics::ServeResult;
-        let ok: Result<Response, StatusCode> = Ok(StatusCode::OK.into_response());
-        assert!(matches!(serve_result(&ok), Some(ServeResult::Ok)));
-        let not_modified: Result<Response, StatusCode> =
-            Ok(StatusCode::NOT_MODIFIED.into_response());
-        assert!(matches!(
-            serve_result(&not_modified),
-            Some(ServeResult::NotModified)
-        ));
-        let not_found: Result<Response, StatusCode> = Err(StatusCode::NOT_FOUND);
-        assert!(matches!(
-            serve_result(&not_found),
-            Some(ServeResult::NotFound)
-        ));
-        let internal: Result<Response, StatusCode> = Err(StatusCode::INTERNAL_SERVER_ERROR);
-        assert!(serve_result(&internal).is_none());
-    }
 
     #[test]
     fn serve_internal_error_maps_to_500() {

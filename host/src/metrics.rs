@@ -37,7 +37,6 @@ enum_attr!(PasswordResetEvent { Requested => "requested", Completed => "complete
 enum_attr!(EmailKind { Verification => "verification", PasswordReset => "password_reset", Invite => "invite" });
 enum_attr!(SendResult { Success => "success", Failure => "failure" });
 enum_attr!(UploadOutcome { Stored => "stored", Deduplicated => "deduplicated", QuotaExceeded => "quota_exceeded", TooLarge => "too_large", Invalid => "invalid", Error => "error" });
-enum_attr!(ServeResult { Ok => "ok", NotFound => "not_found", NotModified => "not_modified" });
 enum_attr!(RegenResult { Ok => "ok", Error => "error" });
 enum_attr!(PingOutcome { Success => "success", Failed => "failed", Exhausted => "exhausted", NoHub => "no_hub" });
 enum_attr!(CacheResult { Hit => "hit", Miss => "miss" });
@@ -55,7 +54,6 @@ struct Instruments {
     email_send_duration: Histogram<u64>,
     media_uploads: Counter<u64>,
     media_upload_bytes: Histogram<u64>,
-    media_served: Counter<u64>,
     feed_regenerations: Counter<u64>,
     feed_regen_duration: Histogram<u64>,
     websub_pings: Counter<u64>,
@@ -86,7 +84,6 @@ static M: LazyLock<Instruments> = LazyLock::new(|| {
             .u64_histogram("jaunder.media.upload_bytes")
             .with_unit("By")
             .build(),
-        media_served: m.u64_counter("jaunder.media.served").build(),
         feed_regenerations: m.u64_counter("jaunder.feed.regenerations").build(),
         feed_regen_duration: m
             .u64_histogram("jaunder.feed.regeneration_duration")
@@ -180,10 +177,6 @@ pub fn media_upload_bytes(bytes: u64) {
     M.media_upload_bytes.record(bytes, &[]);
 }
 
-pub fn media_served(result: ServeResult) {
-    M.media_served.add(1, &kv("result", result.as_str()));
-}
-
 pub fn feed_regeneration(result: RegenResult) {
     M.feed_regenerations.add(1, &kv("result", result.as_str()));
 }
@@ -255,7 +248,6 @@ mod tests {
         "jaunder.email.send_duration",
         "jaunder.media.uploads",
         "jaunder.media.upload_bytes",
-        "jaunder.media.served",
         "jaunder.feed.regenerations",
         "jaunder.feed.regeneration_duration",
         "jaunder.feed.websub_pings",
@@ -286,7 +278,6 @@ mod tests {
         email_send_duration_ms(12);
         media_upload(UploadOutcome::Deduplicated);
         media_upload_bytes(4096);
-        media_served(ServeResult::NotModified);
         feed_regeneration(RegenResult::Ok);
         feed_regen_duration_ms(7);
         websub_ping(PingOutcome::NoHub);
@@ -493,10 +484,6 @@ mod tests {
         assert_eq!(UploadOutcome::TooLarge.as_str(), "too_large");
         assert_eq!(UploadOutcome::Invalid.as_str(), "invalid");
         assert_eq!(UploadOutcome::Error.as_str(), "error");
-
-        assert_eq!(ServeResult::Ok.as_str(), "ok");
-        assert_eq!(ServeResult::NotFound.as_str(), "not_found");
-        assert_eq!(ServeResult::NotModified.as_str(), "not_modified");
 
         assert_eq!(RegenResult::Ok.as_str(), "ok");
         assert_eq!(RegenResult::Error.as_str(), "error");

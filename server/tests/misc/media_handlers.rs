@@ -14,7 +14,9 @@ use common::test_support::parse_content_hash;
 use server_fn::ServerFn;
 use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
 
-use crate::helpers::{MultipartFile, create_user_and_session, make_app, post_multipart};
+use crate::helpers::{
+    MultipartFile, body_string, create_user_and_session, make_app, post_multipart,
+};
 
 /// Captures one request-boundary error event and its `jaunder.errors` point.
 ///
@@ -191,6 +193,62 @@ async fn serve_returns_200_with_cache_headers(#[case] backend: Backend) {
         cache_control.contains("max-age=31536000"),
         "expected immutable cache-control, got: {cache_control}"
     );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn serve_without_database_record_preserves_file_response(#[case] backend: Backend) {
+    const HASH: &str = "13015a3cf02c05dafbefab3b331350db348e70e86f4e43e73f325473957f0a5c";
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let storage = TempDir::new().unwrap();
+    let file = storage
+        .path()
+        .join("media/upload/13/01")
+        .join(HASH)
+        .join("my%20photo.jpg");
+    tokio::fs::create_dir_all(file.parent().unwrap())
+        .await
+        .unwrap();
+    tokio::fs::write(&file, b"file-bytes").await.unwrap();
+
+    let response = make_app(&state, &storage)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/media/upload/13/01/{HASH}/my%20photo.jpg"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        "image/jpeg"
+    );
+    assert_eq!(
+        response.headers().get(header::CACHE_CONTROL).unwrap(),
+        "public, max-age=31536000, immutable"
+    );
+    assert_eq!(
+        response.headers().get(header::ETAG).unwrap(),
+        &ETag::from_content_hash(&parse_content_hash(HASH)).to_string()
+    );
+    let disposition = response.headers().get(header::CONTENT_DISPOSITION).unwrap();
+    assert!(
+        disposition
+            .to_str()
+            .unwrap()
+            .contains(r#"filename="my photo.jpg""#)
+    );
+    assert!(
+        disposition
+            .to_str()
+            .unwrap()
+            .contains("filename*=UTF-8''my%20photo%2Ejpg")
+    );
+    assert_eq!(body_string(response).await, "file-bytes");
 }
 
 #[apply(backends)]
