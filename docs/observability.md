@@ -840,7 +840,7 @@ Capture protocol is #818's, unchanged: single-worker sqlite × both browsers,
 three runs per arm, distinct `e2eSalt` per run, quiesced host, arms interleaved
 rather than run in blocks.
 
-### Observed — the name-section half held, the code half did not
+### Historical residual analysis — the name-section half held, the code half did not
 
 Captured 2026-08-06, 18 runs, corpus at
 `~/measurements/jaunder/issue-836-wasm-shrink/` (README carries the
@@ -848,7 +848,14 @@ certification and the limits). Coverage: full mark set on 100% of 3744 mounted
 navigations, `dropped = 0`, 0 closure violations in 72 populations. Arms
 verified in-trace — `wasmDecodedBytes` takes exactly one value per arm.
 
-Firefox, combined `wasmFetchMs + wasmInstantiateMs`, mean of three run-means:
+This historical analysis used the field formerly labelled `wasmInstantiateMs`:
+the `responseEnd → boot.entry` residual, not a direct WebAssembly initialization
+measurement. Its contrasts describe that delivery-mode-specific residual; they
+do not establish compilation or instantiation cost. #887 supersedes the field
+with direct initializer diagnostics.
+
+Firefox, combined `wasmFetchMs + responseEnd → boot.entry` residual, mean of
+three run-means:
 
 | contrast | predicted (naive) | pre-registered  | observed cold        | observed warm        |
 | -------- | ----------------- | --------------- | -------------------- | -------------------- |

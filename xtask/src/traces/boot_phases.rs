@@ -459,14 +459,16 @@ pub fn render(rows: &[BootPhaseRow]) -> String {
         ));
         out.push_str(&format!(
             "current: {}  direct complete: {}  direct missing: {}  streaming: {}  buffered: {}  legacy: {}\n\
-             median wasmApiMs: {}  median wasmInitMs: {}\n",
+             median wasmApiMs (n={}): {}  median wasmInitMs (n={}): {}\n",
             row.current,
             row.direct_complete,
             row.direct_missing,
             row.streaming,
             row.buffered,
             row.legacy,
+            row.direct_complete,
             optional_ms(row.wasm_api_ms),
+            row.direct_complete,
             optional_ms(row.wasm_init_ms),
         ));
         // Loud, because an empty table and "the instrument was dark" look

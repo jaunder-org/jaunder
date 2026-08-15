@@ -419,14 +419,19 @@ export async function attachTraceCapture(
   await context.exposeBinding("__jaunderRecordWasmInit", (source, value) => {
     if (!value || typeof value !== "object" || !("href" in value)) return;
     const href = typeof value.href === "string" ? value.href : null;
+    if (href === null) return;
+    const candidates = [
+      ...sinks.pretest.navigations,
+      ...sinks.test.navigations,
+    ];
     const active = stateFor(source.page).active;
-    const navigationId =
-      active ??
-      [...sinks.pretest.navigations, ...sinks.test.navigations]
-        .reverse()
-        .find((navigation) => navigation.url === href)?.id;
-    if (navigationId !== undefined && navigationId !== null) {
-      pendingHarvests.push(harvestDocument(source.page, navigationId));
+    const activeNavigation =
+      active === null ? undefined : findNavigation(active);
+    const navigation =
+      [...candidates].reverse().find((entry) => entry.url === href) ??
+      (activeNavigation?.url === href ? activeNavigation : undefined);
+    if (navigation !== undefined) {
+      pendingHarvests.push(harvestDocument(source.page, navigation.id));
     }
   });
 
