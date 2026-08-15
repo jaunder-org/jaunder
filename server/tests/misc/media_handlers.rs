@@ -235,18 +235,9 @@ async fn serve_without_database_record_preserves_file_response(#[case] backend: 
         response.headers().get(header::ETAG).unwrap(),
         &ETag::from_content_hash(&parse_content_hash(HASH)).to_string()
     );
-    let disposition = response.headers().get(header::CONTENT_DISPOSITION).unwrap();
-    assert!(
-        disposition
-            .to_str()
-            .unwrap()
-            .contains(r#"filename="my photo.jpg""#)
-    );
-    assert!(
-        disposition
-            .to_str()
-            .unwrap()
-            .contains("filename*=UTF-8''my%20photo%2Ejpg")
+    assert_eq!(
+        response.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+        r#"inline; filename="my photo.jpg"; filename*=UTF-8''my%20photo%2Ejpg"#
     );
     assert_eq!(body_string(response).await, "file-bytes");
 }

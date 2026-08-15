@@ -39,7 +39,9 @@ const POLICED_TYPE: &str = "ProfferedFilename";
 /// appear outside an extractor position, so it is exempt wholesale.
 const OWNER_FILE: &str = "common/src/media.rs";
 
-/// Source roots scanned recursively for `.rs` files. Mirrors
+/// The one strict extractor that is allowed to store the inbound type for its
+/// deserialization step.
+const STRICT_EXTRACTOR_FILE: &str = "server/src/media.rs";
 /// [`super::proffered_secret_check`]'s list: every crate that can name a `common` type, so
 /// a leak cannot hide in an unscanned member.
 const POLICED_ROOTS: &[&str] = &[
@@ -100,7 +102,7 @@ fn is_wrapped(line: &str, at: usize) -> bool {
 /// The mention sits on a *continuation* line, which starts with neither `use ` nor `//`. A
 /// prefix-only rule reports it — as this guard did on its first run against the real tree,
 /// which is how the gap was found.
-fn violations(source: &str) -> Vec<usize> {
+fn violations(path: &str, source: &str) -> Vec<usize> {
     let mut out = Vec::new();
     let mut in_use = false;
     let mut in_raw_serve_address = false;
@@ -112,7 +114,7 @@ fn violations(source: &str) -> Vec<usize> {
             in_use = !t.ends_with(';');
         }
         let inside_import = in_use || opens_use;
-        if t == "struct RawServeAddress {" {
+        if path.ends_with(STRICT_EXTRACTOR_FILE) && t == "struct RawServeAddress {" {
             in_raw_serve_address = true;
         }
         let strict_extractor_field = in_raw_serve_address && t == "filename: ProfferedFilename,";
@@ -145,7 +147,7 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
         if path.ends_with(OWNER_FILE) {
             continue;
         }
-        for ln in violations(source) {
+        for ln in violations(path, source) {
             lines.push(format!(
                 "{path}:{ln}: bare `{POLICED_TYPE}` outside an extractor position — the \
                  inbound twin must be rewrapped into `Filename` at the handler, never \
@@ -286,48 +288,62 @@ pub fn leak() -> ProfferedFilename {
 
     #[test]
     fn strict_extractor_positions_are_allowed() {
-        assert!(violations(STRICT_ADDRESS_FIELD).is_empty());
-        assert!(violations(PATH_TUPLE).is_empty());
+        assert!(violations("server/src/media.rs", STRICT_ADDRESS_FIELD).is_empty());
+        assert!(violations("server/src/atompub/media.rs", PATH_TUPLE).is_empty());
     }
 
     #[test]
     fn a_bare_struct_field_is_a_violation() {
-        assert_eq!(violations(BARE_STRUCT_FIELD), vec![3]);
+        assert_eq!(violations("web/src/media.rs", BARE_STRUCT_FIELD), vec![3]);
+    }
+
+    #[test]
+    fn a_raw_serve_address_outside_the_strict_extractor_is_a_violation() {
+        assert_eq!(
+            violations("web/src/media.rs", STRICT_ADDRESS_FIELD),
+            vec![3]
+        );
     }
 
     #[test]
     fn a_soft_path_struct_field_is_a_violation() {
-        assert_eq!(violations(LEGACY_SOFT_PATH_FIELD), vec![3]);
+        assert_eq!(
+            violations("server/src/media.rs", LEGACY_SOFT_PATH_FIELD),
+            vec![3]
+        );
     }
 
     #[test]
     fn a_server_parameter_is_a_violation() {
-        assert_eq!(violations(SERVER_PARAM), vec![3]);
+        assert_eq!(violations("web/src/media.rs", SERVER_PARAM), vec![3]);
     }
 
     #[test]
     fn a_return_position_is_a_violation() {
-        assert_eq!(violations(BARE_RETURN), vec![2]);
+        assert_eq!(violations("web/src/media.rs", BARE_RETURN), vec![2]);
     }
 
     #[test]
     fn a_plain_fn_parameter_is_a_violation() {
-        assert_eq!(violations(PLAIN_FN_PARAM), vec![2]);
+        assert_eq!(violations("web/src/media.rs", PLAIN_FN_PARAM), vec![2]);
     }
 
     #[test]
     fn imports_and_comments_are_allowed() {
-        assert!(violations(IMPORT_AND_COMMENT).is_empty());
+        assert!(violations("web/src/media.rs", IMPORT_AND_COMMENT).is_empty());
     }
 
     #[test]
     fn a_mention_on_a_strict_address_import_continuation_line_is_allowed() {
-        assert!(violations(STRICT_ADDRESS_IMPORT).is_empty());
+        assert!(violations("server/src/media.rs", STRICT_ADDRESS_IMPORT).is_empty());
     }
 
     #[test]
     fn a_wrapped_import_does_not_swallow_a_later_leak() {
-        assert_eq!(violations(WRAPPED_IMPORT_THEN_LEAK), vec![7]);
+        assert_eq!(
+            violations("web/src/media.rs", WRAPPED_IMPORT_THEN_LEAK),
+            vec![7]
+        );
     }
 
     #[test]
@@ -335,13 +351,19 @@ pub fn leak() -> ProfferedFilename {
         // The hole a whole-line `contains("Path<(")` would leave: the tuple closes before
         // the mention, so this is a bare parameter riding alongside a legitimate extractor.
         let src = "\nfn f(Path((a,)): Path<(Username,)>, leaked: ProfferedFilename) {}\n";
-        assert_eq!(violations(src), vec![2]);
+        assert_eq!(violations("web/src/media.rs", src), vec![2]);
     }
 
     #[test]
     fn a_longer_identifier_is_not_matched() {
         // Whole-word matching: `ProfferedFilenameList` is a different type.
-        assert!(violations("pub struct X { f: ProfferedFilenameList }").is_empty());
+        assert!(
+            violations(
+                "web/src/media.rs",
+                "pub struct X { f: ProfferedFilenameList }"
+            )
+            .is_empty()
+        );
     }
 
     #[test]

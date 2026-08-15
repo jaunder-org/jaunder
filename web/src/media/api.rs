@@ -21,8 +21,8 @@ use common::media::UploadResponse;
 use {
     crate::auth::require_auth,
     crate::error::{ErrorClass, ErrorKind, InternalError},
+    common::media::MediaRef,
     // Server-only: the delete guard's key. The CSR build never runs a query.
-    common::media::{MediaRef, detect_content_type},
     leptos::prelude::*,
     leptos::server_fn::error::ServerFnErrorErr,
     leptos_axum::extract,
@@ -269,22 +269,24 @@ pub async fn upload(data: MultipartData) -> WebResult<UploadResponse> {
     // The `file_name()`/`content_type()` borrows must end before `field` is moved
     // into `upload` as the byte stream.
     let filename = MediaManager::validate_filename(field.file_name()).map_err(map_media_error)?;
-    let content_type = match field.content_type() {
-        Some(value) => value.to_string().parse::<ContentType>().map_err(|_| {
-            // multer only exposes parsed `mime::Mime` values, a strict subset of
-            // `ContentType`; retain the defensive mapping if either contract changes.
-            // cov:ignore-start
-            map_media_error(anyhow::anyhow!(MediaError::BadRequest(
-                "Invalid content type".to_owned()
-            )))
-            // cov:ignore-stop
-        })?, // cov:ignore
-        None => detect_content_type(&filename),
-    };
+    let content_type = field
+        .content_type()
+        .map(|value| {
+            value.to_string().parse::<ContentType>().map_err(|_| {
+                // multer only exposes parsed `mime::Mime` values, a strict subset of
+                // `ContentType`; retain the defensive mapping if either contract changes.
+                // cov:ignore-start
+                map_media_error(anyhow::anyhow!(MediaError::BadRequest(
+                    "Invalid content type".to_owned()
+                )))
+                // cov:ignore-stop
+            }) // cov:ignore
+        })
+        .transpose()?; // cov:ignore
 
     let manager = MediaManager::new(media, site_config, storage_path);
     manager
-        .upload(auth.user_id, &filename, Some(content_type), field)
+        .upload(auth.user_id, &filename, content_type, field)
         .await
         .map_err(map_media_error)
 }

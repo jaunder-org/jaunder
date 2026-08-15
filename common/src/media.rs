@@ -782,11 +782,9 @@ pub fn parse_media_url(url: &str) -> Option<MediaRef> {
     let (source, hash, filename) = match segments.as_slice() {
         ["media", source, p1, p2, hash, filename] => {
             let hash: ContentHash = hash.parse().ok()?;
-            // Mirror the serve route's prefix check exactly (`server::media`): a URL whose
-            // shard segments disagree with the digest 404s, so it names nothing. Using
-            // `starts_with` rather than equality keeps the two in step — the read path
-            // accepts a short prefix, so treating it as a reference is not a false positive.
-            if !hash.starts_with(p1) || !hash[2..].starts_with(p2) {
+            // Mirror the strict serve route's exact prefix check: a URL with a malformed
+            // shard cannot name a resource or hold its deletion guard live.
+            if **p1 != hash[..2] || **p2 != hash[2..4] {
                 return None;
             }
             (source.parse().ok()?, hash, filename)
@@ -2069,20 +2067,17 @@ mod tests {
     }
 
     #[test]
-    fn parse_media_url_rejects_a_prefix_that_does_not_match_the_hash() {
-        // The serve route 404s a mismatched shard prefix, so such a URL names nothing.
-        assert_eq!(
-            parse_media_url(&format!(
-                "/media/upload/ff/b0/{MEDIA_TEST_SHA256}/photo.jpg"
-            )),
-            None
-        );
-        assert_eq!(
-            parse_media_url(&format!(
-                "/media/upload/e3/ff/{MEDIA_TEST_SHA256}/photo.jpg"
-            )),
-            None
-        );
+    fn parse_media_url_rejects_non_exact_shard_prefixes() {
+        // The strict serve route rejects malformed shard prefixes as 400, so such URLs name
+        // neither a resource nor a live deletion reference.
+        for (p1, p2) in [("ff", "b0"), ("e3", "ff"), ("e", "b0"), ("e3", "b")] {
+            assert_eq!(
+                parse_media_url(&format!(
+                    "/media/upload/{p1}/{p2}/{MEDIA_TEST_SHA256}/photo.jpg"
+                )),
+                None
+            );
+        }
     }
 
     #[test]

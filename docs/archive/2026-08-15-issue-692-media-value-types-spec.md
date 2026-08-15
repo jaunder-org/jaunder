@@ -8,7 +8,7 @@
   [ADR-0080](../../adr/0080-media-path-naming-correspondence.md),
   [ADR-0084](../../adr/0084-media-filename-encoded-canonical.md),
   [ADR-0101](../../adr/0101-infallible-kind-is-invariant-first.md), and
-  [strict media-address extraction](../../adr/0136-strict-media-address-extraction.md)
+  [strict media-address extraction](../../adr/0140-strict-media-address-extraction.md)
 - Date: 2026-08-15
 
 ## Problem
