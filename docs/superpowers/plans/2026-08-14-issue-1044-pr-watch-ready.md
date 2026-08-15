@@ -92,9 +92,10 @@ virtual-clock/scripted-source unit tests, cargo-nextest, and `cargo xtask`.
 - `xtask/src/result.rs` — only if needed to render the ready handoff clearly;
   retain merged-pointer labeling.
 - `CONTRIBUTING.md` — authoritative human/agent command contract.
-- `.claude/skills/jaunder-ship/SKILL.md` — pre-approval watch handoff and
-  outcome actions.
-- `.claude/skills/jaunder-ship/base-moved.md` — recovery confirmation semantics.
+- `.agents/skills/jaunder-ship/SKILL.md` — git-excluded installed guidance for
+  the pre-approval watch handoff and outcome actions.
+- `.agents/skills/jaunder-ship/base-moved.md` — git-excluded installed recovery
+  guidance.
 - `docs/ARCHITECTURE.md` — materialized view of the stopping-policy ADR.
 - `docs/adr/drafts/pr-watch-actionable-handoff.md` — numberless decision record,
   promoted only during `jaunder-ship`.
@@ -436,8 +437,8 @@ No `Co-Authored-By` trailer.
 **Files:**
 
 - Modify: `CONTRIBUTING.md:451-479`
-- Modify: `.claude/skills/jaunder-ship/SKILL.md:51-110`
-- Modify: `.claude/skills/jaunder-ship/base-moved.md:118-124`
+- Modify: `.agents/skills/jaunder-ship/SKILL.md:51-110`
+- Modify: `.agents/skills/jaunder-ship/base-moved.md:118-124`
 - Modify: `docs/ARCHITECTURE.md:2350-2364`
 - Modify: `docs/adr/drafts/pr-watch-actionable-handoff.md`
 - Modify: `docs/superpowers/plans/2026-08-14-issue-1044-pr-watch-ready.md`
@@ -455,7 +456,7 @@ No `Co-Authored-By` trailer.
   descriptive link text; `jaunder-ship` later promotes and rewrites it before
   push.
 
-- [ ] **Step 1: Update the authoritative contributor documentation**
+- [x] **Step 1: Update the authoritative contributor documentation**
 
 Rewrite `CONTRIBUTING.md`'s PR-watching section so it states:
 
@@ -473,7 +474,7 @@ Rewrite `CONTRIBUTING.md`'s PR-watching section so it states:
 
 Use examples for default, `--once`, `--until merged`, and `pr land`.
 
-- [ ] **Step 2: Update shipping and recovery skills**
+- [x] **Step 2: Update shipping and recovery skills**
 
 In `jaunder-ship/SKILL.md`, make step 7 finite at `ready-to-land`:
 
@@ -491,7 +492,7 @@ actionable state by default. Remove the claim that default watch necessarily
 waits to a terminal PR outcome; mention `--until merged` only as explicit
 passive mode.
 
-- [ ] **Step 3: Finalize the ADR draft and architecture projection**
+- [x] **Step 3: Finalize the ADR draft and architecture projection**
 
 Verify the draft records:
 
@@ -511,12 +512,12 @@ Verify `docs/ARCHITECTURE.md` states current truth and cites the draft as:
 Do not edit `docs/README.md`; `cargo xtask adr promote` owns its generated row
 at ship. Do not number or stage the gitignored draft manually.
 
-- [ ] **Step 4: Format and verify documentation**
+- [x] **Step 4: Format and verify documentation**
 
 Run:
 
 ```bash
-devtool run -- prettier -w CONTRIBUTING.md .claude/skills/jaunder-ship/SKILL.md .claude/skills/jaunder-ship/base-moved.md docs/ARCHITECTURE.md docs/adr/drafts/pr-watch-actionable-handoff.md docs/superpowers/specs/2026-08-14-issue-1044-pr-watch-ready.md docs/superpowers/plans/2026-08-14-issue-1044-pr-watch-ready.md
+devtool run -- prettier -w CONTRIBUTING.md .agents/skills/jaunder-ship/SKILL.md .agents/skills/jaunder-ship/base-moved.md docs/ARCHITECTURE.md docs/adr/drafts/pr-watch-actionable-handoff.md docs/superpowers/specs/2026-08-14-issue-1044-pr-watch-ready.md docs/superpowers/plans/2026-08-14-issue-1044-pr-watch-ready.md
 devtool run -- cargo xtask pr watch --help
 devtool run -- cargo xtask check
 ```
@@ -524,11 +525,11 @@ devtool run -- cargo xtask check
 Expected: Prettier reports all named Markdown files formatted; help and prose
 agree; the full commit gate passes. Inspect and stage any fix-mode changes.
 
-- [ ] **Step 5: Tick Task 2 and commit tracked documentation**
+- [x] **Step 5: Tick Task 2 and commit tracked documentation**
 
-Stage `CONTRIBUTING.md`, both shipping-skill files, `docs/ARCHITECTURE.md`, the
-spec, and this checked plan. The draft remains gitignored and is intentionally
-promoted during `jaunder-ship`. Commit:
+Stage `CONTRIBUTING.md`, `docs/ARCHITECTURE.md`, and this checked plan. The ADR
+draft and installed `.agents/` skill copies remain git-excluded; the draft is
+intentionally promoted during `jaunder-ship`. Commit:
 
 ```text
 docs: describe actionable PR watch handoff (#1044)

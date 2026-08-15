@@ -482,35 +482,42 @@ Jaunder uses OpenTelemetry for deep performance analysis (see
   - Use `--browser chromium|firefox` to restrict the run to one browser
     (default: both).
 
-- **PR watching**: Use `cargo xtask pr watch [N]` to follow a pull request
-  through the whole checks → merge queue → merged sequence, and
-  `cargo xtask pr land [N]` to arm the merge and drive it home. Both need `gh`
-  (in the devShell) and run on the host only. Omit `N` to use the open PR for
-  the current branch.
+- **PR watching**: Use `cargo xtask pr watch [N]` to follow required checks
+  until the next caller-actionable outcome. A green, landable PR returns
+  `ready-to-land`; an already armed or queued PR continues through queue
+  processing. Use `cargo xtask pr land [N]` only after approval — it arms the
+  merge and drives it home. Both need `gh` (in the devShell) and run on the host
+  only. Omit `N` to use the open PR for the current branch.
 
   ```bash
-  cargo xtask pr watch                 # this branch's PR, until it resolves
-  cargo xtask --json pr watch 731 --once   # one snapshot, machine-readable
-  cargo xtask pr land 731              # arm the merge and watch it land
+  cargo xtask pr watch                     # wait for the next action
+  cargo xtask --json pr watch 731 --once   # one snapshot
+  cargo xtask pr watch 731 --until merged  # passive external-approval watch
+  cargo xtask pr land 731                  # approve, arm, and watch it land
   ```
 
-  It reports exactly one outcome — `merged`, `checks-failed`, `ejected`,
-  `conflicted`, `closed-unmerged`, `stale`, `timed-out`, or `watcher-error`,
-  plus `pending` when `--once` catches a PR mid-flight — and they never collapse
-  into one another: `timed-out` means GitHub never finished, `watcher-error`
-  means the tooling could not tell you. **Exit is 0 only for `merged`**; branch
-  on `pr.outcome` in `--json` (or in `.xtask/last-result.json`), not on the exit
-  code. Progress streams to stderr as it happens and is also serialized into
-  `pr.events`.
+  Outcomes are `ready-to-land`, `merged`, `checks-failed`, `ejected`,
+  `dequeued`, `blocked`, `conflicted`, `closed-unmerged`, `stale`, `timed-out`,
+  or `watcher-error`, plus `pending` when `--once` catches a PR mid-flight. They
+  never collapse into one another: `dequeued` means an observed same-head queue
+  entry vanished without a failed current-head merge-group run; `timed-out`
+  means GitHub never finished; `watcher-error` means the tooling could not
+  establish a trustworthy verdict.
+
+  `pr watch` exits 0 for `ready-to-land` or `merged`; `pr land` exits 0 only for
+  `merged`. Exit 1 still covers several distinct actionable outcomes, so branch
+  on `pr.outcome` in `--json` (or `.xtask/last-result.json`). Progress streams
+  to stderr and is also serialized into `pr.events`.
 
   `watch` only observes — it never merges, re-runs a job, rebases, or
-  re-enqueues after an ejection, because each of those is a judgement call.
-  **Running `land` is the merge approval**; invoked from the PR's own branch it
-  refuses whenever your local HEAD differs from the PR head at all — ahead,
-  behind, or diverged — since what would merge is then not what you are looking
-  at. See [the ADR](docs/adr/0087-xtask-github-pr-observation.md) for why `gh`
-  is the transport and why the required-check set is read from the ruleset per
-  run.
+  re-enqueues. `--until merged` explicitly keeps observing across
+  `ready-to-land` while another actor may approve and arm the PR; it may consume
+  the full timeout. **Running `land` is the merge approval**; invoked from the
+  PR's own branch it refuses whenever local HEAD differs from the PR head. See
+  [ADR-0087](docs/adr/0087-xtask-github-pr-observation.md) for the
+  observer/armer split and
+  [the actionable-handoff decision](docs/adr/drafts/pr-watch-actionable-handoff.md)
+  for the stopping policy.
 
 ### Targeted Rust tests
 
