@@ -755,17 +755,17 @@ Run the global per-commit protocol. Commit:
   `list_tags_returns_alphabetical_with_prefix`, and `post_record_carries_tags`.
 - Keeps `tags_of` private.
 
-- [ ] **Step 1: Move exactly the tag-contract bodies**
+- [x] **Step 1: Move exactly the tag-contract bodies**
 
 Do not pull tag-filtered Post query tests back from `listing.rs`.
 
-- [ ] **Step 2: Prove the concern**
+- [x] **Step 2: Prove the concern**
 
 Run:
 `devtool run -- devtool pg run -- cargo nextest run -p jaunder storage::tags`
 Expected: PASS, forty backend cases.
 
-- [ ] **Step 3: Gate and commit**
+- [x] **Step 3: Gate and commit**
 
 Run the global per-commit protocol. Commit:
 `refactor(server/tests): split tag storage tests (#950)`.
