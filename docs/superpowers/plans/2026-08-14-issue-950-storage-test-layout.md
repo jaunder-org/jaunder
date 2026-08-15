@@ -631,18 +631,18 @@ Run the global per-commit protocol. Commit:
 - Produces four PasswordResetStorage token tests plus the two atomic
   confirmation error tests.
 
-- [ ] **Step 1: Move the six retained bodies unchanged**
+- [x] **Step 1: Move the six retained bodies unchanged**
 
 Do not create the success-path test yet; Task 25 performs the approved split in
 a cleanup commit.
 
-- [ ] **Step 2: Prove the concern**
+- [x] **Step 2: Prove the concern**
 
 Run:
 `devtool run -- devtool pg run -- cargo nextest run -p jaunder storage::password_reset`
 Expected: PASS, twelve backend cases.
 
-- [ ] **Step 3: Gate and commit**
+- [x] **Step 3: Gate and commit**
 
 Run the global per-commit protocol. Commit:
 `refactor(server/tests): split password reset storage tests (#950)`.
