@@ -850,18 +850,18 @@ Run the global per-commit protocol. Commit:
   spec cleanup table.
 - Produces no new test; registered storage count falls from 310 to 304.
 
-- [ ] **Step 1: Delete only the three accounted bodies**
+- [x] **Step 1: Delete only the three accounted bodies**
 
 Do not alter retained site-config tests.
 
-- [ ] **Step 2: Prove replacement coverage**
+- [x] **Step 2: Prove replacement coverage**
 
 Run:
 `devtool run -- devtool pg run -- cargo nextest run -p jaunder storage::site_config`
 Expected: PASS. Run `devtool run -- cargo nextest list -p jaunder`; expected
 exactly 304 `storage::` cases and none of the three removed leaf names.
 
-- [ ] **Step 3: Gate and commit**
+- [x] **Step 3: Gate and commit**
 
 Run the global per-commit protocol. Commit:
 `test(server): remove redundant site config storage tests (#950)`.

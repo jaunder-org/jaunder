@@ -1,5 +1,4 @@
 use chrono::Utc;
-use common::config_key::SiteConfigKey;
 use common::test_support::{
     parse_bio, parse_display_name, parse_email, parse_raw_token, parse_session_label,
 };
@@ -47,71 +46,6 @@ use fixtures::{password, raw_exec, username};
 // `unique_postgres_url`/`template_postgres_url`, see helpers), so they run
 // safely under the default in-process parallelism. No `--test-threads=1` is
 // needed (jaunder-qguq).
-
-#[apply(backends)]
-#[tokio::test]
-async fn site_config_set_then_get_roundtrips(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-    state
-        .site_config
-        .set(SiteConfigKey::SiteTitle, "Parity Site")
-        .await
-        .unwrap();
-    assert_eq!(
-        state
-            .site_config
-            .get(SiteConfigKey::SiteTitle)
-            .await
-            .unwrap()
-            .as_deref(),
-        Some("Parity Site")
-    );
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn get_missing_key_returns_none(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-
-    assert!(
-        state
-            .site_config
-            .get(SiteConfigKey::SiteTitle)
-            .await
-            .unwrap()
-            .is_none()
-    );
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn set_overwrites_existing_value(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-
-    state
-        .site_config
-        .set(SiteConfigKey::SiteTitle, "First")
-        .await
-        .unwrap();
-    state
-        .site_config
-        .set(SiteConfigKey::SiteTitle, "Second")
-        .await
-        .unwrap();
-
-    assert_eq!(
-        state
-            .site_config
-            .get(SiteConfigKey::SiteTitle)
-            .await
-            .unwrap()
-            .as_deref(),
-        Some("Second")
-    );
-}
 
 #[apply(backends)]
 #[tokio::test]
