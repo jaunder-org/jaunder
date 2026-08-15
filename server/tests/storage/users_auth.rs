@@ -1,4 +1,5 @@
 use super::*;
+use common::ids::UserId;
 #[apply(backends)]
 #[tokio::test]
 async fn create_user_succeeds_and_get_by_username_returns_record(#[case] backend: Backend) {

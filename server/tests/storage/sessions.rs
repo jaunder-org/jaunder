@@ -1,4 +1,5 @@
 use super::*;
+use storage::test_support::seed_users;
 #[apply(backends)]
 #[tokio::test]
 async fn create_session_then_authenticate_returns_correct_record(#[case] backend: Backend) {

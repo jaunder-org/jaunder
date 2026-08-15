@@ -786,18 +786,18 @@ Run the global per-commit protocol. Commit:
 - Produces all MediaStorage leaves from `create_and_get_media` through
   `find_by_hash_returns_any_match`; keeps `make_media_record` private.
 
-- [ ] **Step 1: Move the media cluster unchanged**
+- [x] **Step 1: Move the media cluster unchanged**
 
 Preserve typed source URL decoding, invalid-row behavior, source filtering,
 usage accounting, and ownership assertions.
 
-- [ ] **Step 2: Prove the concern**
+- [x] **Step 2: Prove the concern**
 
 Run:
 `devtool run -- devtool pg run -- cargo nextest run -p jaunder storage::media`
 Expected: PASS, twenty-four backend cases.
 
-- [ ] **Step 3: Gate and commit**
+- [x] **Step 3: Gate and commit**
 
 Run the global per-commit protocol. Commit:
 `refactor(server/tests): split media storage tests (#950)`.
