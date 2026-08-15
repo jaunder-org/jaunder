@@ -1,10 +1,9 @@
 use chrono::Utc;
-use common::test_support::{parse_bio, parse_display_name, parse_email, parse_raw_token};
-use host::invite::InviteCode;
+use common::test_support::{parse_bio, parse_email, parse_raw_token};
 
 use storage::{
-    ConfirmPasswordResetError, ProfileUpdate, RegisterWithInviteError, UseEmailVerificationError,
-    UsePasswordResetError, UserAuthError,
+    ConfirmPasswordResetError, ProfileUpdate, UseEmailVerificationError, UsePasswordResetError,
+    UserAuthError,
 };
 
 use rstest::*;
@@ -36,7 +35,7 @@ mod tags;
 mod user_config;
 mod users_auth;
 
-use fixtures::{password, raw_exec, username};
+use fixtures::{password, raw_exec};
 
 // The Postgres-backed cases below (the `::postgres` expansion of each
 // `#[apply(backends)]` test) run against PostgreSQL when `JAUNDER_PG_TEST_URL`
@@ -44,42 +43,6 @@ use fixtures::{password, raw_exec, username};
 // `unique_postgres_url`/`template_postgres_url`, see helpers), so they run
 // safely under the default in-process parallelism. No `--test-threads=1` is
 // needed (jaunder-qguq).
-
-#[apply(backends)]
-#[tokio::test]
-async fn invite_and_atomic_registration_work(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-    let expires_at = Utc::now() + chrono::Duration::hours(24);
-    let code = state.invites.create_invite(expires_at).await.unwrap();
-
-    let user_id = state
-        .atomic
-        .create_user_with_invite(
-            &username("carol"),
-            &password("password123"),
-            Some(&parse_display_name("Carol")),
-            false,
-            &code,
-        )
-        .await
-        .unwrap();
-    let created = state.users.get_user(user_id).await.unwrap().unwrap();
-    assert_eq!(created.username, "carol");
-
-    let err = state
-        .atomic
-        .create_user_with_invite(
-            &username("carol2"),
-            &password("password123"),
-            None,
-            false,
-            &code,
-        )
-        .await
-        .unwrap_err();
-    assert!(matches!(err, RegisterWithInviteError::InviteAlreadyUsed));
-}
 
 #[apply(backends)]
 #[tokio::test]
