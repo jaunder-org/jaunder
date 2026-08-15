@@ -408,18 +408,18 @@ Run the global per-commit protocol. Commit:
   `posts_published_at_index_exists`, and private
   `raw_try_exec(Backend, &TestEnv, &str) -> Result<(), sqlx::Error>`.
 
-- [ ] **Step 1: Move the schema-integrity bodies**
+- [x] **Step 1: Move the schema-integrity bodies**
 
 Keep `raw_try_exec`'s backend match, the FK rejection matrix, and the
 backend-specific schema-catalog index assertion unchanged.
 
-- [ ] **Step 2: Prove the concern**
+- [x] **Step 2: Prove the concern**
 
 Run:
 `devtool run -- devtool pg run -- cargo nextest run -p jaunder storage::fk_constraints`
 Expected: PASS, four backend cases.
 
-- [ ] **Step 3: Gate and commit**
+- [x] **Step 3: Gate and commit**
 
 Run the global per-commit protocol. Commit:
 `refactor(server/tests): split storage FK tests (#950)`.
