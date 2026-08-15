@@ -118,10 +118,9 @@
 
 use std::collections::BTreeSet;
 use std::collections::HashMap;
-use std::path::Path;
 
-use crate::files;
-use crate::result::{CommandResult, StepResult};
+use crate::result::CommandResult;
+use crate::steps::scan::run_source_scan;
 
 /// The result of scanning one source: its policed mentions, plus the line ranges
 /// of the test code that was skipped.
@@ -876,42 +875,13 @@ impl Gate {
 
 /// Read every `.rs` file under each of `roots`, hand the `(path, source)` pairs to
 /// `problems`, and push the resulting step.
-///
-/// A missing root, and a file that cannot be read, are both hard failures: a gate
-/// that quietly shrinks its own population reports green for the one reason it must
-/// never report green (ADR-0085 principle 6).
 pub fn run_scan(
     result: &mut CommandResult,
     step: &'static str,
     roots: &'static [&'static str],
-    problems: impl Fn(&[(String, String)]) -> Option<String>,
+    problems: impl FnOnce(&[(String, String)]) -> Option<String>,
 ) {
-    let mut files = Vec::new();
-    for root in roots {
-        match files::with_extension(Path::new(root), "rs") {
-            Ok(found) => files.extend(found),
-            Err(e) => {
-                result.push(StepResult::fail(step).detail(format!("cannot scan {root}: {e}")));
-                return;
-            }
-        }
-    }
-    let mut scanned = Vec::new();
-    let mut read_errors = Vec::new();
-    for p in &files {
-        match std::fs::read_to_string(p) {
-            Ok(s) => scanned.push((p.display().to_string(), s)),
-            Err(e) => read_errors.push(format!("{}: cannot read: {e}", p.display())),
-        }
-    }
-    let step = match (read_errors.is_empty(), problems(&scanned)) {
-        (true, None) => StepResult::ok(step),
-        (_, prob) => {
-            read_errors.extend(prob);
-            StepResult::fail(step).detail(read_errors.join("\n"))
-        }
-    };
-    result.push(step);
+    run_source_scan(result, step, roots, problems);
 }
 
 #[cfg(test)]

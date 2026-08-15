@@ -48,12 +48,8 @@
 //! deny bare-primitive binds unless an entry names the site and its multiplicity — is
 //! **#716**'s scope.
 
-use std::path::Path;
-
-use anyhow::{Context, Result};
-
-use crate::files;
-use crate::result::{CommandResult, StepResult};
+use crate::result::CommandResult;
+use crate::steps::scan::run_source_scan;
 
 /// A bind-expression exempt from the guard, matched by **substring** so it is
 /// robust to reflow (rustfmt can move a bind across lines) — unlike a line number
@@ -229,49 +225,9 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
     Some(lines.join("\n"))
 }
 
-fn read_sources_with(
-    paths: &[std::path::PathBuf],
-    mut read: impl FnMut(&Path) -> std::io::Result<String>,
-) -> Result<Vec<(String, String)>> {
-    paths
-        .iter()
-        .map(|path| {
-            read(path)
-                .with_context(|| format!("reading {}", path.display()))
-                .map(|source| (path.display().to_string(), source))
-        })
-        .collect::<Result<_>>()
-}
-
-/// Scan every Rust file under [`POLICED_ROOT`] and push the result step. A missing
-/// root is a hard failure, so a moved/renamed tree can never quietly disable the
-/// guard.
+/// Scan every Rust file under [`POLICED_ROOT`] and push the result step.
 pub fn run(result: &mut CommandResult) {
-    let files = match files::with_extension(Path::new(POLICED_ROOT), "rs") {
-        Ok(files) => files,
-        Err(e) => {
-            result.push(
-                StepResult::fail("sqlx-newtype-bind")
-                    .detail(format!("cannot scan {POLICED_ROOT}: {e}")),
-            );
-            return;
-        }
-    };
-    let scanned = match read_sources_with(&files, |path| std::fs::read_to_string(path)) {
-        Ok(scanned) => scanned,
-        Err(error) => {
-            result.push(
-                StepResult::fail("sqlx-newtype-bind")
-                    .detail(format!("cannot read source population: {error:#}")),
-            );
-            return;
-        }
-    };
-    let step = match problems(&scanned) {
-        None => StepResult::ok("sqlx-newtype-bind"),
-        Some(detail) => StepResult::fail("sqlx-newtype-bind").detail(detail),
-    };
-    result.push(step);
+    run_source_scan(result, "sqlx-newtype-bind", &[POLICED_ROOT], problems);
 }
 
 #[cfg(test)]
@@ -457,25 +413,6 @@ fn b(limit_i64: i64) {
                 "    .bind(slug)\n    .bind(input.title.as_ref())\n".to_string(),
             )]),
             None
-        );
-    }
-
-    #[test]
-    fn fail_closed_population_unreadable_source() {
-        let path = std::path::PathBuf::from("storage/src/unreadable.rs");
-        let error = read_sources_with(&[path], |_| {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "injected",
-            ))
-        })
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("storage/src/unreadable.rs"));
-        assert_eq!(
-            error
-                .downcast_ref::<std::io::Error>()
-                .map(std::io::Error::kind),
-            Some(std::io::ErrorKind::PermissionDenied)
         );
     }
 }
