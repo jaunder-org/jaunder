@@ -567,18 +567,18 @@ Run the global per-commit protocol. Commit:
 - Produces `create_invite_and_list_invites_includes_it`, five
   `create_user_with_invite_*` atomic tests, and `invite_list_operations`.
 
-- [ ] **Step 1: Move the seven retained bodies**
+- [x] **Step 1: Move the seven retained bodies**
 
 Home cross-store registration tests here because the invited-registration
 operation owns their atomic contract.
 
-- [ ] **Step 2: Prove the concern**
+- [x] **Step 2: Prove the concern**
 
 Run:
 `devtool run -- devtool pg run -- cargo nextest run -p jaunder storage::invites`
 Expected: PASS, fourteen backend cases.
 
-- [ ] **Step 3: Gate and commit**
+- [x] **Step 3: Gate and commit**
 
 Run the global per-commit protocol. Commit:
 `refactor(server/tests): split invite storage tests (#950)`.
