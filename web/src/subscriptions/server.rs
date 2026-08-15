@@ -27,9 +27,6 @@ pub(crate) async fn resolve_author(
 
 #[cfg(test)]
 mod tests {
-    // Helper fns in this feature-gated test module aren't covered by clippy's
-    // allow-{unwrap,expect}-in-tests, so allow the test-scaffolding panics.
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::super::is_subscribed;
     use crate::test_support::auth_parts;
     use common::ids::UserId;

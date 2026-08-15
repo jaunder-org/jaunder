@@ -11,6 +11,7 @@
 // so the workspace's `unwrap_used`/`expect_used = deny` lints are expected off for this
 // module; `#[expect]` self-removes if the scaffolding ever stops unwrapping. Everything
 // else clippy-pedantic flags is fixed in place rather than suppressed. (#94)
+// lint-suppression:allow approved in #294; existing expectation documents intentional test-scaffolding or naming exception
 #![expect(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::media::MediaRecord;

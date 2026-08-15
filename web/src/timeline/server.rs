@@ -164,9 +164,6 @@ pub async fn fetch_user_posts_by_tag(
 
 #[cfg(all(test, feature = "server"))]
 mod tests {
-    // Helper fns in this feature-gated test module aren't covered by clippy's
-    // allow-{unwrap,expect}-in-tests, so allow the test-scaffolding panics.
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::{
         fetch_local_timeline, fetch_posts_by_tag, fetch_user_posts, fetch_user_posts_by_tag,
     };

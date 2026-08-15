@@ -6,9 +6,10 @@
 //! only `authenticate` (the method `require_auth` calls) stubbed.
 
 // Helpers here live in a feature-gated test module, which clippy's
-// allow-{unwrap,expect}-in-tests does not treat as a test context; allow the
-// panics explicitly (this is test scaffolding).
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+// allow-{unwrap,expect}-in-tests does not treat as a test context; expect the
+// test-scaffolding panics explicitly.
+// lint-suppression:allow approved in #294; existing expectation documents intentional test-scaffolding or naming exception
+#![expect(clippy::unwrap_used, clippy::expect_used)]
 
 use axum::http::{Request, header, request::Parts};
 use common::ids::UserId;
