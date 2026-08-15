@@ -374,18 +374,18 @@ Run the global per-commit protocol. Commit:
 - Produces `resolution_matrix` and
   `anonymous_is_not_admitted_by_an_empty_subscriber_ref`.
 
-- [ ] **Step 1: Move the resolution bodies**
+- [x] **Step 1: Move the resolution bodies**
 
 Preserve the complete viewer matrix, raw channel setup, and fail-closed
 assertions.
 
-- [ ] **Step 2: Prove the concern**
+- [x] **Step 2: Prove the concern**
 
 Run:
 `devtool run -- devtool pg run -- cargo nextest run -p jaunder storage::resolution`
 Expected: PASS, four backend cases.
 
-- [ ] **Step 3: Gate and commit**
+- [x] **Step 3: Gate and commit**
 
 Run the global per-commit protocol. Commit:
 `refactor(server/tests): split storage resolution tests (#950)`.
