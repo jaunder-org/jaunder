@@ -718,18 +718,18 @@ Run the global per-commit protocol. Commit:
 - Keeps `anon_user_by_tag`, `anon_published_by_user`, `drafts_of`, and
   `seed_post_published_at` private.
 
-- [ ] **Step 1: Move every Post query-surface body**
+- [x] **Step 1: Move every Post query-surface body**
 
 Use method/observable concern, not source adjacency: tag-filtered Post queries
 belong here; tag mutation and inventory do not.
 
-- [ ] **Step 2: Prove the concern**
+- [x] **Step 2: Prove the concern**
 
 Run:
 `devtool run -- devtool pg run -- cargo nextest run -p jaunder storage::listing`
 Expected: PASS, fifty-eight backend cases.
 
-- [ ] **Step 3: Gate and commit**
+- [x] **Step 3: Gate and commit**
 
 Run the global per-commit protocol. Commit:
 `refactor(server/tests): split Post listing storage tests (#950)`.
