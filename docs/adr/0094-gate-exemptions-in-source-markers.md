@@ -233,6 +233,13 @@ gate. A gate whose population is un-recheckable must derive and print its
 census. Exemption markers are per-gate, line-scoped, reason-bearing, and never
 blocked.
 
+**Amended by [#1041](https://github.com/jaunder-org/jaunder/issues/1041).**
+“Print” does not mean every successful gate invocation must render the census.
+The gate includes its derived census with failure diagnostics, where it provides
+investigation context; a clean gate prints only its terse success line. The
+census remains derived from every scan, so the decision's no-drift invariant is
+unchanged.
+
 **What it creates.** Twelve in-source markers — seven replacing the three
 allowlists' entries, and five more where the deleted qualifier-pattern exemption
 used to cover `ContentType::from_trusted` sites for free. (Four of those five
