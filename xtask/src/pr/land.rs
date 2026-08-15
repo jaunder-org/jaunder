@@ -251,7 +251,9 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
         if after.auto_merge_armed || after.queue.in_queue {
             let mut watch_cfg = cfg;
             watch_cfg.stop_at_ready = false;
-            let mut result = watch::watch(source, clock, subject, watch_cfg, sink);
+            let progress = Progress::from_snapshot(&after);
+            let mut result =
+                watch::watch_with_progress(source, clock, subject, watch_cfg, progress, sink);
             // One log: the prologue happened first, so it reads first.
             events.extend(std::mem::take(&mut result.events));
             result.events = events;
@@ -419,6 +421,18 @@ mod tests {
             "a direct enqueue must not trigger a re-arm"
         );
         assert_eq!(report.outcome, Outcome::Merged);
+    }
+
+    #[test]
+    fn verified_queue_entry_disappearance_is_dequeued() {
+        let src = FakeSource::new(
+            vec![Ok(open(green())), Ok(queued_at(1)), Ok(open(green()))],
+            queue_rules(),
+        );
+        let armer = CountingArmer::new();
+        let report = land(&src, &armer, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(armer.calls.get(), 1);
+        assert_eq!(report.outcome, Outcome::Dequeued);
     }
 
     #[test]

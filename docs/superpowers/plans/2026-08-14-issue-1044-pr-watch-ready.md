@@ -140,9 +140,9 @@ virtual-clock/scripted-source unit tests, cargo-nextest, and `cargo xtask`.
   `--until merged` and `pr land` set it to `false`.
 - Add a typed clap value for `--until merged`; the `Watch` variant carries
   `until: Option<PrWatchUntil>` and conflicts with `once`.
-- `pr::into_result(command: &str, report: PrReport) -> CommandResult` remains
-  the envelope seam; success is `Merged | ReadyToLand` for `pr-watch`, only
-  `Merged` for `pr-land`.
+- `pr::into_result(operation: PrOperation, report: PrReport) -> CommandResult`
+  remains the envelope seam; success is `Merged | ReadyToLand` for `Watch`, only
+  `Merged` for `Land`.
 
 - [x] **Step 1: Write every failing contract test before changing shared enums**
 
@@ -370,15 +370,14 @@ In `lib.rs`:
 
 In `land.rs`, treat `Step::Ready` as permission to proceed with approved arming,
 and delegate to `watch` with the continue-through-ready config. Empty-gate
-`WatcherError` returns before `PrArmer`.
-
-In `execute.rs`, keep exactly one step and compute success without a new generic
-abstraction:
+`WatcherError` returns before `PrArmer`. In `execute.rs`, keep exactly one step
+and compute success from a typed `PrOperation`, so invalid command spellings are
+unrepresentable:
 
 ```rust
-match (command, report.outcome) {
-    ("pr-watch", Outcome::Merged | Outcome::ReadyToLand) => true,
-    ("pr-land", Outcome::Merged) => true,
+match (operation, report.outcome) {
+    (PrOperation::Watch, Outcome::Merged | Outcome::ReadyToLand) => true,
+    (PrOperation::Land, Outcome::Merged) => true,
     _ => false,
 }
 ```

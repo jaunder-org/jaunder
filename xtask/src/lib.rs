@@ -210,10 +210,16 @@ pub enum Command {
     /// same diagnostic-preserving wrapper. For CI's parallel `elisp-integration`
     /// job; local `validate` realizes it via the `e2e` aggregate. Host only.
     ElispIntegration,
-    /// Watch a pull request through checks → merge queue → merged, and report one
-    /// unambiguous outcome (#729). Host-only manual command; needs `gh`.
+    /// Observe a pull request until the next caller-actionable outcome (#729).
+    /// Host-only manual command; needs `gh`.
     #[command(subcommand)]
     Pr(PrCommand),
+}
+
+/// An explicit passive-observation target for `pr watch`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum PrWatchUntil {
+    Merged,
 }
 
 /// `pr` subcommands (#729).
@@ -222,11 +228,6 @@ pub enum Command {
 /// the merge approval. Every other action in the sequence — re-running a red job,
 /// rebasing, re-enqueueing after an ejection — needs a judgement call and stays with
 /// the human; these two only turn the crank.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum PrWatchUntil {
-    Merged,
-}
-
 #[derive(Subcommand)]
 pub enum PrCommand {
     /// Observe a PR until the next caller-actionable outcome. Never merges,
@@ -762,7 +763,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         }
         Command::Pr(sub) => {
             let start = std::time::Instant::now();
-            let (name, number, cfg, landing) = match sub {
+            let (operation, number, cfg) = match sub {
                 PrCommand::Watch {
                     number,
                     interval,
@@ -770,7 +771,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                     once,
                     until,
                 } => (
-                    "pr-watch",
+                    pr::PrOperation::Watch,
                     number,
                     pr::watch::WatchConfig {
                         interval_secs: interval,
@@ -779,14 +780,13 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                         stop_at_ready: until.is_none(),
                         ..Default::default()
                     },
-                    false,
                 ),
                 PrCommand::Land {
                     number,
                     interval,
                     timeout,
                 } => (
-                    "pr-land",
+                    pr::PrOperation::Land,
                     number,
                     pr::watch::WatchConfig {
                         interval_secs: interval,
@@ -795,15 +795,14 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                         stop_at_ready: false,
                         ..Default::default()
                     },
-                    true,
                 ),
             };
             // An `Err` here means the subject could not be established at all (exit
             // 2, no report). Every other failure — including `gh` being broken — is
             // a `watcher-error` report, so the outcome that most needs to be legible
             // always reaches the sidecar.
-            let report = pr::execute(number, cfg, landing)?;
-            let mut result = pr::into_result(name, report);
+            let report = pr::execute(number, cfg, operation.is_landing())?;
+            let mut result = pr::into_result(operation, report);
             finalize(&mut result, start);
             Ok(result)
         }

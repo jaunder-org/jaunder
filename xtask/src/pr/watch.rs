@@ -152,13 +152,26 @@ impl Emitter<'_> {
     }
 }
 
-/// Poll `subject` until it reaches a terminal state, the budget expires, or the API
-/// stops answering.
+/// Poll until the next actionable outcome, timeout, or watcher failure.
+///
+/// By default, a ready approval handoff ends observation even though the PR remains
+/// open. Passive mode continues through ready until a terminal PR outcome.
 pub fn watch<S: PrSource, C: Clock>(
     source: &S,
     clock: &C,
     subject: &Subject,
     cfg: WatchConfig,
+    sink: &mut dyn FnMut(&Event),
+) -> PrReport {
+    watch_with_progress(source, clock, subject, cfg, Progress::default(), sink)
+}
+
+pub(super) fn watch_with_progress<S: PrSource, C: Clock>(
+    source: &S,
+    clock: &C,
+    subject: &Subject,
+    cfg: WatchConfig,
+    mut progress: Progress,
     sink: &mut dyn FnMut(&Event),
 ) -> PrReport {
     let start = clock.now_unix();
@@ -172,7 +185,6 @@ pub fn watch<S: PrSource, C: Clock>(
     };
 
     let mut required: Option<RequiredChecks> = None;
-    let mut progress = Progress::default();
     let mut strikes = 0u32;
     let mut head_sha = String::new();
     let mut prev: Option<Rendered> = None;

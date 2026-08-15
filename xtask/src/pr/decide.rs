@@ -39,6 +39,14 @@ pub struct Progress {
     pub queued_head_sha: Option<String>,
 }
 
+impl Progress {
+    pub fn from_snapshot(snap: &PrSnapshot) -> Self {
+        Self {
+            queued_head_sha: snap.queue.in_queue.then(|| snap.head_sha.clone()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
     Continue {
@@ -195,6 +203,8 @@ pub fn classify(
             warn: None,
         };
     }
+    // The observed same-head queue transition is the more specific diagnosis.
+    // Preserve it even if GitHub now also reports a blocked merge state.
     if progress.queued_head_sha.as_deref() == Some(snap.head_sha.as_str()) {
         return terminal(
             Outcome::Dequeued,
@@ -202,6 +212,19 @@ pub fn classify(
                 "the queue entry vanished and no failed current-head merge-group run explains it"
                     .into(),
             ),
+            None,
+        );
+    }
+    if matches!(
+        snap.merge_state_status,
+        MergeStateStatus::Blocked | MergeStateStatus::Draft | MergeStateStatus::Dirty
+    ) {
+        return terminal(
+            Outcome::Blocked,
+            Some(format!(
+                "GitHub reports merge state {}",
+                merge_state_label(snap.merge_state_status)
+            )),
             None,
         );
     }
@@ -213,19 +236,14 @@ pub fn classify(
         };
     }
     match snap.merge_state_status {
-        MergeStateStatus::Blocked | MergeStateStatus::Draft | MergeStateStatus::Dirty => terminal(
-            Outcome::Blocked,
-            Some(format!(
-                "GitHub reports merge state {}",
-                merge_state_label(snap.merge_state_status)
-            )),
-            None,
-        ),
         MergeStateStatus::Clean
         | MergeStateStatus::HasHooks
         | MergeStateStatus::Unstable
         | MergeStateStatus::Behind => Step::Ready,
-        MergeStateStatus::Unknown => unreachable!("handled above"),
+        MergeStateStatus::Blocked
+        | MergeStateStatus::Draft
+        | MergeStateStatus::Dirty
+        | MergeStateStatus::Unknown => unreachable!("handled above"),
     }
 }
 
@@ -531,6 +549,22 @@ mod tests {
     }
 
     #[test]
+    fn observed_dequeue_outranks_the_current_blocked_status() {
+        let mut snap = open(green());
+        snap.merge_state_status = MergeStateStatus::Blocked;
+        let progress = Progress {
+            queued_head_sha: Some("abc".into()),
+        };
+        assert!(matches!(
+            classify(&snap, &queue_rules(), None, &progress),
+            Step::Terminal {
+                outcome: Outcome::Dequeued,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn armed_pr_reports_the_armed_phase() {
         assert!(matches!(
             classify(
@@ -621,6 +655,26 @@ mod tests {
                 classify(&snap, &queue_rules(), None, &Progress::default()),
                 Step::Continue {
                     phase: Phase::AwaitingMergeability,
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn blocked_status_outranks_unknown_mergeability() {
+        for status in [
+            MergeStateStatus::Blocked,
+            MergeStateStatus::Draft,
+            MergeStateStatus::Dirty,
+        ] {
+            let mut snap = open(green());
+            snap.mergeable = Mergeable::Unknown;
+            snap.merge_state_status = status;
+            assert!(matches!(
+                classify(&snap, &queue_rules(), None, &Progress::default()),
+                Step::Terminal {
+                    outcome: Outcome::Blocked,
                     ..
                 }
             ));
