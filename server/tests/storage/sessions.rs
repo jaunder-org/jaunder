@@ -1,7 +1,10 @@
-use super::*;
-use common::test_support::parse_session_label;
+use common::test_support::{parse_raw_token, parse_session_label};
+use rstest::*;
+use rstest_reuse::*;
 use storage::SessionAuthError;
-use storage::test_support::seed_users;
+use storage::test_support::{Backend, SeedUser, backends, seed_users};
+
+use crate::helpers::create_session_for;
 #[apply(backends)]
 #[tokio::test]
 async fn create_session_then_authenticate_returns_correct_record(#[case] backend: Backend) {

@@ -1,8 +1,11 @@
-use super::*;
-use crate::storage::fixtures::username;
 use common::ids::UserId;
-use common::test_support::parse_display_name;
-use storage::CreateUserError;
+use common::test_support::{parse_bio, parse_display_name, parse_email};
+use rstest::*;
+use rstest_reuse::*;
+use storage::test_support::{Backend, SeedUser, backends};
+use storage::{CreateUserError, ProfileUpdate, UserAuthError};
+
+use crate::storage::fixtures::{password, username};
 #[apply(backends)]
 #[tokio::test]
 async fn create_user_succeeds_and_get_by_username_returns_record(#[case] backend: Backend) {

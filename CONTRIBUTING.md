@@ -545,14 +545,14 @@ The server integration tests compile as a **single** `integration` binary, so
 run a subset by filtering on the module path rather than by picking a target.
 Test paths follow the nested module path to the test name. A shallow file yields
 `web::web_auth::<name>`; concern submodules add segments, as in
-`web::posts::create::create_post_persists_rendered_published_post`.
-`misc::commands::…` is another nested example, while `storage::…` and
-`projector::…` have no file segment because each subsystem is a single file.
+`web::posts::create::create_post_persists_rendered_published_post`,
+`storage::posts::post_create_and_get_by_id_works`, and projector concern paths.
+`misc::commands::…` is another nested example.
 
 - One subsystem: `cargo nextest run -p jaunder -E 'test(/^web::/)'` (or
   `atompub`, `feed`, `misc`, `projector`, `storage`).
 - One file, concern module, or test (substring match):
-  `cargo nextest run -p jaunder web::posts::create`.
+  `cargo nextest run -p jaunder storage::posts::post_create_and_get_by_id_works`.
 - Library/unit tests only: `cargo test -p jaunder --lib`.
 
 `cargo nextest list -p jaunder` shows every registered Rust test with its full

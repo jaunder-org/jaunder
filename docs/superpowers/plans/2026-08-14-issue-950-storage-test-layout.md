@@ -1065,13 +1065,13 @@ Run the global per-commit protocol. Commit:
 - Consumes: completed 19-module layout and 298-case inventory.
 - Produces: accurate contributor documentation and final verification evidence.
 
-- [ ] **Step 1: Update the path guidance**
+- [x] **Step 1: Update the path guidance**
 
 State that `storage` and `projector` have concern segments. Keep the subsystem
 expression example unchanged; replace/add the single-concern example with:
 `cargo nextest run -p jaunder storage::posts::post_create_and_get_by_id_works`.
 
-- [ ] **Step 2: Reconcile final structure and population**
+- [x] **Step 2: Reconcile final structure and population**
 
 Run: `devtool run -- cargo nextest list -p jaunder` Expected: 298 storage cases
 with concern-qualified paths.
@@ -1081,7 +1081,7 @@ entries and no other items. Confirm each exported fixture helper is imported by
 at least two concern modules and every `#[apply(backends)]` module has all three
 required imports.
 
-- [ ] **Step 3: Commit the contributor guidance**
+- [x] **Step 3: Commit the contributor guidance**
 
 Run the global per-commit protocol. Commit:
 `docs: update storage test filter guidance (#950)`.

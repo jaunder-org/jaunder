@@ -1,4 +1,11 @@
-use super::*;
+use chrono::Utc;
+use common::test_support::parse_raw_token;
+use rstest::*;
+use rstest_reuse::*;
+use storage::UseEmailVerificationError;
+use storage::test_support::{Backend, SeedUser, backends};
+
+use super::fixtures::raw_exec;
 #[apply(backends)]
 #[tokio::test]
 async fn create_email_verification_and_use_returns_user_id_and_email(#[case] backend: Backend) {
