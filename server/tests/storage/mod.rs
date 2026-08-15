@@ -5712,9 +5712,17 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
 // `format!` is safe here (test-only, no untrusted input) and sidesteps the
 // SQLite/Postgres placeholder divergence.
 async fn raw_exec(backend: Backend, env: &TestEnv, sql: &str) {
-    raw_try_exec(backend, env, sql)
-        .await
-        .unwrap_or_else(|e| panic!("raw exec failed: {e}\nSQL: {sql}"));
+    let result = match backend {
+        Backend::Sqlite => sqlx::query(sql)
+            .execute(&open_pool(&env.base).await)
+            .await
+            .map(|_| ()),
+        Backend::Postgres => sqlx::query(sql)
+            .execute(env.base.pool().postgres())
+            .await
+            .map(|_| ()),
+    };
+    result.unwrap_or_else(|e| panic!("raw exec failed: {e}\nSQL: {sql}"));
 }
 
 async fn raw_try_exec(backend: Backend, env: &TestEnv, sql: &str) -> Result<(), sqlx::Error> {

@@ -160,7 +160,7 @@ helpers stay with their single concern.
   whose body dispatches directly to SQLite/PostgreSQL; `raw_try_exec` remains
   unchanged for the FK test.
 
-- [ ] **Step 1: Capture the registered-test baseline**
+- [x] **Step 1: Capture the registered-test baseline**
 
 Run: `devtool run -- cargo nextest list -p jaunder`
 
@@ -169,7 +169,7 @@ Expected: PASS; the parked output contains exactly 310 lines with
 `.xtask/issue-950-storage-baseline.out`, outside the pruned `.xtask/run/`
 directory. This immutable ignored file is the baseline for Task 25.
 
-- [ ] **Step 2: Make `raw_exec` self-contained**
+- [x] **Step 2: Make `raw_exec` self-contained**
 
 Replace its call to `raw_try_exec` with the same backend match currently inside
 `raw_try_exec`: SQLite executes against `open_pool(&env.base)`, PostgreSQL
@@ -177,14 +177,14 @@ executes against `env.base.pool().postgres()`, both map the query result to
 `()`; retain the existing `unwrap_or_else` panic text. Do not change
 `raw_try_exec`.
 
-- [ ] **Step 3: Prove the preparation**
+- [x] **Step 3: Prove the preparation**
 
 Run:
 `devtool run -- devtool pg run -- cargo nextest run -p jaunder -E 'test(/^storage::/)'`
 
 Expected: PASS, 310 storage cases across SQLite and PostgreSQL.
 
-- [ ] **Step 4: Gate and commit**
+- [x] **Step 4: Gate and commit**
 
 Run the global per-commit protocol. Commit:
 `refactor(server/tests): prepare storage test split (#950)`.
