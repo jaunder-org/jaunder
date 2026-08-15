@@ -25,11 +25,12 @@
 //! not a fail-closed no-op: silence would disable the guard rather than over-report.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use syn::spanned::Spanned;
 
-use crate::result::{CommandResult, StepResult};
+use crate::result::CommandResult;
+use crate::steps::scan::run_source_scan;
 
 /// Source roots scanned recursively for `.rs` files. `web` is the only crate whose
 /// host/wasm boundary runs *through* it; `client` and `csr` pass trivially under rule 1
@@ -160,59 +161,12 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
     (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
-/// Collect every `.rs` file under `dir`, recursively.
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let path = entry?.path();
-        if path.is_dir() {
-            rust_files(&path, out)?;
-        } else if path.extension().is_some_and(|e| e == "rs") {
-            out.push(path);
-        }
-    }
-    Ok(())
-}
-
-/// Scan every Rust file under each of [`POLICED_ROOTS`] and push the result step. A
-/// missing root is a hard failure, so a moved/renamed tree can never quietly disable the
-/// guard.
+/// Scan every Rust file under each of [`POLICED_ROOTS`] and push the result step.
+///
+/// The shared scanner rejects every traversal or read failure before calling
+/// [`problems`], so no partial source population can pass this guard.
 pub fn run(result: &mut CommandResult) {
-    let mut files = Vec::new();
-    for root in POLICED_ROOTS {
-        if let Err(e) = rust_files(Path::new(root), &mut files) {
-            result.push(
-                StepResult::fail("target-arch-placement")
-                    .detail(format!("cannot scan {root}: {e}")),
-            );
-            return;
-        }
-    }
-    // A file we cannot read is reported, not skipped: silently dropping it would
-    // disable the guard for exactly the file someone made unreadable. The sibling
-    // checks `filter_map(… .ok())` here; this one does not, because its whole premise
-    // is that no policed file escapes inspection.
-    let mut scanned: Vec<(String, String)> = Vec::new();
-    let mut unreadable: Vec<String> = Vec::new();
-    for p in &files {
-        match std::fs::read_to_string(p) {
-            Ok(s) => scanned.push((p.display().to_string(), s)),
-            Err(e) => unreadable.push(format!("{}: cannot read — {e}", p.display())),
-        }
-    }
-    let step = match (problems(&scanned), unreadable.is_empty()) {
-        (None, true) => StepResult::ok("target-arch-placement"),
-        (found, _) => {
-            let mut detail = unreadable.join("\n");
-            if let Some(problems) = found {
-                if !detail.is_empty() {
-                    detail.push('\n');
-                }
-                detail.push_str(&problems);
-            }
-            StepResult::fail("target-arch-placement").detail(detail)
-        }
-    };
-    result.push(step);
+    run_source_scan(result, "target-arch-placement", POLICED_ROOTS, problems);
 }
 
 #[cfg(test)]

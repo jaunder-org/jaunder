@@ -43,6 +43,7 @@ mod steps {
     pub mod proffered_secret_check;
     pub mod raw_html_door_check;
     pub mod rendered_html_from_trusted_check;
+    pub mod scan;
     pub mod sequence_check;
     pub mod server_fn_coverage_check;
     pub mod server_fn_registrar_check;
