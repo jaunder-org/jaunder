@@ -819,17 +819,17 @@ Run the global per-commit protocol. Commit:
   `user_config_get_returns_none_when_unset` through
   `user_config_delete_nonexistent_is_ok`.
 
-- [ ] **Step 1: Move the six bodies unchanged**
+- [x] **Step 1: Move the six bodies unchanged**
 
 Retain typed-key, overwrite, delete, and missing-key assertions.
 
-- [ ] **Step 2: Prove the concern**
+- [x] **Step 2: Prove the concern**
 
 Run:
 `devtool run -- devtool pg run -- cargo nextest run -p jaunder storage::user_config`
 Expected: PASS, twelve backend cases.
 
-- [ ] **Step 3: Gate and commit**
+- [x] **Step 3: Gate and commit**
 
 Run the global per-commit protocol. Commit:
 `refactor(server/tests): split user config storage tests (#950)`.
