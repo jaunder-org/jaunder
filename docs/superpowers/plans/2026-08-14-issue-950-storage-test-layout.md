@@ -1086,13 +1086,13 @@ required imports.
 Run the global per-commit protocol. Commit:
 `docs: update storage test filter guidance (#950)`.
 
-- [ ] **Step 4: Validate the committed branch**
+- [x] **Step 4: Validate the committed branch**
 
 Run: `devtool run -- cargo xtask validate` Expected: PASS for static checks,
 coverage, and all four `{sqlite,postgres} × {chromium,firefox}` e2e
 combinations.
 
-- [ ] **Step 5: Record completion**
+- [x] **Step 5: Record completion**
 
 Tick Step 4, Step 5, and every remaining plan checkbox. Run the global
 per-commit protocol and commit only the plan:
