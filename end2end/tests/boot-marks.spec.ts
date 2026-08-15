@@ -182,3 +182,85 @@ test("boot fetches the wasm once and the harness captures the full mark set", as
   expect(timing?.wasmInit?.doneMs).not.toBeNull();
   expect(timing?.wasmInit?.apiMs).not.toBeNull();
 });
+
+test("initializer records buffered when streaming is unavailable and restores APIs", async ({
+  page,
+  bootTiming,
+}) => {
+  await page.addInitScript(() => {
+    const scope = globalThis as typeof globalThis & {
+      __jaunderOriginalStreaming?: typeof WebAssembly.instantiateStreaming;
+      __jaunderOriginalInstantiate?: typeof WebAssembly.instantiate;
+    };
+    scope.__jaunderOriginalStreaming = WebAssembly.instantiateStreaming;
+    scope.__jaunderOriginalInstantiate = WebAssembly.instantiate;
+    WebAssembly.instantiateStreaming = undefined as never;
+  });
+
+  await goto(page, "/");
+  await page.waitForFunction(
+    (name) => performance.getEntriesByName(name, "mark").length !== 0,
+    "jaunder.wasm.init_done",
+  );
+  expect((await bootTiming())?.wasmInit).toMatchObject({ path: "buffered" });
+  expect(
+    await page.evaluate(
+      () =>
+        WebAssembly.instantiateStreaming === undefined &&
+        WebAssembly.instantiate ===
+          (
+            globalThis as typeof globalThis & {
+              __jaunderOriginalInstantiate?: typeof WebAssembly.instantiate;
+            }
+          ).__jaunderOriginalInstantiate,
+    ),
+  ).toBe(true);
+});
+
+test("initializer records buffered after MIME-rejected streaming and restores APIs", async ({
+  page,
+  bootTiming,
+}) => {
+  await page.addInitScript(() => {
+    const scope = globalThis as typeof globalThis & {
+      __jaunderOriginalStreaming?: typeof WebAssembly.instantiateStreaming;
+      __jaunderOriginalInstantiate?: typeof WebAssembly.instantiate;
+    };
+    scope.__jaunderOriginalStreaming = WebAssembly.instantiateStreaming;
+    scope.__jaunderOriginalInstantiate = WebAssembly.instantiate;
+  });
+  await page.route("**/pkg/jaunder.wasm", async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({
+      response,
+      headers: {
+        ...response.headers(),
+        "content-type": "application/octet-stream",
+      },
+    });
+  });
+
+  await goto(page, "/");
+  await page.waitForFunction(
+    (name) => performance.getEntriesByName(name, "mark").length !== 0,
+    "jaunder.wasm.init_done",
+  );
+  expect((await bootTiming())?.wasmInit).toMatchObject({ path: "buffered" });
+  expect(
+    await page.evaluate(
+      () =>
+        WebAssembly.instantiateStreaming ===
+          (
+            globalThis as typeof globalThis & {
+              __jaunderOriginalStreaming?: typeof WebAssembly.instantiateStreaming;
+            }
+          ).__jaunderOriginalStreaming &&
+        WebAssembly.instantiate ===
+          (
+            globalThis as typeof globalThis & {
+              __jaunderOriginalInstantiate?: typeof WebAssembly.instantiate;
+            }
+          ).__jaunderOriginalInstantiate,
+    ),
+  ).toBe(true);
+});

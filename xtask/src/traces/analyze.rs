@@ -189,7 +189,12 @@ pub struct BootCoverageRow {
     /// pools sqlite with postgres into one row.
     pub source: String,
     pub project: String,
+    /// All schema versions, retained to make the trace input population explicit.
     pub navigations: u64,
+    /// Current direct-initializer schema navigations; coverage denominator.
+    pub current: u64,
+    /// Pre-cutover schema navigations, excluded from current coverage loss.
+    pub legacy: u64,
     pub mounted: u64,
     pub full_marks: u64,
     pub dropped: u64,
@@ -390,6 +395,8 @@ fn boot_coverage_rows(spans: &[Span]) -> Result<Vec<BootCoverageRow>> {
                     source: s.source.clone(),
                     project,
                     navigations: 0,
+                    current: 0,
+                    legacy: 0,
                     mounted: 0,
                     full_marks: 0,
                     dropped: 0,
@@ -405,6 +412,13 @@ fn boot_coverage_rows(spans: &[Span]) -> Result<Vec<BootCoverageRow>> {
         };
         for nav in arr {
             row.navigations += 1;
+            let current =
+                nav.get("wasmTimingSchema").and_then(Value::as_str) == Some("direct-init-v1");
+            if !current {
+                row.legacy += 1;
+                continue;
+            }
+            row.current += 1;
             if field_f64(nav, "commitToMountMs").is_some() {
                 row.mounted += 1;
             }
@@ -412,10 +426,7 @@ fn boot_coverage_rows(spans: &[Span]) -> Result<Vec<BootCoverageRow>> {
                 .get("bootPhases")
                 .and_then(Value::as_object)
                 .map_or(0, |phases| phases.len());
-            let current =
-                nav.get("wasmTimingSchema").and_then(Value::as_str) == Some("direct-init-v1");
-            if current
-                && phases >= MIN_BOOT_PHASES
+            if phases >= MIN_BOOT_PHASES
                 && field_f64(nav, "wasmInitStartMs").is_some()
                 && field_f64(nav, "wasmInitStartToBootEntryMs").is_some()
             {
@@ -1057,27 +1068,60 @@ mod tests {
     }
 
     #[test]
-    fn boot_coverage_counts_mounted_and_fully_marked_navigations_per_project() {
-        // firefox: 2 navigations, both mounted, neither decomposed — the #818 blackout.
-        // chromium: 2 navigations, 1 mounted and fully marked, 1 never mounted.
+    fn boot_coverage_reports_legacy_without_counting_it_as_current_loss() {
+        // Firefox carries two pre-cutover navigations. Chromium carries one
+        // current full navigation and one legacy navigation.
+        let mut legacy_firefox_a = nav(Some(300.0), None, None);
+        legacy_firefox_a
+            .as_object_mut()
+            .unwrap()
+            .remove("wasmTimingSchema");
+        let mut legacy_firefox_b = nav(Some(280.0), None, None);
+        legacy_firefox_b
+            .as_object_mut()
+            .unwrap()
+            .remove("wasmTimingSchema");
+        let mut legacy_chromium = nav(None, None, None);
+        legacy_chromium
+            .as_object_mut()
+            .unwrap()
+            .remove("wasmTimingSchema");
         let mut spans = boot_span(
             "sqlite",
             "firefox",
             0,
-            vec![nav(Some(300.0), None, None), nav(Some(280.0), None, None)],
+            vec![legacy_firefox_a, legacy_firefox_b],
         );
         spans.extend(boot_span(
             "sqlite",
             "chromium",
             0,
-            vec![full_nav(), nav(None, None, None)],
+            vec![full_nav(), legacy_chromium],
         ));
 
         let rows = boot_coverage_rows(&spans).unwrap();
         let ff = row_for(&rows, "firefox");
-        assert_eq!((ff.navigations, ff.mounted, ff.full_marks), (2, 2, 0));
+        assert_eq!(
+            (
+                ff.navigations,
+                ff.current,
+                ff.legacy,
+                ff.mounted,
+                ff.full_marks
+            ),
+            (2, 0, 2, 0, 0)
+        );
         let chr = row_for(&rows, "chromium");
-        assert_eq!((chr.navigations, chr.mounted, chr.full_marks), (2, 1, 1));
+        assert_eq!(
+            (
+                chr.navigations,
+                chr.current,
+                chr.legacy,
+                chr.mounted,
+                chr.full_marks
+            ),
+            (2, 1, 1, 1, 1)
+        );
     }
 
     #[test]

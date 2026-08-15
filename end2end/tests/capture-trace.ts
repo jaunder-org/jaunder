@@ -420,17 +420,9 @@ export async function attachTraceCapture(
     if (!value || typeof value !== "object" || !("href" in value)) return;
     const href = typeof value.href === "string" ? value.href : null;
     if (href === null) return;
-    const candidates = [
-      ...sinks.pretest.navigations,
-      ...sinks.test.navigations,
-    ];
     const active = stateFor(source.page).active;
-    const activeNavigation =
-      active === null ? undefined : findNavigation(active);
-    const navigation =
-      [...candidates].reverse().find((entry) => entry.url === href) ??
-      (activeNavigation?.url === href ? activeNavigation : undefined);
-    if (navigation !== undefined) {
+    const navigation = active === null ? undefined : findNavigation(active);
+    if (navigation !== undefined && navigation.url === href) {
       pendingHarvests.push(harvestDocument(source.page, navigation.id));
     }
   });
