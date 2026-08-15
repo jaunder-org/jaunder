@@ -1,10 +1,25 @@
 //! Shared, fail-closed Rust-source scanning for one-input static checks.
+//!
+//! A caller supplies its policed roots, step name, and pure analyzer. This module
+//! discovers every `.rs` file with [`crate::files::with_extension`], sorts the
+//! combined population lexically, and decodes each file as UTF-8 before exposing
+//! `(display_path, source)` pairs to that analyzer. A traversal, read, or decode
+//! failure produces the caller's one failed [`StepResult`] and does not invoke the
+//! analyzer; a partial source population must never pass a gate. A complete
+//! population invokes the analyzer exactly once and maps its optional detail to
+//! the caller's one result step.
 
 use std::path::Path;
 
 use crate::files;
 use crate::result::{CommandResult, StepResult};
 
+/// Run one static check over the complete Rust-source population under `roots`.
+///
+/// `problems` receives lexically sorted `(display_path, source)` pairs only after
+/// every root has been walked and every file decoded. The result always receives
+/// exactly one step named `step`: a traversal/read failure, analyzer detail, or
+/// success.
 pub(super) fn run_source_scan(
     result: &mut CommandResult,
     step: &'static str,
@@ -20,6 +35,11 @@ pub(super) fn run_source_scan(
     );
 }
 
+/// Like [`run_source_scan`], but accepts the reader used for each discovered file.
+///
+/// Production supplies [`std::fs::read_to_string`]. Keeping this seam private
+/// prevents check-specific I/O policy while letting this module prove that a read
+/// failure never invokes an analyzer.
 fn run_source_scan_with(
     result: &mut CommandResult,
     step: &'static str,
