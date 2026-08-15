@@ -3,6 +3,11 @@
 - Status: accepted
 - Date: 2026-08-05
 - Issue: [#818](https://github.com/jaunder-org/jaunder/issues/818)
+- Amended: 2026-08-14
+  ([#887](https://github.com/jaunder-org/jaunder/issues/887)) — the
+  document-frame rule is unchanged; the false response-end “instantiate”
+  residual is replaced by direct initialization marks and an exclusive
+  `init_start → boot.entry` segment.
 
 ## Context
 
@@ -51,10 +56,13 @@ analysis uses the document frame.**
 Concretely:
 
 - The analysis target is `bootTotalMs` — the document-relative interval from
-  `timeOrigin` to the last boot mark (`jaunder.boot.mount_done`). Its parts are
-  `wasmFetchStartMs`, `wasmFetchMs`, `wasmInstantiateMs`, and the `bootPhases`
-  intervals. These **sum to it exactly, by construction**, so a non-zero
-  residual is a data defect rather than an unexplained phase.
+  `timeOrigin` to the last boot mark (`jaunder.boot.mount_done`). As amended by
+  #887, its exclusive parts are `wasmInitStartMs`, `wasmInitStartToBootEntryMs`,
+  and the `bootPhases` intervals. These **sum to it exactly, by construction**,
+  so a non-zero residual is a data defect rather than an unexplained phase.
+  Direct `wasmApiMs`, `wasmInitMs`, the successful `streaming | buffered` path,
+  and wasm resource timing are overlapping diagnostics and are never added to
+  the decomposition.
 - `commitToMountMs` remains reported, as the bridge to suite wall-clock, but is
   **never** used as the total for that decomposition.
 - The difference, `commitToMountMs - bootTotalMs`, is reported separately as
@@ -66,6 +74,13 @@ Concretely:
 - #794's published per-phase numbers are **superseded, not corrected**: they
   were chromium-only (firefox recorded no marks at all — #818) and framed
   against `commit_to_mount`. They are not re-derived.
+- #887 directly measures both the successful WebAssembly API promise
+  (`wasmApiMs`) and enclosing wasm-bindgen initialization (`wasmInitMs`), but
+  neither is a compile-only or exclusive duration: `instantiateStreaming`
+  overlaps delivery, and wasm-bindgen calls `wasm.__wbindgen_start()` before
+  resolving, so initialization contains the synchronous Rust boot phases.
+  Historical `wasmInstantiateMs` values remain published as the superseded
+  `responseEnd → boot.entry` residual and are not re-derived.
 - Any future instrument that wants to decompose `commit_to_mount` must first
   measure the frame skew per engine and subtract it explicitly. Nothing does
   today, and adding one is a decision to revisit, not an oversight to fill in.

@@ -947,7 +947,7 @@ Source: #836's arm-C captures (the shipped bundle), single-worker sqlite, three
 runs pooled per engine. No new collection — this re-reads segments the corpus
 already carried.
 
-### The six segments
+### Historical six segments
 
 | segment                             | chromium ms/nav | s/suite  | firefox ms/nav | s/suite   |
 | ----------------------------------- | --------------- | -------- | -------------- | --------- |
@@ -973,11 +973,11 @@ Split by cache warmth, ms per navigation (n = 339 / 285 / 341 / 285):
 | `render_start → mount_done`         | 5.8       | 0.9       | 1.8       | 2.2       |
 | **boot total**                      | **470.9** | **301.6** | **796.9** | **643.4** |
 
-Note what does _not_ move with warmth: **firefox's `wasm_instantiate` is 403.9
-ms cold and 406.4 ms warm.** A warm HTTP cache removes the download and changes
-the compile cost not at all. That is consistent with #864's size-independent
-floor and is the same segment #866's own preload experiment later moved by 125
-ms — see #887.
+Note what does _not_ move with warmth: **firefox's historical `wasm_instantiate`
+residual is 403.9 ms cold and 406.4 ms warm.** A warm HTTP cache removes the
+download but this residual cannot establish what happens to compile cost: it is
+derived from `responseEnd → boot.entry` and absorbs every activity in that
+interval. #887 replaces it with direct initialization diagnostics.
 
 Two things close here rather than deferring.
 
@@ -1150,8 +1150,9 @@ The arithmetic fits reattribution: firefox −194.8 (pre-fetch) +50.1 (fetch)
 is a small genuine saving on top of a large reshuffle across segment boundaries.
 
 **No claim is made about compile cost here, in either direction.** Whether
-delivery affects firefox's real instantiate is untested and needs an instrument
-that measures it rather than subtracting for it — #887.
+delivery affects firefox's real initialization was untested in this historical
+trial; #887 supersedes its residual with direct WebAssembly API and initializer
+measurements.
 
 **This does not touch the decomposition above.** That was computed within a
 _single_ delivery mode (arm C), where `init()` always starts the fetch, so the

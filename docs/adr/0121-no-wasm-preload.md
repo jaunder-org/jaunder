@@ -15,13 +15,17 @@ The SPA shell boots by fetching the wasm bundle after the JS glue. A
 The head carries **no wasm preload**, by measurement, under a pre-registered
 abort rule. The trial (#866) collapsed the serial pre-fetch window exactly as
 intended — firefox 276.2 → 81.5 ms per navigation — and bought nothing: the time
-reappeared as fetch contention and, unexpectedly, 125 ms MORE `wasm_instantiate`
-on firefox. Boot total improved 18.8 ms against a pre-registered floor of 38.8
-ms, so the abort rule fired and the preload was reverted.
+reappeared as fetch contention and a historical 125 ms increase in the
+response-end residual then called `wasm_instantiate`. Boot total improved 18.8
+ms against a pre-registered floor of 38.8 ms, so the abort rule fired and the
+preload was reverted.
 
-Do not re-add it without reading `docs/observability.md` §"#866" and #887 (why
-delivery changes firefox's instantiate cost at all). If it is ever re-added,
-`crossorigin` is mandatory: without it firefox downloads the bundle twice.
+That retained residual is **not** a direct compile or initialization
+measurement. #887 supersedes it with direct `wasmApiMs` and `wasmInitMs`
+diagnostics; neither is added to the exclusive boot decomposition. Do not re-add
+preload without reading `docs/observability.md` §"#866" and #887. If it is ever
+re-added, `crossorigin` is mandatory: without it firefox downloads the bundle
+twice.
 
 ## Consequences
 

@@ -1234,15 +1234,18 @@ entirely within one of them
 frame** — `performance.mark` and `PerformanceResourceTiming`, relative to that
 document's `timeOrigin` — is what `capture-trace.ts`'s `harvestDocument` returns
 and the only frame boot analysis decomposes: `bootTotalMs` is `timeOrigin` to
-`jaunder.boot.mount_done`, and its parts sum to it by construction. The **Node
-frame** — `Date.now()` stamps taken in the Playwright driver — carries
-`committedMs`, `mountedMs`, and `commitToMountMs`. `commitToMountMs` is still
-reported as the bridge to suite wall-clock but is never decomposed; the
-difference `commitToMountMs - bootTotalMs` is reported separately as **frame
-skew** and charged to the harness (`frame_skew_ms` in
-`xtask/src/traces/boot_phases.rs`). The two frames differ by cross-process,
-plausibly engine-asymmetric lag, so mixing them would charge harness IPC to the
-app's boot phases.
+`jaunder.boot.mount_done`; its exclusive parts are `timeOrigin → init_start`,
+`init_start → boot.entry`, and the Rust boot phases, which sum to it by
+construction. Direct WebAssembly API and enclosing wasm-initialization
+durations, their successful path, and wasm resource timing are overlapping
+diagnostics, never added to that decomposition. The **Node frame** —
+`Date.now()` stamps taken in the Playwright driver — carries `committedMs`,
+`mountedMs`, and `commitToMountMs`. `commitToMountMs` is still reported as the
+bridge to suite wall-clock but is never decomposed; the difference
+`commitToMountMs - bootTotalMs` is reported separately as **frame skew** and
+charged to the harness (`frame_skew_ms` in `xtask/src/traces/boot_phases.rs`).
+The two frames differ by cross-process, plausibly engine-asymmetric lag, so
+mixing them would charge harness IPC to the app's boot phases.
 
 ### Metrics
 
