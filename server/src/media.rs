@@ -280,7 +280,7 @@ fn resolve_media_path(
 fn content_disposition(content_type: &ContentType, filename: &Filename) -> String {
     use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 
-    let disposition = if should_inline(content_type) {
+    let disposition = if should_inline(content_type.as_ref()) {
         "inline"
     } else {
         "attachment"

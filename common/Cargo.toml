@@ -66,6 +66,7 @@ test-support = []
 axum = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true }
+rstest.workspace = true
 
 [lints]
 workspace = true

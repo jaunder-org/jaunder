@@ -910,9 +910,9 @@ fn is_valid_content_type(s: &str) -> bool {
 
 /// Returns true if the content type should be served inline rather than as an attachment.
 #[must_use]
-pub fn should_inline(content_type: &ContentType) -> bool {
+pub fn should_inline(content_type: &str) -> bool {
     matches!(
-        content_type.0.as_str(),
+        content_type,
         "image/jpeg"
             | "image/png"
             | "image/gif"
@@ -1022,6 +1022,7 @@ pub struct UploadResponse {
 #[cfg(test)]
 mod tests {
     use crate::test_support::{MEDIA_TEST_SHA256, parse_content_hash};
+    use rstest::rstest;
     use sha2::{Digest, Sha256};
 
     use super::*;
@@ -1145,11 +1146,6 @@ mod tests {
         Filename::sanitized(name).expect("a media test name is a valid leaf")
     }
 
-    /// A validated media type for tests that exercise serving policy.
-    fn content_type(value: &str) -> ContentType {
-        value.parse().expect("a media test content type is valid")
-    }
-
     /// Detect a type from an inbound filename, preserving the production boundary shape.
     fn detected_content_type(name: &str) -> ContentType {
         detect_content_type(&filename(name))
@@ -1243,74 +1239,41 @@ mod tests {
         }
     }
 
-    #[test]
-    fn content_disposition_inline_for_images() {
-        assert!(should_inline(&content_type("image/jpeg")));
-        assert!(should_inline(&content_type("image/png")));
-        assert!(should_inline(&content_type("image/gif")));
-        assert!(should_inline(&content_type("image/webp")));
-        assert!(should_inline(&content_type("image/svg+xml")));
+    #[rstest]
+    #[case::jpeg("image/jpeg", true)]
+    #[case::png("image/png", true)]
+    #[case::gif("image/gif", true)]
+    #[case::webp("image/webp", true)]
+    #[case::svg("image/svg+xml", true)]
+    #[case::mpeg("audio/mpeg", true)]
+    #[case::mp4("video/mp4", true)]
+    #[case::pdf("application/pdf", true)]
+    #[case::zip("application/zip", false)]
+    #[case::text("text/plain", false)]
+    #[case::octet_stream("application/octet-stream", false)]
+    fn should_inline_classifies_content_types(#[case] content_type: &str, #[case] expected: bool) {
+        assert_eq!(should_inline(content_type), expected);
     }
 
-    #[test]
-    fn content_disposition_inline_for_media() {
-        assert!(should_inline(&content_type("audio/mpeg")));
-        assert!(should_inline(&content_type("video/mp4")));
-        assert!(should_inline(&content_type("application/pdf")));
-    }
-
-    #[test]
-    fn content_disposition_attachment_for_others() {
-        assert!(!should_inline(&content_type("application/zip")));
-        assert!(!should_inline(&content_type("text/plain")));
-        assert!(!should_inline(&content_type("application/octet-stream")));
-    }
-
-    #[test]
-    fn detect_content_type_known_extensions() {
-        for (filename, expected) in [
-            ("photo.jpg", "image/jpeg"),
-            ("photo.jpeg", "image/jpeg"),
-            ("image.png", "image/png"),
-            ("doc.pdf", "application/pdf"),
-            ("video.mp4", "video/mp4"),
-        ] {
-            assert_eq!(detected_content_type(filename), expected);
-        }
-    }
-
-    #[test]
-    fn detect_content_type_image_formats() {
-        assert_eq!(detected_content_type("anim.gif"), "image/gif");
-        assert_eq!(detected_content_type("photo.webp"), "image/webp");
-        assert_eq!(detected_content_type("icon.svg"), "image/svg+xml");
-    }
-
-    #[test]
-    fn detect_content_type_audio_formats() {
-        for (filename, expected) in [
-            ("track.mp3", "audio/mpeg"),
-            ("track.ogg", "audio/ogg"),
-            ("track.oga", "audio/ogg"),
-            ("track.flac", "audio/flac"),
-            ("track.wav", "audio/wav"),
-        ] {
-            assert_eq!(detected_content_type(filename), expected);
-        }
-    }
-
-    #[test]
-    fn detect_content_type_video_webm() {
-        assert_eq!(detected_content_type("clip.webm"), "video/webm");
-    }
-
-    #[test]
-    fn detect_content_type_unknown_extension() {
-        assert_eq!(
-            detected_content_type("file.xyz"),
-            "application/octet-stream"
-        );
-        assert_eq!(detected_content_type("noext"), "application/octet-stream");
+    #[rstest]
+    #[case::jpeg("photo.jpg", "image/jpeg")]
+    #[case::jpeg_alias("photo.jpeg", "image/jpeg")]
+    #[case::png("image.png", "image/png")]
+    #[case::gif("anim.gif", "image/gif")]
+    #[case::webp("photo.webp", "image/webp")]
+    #[case::svg("icon.svg", "image/svg+xml")]
+    #[case::mpeg("track.mp3", "audio/mpeg")]
+    #[case::ogg("track.ogg", "audio/ogg")]
+    #[case::oga("track.oga", "audio/ogg")]
+    #[case::flac("track.flac", "audio/flac")]
+    #[case::wav("track.wav", "audio/wav")]
+    #[case::mp4("video.mp4", "video/mp4")]
+    #[case::webm("clip.webm", "video/webm")]
+    #[case::pdf("doc.pdf", "application/pdf")]
+    #[case::unknown_extension("file.xyz", "application/octet-stream")]
+    #[case::no_extension("noext", "application/octet-stream")]
+    fn detect_content_type_classifies_filenames(#[case] filename: &str, #[case] expected: &str) {
+        assert_eq!(detected_content_type(filename), expected);
     }
 
     #[test]
