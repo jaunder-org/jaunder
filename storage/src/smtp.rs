@@ -1,46 +1,8 @@
 use common::config_key::SiteConfigKey;
-use common::smtp_host::SmtpHost;
-use common::smtp_password::SmtpPassword;
-use common::smtp_port::SmtpPort;
-use common::smtp_sender::SmtpSender;
-use common::smtp_username::SmtpUsername;
+use host::smtp_config::SmtpConfig;
 use thiserror::Error;
 
 use crate::SiteConfigStorage;
-
-// The TLS mode now lives in `common` beside the other SMTP value types, where the
-// `#[text_enum]` convention is reachable (`storage` depends on neither `strum` nor
-// `macros`, and the sqlx bridge is `#[cfg(feature = "sqlx")]` evaluated in the
-// *consuming* crate — see #687 D1a). Re-exported so `storage::smtp::SmtpTlsMode` keeps
-// resolving for call sites.
-pub use common::smtp_tls_mode::{InvalidSmtpTlsMode, SmtpTlsMode};
-
-// ---------------------------------------------------------------------------
-// SmtpConfig
-// ---------------------------------------------------------------------------
-
-/// Configuration for the outbound SMTP relay.
-///
-/// Every field is the value's own type, and every one of them arrives decoded through that
-/// type's sqlx bridge by
-/// [`SiteConfigStorage::get_smtp_config`](crate::SiteConfigStorage::get_smtp_config) — so an
-/// `SmtpConfig` in hand is a configuration that parsed, not one that still might not.
-#[derive(Clone, Debug)]
-pub struct SmtpConfig {
-    /// Relay hostname.
-    pub host: SmtpHost,
-    /// Port number (default: 587).
-    pub port: SmtpPort,
-    /// TLS mode (default: [`SmtpTlsMode::StartTls`]).
-    pub tls_mode: SmtpTlsMode,
-    /// Optional SMTP auth username (a validated non-empty identifier).
-    pub username: Option<SmtpUsername>,
-    /// Optional SMTP auth password (a redacting secret newtype — never rendered
-    /// or logged; read once at the mailer `Credentials` boundary).
-    pub password: Option<SmtpPassword>,
-    /// Sender address (e.g. `"Jaunder <noreply@example.com>"`).
-    pub sender: SmtpSender,
-}
 
 // ---------------------------------------------------------------------------
 // SmtpConfigError
@@ -125,43 +87,13 @@ mod tests {
     use super::*;
 
     use crate::test_support::{Backend, backends};
+    use common::smtp_host::SmtpHost;
+    use common::smtp_port::SmtpPort;
+    use common::smtp_sender::SmtpSender;
+    use common::smtp_tls_mode::SmtpTlsMode;
     use common::test_support::{parse_smtp_password, parse_smtp_username};
     use rstest::*;
     use rstest_reuse::*;
-
-    // -- SmtpTlsMode parsing tests --
-
-    #[test]
-    fn tls_mode_parses_plain() {
-        assert_eq!("plain".parse::<SmtpTlsMode>().unwrap(), SmtpTlsMode::Plain);
-    }
-
-    #[test]
-    fn tls_mode_parses_starttls() {
-        assert_eq!(
-            "starttls".parse::<SmtpTlsMode>().unwrap(),
-            SmtpTlsMode::StartTls
-        );
-    }
-
-    #[test]
-    fn tls_mode_parses_tls() {
-        assert_eq!("tls".parse::<SmtpTlsMode>().unwrap(), SmtpTlsMode::Tls);
-    }
-
-    #[test]
-    fn tls_mode_rejects_unknown_string() {
-        assert!("ssl".parse::<SmtpTlsMode>().is_err());
-        assert!("".parse::<SmtpTlsMode>().is_err());
-        assert!("TLS".parse::<SmtpTlsMode>().is_err());
-    }
-
-    #[test]
-    fn tls_mode_display_renders_expected_strings() {
-        assert_eq!(SmtpTlsMode::Plain.to_string(), "plain");
-        assert_eq!(SmtpTlsMode::StartTls.to_string(), "starttls");
-        assert_eq!(SmtpTlsMode::Tls.to_string(), "tls");
-    }
 
     // -- load_smtp_config tests --
 

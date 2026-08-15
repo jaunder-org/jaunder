@@ -3,16 +3,18 @@
 //! never compiles to wasm, so it may use `std::fs`/`std::env` freely without the
 //! `#[cfg(not(target_arch = "wasm32"))]` gating `common` would demand (ADR-0058).
 //!
-//! Tenants live in their own modules. The first is [`capture`] — the `JAUNDER_CAPTURE_DIR`
+//! Tenants live in their own modules. [`capture`] owns the `JAUNDER_CAPTURE_DIR`
 //! contract (issue #227, ADR-0057); [`error`] holds the server-side error carrier
 //! (issue #334, ADR-0058 as clarified); [`auth`] holds host-side HTTP credential
 //! parsing + session-cookie construction pushed down from `web` (issue #334);
 //! [`metrics`] holds the cardinality-safe OpenTelemetry emitter facade pushed down
-//! from `common` (issue #345, ADR-0011/ADR-0058).
+//! from `common` (issue #345, ADR-0011/ADR-0058); and [`smtp_config`] holds the
+//! validated outbound relay aggregate (issue #257, ADR-0058).
 
 pub mod auth;
 pub mod capture;
 pub mod error;
 pub mod invite;
 pub mod metrics;
+pub mod smtp_config;
 pub mod token;

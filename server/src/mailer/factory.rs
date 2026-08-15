@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use common::mailer::{MailSender, NoopMailSender};
-use storage::{SiteConfigStorage, SmtpConfig, load_smtp_config};
+use host::smtp_config::SmtpConfig;
+use storage::{SiteConfigStorage, load_smtp_config};
 
 use super::{FileMailSender, LettreMailSender};
 
@@ -51,8 +52,9 @@ mod tests {
 
     use super::*;
     use common::smtp_port::SmtpPort;
+    use common::smtp_tls_mode::SmtpTlsMode;
+    use storage::SiteConfigKey;
     use storage::test_support::{Backend, backends};
-    use storage::{SiteConfigKey, SmtpTlsMode};
 
     // guard:no-backend — builds a mailer over a mockall SiteConfigStorage whose reads
     // are all absent; no live database backend
