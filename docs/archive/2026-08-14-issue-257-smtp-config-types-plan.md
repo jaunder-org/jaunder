@@ -16,7 +16,7 @@ TLS enum from their owning crates without compatibility re-exports.
 cargo-nextest, cargo-xtask.
 
 **Spec:**
-[`docs/superpowers/specs/2026-08-14-issue-257-smtp-config-types.md`](../specs/2026-08-14-issue-257-smtp-config-types.md)
+[`2026-08-14-issue-257-smtp-config-types.md`](2026-08-14-issue-257-smtp-config-types.md)
 
 ## Review
 
