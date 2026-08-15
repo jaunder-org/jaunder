@@ -211,33 +211,13 @@ an approve-set derived from extra roots and the macro crate.
   step name, roots, and analyzer; `ident_gate::run_scan` retains its existing
   gate-specific inputs and delegates its source collection to `run_source_scan`.
 
-- [ ] **Step 1: Write failing migration regressions**
+- [x] **Step 1: Replace local collection loops**
 
-  Add or adjust direct runner tests using the new helper seam where needed so
-  these contracts are explicit:
-
-  ```rust
-  // Every remaining migrated `run` delegates its current POLICED_ROOTS and
-  // `problems` function to `run_source_scan`; a helper read error yields that
-  // check's existing step name.
-  // ident_gate retains its gate-specific analyzer output after shared collection.
-  ```
-
-  Keep existing direct `problems()` tests unchanged; they remain the contract
-  for gate-specific detection.
-
-- [ ] **Step 2: Run the affected xtask tests and verify they fail**
-
-  Run:
-
-  ```bash
-  devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml -E 'test(/steps::(no_full_reload_check|proffered_filename_check|proffered_secret_check|sqlx_newtype_bind_check|test_pattern_check|ident_gate)::tests::/)'
-  ```
-
-  Expected: FAIL while the local runner/read loops remain or the regressions
-  have not been implemented.
-
-- [ ] **Step 3: Replace local collection loops**
+  The shared scanner's direct tests from Task 1 already defend traversal,
+  lexical ordering, permission failures, invalid UTF-8, and no partial analyzer
+  invocation. Do not add caller-delegation tests that only couple tests to this
+  refactor. Keep each existing direct `problems()` test unchanged as the
+  gate-specific contract.
 
   In each listed remaining one-input check, remove its local `read_sources_with`
   / read loop and unnecessary `Path`, `files`, or `StepResult` imports; call
@@ -247,7 +227,7 @@ an approve-set derived from extra roots and the macro crate.
   change `web_server_fns`, server-fn-registrar, SQLx-newtype-decode, or the Task
   1 target-architecture migration.
 
-- [ ] **Step 4: Run the affected tests and verify they pass**
+- [x] **Step 2: Run the affected tests and verify they pass**
 
   Run:
 
@@ -258,7 +238,7 @@ an approve-set derived from extra roots and the macro crate.
   Expected: PASS, including existing pure analyzer tests and the common
   scanner's unreadable/invalid-UTF-8 contracts.
 
-- [ ] **Step 5: Commit the migration task**
+- [x] **Step 3: Commit the migration task**
 
   Tick Task 2, run `devtool run -- cargo xtask check`, inspect the checked diff,
   stage the modified step files and this plan, then commit:
