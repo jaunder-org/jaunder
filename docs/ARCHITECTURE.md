@@ -410,6 +410,17 @@ point, and it is what makes
 [ADR-0024](adr/0024-server-side-org-canonicalization.md)'s publish-time link
 substitution content-derived.
 
+**The public content-addressed media route is strict at extraction.** One
+validated address owns `MediaSource`, `ContentHash`, both redundant hash
+prefixes, and the inbound-to-canonical `ProfferedFilename` → `Filename`
+conversion. A malformed component or prefix mismatch is an Axum 400 before the
+handler; only a syntactically valid but absent resource is 404. This supersedes
+#504 only for `/media/{source}/{p1}/{p2}/{hash}/{filename}`; projector and
+Syndication Feed soft routes retain `SoftPath`. HTTP serve-outcome counts belong
+to the front proxy, so the application emits upload-domain outcomes and bytes
+but no partial `jaunder.media.served` counter
+(`docs/adr/drafts/strict-media-address-extraction.md`).
+
 **Slugs never fail and preserve Unicode**
 ([ADR-0025](adr/0025-unicode-slug-generation.md)). The charset is per extended
 grapheme cluster — kept iff the base scalar is alphanumeric, carrying its
