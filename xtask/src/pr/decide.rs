@@ -12,6 +12,8 @@ use super::snapshot::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
     AwaitingChecks,
+    AwaitingMergeability,
+    ReadyToLand,
     Armed,
     Queued,
     Terminal,
@@ -21,6 +23,8 @@ impl Phase {
     pub fn as_str(self) -> &'static str {
         match self {
             Phase::AwaitingChecks => "awaiting-checks",
+            Phase::AwaitingMergeability => "awaiting-mergeability",
+            Phase::ReadyToLand => "ready-to-land",
             Phase::Armed => "armed",
             Phase::Queued => "queued",
             Phase::Terminal => "terminal",
@@ -28,11 +32,11 @@ impl Phase {
     }
 }
 
-/// The sliver of history the machine needs. "The queue entry vanished" is only
-/// visible as a transition, but the loop owns the mutation so `classify` stays pure.
+/// The head observed in the queue. Queue disappearance is meaningful only while
+/// observing that same head; a push starts a new history.
 #[derive(Debug, Clone, Default)]
 pub struct Progress {
-    pub was_queued: bool,
+    pub queued_head_sha: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +45,7 @@ pub enum Step {
         phase: Phase,
         warn: Option<String>,
     },
+    Ready,
     Terminal {
         outcome: Outcome,
         detail: Option<String>,
@@ -90,6 +95,7 @@ fn all_required_green(snap: &PrSnapshot, req: &RequiredChecks) -> bool {
 /// that actually needs it.
 pub fn needs_ejection_probe(snap: &PrSnapshot, req: &RequiredChecks) -> bool {
     snap.state == PrState::Open
+        && !req.contexts.is_empty()
         && req.queue_present
         && !snap.queue.in_queue
         && all_required_green(snap, req)
@@ -121,8 +127,7 @@ pub fn classify(
         pointer,
     };
 
-    // Terminal states first, most-actionable first: a PR that both conflicts and has
-    // a red check needs the conflict resolved before the check means anything.
+    // Existing adverse verdicts outrank the approval handoff.
     if snap.state == PrState::Merged {
         return terminal(
             Outcome::Merged,
@@ -150,13 +155,17 @@ pub fn classify(
             entry.details_url.clone(),
         );
     }
-    // Only reachable under a strict ruleset. With the merge queue live the policy is
-    // non-strict, so being behind does not block — but the queue can be rolled back,
-    // and reading the flag rather than assuming keeps that from needing a code change.
     if req.strict && snap.merge_state_status == MergeStateStatus::Behind {
         return terminal(
             Outcome::Stale,
             Some("behind the base branch; the strict ruleset blocks the merge".into()),
+            None,
+        );
+    }
+    if req.contexts.is_empty() {
+        return terminal(
+            Outcome::WatcherError,
+            Some("the required-check set is empty; readiness cannot be established".into()),
             None,
         );
     }
@@ -168,7 +177,6 @@ pub fn classify(
         );
     }
 
-    // Not terminal: report where in the sequence this PR is.
     if snap.queue.in_queue {
         return Step::Continue {
             phase: Phase::Queued,
@@ -181,23 +189,56 @@ pub fn classify(
             warn: None,
         };
     }
+    if !all_required_green(snap, req) {
+        return Step::Continue {
+            phase: Phase::AwaitingChecks,
+            warn: None,
+        };
+    }
+    if progress.queued_head_sha.as_deref() == Some(snap.head_sha.as_str()) {
+        return terminal(
+            Outcome::Dequeued,
+            Some(
+                "the queue entry vanished and no failed current-head merge-group run explains it"
+                    .into(),
+            ),
+            None,
+        );
+    }
+    if snap.mergeable == Mergeable::Unknown || snap.merge_state_status == MergeStateStatus::Unknown
+    {
+        return Step::Continue {
+            phase: Phase::AwaitingMergeability,
+            warn: None,
+        };
+    }
+    match snap.merge_state_status {
+        MergeStateStatus::Blocked | MergeStateStatus::Draft | MergeStateStatus::Dirty => terminal(
+            Outcome::Blocked,
+            Some(format!(
+                "GitHub reports merge state {}",
+                merge_state_label(snap.merge_state_status)
+            )),
+            None,
+        ),
+        MergeStateStatus::Clean
+        | MergeStateStatus::HasHooks
+        | MergeStateStatus::Unstable
+        | MergeStateStatus::Behind => Step::Ready,
+        MergeStateStatus::Unknown => unreachable!("handled above"),
+    }
+}
 
-    // Unqueued and unarmed. Two states here are easy to mistake for progress, so both
-    // say so out loud rather than sitting silent until the budget expires.
-    let warn = if progress.was_queued {
-        Some(
-            "the queue entry vanished but no failed merge-group run explains it — \
-             expected one, found none (a manual dequeue?)"
-                .into(),
-        )
-    } else if all_required_green(snap, req) && req.queue_present {
-        Some("green and unqueued — nothing will happen until `pr land` arms the merge".into())
-    } else {
-        None
-    };
-    Step::Continue {
-        phase: Phase::AwaitingChecks,
-        warn,
+fn merge_state_label(status: MergeStateStatus) -> &'static str {
+    match status {
+        MergeStateStatus::Behind => "BEHIND",
+        MergeStateStatus::Blocked => "BLOCKED",
+        MergeStateStatus::Clean => "CLEAN",
+        MergeStateStatus::Dirty => "DIRTY",
+        MergeStateStatus::Draft => "DRAFT",
+        MergeStateStatus::HasHooks => "HAS_HOOKS",
+        MergeStateStatus::Unknown => "UNKNOWN",
+        MergeStateStatus::Unstable => "UNSTABLE",
     }
 }
 
@@ -298,12 +339,11 @@ mod tests {
     // ---- the traps ----
 
     #[test]
-    fn all_required_green_is_not_terminal_when_a_queue_exists() {
-        // Declaring victory at green checks is wrong: green is the start of phase two.
-        match classify(&open(green()), &queue_rules(), None, &Progress::default()) {
-            Step::Continue { .. } => {}
-            other => panic!("green checks must not be terminal under a queue: {other:?}"),
-        }
+    fn all_required_green_is_ready_for_approval() {
+        assert!(matches!(
+            classify(&open(green()), &queue_rules(), None, &Progress::default()),
+            Step::Ready
+        ));
     }
 
     #[test]
@@ -331,7 +371,7 @@ mod tests {
         ));
         assert!(matches!(
             classify(&open(checks), &queue_rules(), None, &Progress::default()),
-            Step::Continue { .. }
+            Step::Ready
         ));
     }
 
@@ -357,7 +397,7 @@ mod tests {
         );
         assert!(matches!(
             classify(&open(checks), &queue_rules(), None, &Progress::default()),
-            Step::Continue { .. }
+            Step::Ready
         ));
     }
 
@@ -378,7 +418,7 @@ mod tests {
         assert!(
             matches!(
                 classify(&s, &queue_rules(), None, &Progress::default()),
-                Step::Continue { .. }
+                Step::Ready
             ),
             "live ruleset is non-strict: BEHIND is not blocking"
         );
@@ -418,7 +458,7 @@ mod tests {
                 Some(&ejection("2026-07-30T14:30:00Z")),
                 &Progress::default()
             ),
-            Step::Continue { .. }
+            Step::Ready
         ));
     }
 
@@ -433,30 +473,48 @@ mod tests {
                 Some(&run),
                 &Progress::default()
             ),
-            Step::Continue { .. }
+            Step::Ready
         ));
     }
 
     #[test]
-    fn vanished_queue_entry_with_no_run_warns_and_continues() {
-        // A manual dequeue folds back into the loop — loudly, since a human is often
-        // about to re-enqueue and terminating would abandon a still-useful watch.
-        let progress = Progress { was_queued: true };
+    fn vanished_same_head_queue_entry_is_dequeued() {
+        let progress = Progress {
+            queued_head_sha: Some("abc".into()),
+        };
         match classify(&open(green()), &queue_rules(), None, &progress) {
-            Step::Continue { warn, .. } => assert!(warn.unwrap().contains("found none")),
-            other => panic!("expected a warning continue, got {other:?}"),
+            Step::Terminal {
+                outcome, detail, ..
+            } => {
+                assert_eq!(outcome, Outcome::Dequeued);
+                let detail = detail.unwrap();
+                assert!(detail.contains("queue entry vanished"));
+                assert!(detail.contains("no failed current-head merge-group run"));
+            }
+            other => panic!("expected dequeued, got {other:?}"),
         }
     }
 
     #[test]
-    fn green_and_unqueued_warns_that_nothing_will_happen() {
-        match classify(&open(green()), &queue_rules(), None, &Progress::default()) {
-            Step::Continue { warn, phase } => {
-                assert_eq!(phase, Phase::AwaitingChecks);
-                assert!(warn.unwrap().contains("pr land"));
+    fn vanished_queue_entry_with_pending_checks_keeps_waiting() {
+        let progress = Progress {
+            queued_head_sha: Some("abc".into()),
+        };
+        assert!(matches!(
+            classify(&open_pending(), &queue_rules(), None, &progress),
+            Step::Continue {
+                phase: Phase::AwaitingChecks,
+                ..
             }
-            other => panic!("expected the unarmed warning, got {other:?}"),
-        }
+        ));
+    }
+
+    #[test]
+    fn green_and_unqueued_is_ready_to_land() {
+        assert!(matches!(
+            classify(&open(green()), &queue_rules(), None, &Progress::default()),
+            Step::Ready
+        ));
     }
 
     // ---- phases & the probe trigger ----
@@ -495,6 +553,91 @@ mod tests {
         assert!(!needs_ejection_probe(&open_pending(), &queue_rules()));
         assert!(!needs_ejection_probe(&queued_at(1), &queue_rules()));
         assert!(!needs_ejection_probe(&merged_snapshot(), &queue_rules()));
+    }
+
+    #[test]
+    fn empty_required_set_fails_closed_without_an_ejection_probe() {
+        let empty = RequiredChecks {
+            contexts: Vec::new(),
+            strict: false,
+            queue_present: true,
+        };
+        assert!(!needs_ejection_probe(&open(green()), &empty));
+        assert!(matches!(
+            classify(&open(green()), &empty, None, &Progress::default()),
+            Step::Terminal {
+                outcome: Outcome::WatcherError,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn green_merge_state_matrix_is_explicit() {
+        for status in [
+            MergeStateStatus::Clean,
+            MergeStateStatus::HasHooks,
+            MergeStateStatus::Unstable,
+            MergeStateStatus::Behind,
+        ] {
+            let mut snap = open(green());
+            snap.merge_state_status = status;
+            assert!(
+                matches!(
+                    classify(&snap, &queue_rules(), None, &Progress::default()),
+                    Step::Ready
+                ),
+                "{status:?} should be ready"
+            );
+        }
+
+        for status in [
+            MergeStateStatus::Blocked,
+            MergeStateStatus::Draft,
+            MergeStateStatus::Dirty,
+        ] {
+            let mut snap = open(green());
+            snap.merge_state_status = status;
+            match classify(&snap, &queue_rules(), None, &Progress::default()) {
+                Step::Terminal {
+                    outcome, detail, ..
+                } => {
+                    assert_eq!(outcome, Outcome::Blocked);
+                    assert!(detail.unwrap().contains(merge_state_label(status)));
+                }
+                other => panic!("{status:?} should be blocked, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_mergeability_waits_for_a_stable_verdict() {
+        let mut unknown_mergeable = open(green());
+        unknown_mergeable.mergeable = Mergeable::Unknown;
+        let mut unknown_status = open(green());
+        unknown_status.merge_state_status = MergeStateStatus::Unknown;
+        for snap in [unknown_mergeable, unknown_status] {
+            assert!(matches!(
+                classify(&snap, &queue_rules(), None, &Progress::default()),
+                Step::Continue {
+                    phase: Phase::AwaitingMergeability,
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn queue_history_from_an_old_head_does_not_dequeue_the_new_head() {
+        let mut snap = open(green());
+        snap.head_sha = "def".into();
+        let progress = Progress {
+            queued_head_sha: Some("abc".into()),
+        };
+        assert!(matches!(
+            classify(&snap, &queue_rules(), None, &progress),
+            Step::Ready
+        ));
     }
 
     #[test]

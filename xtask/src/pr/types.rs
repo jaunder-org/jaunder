@@ -30,8 +30,11 @@ pub struct Subject {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
     Merged,
+    ReadyToLand,
     ChecksFailed,
     Ejected,
+    Dequeued,
+    Blocked,
     Conflicted,
     ClosedUnmerged,
     Stale,
@@ -50,8 +53,11 @@ impl Outcome {
     pub fn as_str(self) -> &'static str {
         match self {
             Outcome::Merged => "merged",
+            Outcome::ReadyToLand => "ready-to-land",
             Outcome::ChecksFailed => "checks-failed",
             Outcome::Ejected => "ejected",
+            Outcome::Dequeued => "dequeued",
+            Outcome::Blocked => "blocked",
             Outcome::Conflicted => "conflicted",
             Outcome::ClosedUnmerged => "closed-unmerged",
             Outcome::Stale => "stale",

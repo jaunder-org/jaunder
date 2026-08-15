@@ -170,7 +170,11 @@ pub fn execute_with<S: PrSource, A: land::PrArmer, C: watch::Clock>(
 /// sidecar starts reporting `ok: true` for a failed watch.
 pub fn into_result(command: &str, report: PrReport) -> CommandResult {
     let mut result = CommandResult::new(command);
-    let step = if report.outcome.is_merged() {
+    let success = matches!(
+        (command, report.outcome),
+        ("pr-watch", Outcome::Merged | Outcome::ReadyToLand) | ("pr-land", Outcome::Merged)
+    );
+    let step = if success {
         StepResult::ok(command)
     } else {
         StepResult::fail(command)
@@ -387,10 +391,25 @@ mod tests {
     }
 
     #[test]
-    fn non_merged_result_is_not_ok_and_exits_one() {
+    fn ready_to_land_succeeds_only_for_watch() {
+        let watched = into_result("pr-watch", report(Outcome::ReadyToLand));
+        assert!(watched.ok);
+        assert_eq!(watched.exit_code(), 0);
+        assert_eq!(watched.steps.len(), 1);
+        assert!(watched.steps[0].ok);
+
+        let landed = into_result("pr-land", report(Outcome::ReadyToLand));
+        assert!(!landed.ok);
+        assert_eq!(landed.exit_code(), 1);
+    }
+
+    #[test]
+    fn adverse_results_are_not_ok_and_exit_one() {
         for outcome in [
             Outcome::ChecksFailed,
             Outcome::Ejected,
+            Outcome::Dequeued,
+            Outcome::Blocked,
             Outcome::Conflicted,
             Outcome::ClosedUnmerged,
             Outcome::Stale,
@@ -398,9 +417,11 @@ mod tests {
             Outcome::WatcherError,
             Outcome::Pending,
         ] {
-            let r = into_result("pr-watch", report(outcome));
-            assert!(!r.ok, "{outcome:?} must not be ok");
-            assert_eq!(r.exit_code(), 1, "{outcome:?} must exit 1");
+            for command in ["pr-watch", "pr-land"] {
+                let r = into_result(command, report(outcome));
+                assert!(!r.ok, "{command} {outcome:?} must not be ok");
+                assert_eq!(r.exit_code(), 1, "{command} {outcome:?} must exit 1");
+            }
         }
     }
 
@@ -423,6 +444,13 @@ mod tests {
             serde_json::to_value(Outcome::ClosedUnmerged).unwrap(),
             "closed-unmerged"
         );
+        for (outcome, spelling) in [
+            (Outcome::ReadyToLand, "ready-to-land"),
+            (Outcome::Dequeued, "dequeued"),
+            (Outcome::Blocked, "blocked"),
+        ] {
+            assert_eq!(serde_json::to_value(outcome).unwrap(), spelling);
+        }
     }
 
     #[test]

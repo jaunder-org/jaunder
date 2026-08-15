@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 mod adr;
 mod adr_readme;
@@ -222,18 +222,24 @@ pub enum Command {
 /// the merge approval. Every other action in the sequence — re-running a red job,
 /// rebasing, re-enqueueing after an ejection — needs a judgement call and stays with
 /// the human; these two only turn the crank.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum PrWatchUntil {
+    Merged,
+}
+
 #[derive(Subcommand)]
 pub enum PrCommand {
-    /// Observe a PR until it reaches a terminal outcome. Never merges, never
-    /// re-runs a job, never pushes. Reports exactly one of: merged, checks-failed,
-    /// ejected, conflicted, closed-unmerged, stale, timed-out, watcher-error.
+    /// Observe a PR until the next caller-actionable outcome. Never merges,
+    /// re-runs a job, pushes, or re-enqueues. A green, landable PR reports
+    /// `ready-to-land`; an already armed or queued PR continues to its outcome.
     ///
-    /// Exit is 0 only for `merged`; the outcome itself is in `--json` (and in
-    /// `.xtask/last-result.json`) under `pr.outcome`.
+    /// Exit is 0 for `ready-to-land` or `merged`. Distinguish every outcome through
+    /// `pr.outcome` in `--json` or `.xtask/last-result.json`.
     #[command(after_help = "EXAMPLES:\n  \
         cargo xtask pr watch\n  \
         cargo xtask pr watch 731\n  \
         cargo xtask --json pr watch 731 --once\n  \
+        cargo xtask pr watch 731 --until merged\n  \
         cargo xtask pr watch 731 --interval 60 --timeout 30")]
     Watch {
         /// PR number. Omitted: the open PR whose head is the current branch.
@@ -247,6 +253,9 @@ pub enum PrCommand {
         /// Take one snapshot and report, instead of looping. Can report `pending`.
         #[arg(long)]
         once: bool,
+        /// Continue across `ready-to-land` while another actor may arm the merge.
+        #[arg(long, value_name = "OUTCOME", conflicts_with = "once")]
+        until: Option<PrWatchUntil>,
     },
     /// Arm auto-merge, verify the arm actually took, then watch it to `merged`.
     ///
@@ -759,6 +768,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                     interval,
                     timeout,
                     once,
+                    until,
                 } => (
                     "pr-watch",
                     number,
@@ -766,6 +776,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                         interval_secs: interval,
                         timeout_mins: timeout,
                         once,
+                        stop_at_ready: until.is_none(),
                         ..Default::default()
                     },
                     false,
@@ -781,6 +792,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                         interval_secs: interval,
                         timeout_mins: timeout,
                         once: false,
+                        stop_at_ready: false,
                         ..Default::default()
                     },
                     true,
@@ -1037,11 +1049,13 @@ mod cli_tests {
                 interval,
                 timeout,
                 once,
+                until,
             }) => {
                 assert_eq!(number, None);
                 assert_eq!(interval, 30);
                 assert_eq!(timeout, 90);
                 assert!(!once);
+                assert_eq!(until, None);
             }
             _ => panic!("expected pr watch"),
         }
@@ -1067,14 +1081,41 @@ mod cli_tests {
                 interval,
                 timeout,
                 once,
+                until,
             }) => {
                 assert_eq!(number, Some(731));
                 assert_eq!(interval, 60);
                 assert_eq!(timeout, 10);
                 assert!(once);
+                assert_eq!(until, None);
             }
             _ => panic!("expected pr watch"),
         }
+    }
+
+    #[test]
+    fn pr_watch_parses_until_merged() {
+        let cli =
+            Cli::try_parse_from(["xtask", "pr", "watch", "731", "--until", "merged"]).unwrap();
+        match cli.command {
+            Command::Pr(PrCommand::Watch { number, until, .. }) => {
+                assert_eq!(number, Some(731));
+                assert_eq!(until, Some(PrWatchUntil::Merged));
+            }
+            _ => panic!("expected pr watch"),
+        }
+    }
+
+    #[test]
+    fn pr_watch_rejects_once_with_until_merged() {
+        assert!(
+            Cli::try_parse_from(["xtask", "pr", "watch", "--once", "--until", "merged"]).is_err()
+        );
+    }
+
+    #[test]
+    fn pr_watch_rejects_unknown_until_value() {
+        assert!(Cli::try_parse_from(["xtask", "pr", "watch", "--until", "ready"]).is_err());
     }
 
     #[test]

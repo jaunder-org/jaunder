@@ -249,7 +249,9 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
         };
         head_sha = after.head_sha.clone();
         if after.auto_merge_armed || after.queue.in_queue {
-            let mut result = watch::watch(source, clock, subject, cfg, sink);
+            let mut watch_cfg = cfg;
+            watch_cfg.stop_at_ready = false;
+            let mut result = watch::watch(source, clock, subject, watch_cfg, sink);
             // One log: the prologue happened first, so it reads first.
             events.extend(std::mem::take(&mut result.events));
             result.events = events;
@@ -311,7 +313,7 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pr::snapshot::Mergeable;
+    use crate::pr::snapshot::{Mergeable, RequiredChecks};
     use crate::pr::test_support::*;
 
     // ---- the divergence guard ----
@@ -476,5 +478,35 @@ mod tests {
         assert_eq!(report.outcome, Outcome::WatcherError);
         assert_eq!(armer.calls.get(), 2, "arm, then exactly one re-arm");
         assert!(report.detail.unwrap().contains("arm"));
+    }
+    #[test]
+    fn empty_required_set_refuses_before_arming() {
+        let empty = RequiredChecks {
+            contexts: Vec::new(),
+            strict: false,
+            queue_present: true,
+        };
+        let src = FakeSource::new(vec![Ok(open(green()))], empty);
+        let armer = CountingArmer::new();
+        let report = land(&src, &armer, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(report.outcome, Outcome::WatcherError);
+        assert_eq!(armer.calls.get(), 0);
+    }
+
+    #[test]
+    fn approved_land_continues_if_the_arm_temporarily_disappears() {
+        let src = FakeSource::new(
+            vec![
+                Ok(open(green())),
+                Ok(armed_snapshot()),
+                Ok(open(green())),
+                Ok(merged_snapshot()),
+            ],
+            queue_rules(),
+        );
+        let armer = CountingArmer::new();
+        let report = land(&src, &armer, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(armer.calls.get(), 1);
+        assert_eq!(report.outcome, Outcome::Merged);
     }
 }
