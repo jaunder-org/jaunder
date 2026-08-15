@@ -600,17 +600,17 @@ Run the global per-commit protocol. Commit:
 - Produces create/use, already-used, expired, unknown, supersession, and corrupt
   stored-email leaves.
 
-- [ ] **Step 1: Move the six bodies unchanged**
+- [x] **Step 1: Move the six bodies unchanged**
 
 Keep the corrupt-row raw SQL setup and error assertion intact.
 
-- [ ] **Step 2: Prove the concern**
+- [x] **Step 2: Prove the concern**
 
 Run:
 `devtool run -- devtool pg run -- cargo nextest run -p jaunder -E 'test(/^storage::email_verification::/)'`
 Expected: PASS, twelve backend cases.
 
-- [ ] **Step 3: Gate and commit**
+- [x] **Step 3: Gate and commit**
 
 Run the global per-commit protocol. Commit:
 `refactor(server/tests): split email verification storage tests (#950)`.
