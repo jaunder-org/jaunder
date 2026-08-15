@@ -386,8 +386,8 @@ git commit -m "docs(adr): record strict media address extraction"
 
 ## Final verification
 
-- [ ] Run `devtool run -- cargo xtask validate`; expected PASS.
-- [ ] Review the final diff against the approved specification: no public-media
+- [x] Run `devtool run -- cargo xtask validate`; expected PASS.
+- [x] Review the final diff against the approved specification: no public-media
       `SoftPath`, no raw post-intake manager content type, no served metric, and
       no missing backend parameterization.
-- [ ] Leave every task checkbox ticked only after its commit and gate exist.
+- [x] Leave every task checkbox ticked only after its commit and gate exist.
