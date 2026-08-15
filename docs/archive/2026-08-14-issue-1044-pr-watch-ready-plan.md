@@ -97,7 +97,7 @@ virtual-clock/scripted-source unit tests, cargo-nextest, and `cargo xtask`.
 - `.agents/skills/jaunder-ship/base-moved.md` — git-excluded installed recovery
   guidance.
 - `docs/ARCHITECTURE.md` — materialized view of the stopping-policy ADR.
-- `docs/adr/drafts/pr-watch-actionable-handoff.md` — numberless decision record,
+- `docs/adr/0135-pr-watch-actionable-handoff.md` — numberless decision record,
   promoted only during `jaunder-ship`.
 - `docs/superpowers/specs/2026-08-14-issue-1044-pr-watch-ready.md` — approved
   behavioral contract.
@@ -439,7 +439,7 @@ No `Co-Authored-By` trailer.
 - Modify: `.agents/skills/jaunder-ship/SKILL.md:51-110`
 - Modify: `.agents/skills/jaunder-ship/base-moved.md:118-124`
 - Modify: `docs/ARCHITECTURE.md:2350-2364`
-- Modify: `docs/adr/drafts/pr-watch-actionable-handoff.md`
+- Modify: `docs/adr/0135-pr-watch-actionable-handoff.md`
 - Modify: `docs/superpowers/plans/2026-08-14-issue-1044-pr-watch-ready.md`
 
 **Interfaces:**
@@ -451,7 +451,7 @@ No `Co-Authored-By` trailer.
 - Outcome handling adds `ready-to-land`, `dequeued`, and `blocked`;
   `watcher-error` still means the tool could not establish a trustworthy
   verdict.
-- ADR projection cites `docs/adr/drafts/pr-watch-actionable-handoff.md` by
+- ADR projection cites `docs/adr/0135-pr-watch-actionable-handoff.md` by
   descriptive link text; `jaunder-ship` later promotes and rewrites it before
   push.
 
@@ -505,7 +505,7 @@ Verify the draft records:
 Verify `docs/ARCHITECTURE.md` states current truth and cites the draft as:
 
 ```markdown
-[the actionable-handoff decision](adr/drafts/pr-watch-actionable-handoff.md)
+[the actionable-handoff decision](adr/0135-pr-watch-actionable-handoff.md)
 ```
 
 Do not edit `docs/README.md`; `cargo xtask adr promote` owns its generated row
@@ -516,7 +516,7 @@ at ship. Do not number or stage the gitignored draft manually.
 Run:
 
 ```bash
-devtool run -- prettier -w CONTRIBUTING.md .agents/skills/jaunder-ship/SKILL.md .agents/skills/jaunder-ship/base-moved.md docs/ARCHITECTURE.md docs/adr/drafts/pr-watch-actionable-handoff.md docs/superpowers/specs/2026-08-14-issue-1044-pr-watch-ready.md docs/superpowers/plans/2026-08-14-issue-1044-pr-watch-ready.md
+devtool run -- prettier -w CONTRIBUTING.md .agents/skills/jaunder-ship/SKILL.md .agents/skills/jaunder-ship/base-moved.md docs/ARCHITECTURE.md docs/adr/0135-pr-watch-actionable-handoff.md docs/superpowers/specs/2026-08-14-issue-1044-pr-watch-ready.md docs/superpowers/plans/2026-08-14-issue-1044-pr-watch-ready.md
 devtool run -- cargo xtask pr watch --help
 devtool run -- cargo xtask check
 ```

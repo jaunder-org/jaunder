@@ -516,7 +516,7 @@ Jaunder uses OpenTelemetry for deep performance analysis (see
   PR's own branch it refuses whenever local HEAD differs from the PR head. See
   [ADR-0087](docs/adr/0087-xtask-github-pr-observation.md) for the
   observer/armer split and
-  [the actionable-handoff decision](docs/adr/drafts/pr-watch-actionable-handoff.md)
+  [the actionable-handoff decision](docs/adr/0135-pr-watch-actionable-handoff.md)
   for the stopping policy.
 
 ### Targeted Rust tests

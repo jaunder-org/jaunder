@@ -2433,7 +2433,7 @@ the queue silently — xtask owns PR observation. By default,
 outcome: a green, unarmed PR returns `ready-to-land`, while an already armed or
 queued PR continues through the queue. `--until merged` explicitly requests
 passive waiting across the ready handoff
-([the actionable-handoff decision](adr/drafts/pr-watch-actionable-handoff.md)).
+([the actionable-handoff decision](adr/0135-pr-watch-actionable-handoff.md)).
 `cargo xtask pr land [N]` remains the approval-bearing command: it alone arms
 the merge and watches it home
 ([ADR-0087](adr/0087-xtask-github-pr-observation.md)). The transport is the `gh`

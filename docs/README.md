@@ -162,6 +162,7 @@ convention). See the Status column below for each ADR's current status.
 | [0132](adr/0132-explicit-authorization-replaces-session-cookie.md) | Explicit Authorization replaces ambient session state                                                        | accepted   |
 | [0133](adr/0133-hash-bearer-tokens-before-persistence.md)          | Hash bearer-equivalent tokens before persistence                                                             | accepted   |
 | [0134](adr/0134-lowercase-canonical-usernames.md)                  | Lowercase-canonical usernames                                                                                | accepted   |
+| [0135](adr/0135-pr-watch-actionable-handoff.md)                    | PR observation stops at the next caller-actionable state                                                     | accepted   |
 
 <!-- adr-table:end -->
 
