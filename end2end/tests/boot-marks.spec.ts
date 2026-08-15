@@ -264,3 +264,54 @@ test("initializer records buffered after MIME-rejected streaming and restores AP
     ),
   ).toBe(true);
 });
+
+test("failed streaming initialization stays incomplete and restores APIs", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const scope = globalThis as typeof globalThis & {
+      __jaunderRejectedStreaming?: typeof WebAssembly.instantiateStreaming;
+      __jaunderOriginalInstantiate?: typeof WebAssembly.instantiate;
+    };
+    scope.__jaunderRejectedStreaming = async () => {
+      throw new Error("forced streaming rejection");
+    };
+    scope.__jaunderOriginalInstantiate = WebAssembly.instantiate;
+    WebAssembly.instantiateStreaming = scope.__jaunderRejectedStreaming;
+  });
+
+  await expect(goto(page, "/", { timeout: 2_000 })).rejects.toThrow();
+  const marks = await page.evaluate(() =>
+    performance
+      .getEntriesByType("mark")
+      .filter((entry) => entry.name.startsWith("jaunder.wasm."))
+      .map((entry) => ({ name: entry.name, startTime: entry.startTime })),
+  );
+  expect(marks.map((mark) => mark.name)).toContain("jaunder.wasm.init_start");
+  expect(marks.map((mark) => mark.name)).not.toContain(
+    "jaunder.wasm.init_done",
+  );
+  expect(wasmInitFromMarks(marks)).toEqual({
+    startMs: expect.any(Number),
+    doneMs: null,
+    apiMs: null,
+    path: null,
+  });
+  expect(
+    await page.evaluate(
+      () =>
+        WebAssembly.instantiateStreaming ===
+          (
+            globalThis as typeof globalThis & {
+              __jaunderRejectedStreaming?: typeof WebAssembly.instantiateStreaming;
+            }
+          ).__jaunderRejectedStreaming &&
+        WebAssembly.instantiate ===
+          (
+            globalThis as typeof globalThis & {
+              __jaunderOriginalInstantiate?: typeof WebAssembly.instantiate;
+            }
+          ).__jaunderOriginalInstantiate,
+    ),
+  ).toBe(true);
+});

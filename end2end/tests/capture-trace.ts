@@ -308,11 +308,11 @@ export async function attachTraceCapture(
   const navigationRequestIds = new Map<Request, number>();
   const navigationPhase = new Map<number, Phase>();
   const pageStates = new Map<Page, PageState>();
+  const documentTokens = new Map<number, number>();
   const documentTimings = new Map<number, DocumentTiming>();
   const pendingHarvests: Promise<void>[] = [];
   let nextNavigationId = 1;
   let nextRecordSequence = 1;
-
   /**
    * Harvest at mount-ready and load, then reconcile with the initializer
    * completion callback. `load` can precede both boot and wasm completion.
@@ -387,8 +387,9 @@ export async function attachTraceCapture(
 
   await context.exposeBinding("__jaunderRecordMount", (source, value) => {
     if (!value || typeof value !== "object") return;
-    const payload = value as { href?: unknown };
+    const payload = value as { href?: unknown; token?: unknown };
     const href = typeof payload.href === "string" ? payload.href : null;
+    const token = typeof payload.token === "number" ? payload.token : null;
     const nowMs = Date.now();
 
     // The mount-ready marker belongs to the most recent matching navigation
@@ -403,6 +404,7 @@ export async function attachTraceCapture(
       const navigation = candidates[index];
       if (navigation.mountedMs !== null) continue;
       if (href !== null && navigation.url !== href) continue;
+      if (token !== null) documentTokens.set(token, navigation.id);
       navigation.mountedMs = nowMs;
       // Harvest HERE, not only at `load`. This instant is complete by
       // construction — `csr` marks `boot.mount_done` immediately before setting
@@ -417,11 +419,20 @@ export async function attachTraceCapture(
   });
 
   await context.exposeBinding("__jaunderRecordWasmInit", (source, value) => {
-    if (!value || typeof value !== "object" || !("href" in value)) return;
-    const href = typeof value.href === "string" ? value.href : null;
+    if (!value || typeof value !== "object") return;
+    const payload = value as { href?: unknown; token?: unknown };
+    const href = typeof payload.href === "string" ? payload.href : null;
+    const token = typeof payload.token === "number" ? payload.token : null;
     if (href === null) return;
+    const tokenNavigationId =
+      token === null ? undefined : documentTokens.get(token);
     const active = stateFor(source.page).active;
-    const navigation = active === null ? undefined : findNavigation(active);
+    const navigation =
+      tokenNavigationId === undefined
+        ? active === null
+          ? undefined
+          : findNavigation(active)
+        : findNavigation(tokenNavigationId);
     if (navigation !== undefined && navigation.url === href) {
       pendingHarvests.push(harvestDocument(source.page, navigation.id));
     }
@@ -441,12 +452,19 @@ export async function attachTraceCapture(
         }>;
         __jaunderLongTaskTotal?: number;
         __jaunderMountNotified?: boolean;
-        __jaunderRecordMount?: (payload: { href: string }) => void;
-        __jaunderRecordWasmInit?: (payload: { href: string }) => void;
+        __jaunderRecordMount?: (payload: {
+          href: string;
+          token: number;
+        }) => void;
+        __jaunderRecordWasmInit?: (payload: {
+          href: string;
+          token: number;
+        }) => void;
       };
       globalScope.__jaunderLongTasks = [];
       globalScope.__jaunderLongTaskTotal = 0;
       globalScope.__jaunderMountNotified = false;
+      const documentToken = performance.timeOrigin;
 
       const notifyMount = () => {
         if (globalScope.__jaunderMountNotified) return;
@@ -454,7 +472,10 @@ export async function attachTraceCapture(
         if (!body || !body.hasAttribute(mountedAttr)) return;
         globalScope.__jaunderMountNotified = true;
         try {
-          globalScope.__jaunderRecordMount?.({ href: location.href });
+          globalScope.__jaunderRecordMount?.({
+            href: location.href,
+            token: documentToken,
+          });
         } catch {
           // Ignore cross-context bridge errors while collecting diagnostics.
         }
@@ -482,7 +503,10 @@ export async function attachTraceCapture(
           for (const entry of list.getEntries()) {
             if (entry.name !== wasmInitDone) continue;
             try {
-              globalScope.__jaunderRecordWasmInit?.({ href: location.href });
+              globalScope.__jaunderRecordWasmInit?.({
+                href: location.href,
+                token: documentToken,
+              });
             } catch {
               // Ignore cross-context bridge errors while collecting diagnostics.
             }

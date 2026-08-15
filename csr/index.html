@@ -11,9 +11,9 @@
  <meta charset="utf-8" />
  <meta name="viewport" content="width=device-width, initial-scale=1" />
  <!-- No wasm preload, and that is measured rather than an oversight (#866): it
-         collapsed the serial pre-fetch window as intended but bought no boot time,
-         and made firefox's wasm instantiate 125 ms worse (#887). See
-         docs/observability.md §"#866" before re-adding one. -->
+         collapsed the serial pre-fetch window as intended but bought no boot time.
+         The historical 125 ms increase was the superseded response-end residual,
+         not wasm instantiation (#887). See docs/observability.md §"#866". -->
  <link rel="stylesheet" href="/style/jaunder.css" />
  <link rel="stylesheet" href="/style/jaunder-themes.css" />
 </head>
