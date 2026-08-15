@@ -307,18 +307,18 @@ Run the global per-commit protocol. Commit:
 - Produces the five leaves from `local_channel_id_returns_seeded_local` through
   `pending_subscription_is_not_admitted` under `storage::subscriptions`.
 
-- [ ] **Step 1: Move the five test bodies**
+- [x] **Step 1: Move the five test bodies**
 
 Retain the local `StubPending` implementation and backend-specific store setup
 inside its test. Use explicit fixture imports.
 
-- [ ] **Step 2: Prove the concern**
+- [x] **Step 2: Prove the concern**
 
 Run:
 `devtool run -- devtool pg run -- cargo nextest run -p jaunder storage::subscriptions`
 Expected: PASS, ten backend cases.
 
-- [ ] **Step 3: Gate and commit**
+- [x] **Step 3: Gate and commit**
 
 Run the global per-commit protocol. Commit:
 `refactor(server/tests): split subscription storage tests (#950)`.
