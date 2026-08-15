@@ -438,6 +438,38 @@ async fn upload_media_stores_file_and_returns_metadata(#[case] backend: Backend)
 
 #[apply(backends)]
 #[tokio::test]
+async fn upload_media_detects_content_type_when_field_omits_it(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_user_and_session(&state).await.cookie();
+    let storage = TempDir::new().unwrap();
+    let boundary = "----testboundary1234";
+    let body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"photo.jpg\"\r\n\r\nfake jpeg data\r\n--{boundary}--\r\n"
+    );
+    let response = make_app(&state, &storage)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(<web::media::Upload as ServerFn>::PATH)
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .header(header::COOKIE, cookie)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let response: UploadResponse =
+        serde_json::from_str(&crate::helpers::body_string(response).await).unwrap();
+    assert_eq!(response.content_type, "image/jpeg");
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn upload_then_serve_round_trips_a_filename_needing_encoding(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();
@@ -742,13 +774,8 @@ async fn media_serve_get(state: &Arc<storage::AppState>, uri: &str) -> StatusCod
         .status()
 }
 
-// Shape B — the serve handler must reject malformed hashes with 404 (not panic
-// on `params.hash[2..]`, not accept non-hex). Identical setup + assertion; only
-// the malformed URI varies.
-//
-// `short_hash`: a 1-byte hash would panic — the prefix check
-// (`hash.starts_with(p1)`) passes and the slice runs off the end of the string.
-// `non_hex`: 64 characters but not lowercase hex — not a canonical content hash.
+// The strict route extractor rejects malformed hashes as 400 before the handler can slice
+// or read from storage.
 #[apply(backends_matrix)]
 #[case::short_hash("/media/upload/a/a/a/file.txt".to_owned())]
 #[case::non_hex(format!("/media/upload/zz/zz/{}/file.txt", "z".repeat(64)))]
@@ -758,5 +785,5 @@ async fn serve_handler_rejects_malformed_hash(backend: Backend, #[case] uri: Str
 
     let status = media_serve_get(&state, &uri).await;
 
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }

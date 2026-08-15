@@ -167,6 +167,7 @@ convention). See the Status column below for each ADR's current status.
 | [0137](adr/0137-publisher-side-websub.md)                          | Publish Syndication Feed changes through WebSub                                                              | accepted   |
 | [0138](adr/0138-syndication-feed-http-validation.md)               | Validate cached Syndication Feed representations conditionally                                               | accepted   |
 | [0139](adr/0139-syndication-feed-hybrid-window.md)                 | Select Syndication Feed items with a hybrid window                                                           | accepted   |
+| [0140](adr/0140-strict-media-address-extraction.md)                | The public media route extracts one strict validated address                                                 | accepted   |
 
 <!-- adr-table:end -->
 

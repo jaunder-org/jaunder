@@ -782,11 +782,9 @@ pub fn parse_media_url(url: &str) -> Option<MediaRef> {
     let (source, hash, filename) = match segments.as_slice() {
         ["media", source, p1, p2, hash, filename] => {
             let hash: ContentHash = hash.parse().ok()?;
-            // Mirror the serve route's prefix check exactly (`server::media`): a URL whose
-            // shard segments disagree with the digest 404s, so it names nothing. Using
-            // `starts_with` rather than equality keeps the two in step — the read path
-            // accepts a short prefix, so treating it as a reference is not a false positive.
-            if !hash.starts_with(p1) || !hash[2..].starts_with(p2) {
+            // Mirror the strict serve route's exact prefix check: a URL with a malformed
+            // shard cannot name a resource or hold its deletion guard live.
+            if **p1 != hash[..2] || **p2 != hash[2..4] {
                 return None;
             }
             (source.parse().ok()?, hash, filename)
@@ -936,7 +934,7 @@ pub fn should_inline(content_type: &str) -> bool {
 /// since the table is fixed and known-valid (pinned by
 /// `detect_content_type_outputs_are_valid`).
 #[must_use]
-pub fn detect_content_type(filename: &str) -> ContentType {
+pub fn detect_content_type(filename: &Filename) -> ContentType {
     static EXTENSIONS: [(&[&str], &str); 12] = [
         (&["jpg", "jpeg"], "image/jpeg"),
         (&["png"], "image/png"),
@@ -952,7 +950,7 @@ pub fn detect_content_type(filename: &str) -> ContentType {
         (&["pdf"], "application/pdf"),
     ];
 
-    let ext = Path::new(filename)
+    let ext = Path::new(filename.decoded().as_ref())
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
@@ -1024,6 +1022,7 @@ pub struct UploadResponse {
 #[cfg(test)]
 mod tests {
     use crate::test_support::{MEDIA_TEST_SHA256, parse_content_hash};
+    use rstest::rstest;
     use sha2::{Digest, Sha256};
 
     use super::*;
@@ -1142,16 +1141,23 @@ mod tests {
         assert!(sanitize_filename("..").is_empty());
     }
 
+    /// A validated filename built through the same intake door as uploaded names.
+    fn filename(name: &str) -> Filename {
+        Filename::sanitized(name).expect("a media test name is a valid leaf")
+    }
+
+    /// Detect a type from an inbound filename, preserving the production boundary shape.
+    fn detected_content_type(name: &str) -> ContentType {
+        detect_content_type(&filename(name))
+    }
+
     /// The canonical hash and a [`Filename`], the two typed arguments every layout test
     /// needs. `name` is the name a *user would type*, built through the intake door —
     /// since #720 the strict door takes the canonical encoded spelling, so parsing a raw
     /// name here would reject it. Callers keep passing what a person types; the helper
     /// yields what gets stored.
     fn layout_args(name: &str) -> (ContentHash, Filename) {
-        (
-            parse_content_hash(MEDIA_TEST_SHA256),
-            Filename::sanitized(name).expect("a layout-test name is a valid leaf"),
-        )
+        (parse_content_hash(MEDIA_TEST_SHA256), filename(name))
     }
 
     #[test]
@@ -1233,63 +1239,41 @@ mod tests {
         }
     }
 
-    #[test]
-    fn content_disposition_inline_for_images() {
-        assert!(should_inline("image/jpeg"));
-        assert!(should_inline("image/png"));
-        assert!(should_inline("image/gif"));
-        assert!(should_inline("image/webp"));
-        assert!(should_inline("image/svg+xml"));
+    #[rstest]
+    #[case::jpeg("image/jpeg", true)]
+    #[case::png("image/png", true)]
+    #[case::gif("image/gif", true)]
+    #[case::webp("image/webp", true)]
+    #[case::svg("image/svg+xml", true)]
+    #[case::mpeg("audio/mpeg", true)]
+    #[case::mp4("video/mp4", true)]
+    #[case::pdf("application/pdf", true)]
+    #[case::zip("application/zip", false)]
+    #[case::text("text/plain", false)]
+    #[case::octet_stream("application/octet-stream", false)]
+    fn should_inline_classifies_content_types(#[case] content_type: &str, #[case] expected: bool) {
+        assert_eq!(should_inline(content_type), expected);
     }
 
-    #[test]
-    fn content_disposition_inline_for_media() {
-        assert!(should_inline("audio/mpeg"));
-        assert!(should_inline("video/mp4"));
-        assert!(should_inline("application/pdf"));
-    }
-
-    #[test]
-    fn content_disposition_attachment_for_others() {
-        assert!(!should_inline("application/zip"));
-        assert!(!should_inline("text/plain"));
-        assert!(!should_inline("application/octet-stream"));
-    }
-
-    #[test]
-    fn detect_content_type_known_extensions() {
-        assert_eq!(detect_content_type("photo.jpg"), "image/jpeg");
-        assert_eq!(detect_content_type("photo.jpeg"), "image/jpeg");
-        assert_eq!(detect_content_type("image.png"), "image/png");
-        assert_eq!(detect_content_type("doc.pdf"), "application/pdf");
-        assert_eq!(detect_content_type("video.mp4"), "video/mp4");
-    }
-
-    #[test]
-    fn detect_content_type_image_formats() {
-        assert_eq!(detect_content_type("anim.gif"), "image/gif");
-        assert_eq!(detect_content_type("photo.webp"), "image/webp");
-        assert_eq!(detect_content_type("icon.svg"), "image/svg+xml");
-    }
-
-    #[test]
-    fn detect_content_type_audio_formats() {
-        assert_eq!(detect_content_type("track.mp3"), "audio/mpeg");
-        assert_eq!(detect_content_type("track.ogg"), "audio/ogg");
-        assert_eq!(detect_content_type("track.oga"), "audio/ogg");
-        assert_eq!(detect_content_type("track.flac"), "audio/flac");
-        assert_eq!(detect_content_type("track.wav"), "audio/wav");
-    }
-
-    #[test]
-    fn detect_content_type_video_webm() {
-        assert_eq!(detect_content_type("clip.webm"), "video/webm");
-    }
-
-    #[test]
-    fn detect_content_type_unknown_extension() {
-        assert_eq!(detect_content_type("file.xyz"), "application/octet-stream");
-        assert_eq!(detect_content_type("noext"), "application/octet-stream");
+    #[rstest]
+    #[case::jpeg("photo.jpg", "image/jpeg")]
+    #[case::jpeg_alias("photo.jpeg", "image/jpeg")]
+    #[case::png("image.png", "image/png")]
+    #[case::gif("anim.gif", "image/gif")]
+    #[case::webp("photo.webp", "image/webp")]
+    #[case::svg("icon.svg", "image/svg+xml")]
+    #[case::mpeg("track.mp3", "audio/mpeg")]
+    #[case::ogg("track.ogg", "audio/ogg")]
+    #[case::oga("track.oga", "audio/ogg")]
+    #[case::flac("track.flac", "audio/flac")]
+    #[case::wav("track.wav", "audio/wav")]
+    #[case::mp4("video.mp4", "video/mp4")]
+    #[case::webm("clip.webm", "video/webm")]
+    #[case::pdf("doc.pdf", "application/pdf")]
+    #[case::unknown_extension("file.xyz", "application/octet-stream")]
+    #[case::no_extension("noext", "application/octet-stream")]
+    fn detect_content_type_classifies_filenames(#[case] filename: &str, #[case] expected: &str) {
+        assert_eq!(detected_content_type(filename), expected);
     }
 
     #[test]
@@ -1340,7 +1324,7 @@ mod tests {
             "a.unknownext",
         ] {
             assert!(
-                detect_content_type(f)
+                detected_content_type(f)
                     .as_ref()
                     .parse::<ContentType>()
                     .is_ok()
@@ -1598,9 +1582,9 @@ mod tests {
         let f = Filename::sanitized(&long).expect("the intake door truncates, never fails here");
         assert!(f.ends_with(".jpg"), "extension must survive: {f}");
         assert!(f.len() <= MAX_FILENAME_ENCODED_BYTES, "{f}");
-        // The property the extension is kept *for*: the stored content type is unchanged.
+        // The property the extension is kept *for*: the stored content type remains JPEG.
         // Asserting merely "ends_with(.jpg)" would pass on a mangled extension.
-        assert_eq!(detect_content_type(&f), detect_content_type(&long));
+        assert_eq!(detect_content_type(&f), "image/jpeg");
     }
 
     #[test]
@@ -1614,7 +1598,7 @@ mod tests {
             f.chars().count() < 255,
             "must cut well short of 255 chars: {f}"
         );
-        assert_eq!(detect_content_type(&f), detect_content_type(&long));
+        assert_eq!(detect_content_type(&f), "image/png");
     }
 
     #[test]
@@ -1674,7 +1658,7 @@ mod tests {
         assert!(f.len() <= MAX_FILENAME_ENCODED_BYTES, "{f}");
         assert!(f.ends_with(".jpg"), "{f}");
         // The property that matters: still detected as an image, not octet-stream.
-        assert_eq!(detect_content_type(&f), detect_content_type(&zalgo));
+        assert_eq!(detect_content_type(&f), "image/jpeg");
         assert_ne!(f, ".jpg", "a bare extension is a dotfile, not a filename");
         // And it is a value the strict door accepts — `sanitized` builds `Filename` directly,
         // so nothing else enforces that.
@@ -2024,20 +2008,17 @@ mod tests {
     }
 
     #[test]
-    fn parse_media_url_rejects_a_prefix_that_does_not_match_the_hash() {
-        // The serve route 404s a mismatched shard prefix, so such a URL names nothing.
-        assert_eq!(
-            parse_media_url(&format!(
-                "/media/upload/ff/b0/{MEDIA_TEST_SHA256}/photo.jpg"
-            )),
-            None
-        );
-        assert_eq!(
-            parse_media_url(&format!(
-                "/media/upload/e3/ff/{MEDIA_TEST_SHA256}/photo.jpg"
-            )),
-            None
-        );
+    fn parse_media_url_rejects_non_exact_shard_prefixes() {
+        // The strict serve route rejects malformed shard prefixes as 400, so such URLs name
+        // neither a resource nor a live deletion reference.
+        for (p1, p2) in [("ff", "b0"), ("e3", "ff"), ("e", "b0"), ("e3", "b")] {
+            assert_eq!(
+                parse_media_url(&format!(
+                    "/media/upload/{p1}/{p2}/{MEDIA_TEST_SHA256}/photo.jpg"
+                )),
+                None
+            );
+        }
     }
 
     #[test]

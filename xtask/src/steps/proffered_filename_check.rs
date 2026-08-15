@@ -13,23 +13,11 @@
 //! keep it out of ordinary signatures — it must be `pub` for the `server` crate's route
 //! declarations to name it — which is what this guard covers.
 //!
-//! **The discriminator is bare-versus-wrapped, not field-versus-not.** The serve route's
-//! legitimate position *is* a struct field:
-//!
-//! Illustration, not a test: `SoftPath`, `ProfferedFilename` and `Deserialize` are
-//! `server`/`common` types, none of them in this crate's dependency graph.
-//!
-//! ```text
-//! #[derive(Deserialize)]
-//! pub struct ServeParams {
-//!     pub filename: SoftPath<ProfferedFilename>,
-//! }
-//! ```
-//!
-//! so a "no struct fields" rule would be undecidable. A mention is allowed when it is
-//! wrapped in `SoftPath<…>` or sits inside a `Path<(…)>` tuple; a *bare* mention in a
-//! struct field, a `#[server]` parameter, a return type, or a plain fn parameter is a
-//! violation.
+//! **The discriminator is the strict extractor field or a `Path<(…)>` tuple.** The
+//! public media route rewraps its one legitimate field into `Filename` while
+//! deserializing `RawServeAddress`; AtomPub member handlers use a tuple extractor. A bare
+//! mention in any other struct field, a `#[server]` parameter, a return type, or a plain
+//! fn parameter is a violation.
 //!
 //! Accepted limitation (as in [`super::proffered_secret_check`]): matching is per-line, so
 //! a deliberate `use …::ProfferedFilename as Alias;` rename evades the guard, and a
@@ -51,7 +39,9 @@ const POLICED_TYPE: &str = "ProfferedFilename";
 /// appear outside an extractor position, so it is exempt wholesale.
 const OWNER_FILE: &str = "common/src/media.rs";
 
-/// Source roots scanned recursively for `.rs` files. Mirrors
+/// The one strict extractor that is allowed to store the inbound type for its
+/// deserialization step.
+const STRICT_EXTRACTOR_FILE: &str = "server/src/media.rs";
 /// [`super::proffered_secret_check`]'s list: every crate that can name a `common` type, so
 /// a leak cannot hide in an unscanned member.
 const POLICED_ROOTS: &[&str] = &[
@@ -82,20 +72,9 @@ fn type_index(line: &str) -> Option<usize> {
     })
 }
 
-/// Whether the mention at `at` is wrapped in an extractor — the only allowed shape.
-///
-/// Two forms, matching the two real call sites: `SoftPath<ProfferedFilename>` (the serve
-/// route's `ServeParams` field) and a `Path<(…)>` tuple element (the `AtomPub` member
-/// handlers).
+/// Whether the mention at `at` is inside a tuple extractor.
 fn is_wrapped(line: &str, at: usize) -> bool {
     let before = &line[..at];
-    if before.ends_with("SoftPath<") {
-        return true;
-    }
-    // Inside a `Path<(…)>` tuple: the *nearest* preceding `Path<(` must still be open at
-    // the mention, i.e. no `)>` closes it in between. A bare `contains` would accept a bare
-    // mention that merely shares a line with some unrelated extractor — e.g.
-    // `fn f(Path((a,)): Path<(Username,)>, leaked: ProfferedFilename)`.
     let Some(open) = before.rfind("Path<(") else {
         return false;
     };
@@ -123,9 +102,10 @@ fn is_wrapped(line: &str, at: usize) -> bool {
 /// The mention sits on a *continuation* line, which starts with neither `use ` nor `//`. A
 /// prefix-only rule reports it — as this guard did on its first run against the real tree,
 /// which is how the gap was found.
-fn violations(source: &str) -> Vec<usize> {
+fn violations(path: &str, source: &str) -> Vec<usize> {
     let mut out = Vec::new();
     let mut in_use = false;
+    let mut in_raw_serve_address = false;
     for (i, raw) in source.lines().enumerate() {
         let t = raw.trim();
         let opens_use = t.starts_with("use ") || t.starts_with("pub use ");
@@ -134,15 +114,23 @@ fn violations(source: &str) -> Vec<usize> {
             in_use = !t.ends_with(';');
         }
         let inside_import = in_use || opens_use;
+        if path.ends_with(STRICT_EXTRACTOR_FILE) && t == "struct RawServeAddress {" {
+            in_raw_serve_address = true;
+        }
+        let strict_extractor_field = in_raw_serve_address && t == "filename: ProfferedFilename,";
 
         if let Some(at) = type_index(raw)
             && !inside_import
             && !t.starts_with("//")
+            && !strict_extractor_field
             && !is_wrapped(raw, at)
         {
             out.push(i + 1);
         }
 
+        if in_raw_serve_address && t == "}" {
+            in_raw_serve_address = false;
+        }
         if in_use && t.ends_with(';') {
             in_use = false;
         }
@@ -159,7 +147,7 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
         if path.ends_with(OWNER_FILE) {
             continue;
         }
-        for ln in violations(source) {
+        for ln in violations(path, source) {
             lines.push(format!(
                 "{path}:{ln}: bare `{POLICED_TYPE}` outside an extractor position — the \
                  inbound twin must be rewrapped into `Filename` at the handler, never \
@@ -171,9 +159,9 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
         return None;
     }
     lines.push(format!(
-        "  recovery: `{POLICED_TYPE}` may appear only wrapped as `SoftPath<{POLICED_TYPE}>` \
-         or inside a `Path<(…)>` tuple. Convert it with `Filename::from(..)` as the first \
-         statement of the handler and use `Filename` from there on; it is defined and \
+        "  recovery: `{POLICED_TYPE}` may appear only as `RawServeAddress`'s filename field \
+         or inside a `Path<(…)>` tuple. Convert it with `Filename::from(..)` while \
+         deserializing the address and use `Filename` from there on; it is defined and \
          converted in {OWNER_FILE}, and nowhere else may name it in a field, parameter, or \
          return type. Encoding is not idempotent, so a second hop through this type \
          double-encodes."
@@ -232,7 +220,13 @@ pub fn run(result: &mut CommandResult) {
 mod tests {
     use super::*;
 
-    const SOFT_PATH_FIELD: &str = r"
+    const STRICT_ADDRESS_FIELD: &str = r"
+struct RawServeAddress {
+    filename: ProfferedFilename,
+}
+";
+
+    const LEGACY_SOFT_PATH_FIELD: &str = r"
 pub struct ServeParams {
     pub filename: SoftPath<ProfferedFilename>,
 }
@@ -268,17 +262,14 @@ use common::media::ProfferedFilename;
 // `ProfferedFilename` is the inbound twin for URL path segments.
 ";
 
-    /// The real shape in `server/src/media.rs` — the mention lands on a continuation line
-    /// that starts with neither `use ` nor `//`. A prefix-only rule reports it, which is
-    /// exactly what this guard did on its first run against the tree.
-    const WRAPPED_IMPORT: &str = r"
+    const STRICT_ADDRESS_IMPORT: &str = r"
 use common::media::{
     detect_content_type, media_path, should_inline, ContentHash, Filename, MediaSource,
     ProfferedFilename,
 };
 
-pub struct ServeParams {
-    pub filename: SoftPath<ProfferedFilename>,
+struct RawServeAddress {
+    filename: ProfferedFilename,
 }
 ";
 
@@ -296,44 +287,63 @@ pub fn leak() -> ProfferedFilename {
 ";
 
     #[test]
-    fn wrapped_extractor_positions_are_allowed() {
-        assert!(violations(SOFT_PATH_FIELD).is_empty());
-        assert!(violations(PATH_TUPLE).is_empty());
+    fn strict_extractor_positions_are_allowed() {
+        assert!(violations("server/src/media.rs", STRICT_ADDRESS_FIELD).is_empty());
+        assert!(violations("server/src/atompub/media.rs", PATH_TUPLE).is_empty());
     }
 
     #[test]
     fn a_bare_struct_field_is_a_violation() {
-        assert_eq!(violations(BARE_STRUCT_FIELD), vec![3]);
+        assert_eq!(violations("web/src/media.rs", BARE_STRUCT_FIELD), vec![3]);
+    }
+
+    #[test]
+    fn a_raw_serve_address_outside_the_strict_extractor_is_a_violation() {
+        assert_eq!(
+            violations("web/src/media.rs", STRICT_ADDRESS_FIELD),
+            vec![3]
+        );
+    }
+
+    #[test]
+    fn a_soft_path_struct_field_is_a_violation() {
+        assert_eq!(
+            violations("server/src/media.rs", LEGACY_SOFT_PATH_FIELD),
+            vec![3]
+        );
     }
 
     #[test]
     fn a_server_parameter_is_a_violation() {
-        assert_eq!(violations(SERVER_PARAM), vec![3]);
+        assert_eq!(violations("web/src/media.rs", SERVER_PARAM), vec![3]);
     }
 
     #[test]
     fn a_return_position_is_a_violation() {
-        assert_eq!(violations(BARE_RETURN), vec![2]);
+        assert_eq!(violations("web/src/media.rs", BARE_RETURN), vec![2]);
     }
 
     #[test]
     fn a_plain_fn_parameter_is_a_violation() {
-        assert_eq!(violations(PLAIN_FN_PARAM), vec![2]);
+        assert_eq!(violations("web/src/media.rs", PLAIN_FN_PARAM), vec![2]);
     }
 
     #[test]
     fn imports_and_comments_are_allowed() {
-        assert!(violations(IMPORT_AND_COMMENT).is_empty());
+        assert!(violations("web/src/media.rs", IMPORT_AND_COMMENT).is_empty());
     }
 
     #[test]
-    fn a_mention_on_a_wrapped_import_continuation_line_is_allowed() {
-        assert!(violations(WRAPPED_IMPORT).is_empty());
+    fn a_mention_on_a_strict_address_import_continuation_line_is_allowed() {
+        assert!(violations("server/src/media.rs", STRICT_ADDRESS_IMPORT).is_empty());
     }
 
     #[test]
     fn a_wrapped_import_does_not_swallow_a_later_leak() {
-        assert_eq!(violations(WRAPPED_IMPORT_THEN_LEAK), vec![7]);
+        assert_eq!(
+            violations("web/src/media.rs", WRAPPED_IMPORT_THEN_LEAK),
+            vec![7]
+        );
     }
 
     #[test]
@@ -341,13 +351,19 @@ pub fn leak() -> ProfferedFilename {
         // The hole a whole-line `contains("Path<(")` would leave: the tuple closes before
         // the mention, so this is a bare parameter riding alongside a legitimate extractor.
         let src = "\nfn f(Path((a,)): Path<(Username,)>, leaked: ProfferedFilename) {}\n";
-        assert_eq!(violations(src), vec![2]);
+        assert_eq!(violations("web/src/media.rs", src), vec![2]);
     }
 
     #[test]
     fn a_longer_identifier_is_not_matched() {
         // Whole-word matching: `ProfferedFilenameList` is a different type.
-        assert!(violations("pub struct X { f: ProfferedFilenameList }").is_empty());
+        assert!(
+            violations(
+                "web/src/media.rs",
+                "pub struct X { f: ProfferedFilenameList }"
+            )
+            .is_empty()
+        );
     }
 
     #[test]
@@ -371,7 +387,10 @@ pub fn leak() -> ProfferedFilename {
     #[test]
     fn a_clean_tree_reports_nothing() {
         let scanned = vec![
-            ("server/src/media.rs".to_owned(), SOFT_PATH_FIELD.to_owned()),
+            (
+                "server/src/media.rs".to_owned(),
+                STRICT_ADDRESS_FIELD.to_owned(),
+            ),
             (
                 "server/src/atompub/media.rs".to_owned(),
                 PATH_TUPLE.to_owned(),

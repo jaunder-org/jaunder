@@ -14,7 +14,9 @@ use common::test_support::parse_content_hash;
 use server_fn::ServerFn;
 use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
 
-use crate::helpers::{MultipartFile, create_user_and_session, make_app, post_multipart};
+use crate::helpers::{
+    MultipartFile, body_string, create_user_and_session, make_app, post_multipart,
+};
 
 /// Captures one request-boundary error event and its `jaunder.errors` point.
 ///
@@ -195,6 +197,53 @@ async fn serve_returns_200_with_cache_headers(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
+async fn serve_without_database_record_preserves_file_response(#[case] backend: Backend) {
+    const HASH: &str = "13015a3cf02c05dafbefab3b331350db348e70e86f4e43e73f325473957f0a5c";
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let storage = TempDir::new().unwrap();
+    let file = storage
+        .path()
+        .join("media/upload/13/01")
+        .join(HASH)
+        .join("my%20photo.jpg");
+    tokio::fs::create_dir_all(file.parent().unwrap())
+        .await
+        .unwrap();
+    tokio::fs::write(&file, b"file-bytes").await.unwrap();
+
+    let response = make_app(&state, &storage)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/media/upload/13/01/{HASH}/my%20photo.jpg"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get(header::CONTENT_TYPE).unwrap(),
+        "image/jpeg"
+    );
+    assert_eq!(
+        response.headers().get(header::CACHE_CONTROL).unwrap(),
+        "public, max-age=31536000, immutable"
+    );
+    assert_eq!(
+        response.headers().get(header::ETAG).unwrap(),
+        &ETag::from_content_hash(&parse_content_hash(HASH)).to_string()
+    );
+    assert_eq!(
+        response.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+        r#"inline; filename="my photo.jpg"; filename*=UTF-8''my%20photo%2Ejpg"#
+    );
+    assert_eq!(body_string(response).await, "file-bytes");
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn serve_returns_404_when_recorded_file_disappears_after_router_setup(
     #[case] backend: Backend,
 ) {
@@ -240,17 +289,13 @@ async fn serve_returns_404_when_recorded_file_disappears_after_router_setup(
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
-// Shape B — both URIs are served by the same handler and must 404; identical
-// setup + assertion, only the request URI varies.
 #[apply(backends_matrix)]
 #[case::missing_file(
     "/media/upload/ab/cd/abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890/missing.jpg"
 )]
-#[case::invalid_source("/media/invalid/ab/cd/abcdef1234/file.jpg")]
 #[tokio::test]
-async fn serve_returns_404(backend: Backend, #[case] uri: &str) {
+async fn serve_returns_404_for_valid_absent_address(backend: Backend, #[case] uri: &str) {
     let TestEnv { state, base: _base } = backend.setup().await;
-
     let storage = TempDir::new().unwrap();
     let app = make_app(&state, &storage);
 
@@ -266,6 +311,44 @@ async fn serve_returns_404(backend: Backend, #[case] uri: &str) {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[apply(backends_matrix)]
+#[case::invalid_source(
+    "/media/not-a-source/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/file.txt"
+)]
+#[case::short_hash("/media/upload/e3/b0/a/file.txt")]
+#[case::non_hex_hash(
+    "/media/upload/zz/zz/zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz/file.txt"
+)]
+#[case::encoded_separator(
+    "/media/upload/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/a%2Fb.txt"
+)]
+#[case::p1_mismatch(
+    "/media/upload/ff/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/file.txt"
+)]
+#[case::short_p1(
+    "/media/upload/e/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/file.txt"
+)]
+#[case::p2_mismatch(
+    "/media/upload/e3/ff/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/file.txt"
+)]
+#[tokio::test]
+async fn serve_rejects_malformed_address_before_handler(backend: Backend, #[case] uri: &str) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let storage = TempDir::new().unwrap();
+    let response = make_app(&state, &storage)
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 // guard:no-backend — pure constructed I/O classification

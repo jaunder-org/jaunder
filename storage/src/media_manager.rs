@@ -86,7 +86,7 @@ impl MediaManager {
         &self,
         user_id: UserId,
         filename: &Filename,
-        content_type: Option<&str>,
+        content_type: Option<ContentType>,
         stream: S,
     ) -> anyhow::Result<UploadResponse>
     where
@@ -104,7 +104,7 @@ impl MediaManager {
         &self,
         user_id: UserId,
         filename: &Filename,
-        content_type: Option<&str>,
+        content_type: Option<ContentType>,
         stream: S,
     ) -> anyhow::Result<UploadResponse>
     where
@@ -113,8 +113,7 @@ impl MediaManager {
     {
         let (max_file_size, user_quota) = self.get_limits().await?;
 
-        // Sniffing reads *inside* the name, so it gets the decoded form (#720).
-        let content_type = Self::get_content_type(content_type, &filename.decoded())?;
+        let content_type = content_type.unwrap_or_else(|| detect_content_type(filename));
 
         let tmp_path = self.create_temp_file().await?;
         let (sha256_hex, size_bytes) = self
@@ -144,24 +143,8 @@ impl MediaManager {
             .map_err(|_| anyhow::anyhow!(MediaError::BadRequest("Invalid filename".to_owned())))
     }
 
-    /// The single validating content-type door: a present client `Content-Type` is
-    /// validated (malformed → bad request), an absent one is detected from the name.
-    ///
-    /// # Errors
-    ///
-    /// Returns `anyhow::Error` (`MediaError::BadRequest`) when `content_type` is present
-    /// but not a valid `type/subtype` media type.
-    pub fn get_content_type(
-        content_type: Option<&str>,
-        filename: &str,
-    ) -> anyhow::Result<ContentType> {
-        match content_type {
-            Some(c) => c.parse().map_err(|_| {
-                anyhow::anyhow!(MediaError::BadRequest("Invalid content type".to_owned()))
-            }),
-            None => Ok(detect_content_type(filename)),
-        }
-    }
+    // Upload content types have already been parsed at their HTTP boundary; absent
+    // multipart content types are detected from the validated filename.
 
     /// Emits the single `media_upload` failure metric for a completed upload attempt.
     /// The success metrics are emitted in `finalize_upload`, so this fires only on
@@ -381,7 +364,7 @@ impl MediaManager {
         &self,
         user_id: UserId,
         filename: &Filename,
-        content_type: &str,
+        content_type: ContentType,
         bytes: &[u8],
     ) -> anyhow::Result<UploadResponse> {
         let result = self
@@ -395,16 +378,12 @@ impl MediaManager {
         &self,
         user_id: UserId,
         filename: &Filename,
-        content_type: &str,
+        content_type: ContentType,
         bytes: &[u8],
     ) -> anyhow::Result<UploadResponse> {
         let (max_file_size, user_quota) = self.get_limits().await?;
-        // `filename` is already a validated `Filename` (the caller ran Door B on the
-        // client's name), so there is no re-sanitize here.
-        // Decoded like `upload`'s caller above. This path always supplies a content type,
-        // so it never reaches the sniffing branch — passed decoded anyway so the two
-        // callers cannot drift.
-        let content_type = Self::get_content_type(Some(content_type), &filename.decoded())?;
+        // `filename` and `content_type` were validated at their respective inbound
+        // boundaries, so neither needs revalidation in the persistence seam.
 
         let size_bytes = i64::try_from(bytes.len()).unwrap_or(i64::MAX);
         if size_bytes > max_file_size.value() {
@@ -534,16 +513,10 @@ mod tests {
     }
 
     #[test]
-    fn get_content_type_validates_present_and_detects_absent() {
-        // The single door (#495): a malformed present client `Content-Type` is a bad
-        // request, a valid one is taken verbatim, and an absent one is detected.
-        assert!(MediaManager::get_content_type(Some("garbage"), "x.png").is_err());
+    fn typed_content_type_is_preserved_and_absent_is_detected_from_filename() {
+        assert_eq!("image/png".parse::<ContentType>().unwrap(), "image/png");
         assert_eq!(
-            MediaManager::get_content_type(Some("image/png"), "x.bin").unwrap(),
-            "image/png"
-        );
-        assert_eq!(
-            MediaManager::get_content_type(None, "photo.jpg").unwrap(),
+            detect_content_type(&parse_filename("photo.jpg")),
             "image/jpeg"
         );
     }
@@ -799,7 +772,12 @@ mod tests {
         let expected_sha = format!("{:x}", Sha256::digest(bytes));
 
         let first = manager
-            .upload_bytes(user_id, &parse_filename("pic.png"), "image/png", bytes)
+            .upload_bytes(
+                user_id,
+                &parse_filename("pic.png"),
+                "image/png".parse().unwrap(),
+                bytes,
+            )
             .await
             .unwrap();
         assert_eq!(first.sha256.as_ref(), expected_sha.as_str());
@@ -812,7 +790,12 @@ mod tests {
 
         // Identical re-upload must succeed and dedup to the same record.
         let second = manager
-            .upload_bytes(user_id, &parse_filename("pic.png"), "image/png", bytes)
+            .upload_bytes(
+                user_id,
+                &parse_filename("pic.png"),
+                "image/png".parse().unwrap(),
+                bytes,
+            )
             .await
             .unwrap();
         assert_eq!(second.sha256, first.sha256);
@@ -840,7 +823,7 @@ mod tests {
             .upload_bytes(
                 user_id,
                 &parse_filename("big.bin"),
-                "application/octet-stream",
+                "application/octet-stream".parse().unwrap(),
                 &[0_u8; 11],
             )
             .await
@@ -878,7 +861,12 @@ mod tests {
         let stream = futures_util::stream::iter(chunks.into_iter().map(Ok::<_, std::io::Error>));
         let filename = parse_filename("s.png");
         let resp = manager
-            .upload(user_id, &filename, Some("image/png"), stream)
+            .upload(
+                user_id,
+                &filename,
+                Some("image/png".parse().unwrap()),
+                stream,
+            )
             .await
             .unwrap();
 
