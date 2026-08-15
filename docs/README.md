@@ -163,6 +163,10 @@ convention). See the Status column below for each ADR's current status.
 | [0133](adr/0133-hash-bearer-tokens-before-persistence.md)          | Hash bearer-equivalent tokens before persistence                                                             | accepted   |
 | [0134](adr/0134-lowercase-canonical-usernames.md)                  | Lowercase-canonical usernames                                                                                | accepted   |
 | [0135](adr/0135-pr-watch-actionable-handoff.md)                    | PR observation stops at the next caller-actionable state                                                     | accepted   |
+| [0136](adr/0136-local-post-lifecycle.md)                           | Retain local Posts through soft deletion and full revisions                                                  | accepted   |
+| [0137](adr/0137-publisher-side-websub.md)                          | Publish Syndication Feed changes through WebSub                                                              | accepted   |
+| [0138](adr/0138-syndication-feed-http-validation.md)               | Validate cached Syndication Feed representations conditionally                                               | accepted   |
+| [0139](adr/0139-syndication-feed-hybrid-window.md)                 | Select Syndication Feed items with a hybrid window                                                           | accepted   |
 
 <!-- adr-table:end -->
 
