@@ -1,9 +1,36 @@
 use anyhow::{Result, anyhow};
 
+use super::decide::Progress;
 use super::gh::ApiError;
 use super::snapshot::PrSource;
 use super::{Event, GitFacts, Invocation, Outcome, PrNumber, PrReport, land, snapshot, watch};
 use crate::result::{CommandResult, StepResult};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrOperation {
+    Watch,
+    Land,
+}
+
+impl PrOperation {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Watch => "pr-watch",
+            Self::Land => "pr-land",
+        }
+    }
+
+    pub fn is_landing(self) -> bool {
+        matches!(self, Self::Land)
+    }
+
+    fn succeeds_with(self, outcome: Outcome) -> bool {
+        matches!(
+            (self, outcome),
+            (Self::Watch, Outcome::Merged | Outcome::ReadyToLand) | (Self::Land, Outcome::Merged)
+        )
+    }
+}
 
 /// Drive one `pr watch` / `pr land` invocation against the real GitHub.
 ///
@@ -158,19 +185,20 @@ pub fn execute_with<S: PrSource, A: land::PrArmer, C: watch::Clock>(
         }
         return Ok(land::land(source, armer, clock, &subject, cfg, sink));
     }
-    Ok(watch::watch(source, clock, &subject, cfg, sink))
+    let progress = established
+        .as_ref()
+        .map_or_else(|_| Progress::default(), Progress::from_snapshot);
+    Ok(watch::watch_with_progress(
+        source, clock, &subject, cfg, progress, sink,
+    ))
 }
 
 /// Wrap a report in the command envelope.
 ///
-/// The single pushed step is not incidental: `CommandResult::push` recomputes `ok`
-/// from the step vector, so pushing exactly one step whose `ok` mirrors the outcome
-/// is what keeps `ok`, `exit_code()`, and `pr.outcome` from disagreeing — and is why
-/// neither `push` nor `exit_code` needed to change. Push a second step here and the
-/// sidecar starts reporting `ok: true` for a failed watch.
-pub fn into_result(command: &str, report: PrReport) -> CommandResult {
+pub fn into_result(operation: PrOperation, report: PrReport) -> CommandResult {
+    let command = operation.as_str();
     let mut result = CommandResult::new(command);
-    let step = if report.outcome.is_merged() {
+    let step = if operation.succeeds_with(report.outcome) {
         StepResult::ok(command)
     } else {
         StepResult::fail(command)
@@ -353,6 +381,21 @@ mod tests {
     }
 
     #[test]
+    fn establishment_snapshot_preserves_same_head_queue_history() {
+        let src = FakeSource::new(vec![Ok(queued_at(2)), Ok(open(green()))], queue_rules());
+        let git = GitFacts::default();
+        let report = execute_with(
+            &src,
+            &SpyArmer::new(),
+            &clock(),
+            invocation(&git, false),
+            &mut |_| {},
+        )
+        .unwrap();
+        assert_eq!(report.outcome, Outcome::Dequeued);
+    }
+
+    #[test]
     fn watching_never_arms_anything() {
         // The structural guarantee behind the observe/act split: no `watch` path can
         // reach the armer, whatever it is handed.
@@ -381,16 +424,31 @@ mod tests {
 
     #[test]
     fn merged_result_is_ok_and_exits_zero() {
-        let r = into_result("pr-watch", report(Outcome::Merged));
+        let r = into_result(PrOperation::Watch, report(Outcome::Merged));
         assert!(r.ok);
         assert_eq!(r.exit_code(), 0);
     }
 
     #[test]
-    fn non_merged_result_is_not_ok_and_exits_one() {
+    fn ready_to_land_succeeds_only_for_watch() {
+        let watched = into_result(PrOperation::Watch, report(Outcome::ReadyToLand));
+        assert!(watched.ok);
+        assert_eq!(watched.exit_code(), 0);
+        assert_eq!(watched.steps.len(), 1);
+        assert!(watched.steps[0].ok);
+
+        let landed = into_result(PrOperation::Land, report(Outcome::ReadyToLand));
+        assert!(!landed.ok);
+        assert_eq!(landed.exit_code(), 1);
+    }
+
+    #[test]
+    fn adverse_results_are_not_ok_and_exit_one() {
         for outcome in [
             Outcome::ChecksFailed,
             Outcome::Ejected,
+            Outcome::Dequeued,
+            Outcome::Blocked,
             Outcome::Conflicted,
             Outcome::ClosedUnmerged,
             Outcome::Stale,
@@ -398,9 +456,11 @@ mod tests {
             Outcome::WatcherError,
             Outcome::Pending,
         ] {
-            let r = into_result("pr-watch", report(outcome));
-            assert!(!r.ok, "{outcome:?} must not be ok");
-            assert_eq!(r.exit_code(), 1, "{outcome:?} must exit 1");
+            for operation in [PrOperation::Watch, PrOperation::Land] {
+                let r = into_result(operation, report(outcome));
+                assert!(!r.ok, "{operation:?} {outcome:?} must not be ok");
+                assert_eq!(r.exit_code(), 1, "{operation:?} {outcome:?} must exit 1");
+            }
         }
     }
 
@@ -408,7 +468,7 @@ mod tests {
     fn exactly_one_step_is_pushed() {
         // Load-bearing: `push()` recomputes `ok` from the step vector, so a second
         // step would decouple `ok` from the outcome.
-        let r = into_result("pr-watch", report(Outcome::ChecksFailed));
+        let r = into_result(PrOperation::Watch, report(Outcome::ChecksFailed));
         assert_eq!(r.steps.len(), 1);
         assert_eq!(r.steps[0].name, "pr-watch");
     }
@@ -423,11 +483,18 @@ mod tests {
             serde_json::to_value(Outcome::ClosedUnmerged).unwrap(),
             "closed-unmerged"
         );
+        for (outcome, spelling) in [
+            (Outcome::ReadyToLand, "ready-to-land"),
+            (Outcome::Dequeued, "dequeued"),
+            (Outcome::Blocked, "blocked"),
+        ] {
+            assert_eq!(serde_json::to_value(outcome).unwrap(), spelling);
+        }
     }
 
     #[test]
     fn report_rides_the_envelope_json() {
-        let r = into_result("pr-watch", report(Outcome::Ejected));
+        let r = into_result(PrOperation::Watch, report(Outcome::Ejected));
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["pr"]["outcome"], "ejected");
         assert_eq!(v["pr"]["pr"], 731);

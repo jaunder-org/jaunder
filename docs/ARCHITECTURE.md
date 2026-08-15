@@ -2428,15 +2428,21 @@ gone while the semantic-conflict guarantee is kept.
 required checks run in that context.
 
 Because green checks are only phase one under a queue — and an ejected PR leaves
-the queue silently — xtask owns the observation: `cargo xtask pr watch [N]`
-follows a PR through checks → queue → merged and reports exactly one outcome;
-`cargo xtask pr land [N]` arms the merge and watches it home
+the queue silently — xtask owns PR observation. By default,
+`cargo xtask pr watch [N]` follows checks until the next caller-actionable
+outcome: a green, unarmed PR returns `ready-to-land`, while an already armed or
+queued PR continues through the queue. `--until merged` explicitly requests
+passive waiting across the ready handoff
+([the actionable-handoff decision](adr/0135-pr-watch-actionable-handoff.md)).
+`cargo xtask pr land [N]` remains the approval-bearing command: it alone arms
+the merge and watches it home
 ([ADR-0087](adr/0087-xtask-github-pr-observation.md)). The transport is the `gh`
 CLI as a subprocess (`xtask/src/pr/gh.rs`), with `snapshot` turning its JSON
 into typed values and `decide` holding the pure verdict logic (`xtask/src/pr/`).
-The exit code only says merged-or-not; the distinguishing detail is `pr.outcome`
-in the result envelope, where `timed-out` ("GitHub never finished") is
-deliberately distinct from `watcher-error` ("we could not tell").
+Distinguishing outcomes — including `ready-to-land`, `ejected`, `dequeued`,
+`timed-out` ("GitHub never finished"), and `watcher-error` ("we could not tell")
+— live in `pr.outcome` in the result envelope; success is command-specific
+rather than a global synonym for merged.
 
 ## Documentation & decision process
 

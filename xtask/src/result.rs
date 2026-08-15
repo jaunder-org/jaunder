@@ -77,9 +77,34 @@ pub struct CommandResult {
     #[serde(skip)]
     pub traces: Option<String>,
     /// The `pr watch` / `pr land` verdict (#729). Carries the outcome an agent
-    /// branches on, since the exit code deliberately says only merged-or-not.
+    /// branches on because command-specific success cannot encode every verdict.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr: Option<crate::pr::PrReport>,
+}
+
+fn render_pr_summary(pr: &crate::pr::PrReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::new();
+    match pr.head_sha.as_str() {
+        "" => writeln!(out, "PR #{} — {}", pr.pr, pr.outcome).unwrap(),
+        sha => writeln!(out, "PR #{} @ {sha} — {}", pr.pr, pr.outcome).unwrap(),
+    }
+    if let Some(phase) = &pr.phase {
+        writeln!(out, "  phase: {phase}").unwrap();
+    }
+    if let Some(detail) = &pr.detail {
+        writeln!(out, "  {detail}").unwrap();
+    }
+    if let Some(pointer) = &pr.pointer {
+        let label = if pr.outcome.is_merged() {
+            "merge commit"
+        } else {
+            "see"
+        };
+        writeln!(out, "  {label}: {pointer}").unwrap();
+    }
+    out
 }
 
 impl CommandResult {
@@ -156,32 +181,9 @@ impl CommandResult {
         if let Some(traces) = &self.traces {
             print!("{traces}");
         }
-        // And for `pr watch`/`pr land`: the outcome and where to look next are the
-        // point. The event log already streamed to stderr as it happened, so this is
-        // the summary, not a replay of it.
+        // The event log already streamed to stderr; this is the stable summary seam.
         if let Some(pr) = &self.pr {
-            // The head SHA is empty when the very first read failed, so it is only
-            // shown when it says something.
-            match pr.head_sha.as_str() {
-                "" => println!("PR #{} — {}", pr.pr, pr.outcome),
-                sha => println!("PR #{} @ {sha} — {}", pr.pr, pr.outcome),
-            }
-            if let Some(phase) = &pr.phase {
-                println!("  phase: {phase}");
-            }
-            if let Some(detail) = &pr.detail {
-                println!("  {detail}");
-            }
-            if let Some(pointer) = &pr.pointer {
-                // `merged` carries a commit OID, everything else a URL — labelling
-                // both "see:" made the OID read like a broken link.
-                let label = if pr.outcome.is_merged() {
-                    "merge commit"
-                } else {
-                    "see"
-                };
-                println!("  {label}: {pointer}");
-            }
+            print!("{}", render_pr_summary(pr));
         }
         let verdict = if self.ok { "PASSED" } else { "FAILED" };
         println!(
@@ -257,5 +259,39 @@ mod tests {
         r.push(StepResult::skip("clippy"));
         assert!(r.ok);
         assert_eq!(r.exit_code(), 0);
+    }
+    #[test]
+    fn pr_summary_renders_outcome_head_detail_and_pointer_labels() {
+        let report = |outcome, detail: Option<&str>, pointer: Option<&str>| crate::pr::PrReport {
+            outcome,
+            pr: 1044,
+            head_sha: "abc123".into(),
+            phase: None,
+            detail: detail.map(str::to_string),
+            pointer: pointer.map(str::to_string),
+            events: Vec::new(),
+        };
+
+        let ready = render_pr_summary(&report(
+            crate::pr::Outcome::ReadyToLand,
+            Some("obtain approval, then run `pr land`"),
+            None,
+        ));
+        assert!(ready.contains("PR #1044 @ abc123 — ready-to-land"));
+        assert!(ready.contains("obtain approval"));
+
+        let merged = render_pr_summary(&report(crate::pr::Outcome::Merged, None, Some("deadbeef")));
+        assert!(merged.contains("merged"));
+        assert!(merged.contains("merge commit: deadbeef"));
+
+        for outcome in [
+            crate::pr::Outcome::Dequeued,
+            crate::pr::Outcome::WatcherError,
+        ] {
+            let rendered = render_pr_summary(&report(outcome, Some("action required"), None));
+            assert!(rendered.contains(outcome.as_str()));
+            assert!(rendered.contains("abc123"));
+            assert!(rendered.contains("action required"));
+        }
     }
 }

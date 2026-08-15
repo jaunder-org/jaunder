@@ -66,6 +66,7 @@ pub struct WatchConfig {
     pub interval_secs: u64,
     pub timeout_mins: u64,
     pub once: bool,
+    pub stop_at_ready: bool,
     pub heartbeat_secs: u64,
     pub max_strikes: u32,
 }
@@ -76,6 +77,7 @@ impl Default for WatchConfig {
             interval_secs: 30,
             timeout_mins: 90,
             once: false,
+            stop_at_ready: true,
             heartbeat_secs: 600,
             max_strikes: 5,
         }
@@ -150,13 +152,26 @@ impl Emitter<'_> {
     }
 }
 
-/// Poll `subject` until it reaches a terminal state, the budget expires, or the API
-/// stops answering.
+/// Poll until the next actionable outcome, timeout, or watcher failure.
+///
+/// By default, a ready approval handoff ends observation even though the PR remains
+/// open. Passive mode continues through ready until a terminal PR outcome.
 pub fn watch<S: PrSource, C: Clock>(
     source: &S,
     clock: &C,
     subject: &Subject,
     cfg: WatchConfig,
+    sink: &mut dyn FnMut(&Event),
+) -> PrReport {
+    watch_with_progress(source, clock, subject, cfg, Progress::default(), sink)
+}
+
+pub(super) fn watch_with_progress<S: PrSource, C: Clock>(
+    source: &S,
+    clock: &C,
+    subject: &Subject,
+    cfg: WatchConfig,
+    mut progress: Progress,
     sink: &mut dyn FnMut(&Event),
 ) -> PrReport {
     let start = clock.now_unix();
@@ -170,7 +185,6 @@ pub fn watch<S: PrSource, C: Clock>(
     };
 
     let mut required: Option<RequiredChecks> = None;
-    let mut progress = Progress::default();
     let mut strikes = 0u32;
     let mut head_sha = String::new();
     let mut prev: Option<Rendered> = None;
@@ -306,24 +320,22 @@ pub fn watch<S: PrSource, C: Clock>(
         };
 
         head_sha = snap.head_sha.clone();
-        // An empty required set is silently permissive — nothing can ever be
-        // `checks-failed` and the watch just runs to the budget. That happens for a
-        // fork, a repo with no ruleset, or a token lacking the scope, all of which
-        // return HTTP 200. Say so once rather than letting it look like patience.
-        if required.is_none() && req.contexts.is_empty() {
-            em.emit(
-                clock.now_rfc3339(),
-                now,
-                EventKind::Warning,
-                "the branch ruleset lists no required checks — nothing here can gate a merge"
-                    .into(),
-            );
-        }
         required = Some(req.clone());
+
+        // A push starts a new observation history. Without this reset, seeing head A
+        // queued and then head B unqueued would falsely report B as dequeued.
+        if progress
+            .queued_head_sha
+            .as_deref()
+            .is_some_and(|sha| sha != snap.head_sha)
+        {
+            progress.queued_head_sha = None;
+        }
 
         let step = decide::classify(&snap, &req, ejection.as_ref(), &progress);
         let phase = match &step {
             Step::Continue { phase, .. } => *phase,
+            Step::Ready => Phase::ReadyToLand,
             Step::Terminal { .. } => Phase::Terminal,
         };
 
@@ -331,18 +343,17 @@ pub fn watch<S: PrSource, C: Clock>(
         // current state so the log opens with where things stand.
         let warn = match &step {
             Step::Continue { warn, .. } => warn.clone(),
-            Step::Terminal { .. } => None,
+            Step::Ready | Step::Terminal { .. } => None,
         };
         let current = Rendered::of(&snap, &req, phase, warn);
         let now = clock.now_unix();
         let at = clock.now_rfc3339();
 
-        // On a terminal poll the component events would only restate what the
-        // terminal event already says (a merged PR "leaving the queue", a check going
-        // red that the outcome detail already names), so the outcome speaks alone.
-        let terminal = matches!(step, Step::Terminal { .. });
+        // A returned outcome speaks alone; a passive ready state remains a phase.
+        let stopping = matches!(step, Step::Terminal { .. })
+            || matches!(step, Step::Ready) && cfg.stop_at_ready;
         match &prev {
-            _ if terminal => {}
+            _ if stopping => {}
             None => {
                 em.emit(at.clone(), now, EventKind::Phase, phase.as_str().into());
                 for (name, state) in &current.checks {
@@ -376,35 +387,60 @@ pub fn watch<S: PrSource, C: Clock>(
                 }
             }
         }
-        if let Some(text) = current.warn.as_ref().filter(|_| !terminal)
+        if let Some(text) = current.warn.as_ref().filter(|_| !stopping)
             && prev.as_ref().and_then(|p| p.warn.as_ref()) != Some(text)
         {
             em.emit(at.clone(), now, EventKind::Warning, text.clone());
         }
         prev = Some(current);
 
-        // History the pure machine cannot derive: an entry that is gone now was only
-        // ever visible as a transition.
-        progress.was_queued |= snap.queue.in_queue;
+        // Queue disappearance is meaningful only for the same observed head.
+        if snap.queue.in_queue {
+            progress.queued_head_sha = Some(snap.head_sha.clone());
+        }
 
-        if let Step::Terminal {
-            outcome,
-            detail,
-            pointer,
-        } = step
-        {
-            em.emit(at, now, EventKind::Terminal, outcome.as_str().into());
-            return finish(
-                subject,
-                head_sha,
-                Terminal {
-                    outcome,
-                    detail,
-                    pointer,
-                    phase: None,
-                },
-                em.events,
-            );
+        match step {
+            Step::Terminal {
+                outcome,
+                detail,
+                pointer,
+            } => {
+                em.emit(at, now, EventKind::Terminal, outcome.as_str().into());
+                return finish(
+                    subject,
+                    head_sha,
+                    Terminal {
+                        outcome,
+                        detail,
+                        pointer,
+                        phase: None,
+                    },
+                    em.events,
+                );
+            }
+            Step::Ready if cfg.stop_at_ready => {
+                em.emit(
+                    at,
+                    now,
+                    EventKind::Terminal,
+                    Outcome::ReadyToLand.as_str().into(),
+                );
+                return finish(
+                    subject,
+                    head_sha,
+                    Terminal {
+                        outcome: Outcome::ReadyToLand,
+                        detail: Some(
+                            "all required checks passed; obtain approval, then run `pr land`"
+                                .into(),
+                        ),
+                        pointer: None,
+                        phase: None,
+                    },
+                    em.events,
+                );
+            }
+            Step::Ready | Step::Continue { .. } => {}
         }
 
         if cfg.once {
@@ -473,7 +509,7 @@ fn finish(subject: &Subject, head_sha: String, end: Terminal, events: Vec<Event>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pr::snapshot::CheckState;
+    use crate::pr::snapshot::{CheckState, MergeStateStatus, Mergeable, RequiredChecks};
     use crate::pr::test_support::*;
 
     #[test]
@@ -748,6 +784,199 @@ mod tests {
             Outcome::WatcherError,
             "the tooling worked fine"
         );
+    }
+
+    #[test]
+    fn ready_handoff_returns_without_sleeping_and_once_agrees() {
+        for once in [false, true] {
+            let c = clock();
+            let src = FakeSource::new(vec![Ok(open(green()))], queue_rules());
+            let mut config = cfg();
+            config.once = once;
+            let report = watch(&src, &c, &subject(), config, &mut |_| {});
+            assert_eq!(report.outcome, Outcome::ReadyToLand);
+            assert_eq!(report.head_sha, "abc");
+            assert!(report.detail.unwrap().contains("obtain approval"));
+            assert_eq!(c.now_unix(), 0);
+        }
+    }
+
+    #[test]
+    fn passive_watch_crosses_ready_to_merged() {
+        let src = FakeSource::new(
+            vec![
+                Ok(open(green())),
+                Ok(armed_snapshot()),
+                Ok(queued_at(2)),
+                Ok(merged_snapshot()),
+            ],
+            queue_rules(),
+        );
+        let mut config = cfg();
+        config.stop_at_ready = false;
+        let report = watch(&src, &clock(), &subject(), config, &mut |_| {});
+        assert_eq!(report.outcome, Outcome::Merged);
+        assert!(
+            report
+                .events
+                .iter()
+                .any(|e| e.kind == EventKind::Phase && e.detail == Phase::ReadyToLand.as_str())
+        );
+    }
+
+    #[test]
+    fn same_head_dequeue_returns_after_exactly_one_poll_interval() {
+        let c = clock();
+        let src = FakeSource::new(vec![Ok(queued_at(2)), Ok(open(green()))], queue_rules());
+        let report = watch(&src, &c, &subject(), cfg(), &mut |_| {});
+        assert_eq!(report.outcome, Outcome::Dequeued);
+        let detail = report.detail.unwrap();
+        assert!(detail.contains("queue entry vanished"));
+        assert!(detail.contains("no failed current-head merge-group run"));
+        assert_eq!(c.now_unix(), cfg().interval_secs);
+    }
+
+    #[test]
+    fn same_head_queue_disappearance_waits_while_checks_are_pending() {
+        let src = FakeSource::new(
+            vec![Ok(queued_at(2)), Ok(open_pending()), Ok(merged_snapshot())],
+            queue_rules(),
+        );
+        let report = watch(&src, &clock(), &subject(), cfg(), &mut |_| {});
+        assert_eq!(report.outcome, Outcome::Merged);
+        assert!(
+            report
+                .events
+                .iter()
+                .any(|e| e.kind == EventKind::Phase && e.detail == "awaiting-checks")
+        );
+        assert_ne!(report.outcome, Outcome::Dequeued);
+    }
+
+    #[test]
+    fn new_head_resets_queue_history() {
+        let mut new_head = open(green());
+        new_head.head_sha = "def".into();
+        new_head.head_committed_at = "2026-07-30T16:00:00Z".into();
+        let src = FakeSource::new(
+            vec![Ok(queued_at(2)), Ok(new_head), Ok(merged_snapshot())],
+            queue_rules(),
+        );
+        let mut config = cfg();
+        config.stop_at_ready = false;
+        let report = watch(&src, &clock(), &subject(), config, &mut |_| {});
+        assert_eq!(report.outcome, Outcome::Merged);
+        assert_ne!(report.outcome, Outcome::Dequeued);
+    }
+
+    #[test]
+    fn empty_required_set_fails_closed_in_every_watch_mode() {
+        let empty = RequiredChecks {
+            contexts: Vec::new(),
+            strict: false,
+            queue_present: true,
+        };
+        for (once, stop_at_ready) in [(false, true), (true, true), (false, false)] {
+            let c = clock();
+            let src = FakeSource::new(vec![Ok(open(green()))], empty.clone());
+            let mut config = cfg();
+            config.once = once;
+            config.stop_at_ready = stop_at_ready;
+            let report = watch(&src, &c, &subject(), config, &mut |_| {});
+            assert_eq!(report.outcome, Outcome::WatcherError);
+            assert_eq!(c.now_unix(), 0);
+        }
+    }
+
+    #[test]
+    fn every_landable_merge_status_obeys_each_watch_mode() {
+        for status in [
+            MergeStateStatus::Clean,
+            MergeStateStatus::HasHooks,
+            MergeStateStatus::Unstable,
+            MergeStateStatus::Behind,
+        ] {
+            let mut snap = open(green());
+            snap.merge_state_status = status;
+
+            for once in [false, true] {
+                let src = FakeSource::new(vec![Ok(snap.clone())], queue_rules());
+                let mut config = cfg();
+                config.once = once;
+                assert_eq!(
+                    watch(&src, &clock(), &subject(), config, &mut |_| {}).outcome,
+                    Outcome::ReadyToLand,
+                    "{status:?}, once={once}"
+                );
+            }
+
+            let src = FakeSource::new(vec![Ok(snap), Ok(merged_snapshot())], queue_rules());
+            let mut config = cfg();
+            config.stop_at_ready = false;
+            let report = watch(&src, &clock(), &subject(), config, &mut |_| {});
+            assert_eq!(report.outcome, Outcome::Merged);
+            assert!(
+                report
+                    .events
+                    .iter()
+                    .any(|e| e.kind == EventKind::Phase && e.detail == "ready-to-land")
+            );
+        }
+    }
+
+    #[test]
+    fn every_blocked_merge_status_stops_every_watch_mode() {
+        for status in [
+            MergeStateStatus::Blocked,
+            MergeStateStatus::Draft,
+            MergeStateStatus::Dirty,
+        ] {
+            for (once, stop_at_ready) in [(false, true), (true, true), (false, false)] {
+                let mut snap = open(green());
+                snap.merge_state_status = status;
+                let src = FakeSource::new(vec![Ok(snap)], queue_rules());
+                let mut config = cfg();
+                config.once = once;
+                config.stop_at_ready = stop_at_ready;
+                assert_eq!(
+                    watch(&src, &clock(), &subject(), config, &mut |_| {}).outcome,
+                    Outcome::Blocked,
+                    "{status:?}, once={once}, stop_at_ready={stop_at_ready}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_merge_dimensions_wait_in_every_watch_mode() {
+        let mut unknown_mergeable = open(green());
+        unknown_mergeable.mergeable = Mergeable::Unknown;
+        let mut unknown_status = open(green());
+        unknown_status.merge_state_status = MergeStateStatus::Unknown;
+
+        for snap in [unknown_mergeable, unknown_status] {
+            let src = FakeSource::new(vec![Ok(snap.clone())], queue_rules());
+            let mut once = cfg();
+            once.once = true;
+            let report = watch(&src, &clock(), &subject(), once, &mut |_| {});
+            assert_eq!(report.outcome, Outcome::Pending);
+            assert_eq!(
+                report.phase.as_deref(),
+                Some(Phase::AwaitingMergeability.as_str())
+            );
+
+            for stop_at_ready in [true, false] {
+                let src =
+                    FakeSource::new(vec![Ok(snap.clone()), Ok(merged_snapshot())], queue_rules());
+                let mut config = cfg();
+                config.stop_at_ready = stop_at_ready;
+                let report = watch(&src, &clock(), &subject(), config, &mut |_| {});
+                assert_eq!(report.outcome, Outcome::Merged);
+                assert!(report.events.iter().any(|e| {
+                    e.kind == EventKind::Phase && e.detail == Phase::AwaitingMergeability.as_str()
+                }));
+            }
+        }
     }
 
     #[test]

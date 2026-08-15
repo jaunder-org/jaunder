@@ -17,6 +17,6 @@ mod execute;
 mod invocation;
 mod types;
 
-pub use execute::{execute, execute_with, into_result};
+pub use execute::{PrOperation, execute, execute_with, into_result};
 pub use invocation::{GitFacts, Invocation};
 pub use types::{Event, EventKind, Outcome, PrNumber, PrReport, Subject};
