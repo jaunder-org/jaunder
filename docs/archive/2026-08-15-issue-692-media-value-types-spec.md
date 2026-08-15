@@ -17,9 +17,9 @@
 value invariants, but several post-validation APIs flatten them back to `&str`.
 The most important remaining chain accepts raw content types through
 `MediaManager::upload` and `upload_bytes`, even when the HTTP caller has enough
-information to validate once. `should_inline`, `detect_content_type`, and
-`content_disposition` likewise accept primitive strings after their callers hold
-typed values.
+information to validate once. `detect_content_type` and `content_disposition`
+accept the domain values whose semantics they use; `should_inline` consumes only
+the content type's borrowed media-type spelling.
 
 The issue inventory is partly stale. #675 and #720 already typed `media_path`
 and `media_url` as `MediaSource`/`ContentHash`/`Filename`; ADR-0089 removed the
@@ -69,7 +69,9 @@ removed rather than retained beside the HTTP doors.
 
 ### 2. Helpers accept the values whose semantics they use
 
-- `should_inline` accepts `&ContentType`.
+- `should_inline` accepts `&str`: content disposition passes its already-validated
+  `ContentType` as a borrowed media-type spelling, which is the sole value the
+  allowlist compares.
 - `detect_content_type` accepts `&Filename` and performs the single
   `Filename::decoded()` display-view conversion internally before examining the
   extension.
@@ -79,7 +81,7 @@ removed rather than retained beside the HTTP doors.
 
 These APIs prevent callers from passing an encoded filename where a decoded
 display spelling is required. The conversions remain allocation-conscious:
-borrowed `ContentType` values are matched through `AsRef<str>`, and
+`ContentType` is borrowed as `&str` only at the inline allowlist, and
 `Filename::decoded()` remains a `Cow` consumed in the helper that needs it.
 
 `media_path` and `media_url` remain unchanged: both already accept
@@ -195,10 +197,11 @@ changes.
    Router tests require 400 for both a present ASCII value rejected by
    `ContentType` and a present opaque `HeaderValue` whose `to_str()` conversion
    fails.
-3. `should_inline`, `detect_content_type`, and `content_disposition` accept the
-   applicable domain types. `detect_content_type` and `content_disposition` own
-   the only display decode they require; callers cannot swap content type,
-   encoded filename, source, or hash values through same-typed parameters.
+3. `detect_content_type` and `content_disposition` accept the applicable domain
+   types; `should_inline` compares the borrowed spelling from `ContentType`.
+   `detect_content_type` and `content_disposition` own the only display decode
+   they require; callers cannot swap encoded filename, source, or hash values
+   through same-typed parameters.
 4. The public media route contains no `SoftPath` field or parameter. Its
    extraction type proves source/hash/filename validity and both hash-prefix
    relationships before `serve_handler` runs. Router tests assert malformed

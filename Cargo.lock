@@ -578,6 +578,7 @@ dependencies = [
  "pulldown-cmark",
  "quick-xml",
  "rss",
+ "rstest",
  "serde",
  "serde_json",
  "sha2",

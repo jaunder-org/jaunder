@@ -90,7 +90,7 @@ SQLite/PostgreSQL test matrix; `cargo xtask`.
 - Test: in-file common/storage/server tests plus `server/tests/web/web_media.rs`
   and `server/tests/atompub/atompub_media.rs` **Interfaces:**
 
-- Produces `pub fn should_inline(content_type: &ContentType) -> bool` and
+- Produces `pub fn should_inline(content_type: &str) -> bool` and
   `pub fn detect_content_type(filename: &Filename) -> ContentType`.
 - Produces
   `pub async fn upload<S, E>(&self, user_id: UserId, filename: &Filename, content_type: Option<ContentType>, stream: S) -> anyhow::Result<UploadResponse> where S: Stream<Item = Result<Bytes, E>> + Unpin, E: std::error::Error + Send + Sync + 'static`.
@@ -105,7 +105,7 @@ SQLite/PostgreSQL test matrix; `cargo xtask`.
 ```rust
 let filename: Filename = "photo.jpg".parse().unwrap();
 assert_eq!(detect_content_type(&filename), "image/jpeg");
-assert!(should_inline(&"image/png".parse::<ContentType>().unwrap()));
+assert!(should_inline("image/png"));
 assert_eq!(
     manager
         .upload_bytes(user_id, &parse_filename("pic.png"), "image/png".parse().unwrap(), bytes)
@@ -123,9 +123,8 @@ Delete the old test of the removed raw-string parser.
 - [x] **Step 2: Run the focused tests and verify RED**
 
 Run: `devtool run -- cargo nextest run -p common -E 'test(media::tests)'`
-
-Expected: FAIL because `detect_content_type` and `should_inline` still accept
-`&str`.
+Expected: FAIL because `detect_content_type` still accepts `&str` and the
+content-type detection boundary remains untyped.
 
 Run:
 `devtool run -- cargo nextest run -p storage -E 'test(media_manager::tests)'`
@@ -299,8 +298,8 @@ test inventory.
 
 Keep the existing file-open-before-row-lookup order and derive fallback content
 type with `detect_content_type(&address.filename)`. Change `content_disposition`
-to take `&ContentType` and `&Filename`, decoding only inside it; pass typed
-content type to `should_inline`. Remove the handler wrapper and all
+to take `&ContentType` and `&Filename`, decoding only inside it; pass the
+borrowed media-type spelling to `should_inline`. Remove the handler wrapper and
 served-counter declarations, emission, inventory calls, and enum string tests;
 retain all upload instrumentation.
 
