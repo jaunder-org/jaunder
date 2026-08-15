@@ -880,17 +880,17 @@ Run the global per-commit protocol. Commit:
 - Consumes the three named `users_auth.rs` replacements from the spec table.
 - Produces no new test; registered storage count falls from 304 to 302.
 
-- [ ] **Step 1: Delete the accounted body**
+- [x] **Step 1: Delete the accounted body**
 
 Keep all retained user/auth tests byte-equivalent apart from formatting.
 
-- [ ] **Step 2: Prove replacement coverage**
+- [x] **Step 2: Prove replacement coverage**
 
 Run:
 `devtool run -- devtool pg run -- cargo nextest run -p jaunder storage::users_auth`
 Expected: PASS. List tests; expected 302 storage cases and no removed leaf.
 
-- [ ] **Step 3: Gate and commit**
+- [x] **Step 3: Gate and commit**
 
 Run the global per-commit protocol. Commit:
 `test(server): remove redundant user auth storage test (#950)`.

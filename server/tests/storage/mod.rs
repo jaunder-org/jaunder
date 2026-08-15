@@ -5,8 +5,8 @@ use common::test_support::{
 use host::invite::InviteCode;
 
 use storage::{
-    ConfirmPasswordResetError, CreateUserError, ProfileUpdate, RegisterWithInviteError,
-    SessionAuthError, UseEmailVerificationError, UsePasswordResetError, UserAuthError,
+    ConfirmPasswordResetError, ProfileUpdate, RegisterWithInviteError, SessionAuthError,
+    UseEmailVerificationError, UsePasswordResetError, UserAuthError,
 };
 
 use rstest::*;
@@ -46,48 +46,6 @@ use fixtures::{password, raw_exec, username};
 // `unique_postgres_url`/`template_postgres_url`, see helpers), so they run
 // safely under the default in-process parallelism. No `--test-threads=1` is
 // needed (jaunder-qguq).
-
-#[apply(backends)]
-#[tokio::test]
-async fn create_user_duplicate_and_authenticate_work(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-    let username = username("alice");
-    let initial_password = password("password123");
-
-    let user_id = state
-        .users
-        .create_user(
-            &username,
-            &initial_password,
-            Some(&parse_display_name("Alice")),
-            false,
-        )
-        .await
-        .unwrap();
-    let record = state
-        .users
-        .get_user_by_username(&username)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(record.user_id, user_id);
-
-    let duplicate = state
-        .users
-        .create_user(&username, &password("other_password"), None, false)
-        .await
-        .unwrap_err();
-    assert!(matches!(duplicate, CreateUserError::UsernameTaken));
-
-    let authed = state
-        .users
-        .authenticate(&username, &initial_password)
-        .await
-        .unwrap();
-    assert_eq!(authed.username, "alice");
-    assert!(authed.last_authenticated_at.is_some());
-}
 
 #[apply(backends)]
 #[tokio::test]
