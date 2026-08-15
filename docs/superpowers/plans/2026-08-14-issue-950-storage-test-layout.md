@@ -675,18 +675,18 @@ Run the global per-commit protocol. Commit:
   and both `perform_post_update_*` tests.
 - Keeps `update_input` and `post_audience_rows` private.
 
-- [ ] **Step 1: Move exactly the named core bodies**
+- [x] **Step 1: Move exactly the named core bodies**
 
 Do not move list/query, tag, media, user-config, or schema-integrity tests.
 Preserve the PostgreSQL guard scope in audience helpers.
 
-- [ ] **Step 2: Prove the concern**
+- [x] **Step 2: Prove the concern**
 
 Run:
 `devtool run -- devtool pg run -- cargo nextest run -p jaunder storage::posts`
 Expected: PASS, forty-four backend cases.
 
-- [ ] **Step 3: Gate and commit**
+- [x] **Step 3: Gate and commit**
 
 Run the global per-commit protocol. Commit:
 `refactor(server/tests): split core Post storage tests (#950)`.
