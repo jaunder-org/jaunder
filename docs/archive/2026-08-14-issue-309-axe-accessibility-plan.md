@@ -20,7 +20,7 @@ Leptos CSR, npm lockfile, Nix `buildNpmPackage`.
 **Issue:** [#309](https://github.com/jaunder-org/jaunder/issues/309)
 
 **Approved spec:**
-[`../specs/2026-08-14-issue-309-axe-accessibility-spec.md`](../specs/2026-08-14-issue-309-axe-accessibility-spec.md)
+[`2026-08-14-issue-309-axe-accessibility-spec.md`](2026-08-14-issue-309-axe-accessibility-spec.md)
 
 ## Review
 
