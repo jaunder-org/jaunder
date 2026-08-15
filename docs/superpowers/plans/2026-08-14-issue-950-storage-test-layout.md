@@ -973,7 +973,7 @@ Run the global per-commit protocol. Commit:
   registered storage count remains 298 because one dual-backend test replaces
   one dual-backend test.
 
-- [ ] **Step 1: Add the focused password-reset success contract**
+- [x] **Step 1: Add the focused password-reset success contract**
 
 ```rust
 #[apply(backends)]
@@ -1007,7 +1007,7 @@ The existing email-verification success test retains the combined test's
 verification assertions; the existing reset claim test retains its claimed-ID
 assertion; the existing set-email test retains the intervening update contract.
 
-- [ ] **Step 2: Delete the combined body and finish `mod.rs`**
+- [x] **Step 2: Delete the combined body and finish `mod.rs`**
 
 After pruning residual imports, verify visually that only these declarations
 remain: `audiences`, `database`, `email_verification`, `feed_events`,
@@ -1015,7 +1015,7 @@ remain: `audiences`, `database`, `email_verification`, `feed_events`,
 `password_reset`, `posts`, `resolution`, `sessions`, `site_config`,
 `subscriptions`, `tags`, `user_config`, `users_auth`.
 
-- [ ] **Step 3: Prove the split and population**
+- [x] **Step 3: Prove the split and population**
 
 Run:
 `devtool run -- devtool pg run -- cargo nextest run -p jaunder storage::password_reset`
@@ -1045,7 +1045,7 @@ element-for-element equality. Any residual diff fails this task; totals and
 allowlist checks alone are insufficient. After an empty diff, remove
 `.xtask/issue-950-storage-baseline.out`.
 
-- [ ] **Step 4: Gate and commit**
+- [x] **Step 4: Gate and commit**
 
 Run the global per-commit protocol. Commit:
 `test(server): split storage verification and reset coverage (#950)`.

@@ -27,6 +27,32 @@ async fn confirm_password_reset_hash_failure_returns_internal(#[case] backend: B
 
 #[apply(backends)]
 #[tokio::test]
+async fn confirm_password_reset_changes_credentials(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let user = SeedUser::new().seed(state).await;
+    let reset_token = state
+        .password_resets
+        .create_password_reset(user.user_id, Utc::now() + chrono::Duration::hours(1))
+        .await
+        .unwrap();
+
+    state
+        .atomic
+        .confirm_password_reset(&reset_token, &password("new_password123"))
+        .await
+        .unwrap();
+
+    let authenticated = state
+        .users
+        .authenticate(&user.username, &password("new_password123"))
+        .await
+        .unwrap();
+    assert_eq!(authenticated.user_id, user.user_id);
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn confirm_password_reset_bogus_token_returns_not_found_without_hashing(
     #[case] backend: Backend,
 ) {
