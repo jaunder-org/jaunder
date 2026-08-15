@@ -59,17 +59,17 @@ so serializer-input completeness is a maintained invariant.
 
 ## File Structure
 
-| Path                                                  | Responsibility                                                                               |
-| ----------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| GitHub issues                                         | Durable implementation contracts and resolving links for each current deviation.             |
-| `docs/adr/drafts/publisher-side-websub.md`            | Outbound WebSub topic, trigger, durability, configuration, retry, and recovery policy.       |
-| `docs/adr/drafts/syndication-feed-hybrid-window.md`   | Feed-membership union, visibility/ranking, time, configuration, and corruption policy.       |
-| `docs/adr/drafts/syndication-feed-http-validation.md` | Strong ETag, Last-Modified, and RFC 9110 conditional-response policy.                        |
-| `docs/adr/drafts/local-post-lifecycle.md`             | Local deletion, revision, retention, media, access, and non-purge policy.                    |
-| `docs/ARCHITECTURE.md`                                | Materialized current view: accepted targets and linked present deviations.                   |
-| `CONTEXT.md`                                          | WebSub Publish Ping, Deleted Post, Post Revision, Collection, and active permalink identity. |
-| `docs/DESIGN.md`                                      | Explicit assessment for user-facing deletion/retention language.                             |
-| `docs/README.md`                                      | Generated ADR table; changed only by `cargo xtask adr promote`.                              |
+| Path                                                | Responsibility                                                                               |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| GitHub issues                                       | Durable implementation contracts and resolving links for each current deviation.             |
+| `docs/adr/0137-publisher-side-websub.md`            | Outbound WebSub topic, trigger, durability, configuration, retry, and recovery policy.       |
+| `docs/adr/0139-syndication-feed-hybrid-window.md`   | Feed-membership union, visibility/ranking, time, configuration, and corruption policy.       |
+| `docs/adr/0138-syndication-feed-http-validation.md` | Strong ETag, Last-Modified, and RFC 9110 conditional-response policy.                        |
+| `docs/adr/0136-local-post-lifecycle.md`             | Local deletion, revision, retention, media, access, and non-purge policy.                    |
+| `docs/ARCHITECTURE.md`                              | Materialized current view: accepted targets and linked present deviations.                   |
+| `CONTEXT.md`                                        | WebSub Publish Ping, Deleted Post, Post Revision, Collection, and active permalink identity. |
+| `docs/DESIGN.md`                                    | Explicit assessment for user-facing deletion/retention language.                             |
+| `docs/README.md`                                    | Generated ADR table; changed only by `cargo xtask adr promote`.                              |
 
 ## Tasks
 
@@ -119,13 +119,13 @@ so serializer-input completeness is a maintained invariant.
 
 **Files:**
 
-- Create: `docs/adr/drafts/publisher-side-websub.md`.
+- Create: `docs/adr/0137-publisher-side-websub.md`.
 - Modify: `docs/ARCHITECTURE.md` WebSub publishing section.
 - Modify: `CONTEXT.md` Syndication vocabulary.
 
 **Interfaces:**
 
-- Produces `docs/adr/drafts/publisher-side-websub.md`, cited by the architecture
+- Produces `docs/adr/0137-publisher-side-websub.md`, cited by the architecture
   view.
 - Defines **WebSub Publish Ping** as content-free outbound notification naming
   one concrete public Syndication Feed URL as topic.
@@ -168,12 +168,12 @@ so serializer-input completeness is a maintained invariant.
 
 **Files:**
 
-- Create: `docs/adr/drafts/syndication-feed-hybrid-window.md`.
+- Create: `docs/adr/0139-syndication-feed-hybrid-window.md`.
 - Modify: `docs/ARCHITECTURE.md` Syndication feeds section.
 
 **Interfaces:**
 
-- Produces `docs/adr/drafts/syndication-feed-hybrid-window.md`, cited by the
+- Produces `docs/adr/0139-syndication-feed-hybrid-window.md`, cited by the
   architecture view.
 - Defines `HybridWindow` as
   `eligible_before_rank -> ordered union(prefix(min_items), since(min_days))`.
@@ -210,12 +210,12 @@ so serializer-input completeness is a maintained invariant.
 
 **Files:**
 
-- Create: `docs/adr/drafts/syndication-feed-http-validation.md`.
+- Create: `docs/adr/0138-syndication-feed-http-validation.md`.
 - Modify: `docs/ARCHITECTURE.md` Syndication feeds section.
 
 **Interfaces:**
 
-- Produces `docs/adr/drafts/syndication-feed-http-validation.md`, cited by the
+- Produces `docs/adr/0138-syndication-feed-http-validation.md`, cited by the
   architecture view.
 - Defines complete semantic ETag identity and an unnamed persisted
   representation-modification-time contract. It chooses no storage field or Rust
@@ -254,14 +254,14 @@ so serializer-input completeness is a maintained invariant.
 
 **Files:**
 
-- Create: `docs/adr/drafts/local-post-lifecycle.md`.
+- Create: `docs/adr/0136-local-post-lifecycle.md`.
 - Modify: `docs/ARCHITECTURE.md` Content model section.
 - Modify: `CONTEXT.md` Publishing and AtomPub vocabulary.
 - Assess: `docs/DESIGN.md` user-facing retention and deletion language.
 
 **Interfaces:**
 
-- Produces `docs/adr/drafts/local-post-lifecycle.md`, cited by the architecture
+- Produces `docs/adr/0136-local-post-lifecycle.md`, cited by the architecture
   view.
 - Defines **Deleted Post** and **Post Revision** independently of AtomPub Entry
   and inbound `ajr_entry_versions`.

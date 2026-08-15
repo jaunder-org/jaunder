@@ -454,7 +454,7 @@ later Post may reuse the URL and feed readers may conflate the two. Media
 referenced by a retained current Post or revision is to participate in the
 ordinary reference guard; explicit forced deletion remains an administrative
 override. A future purge remains deliberately undecided and requires its own
-decision ([local Post lifecycle decision](adr/drafts/local-post-lifecycle.md)).
+decision ([local Post lifecycle decision](adr/0136-local-post-lifecycle.md)).
 
 **Current lifecycle behavior.** Updates snapshot only title, slug, body, format,
 and rendered HTML; no-op updates still snapshot; dedicated state changes create
@@ -569,7 +569,7 @@ ordered by `published_at DESC, post_id DESC`. Defaults are 20 Posts and 30 fixed
 passes. A successful setting mutation is to durably invalidate all cached feeds
 before returning; checked overlarge ages mean all history, while corrupt stored
 values are errors
-([Syndication Feed hybrid-window decision](adr/drafts/syndication-feed-hybrid-window.md)).
+([Syndication Feed hybrid-window decision](adr/0139-syndication-feed-hybrid-window.md)).
 The union and defaults ship today, but
 [SQL ranks before visibility](https://github.com/jaunder-org/jaunder/issues/1051),
 so private rows can crowd out the count floor.
@@ -586,7 +586,7 @@ returns 304 without a body, nonmatching GET returns a body, and nonmatching HEAD
 returns GET-equivalent headers without one. Current validators and cache
 metadata accompany 304. `Cache-Control: public, max-age=300` is a downstream
 revalidation policy, not a regeneration promise
-([Syndication Feed HTTP-validation decision](adr/drafts/syndication-feed-http-validation.md)).
+([Syndication Feed HTTP-validation decision](adr/0138-syndication-feed-http-validation.md)).
 [Current tuple completeness, item-derived timestamp, 304 metadata, and conditional parsing](https://github.com/jaunder-org/jaunder/issues/1054)
 remain implementation debt.
 
@@ -673,7 +673,7 @@ to invalidate all cached feeds and work late-binds to one coherent current
 configuration snapshot. Regeneration and publication use separate bounded
 attempt budgets; exhausted regeneration and terminal publication remain
 separately inspectable and redrivable
-([publisher-side WebSub decision](adr/drafts/publisher-side-websub.md)).
+([publisher-side WebSub decision](adr/0137-publisher-side-websub.md)).
 
 **Current publisher behavior.** Production pings through
 `WebSubClient::send_publish(&HubUrl, &FeedUrl)`
@@ -2627,10 +2627,8 @@ than being replaced by the gate.
 
 The claims below are true of the system, but no ADR establishes them. Each is
 either a decision worth recording or detail not worth an ADR; the tracking issue
-decides which. Two issues hold the current set:
-[#937](https://github.com/jaunder-org/jaunder/issues/937) (protocol and content
-lifecycle) and [#938](https://github.com/jaunder-org/jaunder/issues/938)
-(infrastructure and process).
+decides which. [#938](https://github.com/jaunder-org/jaunder/issues/938) holds
+the current infrastructure and process set.
 
 - **The CLI subcommand surface and the `JAUNDER_*` process configuration.**
   ADR-0102 governs `site_config` database keys, a different surface.
