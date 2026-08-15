@@ -536,17 +536,17 @@ Run the global per-commit protocol. Commit:
   `seed_users`.
 - Produces five focused SessionStorage tests plus `session_list_operations`.
 
-- [ ] **Step 1: Move the six retained bodies**
+- [x] **Step 1: Move the six retained bodies**
 
 Keep token, timestamp, label, user-scoping, and list assertions unchanged.
 
-- [ ] **Step 2: Prove the concern**
+- [x] **Step 2: Prove the concern**
 
 Run:
 `devtool run -- devtool pg run -- cargo nextest run -p jaunder storage::sessions`
 Expected: PASS, twelve backend cases.
 
-- [ ] **Step 3: Gate and commit**
+- [x] **Step 3: Gate and commit**
 
 Run the global per-commit protocol. Commit:
 `refactor(server/tests): split session storage tests (#950)`.
