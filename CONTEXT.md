@@ -10,13 +10,25 @@ and conversation stay consistent.
 
 **Post**: A unit of authored content owned by one local user, carrying a body in
 a specific authoring format, an optional title, a slug, tags, and a publication
-state (draft until published). Identified publicly by its permalink. _Avoid_:
-Article, entry (reserve "Entry" for the AtomPub wire object), note.
+state (draft until published). An active Post is identified publicly by its
+permalink; a Deleted Post releases that public identity while retaining its
+internal Post ID. _Avoid_: Article, entry (reserve "Entry" for the AtomPub wire
+object), note.
 
 **Default Post Format**: A per-user preference naming the authoring format
 (`Markdown`, `Org`, or `Html`) used as the web composer's default and as the
 interpretation for AtomPub `type="text"` content. Real HTML
 (`type="html"`/`xhtml"`) always overrides to `Html` regardless of this setting.
+
+**Deleted Post**: A locally authored Post retained under a deletion tombstone
+but absent from active web, Syndication Feed, and AtomPub Collection surfaces.
+Deletion is not physical erasure. _Avoid_: using Deleted Post for inbound
+deletion activity or promising purge.
+
+**Post Revision**: An immutable prior full-state snapshot of a locally authored
+Post, readable only by its owner. Distinct from an AtomPub **Entry** and from
+inbound `ajr_entry_versions`. _Avoid_: edit event (a no-op write creates no
+revision), backup (revisions are included in backups but are not backups).
 
 **App Password**: A named, individually-revocable credential a user mints for a
 non-browser client (e.g. MarsEdit) to authenticate against machine-facing APIs.
@@ -37,7 +49,7 @@ to exactly one **Post**. _Avoid_: using bare "Entry" to mean a Post; an Entry is
 the protocol serialization of a Post.
 
 **Collection**: An AtomPub-addressable, paginated set of Members. In Jaunder, a
-user's Collection is their set of Posts.
+user's Collection is their set of active Posts; Deleted Posts are omitted.
 
 **Service Document**: The AtomPub discovery document (`app:service`) that
 advertises a user's available Collections and the media types each accepts.
@@ -49,6 +61,13 @@ consumed by arbitrary feed readers. Always serialized as rendered HTML. Distinct
 from an AtomPub **Collection**, which is authenticated and editor-facing.
 _Avoid_: calling this "the feed" without qualification when an AtomPub
 Collection is also in play.
+
+**WebSub Publish Ping**: An outbound `hub.mode=publish` notification from
+Jaunder as publisher to the configured **WebSub Hub**, naming a Syndication Feed
+URL as its topic. It announces a representation change but carries no content.
+_Avoid_: bare WebSub when publisher-side notification could be confused with the
+planned inbound WebSub subscription leg; bare hub when the WebSub Hub could be
+confused with Jaunder's planned hub architecture.
 
 **`feed_*` scope**: The `feed_*` identifier family — `feed_url`, `feed_cache`,
 `feed_events` — refers **only** to syndication feeds (RSS, Atom, JSON Feed), and

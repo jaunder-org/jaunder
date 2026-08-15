@@ -423,10 +423,11 @@ slug editable on a later update, and scheduling or publishing freezes it again
 [scheduled publishing](adr/0027-scheduled-publishing-time-gated-visibility.md),
 [current-state slug freeze](adr/0130-current-publication-state-slug-freeze.md)).
 
-**Visibility is two orthogonal predicates on the same reads.** _Time_: a post is
-draft (`published_at` NULL), scheduled (future), or live (past); every public
-read gates `published_at <= now` with `now` an explicit parameter, the feed
-worker's `go_live_pass` (`server/src/feed/worker.rs`) makes future-dated go-live
+**Visibility starts with active/not-deleted eligibility, then applies two
+orthogonal predicates on the same reads.** _Time_: an active Post is draft
+(`published_at` NULL), scheduled (future), or live (past); every public read
+gates `published_at <= now` with `now` an explicit parameter, the feed worker's
+`go_live_pass` (`server/src/feed/worker.rs`) makes future-dated go-live
 restart-durable for cached feeds, and publish is an explicit
 `PublishUpdate { Unpublish, Publish { at } }` so scheduling, backdating, and
 pullback to draft round-trip
@@ -440,18 +441,30 @@ is zero rows); subscriptions route through the admission seam
 (`SubscriptionPolicy`, wired to the auto-approving `OpenSubscriptionPolicy`)
 ([ADR-0020](adr/0020-content-visibility-and-subscription-model.md)).
 
-**Local edits are never destructive**: every update snapshots the pre-edit row
-into an immutable `post_revisions` row — title, slug, body, format, rendered
-HTML at that moment (`storage/src/sqlite/posts.rs:73`,
-`storage/src/postgres/posts.rs:75`; table created in migration
-`0008_create_posts.sql`). The rows are write-only today: `PostRevisionRecord`
-(`storage/src/posts.rs:119`) has no read query, so no surface exposes edit
-history yet.
+**Accepted local lifecycle target.** A local Post is durable canonical identity
+and latest state. Before every meaningful content, tag, audience, media,
+publication, or deletion change, storage is to append a full prior-state **Post
+Revision**, including immutable creation/prior modification and
+publication/deletion timestamps; no-op writes create none. Revisions are
+immutable through the storage API, owner-readable (including after deletion),
+and not revert operations. Soft deletion is to retain the Post and its history
+indefinitely while removing it from active web, Syndication Feed, and AtomPub
+Collection surfaces. Permalink and syndicated-item identity is active-only, so a
+later Post may reuse the URL and feed readers may conflate the two. Media
+referenced by a retained current Post or revision is to participate in the
+ordinary reference guard; explicit forced deletion remains an administrative
+override. A future purge remains deliberately undecided and requires its own
+decision ([local Post lifecycle decision](adr/drafts/local-post-lifecycle.md)).
 
-**Local deletion is soft and un-ADR'd**: `soft_delete_post`
-(`storage/src/posts.rs:689,1308`) stamps `deleted_at`, and public reads filter
-`deleted_at IS NULL` (26 sites in `storage/src/posts.rs`). Whether a hard delete
-ever happens is undecided.
+**Current lifecycle behavior.** Updates snapshot only title, slug, body, format,
+and rendered HTML; no-op updates still snapshot; dedicated state changes create
+no revision; history has no read surface; and deleted Posts/revisions release
+media protection.
+[Revision/history/media corrections](https://github.com/jaunder-org/jaunder/issues/1055)
+and [Deleted Post replay](https://github.com/jaunder-org/jaunder/issues/1056)
+remain implementation debt, not alternate lifecycle policy.
+[ADR-0009](adr/0009-edit-delete-policy.md) governs consumed content and does not
+reach these local rows.
 
 Cross-cutting values are validated newtypes whose `FromStr` is the single
 chokepoint: `Username`, `Slug`, `Tag`, `Password`
@@ -548,6 +561,35 @@ rebuilds them. Scheduled posts reach feeds via `FeedWorker::go_live_pass`
 posts crossed their publish time
 ([ADR-0027](adr/0027-scheduled-publishing-time-gated-visibility.md)).
 
+**Accepted membership target.** Cached membership is to apply anonymous/Public
+eligibility before ranking, then select the union of the first `feeds.min_items`
+Posts and all Posts at or newer than the inclusive `feeds.min_days` cutoff,
+ordered by `published_at DESC, post_id DESC`. Defaults are 20 Posts and 30 fixed
+24-hour UTC days. The window is exact when regenerated, not continuously as time
+passes. A successful setting mutation is to durably invalidate all cached feeds
+before returning; checked overlarge ages mean all history, while corrupt stored
+values are errors
+([Syndication Feed hybrid-window decision](adr/drafts/syndication-feed-hybrid-window.md)).
+The union and defaults ship today, but
+[SQL ranks before visibility](https://github.com/jaunder-org/jaunder/issues/1051),
+so private rows can crowd out the count floor.
+[Setting activation, arithmetic, and corrupted values](https://github.com/jaunder-org/jaunder/issues/1053)
+remain implementation debt.
+
+**Accepted validation target.** Each cached representation is to carry a strong,
+deterministic ETag from every ordered serializer input plus serializer revision;
+identical semantic inputs and bytes retain it. A persisted whole-second
+representation-modification time is to change only with representation identity
+and supply `Last-Modified`. `If-None-Match` uses RFC 9110 weak comparison, lists
+and wildcard, and takes precedence over `If-Modified-Since`; matching GET/HEAD
+returns 304 without a body, nonmatching GET returns a body, and nonmatching HEAD
+returns GET-equivalent headers without one. Current validators and cache
+metadata accompany 304. `Cache-Control: public, max-age=300` is a downstream
+revalidation policy, not a regeneration promise
+([Syndication Feed HTTP-validation decision](adr/drafts/syndication-feed-http-validation.md)).
+[Current tuple completeness, item-derived timestamp, 304 metadata, and conditional parsing](https://github.com/jaunder-org/jaunder/issues/1054)
+remain implementation debt.
+
 The Atom feed document is built by upstream `atom_syndication` — `render_atom`
 assembles an `atom_syndication::Feed` and lets the crate emit the XML
 ([ADR-0089](adr/0089-upstream-atom-document-io.md)). RSS goes through the `rss`
@@ -619,15 +661,28 @@ as before: `quick-xml` ≥ 0.41.
 
 ### WebSub publishing
 
-WebSub is publisher-side only. After regenerating a feed, the feed worker pings
-the configured hub (the `feeds.websub_hub_url` setting,
-`common/src/config_key.rs:165`) through
+**Accepted publisher target.** Publisher-side WebSub is to cover every Site,
+User, Site Tag, and User Tag Syndication Feed URL in RSS, Atom, and JSON. One
+optional site-wide hub is advertised in each representation; a **WebSub Publish
+Ping** names that exact URL as its topic and carries no content. The trigger is
+a protocol-independent change to at least one concrete public feed
+representation. Post mutation and affected-feed events are to commit as a
+transactional outbox; the worker commits the regenerated cache before
+duplicate-safe, at-least-once remote publication. Hub configuration changes are
+to invalidate all cached feeds and work late-binds to one coherent current
+configuration snapshot. Regeneration and publication use separate bounded
+attempt budgets; exhausted regeneration and terminal publication remain
+separately inspectable and redrivable
+([publisher-side WebSub decision](adr/drafts/publisher-side-websub.md)).
+
+**Current publisher behavior.** Production pings through
 `WebSubClient::send_publish(&HubUrl, &FeedUrl)`
-(`server/src/websub/contract.rs:45`) with bounded retries and a `websub_ping`
-metric whose outcome distinguishes `Success`, `Exhausted`, `Failed`, and `NoHub`
-(`server/src/feed/worker.rs:239-266`) — an unconfigured hub is a recorded no-op,
-not a silent one. `HttpWebSubClient` runs in production; noop and file-capture
-implementations back the tests.
+(`server/src/websub/contract.rs:45`) and reports `Success`, `Exhausted`,
+`Failed`, or `NoHub`.
+[AtomPub does not enqueue, web enqueue is not atomic, and triggers are coarse](https://github.com/jaunder-org/jaunder/issues/1051).
+[Configuration changes do not invalidate caches, worker/regenerator snapshots can differ, configuration access errors can collapse to `NoHub`, HTTP failures retry alike, `Retry-After` is ignored, budgets are shared, and terminal rows lack redrive](https://github.com/jaunder-org/jaunder/issues/1052).
+`HttpWebSubClient` runs in production; noop and file-capture implementations
+back tests.
 
 ### Committed direction — inbound federation
 
@@ -2577,21 +2632,6 @@ decides which. Two issues hold the current set:
 lifecycle) and [#938](https://github.com/jaunder-org/jaunder/issues/938)
 (infrastructure and process).
 
-- **Publisher-side WebSub.** It is built and exercised by e2e specs, but
-  ADR-0010 names WebSub only as a future _ingestion_ channel.
-  [#937](https://github.com/jaunder-org/jaunder/issues/937)
-- **Feed item selection and conditional GET.** `HybridWindow` (`feeds.min_items`
-  / `feeds.min_days`, `common/src/feed/window.rs`) and `feed_etag`
-  (`common/src/feed/metadata.rs:66`) are load-bearing feed policy with no ADR.
-  [#937](https://github.com/jaunder-org/jaunder/issues/937)
-- **Local soft delete.** `soft_delete_post` stamps `deleted_at` and every public
-  read filters `deleted_at IS NULL`; no ADR mentions deletion policy, and
-  whether a hard delete ever happens is undecided.
-  [#937](https://github.com/jaunder-org/jaunder/issues/937)
-- **Local revision snapshots.** `post_revisions` is written on every edit and
-  read by nothing. ADR-0009 covers consumed content only, so it does not reach
-  this despite the resemblance.
-  [#937](https://github.com/jaunder-org/jaunder/issues/937)
 - **The CLI subcommand surface and the `JAUNDER_*` process configuration.**
   ADR-0102 governs `site_config` database keys, a different surface.
   [#938](https://github.com/jaunder-org/jaunder/issues/938)
