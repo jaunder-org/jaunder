@@ -1098,7 +1098,7 @@ Tick Step 4, Step 5, and every remaining plan checkbox. Run the global
 per-commit protocol and commit only the plan:
 `docs: complete issue 950 implementation plan`.
 
-- [ ] **Step 6: Validate the exact final HEAD**
+- [x] **Step 6: Validate the exact final HEAD**
 
 Run: `devtool run -- cargo xtask validate` Expected: PASS again from the clean,
 fully committed tree. Make no file changes after this run. Confirm the branch is
