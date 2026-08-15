@@ -32,6 +32,7 @@ import {
 import { navigateInApp } from "./navigate";
 import { allowSecondBoot } from "./bootBudget";
 import { expectVisual } from "./visual";
+import { expectAccessible } from "./accessibility";
 
 const TIMELINE_PAGE_SIZE = 50;
 const TIMELINE_OVERFLOW_COUNT = 1;
@@ -204,7 +205,7 @@ test("clearing a post summary on edit persists as empty", async ({
 // call, so a control that cannot dispatch cannot be pressed.
 test(
   "an empty body disables the compose page's submit controls",
-  { tag: "@visual" },
+  { tag: ["@visual", "@accessibility"] },
   async ({ page, firstNav }) => {
     const session = await createSessionViaTool("testlogin");
     await applySeededSession(page.context(), session);
@@ -213,6 +214,7 @@ test(
     await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
     await expect(page.locator(SEL.publishButton("false"))).toBeDisabled();
     await expectVisual(page, "empty-post-composer.png");
+    await expectAccessible(page);
 
     // Whitespace-only is rejected by PostBody::from_str exactly as empty is.
     await page.fill(SEL.postBody, "   \n\t ");

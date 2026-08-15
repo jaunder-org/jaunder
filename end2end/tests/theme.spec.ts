@@ -2,6 +2,7 @@ import { test, expect } from "./fixtures";
 import { goto } from "./helpers";
 import { seedPostsViaTool, seedUserViaTool } from "./seed";
 import { expectVisual } from "./visual";
+import { expectAccessible } from "./accessibility";
 
 // Regression for #22: the reactive data-theme binding on the plain `.j-root`
 // element must survive the CSR mount. A leaked Leptos `attr:` directive prefix
@@ -9,7 +10,7 @@ import { expectVisual } from "./visual";
 // stopped matching and no theme token overrides applied after the client booted.
 test(
   "issue #22: .j-root keeps a real data-theme after CSR mount",
-  { tag: "@visual" },
+  { tag: ["@visual", "@accessibility"] },
   async ({ page }) => {
     await seedUserViaTool("visualauthor", "visualpassword123");
     await seedPostsViaTool("visualauthor", 1, "Visual Timeline Post");
@@ -50,5 +51,6 @@ test(
     await expectVisual(page, "public-timeline.png", {
       mask: [page.locator(".j-post-time")],
     });
+    await expectAccessible(page);
   },
 );

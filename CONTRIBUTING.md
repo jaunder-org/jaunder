@@ -306,6 +306,26 @@ both the visual prerequisite and the ordinary/admin invocation to that
 positional filter; an unrelated spec does not schedule all visual tests. Update
 mode intentionally rejects a positional filter.
 
+#### Accessibility workflow
+
+Accessibility coverage runs axe against the same four stable states as visual
+coverage: the public timeline, login form, authenticated `/app` cockpit, and
+empty `/posts/new` composer. Each test retains its behavioral readiness
+assertions, carries the `@accessibility` tag, and checks the complete mounted
+document against the machine-checkable WCAG 2.2 Level A and AA rules available
+in the pinned axe version.
+
+Every scanned state must report zero violations. Do not add exclusions, disable
+rules, suppress findings, or weaken the shared policy; fix each violation at the
+product markup or style that owns it.
+
+To extend coverage, choose a stable existing behavioral test and keep its
+readiness assertions. Add the `@accessibility` tag and call
+`expectAccessible(page)` only after the complete intended state is mounted.
+Automated axe checks cover only machine-checkable findings; they do not replace
+keyboard navigation, screen-reader testing, manual assessment, or inclusive-user
+assessment.
+
 ### One boot per page
 
 An e2e page performs **exactly one document load — its entry, at the URL under

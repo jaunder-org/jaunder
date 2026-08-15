@@ -25,6 +25,7 @@ import { SEL } from "./selectors";
 import { createPostViaApi } from "./posts";
 import { applySeededSession, createSessionViaTool } from "./seed";
 import { expectVisual } from "./visual";
+import { expectAccessible } from "./accessibility";
 
 test("owner: pre-paint auth marks html.authed and / stays the enhanced public timeline", async ({
   page,
@@ -129,7 +130,7 @@ test("seeded: re-seed as the same user after logout boots authed", async ({
 
 test(
   "owner: /app cockpit boots straight into the personalized feed",
-  { tag: "@visual" },
+  { tag: ["@visual", "@accessibility"] },
   async ({ page, firstNav }) => {
     const session = await createSessionViaTool("testlogin");
     await applySeededSession(page.context(), session);
@@ -138,6 +139,7 @@ test(
     await expect(page.locator(".j-topbar .j-sub")).toHaveText("Your home feed");
     await expect(page.locator(SEL.postBody)).toBeVisible();
     await expectVisual(page, "authenticated-cockpit.png");
+    await expectAccessible(page);
   },
 );
 

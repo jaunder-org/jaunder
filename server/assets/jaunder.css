@@ -247,7 +247,7 @@
     font-weight: 600;
     letter-spacing: 0.6px;
     text-transform: uppercase;
-    color: var(--muted-soft);
+    color: var(--muted);
     display: flex;
     align-items: center;
 }
@@ -299,7 +299,7 @@
 }
 .j-source-sub {
     font-size: 11px;
-    color: var(--muted-soft);
+    color: var(--muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -521,7 +521,7 @@
 .j-post-time {
     margin-left: auto;
     font-size: 12px;
-    color: var(--muted-soft);
+    color: var(--muted);
 }
 .j-post-title {
     font-family: var(--font-display);
