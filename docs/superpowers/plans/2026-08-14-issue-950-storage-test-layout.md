@@ -441,18 +441,18 @@ Run the global per-commit protocol. Commit:
 - Consumes shared `backends`, `Backend`, and `TestEnv`.
 - Produces three retained leaves under `storage::site_config`.
 
-- [ ] **Step 1: Move only retained site-config bodies**
+- [x] **Step 1: Move only retained site-config bodies**
 
 Keep mailer construction in this module because its observable contract is
 configuration-driven. Do not move or delete the three root smoke tests yet.
 
-- [ ] **Step 2: Prove the concern**
+- [x] **Step 2: Prove the concern**
 
 Run:
 `devtool run -- devtool pg run -- cargo nextest run -p jaunder -E 'test(/^storage::site_config::/)'`
 Expected: PASS, six backend cases.
 
-- [ ] **Step 3: Gate and commit**
+- [x] **Step 3: Gate and commit**
 
 Run the global per-commit protocol. Commit:
 `refactor(server/tests): split site config storage tests (#950)`.
