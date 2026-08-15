@@ -168,6 +168,10 @@ convention). See the Status column below for each ADR's current status.
 | [0138](adr/0138-syndication-feed-http-validation.md)               | Validate cached Syndication Feed representations conditionally                                               | accepted   |
 | [0139](adr/0139-syndication-feed-hybrid-window.md)                 | Select Syndication Feed items with a hybrid window                                                           | accepted   |
 | [0140](adr/0140-strict-media-address-extraction.md)                | The public media route extracts one strict validated address                                                 | accepted   |
+| [0141](adr/0141-cargo-workspace-execution-boundaries.md)           | Cargo Workspace Execution Boundaries and Compensating Host Tests                                             | accepted   |
+| [0142](adr/0142-declarative-nixos-deployment-package-outputs.md)   | Declarative NixOS Deployment and Package Outputs                                                             | accepted   |
+| [0143](adr/0143-emacs-auth-source-app-password-storage.md)         | Emacs auth-source App Password Storage                                                                       | accepted   |
+| [0144](adr/0144-process-configuration-cli-contract.md)             | Process Configuration and CLI Contract                                                                       | accepted   |
 
 <!-- adr-table:end -->
 
