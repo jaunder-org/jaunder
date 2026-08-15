@@ -27,7 +27,7 @@ pub fn document(seed: &PageSeed) -> String {
             "<!DOCTYPE html><html lang=\"en\"><head>{prepaint}{head}</head><body>",
             "<div id=\"app\">{body}</div>",
             "<script type=\"application/json\" id=\"jaunder-seed\">{blob}</script>",
-            "<script type=\"module\">import init from \"/pkg/jaunder.js\"; init(\"/pkg/jaunder.wasm\");</script>",
+            "<script type=\"module\">import {{initMeasured}} from \"/pkg/jaunder.js\"; initMeasured(\"/pkg/jaunder.wasm\");</script>",
             "</body></html>",
         ),
         prepaint = PREPAINT_SCRIPT,
@@ -210,7 +210,7 @@ mod tests {
         }));
         assert!(doc.contains(web::app::PREPAINT_SCRIPT), "{doc}");
         assert!(
-            doc.contains("<head><script>(function()"),
+            doc.contains(&format!("<head>{}", web::app::PREPAINT_SCRIPT)),
             "prepaint is first in head: {doc}"
         );
     }
@@ -226,10 +226,13 @@ mod tests {
         // silently drift; `cargo xtask audit-wasm` ties that shared URL to the file
         // the build actually emits.
         fn boot_wasm_url(html: &str) -> &str {
-            let marker = "init(\"";
-            let start = html.find(marker).expect("boot script calls init(\"…\")") + marker.len();
+            let marker = "initMeasured(\"";
+            let start = html
+                .find(marker)
+                .expect("boot script calls initMeasured(\"…\")")
+                + marker.len();
             let rest = &html[start..];
-            &rest[..rest.find('"').expect("init(\"…\") closing quote")]
+            &rest[..rest.find('"').expect("initMeasured(\"…\") closing quote")]
         }
         let doc = document(&PageSeed::SiteTimeline(TimelinePage {
             posts: vec![],

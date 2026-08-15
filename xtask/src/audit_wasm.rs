@@ -128,20 +128,21 @@ fn quoted_after(haystack: &str, marker: &str) -> Option<String> {
 }
 
 /// The `pkg/`-relative artifacts the CSR shell actually boots, read from the
-/// site's `index.html`: the wasm the boot passes to `init` (`init("…")`) and the
-/// JS module it imports (`import init from "…"`). Deriving the audit's targets
-/// from the shell — rather than a hard-coded name — is what makes this a real
-/// guard: a wasm the shell references but the build never emitted (issue #234)
-/// becomes a missing artifact here, instead of a silent 404 in the browser.
-/// Rejects an arg-less `init()` (no explicit URL → wasm-bindgen's `_bg` default,
-/// the #234 regression).
+/// site's `index.html`: the wasm the measured boot passes to `initMeasured`
+/// (`initMeasured("…")`) and the JS module it imports. Deriving the audit's
+/// targets from the shell — rather than a hard-coded name — is what makes this a
+/// real guard: a wasm the shell references but the build never emitted (issue
+/// #234) becomes a missing artifact here, instead of a silent 404 in the browser.
+/// Rejects an arg-less `initMeasured()` (no explicit URL → wasm-bindgen's `_bg`
+/// default, the #234 regression).
 fn shell_boot_artifacts(index_html: &str) -> Result<Vec<String>> {
-    let wasm = quoted_after(index_html, "init(\"").context(
-        "index.html boot script has no explicit `init(\"…\")` wasm URL \
-         (arg-less init() falls back to wasm-bindgen's _bg default — issue #234)",
+    let wasm = quoted_after(index_html, "initMeasured(\"").context(
+        "index.html boot script has no explicit `initMeasured(\"…\")` wasm URL \
+         (arg-less initMeasured() falls back to wasm-bindgen's _bg default — issue #234)",
     )?;
-    let js = quoted_after(index_html, "import init from \"")
-        .context("index.html has no `import init from \"…\"` module URL")?;
+    let js = quoted_after(index_html, "import {initMeasured} from \"")
+        .or_else(|| quoted_after(index_html, "import { initMeasured } from \""))
+        .context("index.html has no `initMeasured` module URL")?;
     Ok([wasm, js]
         .into_iter()
         .map(|url| url.trim_start_matches('/').to_string())
@@ -357,11 +358,12 @@ mod tests {
     }
 
     #[test]
-    fn shell_boot_artifacts_reads_the_boot_urls_from_index_html() {
-        // wasm first (the boot's `init(...)` target), then the JS module.
+    fn shell_boot_artifacts_reads_the_measured_boot_urls_from_index_html() {
+        // wasm first (the measured boot's `initMeasured(...)` target), then the JS
+        // module.
         let index = r#"<!doctype html><script type="module">
-          import init from "/pkg/jaunder.js";
-          init("/pkg/jaunder.wasm");
+          import {initMeasured} from "/pkg/jaunder.js";
+          initMeasured("/pkg/jaunder.wasm");
         </script>"#;
         assert_eq!(
             shell_boot_artifacts(index).unwrap(),
@@ -370,10 +372,9 @@ mod tests {
     }
 
     #[test]
-    fn shell_boot_artifacts_rejects_arg_less_init() {
-        // The exact #234 regression: arg-less init() carries no explicit wasm URL,
-        // so wasm-bindgen falls back to its `_bg` default → the audit must refuse it.
-        let index = r#"<script type="module">import init from "/pkg/jaunder.js"; init();</script>"#;
+    fn shell_boot_artifacts_rejects_arg_less_measured_initializer() {
+        // The #234 regression remains invalid through the measured public API.
+        let index = r#"<script type="module">import {initMeasured} from "/pkg/jaunder.js"; initMeasured();</script>"#;
         let err = shell_boot_artifacts(index).unwrap_err().to_string();
         assert!(
             err.contains("234"),

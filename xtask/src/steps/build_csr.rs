@@ -1,8 +1,9 @@
 //! `xtask build-csr` — build the CSR wasm bundle on the host without cargo-leptos.
-//! Compiles the `csr` crate to wasm, then runs the shared `devtool csr-bundle`
-//! post-processing — the SAME implementation the Nix `csrWasmBundle` derivation
-//! uses (#236), so the host and CI bundles cannot drift. Debug by default (fast
-//! dev loop; the CSR mount is slower); `--release` matches CI's optimized wasm.
+//! Compiles the `csr` crate to wasm, then runs the checked-out `devtool`
+//! postprocessor. The PATH `devtool` is the devShell's pinned release binary and
+//! can predate this checkout; building the local crate is required for e2e to
+//! exercise a changed bundle postprocessor. Debug is faster for the dev loop;
+//! `--release` matches CI's optimized wasm.
 //!
 //! Output lands in `target/site/pkg/` (`jaunder.{js,wasm}` + wasm-bindgen's
 //! `.d.ts`/`snippets`), where `jaunder serve` serves it from `site_root`.
@@ -40,13 +41,16 @@ pub fn run(sh: &Shell, result: &mut CommandResult, release: bool) {
 
     let wasm = format!("{root}/target/wasm32-unknown-unknown/{profile}/csr.wasm");
     let out = format!("{root}/target/site/pkg");
-    if cmd!(sh, "devtool csr-bundle --wasm {wasm} --out {out}")
-        .run()
-        .is_err()
+    if cmd!(
+        sh,
+        "cargo run --manifest-path tools/devtool/Cargo.toml -- csr-bundle --wasm {wasm} --out {out}"
+    )
+    .run()
+    .is_err()
     {
         result.push(
             StepResult::fail("build-csr-bundle")
-                .detail("devtool csr-bundle failed (is devtool/wasm-bindgen on PATH?)".to_owned()),
+                .detail("checked-out devtool csr-bundle failed".to_owned()),
         );
         return;
     }

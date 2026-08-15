@@ -101,7 +101,11 @@ export type CaptureSink = {
 };
 
 /** One `performance.mark` the CSR client emitted, document-relative. */
-export type BootMark = { name: string; startTime: number };
+export type BootMark = {
+  name: string;
+  startTime: number;
+  detail?: unknown;
+};
 
 /** The `.wasm` resource's timing within one document, document-relative.
  *
@@ -124,6 +128,69 @@ export type WasmTiming = {
   transferSize: number;
 };
 
+/** Direct initializer marks and the successful WebAssembly API timing. Kept
+ * separate from Rust boot marks because both direct durations overlap them. */
+export type WasmInitTiming = {
+  startMs: number | null;
+  doneMs: number | null;
+  apiMs: number | null;
+  path: "streaming" | "buffered" | null;
+};
+
+const WASM_INIT_START = "jaunder.wasm.init_start";
+const WASM_INIT_DONE = "jaunder.wasm.init_done";
+
+/** Decode only the closed completion payload the generated initializer writes. */
+export function wasmInitFromMarks(
+  marks: BootMark[],
+): WasmInitTiming | undefined {
+  const start = marks.find((mark) => mark.name === WASM_INIT_START);
+  const done = marks.find((mark) => mark.name === WASM_INIT_DONE);
+  if (!start && !done) return undefined;
+  const detail = done?.detail;
+  const completion =
+    detail !== null &&
+    typeof detail === "object" &&
+    "path" in detail &&
+    "apiMs" in detail
+      ? detail
+      : null;
+  const candidatePath =
+    completion?.path === "streaming"
+      ? "streaming"
+      : completion?.path === "buffered"
+        ? "buffered"
+        : null;
+  const candidateApiMs =
+    typeof completion?.apiMs === "number" && Number.isFinite(completion.apiMs)
+      ? completion.apiMs
+      : null;
+  const valid =
+    candidatePath !== null && candidateApiMs !== null && candidateApiMs >= 0;
+  const path = valid ? candidatePath : null;
+  const apiMs = valid ? candidateApiMs : null;
+  return {
+    startMs: start?.startTime ?? null,
+    doneMs: done?.startTime ?? null,
+    apiMs,
+    path,
+  };
+}
+
+function mergeWasmInit(
+  existing: WasmInitTiming | undefined,
+  incoming: WasmInitTiming | undefined,
+): WasmInitTiming | undefined {
+  if (existing === undefined) return incoming;
+  if (incoming === undefined) return existing;
+  return {
+    startMs: existing.startMs ?? incoming.startMs,
+    doneMs: existing.doneMs ?? incoming.doneMs,
+    apiMs: existing.apiMs ?? incoming.apiMs,
+    path: existing.path ?? incoming.path,
+  };
+}
+
 /**
  * Everything harvested from a single document, at mount-ready and again at `load`.
  *
@@ -135,6 +202,8 @@ export type WasmTiming = {
 export type DocumentTiming = {
   marks: BootMark[];
   wasm: WasmTiming | null;
+  /** Completion can arrive after mount/load snapshots; merge independently. */
+  wasmInit?: WasmInitTiming;
 };
 
 /**
@@ -155,14 +224,17 @@ export function mergeDocumentTiming(
   incoming: DocumentTiming,
 ): DocumentTiming {
   if (existing === undefined) return incoming;
+  let selected = existing;
   if (incoming.marks.length !== existing.marks.length) {
-    return incoming.marks.length > existing.marks.length ? incoming : existing;
+    selected =
+      incoming.marks.length > existing.marks.length ? incoming : existing;
+  } else if (existing.wasm === null && incoming.wasm !== null) {
+    selected = incoming;
   }
-  // Equal mark counts: prefer whichever actually saw the `.wasm` resource entry.
-  // `load` can fire before the fetch completes (that is defect 2 of #818), so a tie
-  // on marks does not mean a tie on completeness.
-  if (existing.wasm === null && incoming.wasm !== null) return incoming;
-  return existing;
+  const wasmInit = mergeWasmInit(existing.wasmInit, incoming.wasmInit);
+  return wasmInit === undefined || selected.wasmInit === wasmInit
+    ? selected
+    : { ...selected, wasmInit };
 }
 
 export type TraceCapture = {
@@ -238,31 +310,14 @@ export async function attachTraceCapture(
   const navigationRequestIds = new Map<Request, number>();
   const navigationPhase = new Map<number, Phase>();
   const pageStates = new Map<Page, PageState>();
+  const documentTokens = new Map<number, number>();
   const documentTimings = new Map<number, DocumentTiming>();
   const pendingHarvests: Promise<void>[] = [];
   let nextNavigationId = 1;
   let nextRecordSequence = 1;
-
   /**
-   * Snapshot this document's marks and `.wasm` resource timing before the next
-   * navigation wipes them.
-   *
-   * **Called at two points, and the mount-ready one is what makes this complete.**
-   * `csr` emits every `jaunder.*` mark synchronously before setting `data-mounted`,
-   * so a harvest driven by that attribute catches the whole set by construction on
-   * any engine. The `load` harvest is kept because a navigation that never mounts
-   * still reaches it and still has wasm timing worth recording — but `load` alone
-   * is not enough twice over: it frequently never fires at all (`goto` waits only
-   * for `domcontentloaded`), and on firefox it lands before boot has even reached
-   * `boot.entry`, because `csr/index.html` starts the wasm from a module script
-   * that never awaits `init(...)`, so the fetch does not block `load`. Firefox lost
-   * that race on 210/210 navigations of every run in the #792 corpus (#818).
-   *
-   * Everything returned is document-relative (`performance.timeOrigin`-based), so
-   * the values are comparable to each other but NOT to the Node-side `Date.now()`
-   * fields on `NavigationRecord`. The boot decomposition is computed entirely
-   * within this frame of reference; `mount_to_settled_ms` is computed entirely
-   * within the Node one. The two are never mixed.
+   * Harvest at mount-ready and load, then reconcile with the initializer
+   * completion callback. `load` can precede both boot and wasm completion.
    */
   const harvestDocument = async (page: Page, navigationId: number) => {
     try {
@@ -270,7 +325,15 @@ export async function attachTraceCapture(
         const marks = performance
           .getEntriesByType("mark")
           .filter((entry) => entry.name.startsWith(prefix))
-          .map((entry) => ({ name: entry.name, startTime: entry.startTime }));
+          .map((entry) => {
+            // `getEntriesByType` erases the concrete mark type.
+            const mark = entry as PerformanceMark;
+            return {
+              name: mark.name,
+              startTime: mark.startTime,
+              detail: mark.detail,
+            };
+          });
         const wasmEntry = (
           performance.getEntriesByType(
             "resource",
@@ -292,15 +355,16 @@ export async function attachTraceCapture(
             : null,
         };
       }, MARK_PREFIX);
-      // Merge, never overwrite: this runs twice per navigation (mount-ready and
-      // `load`) and the two can resolve in either order. See `mergeDocumentTiming`.
+      const harvested: DocumentTiming = {
+        ...timing,
+        wasmInit: wasmInitFromMarks(timing.marks),
+      };
       documentTimings.set(
         navigationId,
-        mergeDocumentTiming(documentTimings.get(navigationId), timing),
+        mergeDocumentTiming(documentTimings.get(navigationId), harvested),
       );
     } catch {
-      // Page closed, or navigated again before the evaluate landed. A missing
-      // entry is reported as absent rather than as zeros.
+      // Page closed, or navigated again before the evaluate landed.
     }
   };
 
@@ -325,8 +389,9 @@ export async function attachTraceCapture(
 
   await context.exposeBinding("__jaunderRecordMount", (source, value) => {
     if (!value || typeof value !== "object") return;
-    const payload = value as { href?: unknown };
+    const payload = value as { href?: unknown; token?: unknown };
     const href = typeof payload.href === "string" ? payload.href : null;
+    const token = typeof payload.token === "number" ? payload.token : null;
     const nowMs = Date.now();
 
     // The mount-ready marker belongs to the most recent matching navigation
@@ -341,6 +406,7 @@ export async function attachTraceCapture(
       const navigation = candidates[index];
       if (navigation.mountedMs !== null) continue;
       if (href !== null && navigation.url !== href) continue;
+      if (token !== null) documentTokens.set(token, navigation.id);
       navigation.mountedMs = nowMs;
       // Harvest HERE, not only at `load`. This instant is complete by
       // construction — `csr` marks `boot.mount_done` immediately before setting
@@ -354,74 +420,127 @@ export async function attachTraceCapture(
     }
   });
 
+  await context.exposeBinding("__jaunderRecordWasmInit", (source, value) => {
+    if (!value || typeof value !== "object") return;
+    const payload = value as { href?: unknown; token?: unknown };
+    const href = typeof payload.href === "string" ? payload.href : null;
+    const token = typeof payload.token === "number" ? payload.token : null;
+    if (href === null) return;
+    const tokenNavigationId =
+      token === null ? undefined : documentTokens.get(token);
+    const active = stateFor(source.page).active;
+    const navigation =
+      tokenNavigationId === undefined
+        ? active === null
+          ? undefined
+          : findNavigation(active)
+        : findNavigation(tokenNavigationId);
+    if (navigation !== undefined && navigation.url === href) {
+      pendingHarvests.push(harvestDocument(source.page, navigation.id));
+    }
+  });
+
   // `addInitScript` serializes this callback into the page, so it cannot close
   // over `MOUNTED_ATTR` from module scope — the attribute name is passed as the
   // call's argument instead (#251).
-  await context.addInitScript((mountedAttr: string) => {
-    const globalScope = globalThis as typeof globalThis & {
-      __jaunderLongTasks?: Array<{
-        startTime: number;
-        duration: number;
-        name: string;
-      }>;
-      __jaunderLongTaskTotal?: number;
-      __jaunderMountNotified?: boolean;
-      __jaunderRecordMount?: (payload: { href: string }) => void;
-    };
-    globalScope.__jaunderLongTasks = [];
-    globalScope.__jaunderLongTaskTotal = 0;
-    globalScope.__jaunderMountNotified = false;
+  await context.addInitScript(
+    (args: { mountedAttr: string; wasmInitDone: string }) => {
+      const { mountedAttr, wasmInitDone } = args;
+      const globalScope = globalThis as typeof globalThis & {
+        __jaunderLongTasks?: Array<{
+          startTime: number;
+          duration: number;
+          name: string;
+        }>;
+        __jaunderLongTaskTotal?: number;
+        __jaunderMountNotified?: boolean;
+        __jaunderRecordMount?: (payload: {
+          href: string;
+          token: number;
+        }) => void;
+        __jaunderRecordWasmInit?: (payload: {
+          href: string;
+          token: number;
+        }) => void;
+      };
+      globalScope.__jaunderLongTasks = [];
+      globalScope.__jaunderLongTaskTotal = 0;
+      globalScope.__jaunderMountNotified = false;
+      const documentToken = performance.timeOrigin;
 
-    const notifyMount = () => {
-      if (globalScope.__jaunderMountNotified) return;
-      const body = document.body;
-      if (!body || !body.hasAttribute(mountedAttr)) return;
-      globalScope.__jaunderMountNotified = true;
-      try {
-        globalScope.__jaunderRecordMount?.({ href: location.href });
-      } catch {
-        // Ignore cross-context bridge errors while collecting diagnostics.
-      }
-    };
-
-    notifyMount();
-    if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", notifyMount, {
-        once: true,
-      });
-    }
-    try {
-      const mountObserver = new MutationObserver(() => notifyMount());
-      mountObserver.observe(document.documentElement, {
-        subtree: true,
-        attributes: true,
-        attributeFilter: [mountedAttr],
-      });
-    } catch {
-      // MutationObserver should always exist in browsers, but keep this defensive.
-    }
-
-    if (typeof PerformanceObserver === "undefined") return;
-    try {
-      const observer = new PerformanceObserver((list) => {
-        for (const entry of list.getEntries()) {
-          if (entry.entryType !== "longtask") continue;
-          globalScope.__jaunderLongTaskTotal =
-            (globalScope.__jaunderLongTaskTotal ?? 0) + 1;
-          globalScope.__jaunderLongTasks?.push({
-            startTime: entry.startTime,
-            duration: entry.duration,
-            name: entry.name || "longtask",
+      const notifyMount = () => {
+        if (globalScope.__jaunderMountNotified) return;
+        const body = document.body;
+        if (!body || !body.hasAttribute(mountedAttr)) return;
+        globalScope.__jaunderMountNotified = true;
+        try {
+          globalScope.__jaunderRecordMount?.({
+            href: location.href,
+            token: documentToken,
           });
+        } catch {
+          // Ignore cross-context bridge errors while collecting diagnostics.
         }
-      });
-      observer.observe({ type: "longtask", buffered: true });
-    } catch {
-      // LongTask API is not available in every engine build.
-      // Note: Gecko implements no `longtask` observer at all, so this list is
-      // always empty on Firefox — an engine limitation, not a capture bug.
-    }
-  }, MOUNTED_ATTR);
+      };
+
+      notifyMount();
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", notifyMount, {
+          once: true,
+        });
+      }
+      try {
+        const mountObserver = new MutationObserver(() => notifyMount());
+        mountObserver.observe(document.documentElement, {
+          subtree: true,
+          attributes: true,
+          attributeFilter: [mountedAttr],
+        });
+      } catch {
+        // MutationObserver should always exist in browsers, but keep this defensive.
+      }
+
+      try {
+        const observer = new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) {
+            if (entry.name !== wasmInitDone) continue;
+            try {
+              globalScope.__jaunderRecordWasmInit?.({
+                href: location.href,
+                token: documentToken,
+              });
+            } catch {
+              // Ignore cross-context bridge errors while collecting diagnostics.
+            }
+          }
+        });
+        observer.observe({ type: "mark", buffered: true });
+      } catch {
+        // PerformanceObserver can be absent in reduced browser environments.
+      }
+      if (typeof PerformanceObserver === "undefined") return;
+      try {
+        const observer = new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) {
+            if (entry.entryType !== "longtask") continue;
+            globalScope.__jaunderLongTaskTotal =
+              (globalScope.__jaunderLongTaskTotal ?? 0) + 1;
+            globalScope.__jaunderLongTasks?.push({
+              startTime: entry.startTime,
+              duration: entry.duration,
+              name: entry.name || "longtask",
+            });
+          }
+        });
+        observer.observe({ type: "longtask", buffered: true });
+      } catch {
+        // LongTask API is not available in every engine build.
+        // Note: Gecko implements no `longtask` observer at all, so this list is
+        // always empty on Firefox — an engine limitation, not a capture bug.
+      }
+    },
+    { mountedAttr: MOUNTED_ATTR, wasmInitDone: WASM_INIT_DONE },
+  );
 
   context.on("request", (request) => {
     const startedMs = Date.now();
@@ -566,6 +685,36 @@ export async function attachTraceCapture(
       // arrives via async binding dispatch, so it can land after settling has
       // begun. A harvest missed here reads as a navigation with no boot
       // decomposition — indistinguishable from the bug this all fixes (#818).
+      // Give bindings queued by the page's last synchronous turn a bounded
+      // opportunity to arrive. In particular, `init_done` is emitted after
+      // mount while the initializer promise resolves; absent/hung initializers
+      // still cannot keep settlement open.
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 50);
+      });
+      const incompleteInitializers = [...pageStates].flatMap(
+        ([page, state]) => {
+          if (state.active === null) return [];
+          const doneMs = documentTimings.get(state.active)?.wasmInit?.doneMs;
+          return doneMs === null || doneMs === undefined
+            ? [[state.active, page] as const]
+            : [];
+        },
+      );
+      await Promise.all(
+        incompleteInitializers.map(async ([navigationId, page]) => {
+          try {
+            await page.waitForFunction(
+              (name) => performance.getEntriesByName(name, "mark").length !== 0,
+              WASM_INIT_DONE,
+              { timeout: 500 },
+            );
+          } catch {
+            // Failed and hung initializers do not block trace settlement.
+          }
+          pendingHarvests.push(harvestDocument(page, navigationId));
+        }),
+      );
       let drained = 0;
       while (drained < pendingHarvests.length) {
         const batch = pendingHarvests.slice(drained);

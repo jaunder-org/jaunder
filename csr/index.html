@@ -1,23 +1,28 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-  <head>
-    <!-- #181 pre-paint auth: byte-identical to web::app::PREPAINT_SCRIPT
-         (drift-guarded). Kept minified + prettier-ignored so the two copies match. -->
-    <!-- prettier-ignore -->
-    <script>(function(){try{var m=localStorage.getItem('jaunder_auth');if(m){var u=JSON.parse(m).username;if(u){var e=document.documentElement;e.classList.add('authed');e.setAttribute('data-user',u);if(localStorage.getItem('jaunder_home_redirect')==='app'&&location.pathname==='/'){location.replace('/app');}}}}catch(_){}})();</script>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <!-- No wasm preload, and that is measured rather than an oversight (#866): it
-         collapsed the serial pre-fetch window as intended but bought no boot time,
-         and made firefox's wasm instantiate 125 ms worse (#887). See
-         docs/observability.md §"#866" before re-adding one. -->
-    <link rel="stylesheet" href="/style/jaunder.css" />
-    <link rel="stylesheet" href="/style/jaunder-themes.css" />
-  </head>
-  <body>
-    <script type="module">
-      import init from "/pkg/jaunder.js";
-      init("/pkg/jaunder.wasm");
-    </script>
-  </body>
+
+<head>
+ <!-- #181 pre-paint auth: byte-identical to web::app::PREPAINT_SCRIPT
+         (drift-guarded). Kept formatter-stable so the two copies match. -->
+ <script>
+  // prettier-ignore
+  (function () {try {var m = localStorage.getItem('jaunder_auth'); if (m) {var u = JSON.parse(m).username; if (u) {var e = document.documentElement; e.classList.add('authed'); e.setAttribute('data-user', u); if (localStorage.getItem('jaunder_home_redirect') === 'app' && location.pathname === '/') {location.replace('/app');} } } } catch (_) { } })();
+ </script>
+ <meta charset="utf-8" />
+ <meta name="viewport" content="width=device-width, initial-scale=1" />
+ <!-- No wasm preload, and that is measured rather than an oversight (#866): it
+         collapsed the serial pre-fetch window as intended but bought no boot time.
+         The historical 125 ms increase was the superseded response-end residual,
+         not wasm instantiation (#887). See docs/observability.md §"#866". -->
+ <link rel="stylesheet" href="/style/jaunder.css" />
+ <link rel="stylesheet" href="/style/jaunder-themes.css" />
+</head>
+
+<body>
+ <script type="module">
+  import {initMeasured} from "/pkg/jaunder.js";
+  initMeasured("/pkg/jaunder.wasm");
+ </script>
+</body>
+
 </html>

@@ -127,7 +127,12 @@ impl From<&SpanCoverageRow> for SpanCoverageDisplay {
 struct BootCoverageDisplay {
     source: String,
     project: String,
+    #[tabled(rename = "all navs")]
     navigations: u64,
+    #[tabled(rename = "current navs")]
+    current: u64,
+    #[tabled(rename = "legacy navs")]
+    legacy: u64,
     mounted: u64,
     #[tabled(rename = "full marks")]
     full_marks: u64,
@@ -140,6 +145,8 @@ impl From<&BootCoverageRow> for BootCoverageDisplay {
             source: r.source.clone(),
             project: r.project.clone(),
             navigations: r.navigations,
+            current: r.current,
+            legacy: r.legacy,
             mounted: r.mounted,
             full_marks: r.full_marks,
             dropped: r.dropped,
@@ -422,6 +429,8 @@ mod tests {
             source: source.into(),
             project: "firefox".into(),
             navigations: 10,
+            current: 9,
+            legacy: 1,
             mounted: 9,
             full_marks: 9,
             dropped: 0,
