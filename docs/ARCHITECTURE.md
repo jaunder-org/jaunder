@@ -74,9 +74,11 @@ the host coverage denominator
 
 Two sibling trees are outside the root workspace, each its own cargo workspace:
 `xtask/` (the host-only dev/CI driver, also named in the root
-`exclude = ["xtask"]`) and `tools/` (members `devtool`, `coverage`, `doctests` —
-the in-sandbox tools that run where `xtask` is unavailable). Both are covered
-under [Development tooling](#development-tooling). `elisp/` (the Emacs client,
+`exclude = ["xtask"]`) and `tools/` (members `devtool`, `coverage`, `doctests`).
+Those boundaries are execution/ownership boundaries, not a claim that every
+`tools/` crate is absent from every Nix derivation
+([Cargo workspace execution boundaries](adr/0141-cargo-workspace-execution-boundaries.md)).
+`elisp/` (the Emacs client,
 [ADR-0031](adr/0031-elisp-separately-tested-subproject.md)) and `end2end/`
 (Playwright) are covered in their sections.
 
@@ -1472,33 +1474,39 @@ every stored row, flagging keys outside the registry as `UNKNOWN KEY` and
 recognised keys holding unparseable values as `INVALID`, so legacy rows stay
 visible.
 
-Deployment is configured by environment variables, each a clap `env` fallback
-for a flag (`server/src/cli.rs`). The process-shape ones are `JAUNDER_BIND`
-(listen address, `:267`), `JAUNDER_DB` (database URL, default
-`sqlite:./data/jaunder.db`, `:41`), `JAUNDER_STORAGE_PATH` (the data directory,
-default `./data`, `:33`), `JAUNDER_ENV` (`dev` | `prod`, `:271`),
-`JAUNDER_RUNTIME_FILE` (`:276`) and `JAUNDER_VERBOSE` (`:25`). PostgreSQL takes
-its secret by either `JAUNDER_DB_PASSWORD` or `JAUNDER_DB_PASSWORD_FILE`
-(`:39-40`, read at `storage/src/postgres/open.rs:40,44`). The observability
-variables are covered under [Observability](#observability). `prod` is
-load-bearing in two places: it sets the `secure_cookies` flag passed to
-`create_router` (`server/src/commands.rs:546`, `server/src/lib.rs:32`), and it
-disables the dev-only auto-initialization of a missing database on `serve`
+Deployment is configured by clap flags with matching `JAUNDER_*` environment
+fallbacks and documented defaults
+([process configuration](adr/0144-process-configuration-cli-contract.md)). The
+process-shape variables are `JAUNDER_BIND` (listen address, `:267`),
+`JAUNDER_DB` (database URL, default `sqlite:./data/jaunder.db`, `:41`),
+`JAUNDER_STORAGE_PATH` (the data directory, default `./data`, `:33`),
+`JAUNDER_ENV` (`dev` | `prod`, `:271`), `JAUNDER_RUNTIME_FILE` (`:276`) and
+`JAUNDER_VERBOSE` (`:25`). PostgreSQL takes its secret by either
+`JAUNDER_DB_PASSWORD` or `JAUNDER_DB_PASSWORD_FILE` (`:39-40`, read at
+`storage/src/postgres/open.rs:40,44`); the file source wins over the variable,
+and either wins over an embedded URL password. The observability variables are
+covered under [Observability](#observability). `prod` is load-bearing in two
+places: it sets the `secure_cookies` flag passed to `create_router`
+(`server/src/commands.rs:546`, `server/src/lib.rs:32`), and it disables the
+dev-only auto-initialization of a missing database on `serve`
 (`server/src/commands.rs:501-512`).
 
-**What the flake ships.** `flake.nix` exports `packages.jaunder` (the server
-binary), `packages.site`, and `nixosModules.jaunder` (`flake.nix:247-249`,
-`1059-1062`). `packages.site` is **no longer a deployment artifact** — the
-binary embeds the bundle — and is retained only so `cargo xtask audit-wasm` can
-build `.#site` and inspect the bundle for size analysis (`flake.nix:464-473`,
-[ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)). The `services.jaunder`
-module (`flake.nix:44-118`) creates a dedicated `jaunder` user/group, runs under
-systemd from `StateDirectory=jaunder` with `WorkingDirectory=%S/jaunder`, passes
-`bind` and `db` through unconditionally and `JAUNDER_ENV=prod` only when `prod`
-is set (`flake.nix:95-101`), runs
+**What the flake ships.** `flake.nix` exports `packages.jaunder` (the deployable
+server binary), `packages.site`, and `nixosModules.jaunder`
+(`flake.nix:247-249`, `1059-1062`). `packages.site` is **no longer a deployment
+artifact** — the binary embeds the bundle — and is retained only so
+`cargo xtask audit-wasm` can build `.#site` and inspect the bundle for size
+analysis (`flake.nix:464-473`,
+[declarative NixOS deployment and package outputs](adr/0142-declarative-nixos-deployment-package-outputs.md)).
+The `services.jaunder` module (`flake.nix:44-118`) creates a dedicated `jaunder`
+user/group, runs under systemd from `StateDirectory=jaunder` with
+`WorkingDirectory=%S/jaunder`, passes `bind` and `db` through unconditionally
+and `JAUNDER_ENV=prod` only when `prod` is set (`flake.nix:95-101`), runs
 `jaunder init --db "$JAUNDER_DB" --skip-if-exists` in `preStart`
-(`flake.nix:105`), and starts `jaunder serve`. There is no site symlink; the
-module comment names #237 as the reason. Two `nixosConfigurations` test VMs
+(`flake.nix:105`), and starts `jaunder serve`. It has no module option for
+PostgreSQL password injection; operators supply `JAUNDER_DB_PASSWORD[_FILE]`
+through the service manager when needed. There is no site symlink; the module
+comment names #237 as the reason. Two `nixosConfigurations` test VMs
 (interactive, PostgreSQL) exist for development only.
 
 ## Emacs client
@@ -1544,7 +1552,9 @@ Authentication is the server's app-password Basic scheme
 ([ADR-0014](adr/0014-atompub-authentication.md); the auth section owns details).
 `jaunder--auth-secret` (`elisp/jaunder-transport.el:72`) resolves the app
 password through Emacs `auth-source`, keyed on the active blog's URL **host**
-(port excluded) and username, and errors when no entry matches.
+(port excluded) and username, requests at most one match, and errors when no
+entry matches
+([Emacs auth-source App Password storage](adr/0143-emacs-auth-source-app-password-storage.md)).
 `jaunder--basic-auth-header` UTF-8-encodes `user:password` before base64 per
 RFC 7617.
 
@@ -1612,15 +1622,19 @@ including a `412` stale-ETag, is recoverable by a plain re-publish
 applies to the sent body only; the authoring buffer is never modified.
 
 Creates go through `jaunder--create-with-retry`
-(`elisp/jaunder-publish.el:151`), which retries a 5xx or **any** signalled error
-— the handler is a bare `(error …)` (`:165`), so a non-transport failure such as
-a missing auth-source entry is also retried twice before re-signalling — up to
-three attempts (≈1s then ≈2s backoff) under **one** `Idempotency-Key`, so the
-server dedups the replay. The key is ephemeral, not stable across invocations:
-it is a fresh md5 of local entropy per call, so a later re-publish gets a new
-key and an edit is never mistaken for a retry. The server side of that contract
-was decided in issue [#79](https://github.com/jaunder-org/jaunder/issues/79) as
-a follow-on to ADR-0047 — see the Storage section.
+(`elisp/jaunder-publish.el:151`), which currently retries a 5xx or **any**
+signalled error — the handler is a bare `(error …)` (`:165`), so a non-transport
+failure such as a missing auth-source entry is also retried twice before
+re-signalling. That credential-error retry contradicts the accepted auth-source
+boundary and is tracked in
+[#1062](https://github.com/jaunder-org/jaunder/issues/1062); transport retry
+still uses up to three attempts (≈1s then ≈2s backoff) under **one**
+`Idempotency-Key`, so the server dedups the replay. The key is ephemeral, not
+stable across invocations: it is a fresh md5 of local entropy per call, so a
+later re-publish gets a new key and an edit is never mistaken for a retry. The
+server side of that contract was decided in issue
+[#79](https://github.com/jaunder-org/jaunder/issues/79) as a follow-on to
+ADR-0047 — see the Storage section.
 
 ### Committed direction
 
@@ -2165,27 +2179,27 @@ compiling checks — `clippy`, `wasm-clippy`, `deny` and the two workspace-local
 clippy runs — keep their own crane derivations, which is what makes the cheap
 `runCommand` over a broad source tree viable for the rest.
 
-| Step                                                       | Guards                                                    |
-| ---------------------------------------------------------- | --------------------------------------------------------- |
-| `identifier-collisions`                                    | duplicate ADR/migration number prefixes, migration parity |
-| `adr-format`, `adr-readme-parity`                          | ADR front-matter shape and the README table               |
-| `adr-view-parity`                                          | every accepted ADR is cited in this document              |
-| `doc-links`                                                | intra-doc link targets                                    |
-| `test-backend-pattern`                                     | dual-backend storage test shape                           |
-| `server-fn-registrar`                                      | every `web` `#[server]` fn is in the test registrar       |
-| `server-fn-tracing`                                        | each server fn's instrumentation                          |
-| `server-fn-coverage`                                       | static lane of the flow-coverage snapshot                 |
-| `traced-context`                                           | context propagation                                       |
-| `proffered-secret`, `proffered-filename-position`          | untrusted-input handling                                  |
-| `no-full-reload`                                           | SPA navigation                                            |
-| `e2e-goto-wrapper`, `e2e-scaffold`                         | e2e harness shape; no committed `e2eSalt`                 |
-| `target-arch-placement`                                    | host/wasm split at module wiring only                     |
-| `thin-components`                                          | `#[component]` control-flow budget                        |
-| `sqlx-newtype-bind`, `sqlx-newtype-decode`                 | newtypes at the SQL boundary                              |
-| `doctest-fences`                                           | the doctest population Nix cannot reach                   |
-| `rendered-html-from-trusted`, `raw-html-door`, `html-sink` | the three XSS doors                                       |
-| `xlang-literal`                                            | Rust/TypeScript literal agreement                         |
-| `xtask-tests`, `tools-test`                                | xtask's and `tools/`'s own unit tests                     |
+| Step                                                       | Guards                                                                                                                                                           |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `identifier-collisions`                                    | duplicate ADR/migration number prefixes, migration parity                                                                                                        |
+| `adr-format`, `adr-readme-parity`                          | ADR front-matter shape and the README table                                                                                                                      |
+| `adr-view-parity`                                          | every accepted ADR is cited in this document                                                                                                                     |
+| `doc-links`                                                | intra-doc link targets                                                                                                                                           |
+| `test-backend-pattern`                                     | dual-backend storage test shape                                                                                                                                  |
+| `server-fn-registrar`                                      | every `web` `#[server]` fn is in the test registrar                                                                                                              |
+| `server-fn-tracing`                                        | each server fn's instrumentation                                                                                                                                 |
+| `server-fn-coverage`                                       | static lane of the flow-coverage snapshot                                                                                                                        |
+| `traced-context`                                           | context propagation                                                                                                                                              |
+| `proffered-secret`, `proffered-filename-position`          | untrusted-input handling                                                                                                                                         |
+| `no-full-reload`                                           | SPA navigation                                                                                                                                                   |
+| `e2e-goto-wrapper`, `e2e-scaffold`                         | e2e harness shape; no committed `e2eSalt`                                                                                                                        |
+| `target-arch-placement`                                    | host/wasm split at module wiring only                                                                                                                            |
+| `thin-components`                                          | `#[component]` control-flow budget                                                                                                                               |
+| `sqlx-newtype-bind`, `sqlx-newtype-decode`                 | newtypes at the SQL boundary                                                                                                                                     |
+| `doctest-fences`                                           | the doctest population Nix cannot reach                                                                                                                          |
+| `rendered-html-from-trusted`, `raw-html-door`, `html-sink` | the three XSS doors                                                                                                                                              |
+| `xlang-literal`                                            | Rust/TypeScript literal agreement                                                                                                                                |
+| `xtask-tests`, `tools-test`                                | auxiliary workspace unit tests the application coverage/Nix test gates do not execute ([workspace boundaries](adr/0141-cargo-workspace-execution-boundaries.md)) |
 
 ### How a gate is built
 
@@ -2401,9 +2415,14 @@ rather than running a stale copy, and frequently-edited gate logic never busts
 the coverage/e2e cache ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)).
 xtask is also excluded from the root cargo workspace (`exclude = ["xtask"]`,
 with its own `[workspace]` in `xtask/Cargo.toml`), and `tools/` is a second
-standalone workspace (`coverage`, `devtool`, `doctests` — `tools/Cargo.toml:3`).
-All three manifests pin `resolver = "3"` explicitly, because the two virtual
-manifests would otherwise default to resolver 1
+standalone workspace (`coverage`, `devtool`, `doctests` — `tools/Cargo.toml:3`);
+explicit `xtask-tests` and `tools-test` steps compensate for the unit suites the
+application coverage/Nix test gates do not execute
+([Cargo workspace execution boundaries](adr/0141-cargo-workspace-execution-boundaries.md)).
+[#1061](https://github.com/jaunder-org/jaunder/issues/1061) tracks the stale
+`host_tests` source comment that overstated the related `tools/` Nix-exclusion
+claim. All three manifests pin `resolver = "3"` explicitly, because the two
+virtual manifests would otherwise default to resolver 1
 ([ADR-0104](adr/0104-edition-2024-unsafe-env-and-precise-capturing.md)).
 
 **Workspace layering.** The root workspace's shared crates are target-scoped
@@ -2639,27 +2658,14 @@ than being replaced by the gate.
 
 ## Un-ADR'd reality
 
-The claims below are true of the system, but no ADR establishes them. Each is
-either a decision worth recording or detail not worth an ADR; the tracking issue
-decides which. [#938](https://github.com/jaunder-org/jaunder/issues/938) holds
-the current infrastructure and process set.
-
-- **The CLI subcommand surface and the `JAUNDER_*` process configuration.**
-  ADR-0102 governs `site_config` database keys, a different surface.
-  [#938](https://github.com/jaunder-org/jaunder/issues/938)
-- **The NixOS module and the package outputs.** Load-bearing deployment reality
-  with no ADR beyond ADR-0008's single-binary framing.
-  [#938](https://github.com/jaunder-org/jaunder/issues/938)
-- **The cargo-workspace exclusions.** The root `exclude = ["xtask"]` and the
-  separate `tools/` workspace are stated in `flake.nix` comments and ADR asides
-  only; #276 assumes the tools workspace rather than deciding it.
-  [#938](https://github.com/jaunder-org/jaunder/issues/938)
-- **The `host_tests` gate steps** (`xtask-tests`, `tools-test`) are recorded in
-  no ADR. [#938](https://github.com/jaunder-org/jaunder/issues/938)
-- **`auth-source` as the Emacs client credential store.** ADR-0014 decides the
-  app-password scheme and the wire header but not where a client keeps the
-  secret; ADR-0035 and issue #76 both build on the rule as settled.
-  [#938](https://github.com/jaunder-org/jaunder/issues/938)
+The former #938 gaps are now covered by accepted decisions: process
+configuration ([ADR-0143](adr/0144-process-configuration-cli-contract.md)),
+deployment/package outputs
+([ADR-0141](adr/0142-declarative-nixos-deployment-package-outputs.md)),
+workspace/gate boundaries
+([ADR-0140](adr/0141-cargo-workspace-execution-boundaries.md)), and Emacs
+credential storage
+([ADR-0142](adr/0143-emacs-auth-source-app-password-storage.md)).
 
 Two gaps a reader might expect here are absent because the system closed them.
 The content-addressed media store is no longer un-ADR'd: ADR-0080 decides the
