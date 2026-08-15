@@ -175,7 +175,7 @@ for no gain.
   shape.
 
 **Media serve extractor amended on 2026-08-15.** The strict media-address
-decision in `docs/adr/drafts/strict-media-address-extraction.md` supersedes
+decision in `docs/adr/0136-strict-media-address-extraction.md` supersedes
 #504's media-specific `SoftPath<ProfferedFilename>` policy. The public media
 route now establishes source, hash, both hash prefixes, and canonical filename
 during strict Axum extraction; the AtomPub strict extractors and every

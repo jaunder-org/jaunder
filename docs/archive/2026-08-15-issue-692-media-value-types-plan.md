@@ -76,7 +76,7 @@ SQLite/PostgreSQL test matrix; `cargo xtask`.
 | Integration contracts   | `server/tests/web/web_media.rs`, `server/tests/atompub/atompub_media.rs`, `server/tests/misc/media_handlers.rs`                   |
 | Metrics                 | `host/src/metrics.rs`                                                                                                             |
 | Static policy           | `xtask/src/steps/proffered_filename_check.rs`                                                                                     |
-| Decision projection     | `docs/adr/drafts/strict-media-address-extraction.md`, `docs/adr/0084-media-filename-encoded-canonical.md`, `docs/ARCHITECTURE.md` |
+| Decision projection     | `docs/adr/0136-strict-media-address-extraction.md`, `docs/adr/0084-media-filename-encoded-canonical.md`, `docs/ARCHITECTURE.md` |
 
 ## Task 1: Type the media seam and migrate HTTP callers
 
@@ -329,7 +329,7 @@ git commit -m "refactor(media): remove served outcome metric"
 
 **Files:**
 
-- Modify: `docs/adr/drafts/strict-media-address-extraction.md`
+- Modify: `docs/adr/0136-strict-media-address-extraction.md`
 - Modify: `docs/adr/0084-media-filename-encoded-canonical.md`
 - Modify: `docs/ARCHITECTURE.md`
 - Test: implementation and `xtask` checks from Tasks 3–4 are the executable
@@ -369,7 +369,7 @@ change.
 - [x] **Step 4: Format and verify GREEN**
 
 Run:
-`devtool run -- prettier -w docs/adr/drafts/strict-media-address-extraction.md docs/adr/0084-media-filename-encoded-canonical.md docs/ARCHITECTURE.md`
+`devtool run -- prettier -w docs/adr/0136-strict-media-address-extraction.md docs/adr/0084-media-filename-encoded-canonical.md docs/ARCHITECTURE.md`
 
 Expected: PASS.
 
@@ -377,10 +377,10 @@ Run: `devtool run -- cargo xtask check`
 
 Expected: PASS, including `proffered-filename-position`.
 
-- [ ] **Step 5: Commit the projection**
+- [x] **Step 5: Commit the projection**
 
 ```bash
-git add docs/adr/drafts/strict-media-address-extraction.md docs/adr/0084-media-filename-encoded-canonical.md docs/ARCHITECTURE.md
+git add docs/adr/0136-strict-media-address-extraction.md docs/adr/0084-media-filename-encoded-canonical.md docs/ARCHITECTURE.md
 git commit -m "docs(adr): record strict media address extraction"
 ```
 

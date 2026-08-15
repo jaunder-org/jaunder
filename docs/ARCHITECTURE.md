@@ -419,7 +419,7 @@ handler; only a syntactically valid but absent resource is 404. This supersedes
 Syndication Feed soft routes retain `SoftPath`. HTTP serve-outcome counts belong
 to the front proxy, so the application emits upload-domain outcomes and bytes
 but no partial `jaunder.media.served` counter
-(`docs/adr/drafts/strict-media-address-extraction.md`).
+(`docs/adr/0136-strict-media-address-extraction.md`).
 
 **Slugs never fail and preserve Unicode**
 ([ADR-0025](adr/0025-unicode-slug-generation.md)). The charset is per extended
