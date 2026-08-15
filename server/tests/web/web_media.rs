@@ -438,6 +438,38 @@ async fn upload_media_stores_file_and_returns_metadata(#[case] backend: Backend)
 
 #[apply(backends)]
 #[tokio::test]
+async fn upload_media_detects_content_type_when_field_omits_it(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_user_and_session(&state).await.cookie();
+    let storage = TempDir::new().unwrap();
+    let boundary = "----testboundary1234";
+    let body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"photo.jpg\"\r\n\r\nfake jpeg data\r\n--{boundary}--\r\n"
+    );
+    let response = make_app(&state, &storage)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(<web::media::Upload as ServerFn>::PATH)
+                .header(
+                    header::CONTENT_TYPE,
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .header(header::COOKIE, cookie)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let response: UploadResponse =
+        serde_json::from_str(&crate::helpers::body_string(response).await).unwrap();
+    assert_eq!(response.content_type, "image/jpeg");
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn upload_then_serve_round_trips_a_filename_needing_encoding(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = create_user_and_session(&state).await.cookie();

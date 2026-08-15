@@ -11,7 +11,9 @@ use axum::response::{IntoResponse, Response};
 use sha2::{Digest, Sha256};
 
 use common::atompub::{MediaLinkEntry, render_media_link_entry};
-use common::media::{ContentHash, Filename, MediaRef, MediaSource, ProfferedFilename, media_url};
+use common::media::{
+    ContentHash, ContentType, Filename, MediaRef, MediaSource, ProfferedFilename, media_url,
+};
 use common::root_relative_url::RootRelativeUrl;
 use common::tagged_url::{BaseUrl, EditMediaUriUrl, EditUriUrl, compose};
 use common::time::UtcInstant;
@@ -90,11 +92,16 @@ pub async fn collection_post(
         .unwrap_or("upload");
     // Door B: normalize the requested `Slug` to a safe leaf, rejecting empty as a 400.
     let filename = Filename::sanitized(raw_name).map_err(|_| HandlerError::BadRequest)?;
-    let content_type = headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("application/octet-stream")
-        .to_string();
+    let content_type = match headers.get(header::CONTENT_TYPE) {
+        Some(value) => value
+            .to_str()
+            .map_err(|_| HandlerError::BadRequest)?
+            .parse::<ContentType>()
+            .map_err(|_| HandlerError::BadRequest)?,
+        None => "application/octet-stream"
+            .parse()
+            .map_err(|_| HandlerError::Invariant)?,
+    };
 
     // Determine whether this exact resource already exists (idempotent re-upload).
     let sha = ContentHash::from_digest(Sha256::digest(&body).into());
@@ -105,7 +112,7 @@ pub async fn collection_post(
 
     let manager = storage::MediaManager::new(media.clone(), site_config.clone(), storage_path);
     let upload = manager
-        .upload_bytes(auth_user.user_id, &filename, &content_type, &body)
+        .upload_bytes(auth_user.user_id, &filename, content_type, &body)
         .await?;
 
     let record = media

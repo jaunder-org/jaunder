@@ -912,9 +912,9 @@ fn is_valid_content_type(s: &str) -> bool {
 
 /// Returns true if the content type should be served inline rather than as an attachment.
 #[must_use]
-pub fn should_inline(content_type: &str) -> bool {
+pub fn should_inline(content_type: &ContentType) -> bool {
     matches!(
-        content_type,
+        content_type.as_ref(),
         "image/jpeg"
             | "image/png"
             | "image/gif"
@@ -936,7 +936,7 @@ pub fn should_inline(content_type: &str) -> bool {
 /// since the table is fixed and known-valid (pinned by
 /// `detect_content_type_outputs_are_valid`).
 #[must_use]
-pub fn detect_content_type(filename: &str) -> ContentType {
+pub fn detect_content_type(filename: &Filename) -> ContentType {
     static EXTENSIONS: [(&[&str], &str); 12] = [
         (&["jpg", "jpeg"], "image/jpeg"),
         (&["png"], "image/png"),
@@ -952,7 +952,7 @@ pub fn detect_content_type(filename: &str) -> ContentType {
         (&["pdf"], "application/pdf"),
     ];
 
-    let ext = Path::new(filename)
+    let ext = Path::new(filename.decoded().as_ref())
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
@@ -1235,61 +1235,106 @@ mod tests {
 
     #[test]
     fn content_disposition_inline_for_images() {
-        assert!(should_inline("image/jpeg"));
-        assert!(should_inline("image/png"));
-        assert!(should_inline("image/gif"));
-        assert!(should_inline("image/webp"));
-        assert!(should_inline("image/svg+xml"));
+        assert!(should_inline(&"image/jpeg".parse().unwrap()));
+        assert!(should_inline(&"image/png".parse().unwrap()));
+        assert!(should_inline(&"image/gif".parse().unwrap()));
+        assert!(should_inline(&"image/webp".parse().unwrap()));
+        assert!(should_inline(&"image/svg+xml".parse().unwrap()));
     }
 
     #[test]
     fn content_disposition_inline_for_media() {
-        assert!(should_inline("audio/mpeg"));
-        assert!(should_inline("video/mp4"));
-        assert!(should_inline("application/pdf"));
+        assert!(should_inline(&"audio/mpeg".parse().unwrap()));
+        assert!(should_inline(&"video/mp4".parse().unwrap()));
+        assert!(should_inline(&"application/pdf".parse().unwrap()));
     }
 
     #[test]
     fn content_disposition_attachment_for_others() {
-        assert!(!should_inline("application/zip"));
-        assert!(!should_inline("text/plain"));
-        assert!(!should_inline("application/octet-stream"));
+        assert!(!should_inline(&"application/zip".parse().unwrap()));
+        assert!(!should_inline(&"text/plain".parse().unwrap()));
+        assert!(!should_inline(&"application/octet-stream".parse().unwrap()));
     }
 
     #[test]
     fn detect_content_type_known_extensions() {
-        assert_eq!(detect_content_type("photo.jpg"), "image/jpeg");
-        assert_eq!(detect_content_type("photo.jpeg"), "image/jpeg");
-        assert_eq!(detect_content_type("image.png"), "image/png");
-        assert_eq!(detect_content_type("doc.pdf"), "application/pdf");
-        assert_eq!(detect_content_type("video.mp4"), "video/mp4");
+        assert_eq!(
+            detect_content_type(&layout_args("photo.jpg").1),
+            "image/jpeg"
+        );
+        assert_eq!(
+            detect_content_type(&layout_args("photo.jpeg").1),
+            "image/jpeg"
+        );
+        assert_eq!(
+            detect_content_type(&layout_args("image.png").1),
+            "image/png"
+        );
+        assert_eq!(
+            detect_content_type(&layout_args("doc.pdf").1),
+            "application/pdf"
+        );
+        assert_eq!(
+            detect_content_type(&layout_args("video.mp4").1),
+            "video/mp4"
+        );
     }
 
     #[test]
     fn detect_content_type_image_formats() {
-        assert_eq!(detect_content_type("anim.gif"), "image/gif");
-        assert_eq!(detect_content_type("photo.webp"), "image/webp");
-        assert_eq!(detect_content_type("icon.svg"), "image/svg+xml");
+        assert_eq!(detect_content_type(&layout_args("anim.gif").1), "image/gif");
+        assert_eq!(
+            detect_content_type(&layout_args("photo.webp").1),
+            "image/webp"
+        );
+        assert_eq!(
+            detect_content_type(&layout_args("icon.svg").1),
+            "image/svg+xml"
+        );
     }
 
     #[test]
     fn detect_content_type_audio_formats() {
-        assert_eq!(detect_content_type("track.mp3"), "audio/mpeg");
-        assert_eq!(detect_content_type("track.ogg"), "audio/ogg");
-        assert_eq!(detect_content_type("track.oga"), "audio/ogg");
-        assert_eq!(detect_content_type("track.flac"), "audio/flac");
-        assert_eq!(detect_content_type("track.wav"), "audio/wav");
+        assert_eq!(
+            detect_content_type(&layout_args("track.mp3").1),
+            "audio/mpeg"
+        );
+        assert_eq!(
+            detect_content_type(&layout_args("track.ogg").1),
+            "audio/ogg"
+        );
+        assert_eq!(
+            detect_content_type(&layout_args("track.oga").1),
+            "audio/ogg"
+        );
+        assert_eq!(
+            detect_content_type(&layout_args("track.flac").1),
+            "audio/flac"
+        );
+        assert_eq!(
+            detect_content_type(&layout_args("track.wav").1),
+            "audio/wav"
+        );
     }
 
     #[test]
     fn detect_content_type_video_webm() {
-        assert_eq!(detect_content_type("clip.webm"), "video/webm");
+        assert_eq!(
+            detect_content_type(&layout_args("clip.webm").1),
+            "video/webm"
+        );
     }
 
     #[test]
     fn detect_content_type_unknown_extension() {
-        assert_eq!(detect_content_type("file.xyz"), "application/octet-stream");
-        assert_eq!(detect_content_type("noext"), "application/octet-stream");
+        assert_eq!(
+            detect_content_type(&layout_args("file.xyz").1),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            detect_content_type(&layout_args("noext").1),
+            "application/octet-stream"
+        );
     }
 
     #[test]
@@ -1340,7 +1385,7 @@ mod tests {
             "a.unknownext",
         ] {
             assert!(
-                detect_content_type(f)
+                detect_content_type(&layout_args(f).1)
                     .as_ref()
                     .parse::<ContentType>()
                     .is_ok()
@@ -1598,9 +1643,9 @@ mod tests {
         let f = Filename::sanitized(&long).expect("the intake door truncates, never fails here");
         assert!(f.ends_with(".jpg"), "extension must survive: {f}");
         assert!(f.len() <= MAX_FILENAME_ENCODED_BYTES, "{f}");
-        // The property the extension is kept *for*: the stored content type is unchanged.
+        // The property the extension is kept *for*: the stored content type remains JPEG.
         // Asserting merely "ends_with(.jpg)" would pass on a mangled extension.
-        assert_eq!(detect_content_type(&f), detect_content_type(&long));
+        assert_eq!(detect_content_type(&f), "image/jpeg");
     }
 
     #[test]
@@ -1614,7 +1659,7 @@ mod tests {
             f.chars().count() < 255,
             "must cut well short of 255 chars: {f}"
         );
-        assert_eq!(detect_content_type(&f), detect_content_type(&long));
+        assert_eq!(detect_content_type(&f), "image/png");
     }
 
     #[test]
@@ -1674,7 +1719,7 @@ mod tests {
         assert!(f.len() <= MAX_FILENAME_ENCODED_BYTES, "{f}");
         assert!(f.ends_with(".jpg"), "{f}");
         // The property that matters: still detected as an image, not octet-stream.
-        assert_eq!(detect_content_type(&f), detect_content_type(&zalgo));
+        assert_eq!(detect_content_type(&f), "image/jpeg");
         assert_ne!(f, ".jpg", "a bare extension is a dotfile, not a filename");
         // And it is a value the strict door accepts — `sanitized` builds `Filename` directly,
         // so nothing else enforces that.

@@ -16,8 +16,8 @@ use tokio_util::io::ReaderStream;
 use common::etag::ETag;
 use common::ids::UserId;
 use common::media::{
-    ContentHash, Filename, MediaSource, ProfferedFilename, detect_content_type, media_path,
-    should_inline,
+    ContentHash, ContentType, Filename, MediaSource, ProfferedFilename, detect_content_type,
+    media_path, should_inline,
 };
 use storage::{MediaError, MediaStorage};
 use web::auth::AuthUser;
@@ -183,16 +183,11 @@ async fn serve_response(
         .find_by_hash(&hash, &source)
         .await
         .map_err(serve_internal_error)?
-        // Both read *inside* the name rather than using it as a path, so both take the
-        // decoded form (#720). Extension sniffing on the encoded form happens to work
-        // only because `.` is unreserved and every extension in the table is ASCII
-        // alphanumeric — a coincidence of the encode set, not a property to rely on.
-        .map_or_else(
-            || detect_content_type(&filename.decoded()),
-            |r| r.content_type,
-        );
+        // Both read inside the typed filename, which decodes only at the display
+        // boundary. Extension detection must not inspect its encoded spelling.
+        .map_or_else(|| detect_content_type(&filename), |r| r.content_type);
 
-    let disposition = content_disposition(&content_type, &filename.decoded());
+    let disposition = content_disposition(&content_type, &filename);
 
     let stream = ReaderStream::new(file);
     let body = axum::body::Body::from_stream(stream);
@@ -324,21 +319,11 @@ fn resolve_media_path(
     Ok((source, hash, filename, file_path))
 }
 
-/// Builds a header-safe `Content-Disposition` value for serving `filename`.
+/// Builds a header-safe `Content-Disposition` value for a typed content type and filename.
 ///
-/// Takes the **decoded** name — this header is what the user sees and saves as, so it
-/// carries the name they typed (#720). Its internal `NON_ALPHANUMERIC` encode below is the
-/// RFC 5987 one, a deliberately *different* set from the media path segment's (ADR-0080);
-/// passing an already-encoded name here would double-encode into a header that still looks
-/// well-formed.
-///
-/// The filename is attacker-influenced (it round-trips through the URL), so it
-/// is emitted in two forms: a quote/backslash-escaped, ASCII-only `filename=`
-/// fallback (control and non-ASCII bytes dropped, so the value can never break
-/// the quoted string or be rejected as a header), and an RFC 5987
-/// `filename*=UTF-8''…` carrying the full percent-encoded name for modern
-/// clients. `inline` vs `attachment` follows [`should_inline`].
-fn content_disposition(content_type: &str, filename: &str) -> String {
+/// The decoded filename is only for this display header; its canonical spelling remains on
+/// the storage and URL paths. `inline` vs `attachment` follows [`should_inline`].
+fn content_disposition(content_type: &ContentType, filename: &Filename) -> String {
     use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 
     let disposition = if should_inline(content_type) {
@@ -347,8 +332,9 @@ fn content_disposition(content_type: &str, filename: &str) -> String {
         "attachment"
     };
 
-    let mut fallback = String::with_capacity(filename.len());
-    for c in filename.chars() {
+    let decoded = filename.decoded();
+    let mut fallback = String::with_capacity(decoded.len());
+    for c in decoded.chars() {
         if !c.is_ascii() || c.is_control() {
             continue;
         }
@@ -358,7 +344,7 @@ fn content_disposition(content_type: &str, filename: &str) -> String {
         fallback.push(c);
     }
 
-    let encoded = utf8_percent_encode(filename, NON_ALPHANUMERIC);
+    let encoded = utf8_percent_encode(&decoded, NON_ALPHANUMERIC);
     format!("{disposition}; filename=\"{fallback}\"; filename*=UTF-8''{encoded}")
 }
 
@@ -585,7 +571,10 @@ mod tests {
         // both correct in place. Handing it the already-encoded name would double-encode
         // into a header that still looks well-formed, which is exactly the failure class
         // this issue exists to remove, so both parameters are pinned as exact strings.
-        let value = content_disposition("image/png", "my photo.jpg");
+        let value = content_disposition(
+            &"image/png".parse().unwrap(),
+            &Filename::sanitized("my photo.jpg").unwrap(),
+        );
         assert!(value.contains("filename=\"my photo.jpg\""), "{value}");
         // Note `%2E`, not `.`: the RFC 5987 parameter uses the **bare** `NON_ALPHANUMERIC`
         // set, which encodes the unreserved marks the media path segment deliberately
@@ -600,9 +589,19 @@ mod tests {
 
     #[test]
     fn content_disposition_picks_inline_or_attachment_by_type() {
-        assert!(content_disposition("image/png", "p.png").starts_with("inline; "));
         assert!(
-            content_disposition("application/octet-stream", "p.bin").starts_with("attachment; ")
+            content_disposition(
+                &"image/png".parse().unwrap(),
+                &Filename::sanitized("p.png").unwrap()
+            )
+            .starts_with("inline; ")
+        );
+        assert!(
+            content_disposition(
+                &"application/octet-stream".parse().unwrap(),
+                &Filename::sanitized("p.bin").unwrap()
+            )
+            .starts_with("attachment; ")
         );
     }
 
@@ -610,7 +609,10 @@ mod tests {
     fn content_disposition_escapes_quotes_and_strips_control_chars() {
         // A quote in the name must be backslash-escaped, never break the
         // quoted-string; control chars are dropped from the ASCII fallback.
-        let value = content_disposition("application/octet-stream", "a\"b\n.txt");
+        let value = content_disposition(
+            &"application/octet-stream".parse().unwrap(),
+            &Filename::sanitized("a\"b\n.txt").unwrap(),
+        );
         assert!(
             value.contains(r#"filename="a\"b.txt""#),
             "fallback not escaped/stripped: {value}"
@@ -622,7 +624,10 @@ mod tests {
 
     #[test]
     fn content_disposition_percent_encodes_non_ascii_in_filename_star() {
-        let value = content_disposition("image/png", "café.png");
+        let value = content_disposition(
+            &"image/png".parse().unwrap(),
+            &Filename::sanitized("café.png").unwrap(),
+        );
         // Non-ASCII dropped from the ASCII fallback...
         assert!(value.contains(r#"filename="caf.png""#), "{value}");
         // ...but carried, percent-encoded, in filename*.
@@ -726,7 +731,7 @@ mod tests {
         .expect("serve response");
 
         assert_eq!(resp.status(), StatusCode::OK);
-        let expected = detect_content_type("photo.jpg");
+        let expected = detect_content_type(&Filename::sanitized("photo.jpg").unwrap());
         assert_eq!(
             resp.headers()
                 .get(axum::http::header::CONTENT_TYPE)

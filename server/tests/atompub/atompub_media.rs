@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    http::{StatusCode, header},
+    http::{HeaderValue, StatusCode, header},
 };
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -59,6 +59,79 @@ async fn upload_returns_201_and_media_link_entry(#[case] backend: Backend) {
         body.contains("https://example.com/media/upload/"),
         "body: {body}"
     );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn upload_without_content_type_defaults_to_octet_stream(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let storage = TempDir::new().unwrap();
+    let app = make_app(&state, &storage);
+
+    let response = app
+        .oneshot(
+            atompub(&session, "POST", "media")
+                .header("slug", "upload.bin")
+                .body(Body::from(PNG))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert!(
+        body_string(response)
+            .await
+            .contains("type=\"application/octet-stream\"")
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn upload_rejects_invalid_present_content_type(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let storage = TempDir::new().unwrap();
+    let app = make_app(&state, &storage);
+
+    let response = app
+        .oneshot(
+            atompub(&session, "POST", "media")
+                .header(header::CONTENT_TYPE, "text")
+                .header("slug", "upload.txt")
+                .body(Body::from(PNG))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn upload_rejects_opaque_present_content_type(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let storage = TempDir::new().unwrap();
+    let app = make_app(&state, &storage);
+
+    let response = app
+        .oneshot(
+            atompub(&session, "POST", "media")
+                .header(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_bytes(&[0xff]).expect("opaque header value"),
+                )
+                .header("slug", "upload.bin")
+                .body(Body::from(PNG))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[apply(backends)]
