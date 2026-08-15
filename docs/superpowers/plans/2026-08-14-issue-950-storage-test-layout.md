@@ -274,18 +274,18 @@ Run the global per-commit protocol. Commit:
 - Produces: `channels_bijection`, `target_kinds_bijection`, and
   `statuses_seed_maps_to_enum` under `storage::lookups`.
 
-- [ ] **Step 1: Move the lookup cluster**
+- [x] **Step 1: Move the lookup cluster**
 
 Move all five bodies unchanged. Keep the PostgreSQL guard bound through each
 query.
 
-- [ ] **Step 2: Prove the concern**
+- [x] **Step 2: Prove the concern**
 
 Run:
 `devtool run -- devtool pg run -- cargo nextest run -p jaunder storage::lookups`
 Expected: PASS, six backend cases.
 
-- [ ] **Step 3: Gate and commit**
+- [x] **Step 3: Gate and commit**
 
 Run the global per-commit protocol. Commit:
 `refactor(server/tests): split storage lookup tests (#950)`.

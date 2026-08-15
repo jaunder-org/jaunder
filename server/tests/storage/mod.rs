@@ -10,11 +10,8 @@ use common::test_support::{
     parse_slug, parse_url, permalink_date,
 };
 use common::username::Username;
-use common::visibility::{
-    AudienceTarget, Channel, SubscriptionPolicy, SubscriptionStatus, TargetKind, ViewerIdentity,
-};
+use common::visibility::{AudienceTarget, SubscriptionPolicy, SubscriptionStatus, ViewerIdentity};
 use host::invite::InviteCode;
-use sqlx::PgPool;
 use std::sync::Arc;
 use storage::{
     AppState, AudienceError, ConfirmPasswordResetError, CreatePostError, CreateUserError,
@@ -33,12 +30,12 @@ use rstest_reuse::*;
 
 use crate::helpers::create_session_for;
 use storage::test_support::{
-    Backend, PostgresDbGuard, SeedRawPost, SeedUser, TestEnv, UpdateRawPost, backends, fp,
-    seed_users, template_postgres_url,
+    Backend, SeedRawPost, SeedUser, TestEnv, UpdateRawPost, backends, fp, seed_users,
 };
 
 mod database;
 mod fixtures;
+mod lookups;
 
 use fixtures::{
     anon_by_tag, anon_published, channel_id_by_name, local_channel_id, open_pool, password,
@@ -112,92 +109,6 @@ async fn tags_of(state: &AppState, post_id: PostId) -> Vec<PostTag> {
         .expect("get_post_by_id failed")
         .expect("post exists")
         .tags
-}
-
-async fn open_pg_pool() -> (PgPool, PostgresDbGuard) {
-    let (url, guard) = template_postgres_url().await;
-    // `expose_url`, not `to_string`: we are connecting, so the password must survive.
-    let pool = PgPool::connect(&url.expose_url()).await.unwrap();
-    (pool, guard)
-}
-
-async fn lookup_names(backend: Backend, env: &TestEnv, table: &str) -> Vec<String> {
-    let sql = format!("SELECT name FROM {table} ORDER BY name");
-    match backend {
-        Backend::Sqlite => sqlx::query_scalar(&sql)
-            .fetch_all(&open_pool(&env.base).await)
-            .await
-            .unwrap(),
-        Backend::Postgres => {
-            let (pool, _pg) = open_pg_pool().await;
-            sqlx::query_scalar(&sql).fetch_all(&pool).await.unwrap()
-        }
-    }
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn channels_bijection(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let names = lookup_names(backend, &env, "channels").await;
-    for n in &names {
-        assert!(
-            Channel::try_from(n.as_str()).is_ok(),
-            "unseeded enum for channel {n}"
-        );
-    }
-    let c = Channel::Local;
-    assert!(
-        names.iter().any(|n| n == c.as_ref()),
-        "missing seed for {c}"
-    );
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn target_kinds_bijection(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let names = lookup_names(backend, &env, "target_kinds").await;
-    for n in &names {
-        assert!(
-            TargetKind::try_from(n.as_str()).is_ok(),
-            "unseeded enum for target kind {n}"
-        );
-    }
-    for k in [
-        TargetKind::Public,
-        TargetKind::Subscribers,
-        TargetKind::Named,
-    ] {
-        assert!(
-            names.iter().any(|n| n == k.as_ref()),
-            "missing seed for {k}"
-        );
-    }
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn statuses_seed_maps_to_enum(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let names = lookup_names(backend, &env, "subscription_statuses").await;
-    // Seeded names must each map to a variant (no orphan seed)...
-    for n in &names {
-        assert!(
-            SubscriptionStatus::try_from(n.as_str()).is_ok(),
-            "unseeded enum for subscription status {n}"
-        );
-    }
-    // ...and the one status seeded this milestone must be present. `Pending`
-    // and `Blocked` variants exist (reserved for M13/M15) but have no rows yet,
-    // so this is the subset direction only — not exact bijection.
-    assert!(
-        names
-            .iter()
-            .any(|n| n == SubscriptionStatus::Active.as_ref()),
-        "missing seed for {}",
-        SubscriptionStatus::Active
-    );
 }
 
 // The production `SubscriptionStorage::local_channel_id()` accessor must return
