@@ -550,7 +550,7 @@
         e2ePackage = pkgs.buildNpmPackage {
           name = "jaunder-e2e";
           src = ./end2end;
-          npmDepsHash = "sha256-k+N5Zf+jX2wT9Q2N1yaPYngjV0qTBFWNRdZMjqeE+t0=";
+          npmDepsHash = "sha256-z4BCkyRqFaBc2YpPjUNpAPer1SVKLvv0XLxVhrzJI90=";
           dontNpmBuild = true;
           installPhase = ''
             mkdir -p $out
