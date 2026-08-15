@@ -341,18 +341,18 @@ Run the global per-commit protocol. Commit:
   through `audience_delete_cascades_memberships`; keeps `raw_scalar_i64`
   private.
 
-- [ ] **Step 1: Move the audience cluster**
+- [x] **Step 1: Move the audience cluster**
 
 Keep ownership, ordering, and cascade assertions unchanged. Keep
 `raw_scalar_i64`'s backend match local.
 
-- [ ] **Step 2: Prove the concern**
+- [x] **Step 2: Prove the concern**
 
 Run:
 `devtool run -- devtool pg run -- cargo nextest run -p jaunder storage::audiences`
 Expected: PASS, twelve backend cases.
 
-- [ ] **Step 3: Gate and commit**
+- [x] **Step 3: Gate and commit**
 
 Run the global per-commit protocol. Commit:
 `refactor(server/tests): split audience storage tests (#950)`.
