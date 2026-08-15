@@ -23,8 +23,6 @@ use storage::{MediaError, MediaStorage};
 use web::auth::AuthUser;
 use web::error::InternalError;
 
-use crate::soft_path::SoftPath;
-
 /// Builds the media routes (content-addressed serve, remote proxy). Upload lives
 /// in the `web::media::upload` `#[server]` fn (#517).
 ///
@@ -103,41 +101,69 @@ pub fn classify_media_open_error(error: io::Error) -> MediaOpenError {
 // Serve handler  GET /media/{source}/{p1}/{p2}/{hash}/{filename}
 // ---------------------------------------------------------------------------
 
-/// Path parameters for the media serve route.
+/// Fully validated path address for the public content-addressed media route.
 #[derive(Deserialize)]
-pub struct ServeParams {
-    pub source: SoftPath<MediaSource>,
-    pub p1: String,
-    pub p2: String,
-    pub hash: SoftPath<ContentHash>,
-    /// Typed [`ProfferedFilename`], not [`Filename`]: axum has percent-*decoded* this
-    /// segment before the handler runs, so it is the decoded spelling, and only the
-    /// inbound door knows how to recover the stored one (#720).
-    pub filename: SoftPath<ProfferedFilename>,
+struct RawServeAddress {
+    source: MediaSource,
+    p1: String,
+    p2: String,
+    hash: ContentHash,
+    /// Axum has percent-decoded this segment; this door restores its canonical encoding.
+    filename: ProfferedFilename,
 }
 
-/// Serves a stored media file, recording the `jaunder.media.served` outcome.
+/// Fully validated path address for the public content-addressed media route.
+struct ServeAddress {
+    source: MediaSource,
+    hash: ContentHash,
+    filename: Filename,
+}
+
+impl<'de> Deserialize<'de> for ServeAddress {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let RawServeAddress {
+            source,
+            p1,
+            p2,
+            hash,
+            filename,
+        } = RawServeAddress::deserialize(deserializer)?;
+
+        if p1 != hash[..2] || p2 != hash[2..4] {
+            return Err(serde::de::Error::custom("media hash prefixes do not match"));
+        }
+
+        Ok(Self {
+            source,
+            hash,
+            filename: Filename::from(filename),
+        })
+    }
+}
+
+/// Serves a stored media file.
 ///
 /// # Errors
 ///
-/// Returns `4xx` status codes for missing files or invalid parameters.
+/// Returns `4xx` status codes for a valid but missing file.
 #[tracing::instrument(name = "media.serve", skip_all)]
-pub async fn serve_handler(
+async fn serve_handler(
     media: Extension<Arc<dyn MediaStorage>>,
     storage_path: Extension<Arc<PathBuf>>,
-    params: Path<ServeParams>,
+    Path(address): Path<ServeAddress>,
     req_headers: axum::http::HeaderMap,
 ) -> Result<Response, StatusCode> {
-    let result = serve_response(media, storage_path, params, req_headers).await;
+    let result = serve_response(media, storage_path, address, req_headers).await;
     if let Some(outcome) = serve_result(&result) {
         host::metrics::media_served(outcome);
     }
     result
 }
 
-/// Maps a serve outcome to its bounded `result` attribute, or `None` for
-/// internal failures (not one of the served outcomes). Exhaustively tested so
-/// every arm is covered independent of handler call paths.
+/// Maps a serve outcome to its bounded `result` attribute.
 fn serve_result(result: &Result<Response, StatusCode>) -> Option<host::metrics::ServeResult> {
     match result {
         Ok(response) if response.status() == StatusCode::NOT_MODIFIED => {
@@ -155,10 +181,10 @@ fn serve_result(result: &Result<Response, StatusCode>) -> Option<host::metrics::
 async fn serve_response(
     Extension(media): Extension<Arc<dyn MediaStorage>>,
     Extension(storage_path): Extension<Arc<PathBuf>>,
-    Path(params): Path<ServeParams>,
+    address: ServeAddress,
     req_headers: axum::http::HeaderMap,
 ) -> Result<Response, StatusCode> {
-    let (source, hash, filename, file_path) = resolve_media_path(&storage_path, &params)?;
+    let (source, hash, filename, file_path) = resolve_media_path(&storage_path, address);
     let file = match fs::File::open(&file_path).await {
         Ok(file) => file,
         Err(error) => {
@@ -251,72 +277,18 @@ pub async fn proxy_handler(
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
-
-/// Validates the serve route's attacker-controlled path parameters, returning
-/// the parsed [`MediaSource`], [`ContentHash`], and [`Filename`], or `NOT_FOUND`
-/// for any invalid component.
-///
-/// The `source`/`hash`/`filename` segments arrive as [`SoftPath`] — soft-parsed into
-/// [`MediaSource`]/[`ContentHash`]/[`Filename`] at extraction, `None` on a parse miss
-/// (never axum's pre-handler 400, keeping this public content route a DoS-safe 404 for a
-/// bad segment, #504). A missing (unparseable) component is `NOT_FOUND` here. `ContentHash`'s
-/// `FromStr` enforces canonical 64-char lowercase hex, so a malformed hash is rejected before
-/// it is sliced (`hash[2..]`/path-join can never panic); `p1`/`p2` must be its matching leading
-/// hex pairs. `Filename`'s validating `FromStr` accepts only a single safe leaf, so a
-/// traversal value (`..`, `a/b`) is a miss → `NOT_FOUND`.
-fn validate_serve_params(
-    params: &ServeParams,
-) -> Result<(MediaSource, ContentHash, Filename), StatusCode> {
-    let Some(source) = params.source.value() else {
-        return Err(StatusCode::NOT_FOUND);
-    };
-    let Some(hash) = params.hash.value() else {
-        return Err(StatusCode::NOT_FOUND);
-    };
-
-    if !hash.starts_with(&params.p1) || !hash[2..].starts_with(&params.p2) {
-        return Err(StatusCode::NOT_FOUND);
-    }
-
-    let Some(filename) = params.filename.value() else {
-        return Err(StatusCode::NOT_FOUND);
-    };
-    // `value()` borrows, so clone before the rewrap — this is what `Clone` on
-    // `ProfferedFilename` is for. The conversion is infallible: the proffered door
-    // already enforced every condition `Filename` requires.
-    let filename = Filename::from(filename.clone());
-
-    Ok((*source, hash.clone(), filename))
-}
-
-/// Validates the serve route's path parameters and resolves the on-disk file
-/// path, returning `NOT_FOUND` for any invalid component.
+/// Resolves the already-validated media address into its storage path.
 fn resolve_media_path(
     storage_path: &std::path::Path,
-    params: &ServeParams,
-) -> Result<(MediaSource, ContentHash, Filename, PathBuf), StatusCode> {
-    let (source, hash, filename) = validate_serve_params(params)?;
-    // Built via `media_path` — the single definition of the layout — rather than
-    // re-joining the segments here. The write path (`storage::MediaManager::upload`) uses
-    // it too, so the two cannot disagree; a hand-rolled read path would miss the file
-    // whenever the name needs percent-encoding.
-    //
-    // The re-encode is not redundant (#675), and it lives in `ProfferedFilename`'s
-    // door, not here (#720, ADR-0080): axum has already *decoded* the incoming
-    // segment, that door re-encodes it to recover the stored spelling, and
-    // `media_path` merely interpolates a value that already is the path segment.
-    // Deleting that door — or "simplifying" it to `Filename` — breaks serving for
-    // every name needing encoding, and axum offers no un-decoded extractor to avoid
-    // it with.
-    //
-    // The parsed values are used, not the raw `params.*`: `p1`/`p2` are re-derived from
-    // the validated hash, having already been checked against it in
-    // `validate_serve_params`.
-    let file_path = storage_path
-        .join("media")
-        .join(media_path(&source, &hash, &filename));
+    address: ServeAddress,
+) -> (MediaSource, ContentHash, Filename, PathBuf) {
+    let file_path = storage_path.join("media").join(media_path(
+        &address.source,
+        &address.hash,
+        &address.filename,
+    ));
 
-    Ok((source, hash, filename, file_path))
+    (address.source, address.hash, address.filename, file_path)
 }
 
 /// Builds a header-safe `Content-Disposition` value for a typed content type and filename.
@@ -417,23 +389,19 @@ mod tests {
         );
     }
 
-    fn params(source: &str, p1: &str, p2: &str, hash: &str, filename: &str) -> ServeParams {
-        ServeParams {
-            source: SoftPath::parse(source),
-            p1: p1.to_string(),
-            p2: p2.to_string(),
-            hash: SoftPath::parse(hash),
-            filename: SoftPath::parse(filename),
-        }
-    }
-
     #[test]
-    fn resolve_media_path_builds_path_for_valid_params() {
-        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-        let p = params("upload", "e3", "b0", hash, "photo.jpg");
+    fn resolve_media_path_builds_path_for_valid_address() {
+        let hash: ContentHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            .parse()
+            .unwrap();
+        let address = ServeAddress {
+            source: MediaSource::Upload,
+            hash: hash.clone(),
+            filename: Filename::sanitized("photo.jpg").unwrap(),
+        };
 
         let (source, resolved_hash, _filename, path) =
-            resolve_media_path(Path::new("/data"), &p).expect("valid params should resolve");
+            resolve_media_path(Path::new("/data"), address);
 
         assert_eq!(source, MediaSource::Upload);
         assert_eq!(resolved_hash, hash);
@@ -444,123 +412,8 @@ mod tests {
                 .join("upload")
                 .join("e3")
                 .join("b0")
-                .join(hash)
+                .join(hash.as_ref())
                 .join("photo.jpg")
-        );
-    }
-
-    #[test]
-    fn resolve_media_path_recovers_the_stored_spelling_from_a_decoded_segment() {
-        // The read path must spell the name exactly as `storage`'s upload wrote it. axum
-        // hands us the *decoded* segment, so `ProfferedFilename`'s door re-encodes it to
-        // recover the stored spelling; `media_path` then only interpolates (#720). A
-        // hand-rolled join here would look for `a b.txt` and miss the stored
-        // `a%20b.txt` (#675). This is the test that proves the door carries the encode.
-        //
-        // Each case is a distinct hazard: a space is unrepresentable as a `RootRelativeUrl`;
-        // `?`/`#` would truncate the path if unencoded (the failure the newtype cannot
-        // catch); and a literal `%` must survive one encode/decode round without being
-        // read back as the start of an escape.
-        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-        for (raw, stored) in [
-            ("a b.txt", "a%20b.txt"),
-            ("what?.png", "what%3F.png"),
-            ("a#b.png", "a%23b.png"),
-            ("50%.png", "50%25.png"),
-        ] {
-            let p = params("upload", "e3", "b0", hash, raw);
-
-            let (_source, _hash, filename, path) = resolve_media_path(Path::new("/data"), &p)
-                .unwrap_or_else(|e| panic!("{raw} is a legal Filename, got {e}"));
-
-            // The typed filename IS the stored spelling — one value, no derivation — and
-            // the on-disk path is byte-identical to it.
-            assert_eq!(filename, stored);
-            assert_eq!(
-                path,
-                Path::new("/data")
-                    .join("media")
-                    .join("upload")
-                    .join("e3")
-                    .join("b0")
-                    .join(hash)
-                    .join(stored),
-                "{raw} must resolve to the stored name {stored}"
-            );
-        }
-    }
-
-    #[test]
-    fn validate_serve_params_returns_typed_filename_for_canonical_name() {
-        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-        let p = params("upload", "e3", "b0", hash, "photo.jpg");
-        let (source, h, filename) = validate_serve_params(&p).expect("valid params");
-        assert_eq!(source, MediaSource::Upload);
-        assert_eq!(h, hash);
-        assert_eq!(filename, "photo.jpg"); // Filename: PartialEq<str>
-    }
-
-    #[test]
-    fn resolve_media_path_rejects_unknown_source() {
-        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-        let p = params("bogus", "e3", "b0", hash, "photo.jpg");
-        assert_eq!(
-            resolve_media_path(Path::new("/data"), &p),
-            Err(StatusCode::NOT_FOUND)
-        );
-    }
-
-    #[test]
-    fn resolve_media_path_rejects_short_hash() {
-        // A hash shorter than 2 bytes cannot be sliced at [..2]; it must reject,
-        // not panic.
-        let p = params("upload", "a", "a", "a", "photo.jpg");
-        assert_eq!(
-            resolve_media_path(Path::new("/data"), &p),
-            Err(StatusCode::NOT_FOUND)
-        );
-    }
-
-    #[test]
-    fn resolve_media_path_rejects_non_hex_hash() {
-        let hash = "z".repeat(64);
-        let p = params("upload", "zz", "zz", &hash, "photo.jpg");
-        assert_eq!(
-            resolve_media_path(Path::new("/data"), &p),
-            Err(StatusCode::NOT_FOUND)
-        );
-    }
-
-    #[test]
-    fn resolve_media_path_rejects_filename_with_traversal_or_separators() {
-        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-        for bad in ["..", ".", "../../etc/passwd", "a/b", "sub/file.txt"] {
-            let p = params("upload", "e3", "b0", hash, bad);
-            assert_eq!(
-                resolve_media_path(Path::new("/data"), &p),
-                Err(StatusCode::NOT_FOUND),
-                "filename {bad:?} must be rejected"
-            );
-        }
-    }
-
-    #[test]
-    fn resolve_media_path_rejects_p1_prefix_mismatch() {
-        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-        let p = params("upload", "ff", "b0", hash, "photo.jpg");
-        assert_eq!(
-            resolve_media_path(Path::new("/data"), &p),
-            Err(StatusCode::NOT_FOUND)
-        );
-    }
-
-    #[test]
-    fn resolve_media_path_rejects_p2_prefix_mismatch() {
-        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-        let p = params("upload", "e3", "ff", hash, "photo.jpg");
-        assert_eq!(
-            resolve_media_path(Path::new("/data"), &p),
-            Err(StatusCode::NOT_FOUND)
         );
     }
 
@@ -638,8 +491,8 @@ mod tests {
     const SAMPLE_HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
     /// Materializes a stored media file under a fresh temp storage root and
-    /// returns the root plus the matching serve params.
-    fn stored_file(filename: &str) -> (tempfile::TempDir, ServeParams) {
+    /// returns the root plus the matching strict serve address.
+    fn stored_file(filename: &str) -> (tempfile::TempDir, ServeAddress) {
         let temp = tempfile::TempDir::new().expect("temp dir");
         let dir = temp
             .path()
@@ -650,19 +503,21 @@ mod tests {
             .join(SAMPLE_HASH);
         std::fs::create_dir_all(&dir).expect("create media dirs");
         std::fs::write(dir.join(filename), b"file-bytes").expect("write file");
-        let p = params("upload", "e3", "b0", SAMPLE_HASH, filename);
-        (temp, p)
+        (
+            temp,
+            ServeAddress {
+                source: MediaSource::Upload,
+                hash: SAMPLE_HASH.parse().unwrap(),
+                filename: Filename::sanitized(filename).unwrap(),
+            },
+        )
     }
 
     // guard:no-backend — mock store
     #[tokio::test]
     async fn serve_response_returns_304_on_matching_if_none_match() {
-        let (temp, p) = stored_file("photo.jpg");
-        // No DB lookup happens: the ETag match short-circuits before find_by_hash.
+        let (temp, address) = stored_file("photo.jpg");
         let media = storage::MockMediaStorage::new();
-
-        // The ETag the producer now emits (sha256-prefixed) — derived from the door so the
-        // test can't drift from `serve_response`'s value.
         let etag = ETag::from_content_hash(&parse_content_hash(SAMPLE_HASH));
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(
@@ -670,72 +525,71 @@ mod tests {
             HeaderValue::from_str(etag.as_ref()).unwrap(),
         );
 
-        let resp = serve_response(
+        let response = serve_response(
             Extension(Arc::new(media) as Arc<dyn MediaStorage>),
             Extension(Arc::new(temp.path().to_path_buf())),
-            Path(p),
+            address,
             headers,
         )
         .await
         .expect("serve response");
-        assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
     }
 
     // guard:no-backend — mock store
     #[tokio::test]
     async fn serve_response_serves_body_when_if_none_match_does_not_match() {
-        let (temp, p) = stored_file("photo.jpg");
+        let (temp, address) = stored_file("photo.jpg");
         let mut media = storage::MockMediaStorage::new();
-        // ETag present but not matching: the conditional falls through to the
-        // normal serve path (DB lookup + 200) rather than returning 304.
         media
             .expect_find_by_hash()
             .times(1)
             .returning(|_, _| Ok(None));
-
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(
             axum::http::header::IF_NONE_MATCH,
             HeaderValue::from_static("\"not-the-hash\""),
         );
 
-        let resp = serve_response(
+        let response = serve_response(
             Extension(Arc::new(media) as Arc<dyn MediaStorage>),
             Extension(Arc::new(temp.path().to_path_buf())),
-            Path(p),
+            address,
             headers,
         )
         .await
         .expect("serve response");
-        assert_eq!(resp.status(), StatusCode::OK);
+
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     // guard:no-backend — mock store
     #[tokio::test]
     async fn serve_response_falls_back_to_extension_content_type_when_db_has_no_record() {
-        let (temp, p) = stored_file("photo.jpg");
+        let (temp, address) = stored_file("photo.jpg");
         let mut media = storage::MockMediaStorage::new();
-        // No DB record -> content type is detected from the filename extension.
         media
             .expect_find_by_hash()
             .times(1)
             .returning(|_, _| Ok(None));
 
-        let resp = serve_response(
+        let response = serve_response(
             Extension(Arc::new(media) as Arc<dyn MediaStorage>),
             Extension(Arc::new(temp.path().to_path_buf())),
-            Path(p),
+            address,
             axum::http::HeaderMap::new(),
         )
         .await
         .expect("serve response");
 
-        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::OK);
         let expected = detect_content_type(&Filename::sanitized("photo.jpg").unwrap());
         assert_eq!(
-            resp.headers()
+            response
+                .headers()
                 .get(axum::http::header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok()),
+                .and_then(|value| value.to_str().ok()),
             Some(expected.as_ref())
         );
     }
