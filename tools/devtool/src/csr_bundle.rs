@@ -70,6 +70,47 @@ fn rewrite_wasm_ref(js: &str) -> String {
     js.replace(IN_WASM, OUT_WASM)
 }
 
+/// Append the Jaunder-owned initializer without changing wasm-bindgen's default
+/// export. The wrapper surrounds the real delivery path, so its timings retain
+/// streaming versus buffered fallback behavior instead of introducing a second
+/// byte-first path.
+fn append_measured_initializer(js: &str) -> String {
+    format!(
+        "{js}\n\
+\n\
+export async function initMeasured(moduleOrPath) {{\n\
+    performance.mark(\"jaunder.wasm.init_start\");\n\
+    let path = null;\n\
+    let apiMs = null;\n\
+    const originalStreaming = WebAssembly.instantiateStreaming;\n\
+    const originalInstantiate = WebAssembly.instantiate;\n\
+    const measure = (original, successfulPath) => async function (...args) {{\n\
+        const startedAt = performance.now();\n\
+        const result = await original.apply(this, args);\n\
+        path = successfulPath;\n\
+        apiMs = performance.now() - startedAt;\n\
+        return result;\n\
+    }};\n\
+    if (typeof originalStreaming === \"function\") {{\n\
+        WebAssembly.instantiateStreaming = measure(originalStreaming, \"streaming\");\n\
+    }}\n\
+    if (typeof originalInstantiate === \"function\") {{\n\
+        WebAssembly.instantiate = measure(originalInstantiate, \"buffered\");\n\
+    }}\n\
+    try {{\n\
+        const exports = await __wbg_init(moduleOrPath);\n\
+        if (path !== null && apiMs !== null) {{\n\
+            performance.mark(\"jaunder.wasm.init_done\", {{ detail: {{ path, apiMs }} }});\n\
+        }}\n\
+        return exports;\n\
+    }} finally {{\n\
+        WebAssembly.instantiateStreaming = originalStreaming;\n\
+        WebAssembly.instantiate = originalInstantiate;\n\
+    }}\n\
+}}\n"
+    )
+}
+
 /// Brotli-compress `bytes` at max quality (11, lgwin 22) — the release-asset
 /// setting; the bundle is compressed once at build time, not per request.
 fn brotli_compress(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
@@ -174,8 +215,11 @@ pub fn run(wasm: &Path, out: &Path) -> anyhow::Result<()> {
     let js_path = out.join(OUT_JS);
     let js = std::fs::read_to_string(&js_path)
         .with_context(|| format!("reading {}", js_path.display()))?;
-    std::fs::write(&js_path, rewrite_wasm_ref(&js))
-        .with_context(|| format!("writing {}", js_path.display()))?;
+    std::fs::write(
+        &js_path,
+        append_measured_initializer(&rewrite_wasm_ref(&js)),
+    )
+    .with_context(|| format!("writing {}", js_path.display()))?;
 
     // Optimise before compressing, so the `.br`/`.gz` siblings describe the bytes
     // that actually ship.
@@ -211,6 +255,34 @@ mod tests {
     fn already_renamed_is_unchanged() {
         let js = "init('jaunder.wasm')";
         assert_eq!(rewrite_wasm_ref(js), js);
+    }
+
+    #[test]
+    fn appends_measured_initializer_after_renaming_wasm_reference() {
+        let js = append_measured_initializer("export { initSync, __wbg_init as default };");
+        assert!(
+            js.starts_with("export { initSync, __wbg_init as default };"),
+            "{js}"
+        );
+        for expected in [
+            "export async function initMeasured(moduleOrPath)",
+            "performance.mark(\"jaunder.wasm.init_start\")",
+            "performance.mark(\"jaunder.wasm.init_done\", { detail: { path, apiMs } })",
+            "WebAssembly.instantiateStreaming",
+            "WebAssembly.instantiate",
+            "performance.now()",
+            "WebAssembly.instantiateStreaming = originalStreaming",
+            "WebAssembly.instantiate = originalInstantiate",
+            "finally",
+        ] {
+            assert!(js.contains(expected), "missing {expected:?} in {js}");
+        }
+        assert!(
+            js.find("export { initSync, __wbg_init as default };")
+                .unwrap()
+                < js.find("export async function initMeasured").unwrap(),
+            "{js}"
+        );
     }
 
     #[test]

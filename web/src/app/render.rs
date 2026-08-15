@@ -35,14 +35,13 @@ pub const DEFAULT_THEME: &str = "studio";
 /// redirect-pref (`jaunder_home_redirect`) read path is present with the safe
 /// stay-default — nothing writes the key yet (ADR-0044 D7/D10). Bytes are
 /// identical for every visitor → cacheability intact. Kept byte-identical in
-/// `csr/index.html` (a `<!-- prettier-ignore -->`-pinned copy, drift-guarded by a
-/// unit test) — deliberately minified so the two copies can match verbatim.
-pub const PREPAINT_SCRIPT: &str = "<script>(function(){try{\
-var m=localStorage.getItem('jaunder_auth');\
-if(m){var u=JSON.parse(m).username;\
-if(u){var e=document.documentElement;e.classList.add('authed');e.setAttribute('data-user',u);\
-if(localStorage.getItem('jaunder_home_redirect')==='app'&&location.pathname==='/'){location.replace('/app');}}}\
-}catch(_){}})();</script>";
+/// `csr/index.html` and drift-guarded by a unit test.
+pub const PREPAINT_SCRIPT: &str = concat!(
+    "<script>\n",
+    "  // prettier-ignore\n",
+    "  (function () {try {var m = localStorage.getItem('jaunder_auth'); if (m) {var u = JSON.parse(m).username; if (u) {var e = document.documentElement; e.classList.add('authed'); e.setAttribute('data-user', u); if (localStorage.getItem('jaunder_home_redirect') === 'app' && location.pathname === '/') {location.replace('/app');} } } } catch (_) { } })();\n",
+    " </script>",
+);
 
 /// The CSR SPA shell, embedded at compile time. The `cargo xtask build-csr` build
 /// never writes `index.html` to `site_root` (#239); the server owns it and serves it — the
@@ -54,8 +53,8 @@ pub const SPA_SHELL: &str = include_str!("../../../csr/index.html");
 /// artifacts' paths (#866).
 ///
 /// Every consumer — both shells, the projector's boot script, and two xtask
-/// checks — reads these constants, and the shell's `init()` target, its glue
-/// `import`, and the projector's boot script are asserted against them by the
+/// checks — reads these constants, and the shell's `initMeasured()` target, its
+/// glue `import`, and the projector's boot script are asserted against them by the
 /// drift guards in this module's tests. Hand-written copies with nothing tying
 /// them together are the hazard (see
 /// docs/adr/0121-no-wasm-preload.md for the double-download failure a
@@ -265,8 +264,8 @@ mod tests {
     #[test]
     fn index_html_shell_contains_the_prepaint_script() {
         // The projector's SPA-shell fallback IS csr/index.html; it must carry the
-        // identical pre-paint script (a prettier-ignored, minified copy) so
-        // authed-only / shell-fallback pages pre-paint too.
+        // identical pre-paint script so authed-only / shell-fallback pages pre-paint
+        // too.
         let index = include_str!("../../../csr/index.html");
         assert!(
             index.contains(PREPAINT_SCRIPT),
@@ -277,25 +276,26 @@ mod tests {
     #[test]
     fn csr_index_html_boots_wasm_with_an_explicit_url() {
         // Fast unit smoke (#234): the SPA shell must pass an explicit wasm URL to
-        // init(), not the arg-less init() that falls back to wasm-bindgen's
-        // `jaunder_bg.wasm` default. This runs in `check`; `cargo xtask audit-wasm`
-        // is what ties this URL to the file the build actually emits.
+        // initMeasured(), not the arg-less wasm-bindgen default initializer that
+        // falls back to `jaunder_bg.wasm`. This runs in `check`; `cargo xtask
+        // audit-wasm` is what ties this URL to the file the build actually emits.
         //
         // Derived from WASM_URL rather than a literal (#866), so the shell and every
         // other consumer of the boot URLs share one definition.
         assert!(
-            SPA_SHELL.contains(&format!(r#"init("{WASM_URL}")"#)),
-            "csr/index.html must boot via an explicit init(\"{WASM_URL}\") (drift guard #234)"
+            SPA_SHELL.contains(&format!(r#"initMeasured("{WASM_URL}")"#)),
+            "csr/index.html must boot via initMeasured(\"{WASM_URL}\") (drift guard #234)"
         );
     }
 
-    /// The glue's URL has the same drift exposure as the wasm's: the shell imports it
-    /// by literal path, and nothing else would notice if the emitted filename moved.
+    /// The glue's URL has the same drift exposure as the wasm's: the shell imports
+    /// the public measured initializer by literal path, and nothing else would
+    /// notice if the emitted filename moved.
     #[test]
-    fn csr_index_html_imports_the_glue_by_its_constant() {
+    fn csr_index_html_imports_measured_initializer_from_the_glue_constant() {
         assert!(
-            SPA_SHELL.contains(&format!(r#"import init from "{GLUE_URL}""#)),
-            "csr/index.html must import the glue from {GLUE_URL} (drift guard)"
+            SPA_SHELL.contains(&format!(r#"import {{initMeasured}} from "{GLUE_URL}""#)),
+            "csr/index.html must import initMeasured from {GLUE_URL} (drift guard)"
         );
     }
 

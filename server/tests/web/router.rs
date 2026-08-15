@@ -66,8 +66,8 @@ async fn spa_fallback_serves_embedded_shell_without_disk_index_html(#[case] back
         .unwrap();
     let body = String::from_utf8(body.to_vec()).unwrap();
     assert!(
-        body.contains(r#"init("/pkg/jaunder.wasm")"#),
-        "SPA fallback serves the embedded shell that boots the wasm: {body}"
+        body.contains(r#"initMeasured("/pkg/jaunder.wasm")"#),
+        "SPA fallback serves the embedded shell that measures wasm initialization: {body}"
     );
 }
 
