@@ -909,17 +909,17 @@ Run the global per-commit protocol. Commit:
 - Consumes the three named `sessions.rs` replacements from the spec table.
 - Produces no new test; registered storage count falls from 302 to 300.
 
-- [ ] **Step 1: Delete the accounted body**
+- [x] **Step 1: Delete the accounted body**
 
 Do not edit retained session tests.
 
-- [ ] **Step 2: Prove replacement coverage**
+- [x] **Step 2: Prove replacement coverage**
 
 Run:
 `devtool run -- devtool pg run -- cargo nextest run -p jaunder storage::sessions`
 Expected: PASS. List tests; expected 300 storage cases and no removed leaf.
 
-- [ ] **Step 3: Gate and commit**
+- [x] **Step 3: Gate and commit**
 
 Run the global per-commit protocol. Commit:
 `test(server): remove redundant session storage test (#950)`.

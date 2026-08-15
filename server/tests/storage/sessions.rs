@@ -1,4 +1,6 @@
 use super::*;
+use common::test_support::parse_session_label;
+use storage::SessionAuthError;
 use storage::test_support::seed_users;
 #[apply(backends)]
 #[tokio::test]

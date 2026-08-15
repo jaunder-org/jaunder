@@ -1,12 +1,10 @@
 use chrono::Utc;
-use common::test_support::{
-    parse_bio, parse_display_name, parse_email, parse_raw_token, parse_session_label,
-};
+use common::test_support::{parse_bio, parse_display_name, parse_email, parse_raw_token};
 use host::invite::InviteCode;
 
 use storage::{
-    ConfirmPasswordResetError, ProfileUpdate, RegisterWithInviteError, SessionAuthError,
-    UseEmailVerificationError, UsePasswordResetError, UserAuthError,
+    ConfirmPasswordResetError, ProfileUpdate, RegisterWithInviteError, UseEmailVerificationError,
+    UsePasswordResetError, UserAuthError,
 };
 
 use rstest::*;
@@ -46,33 +44,6 @@ use fixtures::{password, raw_exec, username};
 // `unique_postgres_url`/`template_postgres_url`, see helpers), so they run
 // safely under the default in-process parallelism. No `--test-threads=1` is
 // needed (jaunder-qguq).
-
-#[apply(backends)]
-#[tokio::test]
-async fn session_lifecycle_works(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-    let user = SeedUser::new().seed(state).await;
-
-    let raw_token = state
-        .sessions
-        .create_session(user.user_id, &parse_session_label("Laptop"))
-        .await
-        .unwrap();
-    let record = state.sessions.authenticate(&raw_token).await.unwrap();
-    assert_eq!(record.user_id, user.user_id);
-    assert_eq!(record.username, user.username);
-
-    let sessions = state.sessions.list_sessions(user.user_id).await.unwrap();
-    assert_eq!(sessions.len(), 1);
-    state
-        .sessions
-        .revoke_session(&record.token_hash)
-        .await
-        .unwrap();
-    let err = state.sessions.authenticate(&raw_token).await.unwrap_err();
-    assert!(matches!(err, SessionAuthError::SessionNotFound));
-}
 
 #[apply(backends)]
 #[tokio::test]
