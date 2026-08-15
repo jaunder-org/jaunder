@@ -2659,13 +2659,13 @@ than being replaced by the gate.
 ## Un-ADR'd reality
 
 The former #938 gaps are now covered by accepted decisions: process
-configuration ([ADR-0143](adr/0144-process-configuration-cli-contract.md)),
+configuration ([ADR-0144](adr/0144-process-configuration-cli-contract.md)),
 deployment/package outputs
-([ADR-0141](adr/0142-declarative-nixos-deployment-package-outputs.md)),
+([ADR-0142](adr/0142-declarative-nixos-deployment-package-outputs.md)),
 workspace/gate boundaries
-([ADR-0140](adr/0141-cargo-workspace-execution-boundaries.md)), and Emacs
+([ADR-0141](adr/0141-cargo-workspace-execution-boundaries.md)), and Emacs
 credential storage
-([ADR-0142](adr/0143-emacs-auth-source-app-password-storage.md)).
+([ADR-0143](adr/0143-emacs-auth-source-app-password-storage.md)).
 
 Two gaps a reader might expect here are absent because the system closed them.
 The content-addressed media store is no longer un-ADR'd: ADR-0080 decides the
