@@ -504,18 +504,18 @@ Run the global per-commit protocol. Commit:
   authentication paths, profile update, unknown ID, two `set_email` paths, and
   `set_password_authenticate_with_old_returns_invalid_and_new_succeeds`.
 
-- [ ] **Step 1: Move the ten retained bodies**
+- [x] **Step 1: Move the ten retained bodies**
 
 Home `set_email_*` and `set_password_*` here because UserStorage owns those
 operations. Keep the combined smoke test in root for Task 22.
 
-- [ ] **Step 2: Prove the concern**
+- [x] **Step 2: Prove the concern**
 
 Run:
 `devtool run -- devtool pg run -- cargo nextest run -p jaunder storage::users_auth`
 Expected: PASS, twenty backend cases.
 
-- [ ] **Step 3: Gate and commit**
+- [x] **Step 3: Gate and commit**
 
 Run the global per-commit protocol. Commit:
 `refactor(server/tests): split user storage tests (#950)`.
