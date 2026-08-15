@@ -2,6 +2,8 @@
 
 use async_trait::async_trait;
 use common::mailer::{EmailMessage, MailError, MailSender};
+use common::smtp_tls_mode::SmtpTlsMode;
+use host::smtp_config::SmtpConfig;
 use lettre::{
     AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
     message::Mailbox,
@@ -9,7 +11,6 @@ use lettre::{
         AsyncSmtpTransportBuilder, Error as SmtpTransportError, authentication::Credentials,
     },
 };
-use storage::{SmtpConfig, SmtpTlsMode};
 use thiserror::Error;
 
 /// Errors that can occur when constructing a [`LettreMailSender`].
@@ -183,9 +184,10 @@ impl MailSender for LettreMailSender {
 mod tests {
     use common::email::Email;
     use common::smtp_port::SmtpPort;
+    use common::smtp_tls_mode::SmtpTlsMode;
     use common::test_support::{parse_smtp_password, parse_smtp_username};
+    use host::smtp_config::SmtpConfig;
     use std::str::FromStr;
-    use storage::{SmtpConfig, SmtpTlsMode};
 
     use super::*;
 

@@ -23,6 +23,7 @@ use common::tagged_url::{MailConfirmUrl, compose};
 use common::token::RawToken;
 use common::username::Username;
 use host::capture;
+use host::smtp_config::SmtpConfig;
 use storage::load_smtp_config;
 use storage::{BackupExportOptions, BackupRestoreOptions, export_backup, restore_backup};
 use storage::{init_storage, open_database, open_existing_database};
@@ -360,9 +361,7 @@ pub async fn cmd_smtp_test(storage: &StorageArgs, to: &str) -> anyhow::Result<()
 async fn smtp_test_with(
     site_config: &dyn storage::SiteConfigStorage,
     to: &str,
-    build_smtp: impl FnOnce(
-        &storage::SmtpConfig,
-    ) -> Result<Box<dyn MailSender>, crate::mailer::BuildMailerError>,
+    build_smtp: impl FnOnce(&SmtpConfig) -> Result<Box<dyn MailSender>, crate::mailer::BuildMailerError>,
 ) -> anyhow::Result<()> {
     let smtp_config = load_smtp_config(site_config)
         .await
@@ -919,6 +918,7 @@ fn format_entries(entries: &[(String, String)]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use common::smtp_tls_mode::SmtpTlsMode;
     use common::test_support::{
         parse_invite_ttl_hours, parse_password as test_password, parse_session_label,
         parse_username,
@@ -1003,11 +1003,11 @@ mod tests {
         );
     }
 
-    fn smtp_config() -> storage::SmtpConfig {
-        storage::SmtpConfig {
+    fn smtp_config() -> SmtpConfig {
+        SmtpConfig {
             host: "mail.example.com".parse().expect("valid host"),
             port: common::smtp_port::SmtpPort::default(),
-            tls_mode: storage::SmtpTlsMode::StartTls,
+            tls_mode: SmtpTlsMode::StartTls,
             username: None,
             password: None,
             sender: "Jaunder <noreply@example.com>"
@@ -1066,7 +1066,7 @@ mod tests {
 
     #[tokio::test]
     async fn command_source_chain_smtp_invalid_sender() {
-        let config = storage::SmtpConfig {
+        let config = SmtpConfig {
             sender: "Acme, Inc <noreply@example.com>"
                 .parse()
                 .expect("common mailbox accepts the display name"),

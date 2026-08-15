@@ -1,9 +1,9 @@
 //! Site-wide configuration storage.
 
 use crate::backend::Backend;
-use crate::smtp::SmtpConfig;
 use async_trait::async_trait;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, DestinationPath, RetentionCount};
+use host::smtp_config::SmtpConfig;
 // The closed registry of site-config keys (#687) — re-exported so
 // `storage::SiteConfigKey` resolves for the call sites that name one.
 pub use common::config_key::SiteConfigKey;
