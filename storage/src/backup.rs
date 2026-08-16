@@ -601,6 +601,7 @@ fn previous_directory_backup(destination_path: &Path) -> Result<Option<PathBuf>,
 mod tests {
     // Parallel fixture names (e.g. user1/user2) aid test clarity. Single-compiled test
     // module, so `#[expect]` self-removes if the names ever diverge. (#94)
+    // lint-suppression:allow approved in #294; existing expectation documents intentional test-scaffolding or naming exception
     #![expect(clippy::similar_names)]
     use super::*;
     use crate::test_support::{

@@ -7,7 +7,8 @@
 // the crate root and gated to the same `any(test, feature = "test-utils")` as the mocks
 // (`storage`'s own `cfg(test)` build now uses them too, #517). No production code uses
 // `&Option<&T>`, so nothing genuine is masked (#245).
-#![cfg_attr(any(test, feature = "test-utils"), allow(clippy::ref_option_ref))]
+// lint-suppression:allow approved in #294; cfg-gated mockall-generated matcher signature suppression
+#![cfg_attr(any(test, feature = "test-utils"), expect(clippy::ref_option_ref))]
 
 mod app_state;
 mod atomic;

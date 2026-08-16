@@ -165,6 +165,7 @@ pub(crate) fn build_invite_record(
 /// `json_object` keys verbatim, hence the matching `tag_` prefixes.
 // Fields mirror the SQL `json_object` aggregation keys (tag_id/tag_slug/tag_display)
 // this struct deserializes; renaming would need per-field `#[serde(rename)]` for no gain.
+// lint-suppression:allow approved in #294; existing expectation documents intentional test-scaffolding or naming exception
 #[expect(clippy::struct_field_names)]
 #[derive(Deserialize)]
 struct PostTagJson {

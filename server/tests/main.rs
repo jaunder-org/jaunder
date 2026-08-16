@@ -4,6 +4,7 @@
 // unwrap/expect are permitted in test code (CONTRIBUTING); clippy's
 // allow-{unwrap,expect}-in-tests only exempts #[test]/#[tokio::test] bodies, not the
 // shared/local test-helper fns, so this single crate-level expect covers them.
+// lint-suppression:allow approved in #294; existing expectation documents intentional test-scaffolding or naming exception
 #![expect(clippy::unwrap_used, clippy::expect_used)]
 
 mod helpers;

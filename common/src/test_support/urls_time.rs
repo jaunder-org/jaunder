@@ -1,6 +1,7 @@
 // Test scaffolding that deliberately `expect()`s on a fixture parse, so the
 // workspace's `expect_used = deny` lint is expected off for this module; `#[expect]`
 // self-flags if the scaffolding ever stops using `expect`.
+// lint-suppression:allow approved in #294; existing expectation documents intentional test-scaffolding or naming exception
 #![expect(clippy::expect_used)]
 
 use crate::etag::ETag;

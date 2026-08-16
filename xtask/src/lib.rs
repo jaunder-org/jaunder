@@ -37,6 +37,7 @@ mod steps {
     pub mod host_tests;
     pub mod html_sink_check;
     pub mod ident_gate;
+    pub mod lint_suppression_check;
     pub mod nix;
     pub mod no_full_reload_check;
     pub mod proffered_filename_check;
@@ -483,6 +484,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::no_full_reload_check::run(&mut result);
             steps::e2e_goto_wrapper_check::run(&mut result);
             steps::target_arch_placement_check::run(&mut result);
+            steps::lint_suppression_check::run(&mut result);
             steps::thin_components::run(&mut result);
             steps::sqlx_newtype_bind_check::run(&mut result);
             steps::sqlx_newtype_decode_check::run(&mut result);
@@ -528,6 +530,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::no_full_reload_check::run(&mut result);
             steps::e2e_goto_wrapper_check::run(&mut result);
             steps::target_arch_placement_check::run(&mut result);
+            steps::lint_suppression_check::run(&mut result);
             steps::thin_components::run(&mut result);
             steps::sqlx_newtype_bind_check::run(&mut result);
             steps::sqlx_newtype_decode_check::run(&mut result);

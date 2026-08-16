@@ -133,7 +133,11 @@ they run in CI, or locally via `cargo xtask validate`. Bypass with
   `clippy::` lint or a rustc lint — requires **explicit user approval** before
   it lands; do not introduce one to make the gate pass on your own initiative
   (this is the actionable form of the "never suppress … linting without explicit
-  approval" rule under Testing).
+  approval" rule under Testing). `cargo xtask check` and `cargo xtask validate`
+  reject every `#[allow(...)]` and every `#[expect(...)]` without an immediately
+  preceding, non-empty `// lint-suppression:allow <reason>` marker. After
+  approval, add that reviewed marker in the same change; never use it to make an
+  unapproved suppression pass.
 - **Review gates the merge, not the commit.** Agents commit on their own
   recognizance — history is meant to be built up in focused, atomic steps, and
   the pre-commit hook already gates each one on the full `cargo xtask check`.

@@ -810,8 +810,9 @@ mod tests {
 #[cfg(all(test, feature = "server"))]
 mod server_tests {
     // Helper fns in this feature-gated test module aren't covered by clippy's
-    // allow-{unwrap,expect}-in-tests, so allow the test-scaffolding panics.
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    // allow-{unwrap,expect}-in-tests, so expect the test-scaffolding panics.
+    // lint-suppression:allow approved in #294; existing expectation documents intentional test-scaffolding or naming exception
+    #![expect(clippy::unwrap_used)]
     use super::{PostInputs, create, list_drafts, publish, update};
     use crate::error::WebError;
     use crate::test_support::auth_parts;
