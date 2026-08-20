@@ -1,8 +1,10 @@
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
+use opentelemetry::KeyValue;
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::Resource;
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
@@ -14,6 +16,11 @@ fn default_filter(verbose: bool) -> EnvFilter {
         EnvFilter::new("jaunder=warn,host=warn,web=warn,common=warn,tower_http=warn,sqlx=warn")
     }
 }
+
+const E2E_SEED_PROCESS_ENV: &str = "JAUNDER_E2E_SEED_PROCESS";
+const E2E_SEED_PROCESS_ATTR: &str = "jaunder.e2e.seed_process";
+const E2E_SEED_PROCESS_JAUNDER: &str = "e2e.seed.jaunder";
+const E2E_SEED_PROCESS_TEST_SUPPORT: &str = "e2e.seed.test-support";
 
 fn read_env(name: &str) -> Result<Option<String>, std::env::VarError> {
     match std::env::var(name) {
@@ -235,9 +242,38 @@ fn otel_exporter_otlp_endpoint_with(
 fn otel_exporter_otlp_endpoint() -> Option<String> {
     otel_exporter_otlp_endpoint_with(read_env, || fallback(FallbackKind::OtlpEndpoint))
 }
+fn e2e_seed_process_attribute_with(
+    mut read: impl FnMut(&str) -> Result<Option<String>, std::env::VarError>,
+) -> Option<KeyValue> {
+    let value = trimmed_non_empty(read(E2E_SEED_PROCESS_ENV).ok()?)?;
+    if matches!(
+        value.as_str(),
+        E2E_SEED_PROCESS_JAUNDER | E2E_SEED_PROCESS_TEST_SUPPORT
+    ) {
+        Some(KeyValue::new(E2E_SEED_PROCESS_ATTR, value))
+    } else {
+        None
+    }
+}
+
+fn telemetry_resource_with(
+    read: impl FnMut(&str) -> Result<Option<String>, std::env::VarError>,
+) -> Resource {
+    let builder = Resource::builder();
+    if let Some(attribute) = e2e_seed_process_attribute_with(read) {
+        builder.with_attribute(attribute).build()
+    } else {
+        builder.build()
+    }
+}
+
+fn telemetry_resource() -> Resource {
+    telemetry_resource_with(read_env)
+}
 
 fn build_otel_tracer(
     endpoint: &str,
+    resource: Resource,
 ) -> anyhow::Result<opentelemetry_sdk::trace::SdkTracerProvider> {
     let exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
@@ -245,6 +281,7 @@ fn build_otel_tracer(
         .build()
         .context("failed to build OTLP span exporter")?;
     let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+        .with_resource(resource)
         .with_batch_exporter(exporter)
         .build();
     opentelemetry::global::set_tracer_provider(provider.clone());
@@ -253,6 +290,7 @@ fn build_otel_tracer(
 
 fn build_otel_meter(
     endpoint: &str,
+    resource: Resource,
 ) -> anyhow::Result<opentelemetry_sdk::metrics::SdkMeterProvider> {
     let exporter = opentelemetry_otlp::MetricExporter::builder()
         .with_tonic()
@@ -260,6 +298,7 @@ fn build_otel_meter(
         .build()
         .context("failed to build OTLP metric exporter")?;
     let provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
+        .with_resource(resource)
         .with_periodic_exporter(exporter)
         .build();
     opentelemetry::global::set_meter_provider(provider.clone());
@@ -431,11 +470,16 @@ where
     // handles are retained in the returned guard so a one-shot process can flush
     // them before exit.
     let endpoint = otel_exporter_otlp_endpoint();
+    let resource = telemetry_resource();
 
     let tracer = endpoint.as_deref().and_then(|endpoint| {
-        setup_otel_tracer_with(endpoint, build_otel_tracer, |error| {
-            exporter_fallback(FallbackKind::TracerExporterSetup, error);
-        })
+        setup_otel_tracer_with(
+            endpoint,
+            |endpoint| build_otel_tracer(endpoint, resource.clone()),
+            |error| {
+                exporter_fallback(FallbackKind::TracerExporterSetup, error);
+            },
+        )
     });
     let otel_layer = tracer
         .as_ref()
@@ -443,9 +487,13 @@ where
 
     // Metrics share the OTLP endpoint with traces; setup failure is non-fatal.
     let meter = endpoint.as_deref().and_then(|endpoint| {
-        setup_otel_meter_with(endpoint, build_otel_meter, |error| {
-            exporter_fallback(FallbackKind::MeterExporterSetup, error);
-        })
+        setup_otel_meter_with(
+            endpoint,
+            |endpoint| build_otel_meter(endpoint, resource),
+            |error| {
+                exporter_fallback(FallbackKind::MeterExporterSetup, error);
+            },
+        )
     });
 
     // `try_init` fails only if a global subscriber is already installed. That
@@ -562,6 +610,7 @@ impl Drop for TelemetryGuard {
 mod tests {
     use super::*;
     use common::test_support::with_env;
+    use opentelemetry::Value;
     use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
     use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
     use std::io::Write as _;
@@ -979,15 +1028,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn telemetry_resource_records_closed_e2e_seed_process_marker() {
+        let resource = telemetry_resource_with(|name| {
+            assert_eq!(name, E2E_SEED_PROCESS_ENV);
+            Ok(Some(E2E_SEED_PROCESS_TEST_SUPPORT.to_owned()))
+        });
+        assert_eq!(
+            resource.get(&opentelemetry::Key::from_static_str(E2E_SEED_PROCESS_ATTR)),
+            Some(Value::from(E2E_SEED_PROCESS_TEST_SUPPORT))
+        );
+    }
+
+    #[test]
+    fn telemetry_resource_ignores_unrecognised_e2e_seed_process_marker() {
+        let resource = telemetry_resource_with(|name| {
+            assert_eq!(name, E2E_SEED_PROCESS_ENV);
+            Ok(Some("user-controlled".to_owned()))
+        });
+        assert!(
+            resource
+                .get(&opentelemetry::Key::from_static_str(E2E_SEED_PROCESS_ATTR))
+                .is_none()
+        );
+    }
+
     #[tokio::test]
     async fn build_otel_tracer_accepts_valid_endpoint() {
-        let tracer = build_otel_tracer("http://127.0.0.1:4317");
+        let tracer = build_otel_tracer("http://127.0.0.1:4317", Resource::builder().build());
         assert!(tracer.is_ok());
     }
 
     #[test]
     fn tracer_exporter_failure_preserves_typed_source_at_fallback_and_records_zero_metrics() {
-        let injected = build_otel_tracer("not a valid endpoint").expect_err("invalid endpoint");
+        let injected = build_otel_tracer("not a valid endpoint", Resource::builder().build())
+            .expect_err("invalid endpoint");
         let mut output = Vec::new();
         let source_seen = std::cell::Cell::new(false);
         let provider = assert_zero_error_metrics(|| {
@@ -1021,12 +1096,13 @@ mod tests {
 
     #[tokio::test]
     async fn build_otel_meter_accepts_valid_endpoint() {
-        assert!(build_otel_meter("http://127.0.0.1:4317").is_ok());
+        assert!(build_otel_meter("http://127.0.0.1:4317", Resource::builder().build()).is_ok());
     }
 
     #[test]
     fn meter_exporter_failure_preserves_typed_source_at_fallback_and_records_zero_metrics() {
-        let injected = build_otel_meter("not a valid endpoint").expect_err("invalid endpoint");
+        let injected = build_otel_meter("not a valid endpoint", Resource::builder().build())
+            .expect_err("invalid endpoint");
         let mut output = Vec::new();
         let source_seen = std::cell::Cell::new(false);
         let provider = assert_zero_error_metrics(|| {

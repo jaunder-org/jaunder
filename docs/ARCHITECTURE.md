@@ -53,7 +53,7 @@ from all three, in `macros`
 | `server`       | host        | The `jaunder` binary: Axum router, CLI, background workers, integration tests.                                                                                                                           |
 | `web`          | host + wasm | Leptos components and `#[server]` functions — the UI and its server halves, split host/wasm at the file level ([ADR-0070](adr/0070-web-vertical-wasm-only-component-files.md)).                          |
 | `csr`          | wasm        | The client-side-rendering entry point: mounts `web` in the browser ([ADR-0041](adr/0041-public-projector-and-csr-client.md)).                                                                            |
-| `host`         | host        | Strictly-host-focused shared code: error carrier, capture dir, auth/token parsing, invites, metrics, and SMTP relay configuration ([ADR-0058](adr/0058-host-crate-layering.md)).                         |
+| `host`         | host        | Strictly-host-focused shared code: error carrier, capture dir, auth/token parsing, invites, process telemetry, metrics, and SMTP relay configuration ([ADR-0058](adr/0058-host-crate-layering.md)).      |
 | `client`       | host + wasm | Browser infrastructure: `localStorage`, dialogs, DOM/file-upload glue, reactive revalidation, CSR performance marks, and bounded client telemetry ([ADR-0069](adr/0069-client-crate-wasm-only-home.md)). |
 | `macros`       | build-time  | The workspace's proc-macro home: newtype, `text_enum`, sqlx-bridge and server-fn derives ([ADR-0062](adr/0062-macros-crate-proc-macro-home.md)).                                                         |
 | `test-support` | host        | A seed binary linking `storage` for out-of-process e2e seeding ([ADR-0046](adr/0046-test-support-seed-binary.md)).                                                                                       |
@@ -1216,17 +1216,20 @@ how-to lives in [observability.md](observability.md).
 
 ### Traces
 
-The backend emits spans via `tracing` + `tracing-opentelemetry` in the `server`
-crate ([ADR-0011](adr/0011-unified-observability.md)). `init_tracing`
-(`server/src/observability.rs`) installs the OTLP tracer only when
-`JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT` (fallback `OTEL_EXPORTER_OTLP_ENDPOINT`)
-is set; with no endpoint every emit is a no-op, and exporter-setup failure is
-non-fatal. `with_http_observability` (same file) layers the per-request tracing
-span onto the router, together with a `tower-http` `x-request-id` that it mints
-when absent and propagates onto the response. Inbound W3C `traceparent` headers
-are extracted onto the per-request span, so backend spans parent into the
-caller's trace. Span fields and metric attributes are exported, so they MUST NOT
-carry user PII or secrets — stable identifiers (`user_id`, `error.kind`) only.
+The backend emits spans via `tracing` + `tracing-opentelemetry`; shared
+host-process setup lives in `host::telemetry`
+([ADR-0011](adr/0011-unified-observability.md),
+[ADR-0058](adr/0058-host-crate-layering.md)). `server::observability` owns
+server-scoped HTTP tracing and e2e diagnostics. `host::telemetry::init_tracing`
+installs the OTLP tracer only when `JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT`
+(fallback `OTEL_EXPORTER_OTLP_ENDPOINT`) is set; with no endpoint every emit is
+a no-op, and exporter-setup failure is non-fatal. `with_http_observability`
+(`server/src/observability.rs`) layers the per-request tracing span onto the
+router, together with a `tower-http` `x-request-id` that it mints when absent
+and propagates onto the response. Inbound W3C `traceparent` headers are
+extracted onto the per-request span, so backend spans parent into the caller's
+trace. Span fields and metric attributes are exported, so they MUST NOT carry
+user PII or secrets — stable identifiers (`user_id`, `error.kind`) only.
 
 ### Server-fn span names are macro-derived
 

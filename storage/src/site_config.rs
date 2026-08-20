@@ -360,6 +360,11 @@ where
         Ok(row.map(|(value,)| value))
     }
 
+    #[tracing::instrument(
+        name = "storage.site_config.set",
+        skip(self, value),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
     async fn set(&self, key: SiteConfigKey, value: &str) -> sqlx::Result<()> {
         sqlx::query(
             "INSERT INTO site_config (key, value) VALUES ($1, $2)

@@ -351,6 +351,9 @@ processes call `host::telemetry::init_tracing(false)` and only the server
 
 - Modify: `flake.nix`
 - Modify: `tools/devtool/src/seed_e2e.rs` if stable process markers are needed
+- Modify: `host/src/telemetry.rs` if stable process markers are needed
+- Modify: `storage/src/site_config.rs` if the site-config seed path lacks a
+  `storage.*` span
 - Modify: `xtask/src/traces/parse.rs` or new narrow helper if Rust JSONL parsing
   is used from the VM/assertion path
 - Modify: `docs/adr/0011-unified-observability.md`
@@ -369,7 +372,7 @@ processes call `host::telemetry::init_tracing(false)` and only the server
   - at least one `storage.*` span emitted by `test-support`, and
   - at least one `storage.*` span emitted by `jaunder site-config set`.
 
-- [ ] **Step 1: Add the failing trace-completeness assertion.** Extend both
+- [x] **Step 1: Add the failing trace-completeness assertion.** Extend both
       sqlite and postgres e2e `seed_db()` commands to prefix
       `JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317` alongside
       `JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture`, then verify the collector
@@ -385,7 +388,7 @@ processes call `host::telemetry::init_tracing(false)` and only the server
       Expected: FAIL before Task 2's binary wiring reaches the VM, naming the
       missing `test-support` or `jaunder` seed span.
 
-- [ ] **Step 2: Add stable process attribution if the captured spans cannot
+- [x] **Step 2: Add stable process attribution if the captured spans cannot
       distinguish the two binaries.** If span resource/service metadata already
       distinguishes `test-support` from `jaunder`, use it. Otherwise, set a
       bounded seed-process environment marker in `tools/devtool/src/seed_e2e.rs`
@@ -400,7 +403,7 @@ processes call `host::telemetry::init_tracing(false)` and only the server
       Run: `devtool run -- cargo nextest run --manifest-path tools/Cargo.toml seed_e2e`.
       Expected: PASS if the tool changed; skip only if no tool change was needed.
 
-- [ ] **Step 3: Update observability docs.** Add ADR-0011 addendum text stating
+- [x] **Step 3: Update observability docs.** Add ADR-0011 addendum text stating
       that OTLP process telemetry now lives in `host::telemetry` and is held by
       `server`, production CLI commands, and `test-support`. State explicitly
       that scoped diagnostics remain server-owned per ADR-0057. Update
@@ -408,7 +411,7 @@ processes call `host::telemetry::init_tracing(false)` and only the server
       `docs/observability.md` Backend/e2e capture prose to say seed processes
       now contribute storage spans to `otel-traces.jsonl`.
 
-- [ ] **Step 4: Run focused docs/tool checks and the e2e proof.**
+- [x] **Step 4: Run focused docs/tool checks and the e2e proof.**
 
       Run: `devtool run -- cargo xtask check --no-test`.
       Expected: PASS.
@@ -416,7 +419,7 @@ processes call `host::telemetry::init_tracing(false)` and only the server
       Run: `devtool run -- cargo xtask e2e sqlite chromium`.
       Expected: PASS, including the new seed-span assertion.
 
-- [ ] **Step 5: Tick this checkbox, run the commit gate, and commit.**
+- [x] **Step 5: Tick this checkbox, run the commit gate, and commit.**
 
       Run: `devtool run -- cargo xtask check`.
       Expected: PASS.
@@ -424,7 +427,7 @@ processes call `host::telemetry::init_tracing(false)` and only the server
       Commit exactly:
 
       ```bash
-      devtool run -- git add flake.nix tools/devtool/src/seed_e2e.rs xtask/src/traces docs/adr/0011-unified-observability.md docs/ARCHITECTURE.md docs/observability.md
+      devtool run -- git add flake.nix tools/devtool/src/seed_e2e.rs host/src/telemetry.rs storage/src/site_config.rs docs/adr/0011-unified-observability.md docs/ARCHITECTURE.md docs/observability.md docs/superpowers/plans/2026-08-20-issue-769-test-support-cli-otel.md
       devtool run -- git commit -m "test(e2e): require seed storage spans (#769)"
       ```
 
