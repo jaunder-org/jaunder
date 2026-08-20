@@ -1133,7 +1133,8 @@ graph TD
     #[test]
     #[ignore = "Task 3 populates docs/flows before this repository-wide assertion can run"]
     fn repository_flow_corpus_is_valid() {
-        let step = run(Path::new("."));
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let step = run(root);
         assert!(step.ok, "{}", step.detail.unwrap_or_default());
     }
 }

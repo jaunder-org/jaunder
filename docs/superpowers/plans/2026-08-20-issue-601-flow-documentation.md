@@ -190,7 +190,7 @@ omits; coverage status must remain independent of timing-dependent attribution.
 - Consumes: remaining source-derived endpoints and mounted route patterns.
 - Produces: exactly 13 flow documents with every endpoint declared once.
 
-- [ ] **Step 1: Write remaining flow narratives and endpoint census**
+- [x] **Step 1: Write remaining flow narratives and endpoint census**
 
   Add the six named documents, each with one or more stable `matrix:` links,
   relevant checked routes, concise journey prose, and unique endpoint tokens.
@@ -198,15 +198,15 @@ omits; coverage status must remain independent of timing-dependent attribution.
   Assign `sessions/revoke` to app-password management and let its allowlist
   status remain visible; do not add E2E coverage or hide the gap.
 
-- [ ] **Step 2: Reconcile complete inventories**
+- [x] **Step 2: Reconcile complete inventories**
 
   Run
-  `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml -p xtask -E 'test(repository_flow_corpus_is_valid)'`.
+  `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml -p xtask --run-ignored ignored-only -E 'test(repository_flow_corpus_is_valid)'`.
   Expected: PASS; the repository corpus has zero unassigned/duplicate endpoints
   and any unmapped routes are an informational report. Do not invoke
   `cargo xtask check --no-test` yet: Task 4 has not registered the step.
 
-- [ ] **Step 3: Commit complete corpus**
+- [x] **Step 3: Commit complete corpus**
 
   Tick this task, run `devtool run -- cargo xtask check`, stage all flow docs,
   and commit `docs: complete CSR flow index`.
