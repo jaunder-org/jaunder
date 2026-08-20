@@ -229,6 +229,13 @@ fn variants_named_in_body(body: &str, error_name: &str) -> BTreeSet<String> {
             variants.insert(name);
         }
     }
+    if variants.is_empty()
+        && body
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .any(|word| word == error_name)
+    {
+        variants.insert(error_name.to_string());
+    }
     variants
 }
 
@@ -554,13 +561,22 @@ fn cargo_lock_version(lockfile: &str, crate_name: &str) -> Option<String> {
 }
 
 fn decode_telemetry_is_sanitized(server_error_src: &str) -> bool {
-    let Some(start) = server_error_src.find("emit_arg_decode_failure") else {
+    let Ok(file) = syn::parse_file(server_error_src) else {
         return false;
     };
-    let rest = &server_error_src[start..];
-    let end = rest.find("///").unwrap_or(rest.len());
-    let body = &rest[..end];
-    body.contains("InternalError::validation(") && !body.contains("validation_source")
+    let Some(body) = file.items.into_iter().find_map(|item| match item {
+        syn::Item::Fn(item) if item.sig.ident == "emit_arg_decode_failure" => {
+            Some(item.block.to_token_stream().to_string())
+        }
+        _ => None,
+    }) else {
+        return false;
+    };
+    body.contains("InternalError :: validation")
+        && !body.contains("validation_source")
+        && !body.contains("InternalError :: masked")
+        && !body.contains("value . clone")
+        && !body.contains("anyhow :: Error :: new")
 }
 
 fn field_type_path(ty: &str) -> String {
@@ -595,6 +611,26 @@ fn reachable_error_variants<'a>(
     }
 }
 
+fn strictly_reachable_error_variants<'a>(
+    wire_type: &str,
+    error: &'a ErrorType,
+    index: &TypeIndex,
+) -> Vec<&'a ErrorVariant> {
+    let reachable_key = (wire_type.to_string(), error.name.clone());
+    let Some(reachable) = index
+        .reachable_variants
+        .get(&reachable_key)
+        .filter(|variants| !variants.is_empty())
+    else {
+        return Vec::new();
+    };
+    error
+        .variants
+        .iter()
+        .filter(|variant| reachable.contains(&variant.name))
+        .collect()
+}
+
 fn allowlist_entry_is_live(
     entry: &AllowedExternalDisplay,
     inputs: &[WireInput],
@@ -608,7 +644,7 @@ fn allowlist_entry_is_live(
             return false;
         };
         error.name == entry.error_type
-            && reachable_error_variants(&input.ty, &error, index)
+            && strictly_reachable_error_variants(&input.ty, &error, index)
                 .iter()
                 .any(|variant| variant_wraps_external(variant, entry.wrapped_type))
     })
@@ -1046,16 +1082,26 @@ mod tests {
     fn sanitized_server_error() -> &'static str {
         r#"fn emit_arg_decode_failure(value: &ServerFnErrorErr) {
                InternalError::validation("invalid request arguments").emit_boundary_failure();
-           }
-           /// next item"#
+           }"#
     }
 
     fn preserving_server_error() -> &'static str {
         r#"fn emit_arg_decode_failure(value: &ServerFnErrorErr) {
                InternalError::validation_source("invalid request arguments", value.clone())
                    .emit_boundary_failure();
-           }
-           /// next item"#
+           }"#
+    }
+
+    fn masked_server_error() -> &'static str {
+        r#"fn emit_arg_decode_failure(value: &ServerFnErrorErr) {
+               InternalError::validation("invalid request arguments").emit_boundary_failure();
+               InternalError::masked(
+                   ErrorKind::Validation,
+                   ErrorClass::Client,
+                   "invalid request arguments",
+                   anyhow::Error::new(value.clone()),
+               ).emit_boundary_failure();
+           }"#
     }
 
     fn lock_with(name: &str, version: &str) -> String {
@@ -1072,7 +1118,7 @@ mod tests {
                pub struct Email(String);
                impl std::str::FromStr for Email {
                    type Err = InvalidEmail;
-                   fn from_str(_: &str) -> Result<Self, Self::Err> { todo!() }
+                   fn from_str(_: &str) -> Result<Self, Self::Err> { Err(InvalidEmail::Address(todo!())) }
                }"#,
         )
     }
@@ -1087,7 +1133,7 @@ mod tests {
                pub struct BackupSchedule(String);
                impl std::str::FromStr for BackupSchedule {
                    type Err = InvalidBackupSchedule;
-                   fn from_str(_: &str) -> Result<Self, Self::Err> { todo!() }
+                   fn from_str(_: &str) -> Result<Self, Self::Err> { Err(InvalidBackupSchedule::Cron(todo!())) }
                }"#,
         )
     }
@@ -1256,8 +1302,18 @@ mod tests {
         .unwrap_err();
 
         assert!(err.join("\n").contains("preserves source"), "{err:?}");
-    }
 
+        let err = validate_allowlist(
+            &one_input("BackupSchedule"),
+            &index,
+            &lock_with("croner", "2.2.0"),
+            masked_server_error(),
+            &allowlist,
+        )
+        .unwrap_err();
+
+        assert!(err.join("\n").contains("preserves source"), "{err:?}");
+    }
     #[test]
     fn allowlist_blank_reason_duplicate_version_drift_and_stale_entries_fail() {
         let sources = external_wrapper_sources();
