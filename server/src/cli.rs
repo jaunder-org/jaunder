@@ -8,7 +8,9 @@ use sqlx::postgres::PgConnectOptions;
 use common::backup::BackupMode;
 use common::config_key::SiteConfigKey;
 use common::display_name::DisplayName;
+use common::email::Email;
 use common::invite::InviteTtlHours;
+use common::password::Password;
 use common::pg_identifier::{InvalidPgDatabaseName, InvalidPgRoleName, PgDatabaseName, PgRoleName};
 use common::pg_role_password::PgRolePassword;
 use common::session_label::SessionLabel;
@@ -292,7 +294,7 @@ pub enum Commands {
         /// Password for the new account. If omitted, you will be prompted
         /// interactively (input is hidden).
         #[arg(long)]
-        password: Option<String>,
+        password: Option<Password>,
 
         /// Optional display name.
         #[arg(long)]
@@ -345,7 +347,7 @@ pub enum Commands {
 
         /// Email address to send the test message to.
         #[arg(long)]
-        to: String,
+        to: Email,
     },
 
     /// Immediately run a backup.
@@ -436,7 +438,7 @@ pub enum SiteConfigAction {
 mod tests {
     use super::*;
     use common::session_label::MAX_SESSION_LABEL_CHARS;
-    use common::test_support::{parse_display_name, parse_invite_ttl_hours, with_env};
+    use common::test_support::{parse_display_name, parse_email, parse_invite_ttl_hours, with_env};
 
     fn parse(args: &[&str]) -> Cli {
         Cli::try_parse_from(std::iter::once("jaunder").chain(args.iter().copied()))
@@ -768,7 +770,7 @@ mod tests {
                 unreachable!("parse yields Commands::UserCreate")
             };
             assert_eq!(username, "alice");
-            assert_eq!(password, Some("secret123".to_owned()));
+            assert_eq!(password.as_ref().map(Password::as_ref), Some("secret123"));
             assert_eq!(display_name, None);
         });
     }
@@ -799,7 +801,7 @@ mod tests {
             let Commands::UserCreate { password, .. } = cli.command.expect("subcommand") else {
                 unreachable!("parse yields Commands::UserCreate")
             };
-            assert_eq!(password, None);
+            assert!(password.is_none());
         });
     }
 
@@ -818,6 +820,27 @@ mod tests {
             // any handler runs, rather than surfacing it as a later runtime error.
             let result = Cli::try_parse_from(["jaunder", "user-create", "--username", "bad name"]);
             assert!(result.is_err());
+        });
+    }
+
+    #[test]
+    fn user_create_malformed_password_is_clap_error() {
+        with_env(|_env| {
+            let result = Cli::try_parse_from([
+                "jaunder",
+                "user-create",
+                "--username",
+                "alice",
+                "--password",
+                "short",
+            ]);
+            let Err(err) = result else {
+                unreachable!("an invalid password is rejected at parse")
+            };
+            assert!(
+                err.to_string().contains("at least 8 characters"),
+                "the clap error must name the password constraint; got: {err}"
+            );
         });
     }
 
@@ -898,7 +921,7 @@ mod tests {
             let Commands::SmtpTest { to, .. } = cli.command.expect("subcommand") else {
                 unreachable!("parse yields Commands::SmtpTest")
             };
-            assert_eq!(to, "alice@example.com");
+            assert_eq!(to, parse_email("alice@example.com"));
         });
     }
 
@@ -907,6 +930,20 @@ mod tests {
         with_env(|_env| {
             let result = Cli::try_parse_from(["jaunder", "smtp-test"]);
             assert!(result.is_err());
+        });
+    }
+
+    #[test]
+    fn smtp_test_malformed_to_is_clap_error() {
+        with_env(|_env| {
+            let result = Cli::try_parse_from(["jaunder", "smtp-test", "--to", "not-an-email"]);
+            let Err(err) = result else {
+                unreachable!("an invalid email is rejected at parse")
+            };
+            assert!(
+                err.to_string().contains("invalid email address"),
+                "the clap error must name the email constraint; got: {err}"
+            );
         });
     }
 

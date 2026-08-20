@@ -32,7 +32,7 @@ broad adoption gate, no central registry, no marker contract system.
 
 - [x] Task 1 — Reconstruct and classify remaining primitive seams
 - [x] Task 2 — Convert Basic auth token to `RawToken`
-- [ ] Task 3 — Convert CLI parse-time complete values
+- [x] Task 3 — Convert CLI parse-time complete values
 - [ ] Task 4 — Tighten AtomPub service and collection cursors
 - [ ] Task 5 — Convert media upload size plumbing to `ByteSize`
 - [ ] Task 6 — Document deliberately retained primitives
@@ -172,17 +172,17 @@ git commit -m "fix(auth): return raw token from basic auth parser"
 **Check**
 
 ```bash
-devtool run -- cargo nextest run -p server user_create
+devtool run -- cargo nextest run -p jaunder cli::tests::user_create
 ```
 
 ```bash
-devtool run -- cargo nextest run -p server smtp_test
+devtool run -- cargo nextest run -p jaunder cli::tests::smtp_test
 ```
 
 **Commit**
 
 ```bash
-git add server/src/cli.rs server/src/commands.rs docs/superpowers/plans/2026-08-20-issue-697-newtype-conversion-closure.md
+git add server/src/cli.rs server/src/commands.rs server/src/main.rs server/tests/misc/commands.rs docs/superpowers/plans/2026-08-20-issue-697-newtype-conversion-closure.md
 git commit -m "fix(cli): parse command values into domain types"
 ```
 
@@ -218,7 +218,7 @@ devtool run -- cargo nextest run -p common service_document
 ```
 
 ```bash
-devtool run -- cargo nextest run -p server atompub
+devtool run -- cargo nextest run -p jaunder atompub
 ```
 
 **Commit**

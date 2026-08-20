@@ -30,20 +30,11 @@ use storage::{init_storage, open_database, open_existing_database};
 
 const INIT_FIRST_CONTEXT: &str = "database could not be opened; run `jaunder init` first";
 
-/// Parse an optional CLI password string into `Option<Password>` (`None` stays
-/// `None`), surfacing the validation error as an `anyhow` message.
-fn parse_password(p: Option<String>) -> anyhow::Result<Option<Password>> {
-    p.map(|p| p.parse::<Password>())
-        .transpose()
-        .map_err(|e| anyhow::anyhow!("{e}"))
-}
-
 impl Commands {
     /// Dispatch this parsed subcommand to its handler. A flat match-expression:
     /// each arm evaluates to the command's `Result<()>`, so there is no `?` on the
-    /// dispatch call and no trailing `Ok(())` (the two arms that parse a CLI
-    /// newtype still `?` on that parse) — keeping any single function's cyclomatic
-    /// complexity (and thus CRAP) low as subcommands are added (#147).
+    /// dispatch call and no trailing `Ok(())` — keeping any single function's
+    /// cyclomatic complexity (and thus CRAP) low as subcommands are added (#147).
     ///
     /// # Errors
     ///
@@ -73,7 +64,7 @@ impl Commands {
                 cmd_user_create(
                     &storage,
                     &username,
-                    parse_password(password)?,
+                    password,
                     display_name.as_ref(),
                     operator,
                 )
@@ -347,7 +338,7 @@ pub async fn cmd_user_invite(
 ///
 /// Returns an error if SMTP is not configured, or if the test email cannot be
 /// sent.
-pub async fn cmd_smtp_test(storage: &StorageArgs, to: &str) -> anyhow::Result<()> {
+pub async fn cmd_smtp_test(storage: &StorageArgs, to: &Email) -> anyhow::Result<()> {
     let state = open_existing_database(&storage.db)
         .await
         .context(INIT_FIRST_CONTEXT)?;
@@ -360,7 +351,7 @@ pub async fn cmd_smtp_test(storage: &StorageArgs, to: &str) -> anyhow::Result<()
 
 async fn smtp_test_with(
     site_config: &dyn storage::SiteConfigStorage,
-    to: &str,
+    to: &Email,
     build_smtp: impl FnOnce(&SmtpConfig) -> Result<Box<dyn MailSender>, crate::mailer::BuildMailerError>,
 ) -> anyhow::Result<()> {
     let smtp_config = load_smtp_config(site_config)
@@ -370,13 +361,9 @@ async fn smtp_test_with(
 
     let mailer = build_smtp(&smtp_config).context("failed to build SMTP transport")?;
 
-    let to_addr: Email = to
-        .parse()
-        .map_err(|e| anyhow::anyhow!("Invalid recipient '{to}': {e}"))?;
-
     let message = EmailMessage {
         from: None,
-        to: vec![to_addr],
+        to: vec![to.clone()],
         subject: "Jaunder SMTP test".to_owned(),
         body_text:
             "This is a test message from Jaunder. If you received it, SMTP is working correctly."
@@ -920,7 +907,7 @@ mod tests {
     use super::*;
     use common::smtp_tls_mode::SmtpTlsMode;
     use common::test_support::{
-        parse_invite_ttl_hours, parse_password as test_password, parse_session_label,
+        parse_email, parse_invite_ttl_hours, parse_password as test_password, parse_session_label,
         parse_username,
     };
     use rstest::*;
@@ -961,24 +948,6 @@ mod tests {
             storage_path: temp.path().to_path_buf(),
             db: crate::test_support::sqlite_db_options(temp.path()),
         }
-    }
-
-    #[test]
-    fn parse_password_none_is_ok_none() {
-        assert!(parse_password(None).unwrap().is_none());
-    }
-
-    #[test]
-    fn parse_password_validates_some() {
-        assert!(
-            parse_password(Some("password123".to_owned()))
-                .unwrap()
-                .is_some()
-        );
-        let err = parse_password(Some("short".to_owned()))
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("at least 8 characters"), "got: {err}");
     }
 
     fn typed_crypto_storage_error() -> sqlx::Error {
@@ -1057,7 +1026,7 @@ mod tests {
             )))
         });
 
-        let error = smtp_test_with(&store, "to@example.com", |_| unreachable!())
+        let error = smtp_test_with(&store, &parse_email("to@example.com"), |_| unreachable!())
             .await
             .unwrap_err();
 
@@ -1077,7 +1046,7 @@ mod tests {
             .expect_get_smtp_config()
             .return_once(move || Ok(Some(config)));
 
-        let error = smtp_test_with(&store, "to@example.com", |config| {
+        let error = smtp_test_with(&store, &parse_email("to@example.com"), |config| {
             Ok(Box::new(LettreMailSender::from_config(config)?) as Box<dyn MailSender>)
         })
         .await
@@ -1096,7 +1065,7 @@ mod tests {
             .expect_get_smtp_config()
             .return_once(|| Ok(Some(smtp_config())));
 
-        let error = smtp_test_with(&store, "to@example.com", |_| {
+        let error = smtp_test_with(&store, &parse_email("to@example.com"), |_| {
             Err(crate::mailer::BuildMailerError::Transport(
                 transport_build_error(),
             ))
@@ -1117,7 +1086,7 @@ mod tests {
             .expect_get_smtp_config()
             .return_once(|| Ok(Some(smtp_config())));
 
-        let error = smtp_test_with(&store, "to@example.com", |_| {
+        let error = smtp_test_with(&store, &parse_email("to@example.com"), |_| {
             Ok(Box::new(FailingMailSender) as Box<dyn MailSender>)
         })
         .await
