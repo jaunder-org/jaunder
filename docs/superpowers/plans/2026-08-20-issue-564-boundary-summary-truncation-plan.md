@@ -464,7 +464,7 @@ No `Co-Authored-By` trailer.
 - Verifies: no production or test caller still imports or references
   `SummarySeed` or `PostSummary::truncated` after the chosen simplification.
 
-- [ ] **Step 1: Verify storage fallback behavior**
+- [x] **Step 1: Verify storage fallback behavior**
 
 Run:
 
@@ -476,7 +476,7 @@ Expected: PASS. This proves `PostRecord::fallback_summary_label` remains total
 on `PostBody`, uses no title/slug fallback, and observes the boundary-aware body
 line cap through the public storage method.
 
-- [ ] **Step 2: Verify no duplicate old API remains**
+- [x] **Step 2: Verify no duplicate old API remains**
 
 Use repo search, not shell grep:
 
@@ -492,7 +492,7 @@ If `SummarySeed` was deliberately kept instead of removed, the remaining matches
 must be limited to its documented proof role and must not include a two-stage
 cap where body-line seeds are capped at 100 then capped again at 500.
 
-- [ ] **Step 3: Run targeted crate tests**
+- [x] **Step 3: Run targeted crate tests**
 
 Run:
 
@@ -518,7 +518,7 @@ devtool run -- cargo nextest run -p storage fallback_summary_label_uses_the_firs
 
 Expected: PASS.
 
-- [ ] **Step 4: Stage, gate, and commit Task 3**
+- [x] **Step 4: Stage, gate, and commit Task 3**
 
 Tick this task's plan checkboxes, then stage all remaining issue files,
 including the approved spec and this plan if not already staged:
