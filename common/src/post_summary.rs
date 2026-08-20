@@ -5,7 +5,6 @@ use thiserror::Error;
 
 use crate::post_body::PostBody;
 use crate::post_title::PostTitle;
-use crate::slug::Slug;
 
 /// Maximum post-summary length, in Unicode scalar values.
 pub const MAX_POST_SUMMARY_CHARS: usize = 500;
@@ -16,14 +15,13 @@ pub const MAX_POST_SUMMARY_CHARS: usize = 500;
 ///
 /// The **public** construction doors — [`FromStr`] and the serde/sqlx bridges the
 /// `StrNewtype` derive emits — enforce the full invariant (non-empty **and** ≤ cap), so
-/// interior code works only with already-valid summaries and an invalid string is rejected
-/// at the boundary and on the wire. [`PostSummary::truncated`] is an *internal* door that
-/// enforces only the length half, because its input — a [`SummarySeed`] — already carries
-/// non-blankness as a type (#830). Absence of a summary is
-/// modeled by `Option<PostSummary>` at the boundary, so `FromStr` rejecting the empty
-/// string means an empty wire value is rejected and clearing goes through omission
-/// (`None`). No `Hash` — nothing hashes a `PostSummary`; ordering is emitted by the
-/// trailer (ADR-0063 §2).
+/// submitted invalid strings are rejected at the boundary and on the wire. The internal
+/// derived doors — [`PostSummary::from_title`] and [`PostSummary::from_body_line`] —
+/// coerce already-non-blank sources into valid summaries with boundary-aware caps.
+/// Absence of a summary is modeled by `Option<PostSummary>` at the boundary, so
+/// `FromStr` rejecting the empty string means an empty wire value is rejected and
+/// clearing goes through omission (`None`). No `Hash` — nothing hashes a `PostSummary`;
+/// ordering is emitted by the trailer (ADR-0063 §2).
 #[derive(Clone, Debug, PartialEq, Eq, StrNewtype)]
 pub struct PostSummary(String);
 
@@ -47,73 +45,62 @@ impl FromStr for PostSummary {
 /// How much of a body line may seed a summary, in Unicode scalar values.
 pub const MAX_BODY_LINE_SEED_CHARS: usize = 100;
 
-/// A summary label already known to be non-blank.
-///
-/// Its constructors are **infallible because each source proves the invariant**: a
-/// [`Slug`] and a [`PostTitle`] are non-blank by construction, and a body line is
-/// selected only when non-blank. That is what lets [`PostSummary::truncated`] be a
-/// plain length-capping door instead of a trusted one carrying a `debug_assert` the
-/// caller had to remember to satisfy (#830).
-///
-/// Only the length half of the summary invariant is left for `truncated` to enforce,
-/// and it coerces rather than rejects — appropriate for an internally derived value
-/// (ADR-0063 §2's lossy door), unlike a *submitted* summary, which goes through the
-/// validating [`FromStr`].
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SummarySeed(String);
-
-impl SummarySeed {
-    /// A slug is non-blank by construction — `Slug::from_str` rejects the empty string.
-    #[must_use]
-    pub fn from_slug(slug: &Slug) -> Self {
-        Self(slug.to_string())
-    }
-
-    /// A [`PostTitle`] is non-blank by construction (#830).
+impl PostSummary {
+    /// Derive a summary from a non-blank title, capping at a sentence or word boundary
+    /// when possible while keeping the summary invariant infallible.
     #[must_use]
     pub fn from_title(title: &PostTitle) -> Self {
-        Self(title.to_string())
+        Self(truncate_at_text_boundary(
+            title.as_ref(),
+            MAX_POST_SUMMARY_CHARS,
+        ))
     }
 
-    /// The first non-blank line of `body`, trimmed and capped at
-    /// [`MAX_BODY_LINE_SEED_CHARS`].
+    /// Derive a summary from the first non-blank body line.
     ///
     /// **Total.** [`PostBody`]'s `FromStr` rejects a body whose every line is blank
-    /// (#811), so such a line always exists — this constructor cannot decline, and
-    /// the caller needs no impossible-case arm.
-    ///
-    /// The search is written to *be* total rather than to search and then prove the
-    /// search succeeded: `trim_start` crosses newlines, so it skips the leading blank
-    /// lines wholesale and lands on the first non-whitespace character, which is by
-    /// definition inside the line we want. `split_once` then ends that line, and its
-    /// `None` arm is not a failure — it means the line runs to the end of the body.
+    /// (#811), so such a line always exists.
     #[must_use]
-    pub fn first_body_line(body: &PostBody) -> Self {
+    pub fn from_body_line(body: &PostBody) -> Self {
         let rest = body.trim_start();
         let line = rest.split_once('\n').map_or(rest, |(first, _)| first);
-        Self(
-            line.trim_end()
-                .chars()
-                .take(MAX_BODY_LINE_SEED_CHARS)
-                .collect(),
-        )
+        Self(truncate_at_text_boundary(
+            line.trim_end(),
+            MAX_BODY_LINE_SEED_CHARS,
+        ))
     }
 }
 
-impl PostSummary {
-    /// Length-cap an already-non-blank [`SummarySeed`] into a `PostSummary`.
-    ///
-    /// Infallible, and it needs no emptiness check: the seed carries that half of the
-    /// invariant as a type. The seed is also already trimmed by its source, so this
-    /// door only caps. The one caller is the label producer
-    /// `storage::PostRecord::fallback_summary_label`.
-    ///
-    /// The cut today is a raw scalar-count boundary (`chars().take(MAX)`), which can slice
-    /// mid-word; #564 tracks making it word-/sentence-aware (the cap stays the ceiling).
-    #[must_use]
-    pub fn truncated(seed: &SummarySeed) -> Self {
-        PostSummary(seed.0.chars().take(MAX_POST_SUMMARY_CHARS).collect())
+pub(crate) fn truncate_at_text_boundary(input: &str, max_scalars: usize) -> String {
+    if input.chars().count() <= max_scalars {
+        return input.to_owned();
     }
+
+    let hard_cap: String = input.chars().take(max_scalars).collect();
+    let sentence = hard_cap
+        .char_indices()
+        .rev()
+        .find_map(|(idx, ch)| matches!(ch, '.' | '!' | '?').then_some(idx + ch.len_utf8()))
+        .and_then(|end| non_empty_trimmed_prefix(&hard_cap[..end]));
+    if let Some(prefix) = sentence {
+        return prefix;
+    }
+
+    let word = hard_cap
+        .char_indices()
+        .rev()
+        .find_map(|(idx, ch)| ch.is_whitespace().then_some(idx))
+        .and_then(|end| non_empty_trimmed_prefix(&hard_cap[..end]));
+    if let Some(prefix) = word {
+        return prefix;
+    }
+
+    hard_cap
+}
+
+fn non_empty_trimmed_prefix(prefix: &str) -> Option<String> {
+    let trimmed = prefix.trim_end();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
 #[cfg(test)]
@@ -165,63 +152,64 @@ mod tests {
     }
 
     #[test]
-    fn truncated_caps_at_char_boundary_from_a_title_seed() {
-        // A title is the only unbounded seed — a slug caps at 80 and a body line at
-        // MAX_BODY_LINE_SEED_CHARS — so it is what keeps the 500-scalar cap reachable.
-        let under: PostTitle = "hi".parse().unwrap();
-        assert_eq!(
-            PostSummary::truncated(&SummarySeed::from_title(&under)),
-            "hi"
-        );
+    fn derived_title_summary_prefers_sentence_boundary() {
+        let prefix = "A complete sentence.";
+        let filler = format!(" {}", "word".repeat(MAX_POST_SUMMARY_CHARS));
+        let title: PostTitle = format!("{prefix}{filler}").parse().unwrap();
 
-        let over: PostTitle = "é".repeat(MAX_POST_SUMMARY_CHARS + 50).parse().unwrap();
-        let capped = PostSummary::truncated(&SummarySeed::from_title(&over));
-        assert_eq!(capped.chars().count(), MAX_POST_SUMMARY_CHARS);
+        assert_eq!(PostSummary::from_title(&title), prefix);
     }
 
     #[test]
-    fn first_body_line_finds_the_first_non_blank_line_and_caps_it() {
-        // Leading blank lines, then a line padded both sides: the seed is the trimmed
-        // line, and the blank lines are skipped rather than declined.
-        let body = crate::test_support::parse_post_body("\n\n   \n  hello  \nsecond\n");
-        let seed = SummarySeed::first_body_line(&body);
-        assert_eq!(PostSummary::truncated(&seed), "hello");
+    fn derived_title_summary_falls_back_to_word_boundary() {
+        let title: PostTitle = format!("{} finalword", "word ".repeat(MAX_POST_SUMMARY_CHARS / 5))
+            .parse()
+            .unwrap();
+        let summary = PostSummary::from_title(&title);
 
-        // The body-line seed carries its own, tighter cap.
-        let long = crate::test_support::parse_post_body(&"x".repeat(MAX_POST_SUMMARY_CHARS));
-        let seed = SummarySeed::first_body_line(&long);
-        assert_eq!(
-            PostSummary::truncated(&seed).chars().count(),
-            MAX_BODY_LINE_SEED_CHARS
-        );
+        assert!(summary.chars().count() <= MAX_POST_SUMMARY_CHARS);
+        assert!(!summary.ends_with("finalword"));
+        assert!(!summary.ends_with(' '));
+    }
+
+    #[test]
+    fn derived_title_summary_hard_caps_one_long_token_without_splitting_utf8() {
+        let title: PostTitle = "é".repeat(MAX_POST_SUMMARY_CHARS + 50).parse().unwrap();
+        let summary = PostSummary::from_title(&title);
+
+        assert_eq!(summary.chars().count(), MAX_POST_SUMMARY_CHARS);
+        assert!(summary.chars().all(|c| c == 'é'));
+    }
+
+    #[test]
+    fn derived_body_summary_prefers_boundary_within_body_line_cap() {
+        let body = crate::test_support::parse_post_body(&format!(
+            "{} trailingword\nsecond line",
+            "body word ".repeat(MAX_BODY_LINE_SEED_CHARS / 10)
+        ));
+        let summary = PostSummary::from_body_line(&body);
+
+        assert!(summary.chars().count() <= MAX_BODY_LINE_SEED_CHARS);
+        assert!(!summary.ends_with("trailingword"));
+        assert!(!summary.ends_with(' '));
+    }
+
+    #[test]
+    fn submitted_over_cap_summary_still_rejects() {
+        let over = "a".repeat(MAX_POST_SUMMARY_CHARS + 1);
+
+        assert!(over.parse::<PostSummary>().is_err());
     }
 
     #[test]
     fn first_body_line_takes_a_body_with_no_trailing_newline() {
-        // The `split_once` `None` arm: the first line runs to the end of the body.
         let body = crate::test_support::parse_post_body("only line");
-        assert_eq!(
-            PostSummary::truncated(&SummarySeed::first_body_line(&body)),
-            "only line"
-        );
+        assert_eq!(PostSummary::from_body_line(&body), "only line");
     }
 
     #[test]
     fn first_body_line_strips_a_carriage_return() {
-        // CRLF bodies: `split_once('\n')` leaves the `\r`, and `trim_end` takes it.
         let body = crate::test_support::parse_post_body("\r\n  hi  \r\nnext\r\n");
-        assert_eq!(
-            PostSummary::truncated(&SummarySeed::first_body_line(&body)),
-            "hi"
-        );
-    }
-
-    #[test]
-    fn seed_from_slug_is_the_always_available_fallback() {
-        let slug: Slug = "my-slug".parse().unwrap();
-        assert_eq!(
-            PostSummary::truncated(&SummarySeed::from_slug(&slug)),
-            "my-slug"
-        );
+        assert_eq!(PostSummary::from_body_line(&body), "hi");
     }
 }

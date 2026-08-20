@@ -10,7 +10,7 @@ use common::ids::{AudienceId, ChannelId, PostId, RevisionId, TagId, UserId};
 use common::media::MediaRef;
 use common::pagination::RowLimit;
 use common::post_body::PostBody;
-use common::post_summary::{PostSummary, SummarySeed};
+use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
 use common::root_relative_url::RootRelativeUrl;
 use common::seed::PageCursor;
@@ -97,15 +97,14 @@ impl PostRecord {
         url
     }
 
-    /// Generates a fallback summary from the post's first non-blank body line, which
-    /// [`PostSummary::truncated`] length-caps into the newtype.
+    /// Generates a fallback summary from the post's first non-blank body line.
     ///
     /// No title/slug fallbacks: [`PostBody`]'s invariant is *exactly* the condition
-    /// [`SummarySeed::first_body_line`] relies on — at least one line non-empty
-    /// after trimming — so the body always answers (#811, #830, #858).
+    /// [`PostSummary::from_body_line`] relies on — at least one line non-empty after
+    /// trimming — so the body always answers (#811, #830, #858).
     #[must_use]
     pub fn fallback_summary_label(&self) -> PostSummary {
-        PostSummary::truncated(&SummarySeed::first_body_line(&self.body))
+        PostSummary::from_body_line(&self.body)
     }
 }
 
