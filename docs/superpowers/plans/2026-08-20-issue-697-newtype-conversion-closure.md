@@ -31,7 +31,7 @@ broad adoption gate, no central registry, no marker contract system.
 ## Checklist
 
 - [x] Task 1 — Reconstruct and classify remaining primitive seams
-- [ ] Task 2 — Convert Basic auth token to `RawToken`
+- [x] Task 2 — Convert Basic auth token to `RawToken`
 - [ ] Task 3 — Convert CLI parse-time complete values
 - [ ] Task 4 — Tighten AtomPub service and collection cursors
 - [ ] Task 5 — Convert media upload size plumbing to `ByteSize`
