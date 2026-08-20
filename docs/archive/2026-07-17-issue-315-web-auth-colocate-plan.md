@@ -1,6 +1,8 @@
+> **Status:** ARCHIVED — shipped issue-cycle plan for issue #315; moved out of active `docs/superpowers/` cycle directories by #679.
+
 # Plan — #315: converge the `auth` vertical onto the file-level host/wasm split
 
-**Spec:** `docs/superpowers/specs/2026-07-17-issue-315-web-auth-colocate.md`
+**Spec:** `docs/archive/2026-07-17-issue-315-web-auth-colocate-spec.md`
 (problem/why/decisions live there — this plan is "how"). **Reconciled to
 ADR-0070** (2026-07-18); the rework recipe of record is the maintainer's
 2026-07-18 review comment on #315. **For agentic workers:** drive with

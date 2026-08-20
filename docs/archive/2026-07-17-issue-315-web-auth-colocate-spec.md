@@ -1,3 +1,5 @@
+> **Status:** ARCHIVED — shipped issue-cycle spec for issue #315; moved out of active `docs/superpowers/` cycle directories by #679.
+
 # Spec — #315: converge the `auth` vertical onto the file-level host/wasm split
 
 **Status:** reconciled to ADR-0070; awaiting re-approval. **Parent:** #303

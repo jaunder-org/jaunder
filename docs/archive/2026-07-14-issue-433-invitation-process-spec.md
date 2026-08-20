@@ -1,3 +1,5 @@
+> **Status:** ARCHIVED — shipped issue-cycle spec for issue #433; moved out of active `docs/superpowers/` cycle directories by #679.
+
 # Spec — #433: complete the invitation process (email delivery + link handling)
 
 - Issue: [#433](https://github.com/jaunder-org/jaunder/issues/433)

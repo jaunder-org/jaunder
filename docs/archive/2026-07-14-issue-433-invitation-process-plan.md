@@ -1,7 +1,9 @@
+> **Status:** ARCHIVED — shipped issue-cycle plan for issue #433; moved out of active `docs/superpowers/` cycle directories by #679.
+
 # Plan — #433: complete the invitation process
 
 Spec:
-[`docs/superpowers/specs/2026-07-14-issue-433-invitation-process.md`](../specs/2026-07-14-issue-433-invitation-process.md).
+[`docs/archive/2026-07-14-issue-433-invitation-process-spec.md`](2026-07-14-issue-433-invitation-process-spec.md).
 Read it for the _what/why_; this plan is the _how_.
 
 ## Review header

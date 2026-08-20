@@ -1,3 +1,5 @@
+> **Status:** ARCHIVED — shipped umbrella spec for issue #303; moved out of active `docs/superpowers/` cycle directories by #679. No matching plan existed.
+
 # Spec — #303: converge `web` on the canonical co-located Leptos CSR layout
 
 **Status:** design resolved; umbrella for a per-vertical migration. **Decision
