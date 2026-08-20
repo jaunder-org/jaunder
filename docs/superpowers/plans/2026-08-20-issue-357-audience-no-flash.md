@@ -202,7 +202,7 @@ a global `Loading members…` count.
 - Produces: a held, Friends-only `list_members` read whose release restores the
   existing Remove-button readiness boundary before composition begins.
 
-- [ ] **Step 1: Add the failing in-flight named-Audience assertion**
+- [x] **Step 1: Add the failing in-flight named-Audience assertion**
 
   Once Friends and X's initial Add button are visible, read Friends'
   `input[name="audience_id"]` and capture its pre-mutation roster:
@@ -229,7 +229,7 @@ a global `Loading members…` count.
   and all subsequent post visibility assertions. This must use the existing
   page; do not add a boot.
 
-- [ ] **Step 2: Run the focused test**
+- [x] **Step 2: Run the focused test**
 
   Run: `devtool run -- cargo xtask e2e-local visibility.spec.ts`
 
@@ -237,7 +237,7 @@ a global `Loading members…` count.
   real post-add refetch is held, then the pre-existing post visibility matrix
   still passes after release.
 
-- [ ] **Step 3: Commit named-Audience stability coverage**
+- [x] **Step 3: Commit named-Audience stability coverage**
 
   Tick this task complete, run `devtool run -- cargo xtask check`, stage
   `end2end/tests/visibility.spec.ts` plus any formatter changes, and commit:
@@ -249,8 +249,8 @@ a global `Loading members…` count.
 
 ## Verification
 
-- [ ] Run `devtool run -- cargo xtask e2e-local audiences.spec.ts` after Task 1.
-- [ ] Run `devtool run -- cargo xtask e2e-local visibility.spec.ts` after
+- [x] Run `devtool run -- cargo xtask e2e-local audiences.spec.ts` after Task 1.
+- [x] Run `devtool run -- cargo xtask e2e-local visibility.spec.ts` after
       Task 2.
 - [ ] Run `devtool run -- cargo xtask validate` after both commits, before
       shipping. Expected: PASS across all required checks and E2E combinations.
