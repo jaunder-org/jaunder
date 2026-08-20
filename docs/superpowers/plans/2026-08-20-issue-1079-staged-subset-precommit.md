@@ -532,7 +532,7 @@ git commit -m "fix(xtask): model safe precommit staging"
   the non-test host surface and then preserves its pre-existing
   `wasm-budget`-before-`host-tests` order.
 
-- [ ] **Step 1: Write CLI and host-surface tests**
+- [x] **Step 1: Write CLI and host-surface tests**
 
 Add tests under `cli_tests`:
 
@@ -619,7 +619,7 @@ fn precommit_orchestration_fails_clean_before_tracked_mutation() {
 }
 ```
 
-- [ ] **Step 2: Run command tests and verify they fail**
+- [x] **Step 2: Run command tests and verify they fail**
 
 Run:
 
@@ -630,7 +630,7 @@ cargo nextest run --manifest-path xtask/Cargo.toml precommit
 Expected: FAIL because `Command::Precommit` and host-surface helpers do not
 exist.
 
-- [ ] **Step 3: Add `Command::Precommit` and factor host gate**
+- [x] **Step 3: Add `Command::Precommit` and factor host gate**
 
 Add a `Precommit` variant immediately after `Check` in the `Command` enum:
 
@@ -680,7 +680,7 @@ Then make `Check` call `run_host_gate(..., Mode::Fix, ...)` followed by
 `run_host_gate(..., Mode::Check, ...)` after the clean-tree precheck, then keep
 `wasm_budget`, `nix::test_checks(false)`, and optional `nix::e2e` unchanged.
 
-- [ ] **Step 4: Implement `Precommit` command body**
+- [x] **Step 4: Implement `Precommit` command body**
 
 Factor the command body through this testable helper:
 
@@ -716,7 +716,7 @@ Do not skip staging reconciliation when `run_host_gate` already failed; the
 overall result stays failed through `CommandResult::ok`, but the stale-index fix
 is still applied when safe.
 
-- [ ] **Step 5: Update `.githooks/pre-commit`**
+- [x] **Step 5: Update `.githooks/pre-commit`**
 
 Replace the hook body after the `SKIP_PRE_COMMIT` block with:
 
@@ -729,7 +729,7 @@ Keep `set -euo pipefail` and the existing `SKIP_PRE_COMMIT=1` escape. Remove the
 old shell-level `pre=$(git status --porcelain)` / `post=...` comparison; Git
 policy now lives in Rust.
 
-- [ ] **Step 6: Run command tests and verify they pass**
+- [x] **Step 6: Run command tests and verify they pass**
 
 Run:
 
@@ -739,7 +739,7 @@ cargo nextest run --manifest-path xtask/Cargo.toml precommit
 
 Expected: PASS.
 
-- [ ] **Step 7: Smoke the hook bypass path**
+- [x] **Step 7: Smoke the hook bypass path**
 
 Run:
 
@@ -749,7 +749,7 @@ SKIP_PRE_COMMIT=1 .githooks/pre-commit
 
 Expected stdout contains `SKIP_PRE_COMMIT=1, skipping` and exit status 0.
 
-- [ ] **Step 8: Run focused xtask tests and commit**
+- [x] **Step 8: Run focused xtask tests and commit**
 
 Run:
 
