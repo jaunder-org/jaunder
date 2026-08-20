@@ -12,7 +12,7 @@ a code fix happened.
 
 ## Approved spec
 
-`docs/superpowers/specs/2026-08-20-issue-629-validate-no-e2e-oom-spec.md`
+`docs/archive/2026-08-20-issue-629-validate-no-e2e-oom-spec.md`
 
 ## Global constraints
 
