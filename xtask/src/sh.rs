@@ -6,7 +6,21 @@ use crate::result::StepResult;
 /// rather than a panic, so one failing step does not abort the others.
 /// On failure, stderr (and stdout if non-empty) are captured into `detail`.
 pub fn step(sh: &Shell, name: &str, program: &str, args: &[&str]) -> StepResult {
-    match sh.cmd(program).args(args).quiet().ignore_status().output() {
+    step_with_env(sh, name, program, args, &[])
+}
+
+pub fn step_with_env(
+    sh: &Shell,
+    name: &str,
+    program: &str,
+    args: &[&str],
+    env: &[(String, String)],
+) -> StepResult {
+    let mut cmd = sh.cmd(program).args(args).quiet().ignore_status();
+    for (key, value) in env {
+        cmd = cmd.env(key, value);
+    }
+    match cmd.output() {
         Ok(output) => {
             if output.status.success() {
                 StepResult::ok(name)

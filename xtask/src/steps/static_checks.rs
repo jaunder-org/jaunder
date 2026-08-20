@@ -1,7 +1,18 @@
+use std::collections::BTreeSet;
+use std::env;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
 use xshell::Shell;
 
 use crate::result::{CommandResult, Mode};
-use crate::sh::step;
+use crate::sh::{step, step_with_env};
+
+/// Rust-compiling host checks opt into `sccache`. Cargo incremental artifacts
+/// are target-dir-local and non-cacheable, so these gate steps trade same-target
+/// incremental reuse for cross-checkout `rustc` reuse.
+const CARGO_COMPILE_ENV: &[(&str, &str)] =
+    &[("RUSTC_WRAPPER", "sccache"), ("CARGO_INCREMENTAL", "0")];
 
 /// A single static-check step: a named command and its arguments, already
 /// resolved for the active `Mode`.
@@ -9,6 +20,7 @@ pub struct StepSpec {
     pub name: &'static str,
     pub program: &'static str,
     pub args: Vec<&'static str>,
+    pub cache_rustc: bool,
 }
 
 /// The ordered static-check steps for `mode`. Pure (no I/O) so the step list
@@ -48,13 +60,13 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
             name: "cargo-deny",
             program: "cargo",
             args: vec!["deny", "check"],
+            cache_rustc: false,
         },
         // clippy — --all-targets, no --workspace
-        StepSpec {
-            name: "clippy",
-            program: "cargo",
-            args: vec!["clippy", "--all-targets", "--", "-D", "warnings"],
-        },
+        cargo_compile_check(
+            "clippy",
+            vec!["clippy", "--all-targets", "--", "-D", "warnings"],
+        ),
         // wasm-clippy — `web::app`'s `component.rs` compiles wasm-only (#300), so the host
         // `clippy` step above never sees it. Lint it on the wasm target: `-p web --features csr`
         // pulls `app/component.rs` into the compile under `target_arch = "wasm32"`. The wasm-only
@@ -64,10 +76,9 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
         // `web`/`client` feature; `csr` has none but rides the same command and pulls
         // `web[csr]` via its own dep — if `web`'s `csr` is ever renamed, this arg needs
         // updating too. This necessarily re-lints the whole `web` crate on wasm.
-        StepSpec {
-            name: "wasm-clippy",
-            program: "cargo",
-            args: vec![
+        cargo_compile_check(
+            "wasm-clippy",
+            vec![
                 "clippy",
                 "-p",
                 "web",
@@ -83,12 +94,11 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
                 "-D",
                 "warnings",
             ],
-        },
+        ),
         devtool_check("tools-fmt", mode),
-        StepSpec {
-            name: "tools-clippy",
-            program: "cargo",
-            args: vec![
+        cargo_compile_check(
+            "tools-clippy",
+            vec![
                 "clippy",
                 "--manifest-path",
                 "tools/Cargo.toml",
@@ -97,16 +107,16 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
                 "-D",
                 "warnings",
             ],
-        },
+        ),
         StepSpec {
             name: "xtask-fmt",
             program: "cargo",
             args: xtask_fmt_args,
+            cache_rustc: false,
         },
-        StepSpec {
-            name: "xtask-clippy",
-            program: "cargo",
-            args: vec![
+        cargo_compile_check(
+            "xtask-clippy",
+            vec![
                 "clippy",
                 "--manifest-path",
                 "xtask/Cargo.toml",
@@ -115,7 +125,7 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
                 "-D",
                 "warnings",
             ],
-        },
+        ),
     ]
 }
 
@@ -143,20 +153,134 @@ fn devtool_check(name: &'static str, mode: Mode) -> StepSpec {
         name,
         program: "cargo",
         args,
+        cache_rustc: false,
     }
+}
+
+fn cargo_compile_check(name: &'static str, args: Vec<&'static str>) -> StepSpec {
+    StepSpec {
+        name,
+        program: "cargo",
+        args,
+        cache_rustc: true,
+    }
+}
+
+fn compile_cache_env() -> (Vec<(String, String)>, Option<String>) {
+    let workspace_root = env::current_dir()
+        .ok()
+        .and_then(|path| path.canonicalize().ok())
+        .or_else(|| env::current_dir().ok());
+    match workspace_root.as_deref() {
+        Some(root) => compile_cache_env_for(root),
+        None => (
+            static_compile_cache_env(),
+            Some(
+                "sccache worktree discovery skipped: could not resolve current directory"
+                    .to_string(),
+            ),
+        ),
+    }
+}
+
+fn compile_cache_env_for(workspace_root: &Path) -> (Vec<(String, String)>, Option<String>) {
+    let (basedirs, warnings) = sccache_basedirs(workspace_root);
+    let mut env = static_compile_cache_env();
+    if !basedirs.is_empty() {
+        env.push(("SCCACHE_BASEDIRS".to_string(), basedirs));
+    }
+    let detail = if warnings.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "sccache worktree discovery warning: {}",
+            warnings.join("; ")
+        ))
+    };
+    (env, detail)
+}
+
+fn static_compile_cache_env() -> Vec<(String, String)> {
+    CARGO_COMPILE_ENV
+        .iter()
+        .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+        .collect()
+}
+
+fn sccache_basedirs(current_root: &Path) -> (String, Vec<String>) {
+    let mut warnings = Vec::new();
+    let mut roots = BTreeSet::new();
+    match Command::new("git")
+        .arg("-C")
+        .arg(current_root)
+        .args(["worktree", "list", "--porcelain"])
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            roots.extend(parse_worktree_roots(&stdout));
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            warnings.push(format!(
+                "`git worktree list --porcelain` failed: {}",
+                stderr.trim()
+            ));
+        }
+        Err(err) => warnings.push(format!("could not run `git worktree list`: {err}")),
+    }
+    if let Some(current_root) = normalized_existing_root(&current_root.display().to_string()) {
+        roots.insert(current_root);
+    }
+    let separator = if cfg!(windows) { ";" } else { ":" };
+    let basedirs = roots
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(separator);
+    (basedirs, warnings)
+}
+
+fn parse_worktree_roots(output: &str) -> BTreeSet<PathBuf> {
+    output
+        .lines()
+        .filter_map(|line| line.strip_prefix("worktree "))
+        .filter_map(normalized_existing_root)
+        .collect()
+}
+
+fn normalized_existing_root(raw: &str) -> Option<PathBuf> {
+    let path = PathBuf::from(raw);
+    if !path.is_absolute() || !path.is_dir() {
+        return None;
+    }
+    path.canonicalize().ok().or(Some(path))
 }
 
 /// Run the static check suite. In `Mode::Fix`, formatting commands auto-fix in
 /// place; in `Mode::Check`, every command is read-only — safe for CI.
 pub fn run(sh: &Shell, mode: Mode, result: &mut CommandResult) {
     for spec in specs(mode) {
-        result.push(step(sh, spec.name, spec.program, &spec.args));
+        if spec.cache_rustc {
+            let (env, cache_detail) = compile_cache_env();
+            let mut step = step_with_env(sh, spec.name, spec.program, &spec.args, &env);
+            if let Some(cache_detail) = cache_detail {
+                step.detail = Some(match step.detail.take() {
+                    Some(command_detail) => format!("{command_detail}\n{cache_detail}"),
+                    None => cache_detail,
+                });
+            }
+            result.push(step);
+        } else {
+            result.push(step(sh, spec.name, spec.program, &spec.args));
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn find<'a>(specs: &'a [StepSpec], name: &str) -> &'a StepSpec {
         specs.iter().find(|s| s.name == name).expect("step present")
@@ -253,6 +377,7 @@ mod tests {
                 "fmt"
             ]
         );
+        assert!(!fmt.cache_rustc);
         let fix_specs = specs(Mode::Fix);
         let prettier_fix = find(&fix_specs, "prettier");
         assert!(
@@ -274,6 +399,45 @@ mod tests {
         );
         assert_eq!(find(&s, "cargo-deny").args, ["deny", "check"]);
         assert_eq!(find(&s, "xtask-clippy").program, "cargo");
+        assert!(find(&s, "clippy").cache_rustc);
+        assert!(find(&s, "wasm-clippy").cache_rustc);
+        assert!(find(&s, "tools-clippy").cache_rustc);
+        assert!(find(&s, "xtask-clippy").cache_rustc);
+        assert!(!find(&s, "cargo-deny").cache_rustc);
+    }
+
+    #[test]
+    fn parse_worktree_roots_keeps_existing_absolute_worktrees() {
+        let temp = tempfile::tempdir().unwrap();
+        let root_a = temp.path().join("a");
+        let root_b = temp.path().join("b");
+        fs::create_dir_all(&root_a).unwrap();
+        fs::create_dir_all(&root_b).unwrap();
+        let output = format!(
+            "worktree {}\nHEAD abc\n\nworktree {}\nHEAD def\n\nworktree /not/a/checkout\n",
+            root_a.display(),
+            root_b.display()
+        );
+
+        let roots = parse_worktree_roots(&output);
+
+        assert_eq!(roots.len(), 2);
+        assert!(roots.contains(&root_a));
+        assert!(roots.contains(&root_b));
+    }
+
+    #[test]
+    fn compile_cache_env_contains_wrapper_incremental_and_worktree_basedirs_only() {
+        let (env, _detail) = compile_cache_env();
+
+        assert!(env.contains(&("RUSTC_WRAPPER".to_string(), "sccache".to_string())));
+        assert!(env.contains(&("CARGO_INCREMENTAL".to_string(), "0".to_string())));
+        assert!(env.iter().any(|(key, _)| key == "SCCACHE_BASEDIRS"));
+        assert!(
+            !env.iter()
+                .any(|(key, _)| key == "CARGO_PROFILE_DEV_DEBUG"
+                    || key == "CARGO_PROFILE_TEST_DEBUG")
+        );
     }
 
     #[test]

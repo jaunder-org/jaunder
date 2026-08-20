@@ -305,6 +305,19 @@
 
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
+        # Compile-only and test-only gates do not need full DWARF. Keep these
+        # overrides local to gate derivations so production packages and normal
+        # human debug builds keep their documented profiles.
+        leanDevProfile = {
+          CARGO_PROFILE_DEV_DEBUG = "0";
+        };
+        leanTestProfile = {
+          CARGO_PROFILE_TEST_DEBUG = "0";
+        };
+        leanDevAndTestProfile = leanDevProfile // leanTestProfile;
+
+        cargoArtifactsLeanDev = craneLib.buildDepsOnly (commonArgs // leanDevProfile);
+
         jaunderBin = craneLib.buildPackage (
           commonArgs
           // {
@@ -1113,6 +1126,7 @@
                 // {
                   cargoArtifacts = craneLib.buildDepsOnly (
                     commonArgs
+                    // leanTestProfile
                     // {
                       CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
                       cargoExtraArgs = "-p client";
@@ -1121,6 +1135,8 @@
                   );
                   pname = "jaunder-wasm-tests";
                   CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
+                  # wasm-bindgen-test diagnostics do not depend on native DWARF.
+                  CARGO_PROFILE_TEST_DEBUG = "0";
                   cargoTestExtraArgs = "-p client";
                   nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ wasm-bindgen-cli ];
                   CHROMEDRIVER = "${pkgs.chromedriver}/bin/chromedriver";
@@ -1177,12 +1193,14 @@
             clippy = craneLib.cargoClippy (
               commonArgs
               // {
-                inherit cargoArtifacts;
+                cargoArtifacts = cargoArtifactsLeanDev;
                 # Crane defaults Clippy to release mode, but `--all-targets`
                 # activates the test-only `cheap-kdf` feature whose optimized-build
                 # guard must fail. Lint test targets in the development profile;
-                # production package builds remain release-mode.
+                # production package builds remain release-mode. Clippy diagnostics
+                # do not need DWARF, so this derivation uses the lean dev profile.
                 CARGO_PROFILE = "dev";
+                CARGO_PROFILE_DEV_DEBUG = "0";
                 cargoClippyExtraArgs = "--all-targets -- -D warnings";
               }
             );
@@ -1195,6 +1213,7 @@
               // {
                 cargoArtifacts = craneLib.buildDepsOnly (
                   commonArgs
+                  // leanDevProfile
                   // {
                     CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
                     cargoExtraArgs = "-p web -p client -p csr --features csr";
@@ -1202,6 +1221,7 @@
                   }
                 );
                 CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
+                CARGO_PROFILE_DEV_DEBUG = "0";
                 cargoClippyExtraArgs = "-p web -p client -p csr --features csr -- -D warnings";
               }
             );
@@ -1381,8 +1401,13 @@
             doctests = craneLib.mkCargoDerivation (
               commonArgs
               // {
-                inherit cargoArtifacts;
+                cargoArtifacts = craneLib.buildDepsOnly (commonArgs // leanDevAndTestProfile);
                 pname = "jaunder-doctests";
+                # Doctest output comes from rustdoc/libtest diagnostics and the
+                # fence reconciler, not DWARF. Keep the override local so manual
+                # `cargo test --doc` remains fully debuggable.
+                CARGO_PROFILE_DEV_DEBUG = "0";
+                CARGO_PROFILE_TEST_DEBUG = "0";
                 nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ devtoolBin ];
                 buildPhaseCargoCommand = ''
                   export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath [ pkgs.openssl ]}:''${LD_LIBRARY_PATH:-}"
@@ -1447,6 +1472,10 @@
               pkgs.prettier
               pkgs.sqlite
               pkgs.typescript
+              # Host xtask steps opt Rust-compiling cargo invocations into
+              # `RUSTC_WRAPPER=sccache`; xtask maintains the multi-checkout
+              # `SCCACHE_BASEDIRS` registry at runtime.
+              pkgs.sccache
               # `wasm-opt`, run by `devtool csr-bundle` after `wasm-bindgen` (#836).
               # In `ciInputs` rather than `devOnly` because `cargo xtask build-csr`
               # invokes it on the host, so the CI shell needs it too.
