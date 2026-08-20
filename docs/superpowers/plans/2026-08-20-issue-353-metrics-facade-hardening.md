@@ -217,12 +217,12 @@ devtool run -- git commit -m "docs: record issue 353 plan completion"
 
 No `Co-Authored-By` trailer.
 
-- [ ] **Step 4: Validate exact final HEAD**
+- [x] **Step 4: Validate exact final HEAD**
 
 Run: `devtool run -- cargo xtask validate --no-e2e`  
 Expected: PASS.
 
-- [ ] **Step 5: Confirm clean final worktree**
+- [x] **Step 5: Confirm clean final worktree**
 
 Run: `devtool run -- git status --short`  
 Expected: no output.
