@@ -247,17 +247,48 @@ test("Named audience: assigned member sees a Friends post; an unassigned non-mem
   const friends = page.locator(".j-audience-item", { hasText: "Friends" });
   await expect(friends).toBeVisible();
 
-  // X appears in the roster as a not-yet-member (with an "Add" button). Add X.
+  // X appears in the roster as a not-yet-member (with an "Add" button). Hold only
+  // Friends' post-success members refetch and prove the mounted roster stays rendered.
+  const friendsId = await friends
+    .locator('input[name="audience_id"]')
+    .inputValue();
   const xRow = friends
     .locator(".j-audience-members li")
     .filter({ hasText: userX.username });
-  await expect(xRow).toBeVisible();
+  await expect(xRow.locator('button:has-text("Add")')).toBeVisible();
+  const membersList = await friends
+    .locator("ul.j-audience-members")
+    .elementHandle();
+  expect(membersList).not.toBeNull();
+  let targetMemberFetches = 0;
+  let releaseMembers!: () => void;
+  const membersGate = new Promise<void>((resolve) => {
+    releaseMembers = resolve;
+  });
+  await page.route("**/api/audiences/list_members", async (route) => {
+    const audienceId = new URLSearchParams(
+      route.request().postData() ?? "",
+    ).get("audience_id");
+    if (audienceId !== friendsId) return route.continue();
+    targetMemberFetches += 1;
+    await membersGate;
+    await route.continue();
+  });
   await xRow.locator('button:has-text("Add")').click();
-  // Once added, X's row shows a "Remove" button (the is-member state).
+  try {
+    await expect.poll(() => targetMemberFetches).toBe(1);
+    expect(await membersList!.evaluate((el) => el.isConnected)).toBe(true);
+    await expect(xRow.locator('button:has-text("Add")')).toBeVisible();
+    await expect(page.getByText("Loading members")).toHaveCount(0);
+  } finally {
+    releaseMembers();
+  }
+  // Once released, X's row shows a "Remove" button (the is-member state).
   await waitForSelector(
     page,
     `.j-audience-members li:has-text("${userX.username}") button:has-text("Remove")`,
   );
+  await page.unroute("**/api/audiences/list_members");
 
   // Author publishes a post targeted to subscribers + the Friends audience.
   allowSecondBoot(
