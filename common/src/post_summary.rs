@@ -71,6 +71,13 @@ impl PostSummary {
     }
 }
 
+/// Truncate an already-selected derived-text seed to `max_scalars` Unicode scalar
+/// values.
+///
+/// The cut prefers the last complete sentence (`.`, `!`, or `?`) within the cap,
+/// then the last Unicode whitespace boundary within the cap, and only then the hard
+/// scalar cap. Boundary cuts trim trailing whitespace and must leave a non-empty
+/// prefix; the hard cap walks `char`s, so it never splits a UTF-8 scalar.
 pub(crate) fn truncate_at_text_boundary(input: &str, max_scalars: usize) -> String {
     if input.chars().count() <= max_scalars {
         return input.to_owned();
