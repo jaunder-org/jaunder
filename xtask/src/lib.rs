@@ -49,6 +49,8 @@ mod steps {
     pub mod server_fn_coverage_check;
     pub mod server_fn_registrar_check;
     pub mod server_fn_tracing_check;
+    #[cfg(test)]
+    pub mod server_fn_wire_arg_error_check;
     pub mod sqlx_newtype_bind_check;
     pub mod sqlx_newtype_decode_check;
     pub mod static_checks;

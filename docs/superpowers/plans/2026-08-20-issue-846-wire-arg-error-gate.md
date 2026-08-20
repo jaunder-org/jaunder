@@ -172,11 +172,11 @@ local aggregate fields, recursively expand leaf types.
 
 **Steps:**
 
-- [ ] Create the module with no command wiring yet. Import
+- [x] Create the module with no command wiring yet. Import
       `crate::web_server_fns` and use `syn` parsing, not regex, for function
       params and struct fields.
 
-- [ ] Add tests that fail until implemented:
+- [x] Add tests that fail until implemented:
   - direct arg: `#[macros::server] async fn update(email: Email)` yields
     `Email`;
   - nested request field: `LoginRequest { password: ProfferedPassword }` yields
@@ -196,7 +196,7 @@ devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml server_fn_wire
 
 Expected: FAIL with missing/incomplete gate behavior.
 
-- [ ] Implement minimal local type indexing for `web/src` and `common/src`:
+- [x] Implement minimal local type indexing for `web/src` and `common/src`:
       last-segment names, local structs with named/tuple fields as needed, and
       obvious container unwrapping. Do not implement a full import resolver.
 
@@ -208,7 +208,7 @@ devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml server_fn_wire
 
 Expected: PASS for population tests.
 
-- [ ] Tick this task checkbox, then run the commit gate.
+- [x] Tick this task checkbox, then run the commit gate.
 
 Run:
 
