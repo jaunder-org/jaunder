@@ -14,7 +14,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 use crate::adr_readme;
 use crate::doc_links;
@@ -315,6 +315,22 @@ pub fn promote() -> StepResult {
     }
 }
 
+/// Promote the required first-line draft heading token and leave the body intact.
+///
+/// This deliberately does not use a whole-body replacement: ADRs about the draft
+/// workflow may discuss the literal `ADR-DRAFT` token in prose or code spans.
+fn promote_heading(body: &str, number: u32, draft_rel: &str) -> Result<String> {
+    let required = "# ADR-DRAFT: ";
+    let Some(rest) = body.strip_prefix(required) else {
+        bail!("{draft_rel} must start with `{required}` and a non-empty title");
+    };
+    let title = rest.split_once('\n').map_or(rest, |(line, _)| line);
+    if title.trim().is_empty() {
+        bail!("{draft_rel} must start with `{required}` and a non-empty title");
+    }
+    Ok(format!("# ADR-{}: {rest}", pad(number)))
+}
+
 /// Number every draft in `docs/adr/drafts`, graduate it into
 /// `docs/adr/NNNN-<slug>.md`, record its acceptance in the status line, rewrite its
 /// path-form references, sync the README table, and stage the result. Numbers are
@@ -348,16 +364,21 @@ fn run_promote(repo: &Path) -> Result<String> {
         });
     }
 
+    let mut promoted_bodies: Vec<(String, String)> = Vec::new();
+    for p in &assigned {
+        let draft_rel = format!("{DRAFTS_DIR}/{}.md", p.slug);
+        let body = std::fs::read_to_string(repo.join(&draft_rel))
+            .with_context(|| format!("reading {draft_rel}"))?;
+        let numbered = promote_heading(&body, p.num, &draft_rel)?;
+        promoted_bodies.push((draft_rel, numbered));
+    }
+
     // Pass B — graduate each draft (heading token `ADR-DRAFT` -> `ADR-NNNN`,
     // status `proposed` -> `accepted`, write it under its number, drop the draft)
     // and stage it. Staging first makes the path-form rewrite below see
     // cross-references between graduated drafts (which now live in tracked files).
-    for p in &mut assigned {
-        let draft_rel = format!("{DRAFTS_DIR}/{}.md", p.slug);
+    for (p, (draft_rel, numbered)) in assigned.iter_mut().zip(promoted_bodies) {
         let new_rel = format!("{ADR_DIR}/{}", p.new_name);
-        let body = std::fs::read_to_string(repo.join(&draft_rel))
-            .with_context(|| format!("reading {draft_rel}"))?;
-        let numbered = body.replace("ADR-DRAFT", &format!("ADR-{}", pad(p.num)));
         // The file moves up one directory here, so its own relative links are
         // rewritten at the same moment — not after Pass C, which would see targets
         // that have already been rewritten to their assigned numbers.
@@ -556,6 +577,65 @@ mod tests {
         let body = std::fs::read_to_string(tmp.join("docs/adr/0002-d.md")).unwrap();
         assert!(body.contains("](template.md)"), "body: {body}");
         assert!(body.contains("](../CONTRIBUTING.md)"), "body: {body}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn promote_rewrites_only_the_heading_token() {
+        let tmp = promote_repo("heading-only");
+        write(
+            &tmp,
+            "docs/adr/drafts/d.md",
+            "# ADR-DRAFT: D\n\nThe literal `ADR-DRAFT` token is documented here.\n\n```text\nADR-DRAFT\n```\n",
+        );
+
+        run_promote(&tmp).unwrap();
+
+        let body = std::fs::read_to_string(tmp.join("docs/adr/0002-d.md")).unwrap();
+        assert!(body.starts_with("# ADR-0002: D\n"), "body: {body}");
+        assert!(
+            body.contains("The literal `ADR-DRAFT` token is documented here."),
+            "body: {body}"
+        );
+        assert!(body.contains("```text\nADR-DRAFT\n```"), "body: {body}");
+        assert!(!body.contains("`ADR-0002`"), "body: {body}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn promote_rejects_malformed_heading_before_mutating_any_draft() {
+        let tmp = promote_repo("bad-heading");
+        let valid = "# ADR-DRAFT: Aaa\n";
+        let malformed = "# ADR-DRAFT:   \n";
+        write(&tmp, "docs/adr/drafts/aaa.md", valid);
+        write(&tmp, "docs/adr/drafts/bbb.md", malformed);
+
+        let err = run_promote(&tmp).unwrap_err();
+        let message = format!("{err:#}");
+
+        assert!(
+            message.contains("docs/adr/drafts/bbb.md"),
+            "error should name malformed draft: {message}"
+        );
+        assert!(
+            message.contains("non-empty title"),
+            "error should require a non-empty title: {message}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(tmp.join("docs/adr/drafts/aaa.md")).unwrap(),
+            valid
+        );
+        assert_eq!(
+            std::fs::read_to_string(tmp.join("docs/adr/drafts/bbb.md")).unwrap(),
+            malformed
+        );
+        assert!(!tmp.join("docs/adr/0002-aaa.md").exists());
+        assert!(!tmp.join("docs/adr/0003-bbb.md").exists());
+
+        let unstaged = git_stdout(&tmp, &["diff", "--name-only"]);
+        let staged = git_stdout(&tmp, &["diff", "--cached", "--name-only"]);
+        assert!(unstaged.trim().is_empty(), "unstaged diff: {unstaged}");
+        assert!(staged.trim().is_empty(), "staged diff: {staged}");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
