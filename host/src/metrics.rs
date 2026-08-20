@@ -1,9 +1,11 @@
 //! Cardinality-safe OpenTelemetry metric emitters, shared by `web` (its native
-//! `#[server]` bodies), `server`, `storage`, and the CLI. Instruments are built once from the global
-//! meter; when no `MeterProvider` is installed (no OTLP endpoint, or any
-//! non-server process) they are no-ops. Helper arguments are bounded enums, or a
-//! `&'static str` drawn from a closed set the call site cannot widen —
-//! `atompub_request`'s `op` comes from `atompub_op` in
+//! `#[server]` bodies), `server`, `storage`, and the CLI. Instruments are cached
+//! in a [`LazyLock`], so the first metric emission in a process fixes which
+//! global `MeterProvider` backs the facade's instruments. Binaries that export
+//! metrics must install their provider before any emitter is called; processes
+//! without metrics setup intentionally keep the no-op provider. Helper arguments
+//! are bounded enums, or a `&'static str` drawn from a closed set the call site
+//! cannot widen — `atompub_request`'s `op` comes from `atompub_op` in
 //! `server/src/atompub/mod.rs`, a matched-route-plus-method lookup, not from an
 //! enum. Either way no call site can attach caller-supplied text as a label.
 //! Exporter setup lives in the binary (`server::observability`), not here.
@@ -320,6 +322,13 @@ mod tests {
             .collect()
     }
 
+    fn attrs1(pairs: [(&str, &str); 1]) -> BTreeSet<(String, String)> {
+        pairs
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect()
+    }
+
     fn attrs(pairs: [(&str, &str); 2]) -> BTreeSet<(String, String)> {
         pairs
             .into_iter()
@@ -401,6 +410,12 @@ mod tests {
         assert!(
             email.contains(&attrs([("kind", "password_reset"), ("result", "failure")])),
             "Err did not record result=failure; got {email:?}"
+        );
+
+        let logins = counter_attributes(&metrics, "jaunder.auth.logins");
+        assert!(
+            logins.contains(&attrs1([("outcome", "invalid_credentials")])),
+            "login did not record outcome=invalid_credentials; got {logins:?}"
         );
 
         let errors = counter_attributes(&metrics, "jaunder.errors");
