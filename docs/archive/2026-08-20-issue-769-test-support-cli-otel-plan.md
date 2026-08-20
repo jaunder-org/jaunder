@@ -43,7 +43,7 @@ the batch processor has already written.
 ## Global Constraints
 
 - Implement the approved spec:
-  `docs/superpowers/specs/2026-08-20-issue-769-test-support-cli-otel.md`.
+  `docs/archive/2026-08-20-issue-769-test-support-cli-otel-spec.md`.
 - Preserve ADR-0011: no endpoint is no-op; exporter/setup/shutdown failures are
   fallback diagnostics only and never change command exit status.
 - Preserve ADR-0057: only the server writes scoped diagnostics (`diag.log`);
