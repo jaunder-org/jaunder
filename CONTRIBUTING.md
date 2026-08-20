@@ -102,14 +102,14 @@ standards. Configure git to use them after cloning:
 git config core.hooksPath .githooks
 ```
 
-**`pre-commit`** runs the full **`cargo xtask check`** (Fix mode) on every
-commit — formatting + clippy + the Nix `coverage` check (the SQLite +
-ephemeral-PostgreSQL suites under instrumentation) — so history stays green
-commit-by-commit. `check` auto-fixes **formatting** (fmt/leptosfmt/prettier);
-the coverage gate is stateless, so there is no baseline or CRAP manifest to
-heal. If the run reformats the tree, the hook **fails and asks you to `git add`
-and re-commit** — so you consciously include the change rather than the hook
-silently folding it in. Bypass with `SKIP_PRE_COMMIT=1 git commit` for WIP.
+**`pre-commit`** runs **`cargo xtask precommit`** on every commit: the fast
+Fix-mode host surface equivalent to `cargo xtask check --no-test`, followed by
+Rust-owned Git/index reconciliation. It auto-fixes formatting
+(fmt/leptosfmt/prettier) and re-stages only formatter/check mutations on
+already-staged tracked paths that had no pre-existing unstaged change. Mixed
+tracked paths, newly-created untracked files, and delete/rename states fail
+closed with diagnostics; pre-existing untracked files stay unstaged and
+tolerated. Bypass with `SKIP_PRE_COMMIT=1 git commit` for WIP.
 
 **`pre-push`** runs `cargo xtask validate --no-e2e` (verify-only): the static
 checks plus the Nix `coverage` check, gating test failures and coverage
@@ -140,10 +140,10 @@ they run in CI, or locally via `cargo xtask validate`. Bypass with
   unapproved suppression pass.
 - **Review gates the merge, not the commit.** Agents commit on their own
   recognizance — history is meant to be built up in focused, atomic steps, and
-  the pre-commit hook already gates each one on the full `cargo xtask check`.
-  What requires explicit user approval is **landing** the work: merging a PR
-  (`cargo xtask pr land` — running it _is_ the merge approval). Ask for review
-  before you merge, not before every commit.
+  the pre-commit hook already gates each one on the fast
+  `cargo xtask precommit`. What requires explicit user approval is **landing**
+  the work: merging a PR (`cargo xtask pr land` — running it _is_ the merge
+  approval). Ask for review before you merge, not before every commit.
 
 ### Adding an ADR
 
@@ -245,8 +245,8 @@ runs a hook it exports `GIT_DIR`/`GIT_INDEX_FILE` (and
 `GIT_WORK_TREE`/`GIT_OBJECT_DIRECTORY`/`GIT_COMMON_DIR`/`GIT_NAMESPACE`), and
 those **override `-C <dir>`**. So a test that builds a throwaway repo with
 `git -C <tmpdir> …` will, when run inside the pre-commit/pre-push hooks (which
-invoke `cargo xtask check`/`validate`, whose host tests then run that code), be
-redirected at the **real** repository — corrupting HEAD, the index, and the
+invoke `cargo xtask precommit`/`validate`, whose host tests then run that code),
+be redirected at the **real** repository — corrupting HEAD, the index, and the
 shared worktree config. Build every git command for such a test (and any
 production helper it calls) through a constructor that `env_remove`s those vars
 — see `git::at()` in `xtask/src/git.rs`. Read-only production queries
@@ -354,7 +354,8 @@ When `cargo xtask validate` is green, you may push.
 
 | Command                         | Runs                                                                                                                                   | Formatting    |
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
-| `cargo xtask check --no-test`   | host static checks + clippy                                                                                                            | auto-fixes    |
+| `cargo xtask precommit`         | host surface from `cargo xtask check --no-test`, then safe-staging reconciliation — the `.githooks/pre-commit` hook runs this path     | auto-fixes    |
+| `cargo xtask check --no-test`   | host static checks + clippy + repo-shape/type-safety gates + host tests — the precommit host surface                                   | auto-fixes    |
 | `cargo xtask check`             | + the Nix `wasm-tests`, `coverage`/`coverage-gate`, and `doctests`/`doctests-gate` checks                                              | auto-fixes    |
 | `cargo xtask validate --no-e2e` | the same test-enabled checks in verify-only mode — the pre-push gate (the `.githooks/pre-push` hook and Validate CI job run this path) | never mutates |
 | `cargo xtask validate`          | + e2e (all four `{sqlite,postgres}×{chromium,firefox}` combinations and the live elisp integration suite) — the full local gate        | never mutates |
@@ -807,12 +808,11 @@ instrumented coverage. Reported line coverage is the union of both backends.
 This — and thus backend parity — runs inside the Nix `coverage` check.
 
 `cargo xtask check` still runs in Fix mode and auto-formats
-(fmt/leptosfmt/prettier); if a run reformats the tree, the pre-commit hook
-**fails and asks you to restage** rather than silently folding the fix into your
-commit. But Fix mode no longer heals any coverage state — there is none to heal.
-Accepting a gap (`cov:ignore`) or waiving a CRAP score (`crap:allow`) is a
-manual source edit that lands as a reviewable diff; `cargo xtask validate` is
-verify-only.
+(fmt/leptosfmt/prettier), but the pre-commit hook runs `cargo xtask precommit`
+so formatter changes to already-staged clean tracked files are safely restaged.
+Fix mode no longer heals any coverage state — there is none to heal. Accepting a
+gap (`cov:ignore`) or waiving a CRAP score (`crap:allow`) is a manual source
+edit that lands as a reviewable diff; `cargo xtask validate` is verify-only.
 
 **Protection tradeoffs (stated honestly — not "stricter").** The stateless gate
 dissolves a class of fragility — the verdict is identical at any checkout depth,

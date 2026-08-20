@@ -779,6 +779,9 @@ git commit -m "fix(xtask): add precommit gate entrypoint"
 
 - Modify: `docs/adr/0029-git-enforced-verify-gate.md:15-62`
 - Modify: `docs/ARCHITECTURE.md:2129-2152`
+- Modify: `CONTRIBUTING.md:105-118,242-248,354-360,809-812`
+- Modify: `.claude/skills/jaunder-{commit,iterate,plan}/SKILL.md`
+- Modify: `.agents/skills/jaunder-{commit,iterate,plan}/SKILL.md`
 - Test: existing docs gates through `cargo xtask check`
 
 **Interfaces:**
@@ -786,7 +789,7 @@ git commit -m "fix(xtask): add precommit gate entrypoint"
 - Consumes Task 2's `cargo xtask precommit` and hook behavior.
 - Produces current human-facing gate docs; no new ADR number.
 
-- [ ] **Step 1: Amend ADR-0029**
+- [x] **Step 1: Amend ADR-0029**
 
 Update ADR-0029's Decision bullets:
 
@@ -805,7 +808,7 @@ coverage/doctest/wasm checks; pre-push/CI remain the Nix-backed proof; safe
 restaging prevents the #791 stale-index trap without sweeping unrelated dirty
 work into commits.
 
-- [ ] **Step 2: Amend `docs/ARCHITECTURE.md` gate projection**
+- [x] **Step 2: Amend `docs/ARCHITECTURE.md` gate projection**
 
 Update the gate ladder section so it states:
 
@@ -817,7 +820,7 @@ Update the gate ladder section so it states:
 - `.githooks/pre-push` calls `cargo xtask validate --no-e2e`; `validate` remains
   the clean-tree proof.
 
-- [ ] **Step 3: Run documentation-sensitive focused tests**
+- [x] **Step 3: Run documentation-sensitive focused tests**
 
 Run:
 
@@ -835,7 +838,7 @@ cargo nextest run --manifest-path xtask/Cargo.toml adr
 
 Expected: PASS.
 
-- [ ] **Step 4: Run full focused command surface**
+- [x] **Step 4: Run full focused command surface**
 
 Run:
 
@@ -853,7 +856,7 @@ SKIP_PRE_COMMIT=1 .githooks/pre-commit
 
 Expected: PASS with the skip message.
 
-- [ ] **Step 5: Run the per-commit gate and commit docs**
+- [x] **Step 5: Run the per-commit gate and commit docs**
 
 Run:
 
@@ -869,7 +872,7 @@ git add docs/adr/0029-git-enforced-verify-gate.md docs/ARCHITECTURE.md
 git commit -m "docs: describe staged-subset precommit gate"
 ```
 
-- [ ] **Step 6: Final branch verification before ship/PR**
+- [x] **Step 6: Final branch verification before ship/PR**
 
 Run:
 
