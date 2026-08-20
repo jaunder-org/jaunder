@@ -20,9 +20,13 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 fn default_filter(verbose: bool) -> EnvFilter {
     if verbose {
-        EnvFilter::new("jaunder=debug,host=debug,web=debug,common=debug,tower_http=debug,sqlx=info")
+        EnvFilter::new(
+            "jaunder=debug,host=debug,web=debug,common=debug,tower_http=debug,sqlx=info,storage=debug",
+        )
     } else {
-        EnvFilter::new("jaunder=warn,host=warn,web=warn,common=warn,tower_http=warn,sqlx=warn")
+        EnvFilter::new(
+            "jaunder=warn,host=warn,web=warn,common=warn,tower_http=warn,sqlx=warn,storage=info",
+        )
     }
 }
 
@@ -362,7 +366,7 @@ fn slow_op_threshold_with(
     }
 }
 
-pub fn slow_op_threshold() -> Duration {
+fn slow_op_threshold() -> Duration {
     slow_op_threshold_with(read_env, || fallback(FallbackKind::SlowThreshold))
 }
 
@@ -534,6 +538,12 @@ fn init_tracing_impl(verbose: bool) -> TelemetryGuard {
     init_tracing_impl_with_layer::<tracing_subscriber::layer::Identity>(verbose, None)
 }
 
+/// Install the process-wide tracing/logging/metrics subscriber and return its
+/// shutdown guard.
+///
+/// The setup is intentionally best-effort: malformed OTLP endpoints, exporter
+/// construction failures, and duplicate subscriber installs are recorded through
+/// local diagnostics but do not prevent the command from running.
 #[must_use]
 pub fn init_tracing(verbose: bool) -> TelemetryGuard {
     // Called once per process from `run` (production), for every command —
@@ -544,6 +554,8 @@ pub fn init_tracing(verbose: bool) -> TelemetryGuard {
     init_tracing_impl(verbose)
 }
 
+/// Install tracing with an extra subscriber layer for tests and return the same
+/// shutdown guard as [`init_tracing`].
 #[must_use]
 pub fn init_tracing_with_layer<L>(verbose: bool, layer: Option<L>) -> TelemetryGuard
 where
