@@ -33,7 +33,7 @@ broad adoption gate, no central registry, no marker contract system.
 - [x] Task 1 — Reconstruct and classify remaining primitive seams
 - [x] Task 2 — Convert Basic auth token to `RawToken`
 - [x] Task 3 — Convert CLI parse-time complete values
-- [ ] Task 4 — Tighten AtomPub service and collection cursors
+- [x] Task 4 — Tighten AtomPub service and collection cursors
 - [ ] Task 5 — Convert media upload size plumbing to `ByteSize`
 - [ ] Task 6 — Document deliberately retained primitives
 - [ ] Task 7 — File follow-up issues for design-sized seams

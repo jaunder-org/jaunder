@@ -11,6 +11,7 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use super::title::{CollectionTitle, WorkspaceTitle};
 use super::xml::{write_empty_element, write_text_element};
 use super::{APP_NS, ATOM_NS, J_NS};
+use crate::media::ContentType;
 use crate::tag::Tag;
 use crate::tagged_url::CollectionHrefUrl;
 
@@ -21,8 +22,8 @@ pub struct CollectionDecl {
     pub href: CollectionHrefUrl,
     /// User-facing title of the collection.
     pub title: CollectionTitle,
-    /// Media types accepted by the collection (e.g. "application/atom+xml;type=entry").
-    pub accept: Vec<String>,
+    /// Media types accepted by the collection (e.g. `application/atom+xml;type=entry`).
+    pub accept: Vec<ContentType>,
     /// Category scheme/terms available for entries in this collection.
     /// When non-empty, an `app:categories` element with `fixed="no"` is emitted.
     pub categories: Vec<Tag>,
@@ -88,7 +89,7 @@ fn write_collection(writer: &mut Writer<Vec<u8>>, coll: &CollectionDecl) {
     write_text_element(writer, "atom:title", &coll.title);
 
     for media_type in &coll.accept {
-        write_text_element(writer, "app:accept", media_type);
+        write_text_element(writer, "app:accept", media_type.as_ref());
     }
 
     if !coll.categories.is_empty() {
@@ -119,17 +120,17 @@ mod tests {
             posts_collection: CollectionDecl {
                 href: parse_url("https://h/atompub/alice/posts"),
                 title: crate::atompub::CollectionTitle::posts(),
-                accept: vec!["application/atom+xml;type=entry".into()],
+                accept: vec!["application/atom+xml;type=entry".parse().unwrap()],
                 categories: vec!["rust".parse().unwrap(), "leptos".parse().unwrap()],
             },
             media_collection: CollectionDecl {
                 href: parse_url("https://h/atompub/alice/media"),
                 title: crate::atompub::CollectionTitle::media(),
                 accept: vec![
-                    "image/png".into(),
-                    "image/jpeg".into(),
-                    "image/gif".into(),
-                    "image/webp".into(),
+                    "image/png".parse().unwrap(),
+                    "image/jpeg".parse().unwrap(),
+                    "image/gif".parse().unwrap(),
+                    "image/webp".parse().unwrap(),
                 ],
                 categories: vec![],
             },

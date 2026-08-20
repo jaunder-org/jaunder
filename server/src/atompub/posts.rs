@@ -109,7 +109,7 @@ fn if_match_satisfied(headers: &HeaderMap, etag: &ETag) -> bool {
 #[derive(Debug, Deserialize)]
 pub struct CollectionPaging {
     /// `updated_at` of the last item on the previous page (RFC 3339).
-    updated_before: Option<String>,
+    updated_before: Option<UtcInstant>,
     /// `post_id` of the last item on the previous page.
     id_before: Option<PostId>,
     /// Requested page size (clamped into `PageSize`'s `1..=50` range).
@@ -120,7 +120,7 @@ pub struct CollectionPaging {
 ///
 /// # Errors
 ///
-/// Returns `400` if the pagination cursor contains an invalid RFC 3339 timestamp.
+/// Returns `400` if the pagination query contains malformed values.
 /// Returns `403` if the authenticated user attempts to access another user's collection.
 /// Returns `500` if storage fails.
 #[tracing::instrument(name = "atompub.posts.collection_get", skip_all)]
@@ -135,16 +135,11 @@ pub async fn collection_get(
 
     let limit = paging.limit.map_or(DEFAULT_PAGE_SIZE, PageSize::clamped);
 
-    let cursor = match (&paging.updated_before, paging.id_before) {
-        (Some(ts), Some(post_id)) => {
-            let updated_at = chrono::DateTime::parse_from_rfc3339(ts)
-                .map_err(|_| HandlerError::BadRequest)?
-                .with_timezone(&chrono::Utc);
-            Some(CollectionCursor {
-                updated_at,
-                post_id,
-            })
-        }
+    let cursor = match (paging.updated_before, paging.id_before) {
+        (Some(updated_before), Some(post_id)) => Some(CollectionCursor {
+            updated_at: updated_before.into(),
+            post_id,
+        }),
         _ => None,
     };
 
@@ -166,7 +161,7 @@ pub async fn collection_get(
     let next: Option<PaginationUrl> = if has_more {
         records.last().map(|last| {
             // Build the cursor query via `url`'s encoder (#560, D5), not `format!`.
-            let updated_before = last.updated_at.to_rfc3339();
+            let updated_before = UtcInstant::from(last.updated_at).to_string();
             let id_before = last.post_id.to_string();
             collection_url.with_query_pairs(&[
                 ("updated_before", updated_before.as_str()),
