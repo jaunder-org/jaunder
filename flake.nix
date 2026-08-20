@@ -1189,9 +1189,7 @@
             # wasm-clippy — `web::pages` compiles wasm-only (#300), so the host `clippy`
             # above never sees it; likewise the wasm-only `client` and `csr` entry crates
             # (#519). Lint them on the wasm target (mirrors the host xtask `wasm-clippy`
-            # step). The remaining `-A` flag is TEMPORARY and must stay in sync with
-            # xtask/src/steps/static_checks.rs — remove `too_many_arguments` when #299
-            # restructures the #[server] args.
+            # step).
             wasm-clippy = craneLib.cargoClippy (
               commonArgs
               // {
@@ -1204,8 +1202,7 @@
                   }
                 );
                 CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
-                cargoClippyExtraArgs =
-                  "-p web -p client -p csr --features csr -- -D warnings " + "-A clippy::too_many_arguments";
+                cargoClippyExtraArgs = "-p web -p client -p csr --features csr -- -D warnings";
               }
             );
             # The non-compiling static checks (#188), unified behind one `devtool

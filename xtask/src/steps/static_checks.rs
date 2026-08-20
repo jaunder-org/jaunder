@@ -63,16 +63,7 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
         // same invocation — for both this is their sole clippy gate. `--features csr` is a
         // `web`/`client` feature; `csr` has none but rides the same command and pulls
         // `web[csr]` via its own dep — if `web`'s `csr` is ever renamed, this arg needs
-        // updating too. This necessarily re-lints
-        // the whole `web` crate on wasm;
-        // one lint is governed elsewhere and allowed here TEMPORARILY:
-        //   -A clippy::too_many_arguments      — the create_post/update_post #[server]
-        //     fns; the fn-level #[allow] doesn't reach the wasm macro expansion. REMOVE
-        //     when #299 restructures their args (they'll drop below 7).
-        //
-        // `-A unfulfilled_lint_expectations` used to sit alongside it, for component
-        // `#[expect(too_many_lines)]`s. #301 decomposed those components, so there are
-        // no such expectations left to be unfulfilled and the allow is gone.
+        // updating too. This necessarily re-lints the whole `web` crate on wasm.
         StepSpec {
             name: "wasm-clippy",
             program: "cargo",
@@ -91,8 +82,6 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
                 "--",
                 "-D",
                 "warnings",
-                "-A",
-                "clippy::too_many_arguments",
             ],
         },
         devtool_check("tools-fmt", mode),
@@ -238,8 +227,6 @@ mod tests {
                     "--",
                     "-D",
                     "warnings",
-                    "-A",
-                    "clippy::too_many_arguments",
                 ]
             );
         }
