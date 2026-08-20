@@ -14,7 +14,11 @@ import { readPingLines, waitForPingMatching } from "./websub";
 // `FEED_POLL_TIMEOUT_MS` is imported, not restated: this spec derives its
 // whole-test budget from it (#270), and `feeds.ts` owns the poll that consumes
 // it. Two copies would let the budget silently drift from the deadline again.
-import { fetchFeedContaining, FEED_POLL_TIMEOUT_MS } from "./feeds";
+import {
+  fetchFeedContaining,
+  FEED_POLL_TIMEOUT_MS,
+  readAlternateLinks,
+} from "./feeds";
 import { createPostViaApi } from "./posts";
 import { withTimedAction } from "./actions";
 
@@ -49,12 +53,7 @@ test("auto-discovery links are present on site home and user timeline, and resol
 
   // Test site home feed discovery
   await goto(page, "/");
-  const homeLinks = await page.$$eval('head link[rel="alternate"]', (els) =>
-    els.map((e) => ({
-      href: (e as HTMLLinkElement).href,
-      type: (e as HTMLLinkElement).type,
-    })),
-  );
+  const homeLinks = await readAlternateLinks(page);
 
   // #198: exactly one set post-boot (three feed links, not the pre-dedupe six), and the
   // two projector stylesheet <link>s survive the marker-scoped removal (AC4).
@@ -79,12 +78,7 @@ test("auto-discovery links are present on site home and user timeline, and resol
     "the document-served head link set for the user timeline is the subject; the sibling test already covers the client-side-nav case, so converting this one would collapse the two into one scenario",
   );
   await goto(page, `/~${username}`);
-  const userLinks = await page.$$eval('head link[rel="alternate"]', (els) =>
-    els.map((e) => ({
-      href: (e as HTMLLinkElement).href,
-      type: (e as HTMLLinkElement).type,
-    })),
-  );
+  const userLinks = await readAlternateLinks(page);
 
   // #198: one set on the user timeline too, plus exactly one RSD EditURI link.
   expect(userLinks.length).toBe(3);
@@ -115,9 +109,7 @@ test("head discovery links update across a client-side nav, staying a single set
 
   await goto(page, "/");
   await waitForMount(page);
-  const siteHrefs = await page.$$eval('head link[rel="alternate"]', (els) =>
-    els.map((e) => (e as HTMLLinkElement).href),
-  );
+  const siteHrefs = (await readAlternateLinks(page)).map((link) => link.href);
   expect(siteHrefs.length).toBe(3); // one set on the Site feed
 
   // Client-side nav: click the post's tag chip → /tags/disco198 (leptos_router
@@ -129,18 +121,14 @@ test("head discovery links update across a client-side nav, staying a single set
   // the batch after the route change — poll until it settles rather than read once and
   // race: exactly three alternate links, all now the SiteTag feed.
   await expect
-    .poll(async () =>
-      page.$$eval(
-        'head link[rel="alternate"]',
-        (els) =>
-          (els as HTMLLinkElement[]).filter((e) => e.href.includes("disco198"))
-            .length,
-      ),
+    .poll(
+      async () =>
+        (await readAlternateLinks(page)).filter((link) =>
+          link.href.includes("disco198"),
+        ).length,
     )
     .toBe(3);
-  const tagHrefs = await page.$$eval('head link[rel="alternate"]', (els) =>
-    els.map((e) => (e as HTMLLinkElement).href),
-  );
+  const tagHrefs = (await readAlternateLinks(page)).map((link) => link.href);
   expect(tagHrefs.length).toBe(3); // exactly one set (no leftover Site links)
   expect(tagHrefs).not.toEqual(siteHrefs); // the SiteTag feed, not the Site feed
 });

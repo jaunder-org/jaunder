@@ -22,6 +22,19 @@ export type FeedResponse = { body: string; contentType: string };
  *  assertions still produce a content diff rather than diffing against "". */
 export type FeedSnapshot = FeedResponse & { matched: boolean };
 
+/** A browser-resolved Syndication Feed discovery link from the current document. */
+export type AlternateLink = { href: string; type: string };
+
+/** Read the current document's alternate links without asserting or waiting. */
+export async function readAlternateLinks(page: Page): Promise<AlternateLink[]> {
+  return page.$$eval('head link[rel="alternate"]', (elements) =>
+    elements.map((element) => {
+      const link = element as HTMLLinkElement;
+      return { href: link.href, type: link.type };
+    }),
+  );
+}
+
 const FEED_POLL_INTERVAL_MS = 500;
 
 /** Per-fetch poll deadline for the eventually-consistent feed cache.
