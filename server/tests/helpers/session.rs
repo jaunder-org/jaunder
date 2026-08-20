@@ -62,10 +62,10 @@ impl SeededSession {
     /// A [`SeedPost`](storage::test_support::SeedPost) pre-owned by this session's
     /// user — so authenticated tests seed a post without re-typing `session.user_id`.
     /// `.seed(&state)` still takes the state (irreducible — no ambient DB handle).
-    /// The returned builder's lifetime is decoupled from `&self` (it only copies
-    /// `user_id`), so a caller may pass a borrowed title/key that outlives the receiver.
+    /// The returned builder owns its typed title if one is set, so its lifetime is
+    /// decoupled from `&self` (it only copies `user_id`).
     #[must_use]
-    pub fn seed_post<'p>(&self) -> storage::test_support::SeedPost<'p> {
+    pub fn seed_post(&self) -> storage::test_support::SeedPost {
         storage::test_support::SeedPost::new(self.user_id)
     }
 }

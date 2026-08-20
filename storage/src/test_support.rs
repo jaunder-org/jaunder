@@ -952,14 +952,14 @@ pub async fn seed_users<const N: usize>(state: &Arc<AppState>) -> [UserId; N] {
 /// Repeated bare seeds get **distinct** slugs: a title-less post derives its slug from
 /// the fixed body, and `perform_post_creation`'s collision-suffix retry disambiguates
 /// (`seeded-post-body`, `seeded-post-body-2`, …).
-pub struct SeedPost<'a> {
+pub struct SeedPost {
     user_id: UserId,
-    title: Option<&'a str>,
+    title: Option<PostTitle>,
     body: PostBody,
     audiences: Vec<AudienceTarget>,
 }
 
-impl<'a> SeedPost<'a> {
+impl SeedPost {
     /// A published, public, Markdown post owned by `user_id`, with a fixed non-empty
     /// body and no explicit title. Deviate from a default only where a test requires
     /// it. Only the three fields real call sites vary — title, body, audiences — are
@@ -977,7 +977,7 @@ impl<'a> SeedPost<'a> {
 
     /// Set an explicit title — for the permalink/listing tests that assert on it.
     #[must_use]
-    pub fn title(mut self, title: &'a str) -> Self {
+    pub fn title(mut self, title: PostTitle) -> Self {
         self.title = Some(title);
         self
     }
@@ -1009,7 +1009,7 @@ impl<'a> SeedPost<'a> {
             crate::PostCreation {
                 user_id: self.user_id,
                 body: self.body,
-                title: self.title,
+                title: self.title.as_ref(),
                 format: PostFormat::Markdown,
                 slug_override: None,
                 published_at: Some(Utc::now()),
@@ -1460,7 +1460,11 @@ pub async fn fetch_post_media(base: &TestBase, post_id: PostId) -> Vec<MediaRef>
 /// # Panics
 ///
 /// If the post cannot be created.
-pub async fn create_post_via_service(state: &Arc<AppState>, user_id: UserId, body: &str) -> PostId {
+pub async fn create_post_via_service(
+    state: &Arc<AppState>,
+    user_id: UserId,
+    body: PostBody,
+) -> PostId {
     create_via_service(state, user_id, body, Some(Utc::now())).await
 }
 
@@ -1473,7 +1477,7 @@ pub async fn create_post_via_service(state: &Arc<AppState>, user_id: UserId, bod
 pub async fn create_draft_via_service(
     state: &Arc<AppState>,
     user_id: UserId,
-    body: &str,
+    body: PostBody,
 ) -> PostId {
     create_via_service(state, user_id, body, None).await
 }
@@ -1484,14 +1488,14 @@ pub async fn create_draft_via_service(
 async fn create_via_service(
     state: &Arc<AppState>,
     user_id: UserId,
-    body: &str,
+    body: PostBody,
     published_at: Option<DateTime<Utc>>,
 ) -> PostId {
     crate::perform_post_creation(
         state.posts.as_ref(),
         crate::PostCreation {
             user_id,
-            body: parse_post_body(body),
+            body,
             title: None,
             format: PostFormat::Markdown,
             slug_override: None,
@@ -1519,14 +1523,14 @@ pub async fn update_post_body_via_service(
     state: &Arc<AppState>,
     post_id: PostId,
     editor_user_id: UserId,
-    body: &str,
+    body: PostBody,
 ) {
     crate::perform_post_update(
         state.posts.as_ref(),
         crate::PostUpdate {
             post_id,
             editor_user_id,
-            body: parse_post_body(body),
+            body,
             title: None,
             format: PostFormat::Markdown,
             slug_override: None,
@@ -1655,7 +1659,7 @@ mod tests {
         let user = SeedUser::new().seed(state).await;
         // Exercise the three settable fields and assert each lands on the record.
         let post = SeedPost::new(user.user_id)
-            .title("Custom Title")
+            .title(parse_post_title("Custom Title"))
             .body(parse_post_body("Custom body text"))
             .audiences(vec![AudienceTarget::Public])
             .seed(state)

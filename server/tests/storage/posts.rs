@@ -1,5 +1,6 @@
 use chrono::Utc;
 use common::ids::{AudienceId, PostId, UserId};
+use common::post_title::PostTitle;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::test_support::{
@@ -136,17 +137,18 @@ async fn post_update_by_non_owner_returns_unauthorized(#[case] backend: Backend)
 /// Builds a `PostUpdate` with the given publish verb and otherwise-valid,
 /// stable fields. `slug` is pinned via `slug_override` so repeated updates on
 /// different posts never collide on a derived slug.
-fn update_input(
+fn update_input<'a>(
     post_id: PostId,
     editor_user_id: UserId,
-    slug: &Slug,
+    title: &'a PostTitle,
+    slug: &'a Slug,
     publish: PublishUpdate,
-) -> PostUpdate<'_> {
+) -> PostUpdate<'a> {
     PostUpdate {
         post_id,
         editor_user_id,
         body: parse_post_body("updated body"),
-        title: Some("Updated Title"),
+        title: Some(title),
         format: PostFormat::Markdown,
         slug_override: Some(slug),
         publish,
@@ -173,6 +175,7 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     // Pinned override slugs (already valid, as they arrive at the storage layer).
     let p: Slug = "p".parse().unwrap();
     let q: Slug = "q".parse().unwrap();
+    let title = parse_post_title("Updated Title");
 
     // Publish { at: Some(future) } on a draft => scheduled at that instant.
     let future = now + Duration::days(1);
@@ -181,6 +184,7 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
         update_input(
             draft,
             alice,
+            &title,
             &p,
             PublishUpdate::Publish { at: Some(future) },
         ),
@@ -196,7 +200,13 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     // Publish { at: None } on an already-published post keeps the existing timestamp.
     let rec2 = perform_post_update(
         &*state.posts,
-        update_input(draft, alice, &p, PublishUpdate::Publish { at: None }),
+        update_input(
+            draft,
+            alice,
+            &title,
+            &p,
+            PublishUpdate::Publish { at: None },
+        ),
     )
     .await
     .unwrap();
@@ -209,7 +219,7 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     // Unpublish clears it.
     let rec3 = perform_post_update(
         &*state.posts,
-        update_input(draft, alice, &p, PublishUpdate::Unpublish),
+        update_input(draft, alice, &title, &p, PublishUpdate::Unpublish),
     )
     .await
     .unwrap();
@@ -219,7 +229,13 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     let draft2 = SeedRawPost::new(alice).draft().seed(state).await.post_id;
     let rec4 = perform_post_update(
         &*state.posts,
-        update_input(draft2, alice, &q, PublishUpdate::Publish { at: None }),
+        update_input(
+            draft2,
+            alice,
+            &title,
+            &q,
+            PublishUpdate::Publish { at: None },
+        ),
     )
     .await
     .unwrap();
@@ -803,13 +819,14 @@ async fn perform_post_update_markdown_renders_and_updates(#[case] backend: Backe
     let user_id = SeedUser::new().seed(state).await.user_id;
 
     let post = SeedRawPost::new(user_id).draft().seed(state).await;
+    let title = parse_post_title("Updated Title");
 
     let record = perform_post_update(
         state.posts.as_ref(),
         PostUpdate {
             post_id: post.post_id,
             editor_user_id: user_id,
-            title: Some("Updated Title"),
+            title: Some(&title),
             slug_override: Some(&post.slug),
             body: parse_post_body("**updated**"),
             format: PostFormat::Markdown,
@@ -840,6 +857,7 @@ async fn perform_post_update_org_renders_and_updates(#[case] backend: Backend) {
     let user_id = SeedUser::new().seed(state).await.user_id;
 
     let post = SeedRawPost::new(user_id).draft().seed(state).await;
+    let title = parse_post_title("Updated Org Title");
 
     // `*bold org*` is emphasis, not a heading — `* ` (with the space) is what marks a
     // title source — so canonicalization leaves it alone and it must still render.
@@ -848,7 +866,7 @@ async fn perform_post_update_org_renders_and_updates(#[case] backend: Backend) {
         PostUpdate {
             post_id: post.post_id,
             editor_user_id: user_id,
-            title: Some("Updated Org Title"),
+            title: Some(&title),
             slug_override: Some(&post.slug),
             body: parse_post_body("*bold org*"),
             format: PostFormat::Org,

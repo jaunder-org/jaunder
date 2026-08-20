@@ -582,36 +582,33 @@ pub use sanitized::{INERT_ATTRS, MEDIA_URL_ATTRS, RenderOutput, extract_media_re
 /// Org's title source is stripped by canonicalization.
 #[must_use]
 pub fn derive_post_naming(
-    explicit_title: Option<&str>,
+    explicit_title: Option<&PostTitle>,
     body: &PostBody,
     format: &PostFormat,
 ) -> (Option<PostTitle>, Slug) {
-    // This filter decides *presence*, not validity: a blank explicit title means the
-    // client supplied none, so the body is consulted for one below. (`PostTitle`'s
-    // `FromStr` enforces non-blankness itself — #830.)
-    let explicit_title = explicit_title
-        .map(str::trim)
-        .filter(|title| !title.is_empty());
     let trimmed = body.trim();
 
     // An explicit title wins outright, so the body is only parsed for one when
     // there is none — hence `or_else`, not `or`.
-    let title = explicit_title.map(str::to_owned).or_else(|| match format {
-        PostFormat::Markdown => extract_markdown_title(trimmed).map(|(title, _)| title),
-        PostFormat::Org => extract_org_title(trimmed).map(|(title, _)| title),
-        PostFormat::Html => None,
+    let title = explicit_title.cloned().or_else(|| {
+        let extracted = match format {
+            PostFormat::Markdown => extract_markdown_title(trimmed).map(|(title, _)| title),
+            PostFormat::Org => extract_org_title(trimmed).map(|(title, _)| title),
+            PostFormat::Html => None,
+        };
+
+        // Extracted titles are non-blank by construction — both extractors reject
+        // empty-after-trim — but the compiler cannot see that. So a failed parse
+        // falls through to the untitled path rather than panicking on an invariant we
+        // believe but cannot prove here (#830).
+        extracted.and_then(|title| title.parse::<PostTitle>().ok())
     });
 
-    // `title` is non-blank by construction — the explicit branch is filtered above,
-    // and both extractors reject empty-after-trim — but the compiler cannot see that.
-    // So a failed parse falls through to the untitled path rather than panicking on an
-    // invariant we believe but cannot prove here (#830).
-    //
     // A titled post seeds its slug from the title; an untitled one — including one
-    // whose title failed that parse — from the body's first non-blank line.
-    let (title, seed) = match title.and_then(|t| t.parse::<PostTitle>().ok().map(|p| (p, t))) {
-        Some((parsed, seed)) => (Some(parsed), seed),
-        None => (None, first_meaningful_line(body)),
+    // whose extracted title failed that parse — from the body's first non-blank line.
+    let seed = match title.as_ref() {
+        Some(title) => title.to_string(),
+        None => first_meaningful_line(body),
     };
 
     // `slugify_title` never fails (it falls back to "post") and emits an
@@ -963,8 +960,9 @@ mod tests {
         body: &str,
         format: PostFormat,
     ) -> (Option<PostTitle>, Slug) {
+        let explicit_title = explicit_title.and_then(|title| title.parse::<PostTitle>().ok());
         derive_post_naming(
-            explicit_title,
+            explicit_title.as_ref(),
             &crate::test_support::parse_post_body(body),
             &format,
         )

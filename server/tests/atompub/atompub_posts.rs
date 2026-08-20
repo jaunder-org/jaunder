@@ -4,7 +4,7 @@ use axum::{
 };
 use common::ids::PostId;
 use common::tag::{MAX_TAGS_PER_POST, TagLabel};
-use common::test_support::{parse_post_body, permalink_date};
+use common::test_support::{parse_post_body, parse_post_title, permalink_date};
 use tower::ServiceExt;
 
 use rstest::*;
@@ -42,13 +42,13 @@ async fn collection_lists_user_posts(#[case] backend: Backend) {
 
     let _post1 = session
         .seed_post()
-        .title("Hello Title One")
+        .title(parse_post_title("Hello Title One"))
         .seed(&state)
         .await;
 
     let _post2 = session
         .seed_post()
-        .title("Hello Title Two")
+        .title(parse_post_title("Hello Title Two"))
         .seed(&state)
         .await;
 
@@ -809,7 +809,11 @@ async fn member_carries_read_only_j_slug(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
 
-    let post = session.seed_post().title("My Post").seed(&state).await;
+    let post = session
+        .seed_post()
+        .title(parse_post_title("My Post"))
+        .seed(&state)
+        .await;
 
     let app = make_app(&state, &base);
 

@@ -65,25 +65,25 @@ impl<S: Send + Sync> FromRequestParts<S> for PostServices {
 /// `ETag` and an idempotent re-publish does not change it, removing the time-based
 /// divergence false-positive (#78).
 pub(crate) fn etag_for(post: &PostRecord) -> ETag {
-    /// The content projection that the `ETag` hashes.  Every field is reduced to a
-    /// plain, `Serialize`-able primitive; `PostFormat`/`PostTag` are never hashed
-    /// directly (the latter carries DB-assigned ids that would differ between two
-    /// identical-content posts).  `draft` is time-independent (`published_at`
-    /// presence, not its value).
+    /// The content projection that the `ETag` hashes. Newtype fields stay typed
+    /// through this seam and serialize through their ADR-0063 string bridges;
+    /// `PostFormat` and `draft` are reduced to their stable wire values. `PostTag`
+    /// itself is never hashed because it carries DB-assigned ids that would differ
+    /// between identical-content posts.
     #[derive(Serialize)]
     struct EtagContent<'a> {
-        title: Option<&'a str>,
-        body: &'a str,
+        title: Option<&'a common::post_title::PostTitle>,
+        body: &'a common::post_body::PostBody,
         format: String,
-        summary: Option<&'a str>,
+        summary: Option<&'a common::post_summary::PostSummary>,
         tags: Vec<&'a TagLabel>,
         draft: bool,
     }
     let content = EtagContent {
-        title: post.title.as_deref(),
+        title: post.title.as_ref(),
         body: &post.body,
         format: post.format.to_string(),
-        summary: post.summary.as_deref(),
+        summary: post.summary.as_ref(),
         // Tags are folded in iteration order, which `TAGS_SUBQUERY`'s `ORDER BY`
         // makes deterministic across query plans and backends (#772). An ETag change
         // costs a re-fetch, never staleness.
@@ -338,7 +338,7 @@ pub async fn collection_post(
         storage::PostCreation {
             user_id: auth_user.user_id,
             body: fields.body,
-            title: fields.title.as_deref(),
+            title: fields.title.as_ref(),
             format: fields.format,
             slug_override: None,
             published_at,
@@ -452,7 +452,7 @@ pub async fn member_put(
             post_id,
             editor_user_id: auth_user.user_id,
             body: fields.body,
-            title: fields.title.as_deref(),
+            title: fields.title.as_ref(),
             format: fields.format,
             slug_override: None,
             // A non-draft entry publishes at the wire `<published>` timestamp
@@ -500,15 +500,16 @@ mod etag_tests {
     use super::*;
     use chrono::{TimeZone, Utc};
     use common::ids::{PostId, TagId, UserId};
-    use common::test_support::{parse_post_body, parse_post_summary};
+    use common::tag::Tag;
+    use common::test_support::{parse_post_body, parse_post_summary, parse_post_title};
     use storage::{PostFormat, PostTag, RenderedHtml};
 
-    fn mk_tag(post_id: i64, tag_id: i64, slug: &str, display: &str) -> PostTag {
+    fn mk_tag(post_id: PostId, tag_id: TagId, slug: Tag, display: TagLabel) -> PostTag {
         PostTag {
-            post_id: PostId::from(post_id),
-            tag_id: TagId::from(tag_id),
-            tag_slug: slug.parse().expect("parse tag slug"),
-            tag_display: display.parse().expect("parse tag label"),
+            post_id,
+            tag_id,
+            tag_slug: slug,
+            tag_display: display,
         }
     }
 
@@ -521,7 +522,7 @@ mod etag_tests {
             post_id: PostId::from(1),
             user_id: UserId::from(1),
             author_username: "alice".parse().expect("parse username"),
-            title: Some(common::test_support::parse_post_title("Title")),
+            title: Some(parse_post_title("Title")),
             slug: "my-post".parse().expect("parse slug"),
             body: parse_post_body("Body text."),
             format: PostFormat::Org,
@@ -531,7 +532,20 @@ mod etag_tests {
             published_at: Some(t),
             deleted_at: None,
             summary: Some(parse_post_summary("Summary")),
-            tags: vec![mk_tag(1, 1, "rust", "Rust"), mk_tag(1, 2, "emacs", "Emacs")],
+            tags: vec![
+                mk_tag(
+                    PostId::from(1),
+                    TagId::from(1),
+                    "rust".parse().unwrap(),
+                    "Rust".parse().unwrap(),
+                ),
+                mk_tag(
+                    PostId::from(1),
+                    TagId::from(2),
+                    "emacs".parse().unwrap(),
+                    "Emacs".parse().unwrap(),
+                ),
+            ],
         }
     }
 
@@ -572,8 +586,18 @@ mod etag_tests {
         p.published_at = Some(later);
         p.rendered_html = RenderedHtml::from_trusted("<p>totally different</p>");
         p.tags = vec![
-            mk_tag(999, 55, "rust", "Rust"),
-            mk_tag(999, 56, "emacs", "Emacs"),
+            mk_tag(
+                PostId::from(999),
+                TagId::from(55),
+                "rust".parse().unwrap(),
+                "Rust".parse().unwrap(),
+            ),
+            mk_tag(
+                PostId::from(999),
+                TagId::from(56),
+                "emacs".parse().unwrap(),
+                "Emacs".parse().unwrap(),
+            ),
         ];
         assert_eq!(etag_for(&p), e);
     }
@@ -586,17 +610,27 @@ mod etag_tests {
             f(&mut p);
             etag_for(&p)
         };
-        assert_ne!(
-            flip(&|p| p.title = Some(common::test_support::parse_post_title("Other"))),
-            e
-        ); // title value
+        assert_ne!(flip(&|p| p.title = Some(parse_post_title("Other"))), e); // title value
         assert_ne!(flip(&|p| p.title = None), e); // title present->absent
         assert_ne!(flip(&|p| p.body = parse_post_body("Different body.")), e); // body
         assert_ne!(flip(&|p| p.summary = Some(parse_post_summary("Other"))), e); // summary value
         assert_ne!(flip(&|p| p.summary = None), e); // summary present->absent
         assert_ne!(flip(&|p| p.format = PostFormat::Markdown), e); // format
         assert_ne!(
-            flip(&|p| p.tags = vec![mk_tag(1, 1, "rust", "Rust"), mk_tag(1, 2, "lisp", "Lisp")]),
+            flip(&|p| p.tags = vec![
+                mk_tag(
+                    PostId::from(1),
+                    TagId::from(1),
+                    "rust".parse().unwrap(),
+                    "Rust".parse().unwrap()
+                ),
+                mk_tag(
+                    PostId::from(1),
+                    TagId::from(2),
+                    "lisp".parse().unwrap(),
+                    "Lisp".parse().unwrap()
+                ),
+            ]),
             e
         ); // tag display set
         assert_ne!(flip(&|p| p.published_at = None), e); // draft flip

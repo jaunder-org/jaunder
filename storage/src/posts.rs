@@ -3550,7 +3550,7 @@ mod tests {
         let uploaded = seed_media(&env.state, user, "photo.jpg").await;
         let body = format!("<img src=\"{}\">", media_url_for("photo.jpg"));
 
-        let post_id = create_post_via_service(&env.state, user, &body).await;
+        let post_id = create_post_via_service(&env.state, user, parse_post_body(&body)).await;
 
         assert_eq!(
             fetch_post_media(&env.base, post_id).await,
@@ -3574,7 +3574,7 @@ mod tests {
         let member = format!("/atompub/alice/media/{MEDIA_TEST_SHA256}/photo.jpg");
         let body = format!("<img src=\"{raw}\"><a href=\"{member}\">doc</a>");
 
-        let post_id = create_post_via_service(&env.state, user, &body).await;
+        let post_id = create_post_via_service(&env.state, user, parse_post_body(&body)).await;
 
         let names: Vec<String> = fetch_post_media(&env.base, post_id)
             .await
@@ -3598,7 +3598,8 @@ mod tests {
         let env = backend.setup().await;
         let [user] = seed_users::<1>(&env.state).await;
 
-        let post_id = create_post_via_service(&env.state, user, "just some prose").await;
+        let post_id =
+            create_post_via_service(&env.state, user, parse_post_body("just some prose")).await;
 
         assert!(fetch_post_media(&env.base, post_id).await.is_empty());
     }
@@ -3613,11 +3614,20 @@ mod tests {
         let [user] = seed_users::<1>(&env.state).await;
         let a = media_url_for("a.jpg");
         let b = media_url_for("b.jpg");
-        let post_id =
-            create_post_via_service(&env.state, user, &format!("<img src=\"{a}\">")).await;
+        let post_id = create_post_via_service(
+            &env.state,
+            user,
+            parse_post_body(&format!("<img src=\"{a}\">")),
+        )
+        .await;
 
-        update_post_body_via_service(&env.state, post_id, user, &format!("<img src=\"{b}\">"))
-            .await;
+        update_post_body_via_service(
+            &env.state,
+            post_id,
+            user,
+            parse_post_body(&format!("<img src=\"{b}\">")),
+        )
+        .await;
 
         let rows = fetch_post_media(&env.base, post_id).await;
         assert_eq!(rows.len(), 1, "the removed reference is gone: {rows:?}");
@@ -3627,7 +3637,13 @@ mod tests {
             "the added reference is present"
         );
 
-        update_post_body_via_service(&env.state, post_id, user, "no media at all").await;
+        update_post_body_via_service(
+            &env.state,
+            post_id,
+            user,
+            parse_post_body("no media at all"),
+        )
+        .await;
 
         assert!(fetch_post_media(&env.base, post_id).await.is_empty());
     }
@@ -3643,7 +3659,7 @@ mod tests {
         let env = backend.setup().await;
         let [user] = seed_users::<1>(&env.state).await;
         let body = format!("<img src=\"{}\">", media_url_for("photo.jpg"));
-        let post_id = create_draft_via_service(&env.state, user, &body).await;
+        let post_id = create_draft_via_service(&env.state, user, parse_post_body(&body)).await;
         let before = fetch_post_media(&env.base, post_id).await;
         assert_eq!(
             before.len(),
@@ -3672,11 +3688,12 @@ mod tests {
         let [owner, stranger] = seed_users::<2>(&env.state).await;
         let embed = format!("<img src=\"{}\">", media_url_for("photo.jpg"));
 
-        let first = create_post_via_service(&env.state, owner, &embed).await;
-        let second = create_post_via_service(&env.state, owner, &embed).await;
-        let deleted = create_post_via_service(&env.state, owner, &embed).await;
-        let foreign = create_post_via_service(&env.state, stranger, &embed).await;
-        let unrelated = create_post_via_service(&env.state, owner, "no media").await;
+        let first = create_post_via_service(&env.state, owner, parse_post_body(&embed)).await;
+        let second = create_post_via_service(&env.state, owner, parse_post_body(&embed)).await;
+        let deleted = create_post_via_service(&env.state, owner, parse_post_body(&embed)).await;
+        let foreign = create_post_via_service(&env.state, stranger, parse_post_body(&embed)).await;
+        let unrelated =
+            create_post_via_service(&env.state, owner, parse_post_body("no media")).await;
         env.state
             .posts
             .soft_delete_post(deleted)
@@ -3760,7 +3777,7 @@ mod tests {
     ) {
         let env = backend.setup().await;
         let [user] = seed_users::<1>(&env.state).await;
-        create_post_via_service(&env.state, user, "no media").await;
+        create_post_via_service(&env.state, user, parse_post_body("no media")).await;
 
         let found = env
             .state

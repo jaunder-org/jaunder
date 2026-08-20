@@ -216,7 +216,11 @@ mod tests {
     use super::*;
     use chrono::{DateTime, Utc};
     use common::ids::{PostId, TagId, UserId};
-    use common::test_support::{parse_post_body, parse_post_summary, parse_url};
+    use common::slug::Slug;
+    use common::tag::{Tag, TagLabel};
+    use common::test_support::{
+        parse_post_body, parse_post_summary, parse_post_title, parse_slug, parse_url,
+    };
 
     // -----------------------------------------------------------------------
     // format_wire seam tests
@@ -550,15 +554,15 @@ mod tests {
 
     /// Fields for the [`make_post`] test builder, bundled so the builder stays
     /// under the argument limit.
-    struct MakePost<'a> {
-        post_id: i64,
-        title: Option<&'a str>,
-        slug: &'a str,
-        body: &'a str,
+    struct MakePost {
+        post_id: PostId,
+        title: Option<common::post_title::PostTitle>,
+        slug: Slug,
+        body: PostBody,
         format: PostFormat,
         published_at: Option<DateTime<Utc>>,
-        summary: Option<&'a str>,
-        tags: Vec<(String, String)>,
+        summary: Option<common::post_summary::PostSummary>,
+        tags: Vec<(Tag, TagLabel)>,
     }
 
     fn make_post(fields: MakePost) -> PostRecord {
@@ -576,27 +580,27 @@ mod tests {
             .into_iter()
             .enumerate()
             .map(|(i, (tag_slug, tag_display))| storage::PostTag {
-                post_id: PostId::from(post_id),
+                post_id,
                 tag_id: TagId::from(i64::try_from(i).expect("tag index fits in i64") + 1),
-                tag_slug: tag_slug.parse().expect("parse tag"),
-                tag_display: tag_display.parse().expect("parse tag label"),
+                tag_slug,
+                tag_display,
             })
             .collect();
 
         PostRecord {
-            post_id: PostId::from(post_id),
+            post_id,
             user_id: UserId::from(1),
             author_username: "alice".parse().expect("parse username"),
-            title: title.map(common::test_support::parse_post_title),
-            slug: slug.parse().expect("parse slug"),
-            body: parse_post_body(body),
+            title,
+            slug,
+            body,
             format,
             rendered_html: storage::RenderedHtml::from_trusted("<p>html</p>"),
             created_at: Utc::now(),
             updated_at: Utc::now(),
             published_at,
             deleted_at: None,
-            summary: summary.map(parse_post_summary),
+            summary,
             tags: tags_vec,
         }
     }
@@ -604,10 +608,10 @@ mod tests {
     #[test]
     fn post_to_entry_markdown_format_becomes_text_content() {
         let post = make_post(MakePost {
-            post_id: 42,
-            title: Some("Title"),
-            slug: "slug",
-            body: "# Markdown Body",
+            post_id: PostId::from(42),
+            title: Some(parse_post_title("Title")),
+            slug: parse_slug("slug"),
+            body: parse_post_body("# Markdown Body"),
             format: PostFormat::Markdown,
             published_at: Some(Utc::now()),
             summary: None,
@@ -626,10 +630,10 @@ mod tests {
     #[test]
     fn post_to_entry_org_format_becomes_text_content() {
         let post = make_post(MakePost {
-            post_id: 42,
-            title: Some("Title"),
-            slug: "slug",
-            body: "* Org Body",
+            post_id: PostId::from(42),
+            title: Some(parse_post_title("Title")),
+            slug: parse_slug("slug"),
+            body: parse_post_body("* Org Body"),
             format: PostFormat::Org,
             published_at: Some(Utc::now()),
             summary: None,
@@ -645,10 +649,10 @@ mod tests {
     #[test]
     fn post_to_entry_html_format_becomes_html_content() {
         let post = make_post(MakePost {
-            post_id: 42,
-            title: Some("Title"),
-            slug: "slug",
-            body: "<p>HTML</p>",
+            post_id: PostId::from(42),
+            title: Some(parse_post_title("Title")),
+            slug: parse_slug("slug"),
+            body: parse_post_body("<p>HTML</p>"),
             format: PostFormat::Html,
             published_at: Some(Utc::now()),
             summary: None,
@@ -664,10 +668,10 @@ mod tests {
     #[test]
     fn post_to_entry_id_is_edit_uri() {
         let post = make_post(MakePost {
-            post_id: 7,
-            title: Some("Title"),
-            slug: "slug",
-            body: "body",
+            post_id: PostId::from(7),
+            title: Some(parse_post_title("Title")),
+            slug: parse_slug("slug"),
+            body: parse_post_body("body"),
             format: PostFormat::Markdown,
             published_at: Some(Utc::now()),
             summary: None,
@@ -682,10 +686,10 @@ mod tests {
     #[test]
     fn post_to_entry_edit_link() {
         let post = make_post(MakePost {
-            post_id: 7,
-            title: Some("Title"),
-            slug: "slug",
-            body: "body",
+            post_id: PostId::from(7),
+            title: Some(parse_post_title("Title")),
+            slug: parse_slug("slug"),
+            body: parse_post_body("body"),
             format: PostFormat::Markdown,
             published_at: Some(Utc::now()),
             summary: None,
@@ -706,10 +710,10 @@ mod tests {
     fn post_to_entry_published_post_has_alternate_link() {
         let now = Utc::now();
         let post = make_post(MakePost {
-            post_id: 7,
-            title: Some("Title"),
-            slug: "slug",
-            body: "body",
+            post_id: PostId::from(7),
+            title: Some(parse_post_title("Title")),
+            slug: parse_slug("slug"),
+            body: parse_post_body("body"),
             format: PostFormat::Markdown,
             published_at: Some(now),
             summary: None,
@@ -735,10 +739,10 @@ mod tests {
     #[test]
     fn post_to_entry_draft_post_has_no_alternate_link() {
         let post = make_post(MakePost {
-            post_id: 7,
-            title: Some("Title"),
-            slug: "slug",
-            body: "body",
+            post_id: PostId::from(7),
+            title: Some(parse_post_title("Title")),
+            slug: parse_slug("slug"),
+            body: parse_post_body("body"),
             format: PostFormat::Markdown,
             published_at: None, // No published_at = draft
             summary: None,
@@ -758,10 +762,10 @@ mod tests {
     #[test]
     fn post_to_entry_title_from_post() {
         let post = make_post(MakePost {
-            post_id: 7,
-            title: Some("My Title"),
-            slug: "slug",
-            body: "body",
+            post_id: PostId::from(7),
+            title: Some(parse_post_title("My Title")),
+            slug: parse_slug("slug"),
+            body: parse_post_body("body"),
             format: PostFormat::Markdown,
             published_at: Some(Utc::now()),
             summary: None,
@@ -776,10 +780,10 @@ mod tests {
     #[test]
     fn post_to_entry_title_falls_back_to_slug() {
         let post = make_post(MakePost {
-            post_id: 7,
+            post_id: PostId::from(7),
             title: None, // No title
-            slug: "my-slug",
-            body: "body",
+            slug: parse_slug("my-slug"),
+            body: parse_post_body("body"),
             format: PostFormat::Markdown,
             published_at: Some(Utc::now()),
             summary: None,
@@ -794,13 +798,13 @@ mod tests {
     #[test]
     fn post_to_entry_summary() {
         let post = make_post(MakePost {
-            post_id: 7,
-            title: Some("Title"),
-            slug: "slug",
-            body: "body",
+            post_id: PostId::from(7),
+            title: Some(parse_post_title("Title")),
+            slug: parse_slug("slug"),
+            body: parse_post_body("body"),
             format: PostFormat::Markdown,
             published_at: Some(Utc::now()),
-            summary: Some("This is a summary"),
+            summary: Some(parse_post_summary("This is a summary")),
             tags: vec![],
         });
 
@@ -812,10 +816,10 @@ mod tests {
     #[test]
     fn post_to_entry_no_summary() {
         let post = make_post(MakePost {
-            post_id: 7,
-            title: Some("Title"),
-            slug: "slug",
-            body: "body",
+            post_id: PostId::from(7),
+            title: Some(parse_post_title("Title")),
+            slug: parse_slug("slug"),
+            body: parse_post_body("body"),
             format: PostFormat::Markdown,
             published_at: Some(Utc::now()),
             summary: None,
@@ -830,16 +834,19 @@ mod tests {
     #[test]
     fn post_to_entry_categories_from_tags() {
         let post = make_post(MakePost {
-            post_id: 7,
-            title: Some("Title"),
-            slug: "slug",
-            body: "body",
+            post_id: PostId::from(7),
+            title: Some(parse_post_title("Title")),
+            slug: parse_slug("slug"),
+            body: parse_post_body("body"),
             format: PostFormat::Markdown,
             published_at: Some(Utc::now()),
             summary: None,
             tags: vec![
-                ("rust".to_string(), "Rust".to_string()),
-                ("programming".to_string(), "Programming".to_string()),
+                ("rust".parse().unwrap(), "Rust".parse().unwrap()),
+                (
+                    "programming".parse().unwrap(),
+                    "Programming".parse().unwrap(),
+                ),
             ],
         });
 
@@ -852,10 +859,10 @@ mod tests {
     #[test]
     fn post_to_entry_no_tags() {
         let post = make_post(MakePost {
-            post_id: 7,
-            title: Some("Title"),
-            slug: "slug",
-            body: "body",
+            post_id: PostId::from(7),
+            title: Some(parse_post_title("Title")),
+            slug: parse_slug("slug"),
+            body: parse_post_body("body"),
             format: PostFormat::Markdown,
             published_at: Some(Utc::now()),
             summary: None,
@@ -870,10 +877,10 @@ mod tests {
     #[test]
     fn post_to_entry_published_post_not_marked_draft() {
         let post = make_post(MakePost {
-            post_id: 7,
-            title: Some("Title"),
-            slug: "slug",
-            body: "body",
+            post_id: PostId::from(7),
+            title: Some(parse_post_title("Title")),
+            slug: parse_slug("slug"),
+            body: parse_post_body("body"),
             format: PostFormat::Markdown,
             published_at: Some(Utc::now()),
             summary: None,
@@ -888,10 +895,10 @@ mod tests {
     #[test]
     fn post_to_entry_draft_post_marked_draft() {
         let post = make_post(MakePost {
-            post_id: 7,
-            title: Some("Title"),
-            slug: "slug",
-            body: "body",
+            post_id: PostId::from(7),
+            title: Some(parse_post_title("Title")),
+            slug: parse_slug("slug"),
+            body: parse_post_body("body"),
             format: PostFormat::Markdown,
             published_at: None, // No published_at = draft
             summary: None,
@@ -907,10 +914,10 @@ mod tests {
     fn post_to_entry_timestamps() {
         let now = Utc::now();
         let mut post = make_post(MakePost {
-            post_id: 7,
-            title: Some("Title"),
-            slug: "slug",
-            body: "body",
+            post_id: PostId::from(7),
+            title: Some(parse_post_title("Title")),
+            slug: parse_slug("slug"),
+            body: parse_post_body("body"),
             format: PostFormat::Markdown,
             published_at: Some(now),
             summary: None,
