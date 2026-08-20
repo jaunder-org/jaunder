@@ -34,7 +34,7 @@ broad adoption gate, no central registry, no marker contract system.
 - [x] Task 2 — Convert Basic auth token to `RawToken`
 - [x] Task 3 — Convert CLI parse-time complete values
 - [x] Task 4 — Tighten AtomPub service and collection cursors
-- [ ] Task 5 — Convert media upload size plumbing to `ByteSize`
+- [x] Task 5 — Convert media upload size plumbing to `ByteSize`
 - [ ] Task 6 — Document deliberately retained primitives
 - [ ] Task 7 — File follow-up issues for design-sized seams
 - [ ] Task 8 — Run final gate and prepare for ship

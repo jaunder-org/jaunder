@@ -56,7 +56,7 @@ struct UploadMetadata {
     filename: Filename,
     content_type: ContentType,
     sha256_hex: ContentHash,
-    size_bytes: i64,
+    size_bytes: ByteSize,
 }
 
 impl MediaManager {
@@ -182,11 +182,15 @@ impl MediaManager {
     async fn check_quota(
         &self,
         user_id: UserId,
-        size_bytes: i64,
+        size_bytes: ByteSize,
         user_quota: UserQuota,
     ) -> anyhow::Result<()> {
         let current_usage = self.media.get_user_upload_usage(user_id).await?;
-        if current_usage.value() + size_bytes > user_quota.value() {
+        if current_usage
+            .value()
+            .checked_add(size_bytes.value())
+            .is_none_or(|total| total > user_quota.value())
+        {
             anyhow::bail!(MediaError::InsufficientStorage);
         }
         Ok(())
@@ -261,7 +265,7 @@ impl MediaManager {
         sha256_hex: &ContentHash,
         filename: &Filename,
         content_type: &ContentType,
-        size_bytes: i64,
+        size_bytes: ByteSize,
     ) -> anyhow::Result<()> {
         let record = MediaRecord {
             user_id,
@@ -269,7 +273,7 @@ impl MediaManager {
             filename: filename.clone(),
             source: MediaSource::Upload,
             content_type: content_type.clone(),
-            size_bytes: ByteSize::try_from(size_bytes)?,
+            size_bytes,
             source_url: None,
             created_at: Utc::now(),
         };
@@ -333,7 +337,7 @@ impl MediaManager {
             metadata.size_bytes,
         )
         .await?;
-        host::metrics::media_upload_bytes(u64::try_from(metadata.size_bytes).unwrap_or(0));
+        host::metrics::media_upload_bytes(metadata.size_bytes.value().unsigned_abs());
         host::metrics::media_upload(if deduplicated {
             host::metrics::UploadOutcome::Deduplicated
         } else {
@@ -348,7 +352,7 @@ impl MediaManager {
             sha256: metadata.sha256_hex,
             filename: metadata.filename,
             content_type: metadata.content_type,
-            size_bytes: ByteSize::try_from(metadata.size_bytes)?,
+            size_bytes: metadata.size_bytes,
             url,
         })
     }
@@ -390,6 +394,8 @@ impl MediaManager {
             anyhow::bail!(MediaError::PayloadTooLarge);
         }
 
+        let size_bytes = ByteSize::try_from(size_bytes)?;
+
         let sha256_hex = ContentHash::from_digest(Sha256::digest(bytes).into());
         let tmp_path = self.create_temp_file().await?;
         fs::write(&tmp_path, bytes).await?;
@@ -409,7 +415,7 @@ impl MediaManager {
         mut stream: S,
         tmp_path: &Path,
         max_file_size: MaxFileSize,
-    ) -> anyhow::Result<(ContentHash, i64)>
+    ) -> anyhow::Result<(ContentHash, ByteSize)>
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin,
         E: std::error::Error + Send + Sync + 'static,
@@ -432,7 +438,7 @@ impl MediaManager {
         drop(file);
 
         let sha256_hex = ContentHash::from_digest(hasher.finalize().into());
-        Ok((sha256_hex, bytes_written))
+        Ok((sha256_hex, ByteSize::try_from(bytes_written)?))
     }
 
     async fn directory_entries(dir: &Path) -> io::Result<impl Stream<Item = io::Result<PathBuf>>> {
@@ -469,7 +475,9 @@ mod tests {
     use super::*;
     use crate::SiteConfigKey;
     use crate::test_support::{Backend, SeedUser, backends};
-    use common::test_support::{parse_content_hash, parse_content_type, parse_filename};
+    use common::test_support::{
+        parse_byte_size, parse_content_hash, parse_content_type, parse_filename,
+    };
     use rstest::*;
     use rstest_reuse::*;
     use tempfile::TempDir;
@@ -535,6 +543,21 @@ mod tests {
         assert!(MediaManager::validate_filename(Some("..")).is_err());
     }
 
+    #[test]
+    fn upload_metadata_carries_validated_byte_size() {
+        let metadata = UploadMetadata {
+            filename: parse_filename("file.png"),
+            content_type: parse_content_type("image/png"),
+            sha256_hex: parse_content_hash(
+                "deadbeef00000000000000000000000000000000000000000000000000000000",
+            ),
+            size_bytes: parse_byte_size("0"),
+        };
+
+        assert_eq!(metadata.size_bytes, parse_byte_size("0"));
+        assert!(ByteSize::try_from(-1).is_err());
+    }
+
     // guard:no-backend — mock store
     #[tokio::test]
     async fn register_in_db_maps_internal_create_error() {
@@ -557,7 +580,7 @@ mod tests {
                 ),
                 &parse_filename("file.png"),
                 &parse_content_type("image/png"),
-                100,
+                parse_byte_size("100"),
             )
             .await
             .unwrap_err();
