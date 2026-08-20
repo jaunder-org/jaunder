@@ -56,19 +56,21 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
   await expect(friends).toBeVisible();
   await expect(family).toBeVisible();
 
-  // Stable handle on the *Family* name node. Adding a member to *Friends* must not
-  // remount Family — single-signal coupling would rebuild the whole list and
-  // detach this node.
-  const familyName = await family.locator("h3.j-audience-name").elementHandle();
+  const friendsId = await friends
+    .locator('input[name="audience_id"]')
+    .inputValue();
+  const familyId = await family
+    .locator('input[name="audience_id"]')
+    .inputValue();
 
   // X is an addable candidate in BOTH audiences (a subscriber, member of neither).
   // Wait for both checklists so the initial member fetches finish before counting.
-  const friendsX = friends
-    .locator(".j-audience-members li")
-    .filter({ hasText: userX });
-  const familyX = family
-    .locator(".j-audience-members li")
-    .filter({ hasText: userX });
+  const friendsX = friends.locator(".j-audience-members li").filter({
+    hasText: userX,
+  });
+  const familyX = family.locator(".j-audience-members li").filter({
+    hasText: userX,
+  });
   await expect(friendsX.locator('button:has-text("Add")')).toBeVisible();
   await expect(familyX.locator('button:has-text("Add")')).toBeVisible();
 
@@ -81,84 +83,230 @@ test("Audiences: CRUD + membership toggle re-fetch without list remount or flash
   const familyChecklist = await family
     .locator("ul.j-audience-members")
     .elementHandle();
+  expect(friendsChecklist).not.toBeNull();
+  expect(familyChecklist).not.toBeNull();
 
-  // The members trigger is local to each MemberChecklist, so adding X to Friends
-  // re-fetches ONLY Friends' members — one `audiences::list_members` round-trip. A
-  // shared trigger would produce two (Friends + Family).
-  // Two request counts. `memberFetches`: a local per-checklist trigger, so a toggle
-  // re-fetches only its own audience (one round-trip). `listFetches`: the audience LIST
-  // must NOT re-fetch on a membership toggle (the scoped-invalidation guard) — its scope
-  // fires only on create/rename/delete, and only on *success*.
-  let memberFetches = 0;
+  // The audience LIST must NOT re-fetch on a membership toggle (scoped invalidation), but
+  // it MUST re-fetch on successful create/rename/delete. Attach after the initial load so
+  // only post-settle mutations contribute.
   let listFetches = 0;
   page.on("request", (req) => {
-    const url = req.url();
-    if (url.includes("/api/audiences/list_members")) memberFetches += 1;
-    if (url.includes("/api/audiences/list_mine")) listFetches += 1;
+    if (req.url().includes("/api/audiences/list_mine")) listFetches += 1;
   });
 
-  // Add X to Friends; the button flips Add -> Remove.
+  // Add X to Friends, but hold ONLY Friends' post-success members refetch. While that read
+  // is in flight, the prior Add state and both mounted checklists must stay rendered.
+  let addTargetMemberFetches = 0;
+  let addFamilyMemberFetches = 0;
+  let releaseAddMembers!: () => void;
+  const addMembersGate = new Promise<void>((resolve) => {
+    releaseAddMembers = resolve;
+  });
+  await page.route("**/api/audiences/list_members", async (route) => {
+    const audienceId = new URLSearchParams(
+      route.request().postData() ?? "",
+    ).get("audience_id");
+    if (audienceId === familyId) addFamilyMemberFetches += 1;
+    if (audienceId !== friendsId) return route.continue();
+    addTargetMemberFetches += 1;
+    await addMembersGate;
+    await route.continue();
+  });
+  const friendsXAddHandle = await friendsX.elementHandle();
+  expect(friendsXAddHandle).not.toBeNull();
+  const beforeAddListFetches = listFetches;
   await friendsX.locator('button:has-text("Add")').click();
+  try {
+    await expect.poll(() => addTargetMemberFetches).toBe(1);
+    expect(await friendsChecklist!.evaluate((el) => el.isConnected)).toBe(true);
+    expect(await familyChecklist!.evaluate((el) => el.isConnected)).toBe(true);
+    expect(await friendsXAddHandle!.evaluate((el) => el.isConnected)).toBe(
+      true,
+    );
+    await expect(friendsX.locator('button:has-text("Add")')).toBeVisible();
+    await expect(familyX.locator('button:has-text("Add")')).toBeVisible();
+    await expect(page.getByText("Loading members")).toHaveCount(0);
+    expect(listFetches).toBe(beforeAddListFetches);
+  } finally {
+    releaseAddMembers();
+  }
   await expect(friendsX.locator('button:has-text("Remove")')).toBeVisible();
+  await page.unroute("**/api/audiences/list_members");
+  expect(addTargetMemberFetches).toBe(1);
+  expect(addFamilyMemberFetches).toBe(0);
+  expect(listFetches).toBe(beforeAddListFetches);
 
-  // The untouched Family row was NOT remounted by the member toggle.
-  expect(await familyName!.evaluate((el) => el.isConnected)).toBe(true);
-  // Only Friends' checklist re-fetched (local trigger), not Family's.
-  expect(memberFetches).toBe(1);
-  // The audience LIST did NOT re-fetch on the membership toggle — scoped invalidation.
-  // A single shared invalidator (over-invalidating) would have re-fetched it here.
-  expect(listFetches).toBe(0);
-  // No members list left stuck on the loading placeholder.
-  await expect(page.getByText("Loading members")).toHaveCount(0);
-
-  // Remove X; the button flips back.
+  // Remove X, holding only Friends' refetch again. The prior Remove state must stay mounted
+  // until the held read is released, and Family must remain untouched.
+  let removeTargetMemberFetches = 0;
+  let removeFamilyMemberFetches = 0;
+  let releaseRemoveMembers!: () => void;
+  const removeMembersGate = new Promise<void>((resolve) => {
+    releaseRemoveMembers = resolve;
+  });
+  await page.route("**/api/audiences/list_members", async (route) => {
+    const audienceId = new URLSearchParams(
+      route.request().postData() ?? "",
+    ).get("audience_id");
+    if (audienceId === familyId) removeFamilyMemberFetches += 1;
+    if (audienceId !== friendsId) return route.continue();
+    removeTargetMemberFetches += 1;
+    await removeMembersGate;
+    await route.continue();
+  });
+  const friendsXRemoveHandle = await friendsX.elementHandle();
+  expect(friendsXRemoveHandle).not.toBeNull();
+  const beforeRemoveListFetches = listFetches;
   await friendsX.locator('button:has-text("Remove")').click();
+  try {
+    await expect.poll(() => removeTargetMemberFetches).toBe(1);
+    expect(await friendsChecklist!.evaluate((el) => el.isConnected)).toBe(true);
+    expect(await familyChecklist!.evaluate((el) => el.isConnected)).toBe(true);
+    expect(await friendsXRemoveHandle!.evaluate((el) => el.isConnected)).toBe(
+      true,
+    );
+    await expect(friendsX.locator('button:has-text("Remove")')).toBeVisible();
+    await expect(familyX.locator('button:has-text("Add")')).toBeVisible();
+    await expect(page.getByText("Loading members")).toHaveCount(0);
+    expect(listFetches).toBe(beforeRemoveListFetches);
+  } finally {
+    releaseRemoveMembers();
+  }
   await expect(friendsX.locator('button:has-text("Add")')).toBeVisible();
-  // The remove re-fetches only Friends too: one additional request despite two
-  // mounted checklists, and still no audience-list refresh.
-  expect(memberFetches).toBe(2);
-  expect(listFetches).toBe(0);
+  await page.unroute("**/api/audiences/list_members");
+  expect(removeTargetMemberFetches).toBe(1);
+  expect(removeFamilyMemberFetches).toBe(0);
+  expect(listFetches).toBe(beforeRemoveListFetches);
 
-  // #348 (create): creating another audience refetches the list; the keyed store `patch`es
-  // in place, so the two existing rows' checklists are not remounted (handles stay
-  // connected). The new "Extras" row loads its own checklist, so a global "Loading members"
-  // count would be a false negative here — the per-row handles are the real observable.
+  // #348 (create): hold the second successful list refetch and prove the existing rows stay
+  // mounted and visible while the read is in flight.
+  const extras = page.locator(".j-audience-item", { hasText: "Extras" });
+  const friendsRowBeforeCreate = await friends.elementHandle();
+  const familyRowBeforeCreate = await family.elementHandle();
+  expect(friendsRowBeforeCreate).not.toBeNull();
+  expect(familyRowBeforeCreate).not.toBeNull();
+  let createListMineFetches = 0;
+  let releaseCreateListMine!: () => void;
+  const createListMineGate = new Promise<void>((resolve) => {
+    releaseCreateListMine = resolve;
+  });
+  const beforeCreateListFetches = listFetches;
+  await page.route("**/api/audiences/list_mine", async (route) => {
+    createListMineFetches += 1;
+    await createListMineGate;
+    await route.continue();
+  });
   await page.fill(createName, "Extras");
   await click(page, 'button:has-text("Create")');
-  await expect(
-    page.locator(".j-audience-item", { hasText: "Extras" }),
-  ).toBeVisible();
+  try {
+    await expect.poll(() => createListMineFetches).toBe(1);
+    expect(await friendsRowBeforeCreate!.evaluate((el) => el.isConnected)).toBe(
+      true,
+    );
+    expect(await familyRowBeforeCreate!.evaluate((el) => el.isConnected)).toBe(
+      true,
+    );
+    await expect(friends).toBeVisible();
+    await expect(family).toBeVisible();
+    await expect(page.getByText("No audiences yet.")).toHaveCount(0);
+    await expect(page.locator(".j-audience-list + p.j-loading")).toHaveCount(0);
+    expect(listFetches).toBe(beforeCreateListFetches + 1);
+  } finally {
+    releaseCreateListMine();
+  }
+  await expect(extras).toBeVisible();
+  await page.unroute("**/api/audiences/list_mine");
+  expect(createListMineFetches).toBe(1);
   expect(await friendsChecklist!.evaluate((el) => el.isConnected)).toBe(true);
   expect(await familyChecklist!.evaluate((el) => el.isConnected)).toBe(true);
 
-  // Rename Friends -> BestFriends; the list re-fetches (a `list` bump) and both
-  // audiences remain.
+  // Rename Friends -> BestFriends, but hold the list refetch so the prior rows stay visible
+  // until the read resolves.
   const renameForm = friends.locator("form").filter({ hasText: "Rename" });
+  const friendsRowBeforeRename = await friends.elementHandle();
+  const familyRowBeforeRename = await family.elementHandle();
+  expect(friendsRowBeforeRename).not.toBeNull();
+  expect(familyRowBeforeRename).not.toBeNull();
+  let renameListMineFetches = 0;
+  let releaseRenameListMine!: () => void;
+  const renameListMineGate = new Promise<void>((resolve) => {
+    releaseRenameListMine = resolve;
+  });
+  const beforeRenameListFetches = listFetches;
+  await page.route("**/api/audiences/list_mine", async (route) => {
+    renameListMineFetches += 1;
+    await renameListMineGate;
+    await route.continue();
+  });
   await renameForm.locator('input[name="name"]').fill("BestFriends");
   await renameForm.locator('button:has-text("Rename")').click();
+  try {
+    await expect.poll(() => renameListMineFetches).toBe(1);
+    expect(await friendsRowBeforeRename!.evaluate((el) => el.isConnected)).toBe(
+      true,
+    );
+    expect(await familyRowBeforeRename!.evaluate((el) => el.isConnected)).toBe(
+      true,
+    );
+    await expect(friends).toBeVisible();
+    await expect(family).toBeVisible();
+    await expect(page.getByText("No audiences yet.")).toHaveCount(0);
+    await expect(page.locator(".j-audience-list + p.j-loading")).toHaveCount(0);
+    expect(listFetches).toBe(beforeRenameListFetches + 1);
+  } finally {
+    releaseRenameListMine();
+  }
+  const bestFriends = page.locator(".j-audience-item", {
+    hasText: "BestFriends",
+  });
   await expect(
     page.locator("h3.j-audience-name", { hasText: "BestFriends" }),
   ).toBeVisible();
   await expect(family).toBeVisible();
-  // The rename re-fetched the list (its own scope fired), so the guard above is a live
-  // counter — it stayed at 0 on the toggle because of scoping, not because it never moves.
-  expect(listFetches).toBeGreaterThanOrEqual(1);
-  // #348 (rename in place): the renamed row updated its <h3> to the new name WITHOUT being
-  // remounted — its checklist <ul> is the same DOM node (handle still connected), as is the
-  // unrelated Family one. Keying on audience_id + a reactive name subfield is what updates
-  // the name in place instead of rebuilding the row (which would reflash its members).
+  await page.unroute("**/api/audiences/list_mine");
+  expect(renameListMineFetches).toBe(1);
+  expect(listFetches).toBe(beforeRenameListFetches + 1);
   expect(await friendsChecklist!.evaluate((el) => el.isConnected)).toBe(true);
   expect(await familyChecklist!.evaluate((el) => el.isConnected)).toBe(true);
 
-  // #348 (delete): deleting one audience removes only its row; the others' checklists are
-  // not remounted. Delete "Extras"; Family's checklist node survives.
-  const extras = page.locator(".j-audience-item", { hasText: "Extras" });
+  // #348 (delete): deleting one audience refetches the list too, but the surviving rows must
+  // remain mounted and visible while that read is held.
+  const bestFriendsRowBeforeDelete = await bestFriends.elementHandle();
+  const familyRowBeforeDelete = await family.elementHandle();
+  expect(bestFriendsRowBeforeDelete).not.toBeNull();
+  expect(familyRowBeforeDelete).not.toBeNull();
+  let deleteListMineFetches = 0;
+  let releaseDeleteListMine!: () => void;
+  const deleteListMineGate = new Promise<void>((resolve) => {
+    releaseDeleteListMine = resolve;
+  });
+  const beforeDeleteListFetches = listFetches;
+  await page.route("**/api/audiences/list_mine", async (route) => {
+    deleteListMineFetches += 1;
+    await deleteListMineGate;
+    await route.continue();
+  });
   await extras.locator('button:has-text("Delete")').click();
-  await expect(
-    page.locator(".j-audience-item", { hasText: "Extras" }),
-  ).toHaveCount(0);
+  try {
+    await expect.poll(() => deleteListMineFetches).toBe(1);
+    expect(
+      await bestFriendsRowBeforeDelete!.evaluate((el) => el.isConnected),
+    ).toBe(true);
+    expect(await familyRowBeforeDelete!.evaluate((el) => el.isConnected)).toBe(
+      true,
+    );
+    await expect(bestFriends).toBeVisible();
+    await expect(family).toBeVisible();
+    await expect(page.getByText("No audiences yet.")).toHaveCount(0);
+    await expect(page.locator(".j-audience-list + p.j-loading")).toHaveCount(0);
+    expect(listFetches).toBe(beforeDeleteListFetches + 1);
+  } finally {
+    releaseDeleteListMine();
+  }
+  await expect(extras).toHaveCount(0);
+  await page.unroute("**/api/audiences/list_mine");
+  expect(deleteListMineFetches).toBe(1);
   expect(await familyChecklist!.evaluate((el) => el.isConnected)).toBe(true);
-
   // Success-gating: a FAILED create (duplicate name) must NOT fire the list invalidator,
   // so the list does not re-fetch. Record the count, attempt the dup, assert it's flat.
   const beforeDup = listFetches;
