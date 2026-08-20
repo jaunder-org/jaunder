@@ -321,6 +321,7 @@ fn display_classification_for_variants(
     DisplayClass::TelemetrySafe
 }
 
+#[cfg(test)]
 fn display_classification(type_name: &str, error: &ErrorType, index: &TypeIndex) -> DisplayClass {
     let reachable_key = (type_name.to_string(), error.name.clone());
     let reachable = index
@@ -566,13 +567,63 @@ fn field_type_path(ty: &str) -> String {
     ty.replace(' ', "")
 }
 
-fn error_wraps_external(error: &ErrorType, wrapped_type: &str) -> bool {
+fn variant_wraps_external(variant: &ErrorVariant, wrapped_type: &str) -> bool {
     let wrapped_type = field_type_path(wrapped_type);
-    error.variants.iter().any(|variant| {
-        variant
-            .fields
-            .values()
-            .any(|ty| field_type_path(ty) == wrapped_type)
+    variant
+        .fields
+        .values()
+        .any(|ty| field_type_path(ty) == wrapped_type)
+}
+
+fn reachable_error_variants<'a>(
+    wire_type: &str,
+    error: &'a ErrorType,
+    index: &TypeIndex,
+) -> Vec<&'a ErrorVariant> {
+    let reachable_key = (wire_type.to_string(), error.name.clone());
+    match index
+        .reachable_variants
+        .get(&reachable_key)
+        .filter(|variants| !variants.is_empty())
+    {
+        Some(reachable) => error
+            .variants
+            .iter()
+            .filter(|variant| reachable.contains(&variant.name))
+            .collect(),
+        None => error.variants.iter().collect(),
+    }
+}
+
+fn allowlist_entry_is_live(
+    entry: &AllowedExternalDisplay,
+    inputs: &[WireInput],
+    index: &TypeIndex,
+) -> bool {
+    inputs.iter().any(|input| {
+        if input.ty != entry.wire_type {
+            return false;
+        }
+        let Some(error) = from_str_error_for(&input.ty, index) else {
+            return false;
+        };
+        error.name == entry.error_type
+            && reachable_error_variants(&input.ty, &error, index)
+                .iter()
+                .any(|variant| variant_wraps_external(variant, entry.wrapped_type))
+    })
+}
+
+fn variant_is_allowlisted_external(
+    wire_type: &str,
+    error_name: &str,
+    variant: &ErrorVariant,
+    allowlist: &[AllowedExternalDisplay],
+) -> bool {
+    allowlist.iter().any(|entry| {
+        entry.wire_type == wire_type
+            && entry.error_type == error_name
+            && variant_wraps_external(variant, entry.wrapped_type)
     })
 }
 
@@ -603,10 +654,12 @@ fn validate_allowlist(
                 entry.wire_type, entry.error_type
             ));
         }
-        if !reachable_wire_types.contains(entry.wire_type) {
+        if !reachable_wire_types.contains(entry.wire_type)
+            || !allowlist_entry_is_live(entry, inputs, index)
+        {
             problems.push(format!(
-                "stale allowlist entry for unreachable wire type {}",
-                entry.wire_type
+                "stale allowlist entry for unreachable external display {} -> {}({})",
+                entry.wire_type, entry.error_type, entry.wrapped_type
             ));
         }
         match cargo_lock_version(lockfile, entry.crate_name) {
@@ -631,20 +684,19 @@ fn validate_allowlist(
         let Some(error) = from_str_error_for(&input.ty, index) else {
             continue;
         };
-        let class = display_classification(&input.ty, &error, index);
-        if matches!(class, DisplayClass::TelemetrySafe) {
-            continue;
-        }
-        let allowed = allowlist.iter().any(|entry| {
-            entry.wire_type == input.ty
-                && entry.error_type == error.name
-                && error_wraps_external(&error, entry.wrapped_type)
-        });
-        if !allowed {
-            problems.push(format!(
-                "{} uses unsafe external display {} without allowlist entry",
-                input.ty, error.name
-            ));
+        for variant in reachable_error_variants(&input.ty, &error, index) {
+            let mut singleton = BTreeSet::new();
+            singleton.insert(variant.name.clone());
+            let class = display_classification_for_variants(&error, Some(&singleton));
+            if matches!(class, DisplayClass::TelemetrySafe) {
+                continue;
+            }
+            if !variant_is_allowlisted_external(&input.ty, &error.name, variant, allowlist) {
+                problems.push(format!(
+                    "{} uses unsafe display {}::{} without a matching external allowlist entry",
+                    input.ty, error.name, variant.name
+                ));
+            }
         }
     }
 
@@ -1063,7 +1115,8 @@ mod tests {
         .unwrap_err();
 
         assert!(
-            err.join("\n").contains("without allowlist entry"),
+            err.join("\n")
+                .contains("without a matching external allowlist entry"),
             "{err:?}"
         );
     }
@@ -1110,7 +1163,72 @@ mod tests {
         .unwrap_err()
         .join("\n");
 
-        assert!(err.contains("without allowlist entry"), "{err}");
+        assert!(
+            err.contains("without a matching external allowlist entry"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn allowlist_does_not_cover_unrelated_unsafe_variant_in_same_error_enum() {
+        let sources = common(
+            r#"#[derive(thiserror::Error, Debug)]
+               pub enum InvalidEmail {
+                   #[error(transparent)]
+                   Address(email_address::Error),
+                   #[error("bad {value}")]
+                   BadValue { value: String },
+               }
+               pub struct Email(String);
+               impl std::str::FromStr for Email {
+                   type Err = InvalidEmail;
+                   fn from_str(_: &str) -> Result<Self, Self::Err> {
+                       Err(InvalidEmail::BadValue { value: String::new() })
+                   }
+               }"#,
+        );
+        let index = index_sources(&sources).expect("index");
+        let allowlist = [ALLOWED_EXTERNAL_DISPLAYS[0].clone()];
+        let err = validate_allowlist(
+            &one_input("Email"),
+            &index,
+            &lock_with("email_address", "0.2.9"),
+            sanitized_server_error(),
+            &allowlist,
+        )
+        .unwrap_err()
+        .join("\n");
+
+        assert!(err.contains("InvalidEmail::BadValue"), "{err}");
+    }
+
+    #[test]
+    fn allowlist_is_stale_when_wire_type_uses_different_wrapper() {
+        let sources = common(
+            r#"#[derive(thiserror::Error, Debug)]
+               pub enum InvalidEmail {
+                   #[error(transparent)]
+                   Address(other_crate::Error),
+               }
+               pub struct Email(String);
+               impl std::str::FromStr for Email {
+                   type Err = InvalidEmail;
+                   fn from_str(_: &str) -> Result<Self, Self::Err> { todo!() }
+               }"#,
+        );
+        let index = index_sources(&sources).expect("index");
+        let allowlist = [ALLOWED_EXTERNAL_DISPLAYS[0].clone()];
+        let err = validate_allowlist(
+            &one_input("Email"),
+            &index,
+            &lock_with("email_address", "0.2.9"),
+            sanitized_server_error(),
+            &allowlist,
+        )
+        .unwrap_err()
+        .join("\n");
+
+        assert!(err.contains("stale allowlist entry"), "{err}");
     }
 
     #[test]
