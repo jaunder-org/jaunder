@@ -112,8 +112,8 @@ omits; coverage status must remain independent of timing-dependent attribution.
   `flow_docs` module declaration to `lib.rs`’s inline `mod steps`: the guard
   cannot enter `check` before the corpus exists, and a private unused production
   step is rejected by the workspace lint policy. Derive endpoint paths as
-  `/api/<vertical>/<operation>` from the shared server-fn enumerator; reject zero
-  or multiple flow assignments. Derive mounted patterns from router syntax,
+  `/api/<vertical>/<operation>` from the shared server-fn enumerator; reject
+  zero or multiple flow assignments. Derive mounted patterns from router syntax,
   including both username forms. Validate matrix fragments by the stated
   heading-slug algorithm. Return a failed `StepResult` for invalid declared
   references and endpoint assignment defects; include an informational sorted
@@ -146,7 +146,7 @@ omits; coverage status must remain independent of timing-dependent attribution.
 - Produces: matrix tokens, route tokens, and unique endpoint tokens assigned to
   their owning user journey; required Mermaid diagrams.
 
-- [ ] **Step 1: Author README route map and declarations**
+- [x] **Step 1: Author README route map and declarations**
 
   Write index prose and a single `graph TD` covering every mounted route and
   `<shell>`, grouped into the four approved regions. Add hand-authored
@@ -155,7 +155,7 @@ omits; coverage status must remain independent of timing-dependent attribution.
   including both `/:username` and `/~:username/...`; do not treat
   fallback/protocol routes as journey nodes.
 
-- [ ] **Step 2: Author the seven substantive documents**
+- [x] **Step 2: Author the seven substantive documents**
 
   Write concise docs for shell/boot, authentication, profile/email verification,
   invitation registration, post lifecycle, audiences/subscriptions/visibility,
@@ -165,13 +165,13 @@ omits; coverage status must remain independent of timing-dependent attribution.
   audiences/visibility, and reset; show Browser/Page, server fn, storage, and
   mailer only when they explain the journey.
 
-- [ ] **Step 3: Validate partial-corpus fixtures**
+- [x] **Step 3: Validate partial-corpus fixtures**
 
   Run the Task 1 focused fixture-test command. Expected: PASS for the parser and
   partial-corpus fixtures. The repository corpus intentionally remains
   incomplete until Task 3, so do not run its complete-corpus test in this task.
 
-- [ ] **Step 4: Commit substantive flow docs**
+- [x] **Step 4: Commit substantive flow docs**
 
   Tick this task, run `devtool run -- cargo xtask check`, stage `docs/flows/`,
   and commit `docs: map substantive CSR journeys`.
