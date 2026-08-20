@@ -18,10 +18,13 @@ contract. No runtime metric behavior changes.
 
 ## Review Header
 
-**Scope in:** `host/src/metrics.rs` docs and
-`host::metrics::tests::every_emitter_exports_its_instrument`.  
+**Scope in:** `host/src/metrics.rs` docs,
+`host::metrics::tests::every_emitter_exports_its_instrument`, and the minimal
+`Cargo.lock` h2 patch update required to satisfy the gate's `cargo-deny`
+advisory check.  
 **Scope out:** exporter setup, metric names, enum vocabularies, dashboards,
-async observable gauges, CLI/test-support OTLP capture.
+async observable gauges, CLI/test-support OTLP capture, manifest requirement
+changes, and unrelated dependency updates.
 
 **Tasks:**
 
@@ -38,6 +41,8 @@ async observable gauges, CLI/test-support OTLP capture.
 - `host::metrics` intentionally no-ops without a provider; document ordering
   without implying every process must export.
 - Current `email_send_result` assertions are real coverage and stay untouched.
+- `cargo xtask check --no-test` exposed an h2 advisory in the base lockfile;
+  update only that package so the required `cargo-deny` gate can pass.
 
 ## Global Constraints
 
@@ -48,6 +53,9 @@ async observable gauges, CLI/test-support OTLP capture.
 - Keep exporter setup owned by `server::observability` per ADR-0011 and #345.
 - Keep `host::metrics` native-only by crate structure; do not add a Cargo
   feature gate.
+- If `cargo-deny` flags h2 from the branch base, `cargo update -p h2` is the
+  only allowed dependency change; stage the resulting `Cargo.lock` with the
+  checked metrics tree so the committed tree matches the gate.
 - Use `devtool run -- <cmd>` for all run-and-inspect commands. No `npx`,
   package-manager wrappers, shell pipelines, or `Co-Authored-By` trailers.
 

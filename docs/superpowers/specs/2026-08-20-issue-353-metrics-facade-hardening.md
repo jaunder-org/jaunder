@@ -4,7 +4,9 @@
 **Issue:** #353.  
 **Scope:** `host::metrics` test assertions and the documented `MeterProvider`
 initialization contract. No metric name, attribute value, emitter call site,
-exporter setup, or runtime behavior changes.
+exporter setup, or runtime metrics behavior changes. A `Cargo.lock` h2 patch
+update is allowed only because the per-commit gate's `cargo-deny` advisory check
+failed on the branch base; it is gate hygiene, not part of the metrics design.
 
 ## Context
 
@@ -64,6 +66,15 @@ provider and later exporter setup cannot repair that process.
   by crate structure.
 - Do not make CLI/test-support telemetry writes visible in e2e traces; #769 owns
   that.
+
+## Gate precondition discovered during implementation
+
+`cargo xtask check --no-test` initially failed before the #353 code could be
+committed because `cargo-deny` reported the h2 unbounded empty DATA frames
+advisory in the branch-base lockfile. The implementation may update only h2 in
+`Cargo.lock` to the latest compatible patch release so the required gate can
+certify the metrics change. Do not change manifest requirements or unrelated
+dependencies.
 
 ## Acceptance
 
