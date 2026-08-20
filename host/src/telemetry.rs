@@ -554,8 +554,8 @@ pub fn init_tracing(verbose: bool) -> TelemetryGuard {
     init_tracing_impl(verbose)
 }
 
-/// Install tracing with an extra subscriber layer for tests and return the same
-/// shutdown guard as [`init_tracing`].
+/// Install tracing with a caller-owned extra subscriber layer and return the
+/// same shutdown guard as [`init_tracing`].
 #[must_use]
 pub fn init_tracing_with_layer<L>(verbose: bool, layer: Option<L>) -> TelemetryGuard
 where
@@ -563,6 +563,11 @@ where
 {
     init_tracing_impl_with_layer(verbose, layer)
 }
+
+type MeterShutdownOperation =
+    fn(&opentelemetry_sdk::metrics::SdkMeterProvider) -> opentelemetry_sdk::error::OTelSdkResult;
+type TracerShutdownOperation =
+    fn(&opentelemetry_sdk::trace::SdkTracerProvider) -> opentelemetry_sdk::error::OTelSdkResult;
 
 /// Owns the OTLP providers installed by [`init_tracing`] so a short-lived
 /// process flushes buffered telemetry before exit. The periodic metric reader
@@ -574,11 +579,6 @@ where
 ///
 /// Both fields are `None` when no OTLP endpoint is configured, making the guard
 /// an inert no-op (the common dev/test case).
-type MeterShutdownOperation =
-    fn(&opentelemetry_sdk::metrics::SdkMeterProvider) -> opentelemetry_sdk::error::OTelSdkResult;
-type TracerShutdownOperation =
-    fn(&opentelemetry_sdk::trace::SdkTracerProvider) -> opentelemetry_sdk::error::OTelSdkResult;
-
 pub struct TelemetryGuard {
     meter: Option<opentelemetry_sdk::metrics::SdkMeterProvider>,
     tracer: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
