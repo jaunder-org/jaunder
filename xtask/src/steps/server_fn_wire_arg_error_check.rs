@@ -572,9 +572,10 @@ fn decode_telemetry_is_sanitized(server_error_src: &str) -> bool {
     }) else {
         return false;
     };
-    body.contains("InternalError :: validation")
+    let internal_error_constructors = body.matches("InternalError ::").count();
+    internal_error_constructors == 1
+        && body.contains("InternalError :: validation")
         && !body.contains("validation_source")
-        && !body.contains("InternalError :: masked")
         && !body.contains("value . clone")
         && !body.contains("anyhow :: Error :: new")
 }
@@ -1104,6 +1105,14 @@ mod tests {
            }"#
     }
 
+    fn server_constructor_error() -> &'static str {
+        r#"fn emit_arg_decode_failure(value: &ServerFnErrorErr) {
+               InternalError::validation("invalid request arguments").emit_boundary_failure();
+               InternalError::server(ServerFnErrorErr::Args(value.to_string()))
+                   .emit_boundary_failure();
+           }"#
+    }
+
     fn lock_with(name: &str, version: &str) -> String {
         format!("[[package]]\nname = \"{name}\"\nversion = \"{version}\"\n")
     }
@@ -1308,6 +1317,17 @@ mod tests {
             &index,
             &lock_with("croner", "2.2.0"),
             masked_server_error(),
+            &allowlist,
+        )
+        .unwrap_err();
+
+        assert!(err.join("\n").contains("preserves source"), "{err:?}");
+
+        let err = validate_allowlist(
+            &one_input("BackupSchedule"),
+            &index,
+            &lock_with("croner", "2.2.0"),
+            server_constructor_error(),
             &allowlist,
         )
         .unwrap_err();
