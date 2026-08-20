@@ -36,7 +36,7 @@ broad adoption gate, no central registry, no marker contract system.
 - [x] Task 4 — Tighten AtomPub service and collection cursors
 - [x] Task 5 — Convert media upload size plumbing to `ByteSize`
 - [x] Task 6 — Document deliberately retained primitives
-- [ ] Task 7 — File follow-up issues for design-sized seams
+- [x] Task 7 — File follow-up issues for design-sized seams
 - [ ] Task 8 — Run final gate and prepare for ship
 
 ## Task 1 — Reconstruct and classify remaining primitive seams
@@ -330,6 +330,20 @@ git commit -m "docs(types): explain retained primitive seams"
   - feed cache body;
   - public path/date extension wrappers.
 - Link existing and created issue URLs in this plan under the task notes.
+
+**Task notes**
+
+- Post idempotency key: created
+  https://github.com/jaunder-org/jaunder/issues/1086.
+- Subscriber reference: existing
+  https://github.com/jaunder-org/jaunder/issues/750 covers `SubscriberRef`.
+- Proxy request URL / cached remote media URL boundary: created
+  https://github.com/jaunder-org/jaunder/issues/1088. Existing
+  https://github.com/jaunder-org/jaunder/issues/744 is related host-matching
+  work, not the boundary-type decision.
+- Feed cache body: created https://github.com/jaunder-org/jaunder/issues/1087.
+- Public feed/permalink route parts: created
+  https://github.com/jaunder-org/jaunder/issues/1089.
 
 **Check**
 
