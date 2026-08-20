@@ -49,6 +49,7 @@ mod steps {
     pub mod server_fn_coverage_check;
     pub mod server_fn_registrar_check;
     pub mod server_fn_tracing_check;
+    pub mod server_fn_wire_arg_error_check;
     pub mod sqlx_newtype_bind_check;
     pub mod sqlx_newtype_decode_check;
     pub mod static_checks;
@@ -478,6 +479,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::server_fn_registrar_check::run(&mut result);
             steps::server_fn_tracing_check::run(&mut result);
             steps::server_fn_coverage_check::run(&mut result);
+            steps::server_fn_wire_arg_error_check::run(&mut result);
             steps::traced_context_check::run(&mut result);
             steps::proffered_secret_check::run(&mut result);
             steps::proffered_filename_check::run(&mut result);
@@ -524,6 +526,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             steps::server_fn_registrar_check::run(&mut result);
             steps::server_fn_tracing_check::run(&mut result);
             steps::server_fn_coverage_check::run(&mut result);
+            steps::server_fn_wire_arg_error_check::run(&mut result);
             steps::traced_context_check::run(&mut result);
             steps::proffered_secret_check::run(&mut result);
             steps::proffered_filename_check::run(&mut result);

@@ -31,14 +31,11 @@ pub use host::error::{
 /// (`server/src/observability.rs`), not by a span name — ADR-0011's "identity comes free
 /// from span context" argument does not hold this early.
 ///
-/// **PII: this puts a deserializer's message into `error.source`, which is exported to
-/// trace backends.** It is safe only because a wire-arg newtype's `FromStr::Err`
-/// message never quotes the offending value — the `str_newtype` bridge is
-/// `FromStr(..).map_err(de::Error::custom)`, and those errors interpolate constants
-/// only (e.g. `"password must be at least {MIN_LENGTH} characters"`). ADR-0011 §PII
-/// states that guarantee conditionally: "PII-free **as long as** constructors keep raw
-/// user input out of error messages". Nothing enforces it yet — #846 proposes the gate.
-/// If you add a wire-arg newtype whose error echoes its input, it lands here.
+/// Decode telemetry deliberately keeps the raw deserializer message out of
+/// `error.source`: arg decode happens before the fn body can authenticate the
+/// caller, and `FromStr::Err` text is also user-facing validation feedback. The
+/// returned `WebError::ServerFunction` still carries the framework message for the
+/// requester; only exported telemetry gets the fixed source-free boundary event.
 ///
 /// Note the level: `ErrorClass::Client` logs at DEBUG, so under a production INFO
 /// filter only the `jaunder.errors` counter survives — the event itself is a
@@ -52,10 +49,10 @@ pub(super) fn emit_arg_decode_failure(value: &ServerFnErrorErr) {
     ) {
         return;
     }
-    // `validation_source`, not `validation`: the latter carries no source and would emit
-    // an empty `error.source`, which is the whole diagnostic payload. `ServerFnErrorErr`
-    // is `Clone + thiserror::Error`, so it satisfies the source bound directly.
-    InternalError::validation_source("invalid request arguments", value.clone())
+    // The source-free carrier keeps malformed pre-auth input out of exported
+    // telemetry; `FromServerFnError` still returns `value.to_string()` to the
+    // requester as the ordinary server-function wire error.
+    InternalError::validation("invalid request arguments")
         .with_context("stage", "decode")
         .emit_boundary_failure();
 }
@@ -449,11 +446,15 @@ mod tests {
         let _guard = tracing::subscriber::set_default(subscriber);
 
         let error = WebError::from_server_fn_error(ServerFnErrorErr::Args(
-            "invalid value for `password`: password must be at least 8 characters".into(),
+            "invalid value for `schedule`: submitted-marker-846".into(),
         ));
 
-        // The variant is untouched: the telemetry is purely additive.
+        // The outward wire error is untouched: only telemetry is sanitized.
         assert!(matches!(error, WebError::ServerFunction { .. }));
+        assert!(
+            error.to_string().contains("submitted-marker-846"),
+            "client-facing decode message changed: {error}"
+        );
 
         let recorded = events.lock().expect("field recorder mutex").clone();
         // Select the boundary event by name rather than flattening every recorded
@@ -492,9 +493,11 @@ mod tests {
             get("error.context").contains("decode"),
             "fields: {fields:?}"
         );
-        // The deserializer's message reaches `error.source` — the diagnostic payload.
+        // The raw deserializer message stays out of exported telemetry. Use a unique
+        // submitted marker rather than a safe constant-like validation message: with
+        // source preservation still enabled, this assertion must fail.
         assert!(
-            get("error.source").contains("at least 8 characters"),
+            !get("error.source").contains("submitted-marker-846"),
             "fields: {fields:?}"
         );
         // Pin the event's identity so a refactor cannot quietly emit a different one.
