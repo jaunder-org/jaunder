@@ -105,6 +105,9 @@ pub fn classify_media_open_error(error: io::Error) -> MediaOpenError {
 #[derive(Deserialize)]
 struct RawServeAddress {
     source: MediaSource,
+    // Directory fan-out segments, not domain values: the canonical hash below is
+    // the address, while `p1`/`p2` only mirror its first nibbles to keep filesystem
+    // directories shallow and are rejected if they drift.
     p1: String,
     p2: String,
     hash: ContentHash,

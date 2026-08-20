@@ -35,7 +35,7 @@ broad adoption gate, no central registry, no marker contract system.
 - [x] Task 3 — Convert CLI parse-time complete values
 - [x] Task 4 — Tighten AtomPub service and collection cursors
 - [x] Task 5 — Convert media upload size plumbing to `ByteSize`
-- [ ] Task 6 — Document deliberately retained primitives
+- [x] Task 6 — Document deliberately retained primitives
 - [ ] Task 7 — File follow-up issues for design-sized seams
 - [ ] Task 8 — Run final gate and prepare for ship
 
@@ -299,7 +299,7 @@ git commit -m "fix(media): carry upload sizes as byte values"
 **Commit**
 
 ```bash
-git add web/src/tags/api.rs client/src/storage.rs docs/superpowers/plans/2026-08-20-issue-697-newtype-conversion-closure.md
+git add server/src/media.rs docs/superpowers/plans/2026-08-20-issue-697-newtype-conversion-closure.md
 git commit -m "docs(types): explain retained primitive seams"
 ```
 
