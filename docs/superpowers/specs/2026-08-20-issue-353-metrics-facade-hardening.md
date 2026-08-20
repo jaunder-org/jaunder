@@ -73,6 +73,6 @@ provider and later exporter setup cannot repair that process.
   emits no `outcome` attribute or maps `InvalidCredentials` incorrectly.
 - The test still uses the single in-memory exporter/provider install already
   present in the module.
-- `devtool run -- cargo nextest run -p jaunder host::metrics::tests::every_emitter_exports_its_instrument`
+- `devtool run -- cargo nextest run -p host metrics::tests::every_emitter_exports_its_instrument`
   passes.
 - `devtool run -- cargo xtask check` passes before commit.

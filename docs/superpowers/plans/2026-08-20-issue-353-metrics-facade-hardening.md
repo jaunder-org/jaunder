@@ -152,7 +152,7 @@ Run:
 Expected:
 PASS.
 
-- [ ] **Step 4: Gate and commit**
+- [x] **Step 4: Gate and commit**
 
 Run: `devtool run -- cargo xtask check`  
 Expected: PASS.
@@ -184,7 +184,7 @@ No `Co-Authored-By` trailer.
 - Produces: A fully checked-off plan commit, then validation evidence for that
   exact final HEAD.
 
-- [ ] **Step 1: Confirm Task 2 left only plan checkbox edits**
+- [x] **Step 1: Confirm Task 2 left only plan checkbox edits**
 
 Run: `devtool run -- git status --short`  
 Expected: either no output, or only
@@ -193,12 +193,12 @@ Expected: either no output, or only
 If any source file is dirty, stop and resolve it before validation; do not hide
 source changes in the plan-completion commit.
 
-- [ ] **Step 2: Tick every remaining checkbox**
+- [x] **Step 2: Tick every remaining checkbox**
 
 Edit this plan so every Task 1, Task 2, and Task 3 checkbox is checked
 (`- [x]`). This is bookkeeping only; do not change the approved task content.
 
-- [ ] **Step 3: Gate and commit the final plan state**
+- [x] **Step 3: Gate and commit the final plan state**
 
 Run: `devtool run -- cargo xtask check`  
 Expected: PASS.
