@@ -355,24 +355,35 @@
           }
         );
 
-        # The in-sandbox dev tool (tools/ workspace: devtool + its coverage
-        # path-dep), built as its OWN crane package with deps vendored from
-        # tools/Cargo.lock. The offline coverage sandbox runs it from PATH
-        # (nativeBuildInputs) instead of an in-sandbox `cargo run`, whose deps
-        # would not be vendored. Building the self-contained tools/ workspace
-        # (not the app root) keeps crane's metadata off the app's deps.
-        devtoolSrc = pkgs.lib.cleanSourceWith {
+        # The auxiliary tools workspace is separate from the product workspace
+        # (ADR-0141). Keep its source and cargo artifacts separate from
+        # `commonArgs`/`cargoArtifacts`: `tools/Cargo.lock` owns these deps, while
+        # `xtask/` remains host-only and outside the flake source (ADR-0028).
+        toolsSrc = pkgs.lib.cleanSourceWith {
           src = craneLib.path ./tools;
           filter = craneLib.filterCargoSources;
         };
-        devtoolBin = craneLib.buildPackage {
-          src = devtoolSrc;
-          pname = "devtool";
+        toolsArgs = {
+          src = toolsSrc;
+          pname = "jaunder-tools";
           version = "0.1.0";
-          cargoExtraArgs = "-p devtool";
           strictDeps = true;
-          doCheck = false;
         };
+        toolsCargoArtifacts = craneLib.buildDepsOnly toolsArgs;
+
+        # The in-sandbox dev tool (tools/ workspace: devtool + its coverage and
+        # doctests path-deps). The offline coverage/doctests sandboxes run it
+        # from PATH (nativeBuildInputs) instead of an in-sandbox `cargo run`,
+        # whose deps would not be vendored.
+        devtoolBin = craneLib.buildPackage (
+          toolsArgs
+          // {
+            cargoArtifacts = toolsCargoArtifacts;
+            pname = "devtool";
+            cargoExtraArgs = "-p devtool";
+            doCheck = false;
+          }
+        );
 
         cargo-crap = pkgs.callPackage (
           {
