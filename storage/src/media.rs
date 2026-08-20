@@ -439,7 +439,7 @@ mod tests {
     };
     use common::test_support::{
         parse_byte_size, parse_content_hash, parse_content_type, parse_filename, parse_page_offset,
-        parse_row_limit,
+        parse_post_body, parse_row_limit,
     };
     use rstest::*;
     use rstest_reuse::*;
@@ -704,7 +704,7 @@ mod tests {
         let [user] = seed_users::<1>(&env.state).await;
         let media = seed_media(&env.state, user, "photo.jpg").await;
         let embed = format!("<img src=\"{}\">", media_url_for("photo.jpg"));
-        create_post_via_service(&env.state, user, &embed).await;
+        create_post_via_service(&env.state, user, parse_post_body(&embed)).await;
 
         assert_eq!(
             env.state
@@ -793,14 +793,23 @@ mod tests {
 
         // One reference exists before any delete is attempted, and none is ever removed, so
         // every unforced delete from here on must refuse.
-        create_post_via_service(&env.state, user, &format!("reference 0\n\n{embed}")).await;
+        create_post_via_service(
+            &env.state,
+            user,
+            parse_post_body(&format!("reference 0\n\n{embed}")),
+        )
+        .await;
 
         let writer = tokio::spawn({
             let state = Arc::clone(&env.state);
             async move {
                 for round in 1..=ROUNDS {
-                    create_post_via_service(&state, user, &format!("reference {round}\n\n{embed}"))
-                        .await;
+                    create_post_via_service(
+                        &state,
+                        user,
+                        parse_post_body(&format!("reference {round}\n\n{embed}")),
+                    )
+                    .await;
                 }
             }
         });

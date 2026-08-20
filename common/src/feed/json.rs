@@ -51,6 +51,8 @@ mod tests {
 
     use super::*;
     use crate::ids::PostId;
+    use crate::post_summary::PostSummary;
+    use crate::post_title::PostTitle;
     use crate::render::RenderedHtml;
     use crate::test_support::{parse_post_summary, parse_post_title, parse_url};
 
@@ -66,16 +68,20 @@ mod tests {
         }
     }
 
-    fn item(title: Option<&str>, tags: Vec<&str>) -> FeedItem {
+    fn item(title: Option<PostTitle>, tags: Vec<&str>) -> FeedItem {
         item_with_summary(title, tags, None)
     }
 
-    fn item_with_summary(title: Option<&str>, tags: Vec<&str>, summary: Option<&str>) -> FeedItem {
+    fn item_with_summary(
+        title: Option<PostTitle>,
+        tags: Vec<&str>,
+        summary: Option<PostSummary>,
+    ) -> FeedItem {
         FeedItem {
             id: PostId::from(1),
-            title: title.map(parse_post_title),
+            title,
             permalink: parse_url("https://example.com/~alice/posts/1"),
-            summary: summary.map(parse_post_summary),
+            summary,
             content_html: RenderedHtml::from_trusted("<p>hi</p>"),
             published_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
             updated_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
@@ -127,7 +133,11 @@ mod tests {
     fn includes_summary_when_present() {
         let out = render_json(
             &meta(None, Some("A site")),
-            &[item_with_summary(Some("t"), vec![], Some("a summary"))],
+            &[item_with_summary(
+                Some(parse_post_title("t")),
+                vec![],
+                Some(parse_post_summary("a summary")),
+            )],
         );
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["items"][0]["summary"], "a summary");
@@ -137,11 +147,14 @@ mod tests {
     fn includes_tags_only_when_present() {
         let out = render_json(
             &meta(None, Some("A site")),
-            &[item(Some("t"), vec!["rust"])],
+            &[item(Some(parse_post_title("t")), vec!["rust"])],
         );
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["items"][0]["tags"][0], "rust");
-        let out2 = render_json(&meta(None, Some("A site")), &[item(Some("t"), vec![])]);
+        let out2 = render_json(
+            &meta(None, Some("A site")),
+            &[item(Some(parse_post_title("t")), vec![])],
+        );
         let v2: Value = serde_json::from_str(&out2).unwrap();
         assert!(v2["items"][0].get("tags").is_none());
     }

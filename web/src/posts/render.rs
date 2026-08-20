@@ -18,6 +18,8 @@ use crate::html::Markup;
 use crate::taglist::TagCtx;
 use crate::timeline::render::render_load_more;
 use crate::{avatar, taglist, topbar};
+use common::post_summary::PostSummary;
+use common::post_title::PostTitle;
 use common::render::RenderedHtml;
 use common::seed::{PageSeed, RenderedPost, TagSummary};
 use common::time::UtcInstant;
@@ -102,9 +104,9 @@ pub(crate) fn permalink_article(post: &RenderedPost) -> Markup {
     let ctx = TagCtx::ForUser(post.username.clone());
     render_post_article(&PostView {
         username: &post.username,
-        title: post.title.as_deref(),
+        title: post.title.as_ref(),
         banner: None,
-        summary: post.summary.as_deref(),
+        summary: post.summary.as_ref(),
         rendered_html: &post.rendered_html,
         time: &format_post_time(post.display_time()),
         permalink: post.permalink.as_deref().unwrap_or_default(),
@@ -122,9 +124,9 @@ fn render_posts(posts: &[RenderedPost], tag_ctx: &TagCtx) -> Markup {
             @let time = format_post_time(post.display_time());
             (render_post_article(&PostView {
                 username: &post.username,
-                title: post.title.as_deref(),
+                title: post.title.as_ref(),
                 banner: None,
-                summary: post.summary.as_deref(),
+                summary: post.summary.as_ref(),
                 rendered_html: &post.rendered_html,
                 time: &time,
                 permalink: post.permalink.as_deref().unwrap_or_default(),
@@ -139,9 +141,9 @@ fn render_posts(posts: &[RenderedPost], tag_ctx: &TagCtx) -> Markup {
 /// is already formatted (see [`format_post_time`]).
 pub(crate) struct PostView<'a> {
     pub username: &'a Username,
-    pub title: Option<&'a str>,
+    pub title: Option<&'a PostTitle>,
     pub banner: Option<&'a str>,
-    pub summary: Option<&'a str>,
+    pub summary: Option<&'a PostSummary>,
     pub rendered_html: &'a RenderedHtml,
     pub time: &'a str,
     pub permalink: &'a str,
@@ -313,7 +315,9 @@ mod tests {
     use super::test_fixtures::{one_post_page, sample_post, sample_summary};
     use super::*;
     use common::seed::TimelinePage;
-    use common::test_support::{parse_username, parse_utc_instant};
+    use common::test_support::{
+        parse_post_summary, parse_post_title, parse_username, parse_utc_instant,
+    };
 
     #[test]
     fn format_post_time_includes_time_portion() {
@@ -342,11 +346,12 @@ mod tests {
         // render_post_inner wraps. render_post_content is viewer-independent, so the
         // authed re-render cannot diverge from the paint — no localized flash.
         let ctx = TagCtx::ForUser(parse_username("alice"));
+        let title = parse_post_title("T");
         let author = parse_username("alice");
         let body = RenderedHtml::from_trusted("<p>b</p>");
         let view = PostView {
             username: &author,
-            title: Some("T"),
+            title: Some(&title),
             banner: None,
             summary: None,
             rendered_html: &body,
@@ -557,11 +562,12 @@ mod tests {
         let ctx = TagCtx::SiteWide;
         let author = parse_username("bob");
         let body = RenderedHtml::from_trusted("<p>b</p>");
+        let summary = parse_post_summary("An excerpt");
         let view = PostView {
             username: &author,
             title: None,
             banner: Some("Draft - visible only to you"),
-            summary: Some("An excerpt"),
+            summary: Some(&summary),
             rendered_html: &body,
             time: "2026-01-01 00:00",
             permalink: "",
@@ -584,9 +590,10 @@ mod tests {
         let ctx = TagCtx::SiteWide;
         let author = parse_username("bob");
         let body = RenderedHtml::from_trusted("<p>b</p>");
+        let title = parse_post_title("T");
         let view = PostView {
             username: &author,
-            title: Some("T"),
+            title: Some(&title),
             banner: None,
             summary: None,
             rendered_html: &body,

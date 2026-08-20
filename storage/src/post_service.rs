@@ -199,8 +199,6 @@ impl PublishUpdate {
 
 /// Raw, front-end-supplied inputs to [`perform_post_update`].
 ///
-/// Grouping these into a struct keeps the easy-to-transpose pair
-/// (`title: Option<&str>` / `slug_override: Option<&Slug>`) named at every call site.
 pub struct PostUpdate<'a> {
     /// Post being edited.
     pub post_id: PostId,
@@ -209,7 +207,7 @@ pub struct PostUpdate<'a> {
     /// Raw post body in `format`.
     pub body: PostBody,
     /// Explicit title, or `None` to derive one from the body.
-    pub title: Option<&'a str>,
+    pub title: Option<&'a PostTitle>,
     /// Markup format of `body`.
     pub format: PostFormat,
     /// Explicit slug (already validated at the wire/CLI boundary), or `None` to
@@ -363,15 +361,13 @@ pub fn candidate_slug(slug_seed: &Slug, attempt: usize) -> Result<Slug, InvalidS
 
 /// Raw, front-end-supplied inputs to [`perform_post_creation`].
 ///
-/// Grouping these into a struct keeps the easy-to-transpose pair
-/// (`title: Option<&str>` / `slug_override: Option<&Slug>`) named at every call site.
 pub struct PostCreation<'a> {
     /// Author of the new post.
     pub user_id: UserId,
     /// Raw post body in `format`.
     pub body: PostBody,
     /// Explicit title, or `None` to derive one from the body.
-    pub title: Option<&'a str>,
+    pub title: Option<&'a PostTitle>,
     /// Markup format of `body`.
     pub format: PostFormat,
     /// Explicit slug (already validated at the wire/CLI boundary), or `None` to
@@ -486,7 +482,7 @@ pub async fn perform_post_creation(
 mod tests {
     use super::*;
     use crate::test_support::{Backend, SeedUser, backends};
-    use common::test_support::{parse_post_body, parse_row_limit, parse_slug};
+    use common::test_support::{parse_post_body, parse_post_title, parse_row_limit, parse_slug};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -534,12 +530,13 @@ mod tests {
         // nobody else. Every other create test targets Public, so this is the
         // only one that can observe that the post-create re-read resolves *as
         // the author* rather than incidentally as an anonymous reader.
+        let title = parse_post_title("Private Note");
         let record = perform_post_creation(
             storage,
             PostCreation {
                 user_id,
                 body: parse_post_body("Private note."),
-                title: Some("Private Note"),
+                title: Some(&title),
                 format: PostFormat::Markdown,
                 slug_override: None,
                 published_at: None,
@@ -577,12 +574,13 @@ mod tests {
         let storage = &*env.state.posts;
         // The body has no heading, so any title must come from the explicit arg,
         // which also seeds the slug.
+        let title = parse_post_title("Explicit Title");
         let record = perform_post_creation(
             storage,
             PostCreation {
                 user_id,
                 body: parse_post_body("Body without a heading."),
-                title: Some("Explicit Title"),
+                title: Some(&title),
                 format: PostFormat::Markdown,
                 slug_override: None,
                 published_at: None,
@@ -1127,18 +1125,14 @@ mod tests {
 
     /// Builds a minimal public Markdown [`PostCreation`] carrying `key`, so the
     /// dedup tests vary only the user, body, and key.
-    fn creation_with_key<'a>(
-        user_id: UserId,
-        body: &str,
-        key: Option<&'a str>,
-    ) -> PostCreation<'a> {
+    fn creation_with_key(user_id: UserId, body: PostBody, key: Option<&str>) -> PostCreation<'_> {
         PostCreation {
             user_id,
-            body: parse_post_body(body),
+            body,
             title: None,
             format: PostFormat::Markdown,
             slug_override: None,
-            published_at: None,
+            published_at: Some(Utc::now()),
             max_attempts: 100,
             summary: None,
             audiences: vec![AudienceTarget::Public],
@@ -1153,16 +1147,18 @@ mod tests {
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let storage = &*env.state.posts;
 
-        let first =
-            perform_post_creation(storage, creation_with_key(user_id, "First body", Some("k")))
-                .await
-                .unwrap();
+        let first = perform_post_creation(
+            storage,
+            creation_with_key(user_id, parse_post_body("First body"), Some("k")),
+        )
+        .await
+        .unwrap();
 
         // A second create with the same (user, key) is a duplicate: the DB unique
         // constraint fires in the create transaction, rolling the whole thing back.
         let err = perform_post_creation(
             storage,
-            creation_with_key(user_id, "Second body", Some("k")),
+            creation_with_key(user_id, parse_post_body("Second body"), Some("k")),
         )
         .await
         .unwrap_err();
@@ -1198,7 +1194,9 @@ mod tests {
             storage,
             creation_with_key(
                 user_id,
-                "Hello\n\n<script>alert(1)</script>\n\n<img src=\"x\" onerror=\"alert(1)\">",
+                parse_post_body(
+                    "Hello\n\n<script>alert(1)</script>\n\n<img src=\"x\" onerror=\"alert(1)\">",
+                ),
                 None,
             ),
         )
@@ -1226,9 +1224,12 @@ mod tests {
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let storage = &*env.state.posts;
 
-        let record = perform_post_creation(storage, creation_with_key(user_id, "Body", Some("k")))
-            .await
-            .unwrap();
+        let record = perform_post_creation(
+            storage,
+            creation_with_key(user_id, parse_post_body("Body"), Some("k")),
+        )
+        .await
+        .unwrap();
 
         let mapped = storage
             .post_id_for_idempotency_key(user_id, "k")
@@ -1252,12 +1253,18 @@ mod tests {
         let storage = &*env.state.posts;
 
         // The same key string from two users creates two independent posts.
-        let post_a = perform_post_creation(storage, creation_with_key(user_a, "A body", Some("k")))
-            .await
-            .unwrap();
-        let post_b = perform_post_creation(storage, creation_with_key(user_b, "B body", Some("k")))
-            .await
-            .unwrap();
+        let post_a = perform_post_creation(
+            storage,
+            creation_with_key(user_a, parse_post_body("A body"), Some("k")),
+        )
+        .await
+        .unwrap();
+        let post_b = perform_post_creation(
+            storage,
+            creation_with_key(user_b, parse_post_body("B body"), Some("k")),
+        )
+        .await
+        .unwrap();
         assert_ne!(post_a.post_id, post_b.post_id);
 
         assert_eq!(

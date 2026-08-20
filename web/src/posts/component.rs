@@ -173,9 +173,9 @@ pub fn PostDisplay<'a>(
     // and reintroduce a flash. The action column is layered on additively.
     let view = crate::posts::render::PostView {
         username: &post.username,
-        title: post.title.as_deref(),
+        title: post.title.as_ref(),
         banner,
-        summary: post.summary.as_deref(),
+        summary: post.summary.as_ref(),
         rendered_html: &post.rendered_html,
         time: &time_label,
         permalink: post.permalink.as_deref().unwrap_or_default(),
