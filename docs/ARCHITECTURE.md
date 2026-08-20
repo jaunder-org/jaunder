@@ -1219,11 +1219,13 @@ how-to lives in [observability.md](observability.md).
 The backend emits spans via `tracing` + `tracing-opentelemetry`; shared
 host-process setup lives in `host::telemetry`
 ([ADR-0011](adr/0011-unified-observability.md),
-[ADR-0058](adr/0058-host-crate-layering.md)). `server::observability` owns
-server-scoped HTTP tracing and e2e diagnostics. `host::telemetry::init_tracing`
-installs the OTLP tracer only when `JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT`
-(fallback `OTEL_EXPORTER_OTLP_ENDPOINT`) is set; with no endpoint every emit is
-a no-op, and exporter-setup failure is non-fatal. `with_http_observability`
+[ADR-0058](adr/0058-host-crate-layering.md)). The server, production CLI
+commands, and `test-support` all hold the same `host::telemetry` guard for
+process-wide OTLP setup and shutdown. `server::observability` owns server-scoped
+HTTP tracing and e2e diagnostics. `host::telemetry::init_tracing` installs the
+OTLP tracer only when `JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT` (fallback
+`OTEL_EXPORTER_OTLP_ENDPOINT`) is set; with no endpoint every emit is a no-op,
+and exporter-setup failure is non-fatal. `with_http_observability`
 (`server/src/observability.rs`) layers the per-request tracing span onto the
 router, together with a `tower-http` `x-request-id` that it mints when absent
 and propagates onto the response. Inbound W3C `traceparent` headers are

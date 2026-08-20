@@ -6,11 +6,12 @@ processes, and end-to-end test runner.
 ## Backend
 
 - Backend spans are produced via `tracing` + OpenTelemetry. Shared host-process
-  OTLP setup lives in `host::telemetry`; server-scoped HTTP spans and e2e
-  diagnostics stay in `server::observability`.
-- In e2e VM checks, the running server, `jaunder site-config set` seed steps,
-  and the `test-support` seed binary export to the in-VM collector. The
-  collector writes under the capture-dir contract (#332):
+  OTLP setup and shutdown live in `host::telemetry`; the server, production CLI
+  commands, and `test-support` all hold the same guard. Server-scoped HTTP spans
+  and e2e diagnostics stay in `server::observability`.
+- In e2e VM checks, the running server, production `jaunder site-config set`
+  seed steps, and the `test-support` seed binary export to the in-VM collector.
+  The collector writes under the capture-dir contract (#332):
   - `/var/lib/jaunder/capture/otel-traces.jsonl` (inside the VM)
   - lifted per combo inside `capture-<backend>.tar.gz` (the same bundle that
     carries `diag.log` and the mail/websub JSONL — see below)
