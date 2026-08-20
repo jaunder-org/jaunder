@@ -189,7 +189,7 @@ Precommit reconciliation contract:
 - Consumes existing `git::output`, `git::run`,
   `crate::test_support::{commit, git_ok, write}`, and `crate::StepResult`.
 
-- [ ] **Step 1: Write parser unit tests**
+- [x] **Step 1: Write parser unit tests**
 
 Add these tests under `xtask/src/git.rs`'s existing `#[cfg(test)] mod tests`:
 
@@ -215,7 +215,7 @@ fn precommit_status_parser_marks_delete_and_rename_unsafe() {
 }
 ```
 
-- [ ] **Step 2: Run parser tests and verify they fail**
+- [x] **Step 2: Run parser tests and verify they fail**
 
 Run:
 
@@ -225,7 +225,7 @@ cargo nextest run --manifest-path xtask/Cargo.toml precommit_status_parser
 
 Expected: FAIL because the new parser/types do not exist.
 
-- [ ] **Step 3: Implement parser/types**
+- [x] **Step 3: Implement parser/types**
 
 Add the four structs and `parse_status_snapshot`/`status_snapshot` exactly as in
 `Interfaces and contracts`. Implementation detail that tests cannot fully pin:
@@ -237,7 +237,7 @@ status-column `D` or `R` as `delete_or_rename`. `status_snapshot` calls
 fills `worktree_fingerprint` for each tracked, non-delete/rename path with
 `git hash-object -- <path>`.
 
-- [ ] **Step 4: Run parser tests and verify they pass**
+- [x] **Step 4: Run parser tests and verify they pass**
 
 Run:
 
@@ -247,7 +247,7 @@ cargo nextest run --manifest-path xtask/Cargo.toml precommit_status_parser
 
 Expected: PASS.
 
-- [ ] **Step 5: Write reconciliation unit tests**
+- [x] **Step 5: Write reconciliation unit tests**
 
 Add these pure-plan tests. Use a small local helper in the test module to set
 `worktree_fingerprint` values without invoking Git:
@@ -336,7 +336,7 @@ fn precommit_stage_plan_preserves_delete_recreate_as_delete_rename() {
 }
 ```
 
-- [ ] **Step 6: Run reconciliation tests and verify they fail**
+- [x] **Step 6: Run reconciliation tests and verify they fail**
 
 Run:
 
@@ -346,14 +346,14 @@ cargo nextest run --manifest-path xtask/Cargo.toml precommit_stage_plan
 
 Expected: FAIL because `precommit_stage_plan` is not implemented.
 
-- [ ] **Step 7: Implement reconciliation**
+- [x] **Step 7: Implement reconciliation**
 
 Implement `precommit_stage_plan` exactly to the contract above. Compare the
 `before` and `after` snapshots by path and by `worktree_fingerprint`, not just
 by status class. Sort `stage_paths` and `failures` by path for deterministic
 output.
 
-- [ ] **Step 8: Run reconciliation tests and verify they pass**
+- [x] **Step 8: Run reconciliation tests and verify they pass**
 
 Run:
 
@@ -363,7 +363,7 @@ cargo nextest run --manifest-path xtask/Cargo.toml precommit_stage_plan
 
 Expected: PASS.
 
-- [ ] **Step 9: Write executable Git fixture tests**
+- [x] **Step 9: Write executable Git fixture tests**
 
 Add fixture tests that call `status_snapshot`, `precommit_stage_plan`, and
 `apply_precommit_stage_plan` against real temp repos:
@@ -467,7 +467,7 @@ fn precommit_apply_refuses_new_file_inside_preexisting_untracked_dir() {
 }
 ```
 
-- [ ] **Step 10: Run fixture tests and verify they fail**
+- [x] **Step 10: Run fixture tests and verify they fail**
 
 Run:
 
@@ -477,13 +477,13 @@ cargo nextest run --manifest-path xtask/Cargo.toml precommit_apply
 
 Expected: FAIL because `apply_precommit_stage_plan` is not implemented.
 
-- [ ] **Step 11: Implement `apply_precommit_stage_plan`**
+- [x] **Step 11: Implement `apply_precommit_stage_plan`**
 
 Implement the exact `StepResult` contract. Use
 `git::run(dir, &["add", "--", path.as_str()])` or an equivalent helper that
 includes `--`. Never call `git add .` or `git add -A`.
 
-- [ ] **Step 12: Run all Git policy tests and verify they pass**
+- [x] **Step 12: Run all Git policy tests and verify they pass**
 
 Run:
 
@@ -493,7 +493,7 @@ cargo nextest run --manifest-path xtask/Cargo.toml precommit
 
 Expected: PASS.
 
-- [ ] **Step 13: Run the per-commit gate and commit**
+- [x] **Step 13: Run the per-commit gate and commit**
 
 Run:
 
