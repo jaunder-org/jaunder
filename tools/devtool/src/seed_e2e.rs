@@ -30,15 +30,14 @@ const TEST_SUPPORT_SEED_PROCESS: &str = "e2e.seed.test-support";
 const SEED_RUST_LOG: &str =
     "jaunder=warn,host=warn,web=warn,common=warn,tower_http=warn,sqlx=warn,storage=info";
 
-/// The canonical fixture invocations as `(bin, args, fatal)`. `fatal` is
-/// currently always true — the tuple shape keeps a future non-fatal step a data
-/// change rather than a control-flow change. The `site_config` steps run
-/// **first**, through the shipped `jaunder` binary, so a wrong `--jaunder-bin`
-/// (e.g. a cheap-kdf build that fail-closes) aborts on an empty DB rather than
-/// after the users are created. Pure, so it is unit-tested directly.
-fn seed_invocations() -> Vec<(SeedBin, Vec<String>, bool)> {
-    let step = |bin: SeedBin, xs: &[&str]| -> (SeedBin, Vec<String>, bool) {
-        (bin, xs.iter().map(|x| (*x).to_owned()).collect(), true)
+/// The canonical fixture invocations as `(bin, args)`. The `site_config` steps
+/// run **first**, through the shipped `jaunder` binary, so a wrong
+/// `--jaunder-bin` (e.g. a cheap-kdf build that fail-closes) aborts on an empty
+/// DB rather than after the users are created. Pure, so it is unit-tested
+/// directly.
+fn seed_invocations() -> Vec<(SeedBin, Vec<String>)> {
+    let step = |bin: SeedBin, xs: &[&str]| -> (SeedBin, Vec<String>) {
+        (bin, xs.iter().map(|x| (*x).to_owned()).collect())
     };
     let ts = |xs: &[&str]| step(SeedBin::TestSupport, xs);
     let jaunder = |xs: &[&str]| step(SeedBin::Jaunder, xs);
@@ -98,7 +97,7 @@ fn child_env(db: &str, bin: SeedBin) -> [(&'static str, &str); 4] {
 /// (`test_support_bin` or `jaunder_bin`) with the DB and OTLP endpoint passed to
 /// every child process. Fatal on the first non-zero exit; the bail message names
 pub fn run(db: &str, test_support_bin: &Path, jaunder_bin: &Path) -> anyhow::Result<()> {
-    for (bin, args, _fatal) in seed_invocations() {
+    for (bin, args) in seed_invocations() {
         let path = match bin {
             SeedBin::TestSupport => test_support_bin,
             SeedBin::Jaunder => jaunder_bin,
@@ -130,10 +129,7 @@ mod tests {
         let inv = seed_invocations();
         let as_tagged: Vec<(SeedBin, Vec<&str>)> = inv
             .iter()
-            .map(|(bin, args, fatal)| {
-                assert!(*fatal, "all e2e seed steps are fatal against a fresh DB");
-                (*bin, args.iter().map(String::as_str).collect())
-            })
+            .map(|(bin, args)| (*bin, args.iter().map(String::as_str).collect()))
             .collect();
         assert_eq!(
             as_tagged,

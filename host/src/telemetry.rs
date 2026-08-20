@@ -1,3 +1,12 @@
+//! Shared host-process telemetry setup and shutdown.
+//!
+//! This module owns the OpenTelemetry providers used by native binaries that
+//! write application state: `jaunder serve`, one-shot `jaunder` CLI commands,
+//! and `test-support`. It installs tracing/log/metric layers when an OTLP
+//! endpoint is configured, keeps setup failures non-fatal, and returns a
+//! [`TelemetryGuard`] whose drop path flushes short-lived process telemetry
+//! before exit. Server-only request diagnostics stay in `server::observability`.
+
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
