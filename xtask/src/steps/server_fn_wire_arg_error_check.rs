@@ -729,9 +729,14 @@ fn validate_allowlist(
                 continue;
             }
             if !variant_is_allowlisted_external(&input.ty, &error.name, variant, allowlist) {
+                let field_path = if input.field_path.is_empty() {
+                    "<root>".to_string()
+                } else {
+                    input.field_path.join(".")
+                };
                 problems.push(format!(
-                    "{} uses unsafe display {}::{} without a matching external allowlist entry",
-                    input.ty, error.name, variant.name
+                    "server_fn={} root={} field_path={} type={} uses unsafe display {}::{} without a matching external allowlist entry",
+                    input.server_fn, input.root, field_path, input.ty, error.name, variant.name
                 ));
             }
         }
@@ -1156,6 +1161,15 @@ mod tests {
         }]
     }
 
+    fn nested_input(ty: &str) -> Vec<WireInput> {
+        vec![WireInput {
+            server_fn: "save_settings".to_string(),
+            root: "config".to_string(),
+            field_path: vec!["backup".to_string(), "schedule".to_string()],
+            ty: ty.to_string(),
+        }]
+    }
+
     #[test]
     fn external_wrapper_fails_without_allowlist_entry() {
         let sources = external_wrapper_sources();
@@ -1174,6 +1188,25 @@ mod tests {
                 .contains("without a matching external allowlist entry"),
             "{err:?}"
         );
+    }
+
+    #[test]
+    fn unsafe_display_failure_names_server_root_and_field_path() {
+        let sources = external_wrapper_sources();
+        let index = index_sources(&sources).expect("index");
+        let err = validate_allowlist(
+            &nested_input("Email"),
+            &index,
+            &lock_with("email_address", "0.2.9"),
+            sanitized_server_error(),
+            &[],
+        )
+        .unwrap_err()
+        .join("\n");
+
+        assert!(err.contains("server_fn=save_settings"), "{err}");
+        assert!(err.contains("root=config"), "{err}");
+        assert!(err.contains("field_path=backup.schedule"), "{err}");
     }
 
     #[test]
