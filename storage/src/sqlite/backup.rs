@@ -233,6 +233,10 @@ fn insert_sql(table: &str, columns: &[String]) -> String {
     )
 }
 
+/// Binds backup NDJSON cell values, not domain values. The backup format is a
+/// table-shaped wire snapshot; each column's domain type re-enters through the
+/// live schema on restore, so this generic JSON bridge is intentionally outside
+/// the ADR-0063 newtype boundary.
 fn bind_json_value<'q>(
     query: sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>>,
     value: &serde_json::Value,

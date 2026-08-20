@@ -192,6 +192,15 @@ async fn collection_paging_emits_next_link(#[case] backend: Backend) {
         body.contains("updated_before="),
         "next link lacks cursor: {body}"
     );
+    let updated_before = body
+        .split("updated_before=")
+        .nth(1)
+        .and_then(|tail| tail.split("&amp;id_before=").next())
+        .expect("next link exposes updated_before");
+    assert!(
+        updated_before.ends_with('Z'),
+        "next link cursor should use canonical UTC spelling: {body}"
+    );
     assert_eq!(
         body.matches("<entry").count(),
         1,
