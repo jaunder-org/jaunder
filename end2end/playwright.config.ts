@@ -65,10 +65,11 @@ export default defineConfig({
     ...(traceParent ? { extraHTTPHeaders: { traceparent: traceParent } } : {}),
   },
   // admin-site and invite mutate global site-config singletons (site.title/base_url;
-  // site.registration_policy, #433), so they must not overlap each other or specs
-  // that read those globals (ADR-0039). Each gated browser runs its zero-retry visual
-  // contracts first, the parallel ordinary tests second, and the single-worker admin
-  // tests last. Reciprocal tag filters keep each behavioral test in exactly one
+  // site.registration_policy, #433).  Playwright's `fullyParallel: false` is
+  // only intra-file, so the mutating files live in dependent projects to prevent
+  // cross-file overlap under workers=2. Each gated browser runs its zero-retry
+  // visual contracts first, the parallel ordinary tests second, then admin-site,
+  // then invite. Reciprocal tag filters keep each behavioral test in exactly one
   // project. At workers=1 the ordinary/admin serialization is inert. WebKit is
   // host-only and excludes visual tests.
   projects: [
@@ -93,12 +94,23 @@ export default defineConfig({
       },
     },
     {
-      name: "chromium-admin",
-      testMatch: /(admin-site|invite)\.spec\.ts/,
+      name: "chromium-admin-site",
+      testMatch: /admin-site\.spec\.ts/,
       grepInvert: visualTag,
       fullyParallel: false,
       workers: 1,
       dependencies: ["chromium"],
+      use: {
+        ...devices["Desktop Chrome"],
+        launchOptions: chromiumLaunchOptions,
+      },
+    },
+    {
+      name: "chromium-admin",
+      testMatch: /invite\.spec\.ts/,
+      grepInvert: visualTag,
+      fullyParallel: false,
+      dependencies: ["chromium-admin-site"],
       use: {
         ...devices["Desktop Chrome"],
         launchOptions: chromiumLaunchOptions,
@@ -125,12 +137,23 @@ export default defineConfig({
       },
     },
     {
-      name: "firefox-admin",
-      testMatch: /(admin-site|invite)\.spec\.ts/,
+      name: "firefox-admin-site",
+      testMatch: /admin-site\.spec\.ts/,
       grepInvert: visualTag,
       fullyParallel: false,
       workers: 1,
       dependencies: ["firefox"],
+      use: {
+        ...devices["Desktop Firefox"],
+        launchOptions: firefoxLaunchOptions,
+      },
+    },
+    {
+      name: "firefox-admin",
+      testMatch: /invite\.spec\.ts/,
+      grepInvert: visualTag,
+      fullyParallel: false,
+      dependencies: ["firefox-admin-site"],
       use: {
         ...devices["Desktop Firefox"],
         launchOptions: firefoxLaunchOptions,
