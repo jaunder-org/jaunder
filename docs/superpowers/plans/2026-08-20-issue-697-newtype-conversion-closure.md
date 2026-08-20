@@ -37,7 +37,7 @@ broad adoption gate, no central registry, no marker contract system.
 - [x] Task 5 — Convert media upload size plumbing to `ByteSize`
 - [x] Task 6 — Document deliberately retained primitives
 - [x] Task 7 — File follow-up issues for design-sized seams
-- [ ] Task 8 — Run final gate and prepare for ship
+- [x] Task 8 — Run final gate and prepare for ship
 
 ## Task 1 — Reconstruct and classify remaining primitive seams
 
