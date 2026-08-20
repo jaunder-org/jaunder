@@ -362,7 +362,7 @@ AllowedExternalDisplay {
 
 **Steps:**
 
-- [ ] Add failing tests for allowlist and sanitization hygiene:
+- [x] Add failing tests for allowlist and sanitization hygiene:
   - `InvalidEmail(email_address::Error)`-like external wrapper fails without an
     allowlist entry;
   - telemetry-safe matching allowlist with nonblank reason and matching lockfile
@@ -386,13 +386,13 @@ devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml server_fn_wire
 
 Expected: FAIL before allowlist/version/sanitization checks are implemented.
 
-- [ ] Implement Cargo.lock version extraction for the small allowlist check.
+- [x] Implement Cargo.lock version extraction for the small allowlist check.
       Keep it deterministic and unit-testable with fixture lockfile text.
 
-- [ ] Implement the decode telemetry sanitization check over
+- [x] Implement the decode telemetry sanitization check over
       `web/src/error/server.rs`.
 
-- [ ] Add the `Email` allowlist entry with the current lockfile version `0.2.9`
+- [x] Add the `Email` allowlist entry with the current lockfile version `0.2.9`
       and the `BackupSchedule` allowlist entry with the current lockfile version
       `2.2.0`.
 
@@ -404,7 +404,7 @@ devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml server_fn_wire
 
 Expected: PASS.
 
-- [ ] Tick this task checkbox, then run the commit gate.
+- [x] Tick this task checkbox, then run the commit gate.
 
 Run:
 

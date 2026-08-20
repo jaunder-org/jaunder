@@ -91,7 +91,7 @@ fn fields_by_name(fields: &syn::Fields) -> BTreeMap<String, String> {
             .filter_map(|field| {
                 Some((
                     field.ident.as_ref()?.to_string(),
-                    type_name(&field.ty).unwrap_or_else(|| field.ty.to_token_stream().to_string()),
+                    field.ty.to_token_stream().to_string().replace(' ', ""),
                 ))
             })
             .collect(),
@@ -102,7 +102,7 @@ fn fields_by_name(fields: &syn::Fields) -> BTreeMap<String, String> {
             .map(|(index, field)| {
                 (
                     index.to_string(),
-                    type_name(&field.ty).unwrap_or_else(|| field.ty.to_token_stream().to_string()),
+                    field.ty.to_token_stream().to_string().replace(' ', ""),
                 )
             })
             .collect(),
@@ -487,6 +487,172 @@ fn wire_inputs(
     Ok(out)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExternalDisplayCategory {
+    TelemetrySafe,
+    UserFacingOnly,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AllowedExternalDisplay {
+    wire_type: &'static str,
+    error_type: &'static str,
+    wrapped_type: &'static str,
+    crate_name: &'static str,
+    crate_version: &'static str,
+    category: ExternalDisplayCategory,
+    reason: &'static str,
+}
+
+const ALLOWED_EXTERNAL_DISPLAYS: &[AllowedExternalDisplay] = &[
+    AllowedExternalDisplay {
+        wire_type: "Email",
+        error_type: "InvalidEmail",
+        wrapped_type: "email_address::Error",
+        crate_name: "email_address",
+        crate_version: "0.2.9",
+        category: ExternalDisplayCategory::TelemetrySafe,
+        reason: "email_address 0.2.9 Error is a unit-variant enum whose Display emits literals and constants only; re-review on version change (#846)",
+    },
+    AllowedExternalDisplay {
+        wire_type: "BackupSchedule",
+        error_type: "InvalidBackupSchedule",
+        wrapped_type: "croner::errors::CronError",
+        crate_name: "croner",
+        crate_version: "2.2.0",
+        category: ExternalDisplayCategory::UserFacingOnly,
+        reason: "croner's detailed schedule parse message is useful user feedback, but decode telemetry is source-sanitized; re-review on croner version change (#846)",
+    },
+];
+
+fn cargo_lock_version(lockfile: &str, crate_name: &str) -> Option<String> {
+    let mut in_package = false;
+    let mut current_name = None;
+    for line in lockfile.lines().map(str::trim) {
+        if line == "[[package]]" {
+            in_package = true;
+            current_name = None;
+            continue;
+        }
+        if !in_package {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("name = ") {
+            current_name = Some(value.trim_matches('"').to_string());
+            continue;
+        }
+        if current_name.as_deref() == Some(crate_name)
+            && let Some(value) = line.strip_prefix("version = ")
+        {
+            return Some(value.trim_matches('"').to_string());
+        }
+    }
+    None
+}
+
+fn decode_telemetry_is_sanitized(server_error_src: &str) -> bool {
+    let Some(start) = server_error_src.find("emit_arg_decode_failure") else {
+        return false;
+    };
+    let rest = &server_error_src[start..];
+    let end = rest.find("///").unwrap_or(rest.len());
+    let body = &rest[..end];
+    body.contains("InternalError::validation(") && !body.contains("validation_source")
+}
+
+fn field_type_path(ty: &str) -> String {
+    ty.replace(' ', "")
+}
+
+fn error_wraps_external(error: &ErrorType, wrapped_type: &str) -> bool {
+    let wrapped_type = field_type_path(wrapped_type);
+    error.variants.iter().any(|variant| {
+        variant
+            .fields
+            .values()
+            .any(|ty| field_type_path(ty) == wrapped_type)
+    })
+}
+
+fn validate_allowlist(
+    inputs: &[WireInput],
+    index: &TypeIndex,
+    lockfile: &str,
+    server_error_src: &str,
+    allowlist: &[AllowedExternalDisplay],
+) -> Result<(), Vec<String>> {
+    let mut problems = Vec::new();
+    let reachable_wire_types = inputs
+        .iter()
+        .map(|input| input.ty.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut seen = BTreeSet::new();
+    for entry in allowlist {
+        let key = (entry.wire_type, entry.error_type, entry.wrapped_type);
+        if !seen.insert(key) {
+            problems.push(format!(
+                "duplicate allowlist entry for {} -> {}",
+                entry.wire_type, entry.error_type
+            ));
+        }
+        if entry.reason.trim().is_empty() {
+            problems.push(format!(
+                "blank allowlist reason for {} -> {}",
+                entry.wire_type, entry.error_type
+            ));
+        }
+        if !reachable_wire_types.contains(entry.wire_type) {
+            problems.push(format!(
+                "stale allowlist entry for unreachable wire type {}",
+                entry.wire_type
+            ));
+        }
+        match cargo_lock_version(lockfile, entry.crate_name) {
+            Some(version) if version == entry.crate_version => {}
+            Some(version) => problems.push(format!(
+                "{} version drift: allowlist has {}, lockfile has {}",
+                entry.crate_name, entry.crate_version, version
+            )),
+            None => problems.push(format!("{} is missing from Cargo.lock", entry.crate_name)),
+        }
+        if entry.category == ExternalDisplayCategory::UserFacingOnly
+            && !decode_telemetry_is_sanitized(server_error_src)
+        {
+            problems.push(format!(
+                "{} -> {} is user-facing-only but decode telemetry preserves source",
+                entry.wire_type, entry.error_type
+            ));
+        }
+    }
+
+    for input in inputs {
+        let Some(error) = from_str_error_for(&input.ty, index) else {
+            continue;
+        };
+        let class = display_classification(&input.ty, &error, index);
+        if matches!(class, DisplayClass::TelemetrySafe) {
+            continue;
+        }
+        let allowed = allowlist.iter().any(|entry| {
+            entry.wire_type == input.ty
+                && entry.error_type == error.name
+                && error_wraps_external(&error, entry.wrapped_type)
+        });
+        if !allowed {
+            problems.push(format!(
+                "{} uses unsafe external display {} without allowlist entry",
+                input.ty, error.name
+            ));
+        }
+    }
+
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -742,6 +908,202 @@ mod tests {
         );
 
         assert_eq!(class, DisplayClass::TelemetrySafe);
+    }
+
+    fn sanitized_server_error() -> &'static str {
+        r#"fn emit_arg_decode_failure(value: &ServerFnErrorErr) {
+               InternalError::validation("invalid request arguments").emit_boundary_failure();
+           }
+           /// next item"#
+    }
+
+    fn preserving_server_error() -> &'static str {
+        r#"fn emit_arg_decode_failure(value: &ServerFnErrorErr) {
+               InternalError::validation_source("invalid request arguments", value.clone())
+                   .emit_boundary_failure();
+           }
+           /// next item"#
+    }
+
+    fn lock_with(name: &str, version: &str) -> String {
+        format!("[[package]]\nname = \"{name}\"\nversion = \"{version}\"\n")
+    }
+
+    fn external_wrapper_sources() -> Vec<(String, String)> {
+        common(
+            r#"#[derive(thiserror::Error, Debug)]
+               pub enum InvalidEmail {
+                   #[error(transparent)]
+                   Address(email_address::Error),
+               }
+               pub struct Email(String);
+               impl std::str::FromStr for Email {
+                   type Err = InvalidEmail;
+                   fn from_str(_: &str) -> Result<Self, Self::Err> { todo!() }
+               }"#,
+        )
+    }
+
+    fn backup_wrapper_sources() -> Vec<(String, String)> {
+        common(
+            r#"#[derive(thiserror::Error, Debug)]
+               pub enum InvalidBackupSchedule {
+                   #[error(transparent)]
+                   Cron(croner::errors::CronError),
+               }
+               pub struct BackupSchedule(String);
+               impl std::str::FromStr for BackupSchedule {
+                   type Err = InvalidBackupSchedule;
+                   fn from_str(_: &str) -> Result<Self, Self::Err> { todo!() }
+               }"#,
+        )
+    }
+
+    fn one_input(ty: &str) -> Vec<WireInput> {
+        vec![WireInput {
+            server_fn: "save".to_string(),
+            root: ty.to_ascii_lowercase(),
+            field_path: Vec::new(),
+            ty: ty.to_string(),
+        }]
+    }
+
+    #[test]
+    fn external_wrapper_fails_without_allowlist_entry() {
+        let sources = external_wrapper_sources();
+        let index = index_sources(&sources).expect("index");
+        let err = validate_allowlist(
+            &one_input("Email"),
+            &index,
+            &lock_with("email_address", "0.2.9"),
+            sanitized_server_error(),
+            &[],
+        )
+        .unwrap_err();
+
+        assert!(
+            err.join("\n").contains("without allowlist entry"),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn telemetry_safe_allowlist_passes_with_matching_lockfile() {
+        let sources = external_wrapper_sources();
+        let index = index_sources(&sources).expect("index");
+        let allowlist = [ALLOWED_EXTERNAL_DISPLAYS[0].clone()];
+
+        validate_allowlist(
+            &one_input("Email"),
+            &index,
+            &lock_with("email_address", "0.2.9"),
+            sanitized_server_error(),
+            &allowlist,
+        )
+        .expect("allowlist valid");
+    }
+
+    #[test]
+    fn allowlist_does_not_match_same_last_segment_from_wrong_crate() {
+        let sources = common(
+            r#"#[derive(thiserror::Error, Debug)]
+               pub enum InvalidEmail {
+                   #[error(transparent)]
+                   Address(other_crate::Error),
+               }
+               pub struct Email(String);
+               impl std::str::FromStr for Email {
+                   type Err = InvalidEmail;
+                   fn from_str(_: &str) -> Result<Self, Self::Err> { todo!() }
+               }"#,
+        );
+        let index = index_sources(&sources).expect("index");
+        let allowlist = [ALLOWED_EXTERNAL_DISPLAYS[0].clone()];
+        let err = validate_allowlist(
+            &one_input("Email"),
+            &index,
+            &lock_with("email_address", "0.2.9"),
+            sanitized_server_error(),
+            &allowlist,
+        )
+        .unwrap_err()
+        .join("\n");
+
+        assert!(err.contains("without allowlist entry"), "{err}");
+    }
+
+    #[test]
+    fn user_facing_only_allowlist_requires_sanitized_decode_telemetry() {
+        let sources = backup_wrapper_sources();
+        let index = index_sources(&sources).expect("index");
+        let allowlist = [ALLOWED_EXTERNAL_DISPLAYS[1].clone()];
+
+        validate_allowlist(
+            &one_input("BackupSchedule"),
+            &index,
+            &lock_with("croner", "2.2.0"),
+            sanitized_server_error(),
+            &allowlist,
+        )
+        .expect("sanitized telemetry permits user-facing-only allowlist");
+
+        let err = validate_allowlist(
+            &one_input("BackupSchedule"),
+            &index,
+            &lock_with("croner", "2.2.0"),
+            preserving_server_error(),
+            &allowlist,
+        )
+        .unwrap_err();
+
+        assert!(err.join("\n").contains("preserves source"), "{err:?}");
+    }
+
+    #[test]
+    fn allowlist_blank_reason_duplicate_version_drift_and_stale_entries_fail() {
+        let sources = external_wrapper_sources();
+        let index = index_sources(&sources).expect("index");
+        let entry = AllowedExternalDisplay {
+            reason: "",
+            crate_version: "9.9.9",
+            ..ALLOWED_EXTERNAL_DISPLAYS[0].clone()
+        };
+        let stale = AllowedExternalDisplay {
+            wire_type: "Unreachable",
+            ..ALLOWED_EXTERNAL_DISPLAYS[0].clone()
+        };
+        let err = validate_allowlist(
+            &one_input("Email"),
+            &index,
+            &lock_with("email_address", "0.2.9"),
+            sanitized_server_error(),
+            &[entry.clone(), entry, stale],
+        )
+        .unwrap_err()
+        .join("\n");
+
+        assert!(err.contains("blank allowlist reason"), "{err}");
+        assert!(err.contains("duplicate allowlist entry"), "{err}");
+        assert!(err.contains("version drift"), "{err}");
+        assert!(err.contains("stale allowlist entry"), "{err}");
+    }
+
+    #[test]
+    fn backup_schedule_allowlist_fails_on_croner_version_drift() {
+        let sources = backup_wrapper_sources();
+        let index = index_sources(&sources).expect("index");
+        let allowlist = [ALLOWED_EXTERNAL_DISPLAYS[1].clone()];
+        let err = validate_allowlist(
+            &one_input("BackupSchedule"),
+            &index,
+            &lock_with("croner", "2.3.0"),
+            sanitized_server_error(),
+            &allowlist,
+        )
+        .unwrap_err()
+        .join("\n");
+
+        assert!(err.contains("croner version drift"), "{err}");
     }
 
     #[test]
