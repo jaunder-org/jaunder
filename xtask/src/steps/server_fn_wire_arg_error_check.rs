@@ -22,12 +22,35 @@ pub(crate) struct WireInput {
 #[derive(Default)]
 pub(crate) struct TypeIndex {
     aggregates: BTreeMap<String, Vec<Field>>,
+    errors: BTreeMap<String, ErrorType>,
+    from_str_errors: BTreeMap<String, String>,
+    reachable_variants: BTreeMap<(String, String), BTreeSet<String>>,
 }
 
 #[derive(Clone)]
 struct Field {
     name: String,
     ty: syn::Type,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ErrorType {
+    name: String,
+    variants: Vec<ErrorVariant>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ErrorVariant {
+    name: String,
+    fields: BTreeMap<String, String>,
+    display: Option<String>,
+    transparent: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DisplayClass {
+    TelemetrySafe,
+    Unsafe(String),
 }
 
 pub(crate) fn type_name(ty: &syn::Type) -> Option<String> {
@@ -60,15 +83,266 @@ fn named_fields(fields: &syn::Fields) -> Option<Vec<Field>> {
     )
 }
 
+fn fields_by_name(fields: &syn::Fields) -> BTreeMap<String, String> {
+    match fields {
+        syn::Fields::Named(fields) => fields
+            .named
+            .iter()
+            .filter_map(|field| {
+                Some((
+                    field.ident.as_ref()?.to_string(),
+                    type_name(&field.ty).unwrap_or_else(|| field.ty.to_token_stream().to_string()),
+                ))
+            })
+            .collect(),
+        syn::Fields::Unnamed(fields) => fields
+            .unnamed
+            .iter()
+            .enumerate()
+            .map(|(index, field)| {
+                (
+                    index.to_string(),
+                    type_name(&field.ty).unwrap_or_else(|| field.ty.to_token_stream().to_string()),
+                )
+            })
+            .collect(),
+        syn::Fields::Unit => BTreeMap::new(),
+    }
+}
+
+fn error_attr(attrs: &[syn::Attribute]) -> Option<(String, bool)> {
+    attrs
+        .iter()
+        .find(|attr| attr.path().is_ident("error"))
+        .map(|attr| {
+            let tokens = attr.meta.to_token_stream().to_string();
+            (tokens.clone(), tokens.contains("transparent"))
+        })
+}
+
+fn record_error_struct(index: &mut TypeIndex, item: &syn::ItemStruct) {
+    let Some((display, transparent)) = error_attr(&item.attrs) else {
+        return;
+    };
+    index.errors.insert(
+        item.ident.to_string(),
+        ErrorType {
+            name: item.ident.to_string(),
+            variants: vec![ErrorVariant {
+                name: item.ident.to_string(),
+                fields: fields_by_name(&item.fields),
+                display: Some(display),
+                transparent,
+            }],
+        },
+    );
+}
+
+fn record_error_enum(index: &mut TypeIndex, item: &syn::ItemEnum) {
+    let variants = item
+        .variants
+        .iter()
+        .filter_map(|variant| {
+            let (display, transparent) = error_attr(&variant.attrs)?;
+            Some(ErrorVariant {
+                name: variant.ident.to_string(),
+                fields: fields_by_name(&variant.fields),
+                display: Some(display),
+                transparent,
+            })
+        })
+        .collect::<Vec<_>>();
+    if !variants.is_empty() {
+        index.errors.insert(
+            item.ident.to_string(),
+            ErrorType {
+                name: item.ident.to_string(),
+                variants,
+            },
+        );
+    }
+}
+
+fn impl_trait_last_segment(item: &syn::ItemImpl) -> Option<String> {
+    item.trait_
+        .as_ref()?
+        .1
+        .segments
+        .last()
+        .map(|s| s.ident.to_string())
+}
+
+fn record_from_str_impl(index: &mut TypeIndex, item: &syn::ItemImpl) {
+    if impl_trait_last_segment(item).as_deref() != Some("FromStr") {
+        return;
+    }
+    let Some(self_type_name) = type_name(&item.self_ty) else {
+        return;
+    };
+    let mut error_name = None;
+    let mut body = String::new();
+    for impl_item in &item.items {
+        match impl_item {
+            syn::ImplItem::Type(item) if item.ident == "Err" => {
+                error_name = type_name(&item.ty);
+            }
+            syn::ImplItem::Fn(item) if item.sig.ident == "from_str" => {
+                body = item.block.to_token_stream().to_string();
+            }
+            _ => {}
+        }
+    }
+    let Some(error_name) = error_name else {
+        return;
+    };
+    let reachable = reachable_variants(&self_type_name, &error_name, &body);
+    index
+        .reachable_variants
+        .insert((self_type_name.clone(), error_name.clone()), reachable);
+    index.from_str_errors.insert(self_type_name, error_name);
+}
+
+fn reachable_variants(self_type_name: &str, error_name: &str, body: &str) -> BTreeSet<String> {
+    if matches!(self_type_name, "Password" | "ProfferedPassword") && error_name == "PasswordError" {
+        return ["PasswordTooShort", "PasswordTooLong"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+    }
+    variants_named_in_body(body, error_name)
+}
+
+fn variants_named_in_body(body: &str, error_name: &str) -> BTreeSet<String> {
+    let mut variants = BTreeSet::new();
+    let needle = format!("{error_name} ::");
+    let mut rest = body;
+    while let Some(offset) = rest.find(&needle) {
+        rest = &rest[offset + needle.len()..];
+        let name = rest
+            .trim_start()
+            .chars()
+            .take_while(|ch| ch.is_alphanumeric() || *ch == '_')
+            .collect::<String>();
+        if !name.is_empty() {
+            variants.insert(name);
+        }
+    }
+    variants
+}
+
+fn from_str_error_for(type_name: &str, index: &TypeIndex) -> Option<ErrorType> {
+    let error_name = index.from_str_errors.get(type_name)?;
+    index.errors.get(error_name).cloned()
+}
+
+fn is_safe_scalar(ty: &str) -> bool {
+    matches!(
+        ty,
+        "usize"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "isize"
+            | "i8"
+            | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "bool"
+    )
+}
+
+fn placeholders(template: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        rest = &rest[open + 1..];
+        if rest.starts_with('{') {
+            rest = &rest[1..];
+            continue;
+        }
+        let Some(close) = rest.find('}') else {
+            break;
+        };
+        let mut name = rest[..close].trim().trim_start_matches(':');
+        if let Some((before, _)) = name.split_once(':') {
+            name = before;
+        }
+        if let Some((before, _)) = name.split_once('?') {
+            name = before;
+        }
+        let name = name.trim();
+        if !name.is_empty() && !name.chars().all(|ch| ch.is_ascii_uppercase() || ch == '_') {
+            out.push(name.to_string());
+        }
+        rest = &rest[close + 1..];
+    }
+    out
+}
+
+fn display_classification_for_variants(
+    error: &ErrorType,
+    reachable: Option<&BTreeSet<String>>,
+) -> DisplayClass {
+    for variant in error
+        .variants
+        .iter()
+        .filter(|variant| reachable.is_none_or(|set| set.contains(&variant.name)))
+    {
+        if variant.transparent {
+            return DisplayClass::Unsafe(format!(
+                "{}::{} is #[error(transparent)]",
+                error.name, variant.name
+            ));
+        }
+        let Some(display) = &variant.display else {
+            return DisplayClass::Unsafe(format!(
+                "{}::{} has no display shape",
+                error.name, variant.name
+            ));
+        };
+        for placeholder in placeholders(display) {
+            let field_name = placeholder.trim_start_matches('.');
+            let Some(ty) = variant.fields.get(field_name) else {
+                continue;
+            };
+            if ty == "String" || !is_safe_scalar(ty) {
+                return DisplayClass::Unsafe(format!(
+                    "{}::{} interpolates {field_name}: {ty}",
+                    error.name, variant.name
+                ));
+            }
+        }
+    }
+    DisplayClass::TelemetrySafe
+}
+
+fn display_classification(type_name: &str, error: &ErrorType, index: &TypeIndex) -> DisplayClass {
+    let reachable_key = (type_name.to_string(), error.name.clone());
+    let reachable = index
+        .reachable_variants
+        .get(&reachable_key)
+        .filter(|variants| !variants.is_empty());
+    display_classification_for_variants(error, reachable)
+}
+
 fn index_sources(sources: &[(String, String)]) -> Result<TypeIndex, String> {
     let mut index = TypeIndex::default();
     for (path, src) in sources {
         let file = syn::parse_file(src).map_err(|e| format!("{path}: cannot parse: {e}"))?;
         for item in file.items {
-            if let syn::Item::Struct(item) = item
-                && let Some(fields) = named_fields(&item.fields)
-            {
-                index.aggregates.insert(item.ident.to_string(), fields);
+            match item {
+                syn::Item::Struct(item) => {
+                    record_error_struct(&mut index, &item);
+                    if let Some(fields) = named_fields(&item.fields) {
+                        index.aggregates.insert(item.ident.to_string(), fields);
+                    }
+                }
+                syn::Item::Enum(item) => record_error_enum(&mut index, &item),
+                syn::Item::Impl(item) => record_from_str_impl(&mut index, &item),
+                _ => {}
             }
         }
     }
@@ -303,6 +577,171 @@ mod tests {
         .expect("wire inputs");
 
         assert_eq!(tys(&inputs), vec!["BackupMode"]);
+    }
+
+    fn class_for(src: &str, ty: &str) -> DisplayClass {
+        let sources = common(src);
+        let index = index_sources(&sources).expect("index");
+        let error = from_str_error_for(ty, &index).expect("from_str error");
+        display_classification(ty, &error, &index)
+    }
+
+    #[test]
+    fn literal_error_display_is_telemetry_safe() {
+        let class = class_for(
+            r#"#[derive(thiserror::Error, Debug)]
+               pub enum PostTitleError { #[error("post title must be non-empty")] Empty }
+               pub struct PostTitle(String);
+               impl std::str::FromStr for PostTitle {
+                   type Err = PostTitleError;
+                   fn from_str(s: &str) -> Result<Self, Self::Err> {
+                       Err(PostTitleError::Empty)
+                   }
+               }"#,
+            "PostTitle",
+        );
+
+        assert_eq!(class, DisplayClass::TelemetrySafe);
+    }
+
+    #[test]
+    fn const_placeholder_error_display_is_telemetry_safe() {
+        let class = class_for(
+            r#"const MIN_LENGTH: usize = 8;
+               #[derive(thiserror::Error, Debug)]
+               pub enum PasswordError {
+                   #[error("password must be at least {MIN_LENGTH} characters")]
+                   TooShort,
+               }
+               pub struct ProfferedPassword(String);
+               impl std::str::FromStr for ProfferedPassword {
+                   type Err = PasswordError;
+                   fn from_str(s: &str) -> Result<Self, Self::Err> {
+                       Err(PasswordError::TooShort)
+                   }
+               }"#,
+            "ProfferedPassword",
+        );
+
+        assert_eq!(class, DisplayClass::TelemetrySafe);
+    }
+
+    #[test]
+    fn numeric_scalar_field_error_display_is_telemetry_safe() {
+        let class = class_for(
+            r#"#[derive(thiserror::Error, Debug)]
+               pub enum FilenameError {
+                   #[error("filename too long: {encoded} bytes")]
+                   TooLong { encoded: usize },
+               }
+               pub struct Filename(String);
+               impl std::str::FromStr for Filename {
+                   type Err = FilenameError;
+                   fn from_str(s: &str) -> Result<Self, Self::Err> {
+                       Err(FilenameError::TooLong { encoded: s.len() })
+                   }
+               }"#,
+            "Filename",
+        );
+
+        assert_eq!(class, DisplayClass::TelemetrySafe);
+    }
+
+    #[test]
+    fn tuple_string_interpolation_is_unsafe() {
+        let class = class_for(
+            r#"#[derive(thiserror::Error, Debug)]
+               #[error("bad {0}")]
+               pub struct Bad(String);
+               pub struct Email(String);
+               impl std::str::FromStr for Email {
+                   type Err = Bad;
+                   fn from_str(s: &str) -> Result<Self, Self::Err> {
+                       Err(Bad(s.to_string()))
+                   }
+               }"#,
+            "Email",
+        );
+
+        assert!(matches!(class, DisplayClass::Unsafe(_)));
+    }
+
+    #[test]
+    fn named_string_debug_interpolation_is_unsafe() {
+        let class = class_for(
+            r#"#[derive(thiserror::Error, Debug)]
+               pub enum Bad {
+                   #[error("bad {value:?}")]
+                   Value { value: String },
+               }
+               pub struct Email(String);
+               impl std::str::FromStr for Email {
+                   type Err = Bad;
+                   fn from_str(s: &str) -> Result<Self, Self::Err> {
+                       Err(Bad::Value { value: s.to_string() })
+                   }
+               }"#,
+            "Email",
+        );
+
+        assert!(matches!(class, DisplayClass::Unsafe(_)));
+    }
+
+    #[test]
+    fn transparent_error_is_unsafe_without_proven_inner_type() {
+        let class = class_for(
+            r#"#[derive(thiserror::Error, Debug)]
+               pub enum Bad {
+                   #[error(transparent)]
+                   Inner(InnerError),
+               }
+               #[derive(thiserror::Error, Debug)]
+               #[error("inner")]
+               pub struct InnerError;
+               pub struct Email(String);
+               impl std::str::FromStr for Email {
+                   type Err = Bad;
+                   fn from_str(s: &str) -> Result<Self, Self::Err> {
+                       Err(Bad::Inner(InnerError))
+                   }
+               }"#,
+            "Email",
+        );
+
+        assert!(matches!(class, DisplayClass::Unsafe(_)));
+    }
+
+    #[test]
+    fn password_from_str_does_not_accept_unreachable_variants() {
+        let class = class_for(
+            r#"const MIN_LENGTH: usize = 8;
+               const MAX_LENGTH: usize = 128;
+               #[derive(thiserror::Error, Debug)]
+               pub enum PasswordError {
+                   #[error("password must be at least {MIN_LENGTH} characters")]
+                   PasswordTooShort,
+                   #[error("password must be at most {MAX_LENGTH} characters")]
+                   PasswordTooLong,
+                   #[error("verification failed: {0}")]
+                   VerificationFailed(String),
+                   #[error("hashing failed: {source}")]
+                   HashingFailed { source: String },
+               }
+               pub struct ProfferedPassword(String);
+               fn validate_password_shape(_: &str) -> Result<(), PasswordError> {
+                   Err(PasswordError::PasswordTooShort)
+               }
+               impl std::str::FromStr for ProfferedPassword {
+                   type Err = PasswordError;
+                   fn from_str(s: &str) -> Result<Self, Self::Err> {
+                       validate_password_shape(s)?;
+                       Ok(ProfferedPassword(s.to_string()))
+                   }
+               }"#,
+            "ProfferedPassword",
+        );
+
+        assert_eq!(class, DisplayClass::TelemetrySafe);
     }
 
     #[test]

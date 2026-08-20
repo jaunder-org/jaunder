@@ -250,7 +250,7 @@ Use whichever keeps the code smaller and clearer. Do not add a blanket
 
 **Steps:**
 
-- [ ] Add failing tests for display-shape policy:
+- [x] Add failing tests for display-shape policy:
   - unit/literal `#[error("post title must be non-empty")]` is telemetry-safe;
   - const/static placeholder
     `#[error("password must be at least {MIN_LENGTH} characters")]` is
@@ -274,10 +274,10 @@ devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml server_fn_wire
 
 Expected: FAIL before analysis is implemented.
 
-- [ ] Implement first-party `thiserror` shape analysis for structs/enums and
+- [x] Implement first-party `thiserror` shape analysis for structs/enums and
       constants. Keep failure messages path/type/variant-specific.
 
-- [ ] Implement the chosen `PasswordError` reachability treatment narrowly, with
+- [x] Implement the chosen `PasswordError` reachability treatment narrowly, with
       tests that would fail if `HashingFailed`/`VerificationFailed` were treated
       as decode-reachable.
 
@@ -289,7 +289,7 @@ devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml server_fn_wire
 
 Expected: PASS.
 
-- [ ] Tick this task checkbox, then run the commit gate.
+- [x] Tick this task checkbox, then run the commit gate.
 
 Run:
 
