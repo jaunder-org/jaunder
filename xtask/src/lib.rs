@@ -34,6 +34,8 @@ mod steps {
     pub mod e2e_scaffold_check;
     pub mod error_swallowing_inventory_check;
     pub mod flaky;
+    #[cfg(test)]
+    pub mod flow_docs;
     pub mod host_tests;
     pub mod html_sink_check;
     pub mod ident_gate;
