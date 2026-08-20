@@ -1699,13 +1699,13 @@ type takes `#[str_newtype(infallible)]` today. The diagnostic ADR-0063 §3 draws
 from this: a type declared infallible that needs a downstream gate to reject
 some of its values was mis-declared — the gate is the invariant, displaced.
 
-ADR-0101 also replaces the trusted door with a typed proof wherever a caller can
-supply one. `PostSummary::truncated` takes a `SummarySeed`
-(`common/src/post_summary.rs:63,114`) whose three constructors — from a `Slug`,
-a `PostTitle`, or the first non-blank line of a `PostBody` — are each infallible
-because their source is already non-blank. What remains is a plain length-cap,
-the one half of the invariant the door genuinely coerces. The trusted door
-survives only where no caller can supply a proof.
+ADR-0101 also replaces trusted doors with typed proof wherever a caller can
+supply one. `PostSummary` applies that shape directly in its derived-summary
+constructors: `from_title` accepts a `PostTitle`, and `from_body_line` accepts a
+`PostBody`; each source already proves non-blankness, so these constructors only
+coerce the length half of the summary invariant. They share one internal
+boundary-aware truncation helper, which prefers sentence then word boundaries
+before a hard Unicode-scalar cap.
 
 ### Identity and label are two types, not one
 

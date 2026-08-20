@@ -3,6 +3,7 @@
 //! Format-driven transformation of post bodies to HTML plus extraction of
 //! titles and slugs. No storage or database concerns.
 
+use crate::post_summary::truncate_at_text_boundary;
 use std::fmt;
 
 use crate::post_body::{InvalidPostBody, PostBody};
@@ -630,7 +631,7 @@ fn first_meaningful_line(body: &PostBody) -> String {
     let Some(line) = body.lines().map(str::trim).find(|line| !line.is_empty()) else {
         unreachable!("a PostBody always has a non-blank line")
     };
-    line.chars().take(100).collect()
+    truncate_at_text_boundary(line, 100)
 }
 
 fn extract_markdown_title(body: &str) -> Option<(String, String)> {
@@ -1016,6 +1017,28 @@ mod tests {
         let (title, slug) = naming(Some("   "), "body line", PostFormat::Markdown);
         assert_eq!(title, None);
         assert_eq!(slug, "body-line");
+    }
+
+    #[test]
+    fn derive_post_naming_untitled_slug_seed_prefers_word_boundary() {
+        let body = format!("{}trailingword\nsecond line", "slug     ".repeat(10));
+        let (title, slug) = naming(None, &body, PostFormat::Html);
+        let expected = [
+            "slug", "slug", "slug", "slug", "slug", "slug", "slug", "slug", "slug", "slug",
+        ]
+        .join("-");
+
+        assert_eq!(title, None);
+        assert_eq!(slug.as_ref(), expected);
+    }
+
+    #[test]
+    fn derive_post_naming_untitled_slug_seed_hard_caps_long_token() {
+        let body = format!("{}\nsecond line", "é".repeat(150));
+        let (title, slug) = naming(None, &body, PostFormat::Html);
+
+        assert_eq!(title, None);
+        assert_eq!(slug.as_ref(), "é".repeat(crate::slug::MAX_SLUG_CHARS));
     }
 
     #[test]

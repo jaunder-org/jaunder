@@ -17,9 +17,9 @@ use thiserror::Error;
 /// rejects blank input on the wire and on decode.
 ///
 /// **No length bound** — unlike [`crate::session_label::SessionLabel`], a title is
-/// unbounded prose, and bounding it is a separate decision. That makes `PostTitle` the
-/// only unbounded source for [`crate::post_summary::SummarySeed`], and therefore the
-/// one that keeps `MAX_POST_SUMMARY_CHARS` reachable.
+/// unbounded prose, and bounding it is a separate derived-summary decision.
+/// [`crate::post_summary::PostSummary::from_title`] therefore keeps
+/// `MAX_POST_SUMMARY_CHARS` reachable.
 ///
 /// No `Hash` — nothing hashes a `PostTitle`; ordering is emitted by the trailer
 /// (ADR-0063 §2), matching `SessionLabel` and `PostSummary`.
