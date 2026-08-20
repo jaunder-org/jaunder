@@ -142,7 +142,7 @@ reactive head replacement.
 - Consumes: Task 1’s `AlternateLink` and `readAlternateLinks` contract.
 - Produces: a review packet suitable for the issue-cycle validation/ship stage.
 
-- [ ] **Step 1: Inspect the branch-side diff**
+- [x] **Step 1: Inspect the branch-side diff**
 
   ```bash
   devtool run -- git diff origin/main...HEAD -- end2end/tests/feeds.ts end2end/tests/feeds.spec.ts
@@ -152,7 +152,7 @@ reactive head replacement.
   materialized callers, except the selected helper; crawler raw-HTML checking
   remains separate.
 
-- [ ] **Step 2: Run the implementation review**
+- [x] **Step 2: Run the implementation review**
 
   Use `jaunder-review` against `origin/main`, separating standards and
   specification conformance. Resolve every finding before the final ship gate.
