@@ -1,7 +1,9 @@
+> **Status:** ARCHIVED — shipped issue-cycle plan for issue #400; moved out of active `docs/superpowers/` cycle directories by #679.
+
 # Plan — #400: `InviteCode` / `ProfferedInviteCode` newtypes
 
 Spec:
-[`docs/superpowers/specs/2026-07-13-issue-400-invite-code-newtype.md`](../specs/2026-07-13-issue-400-invite-code-newtype.md).
+[`docs/archive/2026-07-13-issue-400-invite-code-newtype-spec.md`](2026-07-13-issue-400-invite-code-newtype-spec.md).
 Read it for the _what/why_; this plan is the _how_.
 
 ## Review header

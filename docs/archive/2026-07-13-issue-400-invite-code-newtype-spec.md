@@ -1,3 +1,5 @@
+> **Status:** ARCHIVED — shipped issue-cycle spec for issue #400; moved out of active `docs/superpowers/` cycle directories by #679.
+
 # Spec — #400: `InviteCode` / `ProfferedInviteCode` newtypes
 
 - Issue: [#400](https://github.com/jaunder-org/jaunder/issues/400)
