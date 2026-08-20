@@ -6,10 +6,12 @@
 //! types whose `FromStr::Err` displays can reach decode errors.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use quote::ToTokens;
 
-use crate::web_server_fns;
+use crate::result::{CommandResult, StepResult};
+use crate::{files, web_server_fns};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct WireInput {
@@ -650,6 +652,85 @@ fn validate_allowlist(
         Ok(())
     } else {
         Err(problems)
+    }
+}
+
+fn read_sources(root: &str) -> Result<Vec<(String, String)>, String> {
+    let paths = files::with_extension(Path::new(root), "rs")
+        .map_err(|e| format!("cannot scan {root}: {e}"))?;
+    paths
+        .into_iter()
+        .map(|path| {
+            let display = path.display().to_string();
+            let src = std::fs::read_to_string(&path)
+                .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+            Ok((display, src))
+        })
+        .collect()
+}
+
+pub fn run(result: &mut CommandResult) {
+    let web_sources = match read_sources(web_server_fns::WEB_SRC) {
+        Ok(sources) => sources,
+        Err(e) => {
+            result.push(StepResult::fail("server-fn-wire-arg-error").detail(e));
+            return;
+        }
+    };
+    let common_sources = match read_sources("common/src") {
+        Ok(sources) => sources,
+        Err(e) => {
+            result.push(StepResult::fail("server-fn-wire-arg-error").detail(e));
+            return;
+        }
+    };
+    let mut index_sources_input = web_sources.clone();
+    index_sources_input.extend_from_slice(&common_sources);
+    let index = match index_sources(&index_sources_input) {
+        Ok(index) => index,
+        Err(e) => {
+            result.push(StepResult::fail("server-fn-wire-arg-error").detail(e));
+            return;
+        }
+    };
+    let inputs = match wire_inputs(&web_sources, &common_sources) {
+        Ok(inputs) => inputs,
+        Err(e) => {
+            result.push(StepResult::fail("server-fn-wire-arg-error").detail(e));
+            return;
+        }
+    };
+    let lockfile = match std::fs::read_to_string("Cargo.lock") {
+        Ok(lockfile) => lockfile,
+        Err(e) => {
+            result.push(
+                StepResult::fail("server-fn-wire-arg-error")
+                    .detail(format!("cannot read Cargo.lock: {e}")),
+            );
+            return;
+        }
+    };
+    let server_error_src = match std::fs::read_to_string("web/src/error/server.rs") {
+        Ok(src) => src,
+        Err(e) => {
+            result.push(
+                StepResult::fail("server-fn-wire-arg-error")
+                    .detail(format!("cannot read web/src/error/server.rs: {e}")),
+            );
+            return;
+        }
+    };
+    match validate_allowlist(
+        &inputs,
+        &index,
+        &lockfile,
+        &server_error_src,
+        ALLOWED_EXTERNAL_DISPLAYS,
+    ) {
+        Ok(()) => result.push(StepResult::ok("server-fn-wire-arg-error")),
+        Err(problems) => {
+            result.push(StepResult::fail("server-fn-wire-arg-error").detail(problems.join("\n")));
+        }
     }
 }
 

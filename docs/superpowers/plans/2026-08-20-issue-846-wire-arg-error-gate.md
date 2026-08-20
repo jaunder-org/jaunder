@@ -439,9 +439,9 @@ devtool run -- git commit -m "feat(xtask): pin wire arg display telemetry safety
 
 **Steps:**
 
-- [ ] Wire the step into both check and validate.
+- [x] Wire the step into both check and validate.
 
-- [ ] Run the focused step tests.
+- [x] Run the focused step tests.
 
 Run:
 
@@ -451,7 +451,7 @@ devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml server_fn_wire
 
 Expected: PASS.
 
-- [ ] Run the fast static gate and confirm the new step appears and passes.
+- [x] Run the fast static gate and confirm the new step appears and passes.
 
 Run:
 
@@ -461,7 +461,7 @@ devtool run -- cargo xtask check --no-test
 
 Expected: PASS, including `[ ok ] server-fn-wire-arg-error`.
 
-- [ ] Tick every remaining task checkbox in this plan, then run the per-commit
+- [x] Tick every remaining task checkbox in this plan, then run the per-commit
       gate.
 
 Run:
