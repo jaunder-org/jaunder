@@ -49,7 +49,7 @@ but the overall command remains failed.
 ## Global Constraints
 
 - Implement
-  [the approved specification](../specs/2026-08-20-issue-1079-staged-subset-precommit.md),
+  [the approved specification](2026-08-20-issue-1079-staged-subset-precommit-spec.md),
   especially D1-D8 and AC1-AC12.
 - `cargo xtask precommit` runs the same non-Nix test surface as
   `cargo xtask check --no-test`: host static checks, repo-shape gates,
