@@ -10,7 +10,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use super::{AllowlistEntry, Coverage, extract, render};
+use super::{Coverage, extract, render};
 use crate::files;
 use crate::server_fns::{ServerFn, module_path_of, server_fns_in};
 use crate::traces::parse::{Filters, parse_spans};
@@ -22,8 +22,6 @@ pub const SNAPSHOT_PATH: &str = "docs/coverage/server-fns.json";
 /// The committed, generated test-title evidence — regenerated beside the
 /// snapshot, never compared (#745).
 pub const EVIDENCE_PATH: &str = "docs/coverage/server-fns-evidence.json";
-/// The committed, hand-maintained allowlist.
-pub const ALLOWLIST_PATH: &str = "docs/coverage/server-fns-allowlist.json";
 /// Where `cargo xtask e2e sqlite chromium` lifts the authoritative capture.
 pub const CAPTURE_PATH: &str = ".xtask/diagnostics/e2e-sqlite-chromium/capture-sqlite.tar.gz";
 
@@ -88,14 +86,10 @@ pub fn coverage_from_capture(tarball: &Path, inventory: &[ServerFn]) -> Result<C
 ///
 /// One function rather than one per artifact, so the two cannot acquire
 /// different read semantics. What they share is that **both fail closed**: a
-/// missing or unparseable file is an error, never an empty value.
-///
-/// That is deliberately **not** [`read_allowlist`]'s rule below, where missing
-/// means empty means nothing is excused — which is the strict reading *there*.
-/// Here an empty value is the lenient reading: an absent evidence file would
-/// disagree with the snapshot on every covered fn, so `evidence_verdict` would
-/// report one violation per fn instead of the single fact that matters — it is
-/// not there.
+/// missing or unparseable file is an error, never an empty value. An absent
+/// evidence file would disagree with the snapshot on every covered fn, so
+/// `evidence_verdict` would report one violation per fn instead of the single
+/// fact that matters — it is not there.
 pub fn read_artifact<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     let raw = std::fs::read_to_string(path).with_context(|| {
         format!(
@@ -104,17 +98,6 @@ pub fn read_artifact<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
             super::REGENERATE_CMD
         )
     })?;
-    serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
-}
-
-/// The committed allowlist. A missing file is an empty allowlist — that is the
-/// strict reading (nothing is excused), not a lenient one.
-pub fn read_allowlist(path: &Path) -> Result<Vec<AllowlistEntry>> {
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let raw =
-        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
 }
 
@@ -177,12 +160,6 @@ mod tests {
     }
 
     #[test]
-    fn missing_allowlist_is_empty_not_an_error() {
-        let list = read_allowlist(Path::new("/nonexistent-allowlist.json")).expect("ok");
-        assert!(list.is_empty());
-    }
-
-    #[test]
     fn missing_snapshot_error_names_the_regenerate_command() {
         let err = read_artifact::<Snapshot>(Path::new("/nonexistent-snapshot.json")).unwrap_err();
         let chain = format!("{err:#}");
@@ -191,9 +168,8 @@ mod tests {
 
     #[test]
     fn missing_evidence_fails_closed_rather_than_reading_as_empty() {
-        // Deliberately NOT the `read_allowlist` template, where missing means
-        // empty means pass. An empty evidence file disagrees with the snapshot on
-        // every covered fn, which is a confusing way to report "it is gone".
+        // An absent evidence file would disagree with the snapshot on every
+        // covered fn, which is a confusing way to report "it is gone".
         let err = read_artifact::<Evidence>(Path::new("/nonexistent-evidence.json")).unwrap_err();
         let chain = format!("{err:#}");
         assert!(chain.contains(super::super::REGENERATE_CMD), "{chain}");

@@ -155,8 +155,8 @@ Concretely:
   only its key set is checked — a renamed or deleted test leaves a wrong title
   in a green tree. Whether that file is worth its weight at all is **#757**.
 
-- A fn may be **uncovered only via an explicit allowlist entry** carrying a
-  reason and a filed issue.
+- A fn may be **uncovered only as a failing gate finding**. There is no
+  server-fn flow-coverage allowlist; add a browser flow instead.
 
 ## Consequences
 
@@ -167,8 +167,8 @@ Concretely:
   not:** _whether_ a fn is covered remains a checked fact in the compared
   snapshot, but _which flow_ covers it now lives in the uncompared evidence file
   and is a promise again — accurate when regenerated, unpoliced thereafter.
-- A new `#[server]` fn cannot land silently untested: absent from the snapshot
-  and the allowlist, it reddens the fast lane without needing an e2e run.
+- A new `#[server]` fn cannot land silently untested: absent from the snapshot,
+  it reddens the fast lane without needing an e2e run.
 - This commits us to keeping the e2e trace export working. If the capture
   pipeline breaks, coverage verification degrades with it — the gate must treat
   a missing or unreadable capture as failure, never as "nothing uncovered".
