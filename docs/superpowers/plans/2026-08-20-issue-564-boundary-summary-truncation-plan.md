@@ -222,8 +222,8 @@ pub(crate) fn truncate_at_text_boundary(input: &str, max_scalars: usize) -> Stri
     let hard_cap: String = input.chars().take(max_scalars).collect();
     let sentence = hard_cap
         .char_indices()
-        .filter_map(|(idx, ch)| matches!(ch, '.' | '!' | '?').then_some(idx + ch.len_utf8()))
-        .last()
+        .rev()
+        .find_map(|(idx, ch)| matches!(ch, '.' | '!' | '?').then_some(idx + ch.len_utf8()))
         .and_then(|end| non_empty_trimmed_prefix(&hard_cap[..end]));
     if let Some(prefix) = sentence {
         return prefix;
@@ -231,8 +231,8 @@ pub(crate) fn truncate_at_text_boundary(input: &str, max_scalars: usize) -> Stri
 
     let word = hard_cap
         .char_indices()
-        .filter_map(|(idx, ch)| ch.is_whitespace().then_some(idx))
-        .last()
+        .rev()
+        .find_map(|(idx, ch)| ch.is_whitespace().then_some(idx))
         .and_then(|end| non_empty_trimmed_prefix(&hard_cap[..end]));
     if let Some(prefix) = word {
         return prefix;
@@ -344,29 +344,21 @@ No `Co-Authored-By` trailer.
 - Preserves: `derive_post_naming(None, body, format)` remains total and still
   falls back to slug `post` when the selected seed has no slug characters.
 
-- [ ] **Step 1: Write failing render tests**
+- [x] **Step 1: Write failing render tests**
 
 Add tests near existing `derive_post_naming_*` tests:
 
 ```rust
 #[test]
 fn derive_post_naming_untitled_slug_seed_prefers_word_boundary() {
-    let body = format!("{}trailingword\nsecond line", "slug word ".repeat(9));
+    let body = format!("{}trailingword\nsecond line", "slug     ".repeat(10));
     let (title, slug) = naming(None, &body, PostFormat::Html);
 
     assert_eq!(title, None);
     assert_eq!(
         slug.as_ref(),
         [
-            "slug-word",
-            "slug-word",
-            "slug-word",
-            "slug-word",
-            "slug-word",
-            "slug-word",
-            "slug-word",
-            "slug-word",
-            "slug-word",
+            "slug", "slug", "slug", "slug", "slug", "slug", "slug", "slug", "slug", "slug",
         ]
         .join("-")
     );
@@ -386,7 +378,7 @@ The exact expected slug is part of the contract: the old raw 100-scalar cut
 includes part of `trailingword`, while the shared helper backs up to the
 previous word boundary.
 
-- [ ] **Step 2: Run the render tests and verify failure**
+- [x] **Step 2: Run the render tests and verify failure**
 
 Run:
 
@@ -397,7 +389,7 @@ devtool run -- cargo nextest run -p common derive_post_naming_untitled_slug_seed
 Expected: FAIL under the current raw `line.chars().take(100)` behavior for the
 word-boundary test.
 
-- [ ] **Step 3: Implement render call-through**
+- [x] **Step 3: Implement render call-through**
 
 Modify `common/src/render.rs`:
 
@@ -418,7 +410,7 @@ fn first_meaningful_line(body: &PostBody) -> String {
 
 Do not create a second render-specific truncation helper.
 
-- [ ] **Step 4: Run the targeted render tests and verify pass**
+- [x] **Step 4: Run the targeted render tests and verify pass**
 
 Run:
 
@@ -428,7 +420,7 @@ devtool run -- cargo nextest run -p common derive_post_naming
 
 Expected: PASS.
 
-- [ ] **Step 5: Stage, gate, and commit Task 2**
+- [x] **Step 5: Stage, gate, and commit Task 2**
 
 Tick this task's plan checkboxes, then stage exactly what will land before
 running the gate:
