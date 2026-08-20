@@ -210,7 +210,7 @@ processes call `host::telemetry::init_tracing(false)` and only the server
       Commit exactly:
 
       ```bash
-      devtool run -- git add Cargo.lock host/src/telemetry.rs host/src/lib.rs host/Cargo.toml server/src/observability.rs server/Cargo.toml docs/superpowers/specs/2026-08-20-issue-769-test-support-cli-otel.md docs/superpowers/plans/2026-08-20-issue-769-test-support-cli-otel.md
+      devtool run -- git add Cargo.lock host/src/telemetry.rs host/src/lib.rs host/Cargo.toml server/src/observability.rs server/Cargo.toml docs/archive/2026-08-20-issue-769-test-support-cli-otel-spec.md docs/archive/2026-08-20-issue-769-test-support-cli-otel-plan.md
       devtool run -- git commit -m "refactor(obs): split process telemetry into host (#769)"
       ```
 
@@ -341,7 +341,7 @@ processes call `host::telemetry::init_tracing(false)` and only the server
       Commit exactly:
 
       ```bash
-      devtool run -- git add test-support/src/main.rs test-support/tests/cli.rs server/src/main.rs server/src/cli.rs docs/superpowers/plans/2026-08-20-issue-769-test-support-cli-otel.md
+      devtool run -- git add test-support/src/main.rs test-support/tests/cli.rs server/src/main.rs server/src/cli.rs docs/archive/2026-08-20-issue-769-test-support-cli-otel-plan.md
       devtool run -- git commit -m "feat(obs): trace test-support seed writes (#769)"
       ```
 
@@ -427,7 +427,7 @@ processes call `host::telemetry::init_tracing(false)` and only the server
       Commit exactly:
 
       ```bash
-      devtool run -- git add flake.nix tools/devtool/src/seed_e2e.rs host/src/telemetry.rs storage/src/site_config.rs docs/adr/0011-unified-observability.md docs/ARCHITECTURE.md docs/observability.md docs/superpowers/plans/2026-08-20-issue-769-test-support-cli-otel.md
+      devtool run -- git add flake.nix tools/devtool/src/seed_e2e.rs host/src/telemetry.rs storage/src/site_config.rs docs/adr/0011-unified-observability.md docs/ARCHITECTURE.md docs/observability.md docs/archive/2026-08-20-issue-769-test-support-cli-otel-plan.md
       devtool run -- git commit -m "test(e2e): require seed storage spans (#769)"
       ```
 
@@ -435,7 +435,7 @@ processes call `host::telemetry::init_tracing(false)` and only the server
 
 **Files:**
 
-- Modify: `docs/superpowers/plans/2026-08-20-issue-769-test-support-cli-otel.md`
+- Modify: `docs/archive/2026-08-20-issue-769-test-support-cli-otel-plan.md`
   (tick all completed boxes before each commit gate)
 - No source edits unless review/gates require fixes.
 
