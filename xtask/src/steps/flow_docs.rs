@@ -126,7 +126,6 @@ impl Report {
     }
 }
 
-#[cfg(not(test))]
 pub fn run() -> StepResult {
     match check(Path::new(".")) {
         Ok(report) => report.into_step(),

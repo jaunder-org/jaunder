@@ -16,9 +16,8 @@ Server-function coverage remains a separate evidence surface under
 set and [`server-fns-evidence.json`](server-fns-evidence.json) records per-test
 attribution. Neither is user-visible CSR-flow-to-spec evidence.
 
-Issue [#601](https://github.com/jaunder-org/jaunder/issues/601) is the future
-consumer of these heading anchors until `docs/flows/` exists; its flow index
-then replaces that issue link. Future flow documents link the relevant heading
+[`docs/flows/README.md`](../flows/README.md) is the checked route/journey index
+that consumes these heading anchors. Flow documents link the relevant heading
 below and do not recreate a `Pinned by` mapping or copy either server-function
 artifact or its per-test attribution.
 

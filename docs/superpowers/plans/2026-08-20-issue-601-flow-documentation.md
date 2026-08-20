@@ -225,26 +225,26 @@ omits; coverage status must remain independent of timing-dependent attribution.
 - Produces: one named static check in both `check` and `validate`, Architecture
   and matrix links that lead to the single flow-index owner.
 
-- [ ] **Step 1: Add failing command-registration tests**
+- [x] **Step 1: Add failing command-registration tests**
 
   Extend the existing xtask command/step tests to assert both `check` and
   `validate` invoke a `flow-docs` result. Assert no e2e command is needed for
   this static guard.
 
-- [ ] **Step 2: Run RED and wire the step**
+- [x] **Step 2: Run RED and wire the step**
 
   Run:
   `devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml -p xtask -E 'test(check_and_validate_include_flow_docs)'`.
   Expected: FAIL before registration. Invoke the already-assembled step in both
   command paths; update Architecture’s xtask table.
 
-- [ ] **Step 3: Project documentation ownership**
+- [x] **Step 3: Project documentation ownership**
 
   Replace matrix’s temporary #601 link with `docs/flows/README.md`; add the
   Architecture CSR/frontend link. Do not duplicate the Mermaid graph or matrix
   evidence lists.
 
-- [ ] **Step 4: Run GREEN and commit integration**
+- [x] **Step 4: Run GREEN and commit integration**
 
   Run the Step 2 test and `devtool run -- cargo xtask check`. Expected: PASS.
   Tick this task, stage integration docs/source, and commit
@@ -252,6 +252,6 @@ omits; coverage status must remain independent of timing-dependent attribution.
 
 ## Verification
 
-- [ ] Run `devtool run -- cargo xtask check` after each committed task.
+- [x] Run `devtool run -- cargo xtask check` after each committed task.
 - [ ] Run `devtool run -- cargo xtask validate` on the final clean branch before
       shipping.
