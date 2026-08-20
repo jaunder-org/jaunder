@@ -19,7 +19,7 @@ coverage state only to deterministic snapshot/allowlist inputs.
 
 ## Global Constraints
 
-- Implement approved spec `../specs/2026-08-20-issue-601-flow-documentation.md`;
+- Implement approved spec `2026-08-20-issue-601-flow-documentation-spec.md`;
   retain its D1–D9 and AC1–AC8 exactly.
 - `docs/coverage/csr-e2e-matrix.md` alone maps flows to Playwright tests; flow
   docs link `matrix:` headings and never duplicate `Pinned by` or telemetry
