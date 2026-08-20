@@ -444,12 +444,12 @@ processes call `host::telemetry::init_tracing(false)` and only the server
 - Consumes: completed Tasks 1–3.
 - Produces: final branch ready for `jaunder-ship` review and PR.
 
-- [ ] **Step 1: Run full local validation.**
+- [x] **Step 1: Run full local validation.**
 
       Run: `devtool run -- cargo xtask validate`.
       Expected: PASS.
 
-- [ ] **Step 2: Confirm clean final state.**
+- [x] **Step 2: Confirm clean final state.**
 
       Run: `devtool run -- git status --short`.
       Expected: no output.
@@ -458,6 +458,6 @@ processes call `host::telemetry::init_tracing(false)` and only the server
       Expected: focused commits for the telemetry split, test-support wiring, and
       seed-span/docs verification.
 
-- [ ] **Step 3: Start `jaunder-ship`.** Use the final diff and validation output
+- [x] **Step 3: Start `jaunder-ship`.** Use the final diff and validation output
       for the required standards/spec reviews, then push, open the PR, monitor
       checks, and stop at the merge approval gate.
