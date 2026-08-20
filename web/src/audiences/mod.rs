@@ -17,14 +17,15 @@
 mod api;
 #[cfg(target_arch = "wasm32")]
 mod component;
+mod model;
 #[cfg(feature = "server")]
 mod server;
 
 pub use api::{
     AddSubscriber, AudienceMembershipRequest, Create, Delete, ListMembers, ListMine,
-    ListMySubscribers, RemoveSubscriber, Rename, RenameAudienceRequest, SubscriberSummary, Summary,
-    add_subscriber, create, delete, list_members, list_mine, list_my_subscribers,
-    remove_subscriber, rename,
+    ListMySubscribers, RemoveSubscriber, Rename, RenameAudienceRequest, add_subscriber, create,
+    delete, list_members, list_mine, list_my_subscribers, remove_subscriber, rename,
 };
 #[cfg(target_arch = "wasm32")]
 pub use component::AudiencesPage;
+pub use model::{SubscriberSummary, Summary};

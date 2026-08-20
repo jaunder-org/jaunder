@@ -797,6 +797,17 @@ const ALLOWLIST: &[Allowed] = &[
                  type. Deferred to #750: the fix spans the admission seam, the ChannelId \
                  pairing and the wire DTOs, not this decode",
     },
+    Allowed {
+        file: "subscriptions.rs",
+        function: "list_subscriber_summaries",
+        target: "(SubscriptionId,String)",
+        what: "DB::LIST_SUBSCRIBER_SUMMARIES",
+        count: 1,
+        category: Category::OpaquePayload,
+        reason: "label is already a display payload: either a Username joined from users or a \
+                 channel-scoped opaque subscriber_ref fallback. The branch that produced it is \
+                 the domain fact; the final text has no single stricter type",
+    },
     // ---- the claim wrapper ----
     Allowed {
         file: "postgres/feed_events.rs",

@@ -4,7 +4,7 @@ use common::ids::{ChannelId, UserId};
 use common::visibility::{SubscriptionPolicy, SubscriptionStatus, ViewerIdentity};
 use rstest::*;
 use rstest_reuse::*;
-use storage::test_support::{Backend, backends, seed_users};
+use storage::test_support::{Backend, SeedUser, backends, seed_users};
 use storage::{PostgresSubscriptionStorage, SqliteSubscriptionStorage, SubscriptionStorage};
 
 use super::fixtures::{channel_id_by_name, local_channel_id, open_pool, raw_exec};
@@ -102,6 +102,58 @@ async fn subscribe_is_idempotent_and_active(#[case] backend: Backend) {
             .await
             .unwrap()
             .is_empty()
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn list_subscriber_summaries_resolves_labels_on_both_dialects(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let author = SeedUser::new().seed(state).await.user_id;
+    let local_user = SeedUser::new().seed(state).await;
+    let local = local_channel_id(backend, &env).await;
+    raw_exec(
+        backend,
+        &env,
+        "INSERT INTO channels (name) VALUES ('activitypub')",
+    )
+    .await;
+    let remote = channel_id_by_name(backend, &env, "activitypub").await;
+
+    let resolved = state
+        .subscriptions
+        .subscribe(author, local, &local_user.user_id.to_string())
+        .await
+        .unwrap();
+    let numeric_remote_ref = local_user.user_id.to_string();
+    let remote_numeric = state
+        .subscriptions
+        .subscribe(author, remote, &numeric_remote_ref)
+        .await
+        .unwrap();
+    let missing_ref = "999999999";
+    let missing_local = state
+        .subscriptions
+        .subscribe(author, local, missing_ref)
+        .await
+        .unwrap();
+
+    let rows = state
+        .subscriptions
+        .list_subscriber_summaries(author)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        rows.into_iter()
+            .map(|row| (row.subscription_id, row.label))
+            .collect::<Vec<_>>(),
+        vec![
+            (resolved, local_user.username.to_string()),
+            (remote_numeric, numeric_remote_ref),
+            (missing_local, missing_ref.to_string()),
+        ]
     );
 }
 
@@ -217,4 +269,11 @@ async fn pending_subscription_is_not_admitted(#[case] backend: Backend) {
     );
     // ...and it is not listed (list_subscribers is active-only).
     assert!(store.list_subscribers(author).await.unwrap().is_empty());
+    assert!(
+        store
+            .list_subscriber_summaries(author)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }

@@ -37,6 +37,13 @@ pub struct SubscriptionRecord {
     pub created_at: DateTime<Utc>,
 }
 
+/// A subscriber row projected for named-audience presentation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SubscriberSummaryRecord {
+    pub subscription_id: SubscriptionId,
+    pub label: String,
+}
+
 /// Async operations on the `subscriptions` table.
 #[cfg_attr(feature = "test-utils", mockall::automock)]
 #[async_trait]
@@ -71,6 +78,12 @@ pub trait SubscriptionStorage: Send + Sync {
         &self,
         author_user_id: UserId,
     ) -> sqlx::Result<Vec<SubscriptionRecord>>;
+
+    /// Lists the author's active subscribers with the display label resolved.
+    async fn list_subscriber_summaries(
+        &self,
+        author_user_id: UserId,
+    ) -> sqlx::Result<Vec<SubscriberSummaryRecord>>;
 
     /// Returns the `channel_id` of the seeded `local` channel.
     ///
@@ -116,6 +129,9 @@ pub trait SubscriptionDialect: Database {
     const IS_ACTIVE_LOCAL_SUBSCRIBER: &'static str;
     /// Lists the author's `active` subscriptions. Bind order: `author_user_id`.
     const LIST_ACTIVE_SUBSCRIBERS: &'static str;
+    /// Lists active subscribers with local-user display labels resolved by SQL.
+    /// Bind order: `author_user_id`.
+    const LIST_SUBSCRIBER_SUMMARIES: &'static str;
     /// Selects the `channel_id` of the seeded `local` channel. No binds.
     const SELECT_LOCAL_CHANNEL_ID: &'static str;
 }
@@ -147,6 +163,7 @@ where
     (SubscriptionId,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (ChannelId,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (SubscriptionId, ChannelId, String, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (SubscriptionId, String): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
@@ -253,6 +270,23 @@ where
                     created_at,
                 },
             )
+            .collect())
+    }
+
+    async fn list_subscriber_summaries(
+        &self,
+        author_user_id: UserId,
+    ) -> sqlx::Result<Vec<SubscriberSummaryRecord>> {
+        let rows = sqlx::query_as::<_, (SubscriptionId, String)>(DB::LIST_SUBSCRIBER_SUMMARIES)
+            .bind(author_user_id)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(subscription_id, label)| SubscriberSummaryRecord {
+                subscription_id,
+                label,
+            })
             .collect())
     }
 

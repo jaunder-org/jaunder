@@ -42,6 +42,16 @@ impl SubscriptionDialect for Postgres {
          WHERE s.author_user_id = $1 AND st.name = 'active' \
          ORDER BY s.subscription_id";
 
+    const LIST_SUBSCRIBER_SUMMARIES: &'static str = "SELECT \
+           s.subscription_id, COALESCE(u.username::text, s.subscriber_ref) AS label \
+        FROM subscriptions s \
+        JOIN subscription_statuses st ON st.status_id = s.status_id \
+        LEFT JOIN users u \
+          ON s.channel_id = (SELECT channel_id FROM channels WHERE name = 'local') \
+         AND s.subscriber_ref = u.user_id::text \
+        WHERE s.author_user_id = $1 AND st.name = 'active' \
+        ORDER BY s.subscription_id";
+
     const SELECT_LOCAL_CHANNEL_ID: &'static str =
         "SELECT channel_id FROM channels WHERE name = 'local'";
 }
