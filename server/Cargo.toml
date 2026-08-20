@@ -82,6 +82,7 @@ server_fn = { version = "0.8", features = ["axum-no-default"] }
 serde_qs = "0.15"
 tempfile.workspace = true
 tower = { workspace = true }
+url = { workspace = true }
 
 [lints]
 workspace = true

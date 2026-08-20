@@ -5,6 +5,7 @@ use axum::{
 use common::ids::PostId;
 use common::tag::{MAX_TAGS_PER_POST, TagLabel};
 use common::test_support::{parse_post_body, parse_post_title, permalink_date};
+use common::time::UtcInstant;
 use tower::ServiceExt;
 
 use rstest::*;
@@ -192,14 +193,25 @@ async fn collection_paging_emits_next_link(#[case] backend: Backend) {
         body.contains("updated_before="),
         "next link lacks cursor: {body}"
     );
-    let updated_before = body
-        .split("updated_before=")
-        .nth(1)
-        .and_then(|tail| tail.split("&amp;id_before=").next())
+    let href = body
+        .split("<link ")
+        .find(|link| link.contains("rel=\"next\""))
+        .and_then(|link| link.split("href=\"").nth(1))
+        .and_then(|tail| tail.split('"').next())
+        .expect("next link exposes href")
+        .replace("&amp;", "&");
+    let updated_before = url::Url::parse(&href)
+        .expect("next link href is an absolute URL")
+        .query_pairs()
+        .find_map(|(key, value)| (key == "updated_before").then(|| value.into_owned()))
         .expect("next link exposes updated_before");
-    assert!(
-        updated_before.ends_with('Z'),
-        "next link cursor should use canonical UTC spelling: {body}"
+    let parsed_cursor: UtcInstant = updated_before
+        .parse()
+        .expect("next link cursor is an RFC3339 instant");
+    assert_eq!(
+        updated_before,
+        parsed_cursor.to_string(),
+        "next link cursor should use canonical UTC spelling"
     );
     assert_eq!(
         body.matches("<entry").count(),
