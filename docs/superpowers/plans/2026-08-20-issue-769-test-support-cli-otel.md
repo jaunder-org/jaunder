@@ -221,7 +221,7 @@ processes call `host::telemetry::init_tracing(false)` and only the server
 - Modify: `test-support/src/main.rs`
 - Modify: `test-support/tests/cli.rs`
 - Modify: `server/src/main.rs`
-- Modify: `server/src/commands.rs` if `Commands::is_serve` is added
+- Modify: `server/src/cli.rs` if `Commands::is_serve` is added
 - Test: `test-support/src/main.rs`
 - Test: `test-support/tests/cli.rs`
 - Test: `server/src/main.rs`
@@ -234,7 +234,7 @@ processes call `host::telemetry::init_tracing(false)` and only the server
   `serve` and `host::telemetry::init_tracing(cli.verbose)` for all other
   commands.
 
-- [ ] **Step 1: Add failing dispatch tests.** Add tests proving the two routing
+- [x] **Step 1: Add failing dispatch tests.** Add tests proving the two routing
       rules without depending on a live collector:
 
       ```rust
@@ -318,14 +318,14 @@ processes call `host::telemetry::init_tracing(false)` and only the server
       Run: `devtool run -- cargo nextest run -p jaunder -E 'test(serve_is_the_only_server_diagnostics_command) | test(run_site_config_uses_process_telemetry_without_diag_log)'`.
       Expected: FAIL until helper/routing exists; the non-serve routing test fails on current code because `run` installs server diagnostics for `site-config`.
 
-- [ ] **Step 2: Wire dispatch.** In `test-support/src/main.rs::run`, bind
+- [x] **Step 2: Wire dispatch.** In `test-support/src/main.rs::run`, bind
       `let _telemetry = host::telemetry::init_tracing(false);` after clap has
       produced a runnable command and before the match. In `server/src/main.rs`,
       select `server::observability::init_server_tracing(cli.verbose)` for
       `serve` and `host::telemetry::init_tracing(cli.verbose)` for non-serve
       commands; keep the guard scoped across `command.execute().await`.
 
-- [ ] **Step 3: Run focused command tests.**
+- [x] **Step 3: Run focused command tests.**
 
       Run: `devtool run -- cargo nextest run -p test-support`.
       Expected: PASS.
@@ -333,7 +333,7 @@ processes call `host::telemetry::init_tracing(false)` and only the server
       Run: `devtool run -- cargo nextest run -p jaunder -E 'test(site_config_set_parses_positional_key_value) | test(serve_is_the_only_server_diagnostics_command) | test(run_site_config_uses_process_telemetry_without_diag_log)'`.
       Expected: PASS.
 
-- [ ] **Step 4: Tick this checkbox, run the commit gate, and commit.**
+- [x] **Step 4: Tick this checkbox, run the commit gate, and commit.**
 
       Run: `devtool run -- cargo xtask check`.
       Expected: PASS.
@@ -341,7 +341,7 @@ processes call `host::telemetry::init_tracing(false)` and only the server
       Commit exactly:
 
       ```bash
-      devtool run -- git add test-support/src/main.rs test-support/tests/cli.rs server/src/main.rs server/src/commands.rs
+      devtool run -- git add test-support/src/main.rs test-support/tests/cli.rs server/src/main.rs server/src/cli.rs docs/superpowers/plans/2026-08-20-issue-769-test-support-cli-otel.md
       devtool run -- git commit -m "feat(obs): trace test-support seed writes (#769)"
       ```
 

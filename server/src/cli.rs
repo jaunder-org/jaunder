@@ -381,6 +381,13 @@ pub enum Commands {
     },
 }
 
+impl Commands {
+    #[must_use]
+    pub fn is_serve(&self) -> bool {
+        matches!(self, Self::Serve { .. })
+    }
+}
+
 /// `site-config` leaf actions. The key space is closed: `SiteConfigKey` is the
 /// registry of every recognised key, so an unknown key is rejected at argument
 /// parsing (which also lists the accepted keys). Values are validated too — each
@@ -1054,6 +1061,17 @@ mod tests {
             unreachable!("parse yields unset")
         };
         assert_eq!(key, SiteConfigKey::SiteTitle);
+    }
+
+    #[test]
+    fn serve_is_the_only_server_diagnostics_command() {
+        let cli = parse(&["serve"]);
+        let command = cli.command.expect("serve subcommand");
+        assert!(command.is_serve());
+
+        let cli = parse(&["site-config", "set", "site.title", "Title"]);
+        let command = cli.command.expect("site-config subcommand");
+        assert!(!command.is_serve());
     }
 
     #[test]

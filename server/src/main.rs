@@ -34,16 +34,15 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         // cov:ignore-stop
         unreachable!("Cli::parse_from([\"jaunder\", \"--help\"]) prints help and exits the process")
     };
-    // `run` owns telemetry for *every* command, `serve` included: one guard,
-    // held across the whole dispatch, whose Drop flushes the OTLP exporters
-    // before exit. For a one-shot command that means before the process returns
-    // (on success, `?` error, or panic unwind); for `serve` the guard is simply
-    // held for the process lifetime and flushes at shutdown. `cmd_serve` does
-    // not init telemetry itself, so all commands share this one mechanism.
-    // Bound after command resolution so the no-subcommand `--help` path exits via
-    // clap without initializing telemetry it would never use; bound at function
-    // scope so the guard outlives the dispatch below.
-    let _telemetry = jaunder::observability::init_tracing(cli.verbose);
+    // `run` owns telemetry for *every* command after clap has resolved a runnable
+    // subcommand. `serve` also owns scoped server diagnostics; one-shot CLI
+    // commands get only process telemetry so `JAUNDER_CAPTURE_DIR` does not make
+    // them write `diag.log`.
+    let _telemetry = if command.is_serve() {
+        jaunder::observability::init_server_tracing(cli.verbose)
+    } else {
+        host::telemetry::init_tracing(cli.verbose)
+    };
     command.execute().await
 }
 
@@ -237,6 +236,45 @@ mod tests {
         .expect("unset of an absent key is a no-op success");
     }
 
+    #[test]
+    fn run_site_config_uses_process_telemetry_without_diag_log() {
+        common::test_support::with_env(|env| {
+            let capture = TempDir::new().expect("capture dir");
+            let base = TempDir::new().expect("db dir");
+            let storage = test_storage_args(&base);
+            env.set(host::capture::DIR_ENV, capture.path());
+            env.set(
+                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
+                "not a valid endpoint",
+            );
+            tokio::runtime::Runtime::new()
+                .expect("runtime")
+                .block_on(async {
+                    run(Cli {
+                        command: Some(Commands::Init {
+                            storage: storage.clone(),
+                            skip_if_exists: false,
+                        }),
+                        verbose: false,
+                    })
+                    .await
+                    .expect("init db");
+                    run(Cli {
+                        command: Some(Commands::SiteConfig {
+                            action: SiteConfigAction::Set {
+                                storage,
+                                key: SiteConfigKey::SiteRegistrationPolicy,
+                                value: "open".to_string(),
+                            },
+                        }),
+                        verbose: false,
+                    })
+                    .await
+                    .expect("site-config set");
+                });
+            assert!(!capture.path().join("diag.log").exists());
+        });
+    }
     #[tokio::test]
     async fn run_smtp_test_fails_when_smtp_not_configured() {
         let base = TempDir::new().unwrap();

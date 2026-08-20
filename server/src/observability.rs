@@ -284,11 +284,6 @@ pub fn init_server_tracing(verbose: bool) -> host::telemetry::TelemetryGuard {
     init_tracing_impl(verbose)
 }
 
-#[must_use]
-pub fn init_tracing(verbose: bool) -> host::telemetry::TelemetryGuard {
-    init_server_tracing(verbose)
-}
-
 /// Trace context extracted from inbound request headers (W3C `traceparent`),
 /// stashed in request extensions so the request span can adopt it as parent.
 #[derive(Clone)]

@@ -74,6 +74,32 @@ fn capture_path_prints_the_derived_absolute_path() {
     );
 }
 
+#[test]
+fn capture_path_initializes_telemetry_without_writing_diag_log() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let capture_dir = dir.path().join("capture");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_test-support"))
+        .args(["capture-path", "mail"])
+        .env("JAUNDER_CAPTURE_DIR", &capture_dir)
+        .env(
+            "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
+            "not a valid endpoint",
+        )
+        .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .output()
+        .expect("spawn test-support binary");
+
+    assert!(out.status.success(), "capture-path should exit 0");
+    assert!(!capture_dir.join("diag.log").exists());
+    let stderr = String::from_utf8(out.stderr).expect("stderr utf8");
+    assert!(
+        stderr.contains("tracing export disabled")
+            || stderr.contains("invalid configured value; export disabled"),
+        "telemetry init fallback proves the guard ran; stderr: {stderr}"
+    );
+}
+
 /// An unknown stream key is a caller error, not a silent empty path: `capture-path`
 /// must reject it loudly so a typo in a Playwright reader fails fast rather than
 /// shelling out to a bogus filename.
