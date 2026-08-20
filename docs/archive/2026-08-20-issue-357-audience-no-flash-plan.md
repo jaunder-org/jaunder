@@ -252,5 +252,5 @@ a global `Loading members…` count.
 - [x] Run `devtool run -- cargo xtask e2e-local audiences.spec.ts` after Task 1.
 - [x] Run `devtool run -- cargo xtask e2e-local visibility.spec.ts` after
       Task 2.
-- [ ] Run `devtool run -- cargo xtask validate` after both commits, before
+- [x] Run `devtool run -- cargo xtask validate` after both commits, before
       shipping. Expected: PASS across all required checks and E2E combinations.
