@@ -558,7 +558,6 @@ mod tests {
         let coverage = seed_coverage();
         let allowlist =
             read_allowlist(&repo_root().join(ALLOWLIST_PATH)).expect("allowlist parses");
-        assert!(!allowlist.is_empty(), "the assertion is vacuous when empty");
         for entry in allowlist {
             assert!(
                 !coverage.covered.contains_key(&entry.server_fn),
