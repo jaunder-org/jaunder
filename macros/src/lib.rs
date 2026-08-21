@@ -1128,6 +1128,23 @@ mod tests {
     }
 
     #[test]
+    fn num_newtype_generates_public_unit_error_shape() {
+        let input: DeriveInput = parse_quote! {
+            #[num_newtype(inner = u32, min = 1, error = "count must be positive")]
+            struct Count(u32);
+        };
+        let out = sqlx_bridge::tests::norm(&num_newtype::expand(&input));
+        assert!(out.contains("pubstructInvalidCount;"));
+        assert!(out.contains(&sqlx_bridge::tests::norm_s(
+            "#[derive(::core::fmt::Debug, ::core::clone::Clone, ::core::marker::Copy, \
+             ::core::cmp::PartialEq, ::core::cmp::Eq)]"
+        )));
+        assert!(out.contains("::core::fmt::DisplayforInvalidCount"));
+        assert!(out.contains("f.write_str(\"countmustbepositive\")"));
+        assert!(out.contains("::std::error::ErrorforInvalidCount"));
+    }
+
+    #[test]
     fn num_newtype_max_only_emits_max_check_and_at_most_message() {
         let input: DeriveInput = parse_quote! {
             #[num_newtype(inner = u32, max = 100)]

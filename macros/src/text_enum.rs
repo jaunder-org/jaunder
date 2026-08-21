@@ -490,7 +490,10 @@ mod tests {
              ::core::cmp::PartialEq, ::core::cmp::Eq)]"
         )));
         assert!(out.contains("::core::fmt::DisplayforInvalidX"));
+        assert!(out.contains("f.write_str(\"badx\")"));
         assert!(out.contains("::std::error::ErrorforInvalidX"));
+        assert!(out.contains("fn__x_parse_err(_:&str)->InvalidX"));
+        assert!(out.contains("InvalidX}"));
         assert!(
             !out.contains("thiserror"),
             "must not require a thiserror dependency"
