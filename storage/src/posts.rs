@@ -328,13 +328,17 @@ pub(crate) const INSERT_POST_TAG: &str = "INSERT INTO post_tags
 pub(crate) const DELETE_POST_TAG_BY_SLUG: &str = "DELETE FROM post_tags
      WHERE post_id = $1 AND tag_id = (SELECT tag_id FROM tags WHERE tag_slug = $2)";
 
+pub(crate) type PostOwnershipRow = (UserId, Option<DateTime<Utc>>);
+pub(crate) type TagListRow = (TagId, Tag);
+pub(crate) type PostTagRow = (PostId, TagId, Tag, TagLabel);
+
 /// Maps [`SELECT_POST_TAGS`] rows to [`PostTag`].
 ///
 /// The row tuple's first two positions are `post_id` and `tag_id` — adjacent ids
 /// of the same width. Typing them rather than `i64` is what stops a swapped
 /// destructuring from compiling (ADR-0063 §2); the SELECT's column order is the
 /// only thing that pairs them otherwise.
-pub(crate) fn post_tags_from_rows(rows: Vec<(PostId, TagId, Tag, TagLabel)>) -> Vec<PostTag> {
+pub(crate) fn post_tags_from_rows(rows: Vec<PostTagRow>) -> Vec<PostTag> {
     rows.into_iter()
         .map(|(post_id, tag_id, tag_slug, tag_display)| PostTag {
             post_id,
@@ -961,8 +965,8 @@ where
     PostRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     (PostId,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (bool,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (PostId, TagId, Tag, TagLabel): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (TagId, Tag): for<'r> sqlx::FromRow<'r, DB::Row>,
+    PostTagRow: for<'r> sqlx::FromRow<'r, DB::Row>,
+    TagListRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     (TargetKind, Option<AudienceId>): for<'r> sqlx::FromRow<'r, DB::Row>,
     (DateTime<Utc>,): for<'r> sqlx::FromRow<'r, DB::Row>,
     // `feed_urls_needing_catchup` reads `feed_cache` a row at a time (a bad `feed_url`
@@ -1807,7 +1811,7 @@ where
 
         let rows = match pattern {
             Some(ref like) => {
-                sqlx::query_as::<_, (TagId, Tag)>(
+                sqlx::query_as::<_, TagListRow>(
                     "SELECT tag_id, tag_slug FROM tags
                      WHERE tag_slug LIKE $1
                      ORDER BY tag_slug
@@ -1819,7 +1823,7 @@ where
                 .await?
             }
             None => {
-                sqlx::query_as::<_, (TagId, Tag)>(
+                sqlx::query_as::<_, TagListRow>(
                     "SELECT tag_id, tag_slug FROM tags
                      ORDER BY tag_slug
                      LIMIT $1",

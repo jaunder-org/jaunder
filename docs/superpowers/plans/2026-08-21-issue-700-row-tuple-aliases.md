@@ -335,7 +335,7 @@ git add docs/superpowers/plans/2026-08-21-issue-700-row-tuple-aliases.md storage
 git commit -m "refactor(storage): classify token state rows centrally (#700)"
 ```
 
-### Task 3: Name post row shapes and update `FromRow` bounds
+### Task 3: Name post row shapes and update `FromRow` bounds — DONE
 
 **Files:**
 
@@ -352,7 +352,7 @@ git commit -m "refactor(storage): classify token state rows centrally (#700)"
   `TagListRow = (TagId, Tag)`, `PostTagRow = (PostId, TagId, Tag, TagLabel)`,
   and `post_tags_from_rows(rows: Vec<PostTagRow>) -> Vec<PostTag>`.
 
-- [ ] **Step 1: Name the post rows**
+- [x] **Step 1: Name the post rows**
 
 Define the row aliases where the import graph stays simplest:
 
@@ -372,7 +372,7 @@ Replace inline `query_as` tuple targets at:
 Update every affected generic or backend impl bound from the raw tuple to the
 new alias.
 
-- [ ] **Step 2: Run focused post/tag tests**
+- [x] **Step 2: Run focused post/tag tests**
 
 Run:
 
@@ -382,7 +382,7 @@ devtool run -- cargo nextest run -p storage posts
 
 Expected: PASS.
 
-- [ ] **Step 3: Commit the post row aliases**
+- [x] **Step 3: Commit the post row aliases**
 
 Tick this task checkbox, then run:
 
