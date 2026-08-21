@@ -617,7 +617,7 @@ Do not add the ADR draft; it is intentionally gitignored until ship promotion.
 - Consumes: all prior task commits.
 - Produces: a clean branch ready for `jaunder-ship`.
 
-- [ ] **Step 1: Run final focused proofs**
+- [x] **Step 1: Run final focused proofs**
 
 Run:
 
@@ -630,7 +630,7 @@ devtool run -- cargo xtask validate --no-e2e
 
 Expected: PASS for all.
 
-- [ ] **Step 2: Run the branch gate**
+- [x] **Step 2: Run the branch gate**
 
 Run:
 
@@ -640,7 +640,7 @@ devtool run -- cargo xtask check
 
 Expected: PASS.
 
-- [ ] **Step 3: Inspect branch diff for stale policy language**
+- [x] **Step 3: Inspect branch diff for stale policy language**
 
 Run:
 
@@ -652,7 +652,7 @@ Expected: remaining hits are either historical ADR/archive text, accurately
 qualified old context, or current implementation references. Fix stale current
 docs/comments before proceeding.
 
-- [ ] **Step 4: Commit final plan state if needed**
+- [x] **Step 4: Commit final plan state if needed**
 
 If only the plan checkbox state changed since the previous commit, run the
 normal gate and commit:
