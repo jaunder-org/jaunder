@@ -353,3 +353,16 @@ shared helper rather than only proving behavior.
 - Placeholder scan: no `TODO`, `TBD`, or unspecified test steps remain.
 - Type consistency: the helper signature is declared once and consumed
   consistently by both adapter steps.
+
+## Verification Evidence
+
+- `devtool run -- cargo test -p macros num_newtype_generates_public_unit_error_shape`
+  passed before and after the shared-helper refactor.
+- `devtool run -- cargo test -p macros generates_a_unit_error_matching_the_num_newtype_precedent`
+  passed before and after the shared-helper refactor.
+- `devtool run -- cargo test -p macros --test text_enum` passed before and after
+  the shared-helper refactor.
+- `devtool run -- cargo test -p macros --test num_newtype` passed before and
+  after the shared-helper refactor.
+- `devtool run -- cargo xtask check` passed for the Task 1 staged tree, the Task
+  2 staged tree, and the final plan-progress staged tree.
