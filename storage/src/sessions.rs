@@ -239,7 +239,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{Backend, CloseablePool, SeedUser, TestEnv, backends};
+    use crate::test_support::{Backend, SeedUser, TestEnv, backends};
     use common::test_support::{parse_raw_token, parse_session_label};
     use rstest::*;
     use rstest_reuse::*;
@@ -300,22 +300,13 @@ mod tests {
         // `&str` so the bad value actually lands in the column — the typed bind
         // could not produce it.
         let sql = "UPDATE sessions SET token_hash = $1";
-        match env.base.pool() {
-            CloseablePool::Sqlite(pool) => {
-                sqlx::query(sql)
-                    .bind("bad hash")
-                    .execute(pool)
-                    .await
-                    .unwrap();
-            }
-            CloseablePool::Postgres(pool) => {
-                sqlx::query(sql)
-                    .bind("bad hash")
-                    .execute(pool)
-                    .await
-                    .unwrap();
-            }
-        }
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query(sql)
+                .bind("bad hash")
+                .execute(pool)
+                .await
+                .unwrap();
+        });
 
         // The read decodes the `token_hash` column into `TokenHash` via the sqlx
         // bridge, which validates through `FromStr`; the malformed value surfaces

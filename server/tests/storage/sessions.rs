@@ -204,21 +204,12 @@ async fn session_list_operations(#[case] backend: Backend) {
     assert_eq!(record.user_id, user);
 }
 
-macro_rules! with_backend_pool {
-    ($pool:expr, $backend_pool:ident, $body:block) => {
-        match $pool {
-            CloseablePool::Sqlite($backend_pool) => $body,
-            CloseablePool::Postgres($backend_pool) => $body,
-        }
-    };
-}
-
 async fn set_last_used_at(
     pool: &CloseablePool,
     token_hash: &TokenHash,
     last_used_at: DateTime<Utc>,
 ) {
-    with_backend_pool!(pool, pool, {
+    storage::with_closeable_pool!(pool, pool, {
         sqlx::query("UPDATE sessions SET last_used_at = $1 WHERE token_hash = $2")
             .bind(last_used_at)
             .bind(token_hash)
@@ -229,7 +220,7 @@ async fn set_last_used_at(
 }
 
 async fn load_last_used_at(pool: &CloseablePool, token_hash: &TokenHash) -> DateTime<Utc> {
-    with_backend_pool!(pool, pool, {
+    storage::with_closeable_pool!(pool, pool, {
         sqlx::query_scalar("SELECT last_used_at FROM sessions WHERE token_hash = $1")
             .bind(token_hash)
             .fetch_one(pool)

@@ -821,16 +821,6 @@ const ALLOWLIST: &[Allowed] = &[
     // ---- test scaffolding ----
     Allowed {
         file: "test_support.rs",
-        function: "string_triples",
-        target: "Result<Vec<(String,String,String)>,sqlx::Error>",
-        what: "sql",
-        count: 2,
-        category: Category::TestScaffolding,
-        reason: "a generic test row helper; the SQL is a runtime &str and the shape comes from \
-                 the fn return. The two dialect arms are byte-identical",
-    },
-    Allowed {
-        file: "test_support.rs",
         function: "ensure_template_db",
         target: "bool",
         what: "\"SELECTEXISTS(SELECT1FROMpg_databaseWHEREdatname=$1)\"",
@@ -856,15 +846,6 @@ const ALLOWLIST: &[Allowed] = &[
         count: 1,
         category: Category::CountOrExists,
         reason: "COUNT(*) of live Postgres tables, the dialect twin of the SQLite arm above",
-    },
-    Allowed {
-        file: "backup.rs",
-        function: "database_is_empty_ignores_only_seeded_lookups",
-        target: "i64",
-        what: "&format!(\"SELECTCOUNT(*)FROM{table}\")",
-        count: 2,
-        category: Category::CountOrExists,
-        reason: "COUNT(*) per seeded lookup table; the two dialect arms are byte-identical",
     },
     Allowed {
         file: "sqlite/open.rs",
@@ -901,15 +882,6 @@ const ALLOWLIST: &[Allowed] = &[
         count: 1,
         category: Category::SchemaIntrospection,
         reason: "MAX(version) migration version, the dialect twin of the Postgres one",
-    },
-    Allowed {
-        file: "test_support.rs",
-        function: "scalar_i64",
-        target: "Result<i64,sqlx::Error>",
-        what: "sql",
-        count: 2,
-        category: Category::TestScaffolding,
-        reason: "Generic test scalar helper; SQL is a runtime &str and the type comes from the fn return",
     },
     Allowed {
         file: "subscriptions.rs",
@@ -1481,6 +1453,14 @@ fn entry_matches(entry: &Allowed, path: &str, decode: &DecodeSite) -> bool {
 /// declared count no longer matches the tree, or `None` when the population is exactly
 /// accounted for. Pure given the `(path, source)` pairs, so it is unit-tested directly.
 pub(crate) fn problems(scanned: &[(String, String)], approve: &ApproveSet) -> Option<String> {
+    problems_with_allowlist(scanned, approve, ALLOWLIST)
+}
+
+fn problems_with_allowlist(
+    scanned: &[(String, String)],
+    approve: &ApproveSet,
+    allowlist: &[Allowed],
+) -> Option<String> {
     let mut found: Vec<(String, DecodeSite)> = Vec::new();
     let mut lines = Vec::new();
     for (path, source) in scanned {
@@ -1506,7 +1486,7 @@ pub(crate) fn problems(scanned: &[(String, String)], approve: &ApproveSet) -> Op
 
     // Unjustified decodes: nothing in the allowlist names them.
     for (path, d) in &found {
-        if !ALLOWLIST.iter().any(|e| entry_matches(e, path, d)) {
+        if !allowlist.iter().any(|e| entry_matches(e, path, d)) {
             lines.push(format!(
                 "{path}:{}: `{}` decodes into `{}`, whose leaf type(s) {} are not approved column \
                  types. If the column holds a domain value, decode it straight into its type — the \
@@ -1524,7 +1504,7 @@ pub(crate) fn problems(scanned: &[(String, String)], approve: &ApproveSet) -> Op
 
     // Stale or drifted entries: an allowlist that stops tracking the tree is an
     // allowlist that has silently become a region exemption.
-    for e in ALLOWLIST {
+    for e in allowlist {
         let seen = found
             .iter()
             .filter(|(path, d)| entry_matches(e, path, d))
@@ -1546,7 +1526,7 @@ pub(crate) fn problems(scanned: &[(String, String)], approve: &ApproveSet) -> Op
         }
     }
 
-    lines.extend(allowlist_self_problems(ALLOWLIST));
+    lines.extend(allowlist_self_problems(allowlist));
 
     if lines.is_empty() {
         return None;
@@ -1561,7 +1541,7 @@ pub(crate) fn problems(scanned: &[(String, String)], approve: &ApproveSet) -> Op
             .to_string(),
     );
     for category in Category::ALL {
-        let mut group = ALLOWLIST
+        let mut group = allowlist
             .iter()
             .filter(|a| a.category == *category)
             .peekable();
@@ -1781,6 +1761,13 @@ mod tests {
     /// [`problems`] against the synthetic approve-set.
     fn problems_of(scanned: &[(String, String)]) -> Option<String> {
         problems(scanned, &approve())
+    }
+
+    fn problems_of_with_allowlist(
+        scanned: &[(String, String)],
+        allowlist: &[Allowed],
+    ) -> Option<String> {
+        problems_with_allowlist(scanned, &approve(), allowlist)
     }
 
     // ---- the population: each of the three call-site type positions bites ----
@@ -2152,45 +2139,62 @@ mod tests {
 
     // ---- the allowlist is site-scoped, and its count is load-bearing ----
 
-    /// A source with `n` identical `COUNT(*)` decodes inside `scalar_i64`, matching the
-    /// shape of the real `test_support.rs` entry.
+    /// A source with `n` identical allowlisted `COUNT(*)` decodes.
     fn identical_sites(n: usize) -> String {
-        let arms: String = (0..n)
-            .map(|_| "P(pool) => sqlx::query_scalar(sql).fetch_one(pool).await,\n".to_string())
+        let decodes: String = (0..n)
+            .map(|_| {
+                r#"sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+                )
+                .fetch_one(pool)
+                .await?;
+"#
+                .to_string()
+            })
             .collect();
         format!(
-            "async fn scalar_i64(&self, sql: &str) -> Result<i64, sqlx::Error> {{ match self {{ {arms} }} }}"
+            "async fn backup_covers_every_table_or_deliberately_excludes_it() -> Result<(), sqlx::Error> {{ {decodes} Ok(()) }}"
         )
     }
 
+    fn backup_count_entry() -> Allowed {
+        Allowed {
+            file: "backup.rs",
+            function: "backup_covers_every_table_or_deliberately_excludes_it",
+            target: "i64",
+            what: "\"SELECTCOUNT(*)FROMsqlite_masterWHEREtype='table'ANDnameNOTLIKE'sqlite_%'\"",
+            count: 1,
+            category: Category::CountOrExists,
+            reason: "COUNT(*) of live SQLite tables, checked against the backup manifest",
+        }
+    }
+
     #[test]
-    fn an_entry_count_of_two_passes_on_two_and_fails_on_three() {
+    fn an_entry_count_passes_on_one_and_fails_on_two() {
         // The property that stops an entry becoming a region exemption. The real
-        // `test_support.rs` entry declares 2; a third identical decode must NOT be
+        // backup-manifest entry declares 1; a second identical decode must NOT be
         // silently absorbed by it.
         //
         // Scanning one file in isolation legitimately makes the other nine entries
         // stale, so the assertion is scoped to this entry's own message rather than to
         // `problems` returning `None`.
-        let two = vec![(
-            "storage/src/test_support.rs".to_string(),
-            identical_sites(2),
-        )];
-        let two_detail = problems_of(&two).unwrap_or_default();
+        let one = vec![("storage/src/backup.rs".to_string(), identical_sites(1))];
+        let allowlist = [backup_count_entry()];
+        let one_detail = problems_of_with_allowlist(&one, &allowlist).unwrap_or_default();
         // Match the failure phrasing, not the bare key — the recovery footer lists
         // every entry by key, including this one.
         assert!(
-            !two_detail.contains("test_support.rs::scalar_i64: allowlist entry"),
-            "two sites match the declared count, so this entry must not complain: {two_detail}"
+            !one_detail.contains(
+                "backup.rs::backup_covers_every_table_or_deliberately_excludes_it: allowlist entry"
+            ),
+            "one site matches the declared count, so this entry must not complain: {one_detail}"
         );
 
-        let three = vec![(
-            "storage/src/test_support.rs".to_string(),
-            identical_sites(3),
-        )];
-        let detail = problems_of(&three).expect("a third identical decode must fail");
+        let two = vec![("storage/src/backup.rs".to_string(), identical_sites(2))];
+        let detail = problems_of_with_allowlist(&two, &allowlist)
+            .expect("a second identical decode must fail");
         assert!(
-            detail.contains("declares 2 site(s), the tree has 3"),
+            detail.contains("declares 1 site(s), the tree has 2"),
             "{detail}"
         );
     }
@@ -2199,14 +2203,18 @@ mod tests {
     fn an_entry_exempts_only_the_decode_it_names() {
         // A different `i64` decode in the same allowlisted function is still a failure —
         // the entry covers one decode, never a region.
-        let src = "async fn scalar_i64(&self, sql: &str) -> Result<i64, sqlx::Error> { \
-                   match self { \
-                   P(pool) => sqlx::query_scalar(sql).fetch_one(pool).await, \
-                   Q(pool) => sqlx::query_scalar(sql).fetch_one(pool).await, \
-                   R(pool) => sqlx::query_scalar(\"SELECT owner_id FROM t\").fetch_one(pool).await, \
-                   } }";
-        let detail = problems_of(&[("storage/src/test_support.rs".to_string(), src.to_string())])
-            .expect("the unlisted sibling decode must fail");
+        let src = format!(
+            "{} {}",
+            identical_sites(1),
+            "async fn backup_covers_every_table_or_deliberately_excludes_it_extra() -> Result<(), sqlx::Error> { \
+             let _: i64 = sqlx::query_scalar(\"SELECT owner_id FROM t\").fetch_one(pool).await?; \
+             Ok(()) \
+             }"
+        );
+        let allowlist = [backup_count_entry()];
+        let detail =
+            problems_of_with_allowlist(&[("storage/src/backup.rs".to_string(), src)], &allowlist)
+                .expect("the unlisted sibling decode must fail");
         assert!(detail.contains("SELECTowner_idFROMt"), "{detail}");
     }
 

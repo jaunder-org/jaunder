@@ -776,18 +776,11 @@ mod tests {
             "a freshly-initialized database must count as empty"
         );
         for table in ["channels", "subscription_statuses", "target_kinds"] {
-            let count: i64 = match env.base.pool() {
-                CloseablePool::Sqlite(pool) => {
-                    sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table}"))
-                        .fetch_one(pool)
-                        .await?
-                }
-                CloseablePool::Postgres(pool) => {
-                    sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table}"))
-                        .fetch_one(pool)
-                        .await?
-                }
-            };
+            let count: i64 = crate::with_closeable_pool!(env.base.pool(), pool, {
+                sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table}"))
+                    .fetch_one(pool)
+                    .await?
+            });
             assert!(count > 0, "{table} must be seeded by migrations");
         }
 

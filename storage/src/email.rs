@@ -199,7 +199,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{Backend, CloseablePool, SeedUser, TestEnv, backends};
+    use crate::test_support::{Backend, SeedUser, TestEnv, backends};
     use common::test_support::parse_email;
     use rstest::*;
     use rstest_reuse::*;
@@ -253,22 +253,13 @@ mod tests {
         // Overwrite the `email` column with a value `Email::from_str` rejects,
         // binding it as a raw `&str` so the bad value actually lands in the column.
         let sql = "UPDATE email_verifications SET email = $1";
-        match env.base.pool() {
-            CloseablePool::Sqlite(pool) => {
-                sqlx::query(sql)
-                    .bind("not-an-email")
-                    .execute(pool)
-                    .await
-                    .unwrap();
-            }
-            CloseablePool::Postgres(pool) => {
-                sqlx::query(sql)
-                    .bind("not-an-email")
-                    .execute(pool)
-                    .await
-                    .unwrap();
-            }
-        }
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query(sql)
+                .bind("not-an-email")
+                .execute(pool)
+                .await
+                .unwrap();
+        });
 
         // The claim query decodes the `email` column into `Email` via the sqlx
         // bridge; a corrupt value is a data-integrity fault, surfaced as
