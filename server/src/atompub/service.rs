@@ -9,6 +9,7 @@ use axum::response::{IntoResponse, Response};
 use common::atompub::{
     CollectionDecl, CollectionTitle, ServiceDocument, WorkspaceTitle, render_service_document,
 };
+use common::media::ContentType;
 use common::pagination::RowLimit;
 use common::tagged_url::{CollectionHref, compose};
 use storage::{PostStorage, SiteConfigStorage};
@@ -16,8 +17,14 @@ use web::auth::AuthUser;
 
 use super::{HandlerError, required_base_url};
 
-/// Media types the media collection accepts.
-const MEDIA_ACCEPT: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
+fn media_accept() -> Vec<ContentType> {
+    vec![
+        ContentType::image_png(),
+        ContentType::image_jpeg(),
+        ContentType::image_gif(),
+        ContentType::image_webp(),
+    ]
+}
 
 /// `GET /atompub/service` — the authenticated user's `AtomPub` service document.
 ///
@@ -51,13 +58,13 @@ pub async fn service_document(
             // turbofish on the tag — the alias rule's stated exception.
             href: compose::<CollectionHref>(&base, &posts_path),
             title: CollectionTitle::posts(),
-            accept: vec!["application/atom+xml;type=entry".to_string()],
+            accept: vec![ContentType::atom_entry()],
             categories,
         },
         media_collection: CollectionDecl {
             href: compose::<CollectionHref>(&base, &media_path),
             title: CollectionTitle::media(),
-            accept: MEDIA_ACCEPT.iter().map(|s| (*s).to_string()).collect(),
+            accept: media_accept(),
             categories: Vec::new(),
         },
     };

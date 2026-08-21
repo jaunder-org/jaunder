@@ -8,7 +8,7 @@ use axum::{
 use clap::Parser as _;
 use common::config_key::SiteConfigKey;
 use common::password::Password;
-use common::test_support::{parse_invite_ttl_hours, parse_session_label};
+use common::test_support::{parse_email, parse_invite_ttl_hours, parse_session_label};
 use common::username::Username;
 use jaunder::cli::{Cli, Commands, StorageArgs};
 use jaunder::commands::{
@@ -186,7 +186,9 @@ async fn command_source_chain_cmd_smtp_test_open(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
     let args = uninitialized_storage_args(backend, &base);
 
-    let error = cmd_smtp_test(&args, "to@example.com").await.unwrap_err();
+    let error = cmd_smtp_test(&args, &parse_email("to@example.com"))
+        .await
+        .unwrap_err();
 
     assert_database_open_source(&error, "cmd_smtp_test");
 }
@@ -209,7 +211,9 @@ async fn command_source_chain_cmd_smtp_test_invalid_sender(#[case] backend: Back
         .await
         .expect("set sender");
 
-    let error = cmd_smtp_test(&args, "to@example.com").await.unwrap_err();
+    let error = cmd_smtp_test(&args, &parse_email("to@example.com"))
+        .await
+        .unwrap_err();
 
     assert_eq!(error.to_string(), "failed to build SMTP transport");
     assert!(
@@ -239,7 +243,9 @@ async fn command_source_chain_cmd_smtp_test_send(#[case] backend: Backend) {
             .expect("set SMTP config");
     }
 
-    let error = cmd_smtp_test(&args, "to@example.com").await.unwrap_err();
+    let error = cmd_smtp_test(&args, &parse_email("to@example.com"))
+        .await
+        .unwrap_err();
 
     assert_eq!(error.to_string(), "failed to send test email");
     assert!(
@@ -875,7 +881,7 @@ async fn cmd_smtp_test_fails_when_not_initialized(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
     let args = uninitialized_storage_args(backend, &base);
 
-    let result = cmd_smtp_test(&args, "alice@example.com").await;
+    let result = cmd_smtp_test(&args, &parse_email("alice@example.com")).await;
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(
@@ -891,7 +897,7 @@ async fn cmd_smtp_test_fails_when_smtp_not_configured(#[case] backend: Backend) 
     let (args, _pg) = storage_args(backend, &base).await;
     cmd_init(&args, false).await.expect("init");
 
-    let result = cmd_smtp_test(&args, "alice@example.com").await;
+    let result = cmd_smtp_test(&args, &parse_email("alice@example.com")).await;
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(
@@ -945,49 +951,10 @@ async fn cmd_smtp_test_succeeds_with_mock_server(#[case] backend: Backend) {
         .await
         .expect("set password");
 
-    cmd_smtp_test(&args, "alice@example.com")
+    cmd_smtp_test(&args, &parse_email("alice@example.com"))
         .await
         .expect("smtp test should succeed");
 
     let assertion = maik::MailAssertion::new().recipients_are(["alice@example.com"]);
     assert!(server.assert(assertion));
-}
-
-#[apply(backends)]
-#[tokio::test]
-async fn cmd_smtp_test_fails_on_invalid_to_address(#[case] backend: Backend) {
-    let base = TempDir::new().expect("temp dir");
-    let (args, _pg) = storage_args(backend, &base).await;
-    cmd_init(&args, false).await.expect("init");
-
-    // Configure SMTP so we get past the "not configured" check.
-    let state = open_existing_database(&args.db).await.expect("open db");
-    state
-        .site_config
-        .set(SiteConfigKey::SmtpHost, "mail.example.com")
-        .await
-        .expect("set smtp.host");
-    state
-        .site_config
-        .set(SiteConfigKey::SmtpPort, "587")
-        .await
-        .expect("set smtp.port");
-    state
-        .site_config
-        .set(SiteConfigKey::SmtpTlsMode, "plain")
-        .await
-        .expect("set smtp.tls_mode");
-    state
-        .site_config
-        .set(SiteConfigKey::SmtpSender, "noreply@example.com")
-        .await
-        .expect("set smtp.sender");
-
-    let result = cmd_smtp_test(&args, "not-an-email").await;
-    assert!(result.is_err());
-    let msg = result.unwrap_err().to_string();
-    assert!(
-        msg.contains("not-an-email") && msg.contains("invalid email address"),
-        "expected the offending input and the typed parse reason, got: {msg}"
-    );
 }

@@ -51,7 +51,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use common::config_key::SiteConfigKey;
-    use common::test_support::parse_session_label;
+    use common::test_support::{parse_email, parse_password, parse_session_label};
     use jaunder::cli::{
         Cli, CliBackupMode, Commands, PgBootstrapArgs, SiteConfigAction, StorageArgs,
     };
@@ -97,7 +97,7 @@ mod tests {
             command: Some(Commands::UserCreate {
                 storage,
                 username: "alice".parse().unwrap(),
-                password: Some("password123".to_string()),
+                password: Some(parse_password("password123")),
                 display_name: None,
                 operator: false,
             }),
@@ -254,7 +254,7 @@ mod tests {
         let cli = Cli {
             command: Some(Commands::SmtpTest {
                 storage,
-                to: "alice@example.com".to_string(),
+                to: parse_email("alice@example.com"),
             }),
             verbose: false,
         };
@@ -284,7 +284,7 @@ mod tests {
             command: Some(Commands::UserCreate {
                 storage: storage.clone(),
                 username: "alice".parse().unwrap(),
-                password: Some("password123".to_string()),
+                password: Some(parse_password("password123")),
                 display_name: None,
                 operator: false,
             }),
@@ -374,27 +374,6 @@ mod tests {
                 "arguments are valid; the failure must come from the connection: {msg}"
             );
         }
-    }
-
-    #[tokio::test]
-    async fn run_user_create_rejects_invalid_password() {
-        let base = TempDir::new().unwrap();
-        let storage = test_storage_args(&base);
-        let cli = Cli {
-            command: Some(Commands::UserCreate {
-                storage,
-                username: "alice".parse().unwrap(),
-                password: Some("short".to_string()),
-                display_name: None,
-                operator: false,
-            }),
-            verbose: false,
-        };
-        let err = run(cli).await.unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("password must be at least 8 characters")
-        );
     }
 
     #[tokio::test]
