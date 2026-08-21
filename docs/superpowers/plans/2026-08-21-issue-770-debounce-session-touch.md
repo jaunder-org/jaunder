@@ -486,7 +486,7 @@ git add docs/ARCHITECTURE.md docs/superpowers/plans/2026-08-21-issue-770-debounc
 git commit -m "docs(storage): record bounded-stale session usage metadata (#770)"
 ```
 
-- [ ] **Step 4: Run the branch-level gate**
+- [x] **Step 4: Run the branch-level gate**
 
 Run: `devtool run -- cargo xtask validate --no-e2e`
 
