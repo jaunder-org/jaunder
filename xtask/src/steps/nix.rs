@@ -823,7 +823,7 @@ mod tests {
         CommandResult, FailedBuildDiagnostics, StepResult, check_supporting_test_check_names,
         doctest_sentinel_detail, drain_build_stderr, failed_build_after_diagnostics_with,
         failed_status_step, prepare_build_dirs_with, report_build_diagnostic_failure,
-        test_check_names, validate_check_names,
+        sentinel_detail, test_check_names, validate_check_names,
     };
     use coverage::status::{CoverageStatus, StatusCategory};
     use doctests::check::{Kind, Violation};
