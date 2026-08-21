@@ -539,6 +539,29 @@ pub fn text_enum(attr: TokenStream, item: TokenStream) -> TokenStream {
     text_enum::expand(attr.into(), &item).into()
 }
 
+/// Emits the public unit error shape shared by the macro-generated validation errors.
+pub(crate) fn public_unit_error_type(
+    error: &syn::Ident,
+    doc: &str,
+    message: &proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    quote::quote! {
+        #[doc = #doc]
+        #[derive(::core::fmt::Debug, ::core::clone::Clone, ::core::marker::Copy, ::core::cmp::PartialEq, ::core::cmp::Eq)]
+        pub struct #error;
+
+        #[automatically_derived]
+        impl ::core::fmt::Display for #error {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                f.write_str(#message)
+            }
+        }
+
+        #[automatically_derived]
+        impl ::std::error::Error for #error {}
+    }
+}
+
 /// The field shapes a newtype derive will accept.
 #[derive(Clone, Copy)]
 pub(crate) enum NewtypeShape {
@@ -1125,6 +1148,23 @@ mod tests {
         };
         let out = num_newtype::expand(&input).to_string();
         assert!(out.contains("must be a whole number of at least 1"));
+    }
+
+    #[test]
+    fn num_newtype_generates_public_unit_error_shape() {
+        let input: DeriveInput = parse_quote! {
+            #[num_newtype(inner = u32, min = 1, error = "count must be positive")]
+            struct Count(u32);
+        };
+        let out = sqlx_bridge::tests::norm(&num_newtype::expand(&input));
+        assert!(out.contains("pubstructInvalidCount;"));
+        assert!(out.contains(&sqlx_bridge::tests::norm_s(
+            "#[derive(::core::fmt::Debug, ::core::clone::Clone, ::core::marker::Copy, \
+             ::core::cmp::PartialEq, ::core::cmp::Eq)]"
+        )));
+        assert!(out.contains("::core::fmt::DisplayforInvalidCount"));
+        assert!(out.contains("f.write_str(\"countmustbepositive\")"));
+        assert!(out.contains("::std::error::ErrorforInvalidCount"));
     }
 
     #[test]

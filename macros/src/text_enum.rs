@@ -157,21 +157,8 @@ fn strum_derive_name(path: &Path) -> Option<String> {
 /// these by name and its assertions construct them as bare unit expressions.
 fn error_type(error: &syn::Ident, message: &syn::LitStr, enum_name: &syn::Ident) -> TokenStream {
     let doc = format!("Parse error for [`{enum_name}`]'s string token.");
-    quote! {
-        #[doc = #doc]
-        #[derive(::core::fmt::Debug, ::core::clone::Clone, ::core::marker::Copy, ::core::cmp::PartialEq, ::core::cmp::Eq)]
-        pub struct #error;
-
-        #[automatically_derived]
-        impl ::core::fmt::Display for #error {
-            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-                f.write_str(#message)
-            }
-        }
-
-        #[automatically_derived]
-        impl ::std::error::Error for #error {}
-    }
+    let message = quote! { #message };
+    crate::public_unit_error_type(error, &doc, &message)
 }
 
 /// The serde bridge as direct impls: serialize the `&'static str` token (no allocation,
@@ -490,7 +477,10 @@ mod tests {
              ::core::cmp::PartialEq, ::core::cmp::Eq)]"
         )));
         assert!(out.contains("::core::fmt::DisplayforInvalidX"));
+        assert!(out.contains("f.write_str(\"badx\")"));
         assert!(out.contains("::std::error::ErrorforInvalidX"));
+        assert!(out.contains("fn__x_parse_err(_:&str)->InvalidX"));
+        assert!(out.contains("InvalidX}"));
         assert!(
             !out.contains("thiserror"),
             "must not require a thiserror dependency"
