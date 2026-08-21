@@ -663,7 +663,7 @@ git add docs/superpowers/plans/2026-08-21-issue-276-compiling-static-check-defin
 git commit -m "docs: finish compiling static-check plan (#276)"
 ```
 
-- [ ] **Step 5: Handoff to ship**
+- [x] **Step 5: Handoff to ship**
 
 Confirm:
 
