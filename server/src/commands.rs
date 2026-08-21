@@ -2,7 +2,7 @@ use std::{
     fs, io,
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, RwLock},
 };
 
 use anyhow::Context as _;
@@ -26,7 +26,9 @@ use host::capture;
 use host::smtp_config::SmtpConfig;
 use storage::load_smtp_config;
 use storage::{BackupExportOptions, BackupRestoreOptions, export_backup, restore_backup};
-use storage::{init_storage, open_database, open_existing_database};
+use storage::{
+    init_storage, open_database, open_existing_database, open_existing_database_with_observer,
+};
 
 const INIT_FIRST_CONTEXT: &str = "database could not be opened; run `jaunder init` first";
 
@@ -482,7 +484,7 @@ trait StartupDatabaseOperations: Sync {
     async fn open_existing(
         &self,
         options: &storage::DbConnectOptions,
-    ) -> sqlx::Result<Arc<storage::AppState>>;
+    ) -> sqlx::Result<StartupDatabase>;
 
     async fn init(&self, storage: &StorageArgs) -> anyhow::Result<()>;
 
@@ -491,13 +493,22 @@ trait StartupDatabaseOperations: Sync {
 
 struct RealStartupDatabaseOperations;
 
+struct StartupDatabase {
+    state: Arc<storage::AppState>,
+    pool_observer: storage::DbPoolObserver,
+}
+
 #[async_trait::async_trait]
 impl StartupDatabaseOperations for RealStartupDatabaseOperations {
     async fn open_existing(
         &self,
         options: &storage::DbConnectOptions,
-    ) -> sqlx::Result<Arc<storage::AppState>> {
-        open_existing_database(options).await
+    ) -> sqlx::Result<StartupDatabase> {
+        let opened = open_existing_database_with_observer(options).await?;
+        Ok(StartupDatabase {
+            state: opened.state,
+            pool_observer: opened.pool_observer,
+        })
     }
 
     async fn init(&self, storage: &StorageArgs) -> anyhow::Result<()> {
@@ -555,7 +566,7 @@ async fn open_server_database_with(
     storage: &StorageArgs,
     prod: bool,
     operations: &impl StartupDatabaseOperations,
-) -> anyhow::Result<Arc<storage::AppState>> {
+) -> anyhow::Result<StartupDatabase> {
     let open_error = match operations.open_existing(&storage.db).await {
         Ok(database) => return Ok(database),
         Err(error) => error,
@@ -597,7 +608,7 @@ async fn open_server_database_with(
 async fn open_server_database(
     storage: &StorageArgs,
     prod: bool,
-) -> anyhow::Result<Arc<storage::AppState>> {
+) -> anyhow::Result<StartupDatabase> {
     open_server_database_with(storage, prod, &RealStartupDatabaseOperations).await
 }
 
@@ -613,6 +624,47 @@ pub struct PreparedServer {
     feed_scheduler: tokio_cron_scheduler::JobScheduler,
     /// Removes the runtime-info file on drop (see ADR-0035).
     runtime_guard: runtime_file::RuntimeFileGuard,
+    pub saturation_metrics: Option<PreparedSaturationMetrics>,
+}
+
+pub struct PreparedSaturationMetrics {
+    _observables: host::metrics::SaturationObservableGuard,
+    sampler: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for PreparedSaturationMetrics {
+    fn drop(&mut self) {
+        self.sampler.abort();
+    }
+}
+
+async fn prepare_saturation_metrics(
+    db: Arc<storage::AppState>,
+    pool_observer: storage::DbPoolObserver,
+) -> anyhow::Result<Option<PreparedSaturationMetrics>> {
+    if !host::telemetry::otlp_endpoint_configured() {
+        return Ok(None);
+    }
+    let backup_config = db
+        .site_config
+        .get_backup_config()
+        .await
+        .context("failed to load backup configuration for saturation metrics")?;
+    let backup_destination_root = backup_config.destination_path.as_deref().map(PathBuf::from);
+    let snapshot = Arc::new(RwLock::new(host::metrics::SaturationSnapshot::default()));
+    let observables = host::metrics::register_saturation_observables(snapshot.clone());
+    let sources = crate::metrics::SaturationSources::real(
+        db.feed_events.clone(),
+        db.media.clone(),
+        backup_destination_root,
+        pool_observer,
+    );
+    let sampler = crate::metrics::spawn_saturation_sampler(sources, snapshot);
+
+    Ok(Some(PreparedSaturationMetrics {
+        _observables: observables,
+        sampler,
+    }))
 }
 
 /// Performs all of [`cmd_serve`]'s setup — open the database (auto-initializing
@@ -651,7 +703,11 @@ pub async fn prepare_server(
         runtime_file::StartupCheck::Stale | runtime_file::StartupCheck::Proceed => {}
     }
 
-    let db = open_server_database(storage, prod).await?;
+    let StartupDatabase {
+        state: db,
+        pool_observer,
+    } = open_server_database(storage, prod).await?;
+    let saturation_metrics = prepare_saturation_metrics(db.clone(), pool_observer).await?;
 
     let backup_scheduler = crate::backup::start_backup_worker(
         db.site_config.clone(),
@@ -695,6 +751,7 @@ pub async fn prepare_server(
         backup_scheduler,
         feed_scheduler,
         runtime_guard,
+        saturation_metrics,
     })
 }
 
@@ -794,12 +851,14 @@ pub async fn cmd_serve(
         backup_scheduler,
         feed_scheduler,
         runtime_guard,
+        saturation_metrics,
     } = prepare_server(storage, bind, prod, runtime_file).await?;
 
     tracing::info!(bind = %bind, prod, "starting HTTP server");
     // Keep the worker schedulers alive for the lifetime of the serve loop.
     let _backup_scheduler = backup_scheduler;
     let _feed_scheduler = feed_scheduler;
+    let _saturation_metrics = saturation_metrics;
     #[cfg(unix)]
     {
         // Clone the runtime-file path for the forced-exit removal before the guard
@@ -1182,7 +1241,7 @@ mod tests {
         async fn open_existing(
             &self,
             _options: &DbConnectOptions,
-        ) -> sqlx::Result<Arc<storage::AppState>> {
+        ) -> sqlx::Result<StartupDatabase> {
             Err(self
                 .errors
                 .lock()
@@ -1648,6 +1707,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn open_server_database_carries_pool_observer() {
+        let temp = TempDir::new().expect("temp dir");
+        let storage = sqlite_storage_args(&temp);
+        storage::open_database(&storage.db).await.expect("open db");
+
+        let database = open_server_database(&storage, false)
+            .await
+            .expect("open server database");
+        let snapshot = database.pool_observer.snapshot();
+
+        assert!(snapshot.max >= 1);
+        assert!(snapshot.used <= snapshot.max);
+        assert!(snapshot.idle <= snapshot.max);
+        assert!(Arc::strong_count(&database.state) >= 1);
+    }
+
+    #[tokio::test]
     async fn prepare_server_auto_initializes_in_dev_mode() {
         // A fresh storage dir with no database: `open_existing_database` fails,
         // and because `prod == false`, `prepare_server` takes the dev auto-init
@@ -1669,6 +1745,51 @@ mod tests {
         assert!(db_path.exists(), "auto-init must have created the database");
         // Drop the prepared server (and its background workers) without serving.
         drop(prepared);
+    }
+
+    #[test]
+    fn prepare_server_registers_saturation_sampler_when_otel_endpoint_is_set() {
+        common::test_support::with_env(|env| {
+            env.set(
+                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
+                "http://127.0.0.1:4318",
+            );
+            env.remove("OTEL_EXPORTER_OTLP_ENDPOINT");
+            let runtime = tokio::runtime::Runtime::new().expect("runtime");
+            runtime.block_on(async {
+                let temp = TempDir::new().expect("temp dir");
+                let storage = sqlite_storage_args(&temp);
+                storage::open_database(&storage.db).await.expect("open db");
+                let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+
+                let prepared = prepare_server(&storage, bind, false, None)
+                    .await
+                    .expect("prepare server");
+
+                assert!(prepared.saturation_metrics.is_some());
+            });
+        });
+    }
+
+    #[test]
+    fn prepare_server_does_not_start_saturation_sampler_without_otel_endpoint() {
+        common::test_support::with_env(|env| {
+            env.remove("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
+            env.remove("OTEL_EXPORTER_OTLP_ENDPOINT");
+            let runtime = tokio::runtime::Runtime::new().expect("runtime");
+            runtime.block_on(async {
+                let temp = TempDir::new().expect("temp dir");
+                let storage = sqlite_storage_args(&temp);
+                storage::open_database(&storage.db).await.expect("open db");
+                let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+
+                let prepared = prepare_server(&storage, bind, false, None)
+                    .await
+                    .expect("prepare server");
+
+                assert!(prepared.saturation_metrics.is_none());
+            });
+        });
     }
 
     #[tokio::test]

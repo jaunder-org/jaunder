@@ -255,6 +255,12 @@ fn otel_exporter_otlp_endpoint_with(
 fn otel_exporter_otlp_endpoint() -> Option<String> {
     otel_exporter_otlp_endpoint_with(read_env, || fallback(FallbackKind::OtlpEndpoint))
 }
+
+#[must_use]
+pub fn otlp_endpoint_configured() -> bool {
+    otel_exporter_otlp_endpoint().is_some()
+}
+
 fn e2e_seed_process_attribute_with(
     mut read: impl FnMut(&str) -> Result<Option<String>, std::env::VarError>,
 ) -> Option<KeyValue> {

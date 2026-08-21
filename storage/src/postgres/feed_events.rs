@@ -70,6 +70,23 @@ impl FeedEventDialect for Postgres {
         Ok(finish_purge(records, purge))
     }
 
+    async fn claimable_count(
+        pool: &Pool<Postgres>,
+        now: DateTime<Utc>,
+        lease_cutoff: DateTime<Utc>,
+    ) -> Result<u64, FeedEventError> {
+        let count = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM feed_events \
+             WHERE (status = 'pending' AND next_attempt_at <= $1) \
+                OR (status = 'claimed' AND claimed_at < $2)",
+        )
+        .bind(now)
+        .bind(lease_cutoff)
+        .fetch_one(pool)
+        .await?;
+        Ok(u64::try_from(count).unwrap_or(0))
+    }
+
     async fn mark_regenerated(
         pool: &Pool<Postgres>,
         ids: &[FeedEventId],

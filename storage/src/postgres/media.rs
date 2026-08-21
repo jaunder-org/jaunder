@@ -23,4 +23,14 @@ impl MediaDialect for Postgres {
 
         Ok(row.0)
     }
+
+    async fn total_upload_bytes(pool: &Pool<Postgres>) -> sqlx::Result<ByteSize> {
+        let row = sqlx::query_as::<_, (ByteSize,)>(
+            "SELECT COALESCE(SUM(size_bytes), 0)::bigint FROM media WHERE source = 'upload'",
+        )
+        .fetch_one(pool)
+        .await?;
+
+        Ok(row.0)
+    }
 }
