@@ -373,6 +373,26 @@ impl<'ast> syn::visit::Visit<'ast> for FieldScanner<'_> {
         self.test_depth -= usize::from(test);
     }
 
+    fn visit_item_fn(&mut self, i: &'ast syn::ItemFn) {
+        let test = ident_gate::is_test_cfg(&i.attrs) || ident_gate::has_test_attr(&i.attrs);
+        if test {
+            self.record_test_range(i);
+        }
+        self.test_depth += usize::from(test);
+        syn::visit::visit_item_fn(self, i);
+        self.test_depth -= usize::from(test);
+    }
+
+    fn visit_impl_item_fn(&mut self, i: &'ast syn::ImplItemFn) {
+        let test = ident_gate::is_test_cfg(&i.attrs) || ident_gate::has_test_attr(&i.attrs);
+        if test {
+            self.record_test_range(i);
+        }
+        self.test_depth += usize::from(test);
+        syn::visit::visit_impl_item_fn(self, i);
+        self.test_depth -= usize::from(test);
+    }
+
     fn visit_field(&mut self, i: &'ast syn::Field) {
         let test = ident_gate::is_test_cfg(&i.attrs);
         if test {
@@ -622,6 +642,19 @@ struct Row { rendered_html: RenderedHtml } fn f(raw: String) { RenderedHtml::fro
         let src = "\
 #[cfg(test)]
 mod tests {
+    struct PostRow {
+        rendered_html: RenderedHtml,
+    }
+}
+";
+        assert_eq!(violations(src).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn field_inside_a_test_fn_is_exempt() {
+        let src = "\
+#[test]
+fn fixture() {
     struct PostRow {
         rendered_html: RenderedHtml,
     }

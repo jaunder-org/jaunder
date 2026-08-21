@@ -215,6 +215,6 @@ coverage, and general SQL column-to-field correspondence.
 - [ ] Run `devtool run -- cargo xtask check`.
 - [ ] Stage the checked implementation and docs with `git add`.
 - [ ] Commit: `tooling: gate rendered html fields (#701)`.
-- [ ] Run the jaunder review flow against the branch work.
-- [ ] Address review findings with another checked commit if needed.
+- [x] Run the jaunder review flow against the branch work.
+- [x] Address review findings with another checked commit if needed.
 - [ ] Stop for the ship gate once review is clean.
