@@ -6,6 +6,7 @@ use sqlx::{Database, Pool};
 use thiserror::Error;
 
 use crate::backend::Backend;
+use crate::helpers::TokenStateRow;
 use common::email::Email;
 use common::ids::UserId;
 use common::token::RawToken;
@@ -98,7 +99,7 @@ impl<DB> EmailVerificationStorage for EmailVerificationStore<DB>
 where
     DB: Backend,
     (UserId, Email): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (Option<DateTime<Utc>>, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
+    TokenStateRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `TokenHash` binds and `Email` binds/decodes as themselves via the ADR-0071
     // sqlx bridge (the `(UserId, Email): FromRow` bound above threads the `Email`
@@ -184,7 +185,7 @@ where
 
         // A successful claim miss is the only path that reaches the domain
         // classifier. Failure to read the row remains an infrastructure error.
-        let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
+        let row = sqlx::query_as::<_, TokenStateRow>(
             "SELECT used_at, expires_at FROM email_verifications WHERE token_hash = $1",
         )
         .bind(&token_hash)
@@ -192,7 +193,7 @@ where
         .await
         .map_err(UseEmailVerificationError::Internal)?;
 
-        Err(crate::helpers::email_verification_claim_error(row))
+        Err(crate::helpers::email_verification_claim_error(row, now))
     }
 }
 

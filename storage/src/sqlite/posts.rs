@@ -1,15 +1,15 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use sqlx::{Pool, Sqlite};
 
 use crate::helpers::{PostRow, post_record_from_row};
 use crate::posts::{
-    DELETE_POST_TAG_BY_SLUG, INSERT_POST_TAG, SELECT_POST_TAGS, UPSERT_TAG_RETURNING_ID,
-    post_tag_diff, post_tags_from_rows,
+    DELETE_POST_TAG_BY_SLUG, INSERT_POST_TAG, PostOwnershipRow, PostTagRow, SELECT_POST_TAGS,
+    UPSERT_TAG_RETURNING_ID, post_tag_diff, post_tags_from_rows,
 };
 use crate::{PostDialect, PostRecord, PostStore, TaggingError, UpdatePostError, UpdatePostInput};
 use common::ids::{PostId, TagId, UserId};
-use common::tag::{Tag, TagLabel};
+use common::tag::TagLabel;
 
 pub(crate) fn finish_post_update(
     primary: Result<PostRecord, UpdatePostError>,
@@ -80,7 +80,7 @@ impl PostDialect for Sqlite {
         let now = Utc::now();
 
         let result: Result<PostRow, UpdatePostError> = async {
-            let existing = sqlx::query_as::<_, (UserId, Option<DateTime<Utc>>)>(
+            let existing = sqlx::query_as::<_, PostOwnershipRow>(
                 "SELECT user_id, deleted_at FROM posts WHERE post_id = $1",
             )
             .bind(post_id)
@@ -199,7 +199,7 @@ impl PostDialect for Sqlite {
                 return Err(TaggingError::PostNotFound);
             }
 
-            let rows = sqlx::query_as::<_, (PostId, TagId, Tag, TagLabel)>(SELECT_POST_TAGS)
+            let rows = sqlx::query_as::<_, PostTagRow>(SELECT_POST_TAGS)
                 .bind(post_id)
                 .fetch_all(&mut *conn)
                 .await?;

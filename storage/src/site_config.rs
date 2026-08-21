@@ -312,6 +312,8 @@ impl<DB: Database> SiteConfigStore<DB> {
 /// gate reads are worth more than one abstraction it cannot.
 const SELECT_VALUE_SQL: &str = "SELECT value FROM site_config WHERE key = $1";
 
+type SiteConfigExportRow = (String, String);
+
 /// Re-labels a decode failure with the **key** it came from.
 ///
 /// sqlx names the column by its position (`0`), which for six single-column reads of the
@@ -335,7 +337,7 @@ impl<DB> SiteConfigStorage for SiteConfigStore<DB>
 where
     DB: Backend,
     (String,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (String, String): for<'r> sqlx::FromRow<'r, DB::Row>,
+    SiteConfigExportRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     // The SMTP value types decode from the `value` column via their validating sqlx
     // bridges (#438, #687); these bounds make the bridges available on the generic
     // backend.
@@ -439,7 +441,7 @@ where
     }
 
     async fn list(&self) -> sqlx::Result<Vec<(String, String)>> {
-        let rows = sqlx::query_as::<_, (String, String)>(
+        let rows = sqlx::query_as::<_, SiteConfigExportRow>(
             "SELECT key, value FROM site_config ORDER BY key",
         )
         .fetch_all(&self.pool)
