@@ -14,9 +14,9 @@
 //! `opentelemetry` is kept out of the wasm bundle by crate structure rather than
 //! a feature gate (issue #345). See ADR-0011 (amended) and ADR-0058.
 
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock, PoisonError, RwLock};
 
-use opentelemetry::metrics::{Counter, Histogram};
+use opentelemetry::metrics::{AsyncInstrument, Counter, Histogram, ObservableGauge};
 use opentelemetry::{KeyValue, global};
 
 macro_rules! enum_attr {
@@ -68,6 +68,38 @@ struct Instruments {
     atompub_requests: Counter<u64>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct SaturationSnapshot {
+    pub feed_queue_depth: Option<u64>,
+    pub backup_last_success_timestamp: Option<i64>,
+    pub db_pool_used: Option<u64>,
+    pub db_pool_idle: Option<u64>,
+    pub db_pool_max: Option<u64>,
+    pub media_storage_bytes: Option<u64>,
+}
+
+pub struct SaturationObservableGuard {
+    feed_queue_depth: ObservableGauge<u64>,
+    backup_last_success_timestamp: ObservableGauge<i64>,
+    db_pool_used: ObservableGauge<u64>,
+    db_pool_idle: ObservableGauge<u64>,
+    db_pool_max: ObservableGauge<u64>,
+    media_storage_bytes: ObservableGauge<u64>,
+}
+
+impl SaturationObservableGuard {
+    fn retain(&self) {
+        let _ = (
+            &self.feed_queue_depth,
+            &self.backup_last_success_timestamp,
+            &self.db_pool_used,
+            &self.db_pool_idle,
+            &self.db_pool_max,
+            &self.media_storage_bytes,
+        );
+    }
+}
+
 static M: LazyLock<Instruments> = LazyLock::new(|| {
     let m = global::meter("jaunder");
     Instruments {
@@ -107,6 +139,95 @@ static M: LazyLock<Instruments> = LazyLock::new(|| {
         atompub_requests: m.u64_counter("jaunder.atompub.requests").build(),
     }
 });
+
+pub fn register_saturation_observables(
+    snapshot: Arc<RwLock<SaturationSnapshot>>,
+) -> SaturationObservableGuard {
+    let m = global::meter("jaunder");
+    let feed_queue_depth = m
+        .u64_observable_gauge("jaunder.feed.queue_depth")
+        .with_callback({
+            let snapshot = snapshot.clone();
+            move |observer| observe_u64(&snapshot, |snapshot| snapshot.feed_queue_depth, observer)
+        })
+        .build();
+    let backup_last_success_timestamp = m
+        .i64_observable_gauge("jaunder.backup.last_success_timestamp")
+        .with_unit("s")
+        .with_callback({
+            let snapshot = snapshot.clone();
+            move |observer| {
+                observe_i64(
+                    &snapshot,
+                    |snapshot| snapshot.backup_last_success_timestamp,
+                    observer,
+                );
+            }
+        })
+        .build();
+    let db_pool_used = m
+        .u64_observable_gauge("jaunder.db.pool.used")
+        .with_callback({
+            let snapshot = snapshot.clone();
+            move |observer| observe_u64(&snapshot, |snapshot| snapshot.db_pool_used, observer)
+        })
+        .build();
+    let db_pool_idle = m
+        .u64_observable_gauge("jaunder.db.pool.idle")
+        .with_callback({
+            let snapshot = snapshot.clone();
+            move |observer| observe_u64(&snapshot, |snapshot| snapshot.db_pool_idle, observer)
+        })
+        .build();
+    let db_pool_max = m
+        .u64_observable_gauge("jaunder.db.pool.max")
+        .with_callback({
+            let snapshot = snapshot.clone();
+            move |observer| observe_u64(&snapshot, |snapshot| snapshot.db_pool_max, observer)
+        })
+        .build();
+    let media_storage_bytes = m
+        .u64_observable_gauge("jaunder.media.storage_bytes")
+        .with_unit("By")
+        .with_callback({
+            move |observer| {
+                observe_u64(&snapshot, |snapshot| snapshot.media_storage_bytes, observer);
+            }
+        })
+        .build();
+    let guard = SaturationObservableGuard {
+        feed_queue_depth,
+        backup_last_success_timestamp,
+        db_pool_used,
+        db_pool_idle,
+        db_pool_max,
+        media_storage_bytes,
+    };
+    guard.retain();
+    guard
+}
+
+fn observe_u64(
+    snapshot: &RwLock<SaturationSnapshot>,
+    field: fn(&SaturationSnapshot) -> Option<u64>,
+    observer: &dyn AsyncInstrument<u64>,
+) {
+    let snapshot = snapshot.read().unwrap_or_else(PoisonError::into_inner);
+    if let Some(value) = field(&snapshot) {
+        observer.observe(value, &[]);
+    }
+}
+
+fn observe_i64(
+    snapshot: &RwLock<SaturationSnapshot>,
+    field: fn(&SaturationSnapshot) -> Option<i64>,
+    observer: &dyn AsyncInstrument<i64>,
+) {
+    let snapshot = snapshot.read().unwrap_or_else(PoisonError::into_inner);
+    if let Some(value) = field(&snapshot) {
+        observer.observe(value, &[]);
+    }
+}
 
 #[inline]
 fn kv(key: &'static str, value: &'static str) -> [KeyValue; 1] {
@@ -250,14 +371,20 @@ mod tests {
         "jaunder.email.send_duration",
         "jaunder.media.uploads",
         "jaunder.media.upload_bytes",
+        "jaunder.media.storage_bytes",
         "jaunder.feed.regenerations",
         "jaunder.feed.regeneration_duration",
         "jaunder.feed.websub_pings",
         "jaunder.feed.cache",
+        "jaunder.feed.queue_depth",
         "jaunder.backup.runs",
         "jaunder.backup.duration",
         "jaunder.backup.bytes",
         "jaunder.backup.pruned",
+        "jaunder.backup.last_success_timestamp",
+        "jaunder.db.pool.used",
+        "jaunder.db.pool.idle",
+        "jaunder.db.pool.max",
         "jaunder.posts",
         "jaunder.atompub.requests",
     ];
@@ -343,6 +470,90 @@ mod tests {
             .collect()
     }
 
+    fn u64_gauge_points(
+        metrics: &[opentelemetry_sdk::metrics::data::ResourceMetrics],
+        name: &str,
+    ) -> Vec<u64> {
+        use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
+
+        metrics
+            .iter()
+            .flat_map(opentelemetry_sdk::metrics::data::ResourceMetrics::scope_metrics)
+            .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+            .filter(|metric| metric.name() == name)
+            .filter_map(|metric| match metric.data() {
+                AggregatedMetrics::U64(MetricData::Gauge(gauge)) => Some(gauge),
+                _ => None,
+            })
+            .flat_map(opentelemetry_sdk::metrics::data::Gauge::data_points)
+            .map(opentelemetry_sdk::metrics::data::GaugeDataPoint::value)
+            .collect()
+    }
+
+    fn i64_gauge_points(
+        metrics: &[opentelemetry_sdk::metrics::data::ResourceMetrics],
+        name: &str,
+    ) -> Vec<i64> {
+        use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
+
+        metrics
+            .iter()
+            .flat_map(opentelemetry_sdk::metrics::data::ResourceMetrics::scope_metrics)
+            .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
+            .filter(|metric| metric.name() == name)
+            .filter_map(|metric| match metric.data() {
+                AggregatedMetrics::I64(MetricData::Gauge(gauge)) => Some(gauge),
+                _ => None,
+            })
+            .flat_map(opentelemetry_sdk::metrics::data::Gauge::data_points)
+            .map(opentelemetry_sdk::metrics::data::GaugeDataPoint::value)
+            .collect()
+    }
+
+    fn assert_saturation_gauges(metrics: &[opentelemetry_sdk::metrics::data::ResourceMetrics]) {
+        assert_eq!(
+            u64_gauge_points(metrics, "jaunder.feed.queue_depth"),
+            vec![11]
+        );
+        assert_eq!(
+            i64_gauge_points(metrics, "jaunder.backup.last_success_timestamp"),
+            vec![1_800_000_000]
+        );
+        assert!(
+            u64_gauge_points(metrics, "jaunder.backup.last_success_timestamp").is_empty(),
+            "u64 gauge helper should ignore i64 gauges"
+        );
+        assert_eq!(u64_gauge_points(metrics, "jaunder.db.pool.used"), vec![2]);
+        assert!(
+            i64_gauge_points(metrics, "jaunder.feed.queue_depth").is_empty(),
+            "i64 gauge helper should ignore u64 gauges"
+        );
+        assert_eq!(u64_gauge_points(metrics, "jaunder.db.pool.idle"), vec![3]);
+        assert_eq!(u64_gauge_points(metrics, "jaunder.db.pool.max"), vec![5]);
+        assert_eq!(
+            u64_gauge_points(metrics, "jaunder.media.storage_bytes"),
+            vec![4096]
+        );
+    }
+
+    fn assert_none_snapshot_field_emits_no_datapoint(
+        exporter: &InMemoryMetricExporter,
+        provider: &SdkMeterProvider,
+        saturation: &RwLock<SaturationSnapshot>,
+    ) {
+        exporter.reset();
+        saturation
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .media_storage_bytes = None;
+        provider.force_flush().expect("flush");
+        let metrics = exporter.get_finished_metrics().expect("metrics");
+        assert!(
+            u64_gauge_points(&metrics, "jaunder.media.storage_bytes").is_empty(),
+            "None snapshot fields should emit no datapoint"
+        );
+    }
+
     /// One provider install per process, so every assertion that needs an
     /// exporter lives in this single test.
     ///
@@ -359,6 +570,15 @@ mod tests {
         global::set_meter_provider(provider.clone());
 
         emit_one_of_everything();
+        let saturation = Arc::new(RwLock::new(SaturationSnapshot {
+            feed_queue_depth: Some(11),
+            backup_last_success_timestamp: Some(1_800_000_000),
+            db_pool_used: Some(2),
+            db_pool_idle: Some(3),
+            db_pool_max: Some(5),
+            media_storage_bytes: Some(4096),
+        }));
+        let _saturation_guard = register_saturation_observables(saturation.clone());
         // Both branches of the send-result mapping. The kinds are chosen to be
         // ones `emit_one_of_everything` does not use, so each assertion below can
         // only be satisfied by `email_send_result` itself — it emits through
@@ -436,6 +656,9 @@ mod tests {
             counter_attributes(&metrics, "jaunder.email.send_duration").is_empty(),
             "counter_attributes should ignore histograms"
         );
+
+        assert_saturation_gauges(&metrics);
+        assert_none_snapshot_field_emits_no_datapoint(&exporter, &provider, &saturation);
     }
 
     /// The attribute vocabulary, pinned literally.

@@ -589,7 +589,7 @@ come from `manifest.json`, not filesystem mtime or name sorting.
   }
   ```
 
-- [ ] **Step 1: Write failing host metric export test**
+- [x] **Step 1: Write failing host metric export test**
 
   Extend the single `host/src/metrics.rs` metrics test rather than adding a
   second process-global provider install. Add assertions that after
@@ -608,14 +608,14 @@ come from `manifest.json`, not filesystem mtime or name sorting.
   Add a branch where one snapshot field is `None` and assert that instrument has
   no datapoint, not a zero datapoint.
 
-- [ ] **Step 2: Run host metrics test and verify failure**
+- [x] **Step 2: Run host metrics test and verify failure**
 
   Run:
   `devtool run -- cargo nextest run -p host every_emitter_exports_its_instrument`
 
   Expected: FAIL because observable registration is not implemented.
 
-- [ ] **Step 3: Implement `host::metrics` observable registration**
+- [x] **Step 3: Implement `host::metrics` observable registration**
 
   Build the six observable gauges from `global::meter("jaunder")`. Use `u64`
   gauges for queue depth, DB pool counts, and media bytes. Use an `i64` gauge
@@ -623,7 +623,7 @@ come from `manifest.json`, not filesystem mtime or name sorting.
   `with_callback`, take a read lock, observe only `Some` values, and return
   immediately. Hold every instrument in `SaturationObservableGuard`.
 
-- [ ] **Step 4: Write failing server sampler tests**
+- [x] **Step 4: Write failing server sampler tests**
 
   Add server tests around pure sampler update logic:
 
@@ -731,7 +731,7 @@ come from `manifest.json`, not filesystem mtime or name sorting.
   | `SaturationSources::fake_db_pool_failure` | DB pool used/idle/max           | `server.metrics.db_pool`             |
   | `SaturationSources::fake_media_failure`   | `media_storage_bytes`           | `server.metrics.media_storage_bytes` |
 
-- [ ] **Step 5: Implement the serve-owned sampler**
+- [x] **Step 5: Implement the serve-owned sampler**
 
   Implement a sampler function that performs one sample tick and a spawn helper:
 
@@ -759,7 +759,7 @@ come from `manifest.json`, not filesystem mtime or name sorting.
 
   Do not spawn the sampler when no OTLP endpoint is configured.
 
-- [ ] **Step 6: Run focused metrics tests**
+- [x] **Step 6: Run focused metrics tests**
 
   Run:
   `devtool run -- cargo nextest run -p host every_emitter_exports_its_instrument`
@@ -768,7 +768,7 @@ come from `manifest.json`, not filesystem mtime or name sorting.
 
   Expected: PASS.
 
-- [ ] **Step 7: Gate and commit**
+- [x] **Step 7: Gate and commit**
 
   Run: `devtool run -- cargo xtask check`
 
