@@ -937,6 +937,13 @@ rendering a reactive component to string is the prohibited trap door back. The
 because `leptos_axum` requires it (`web/Cargo.toml:53-64`), and shedding that
 stack is tracked, not done.
 
+Mounted CSR journey ownership lives in
+[`docs/flows/README.md`](flows/README.md): it owns the only route graph. The
+reviewed Playwright evidence map stays in
+[`docs/coverage/csr-e2e-matrix.md`](coverage/csr-e2e-matrix.md), and the
+`flow-docs` xtask step checks the typed route, endpoint, and matrix references
+between those two documents without duplicating either artifact here.
+
 ### Rendering model: projector + CSR client
 
 The mechanism is "SSR the data, not the components"
@@ -2196,6 +2203,7 @@ clippy runs — keep their own crane derivations, which is what makes the cheap
 | `adr-format`, `adr-readme-parity`                          | ADR front-matter shape and the README table                                                                                                                      |
 | `adr-view-parity`                                          | every accepted ADR is cited in this document                                                                                                                     |
 | `doc-links`                                                | intra-doc link targets                                                                                                                                           |
+| `flow-docs`                                                | typed CSR route/endpoint/matrix declarations in `docs/flows/`; one flow owner per endpoint; checked snapshot status                                              |
 | `test-backend-pattern`                                     | dual-backend storage test shape                                                                                                                                  |
 | `server-fn-registrar`                                      | every `web` `#[server]` fn is in the test registrar                                                                                                              |
 | `server-fn-tracing`                                        | each server fn's instrumentation                                                                                                                                 |

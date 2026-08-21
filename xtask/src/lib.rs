@@ -34,6 +34,7 @@ mod steps {
     pub mod e2e_scaffold_check;
     pub mod error_swallowing_inventory_check;
     pub mod flaky;
+    pub mod flow_docs;
     pub mod host_tests;
     pub mod html_sink_check;
     pub mod ident_gate;
@@ -496,6 +497,10 @@ impl HostGateStep {
     }
 }
 
+fn run_flow_docs(result: &mut CommandResult) {
+    result.push(steps::flow_docs::run());
+}
+
 const HOST_GATE_NON_TEST_STEPS: &[HostGateStep] = &[
     HostGateStep::StaticChecks,
     HostGateStep::ResultOnly {
@@ -509,6 +514,10 @@ const HOST_GATE_NON_TEST_STEPS: &[HostGateStep] = &[
     HostGateStep::ResultOnly {
         name: "doc-links",
         run: steps::doc_links::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "flow-docs",
+        run: run_flow_docs,
     },
     HostGateStep::ResultOnly {
         name: "error-swallowing-inventory",
@@ -1153,6 +1162,46 @@ mod cli_tests {
             Command::Validate { allow_dirty, .. } => assert!(!allow_dirty),
             _ => panic!("expected validate"),
         }
+    }
+    #[test]
+    fn check_and_validate_include_flow_docs() {
+        let with_tests = host_gate_step_names_for_test(Mode::Fix);
+        let without_tests = host_gate_without_tests_step_names_for_test(Mode::Check);
+
+        assert_eq!(
+            with_tests
+                .iter()
+                .filter(|name| **name == "flow-docs")
+                .count(),
+            1,
+            "check host gate must include flow-docs exactly once"
+        );
+        assert_eq!(
+            without_tests
+                .iter()
+                .filter(|name| **name == "flow-docs")
+                .count(),
+            1,
+            "validate host gate must include flow-docs exactly once before host-tests"
+        );
+
+        let doc_links = without_tests
+            .iter()
+            .position(|name| *name == "doc-links")
+            .expect("doc-links is in host gate");
+        let flow_docs = without_tests
+            .iter()
+            .position(|name| *name == "flow-docs")
+            .expect("flow-docs is in host gate");
+        assert_eq!(
+            flow_docs,
+            doc_links + 1,
+            "flow-docs must run immediately after doc-links"
+        );
+        assert!(
+            !without_tests.contains(&"host-tests"),
+            "validate's early host gate excludes host tests"
+        );
     }
 
     #[test]
