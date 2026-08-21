@@ -172,6 +172,7 @@ convention). See the Status column below for each ADR's current status.
 | [0142](adr/0142-declarative-nixos-deployment-package-outputs.md)   | Declarative NixOS Deployment and Package Outputs                                                             | accepted   |
 | [0143](adr/0143-emacs-auth-source-app-password-storage.md)         | Emacs auth-source App Password Storage                                                                       | accepted   |
 | [0144](adr/0144-process-configuration-cli-contract.md)             | Process Configuration and CLI Contract                                                                       | accepted   |
+| [0145](adr/0145-sandbox-cargo-deny-skips-advisories.md)            | Sandboxed cargo-deny skips advisories                                                                        | accepted   |
 
 <!-- adr-table:end -->
 

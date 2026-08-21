@@ -2204,7 +2204,7 @@ clippy runs — keep their own crane derivations, which is what makes the cheap
 `cargo-deny` is joining `devtool check --all --sandbox-cargo` under a documented
 sandbox policy: host mode keeps `cargo deny check`, while sandbox mode skips
 `advisories` and checks only `bans`, `licenses`, and `sources`
-([Sandboxed cargo-deny skips advisories](adr/drafts/sandbox-cargo-deny-skips-advisories.md)).
+([Sandboxed cargo-deny skips advisories](adr/0145-sandbox-cargo-deny-skips-advisories.md)).
 The host `xtask` StepSpec remains native until #276 moves the remaining
 compiling checks behind the shared `devtool check` surface.
 
@@ -2442,7 +2442,7 @@ host-side subcommands are therefore chartered, not drift.
   **Committed direction:** `cargo-deny` enters this surface with a split policy:
   host mode remains full `cargo deny check`, while sandbox mode uses the product
   offline Cargo home and skips `advisories`
-  ([Sandboxed cargo-deny skips advisories](adr/drafts/sandbox-cargo-deny-skips-advisories.md)).
+  ([Sandboxed cargo-deny skips advisories](adr/0145-sandbox-cargo-deny-skips-advisories.md)).
 
 **xtask is host-only — an enforced invariant.** Nix derivations never invoke
 xtask; the flow is strictly one-directional (host `cargo xtask` → `nix build`).

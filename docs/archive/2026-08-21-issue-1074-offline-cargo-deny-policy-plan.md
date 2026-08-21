@@ -81,7 +81,7 @@ clippy/wasm-clippy/tools-clippy migration; Cargo workspace membership changes.
   this plan, staged with the implementation.
 - `docs/ARCHITECTURE.md`: committed-direction projection for the ADR draft,
   staged with the implementation.
-- `docs/adr/drafts/sandbox-cargo-deny-skips-advisories.md`: numberless ADR draft
+- `docs/adr/0145-sandbox-cargo-deny-skips-advisories.md`: numberless ADR draft
   kept in the gitignored drafts pen until ship.
 
 ---
@@ -379,7 +379,7 @@ git commit -m "build(nix): exercise sandbox cargo-deny through devtool (#1074)"
   `docs/superpowers/plans/2026-08-21-issue-1074-offline-cargo-deny-policy.md`
 - Modify: `docs/ARCHITECTURE.md`
 - Keep local only until ship:
-  `docs/adr/drafts/sandbox-cargo-deny-skips-advisories.md`
+  `docs/adr/0145-sandbox-cargo-deny-skips-advisories.md`
 
 **Interfaces:**
 
@@ -394,7 +394,7 @@ git commit -m "build(nix): exercise sandbox cargo-deny through devtool (#1074)"
 Run:
 
 ```bash
-devtool run -- prettier -w docs/superpowers/specs/2026-08-21-issue-1074-offline-cargo-deny-policy.md docs/superpowers/plans/2026-08-21-issue-1074-offline-cargo-deny-policy.md docs/ARCHITECTURE.md docs/adr/drafts/sandbox-cargo-deny-skips-advisories.md
+devtool run -- prettier -w docs/superpowers/specs/2026-08-21-issue-1074-offline-cargo-deny-policy.md docs/superpowers/plans/2026-08-21-issue-1074-offline-cargo-deny-policy.md docs/ARCHITECTURE.md docs/adr/0145-sandbox-cargo-deny-skips-advisories.md
 ```
 
 Expected: PASS.
