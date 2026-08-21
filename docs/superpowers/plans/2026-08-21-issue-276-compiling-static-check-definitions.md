@@ -301,7 +301,7 @@ git commit -m "feat(devtool): define compiling static checks (#276)"
 - Produces: `cache_rustc = true` for `clippy`, `wasm-clippy`, and
   `tools-clippy`; `cache_rustc = false` for `cargo-deny`.
 
-- [ ] **Step 1: Replace native-check tests with devtool-routing tests**
+- [x] **Step 1: Replace native-check tests with devtool-routing tests**
 
 In `xtask/src/steps/static_checks.rs`, replace or rewrite
 `native_checks_stay_native` so it asserts:
@@ -344,7 +344,7 @@ Keep existing tests for `xtask-fmt`, `xtask-clippy`, compile-cache env, and step
 ordering, but update any comments/counts that still describe compiling checks as
 native.
 
-- [ ] **Step 2: Run tests and verify fail**
+- [x] **Step 2: Run tests and verify fail**
 
 Run:
 
@@ -354,7 +354,7 @@ devtool run -- cargo test --manifest-path xtask/Cargo.toml static_checks::tests 
 
 Expected: FAIL because the four checks still use native Cargo StepSpecs.
 
-- [ ] **Step 3: Implement routing**
+- [x] **Step 3: Implement routing**
 
 Refactor `devtool_check` if needed so it can set `cache_rustc`. One acceptable
 shape:
@@ -372,7 +372,7 @@ Use it for:
 Delete the native StepSpecs for product `clippy`, `wasm-clippy`, `cargo-deny`,
 and `tools-clippy`. Leave `xtask-fmt` and `xtask-clippy` native.
 
-- [ ] **Step 4: Run focused tests and verify pass**
+- [x] **Step 4: Run focused tests and verify pass**
 
 Run:
 
@@ -382,7 +382,7 @@ devtool run -- cargo test --manifest-path xtask/Cargo.toml static_checks::tests 
 
 Expected: PASS.
 
-- [ ] **Step 5: Verify host delegation reaches real tools**
+- [x] **Step 5: Verify host delegation reaches real tools**
 
 Run at least:
 
@@ -393,7 +393,7 @@ devtool run -- cargo xtask check --no-test
 Expected: PASS. If the environment blocks `cargo-deny` advisory access or
 sccache, rerun with escalation and record the reason in the implementation log.
 
-- [ ] **Step 6: Commit Task 2**
+- [x] **Step 6: Commit Task 2**
 
 Tick this task checkbox, then run:
 
