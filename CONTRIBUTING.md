@@ -353,13 +353,20 @@ clippy, and the standalone `xtask`/`tools` workspaces; root-workspace tests,
 coverage, wasm browser tests, and e2e run in hermetic Nix checks that match CI.
 When `cargo xtask validate` is green, you may push.
 
-| Command                         | Runs                                                                                                                                   | Formatting    |
-| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
-| `cargo xtask precommit`         | host surface from `cargo xtask check --no-test`, then safe-staging reconciliation — the `.githooks/pre-commit` hook runs this path     | auto-fixes    |
-| `cargo xtask check --no-test`   | host static checks + clippy + repo-shape/type-safety gates + host tests — the precommit host surface                                   | auto-fixes    |
-| `cargo xtask check`             | + the Nix `wasm-tests`, `coverage`/`coverage-gate`, and `doctests`/`doctests-gate` checks                                              | auto-fixes    |
-| `cargo xtask validate --no-e2e` | the same test-enabled checks in verify-only mode — the pre-push gate (the `.githooks/pre-push` hook and Validate CI job run this path) | never mutates |
-| `cargo xtask validate`          | + e2e (all four `{sqlite,postgres}×{chromium,firefox}` combinations and the live elisp integration suite) — the full local gate        | never mutates |
+| Command                         | Runs                                                                                                                                     | Formatting    |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| `cargo xtask test-local`        | host-native root-workspace Rust tests through `nextest`, with an ephemeral PostgreSQL and shared `sccache` setup for repeated local runs | never mutates |
+| `cargo xtask precommit`         | host surface from `cargo xtask check --no-test`, then safe-staging reconciliation — the `.githooks/pre-commit` hook runs this path       | auto-fixes    |
+| `cargo xtask check --no-test`   | host static checks + clippy + repo-shape/type-safety gates + host tests — the precommit host surface                                     | auto-fixes    |
+| `cargo xtask check`             | + the Nix `wasm-tests`, `coverage`/`coverage-gate`, and `doctests`/`doctests-gate` checks                                                | auto-fixes    |
+| `cargo xtask validate --no-e2e` | the same test-enabled checks in verify-only mode — the pre-push gate (the `.githooks/pre-push` hook and Validate CI job run this path)   | never mutates |
+| `cargo xtask validate`          | + e2e (all four `{sqlite,postgres}×{chromium,firefox}` combinations and the live elisp integration suite) — the full local gate          | never mutates |
+
+Use `cargo xtask test-local` for repeated product Rust test runs while you are
+editing. It runs outside the Nix test derivation, so it reuses the normal local
+target directory and the shared `sccache` cache across worktrees. It
+intentionally sets `CARGO_INCREMENTAL=0`: that gives up same-target incremental
+reuse so `sccache` can share more compiler work between agents and checkouts.
 
 `check` is the inner-loop fixer: it auto-fixes **formatting**, and nothing else.
 It has no coverage baseline to heal — the coverage gate is stateless (ADR-0050),
@@ -644,12 +651,15 @@ uses them needs its own `use rstest_reuse::*;` — a `use rstest::*;` glob alone
 does not bring them in. See
 [ADR-0124](docs/adr/0124-rstest-reuse-cross-module-templates.md).)
 
-The simplest way to run them against a throwaway PostgreSQL is `devtool pg run`,
-which starts an ephemeral cluster, exports the connection env, runs the command,
-and tears everything down:
+The simplest way to run them against a throwaway PostgreSQL is
+`cargo xtask test-local`, which starts an ephemeral cluster through
+`devtool pg run`, exports the connection env, runs `cargo nextest run`, tears
+everything down, and applies the shared `sccache` environment:
 
 ```bash
-cargo run --manifest-path tools/Cargo.toml -p devtool -- pg run -- cargo nextest run -p jaunder
+cargo xtask test-local
+cargo xtask test-local -- -p jaunder
+cargo xtask test-local -- -p storage site_config_primitives_round_trip
 ```
 
 To use a persistent instance instead (e.g. the dev VM), set the env yourself:

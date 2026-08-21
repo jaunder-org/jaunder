@@ -329,7 +329,7 @@ cargo run --quiet --manifest-path tools/Cargo.toml -p devtool -- \
 - Produces: contributor guidance that names when to use `test-local`,
   `check --no-test`, `check`, `validate --no-e2e`, and `validate`.
 
-- [ ] **Step 1: Update documentation.** In the testing / verify-ladder guidance,
+- [x] **Step 1: Update documentation.** In the testing / verify-ladder guidance,
       add `cargo xtask test-local` as the repeated host-native product-test
       lane. In the PostgreSQL-backed Rust tests section, replace the raw
       `cargo run --manifest-path tools/Cargo.toml -p devtool -- pg run -- cargo     nextest ...`
@@ -337,7 +337,7 @@ cargo run --quiet --manifest-path tools/Cargo.toml -p devtool -- \
       trailing nextest args. State that the command intentionally disables Cargo
       incremental so `sccache` can share Rust compiler work across worktrees.
 
-- [ ] **Step 2: Run doc and parser checks.** Run:
+- [x] **Step 2: Run doc and parser checks.** Run:
 
   ```bash
   devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml test_local compile_cache static_checks
@@ -345,7 +345,7 @@ cargo run --quiet --manifest-path tools/Cargo.toml -p devtool -- \
 
   Expected: PASS.
 
-- [ ] **Step 3: Run the full project check.** Run:
+- [x] **Step 3: Run the full project check.** Run:
 
   ```bash
   devtool run -- cargo xtask check
@@ -354,7 +354,7 @@ cargo run --quiet --manifest-path tools/Cargo.toml -p devtool -- \
   Expected: PASS. If formatters modify docs, inspect and stage those exact
   mechanical changes before committing.
 
-- [ ] **Step 4: Commit the documentation and final checked state.** Tick this
+- [x] **Step 4: Commit the documentation and final checked state.** Tick this
       task, stage the checked tree, then commit:
 
   ```bash
