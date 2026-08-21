@@ -11,6 +11,27 @@ import {
 import { createPostViaApi } from "./posts";
 import type { Page } from "@playwright/test";
 
+type UploadResponse = { url: string; filename: string };
+
+/** Uploads `name` and returns the upload response (`url`, canonical `filename`). */
+async function uploadMedia(
+  page: Page,
+  name: string,
+  content: Buffer = Buffer.from("delete guard content"),
+): Promise<UploadResponse> {
+  const response = await page.request.post(BASE_URL + "/api/media/upload", {
+    multipart: {
+      file: {
+        name,
+        mimeType: "image/jpeg",
+        buffer: content,
+      },
+    },
+  });
+  expect(response.status()).toBe(200);
+  return await response.json();
+}
+
 test.describe("Media upload and serving", () => {
   test("authenticated user can upload and access media", async ({ page }) => {
     await signInAsNewUser(page);
@@ -18,18 +39,7 @@ test.describe("Media upload and serving", () => {
     // Drive the `media::upload` server fn directly — session cookie is in page's
     // cookie jar. The fn returns 200 with the bare `UploadResponse` JSON.
     const fileContent = Buffer.from("fake image content for testing");
-    const response = await page.request.post(BASE_URL + "/api/media/upload", {
-      multipart: {
-        file: {
-          name: "test-image.jpg",
-          mimeType: "image/jpeg",
-          buffer: fileContent,
-        },
-      },
-    });
-    expect(response.status()).toBe(200);
-
-    const json = await response.json();
+    const json = await uploadMedia(page, "test-image.jpg", fileContent);
     expect(json.filename).toBe("test-image.jpg");
     expect(json.url).toContain("/media/upload/");
 
@@ -51,18 +61,7 @@ test.describe("Media upload and serving", () => {
     // derives, the name it wrote on disk, and the request the browser sends back for it
     // (#675). Before the fix the derived URL carried a raw space.
     const fileContent = Buffer.from("spaced filename content");
-    const response = await page.request.post(BASE_URL + "/api/media/upload", {
-      multipart: {
-        file: {
-          name: "my holiday photo.jpg",
-          mimeType: "image/jpeg",
-          buffer: fileContent,
-        },
-      },
-    });
-    expect(response.status()).toBe(200);
-
-    const json = await response.json();
+    const json = await uploadMedia(page, "my holiday photo.jpg", fileContent);
     // Since #720 the wire field carries the canonical encoded spelling — it is a lookup
     // key, not a display value, so it matches the URL segment and the on-disk name byte
     // for byte. Display surfaces decode it.
@@ -83,16 +82,11 @@ test.describe("Media upload and serving", () => {
     await signInAsNewUser(page);
     await goto(page, "/");
 
-    const response = await page.request.post(BASE_URL + "/api/media/upload", {
-      multipart: {
-        file: {
-          name: "my holiday photo.jpg",
-          mimeType: "image/jpeg",
-          buffer: Buffer.from("spaced filename content"),
-        },
-      },
-    });
-    expect(response.status()).toBe(200);
+    await uploadMedia(
+      page,
+      "my holiday photo.jpg",
+      Buffer.from("spaced filename content"),
+    );
 
     // Reached via the nav link and pinned on the page's own landmark, matching the
     // sibling media-page tests below — a bare `goto` races the CSR shell's mount.
@@ -213,24 +207,6 @@ test.describe("Media upload and serving", () => {
 });
 
 test.describe("Media delete guard", () => {
-  /** Uploads `name` and returns the upload response (`url`, canonical `filename`). */
-  async function uploadMedia(
-    page: Page,
-    name: string,
-  ): Promise<{ url: string; filename: string }> {
-    const response = await page.request.post(BASE_URL + "/api/media/upload", {
-      multipart: {
-        file: {
-          name,
-          mimeType: "image/jpeg",
-          buffer: Buffer.from("delete guard content"),
-        },
-      },
-    });
-    expect(response.status()).toBe(200);
-    return await response.json();
-  }
-
   function countMediaRequests(page: Page): {
     deleteRequests: () => number;
     listRequests: () => number;
