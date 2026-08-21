@@ -2199,6 +2199,15 @@ compiling checks — `clippy`, `wasm-clippy`, `deny` and the two workspace-local
 clippy runs — keep their own crane derivations, which is what makes the cheap
 `runCommand` over a broad source tree viable for the rest.
 
+#### Committed direction - sandboxed cargo-deny
+
+`cargo-deny` is joining `devtool check --all --sandbox-cargo` under a documented
+sandbox policy: host mode keeps `cargo deny check`, while sandbox mode skips
+`advisories` and checks only `bans`, `licenses`, and `sources`
+([Sandboxed cargo-deny skips advisories](adr/0145-sandbox-cargo-deny-skips-advisories.md)).
+The host `xtask` StepSpec remains native until #276 moves the remaining
+compiling checks behind the shared `devtool check` surface.
+
 | Step                                                       | Guards                                                                                                                                                           |
 | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `identifier-collisions`                                    | duplicate ADR/migration number prefixes, migration parity                                                                                                        |
@@ -2417,17 +2426,23 @@ host-side subcommands are therefore chartered, not drift.
   `signal`, `duration_ms`, per-stream `{path, bytes, lines}`), and exits with
   the child's code. `devtoolBin` is exposed in the default devShell for this
   reason ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)).
-- **`devtool check <name> | --all [--fix]`** is the single implementation of the
-  non-compiling static checks (`fmt`, `leptosfmt`, `prettier`, `tsc`,
-  `elisp-fmt`, `ert`, `byte-compile`, `tools-fmt` —
-  `tools/devtool/src/check.rs`). Both gates invoke the same code: the host
-  verify ladder runs `cargo run -p devtool -- check <name>` per step
+- **`devtool check <name> | --all [--fix] [--sandbox-cargo]`** is the single
+  implementation of the migrated non-compiling static checks (`fmt`,
+  `leptosfmt`, `prettier`, `tsc`, `elisp-fmt`, `ert`, `byte-compile`,
+  `tools-fmt` — `tools/devtool/src/check.rs`). Both gates invoke the same code:
+  the host verify ladder runs `cargo run -p devtool -- check <name>` per step
   (`xtask/src/steps/static_checks.rs`), and the Nix `static-checks` `runCommand`
-  runs `devtool check --all` from the prebuilt `devtoolBin` — so each check's
-  tool + args live exactly once and host/Nix drift is structurally impossible
+  runs `devtool check --all --sandbox-cargo` from the prebuilt `devtoolBin` — so
+  each migrated check's tool + args live exactly once and host/Nix drift is
+  structurally impossible
   ([ADR-0052](adr/0052-devtool-unifies-static-checks.md)). Compiling checks
   (`clippy`, `cargo-deny`) stay in crane derivations plus host StepSpecs
   ([ADR-0052](adr/0052-devtool-unifies-static-checks.md)).
+
+  **Committed direction:** `cargo-deny` enters this surface with a split policy:
+  host mode remains full `cargo deny check`, while sandbox mode uses the product
+  offline Cargo home and skips `advisories`
+  ([Sandboxed cargo-deny skips advisories](adr/0145-sandbox-cargo-deny-skips-advisories.md)).
 
 **xtask is host-only — an enforced invariant.** Nix derivations never invoke
 xtask; the flow is strictly one-directional (host `cargo xtask` → `nix build`).

@@ -307,12 +307,9 @@
           { name, vendorDir }:
           pkgs.runCommand "${name}-cargo-home" { } ''
             mkdir -p $out
-            cat > $out/config.toml <<EOF
-            [source.crates-io]
-            replace-with = "vendored-sources"
-
-            [source.vendored-sources]
-            directory = "${vendorDir}"
+            cp ${vendorDir}/config.toml $out/config.toml
+            chmod u+w $out/config.toml
+            cat >> $out/config.toml <<EOF
 
             [net]
             offline = true
@@ -1334,6 +1331,7 @@
                   nativeBuildInputs = [
                     devtoolBin
                     toolchain
+                    pkgs.cargo-deny
                     leptosfmt
                     pkgs.prettier
                     pkgs.nodejs
