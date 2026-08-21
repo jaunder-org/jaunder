@@ -2,15 +2,19 @@
 //! database + media to the configured destination, plus retention pruning.
 //! Self-contained (no router coupling); split out of the crate root per §1.7.
 
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
+use flate2::read::GzDecoder;
 use tokio_cron_scheduler::{Job, JobScheduler};
 
 use common::backup::BackupConfig;
 use storage::{
-    BackupExportOptions, BackupMode, DbConnectOptions, SiteConfigStorage, export_backup,
+    BackupExportOptions, BackupManifest, BackupMode, DbConnectOptions, SiteConfigStorage,
+    export_backup,
 };
 
 /// Starts the background backup worker if configured.
@@ -231,6 +235,88 @@ fn backup_path_for_mode(destination_root: &Path, mode: BackupMode) -> PathBuf {
     }
 }
 
+/// Returns the newest successful backup manifest timestamp under `destination_root`.
+///
+/// Malformed candidate artifacts are skipped and reported once with a fixed
+/// metrics context. Missing destination roots are treated as no successful backup.
+///
+/// # Errors
+///
+/// Returns an error when the destination root exists but cannot be enumerated.
+pub fn latest_successful_backup_timestamp(
+    destination_root: &Path,
+) -> anyhow::Result<Option<DateTime<Utc>>> {
+    if !destination_root.exists() {
+        return Ok(None);
+    }
+
+    let mut latest: Option<DateTime<Utc>> = None;
+    let mut saw_malformed_artifact = false;
+    for entry in fs::read_dir(destination_root)? {
+        let path = entry?.path();
+        let timestamp = if path.join("manifest.json").is_file() {
+            read_directory_backup_timestamp(&path)
+        } else if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".tar.gz"))
+        {
+            read_archive_backup_timestamp(&path)
+        } else {
+            continue;
+        };
+
+        match timestamp {
+            Ok(timestamp) => {
+                latest = Some(latest.map_or(timestamp, |current| current.max(timestamp)));
+            }
+            Err(_) => saw_malformed_artifact = true,
+        }
+    }
+
+    if saw_malformed_artifact {
+        host::error::report_swallowed(
+            host::error::ErrorKind::Storage,
+            host::error::ErrorClass::Transient,
+            "server.metrics.backup_last_success",
+            host::error::SwallowedSource::Redacted,
+        );
+    }
+
+    Ok(latest)
+}
+
+fn read_directory_backup_timestamp(path: &Path) -> anyhow::Result<DateTime<Utc>> {
+    let manifest = fs::read_to_string(path.join("manifest.json"))?;
+    let manifest: BackupManifest = serde_json::from_str(&manifest)?;
+    Ok(manifest.timestamp)
+}
+
+fn read_archive_backup_timestamp(path: &Path) -> anyhow::Result<DateTime<Utc>> {
+    let file = File::open(path)?;
+    let decoder = GzDecoder::new(file);
+    let mut archive = tar::Archive::new(decoder);
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        if archive_entry_is_manifest(&entry.path()?) {
+            let mut manifest = String::new();
+            entry.read_to_string(&mut manifest)?;
+            let manifest: BackupManifest = serde_json::from_str(&manifest)?;
+            return Ok(manifest.timestamp);
+        }
+    }
+    anyhow::bail!("archive backup manifest missing")
+}
+
+fn archive_entry_is_manifest(path: &Path) -> bool {
+    path.components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(value) => Some(value),
+            _ => None,
+        })
+        .eq([std::ffi::OsStr::new("manifest.json")])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,6 +392,146 @@ mod tests {
         );
         assert!(suffix.ends_with('Z'), "timestamp must end with 'Z'");
         assert!(suffix.contains('T'), "timestamp must contain 'T'");
+    }
+
+    fn test_manifest(timestamp: &str, mode: BackupMode) -> BackupManifest {
+        BackupManifest {
+            version: "0.1.0".to_owned(),
+            schema_version: 1,
+            schema_checksum: "test".to_owned(),
+            timestamp: DateTime::parse_from_rfc3339(timestamp)
+                .expect("test timestamp")
+                .with_timezone(&Utc),
+            mode,
+            tables: Vec::new(),
+        }
+    }
+
+    fn write_test_manifest(path: &Path, timestamp: &str, mode: BackupMode) {
+        std::fs::create_dir_all(path).expect("backup dir");
+        let manifest = serde_json::to_vec(&test_manifest(timestamp, mode)).expect("manifest json");
+        std::fs::write(path.join("manifest.json"), manifest).expect("write manifest");
+    }
+
+    fn write_test_archive(path: &Path, timestamp: &str) {
+        let staging = TempDir::new().expect("archive staging");
+        write_test_manifest(staging.path(), timestamp, BackupMode::Archive);
+        let file = File::create(path).expect("archive file");
+        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        let mut archive = tar::Builder::new(encoder);
+        archive
+            .append_dir_all(".", staging.path())
+            .expect("append archive");
+        let encoder = archive.into_inner().expect("finish archive");
+        encoder.finish().expect("finish gzip");
+    }
+
+    fn write_test_archive_without_manifest(path: &Path) {
+        let staging = TempDir::new().expect("archive staging");
+        std::fs::write(staging.path().join("notes.txt"), b"not a manifest").expect("notes");
+        let file = File::create(path).expect("archive file");
+        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        let mut archive = tar::Builder::new(encoder);
+        archive
+            .append_dir_all(".", staging.path())
+            .expect("append archive");
+        let encoder = archive.into_inner().expect("finish archive");
+        encoder.finish().expect("finish gzip");
+    }
+
+    #[test]
+    fn latest_successful_backup_timestamp_uses_directory_manifest_timestamp() {
+        let temp = TempDir::new().expect("tempdir");
+        let older = temp.path().join("backup-20260101T000000Z");
+        let newer = temp.path().join("backup-20260102T000000Z");
+        write_test_manifest(&older, "2026-01-01T00:00:00Z", BackupMode::Directory);
+        write_test_manifest(&newer, "2026-01-02T00:00:00Z", BackupMode::Directory);
+
+        let timestamp = latest_successful_backup_timestamp(temp.path())
+            .expect("timestamp scan")
+            .expect("timestamp");
+
+        assert_eq!(timestamp.to_rfc3339(), "2026-01-02T00:00:00+00:00");
+    }
+
+    #[test]
+    fn latest_successful_backup_timestamp_reads_archive_manifest_timestamp() {
+        let temp = TempDir::new().expect("tempdir");
+        write_test_archive(
+            &temp.path().join("backup-20260102T000000Z.tar.gz"),
+            "2026-01-02T00:00:00Z",
+        );
+
+        let timestamp = latest_successful_backup_timestamp(temp.path())
+            .expect("timestamp scan")
+            .expect("timestamp");
+
+        assert_eq!(timestamp.to_rfc3339(), "2026-01-02T00:00:00+00:00");
+    }
+
+    #[test]
+    fn latest_successful_backup_timestamp_ignores_suffix_only_archive() {
+        let temp = TempDir::new().expect("tempdir");
+        std::fs::write(
+            temp.path().join("backup-20260102T000000Z.tar.gz"),
+            b"not a tar",
+        )
+        .expect("write bad archive");
+
+        let (guard, output) = trace_capture();
+        let timestamp = latest_successful_backup_timestamp(temp.path()).expect("timestamp scan");
+        drop(guard);
+
+        assert_eq!(timestamp, None);
+        assert_one_report(&trace_text(&output), "server.metrics.backup_last_success");
+    }
+
+    #[test]
+    fn latest_successful_backup_timestamp_ignores_archive_without_manifest() {
+        let temp = TempDir::new().expect("tempdir");
+        write_test_archive_without_manifest(&temp.path().join("backup-20260102T000000Z.tar.gz"));
+
+        let (guard, output) = trace_capture();
+        let timestamp = latest_successful_backup_timestamp(temp.path()).expect("timestamp scan");
+        drop(guard);
+
+        assert_eq!(timestamp, None);
+        assert_one_report(&trace_text(&output), "server.metrics.backup_last_success");
+    }
+
+    #[test]
+    fn latest_successful_backup_timestamp_ignores_malformed_manifest() {
+        let temp = TempDir::new().expect("tempdir");
+        let bad = temp.path().join("backup-20260102T000000Z");
+        std::fs::create_dir(&bad).expect("dir");
+        std::fs::write(bad.join("manifest.json"), b"{").expect("bad manifest");
+
+        let (guard, output) = trace_capture();
+        let timestamp = latest_successful_backup_timestamp(temp.path()).expect("timestamp scan");
+        drop(guard);
+
+        assert_eq!(timestamp, None);
+        assert_one_report(&trace_text(&output), "server.metrics.backup_last_success");
+    }
+
+    #[test]
+    fn latest_successful_backup_timestamp_accepts_missing_destination_root() {
+        let temp = TempDir::new().expect("tempdir");
+
+        let timestamp = latest_successful_backup_timestamp(&temp.path().join("missing"))
+            .expect("timestamp scan");
+
+        assert_eq!(timestamp, None);
+    }
+
+    #[test]
+    fn latest_successful_backup_timestamp_ignores_non_backup_entries() {
+        let temp = TempDir::new().expect("tempdir");
+        std::fs::write(temp.path().join("notes.txt"), b"ignore me").expect("notes");
+
+        let timestamp = latest_successful_backup_timestamp(temp.path()).expect("timestamp scan");
+
+        assert_eq!(timestamp, None);
     }
 
     #[tokio::test]

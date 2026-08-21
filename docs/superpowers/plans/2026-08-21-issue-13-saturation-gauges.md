@@ -291,7 +291,7 @@ come from `manifest.json`, not filesystem mtime or name sorting.
 - Consumes existing backup artifact conventions from `backup_path_for_mode` and
   `prune_backups`.
 
-- [ ] **Step 1: Write failing backup artifact tests**
+- [x] **Step 1: Write failing backup artifact tests**
 
   Add tests in `server/src/backup.rs`:
 
@@ -354,14 +354,14 @@ come from `manifest.json`, not filesystem mtime or name sorting.
   write a minimal valid `BackupManifest` JSON. Do not use filesystem mtime in
   assertions.
 
-- [ ] **Step 2: Run the focused tests and verify failure**
+- [x] **Step 2: Run the focused tests and verify failure**
 
   Run:
-  `devtool run -- cargo nextest run -p server latest_successful_backup_timestamp`
+  `devtool run -- cargo nextest run -p jaunder latest_successful_backup_timestamp`
 
   Expected: FAIL because the helper does not exist.
 
-- [ ] **Step 3: Implement manifest-based artifact scanning**
+- [x] **Step 3: Implement manifest-based artifact scanning**
 
   Implement `latest_successful_backup_timestamp` in `server/src/backup.rs`. Scan
   children of `destination_root`; return `Ok(None)` for a missing root. For
@@ -374,14 +374,14 @@ come from `manifest.json`, not filesystem mtime or name sorting.
   per scan if at least one artifact failed to read or parse. A failed
   `read_dir(destination_root)` is a scan failure and returns `Err`.
 
-- [ ] **Step 4: Run the focused tests and verify pass**
+- [x] **Step 4: Run the focused tests and verify pass**
 
   Run:
-  `devtool run -- cargo nextest run -p server latest_successful_backup_timestamp`
+  `devtool run -- cargo nextest run -p jaunder latest_successful_backup_timestamp`
 
   Expected: PASS.
 
-- [ ] **Step 5: Gate and commit**
+- [x] **Step 5: Gate and commit**
 
   Run: `devtool run -- cargo xtask check`
 
@@ -519,7 +519,7 @@ come from `manifest.json`, not filesystem mtime or name sorting.
   Run: `devtool run -- cargo nextest run -p storage pool_observer`
 
   Run:
-  `devtool run -- cargo nextest run -p server open_server_database prepare_server`
+  `devtool run -- cargo nextest run -p jaunder open_server_database prepare_server`
 
   Expected: PASS.
 
@@ -764,7 +764,7 @@ come from `manifest.json`, not filesystem mtime or name sorting.
   Run:
   `devtool run -- cargo nextest run -p host every_emitter_exports_its_instrument`
 
-  Run: `devtool run -- cargo nextest run -p server saturation_sampler`
+  Run: `devtool run -- cargo nextest run -p jaunder saturation_sampler`
 
   Expected: PASS.
 
@@ -864,7 +864,7 @@ come from `manifest.json`, not filesystem mtime or name sorting.
 - [ ] **Step 2: Run serve wiring tests and verify failure**
 
   Run:
-  `devtool run -- cargo nextest run -p server saturation_sampler prepare_server`
+  `devtool run -- cargo nextest run -p jaunder saturation_sampler prepare_server`
 
   Expected: FAIL because serve wiring is not complete.
 
@@ -891,7 +891,7 @@ come from `manifest.json`, not filesystem mtime or name sorting.
 - [ ] **Step 5: Run focused tests and docs format**
 
   Run:
-  `devtool run -- cargo nextest run -p server saturation_sampler prepare_server`
+  `devtool run -- cargo nextest run -p jaunder saturation_sampler prepare_server`
 
   Run: `devtool run -- prettier -w docs/observability.md docs/ARCHITECTURE.md`
 
