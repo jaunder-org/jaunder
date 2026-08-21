@@ -107,9 +107,10 @@ Fix-mode host surface equivalent to `cargo xtask check --no-test`, followed by
 Rust-owned Git/index reconciliation. It auto-fixes formatting
 (fmt/leptosfmt/prettier) and re-stages only formatter/check mutations on
 already-staged tracked paths that had no pre-existing unstaged change. Mixed
-tracked paths, newly-created untracked files, and delete/rename states fail
-closed with diagnostics; pre-existing untracked files stay unstaged and
-tolerated. Bypass with `SKIP_PRE_COMMIT=1 git commit` for WIP.
+tracked paths, newly-created untracked files, and delete/rename states changed
+during the hook fail closed with diagnostics; pre-existing delete/rename state
+and untracked files stay unstaged and tolerated. Bypass with
+`SKIP_PRE_COMMIT=1 git commit` for WIP.
 
 **`pre-push`** runs `cargo xtask validate --no-e2e` (verify-only): the static
 checks plus the Nix `coverage` check, gating test failures and coverage

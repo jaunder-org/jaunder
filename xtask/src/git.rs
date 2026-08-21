@@ -141,6 +141,9 @@ pub fn precommit_stage_plan(
     for path in paths {
         let before_status = before.paths.get(path);
         let after_status = after.paths.get(path);
+        if !precommit_path_changed(before_status, after_status) {
+            continue;
+        }
         if before_status.is_some_and(|s| s.delete_or_rename)
             || after_status.is_some_and(|s| s.delete_or_rename)
         {
@@ -158,9 +161,6 @@ pub fn precommit_stage_plan(
             continue;
         }
         if before_status.is_some_and(|s| s.untracked) {
-            continue;
-        }
-        if !precommit_path_changed(before_status, after_status) {
             continue;
         }
         match before_status {
@@ -684,6 +684,33 @@ mod tests {
         assert_eq!(plan.failures.len(), 1);
         assert!(plan.failures[0].contains("new.tmp"));
         assert!(plan.failures[0].contains("new untracked"));
+    }
+
+    #[test]
+    fn precommit_stage_plan_ignores_unchanged_delete_or_rename_states() {
+        let before = parse_status_snapshot("D  gone.rs\nR  old.rs -> new.rs\n");
+        let after = parse_status_snapshot("D  gone.rs\nR  old.rs -> new.rs\n");
+        let plan = precommit_stage_plan(&before, &after);
+        assert!(plan.stage_paths.is_empty());
+        assert!(plan.failures.is_empty());
+    }
+
+    #[test]
+    fn precommit_stage_plan_rejects_changed_rename_states() {
+        let before = parse_status_snapshot("R  old.rs -> new.rs\n");
+        let after = parse_status_snapshot("R  old.rs -> newer.rs\n");
+        let plan = precommit_stage_plan(&before, &after);
+        assert!(plan.stage_paths.is_empty());
+        assert!(
+            plan.failures
+                .iter()
+                .any(|f| f.contains("old.rs -> new.rs") && f.contains("delete/rename"))
+        );
+        assert!(
+            plan.failures
+                .iter()
+                .any(|f| f.contains("old.rs -> newer.rs") && f.contains("delete/rename"))
+        );
     }
 
     #[test]
