@@ -142,7 +142,7 @@ where
         .fetch_optional(&self.pool)
         .await?;
 
-        Err(crate::helpers::password_reset_claim_error(row))
+        Err(crate::helpers::password_reset_claim_error(row, now))
     }
 }
 

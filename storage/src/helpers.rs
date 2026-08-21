@@ -373,23 +373,44 @@ pub(crate) fn media_record_from_row(row: MediaRow) -> MediaRecord {
 // Claim verification error helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) fn email_verification_claim_error(
-    row: Option<(Option<DateTime<Utc>>, DateTime<Utc>)>,
-) -> crate::UseEmailVerificationError {
+pub(crate) type TokenStateRow = (Option<DateTime<Utc>>, DateTime<Utc>);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TokenState {
+    Missing,
+    AlreadyUsed,
+    Expired,
+    Claimable,
+}
+
+pub(crate) fn classify_token_state(row: Option<TokenStateRow>, now: DateTime<Utc>) -> TokenState {
     match row {
-        None => crate::UseEmailVerificationError::NotFound,
-        Some((Some(_), _)) => crate::UseEmailVerificationError::AlreadyUsed,
-        Some((None, _)) => crate::UseEmailVerificationError::Expired,
+        None => TokenState::Missing,
+        Some((Some(_), _)) => TokenState::AlreadyUsed,
+        Some((None, expires_at)) if expires_at <= now => TokenState::Expired,
+        Some((None, _)) => TokenState::Claimable,
+    }
+}
+
+pub(crate) fn email_verification_claim_error(
+    row: Option<TokenStateRow>,
+    now: DateTime<Utc>,
+) -> crate::UseEmailVerificationError {
+    match classify_token_state(row, now) {
+        TokenState::Missing => crate::UseEmailVerificationError::NotFound,
+        TokenState::AlreadyUsed => crate::UseEmailVerificationError::AlreadyUsed,
+        TokenState::Expired | TokenState::Claimable => crate::UseEmailVerificationError::Expired,
     }
 }
 
 pub(crate) fn password_reset_claim_error(
-    row: Option<(Option<DateTime<Utc>>, DateTime<Utc>)>,
+    row: Option<TokenStateRow>,
+    now: DateTime<Utc>,
 ) -> crate::UsePasswordResetError {
-    match row {
-        None => crate::UsePasswordResetError::NotFound,
-        Some((Some(_), _)) => crate::UsePasswordResetError::AlreadyUsed,
-        Some((None, _)) => crate::UsePasswordResetError::Expired,
+    match classify_token_state(row, now) {
+        TokenState::Missing => crate::UsePasswordResetError::NotFound,
+        TokenState::AlreadyUsed => crate::UsePasswordResetError::AlreadyUsed,
+        TokenState::Expired | TokenState::Claimable => crate::UsePasswordResetError::Expired,
     }
 }
 
@@ -1007,18 +1028,40 @@ mod tests {
     }
 
     #[test]
+    fn token_state_classifier_distinguishes_all_arms() {
+        let now = Utc::now();
+        assert_eq!(classify_token_state(None, now), TokenState::Missing);
+        assert_eq!(
+            classify_token_state(Some((Some(now), now + chrono::Duration::hours(1))), now),
+            TokenState::AlreadyUsed
+        );
+        assert_eq!(
+            classify_token_state(Some((None, now)), now),
+            TokenState::Expired
+        );
+        assert_eq!(
+            classify_token_state(Some((None, now - chrono::Duration::seconds(1))), now),
+            TokenState::Expired
+        );
+        assert_eq!(
+            classify_token_state(Some((None, now + chrono::Duration::seconds(1))), now),
+            TokenState::Claimable
+        );
+    }
+
+    #[test]
     fn email_verification_claim_error_distinguishes_all_arms() {
         let now = Utc::now();
         assert!(matches!(
-            email_verification_claim_error(None),
+            email_verification_claim_error(None, now),
             crate::UseEmailVerificationError::NotFound
         ));
         assert!(matches!(
-            email_verification_claim_error(Some((Some(now), now))),
+            email_verification_claim_error(Some((Some(now), now)), now),
             crate::UseEmailVerificationError::AlreadyUsed
         ));
         assert!(matches!(
-            email_verification_claim_error(Some((None, now))),
+            email_verification_claim_error(Some((None, now)), now),
             crate::UseEmailVerificationError::Expired
         ));
     }
@@ -1027,15 +1070,15 @@ mod tests {
     fn password_reset_claim_error_distinguishes_all_arms() {
         let now = Utc::now();
         assert!(matches!(
-            password_reset_claim_error(None),
+            password_reset_claim_error(None, now),
             crate::UsePasswordResetError::NotFound
         ));
         assert!(matches!(
-            password_reset_claim_error(Some((Some(now), now))),
+            password_reset_claim_error(Some((Some(now), now)), now),
             crate::UsePasswordResetError::AlreadyUsed
         ));
         assert!(matches!(
-            password_reset_claim_error(Some((None, now))),
+            password_reset_claim_error(Some((None, now)), now),
             crate::UsePasswordResetError::Expired
         ));
     }

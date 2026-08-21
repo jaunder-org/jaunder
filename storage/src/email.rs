@@ -192,7 +192,7 @@ where
         .await
         .map_err(UseEmailVerificationError::Internal)?;
 
-        Err(crate::helpers::email_verification_claim_error(row))
+        Err(crate::helpers::email_verification_claim_error(row, now))
     }
 }
 
