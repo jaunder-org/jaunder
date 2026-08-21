@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 mod adr;
 mod adr_readme;
 mod audit_wasm;
+mod compile_cache;
 pub mod coverage;
 mod doc_links;
 mod files;
@@ -55,6 +56,7 @@ mod steps {
     pub mod sqlx_newtype_decode_check;
     pub mod static_checks;
     pub mod target_arch_placement_check;
+    pub mod test_local;
     pub mod test_pattern_check;
     pub mod thin_components;
     pub mod traced_context_check;
@@ -106,14 +108,15 @@ impl E2eBrowser {
 #[derive(Subcommand)]
 pub enum Command {
     /// Inner loop (auto-fixes formatting): host static checks + clippy + the host
-    /// xtask unit suite, then the Nix coverage check (instrumented test suite +
-    /// coverage) and the Nix doctest check. `--no-test` skips only those two Nix
-    /// checks; static, clippy, and the xtask unit tests still run — as does the
-    /// host-side `doctest-fences` step, which gates the `xtask`/`tools` fence
-    /// population that no Nix check can see (#763).
+    /// xtask/tools unit suites, then the host-native root-workspace nextest suite
+    /// under an ephemeral PostgreSQL and the Nix-only wasm/doctest checks. `--no-test`
+    /// skips the root-workspace and Nix-only test checks; static, clippy, and the
+    /// xtask/tools unit tests still run — as does the host-side `doctest-fences`
+    /// step, which gates the `xtask`/`tools` fence population that no Nix check can
+    /// see (#763).
     Check {
-        /// Skip the Nix coverage and doctest checks — static + clippy + host xtask
-        /// unit tests only.
+        /// Skip the root-workspace and Nix-only test checks — static + clippy +
+        /// host xtask/tools unit tests only.
         #[arg(long)]
         no_test: bool,
     },
@@ -191,6 +194,16 @@ pub enum Command {
         /// Update every Chromium and Firefox visual baseline using release CSR.
         #[arg(long, conflicts_with = "test")]
         update_visual_snapshots: bool,
+    },
+    /// Run host-native Rust tests through nextest with the shared sccache setup and
+    /// an isolated PostgreSQL lifecycle. Pass nextest filters after `--`.
+    #[command(after_help = "EXAMPLES:\n  \
+        cargo xtask test-local\n  \
+        cargo xtask test-local -- -p storage site_config_primitives_round_trip")]
+    TestLocal {
+        /// Arguments forwarded to `cargo nextest run`.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        nextest_args: Vec<String>,
     },
     /// Build the CSR wasm bundle on the host (`cargo build -p csr` + the shared
     /// `devtool csr-bundle` post-processing) — the cargo-leptos-free bundle build
@@ -423,6 +436,7 @@ impl Cli {
             Command::AuditWasm { .. } => "audit-wasm",
             Command::E2e { .. } => "e2e",
             Command::E2eLocal { .. } => "e2e-local",
+            Command::TestLocal { .. } => "test-local",
             Command::BuildCsr { .. } => "build-csr",
             Command::Adr(AdrCommand::Renumber) => "adr-renumber",
             Command::Adr(AdrCommand::SyncReadme) => "adr-sync-readme",
@@ -673,7 +687,10 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("check");
             run_host_gate(&sh, Mode::Fix, &mut result);
-            steps::nix::test_checks(&mut result, no_test);
+            if !no_test {
+                steps::test_local::run(&sh, &mut result, &[]);
+            }
+            steps::nix::check_supporting_test_checks(&mut result, no_test);
             finalize(&mut result, start);
             Ok(result)
         }
@@ -788,6 +805,14 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("e2e-local");
             steps::e2e_local::run(&sh, &mut result, test.as_deref(), update_visual_snapshots);
+            finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::TestLocal { nextest_args } => {
+            let sh = xshell::Shell::new()?;
+            let start = std::time::Instant::now();
+            let mut result = CommandResult::new("test-local");
+            steps::test_local::run(&sh, &mut result, &nextest_args);
             finalize(&mut result, start);
             Ok(result)
         }
@@ -1086,6 +1111,26 @@ mod cli_tests {
     }
 
     #[test]
+    fn check_uses_local_product_tests_before_nix_only_test_checks() {
+        let mut names = host_gate_step_names_for_test(Mode::Fix);
+        names.push("test-local");
+        names.extend(steps::nix::check_supporting_test_check_names());
+
+        let test_local = names
+            .iter()
+            .position(|name| *name == "test-local")
+            .expect("check includes the host-native product test lane");
+        let wasm_tests = names
+            .iter()
+            .position(|name| *name == "wasm-tests")
+            .expect("check keeps the Nix-only wasm browser tests");
+
+        assert!(test_local < wasm_tests);
+        assert!(!names.contains(&"coverage"));
+        assert!(names.contains(&"doctests"));
+    }
+
+    #[test]
     fn precommit_orchestration_restages_safe_fixture() {
         let dir = crate::test_support::temp_repo("precommit", "orchestration-safe");
         crate::test_support::commit(&dir, "a.rs", "fn a(){}\n");
@@ -1266,6 +1311,37 @@ mod cli_tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn parses_test_local_defaults_and_forwarded_nextest_args() {
+        let cli = Cli::try_parse_from(["xtask", "test-local"]).unwrap();
+        match cli.command {
+            Command::TestLocal { ref nextest_args } => {
+                assert!(nextest_args.is_empty());
+            }
+            _ => panic!("expected test-local"),
+        }
+        assert_eq!(cli.command_name(), "test-local");
+
+        let cli = Cli::try_parse_from([
+            "xtask",
+            "test-local",
+            "--",
+            "-p",
+            "storage",
+            "site_config_primitives_round_trip",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::TestLocal { nextest_args } => {
+                assert_eq!(
+                    nextest_args,
+                    ["-p", "storage", "site_config_primitives_round_trip"]
+                );
+            }
+            _ => panic!("expected test-local with nextest args"),
+        }
     }
 
     #[test]

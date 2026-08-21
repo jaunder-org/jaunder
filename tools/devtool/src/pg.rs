@@ -5,6 +5,7 @@
 //! torn down on every exit path — normal return, panic, or SIGINT/SIGTERM.
 
 use std::io::Write;
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -15,7 +16,7 @@ use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 
 pub(crate) const HOST: &str = "127.0.0.1";
-const PORT: u16 = 54329;
+const START_ATTEMPTS: usize = 8;
 
 const BOOTSTRAP_SQL: &str =
     "CREATE ROLE jaunder LOGIN CREATEDB;\nCREATE DATABASE jaunder OWNER jaunder;\n";
@@ -75,6 +76,29 @@ fn psql_args(host: &str, port: u16) -> Vec<String> {
         "-v".into(),
         "ON_ERROR_STOP=1".into(),
     ]
+}
+
+fn choose_free_port(host: &str) -> Result<u16> {
+    choose_free_port_with(host, |host| {
+        TcpListener::bind((host, 0)).with_context(|| {
+            format!("binding temporary loopback listener for ephemeral PostgreSQL on {host}")
+        })
+    })
+}
+
+fn choose_free_port_with(
+    host: &str,
+    bind: impl FnOnce(&str) -> Result<TcpListener>,
+) -> Result<u16> {
+    let listener = bind(host)?;
+    let port = listener
+        .local_addr()
+        .context("reading temporary PostgreSQL listener address")?
+        .port();
+    if port == 0 {
+        bail!("temporary PostgreSQL listener returned port 0");
+    }
+    Ok(port)
 }
 
 /// Owns a running ephemeral cluster's data dir; tears it down exactly once.
@@ -180,10 +204,7 @@ fn bootstrap(host: &str, port: u16) -> Result<()> {
     Ok(())
 }
 
-/// Boot a throwaway PostgreSQL 16 cluster, run `body` with its endpoints, and tear
-/// down on every exit path (normal return, panic, or SIGINT/SIGTERM).
-pub fn with_ephemeral<T>(body: impl FnOnce(&PgEnv) -> Result<T>) -> Result<T> {
-    let port = PORT;
+fn create_cluster_guard() -> Result<Arc<Cluster>> {
     // `keep()` hands ownership of the dir to us so `TempDir`'s own Drop won't delete
     // it while the server is still running; the `Cluster` guard removes it after the
     // server is stopped.
@@ -192,22 +213,62 @@ pub fn with_ephemeral<T>(body: impl FnOnce(&PgEnv) -> Result<T>) -> Result<T> {
         .tempdir()
         .context("creating PGDATA temp dir")?
         .keep();
-    let cluster = Arc::new(Cluster {
-        pgdata: pgdata.clone(),
+    Ok(Arc::new(Cluster {
+        pgdata,
         torn_down: AtomicBool::new(false),
-    });
+    }))
+}
 
-    run_checked(Command::new("initdb").args(initdb_args(&pgdata)))?;
-    let settings = server_settings(HOST, port, &pgdata).join(" ");
-    run_checked(Command::new("pg_ctl").args([
-        "-D",
-        &pgdata.display().to_string(),
-        "-w",
-        "start",
-        "-o",
-        &settings,
-    ]))?;
-    bootstrap(HOST, port)?;
+fn start_cluster_on_port(port: u16) -> Result<Arc<Cluster>> {
+    let cluster = create_cluster_guard()?;
+    let startup = (|| {
+        run_checked(Command::new("initdb").args(initdb_args(&cluster.pgdata)))?;
+        let settings = server_settings(HOST, port, &cluster.pgdata).join(" ");
+        run_checked(Command::new("pg_ctl").args([
+            "-D",
+            &cluster.pgdata.display().to_string(),
+            "-w",
+            "start",
+            "-o",
+            &settings,
+        ]))?;
+        bootstrap(HOST, port)?;
+        Ok(())
+    })();
+    if let Err(error) = startup {
+        cluster.teardown();
+        return Err(error);
+    }
+    Ok(cluster)
+}
+
+fn retry_start<T>(
+    attempts: usize,
+    mut choose_port: impl FnMut() -> Result<u16>,
+    mut start: impl FnMut(u16) -> Result<T>,
+) -> Result<(T, u16)> {
+    let mut last_error = None;
+    for _ in 0..attempts {
+        let port = choose_port()?;
+        match start(port) {
+            Ok(cluster) => return Ok((cluster, port)),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    match last_error {
+        Some(error) => Err(error).context("starting ephemeral PostgreSQL after retrying ports"),
+        None => bail!("starting ephemeral PostgreSQL requires at least one attempt"),
+    }
+}
+
+/// Boot a throwaway PostgreSQL 16 cluster, run `body` with its endpoints, and tear
+/// down on every exit path (normal return, panic, or SIGINT/SIGTERM).
+pub fn with_ephemeral<T>(body: impl FnOnce(&PgEnv) -> Result<T>) -> Result<T> {
+    let (cluster, port) = retry_start(
+        START_ATTEMPTS,
+        || choose_free_port(HOST),
+        start_cluster_on_port,
+    )?;
 
     // Parity with the bash `trap cleanup INT TERM`: a dedicated thread tears the
     // cluster down on signal, then emulates the default disposition so the process
@@ -266,16 +327,14 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn urls_match_bash_parity() {
-        // Thread the `PORT` const (not a literal) through the URL builders so a
-        // change to the constant fails this assertion — the port's regression lock.
+    fn urls_thread_selected_port() {
         assert_eq!(
-            app_url(HOST, PORT),
-            "postgres://jaunder@127.0.0.1:54329/jaunder"
+            app_url(HOST, 15432),
+            "postgres://jaunder@127.0.0.1:15432/jaunder"
         );
         assert_eq!(
-            bootstrap_url(HOST, PORT),
-            "postgres://postgres@127.0.0.1:54329/postgres"
+            bootstrap_url(HOST, 25432),
+            "postgres://postgres@127.0.0.1:25432/postgres"
         );
     }
 
@@ -326,6 +385,29 @@ mod tests {
                 "ON_ERROR_STOP=1"
             ]
         );
+    }
+
+    #[test]
+    fn retry_start_uses_a_new_port_after_failure() {
+        let mut ports = vec![15432, 25432].into_iter();
+        let mut attempted = Vec::new();
+
+        let (cluster, port) = retry_start(
+            2,
+            || Ok(ports.next().unwrap()),
+            |port| {
+                attempted.push(port);
+                if port == 15432 {
+                    anyhow::bail!("simulated bind race");
+                }
+                Ok("cluster")
+            },
+        )
+        .unwrap();
+
+        assert_eq!(cluster, "cluster");
+        assert_eq!(port, 25432);
+        assert_eq!(attempted, [15432, 25432]);
     }
 
     #[test]

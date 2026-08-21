@@ -2160,8 +2160,8 @@ and `Command::Validate`):
 
 - **`cargo xtask check`** runs the host static checks in **Fix** mode
   (formatters auto-fix), then every repo-shape and type-safety gate, then the
-  host unit tests, and — unless `--no-test` — the Nix `wasm-tests`, `coverage`,
-  and `doctests` derivations.
+  host unit tests, and — unless `--no-test` — the host-native `test-local`
+  product Rust suite plus the Nix-only `wasm-tests` and `doctests` derivations.
 - **`cargo xtask precommit`** is the hook entrypoint. It runs the same host
   surface as `cargo xtask check --no-test`, then applies the safe-staging
   policy: re-stage only formatter/check mutations to already-staged tracked
@@ -2169,9 +2169,10 @@ and `Command::Validate`):
   paths, newly-created untracked files, and delete/rename state changed during
   the hook. Pre-existing delete/rename state and untracked files stay unstaged
   and tolerated.
-- **`cargo xtask validate`** runs the same set **verify-only**, adds
+- **`cargo xtask validate`** runs the same host set **verify-only**, adds
   `wasm-budget` (kept out of `check` because it costs a `nix build .#site`,
-  #836), and — unless `--no-e2e` — the e2e aggregate.
+  #836), runs the Nix `wasm-tests`, `coverage`, and `doctests` derivations, and
+  — unless `--no-e2e` — the e2e aggregate.
 
 Enforcement is git-native ([ADR-0029](adr/0029-git-enforced-verify-gate.md)).
 `.githooks/pre-commit` calls `cargo xtask precommit`; the `xtask` Cargo alias
