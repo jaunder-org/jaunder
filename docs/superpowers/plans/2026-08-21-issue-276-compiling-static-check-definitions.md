@@ -420,7 +420,7 @@ git commit -m "refactor(xtask): route compiling checks through devtool (#276)"
   on the expanded Nix `static-checks` derivation after the crane outputs are
   removed.
 
-- [ ] **Step 1: Inspect current required Nix step wiring**
+- [x] **Step 1: Inspect current required Nix step wiring**
 
 Read the Nix step list and tests:
 
@@ -432,7 +432,7 @@ Record which `cargo xtask validate --no-e2e` step currently realizes the
 hermetic static checks. If no step realizes `checks.*.static-checks`, add one in
 this task.
 
-- [ ] **Step 2: Update expected Nix surface tests**
+- [x] **Step 2: Update expected Nix surface tests**
 
 If xtask has tests that lock Nix step names, update them so the required
 validation path includes the expanded `static-checks` derivation and no longer
@@ -447,7 +447,7 @@ devtool run -- cargo test --manifest-path xtask/Cargo.toml nix -- --nocapture
 
 Expected before implementation: FAIL if tests are updated first.
 
-- [ ] **Step 3: Update `flake.nix`**
+- [x] **Step 3: Update `flake.nix`**
 
 In `checks`:
 
@@ -472,7 +472,7 @@ If wasm clippy requires a target/tool input not already available through
 `toolchain`, add the exact pinned input the existing flake uses rather than
 fetching through a wrapper.
 
-- [ ] **Step 4: Wire required validation to hermetic static-checks**
+- [x] **Step 4: Wire required validation to hermetic static-checks**
 
 If `cargo xtask validate --no-e2e` does not already build `static-checks`, add
 or adjust the Nix step so it does. The resulting required CI job
@@ -483,7 +483,7 @@ Do not make CI call `nix flake check` directly unless the xtask gate model
 requires it; prefer preserving the current `cargo xtask validate --no-e2e`
 entrypoint and changing what it realizes.
 
-- [ ] **Step 5: Run focused local proofs**
+- [x] **Step 5: Run focused local proofs**
 
 Run:
 
@@ -502,7 +502,12 @@ devtool run -- cargo xtask validate --no-e2e
 Expected: PASS; this proves the required CI entrypoint exercises the hermetic
 static-check signal.
 
-- [ ] **Step 6: Commit Task 3**
+Implementation note: the direct `static-checks` build passed. Local
+`validate --no-e2e --allow-dirty` reached and passed `nix-static-checks`, then
+failed on ignored local `.agents/` prettier inputs that are not part of a clean
+CI checkout.
+
+- [x] **Step 6: Commit Task 3**
 
 Tick this task checkbox, then run:
 

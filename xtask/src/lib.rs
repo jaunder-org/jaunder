@@ -717,6 +717,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                 return Ok(result);
             }
             run_host_gate_without_tests(&sh, Mode::Check, &mut result);
+            steps::nix::static_checks(&mut result);
             // Deliberately in `validate` and not `check`: it costs a
             // `nix build .#site`, which the pre-commit gate should not pay (#836).
             steps::wasm_budget::run(&mut result);

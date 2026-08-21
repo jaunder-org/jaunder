@@ -21,6 +21,7 @@ enum TestCheck {
 
 const TEST_CHECKS: [TestCheck; 3] = [TestCheck::Wasm, TestCheck::Coverage, TestCheck::Doctests];
 const CHECK_SUPPORTING_TEST_CHECKS: [TestCheck; 2] = [TestCheck::Wasm, TestCheck::Doctests];
+const STATIC_CHECK: &str = "static-checks";
 
 impl TestCheck {
     const fn name(self) -> &'static str {
@@ -61,6 +62,18 @@ pub(crate) fn check_supporting_test_check_names() -> impl ExactSizeIterator<Item
         .iter()
         .copied()
         .map(TestCheck::name)
+}
+
+#[cfg(test)]
+fn validate_check_names() -> impl Iterator<Item = &'static str> {
+    std::iter::once(STATIC_CHECK).chain(TEST_CHECKS.iter().copied().map(TestCheck::name))
+}
+
+/// Run the hermetic static-check derivation. This is validate-only: `check`
+/// already runs the host-local static lane, while CI's required validate job
+/// needs the same definitions proven inside Nix.
+pub fn static_checks(result: &mut CommandResult) {
+    result.push(build_check("nix-static-checks", STATIC_CHECK));
 }
 
 /// Run the Nix-backed test checks unless `--no-test` disables the group.
@@ -810,7 +823,7 @@ mod tests {
         CommandResult, FailedBuildDiagnostics, StepResult, check_supporting_test_check_names,
         doctest_sentinel_detail, drain_build_stderr, failed_build_after_diagnostics_with,
         failed_status_step, prepare_build_dirs_with, report_build_diagnostic_failure,
-        sentinel_detail, test_check_names,
+        test_check_names, validate_check_names,
     };
     use coverage::status::{CoverageStatus, StatusCategory};
     use doctests::check::{Kind, Violation};
@@ -824,6 +837,11 @@ mod tests {
     #[test]
     fn check_supporting_test_check_names_exclude_coverage() {
         assert!(check_supporting_test_check_names().eq(["wasm-tests", "doctests"]));
+    }
+
+    #[test]
+    fn validate_check_names_include_static_checks_before_test_checks() {
+        assert!(validate_check_names().eq(["static-checks", "wasm-tests", "coverage", "doctests"]));
     }
 
     #[test]
