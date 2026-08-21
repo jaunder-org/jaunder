@@ -253,5 +253,5 @@ omits; coverage status must remain independent of timing-dependent attribution.
 ## Verification
 
 - [x] Run `devtool run -- cargo xtask check` after each committed task.
-- [ ] Run `devtool run -- cargo xtask validate` on the final clean branch before
+- [x] Run `devtool run -- cargo xtask validate` on the final clean branch before
       shipping.
