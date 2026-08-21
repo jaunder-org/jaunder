@@ -1,7 +1,8 @@
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use sqlx::SqlitePool;
 
+use crate::helpers::{TokenState, TokenStateRow, classify_token_state};
 use crate::{AtomicOps, ConfirmPasswordResetError, RegisterWithInviteError};
 use common::display_name::DisplayName;
 use common::ids::UserId;
@@ -78,17 +79,19 @@ impl SqliteAtomicOps {
         .await?;
 
         let Some((user_id,)) = claimed else {
-            let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
+            let row = sqlx::query_as::<_, TokenStateRow>(
                 "SELECT used_at, expires_at FROM password_resets WHERE token_hash = $1",
             )
             .bind(&token_hash)
             .fetch_optional(&mut *tx)
             .await?;
 
-            let primary = match row {
-                None => Err(ConfirmPasswordResetError::NotFound),
-                Some((Some(_), _)) => Err(ConfirmPasswordResetError::AlreadyUsed),
-                Some((None, _)) => Err(ConfirmPasswordResetError::Expired),
+            let primary = match classify_token_state(row, now) {
+                TokenState::Missing => Err(ConfirmPasswordResetError::NotFound),
+                TokenState::AlreadyUsed => Err(ConfirmPasswordResetError::AlreadyUsed),
+                TokenState::Expired | TokenState::Claimable => {
+                    Err(ConfirmPasswordResetError::Expired)
+                }
             };
             return finish_password_reset_rejection(primary, tx.rollback().await);
         };
@@ -148,22 +151,19 @@ impl AtomicOps for SqliteAtomicOps {
             // specific error the caller needs. Reporting them distinctly is what keeps this a
             // read-then-write transaction (hence BEGIN IMMEDIATE above), not a single-statement
             // claim.
-            let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
+            let row = sqlx::query_as::<_, TokenStateRow>(
                 "SELECT used_at, expires_at FROM invites WHERE code = $1",
             )
             .bind(invite_code)
             .fetch_optional(&mut *conn)
-            .await?
-            .ok_or(RegisterWithInviteError::InviteNotFound)?;
-
-            let (used_at, expires_at) = row;
-            if used_at.is_some() {
-                return Err(RegisterWithInviteError::InviteAlreadyUsed);
-            }
+            .await?;
 
             let now = Utc::now();
-            if expires_at <= now {
-                return Err(RegisterWithInviteError::InviteExpired);
+            match classify_token_state(row, now) {
+                TokenState::Missing => return Err(RegisterWithInviteError::InviteNotFound),
+                TokenState::AlreadyUsed => return Err(RegisterWithInviteError::InviteAlreadyUsed),
+                TokenState::Expired => return Err(RegisterWithInviteError::InviteExpired),
+                TokenState::Claimable => {}
             }
 
             let password_hash = crate::helpers::hash_password(password.clone())

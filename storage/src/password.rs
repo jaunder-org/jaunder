@@ -8,6 +8,7 @@ use thiserror::Error;
 use common::token::RawToken;
 
 use crate::backend::Backend;
+use crate::helpers::TokenStateRow;
 use common::ids::UserId;
 
 /// Errors returned by [`PasswordResetStorage::use_password_reset`].
@@ -76,7 +77,7 @@ impl<DB> PasswordResetStorage for PasswordResetStore<DB>
 where
     DB: Backend,
     (UserId,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (Option<DateTime<Utc>>, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
+    TokenStateRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `TokenHash` binds as itself via the ADR-0071 sqlx bridge.
     String: sqlx::Type<DB>,
@@ -135,7 +136,7 @@ where
             return Ok(user_id);
         }
 
-        let row = sqlx::query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)>(
+        let row = sqlx::query_as::<_, TokenStateRow>(
             "SELECT used_at, expires_at FROM password_resets WHERE token_hash = $1",
         )
         .bind(&token_hash)

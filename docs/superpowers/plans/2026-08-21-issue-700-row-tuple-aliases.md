@@ -246,7 +246,7 @@ git add docs/superpowers/specs/2026-08-21-issue-700-row-tuple-aliases.md docs/su
 git commit -m "refactor(storage): name token state rows (#700)"
 ```
 
-### Task 2: Adopt token-state rows at all token lookup sites
+### Task 2: Adopt token-state rows at all token lookup sites — DONE
 
 **Files:**
 
@@ -267,7 +267,7 @@ git commit -m "refactor(storage): name token state rows (#700)"
   `(Option<DateTime<Utc>>, DateTime<Utc>)` token-state decode target is replaced
   with `TokenStateRow`.
 
-- [ ] **Step 1: Replace query decode targets and error-helper calls**
+- [x] **Step 1: Replace query decode targets and error-helper calls**
 
 In `storage/src/email.rs` and `storage/src/password.rs`, import or qualify
 `crate::helpers::TokenStateRow`, replace each token-state `query_as` target with
@@ -307,7 +307,7 @@ match crate::helpers::classify_token_state(row, now) {
 Do not change when `now` is taken relative to the existing SQL/transaction steps
 except as needed to pass it into the classifier.
 
-- [ ] **Step 2: Run focused token/invite storage tests**
+- [x] **Step 2: Run focused token/invite storage tests**
 
 Run:
 
@@ -320,7 +320,7 @@ devtool run -- cargo nextest run -p storage invite
 Expected: PASS. If the test filter misses an existing atomic invite test, run
 the nearest existing storage atomic test filter shown by nextest.
 
-- [ ] **Step 3: Commit the token-site adoption**
+- [x] **Step 3: Commit the token-site adoption**
 
 Tick this task checkbox, then run:
 
