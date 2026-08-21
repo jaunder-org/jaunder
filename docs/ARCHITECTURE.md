@@ -2152,8 +2152,9 @@ and `Command::Validate`):
   surface as `cargo xtask check --no-test`, then applies the safe-staging
   policy: re-stage only formatter/check mutations to already-staged tracked
   paths that had no pre-existing unstaged change; fail closed for mixed tracked
-  paths, newly-created untracked files, and delete/rename ambiguity.
-  Pre-existing untracked files stay unstaged and tolerated.
+  paths, newly-created untracked files, and delete/rename state changed during
+  the hook. Pre-existing delete/rename state and untracked files stay unstaged
+  and tolerated.
 - **`cargo xtask validate`** runs the same set **verify-only**, adds
   `wasm-budget` (kept out of `check` because it costs a `nix build .#site`,
   #836), and — unless `--no-e2e` — the e2e aggregate.

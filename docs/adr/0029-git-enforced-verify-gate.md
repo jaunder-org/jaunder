@@ -99,8 +99,9 @@ new command ran the fast Fix-mode host surface equivalent to
 `cargo xtask check --no-test`, then reconciled Git/index state in Rust. It
 re-staged only formatter/check mutations to already-staged tracked paths with no
 pre-existing unstaged change. Mixed tracked paths, newly-created untracked
-files, and delete/rename states failed closed with diagnostics; pre-existing
-untracked files stayed unstaged and tolerated.
+files, and delete/rename states changed during the hook failed closed with
+diagnostics; pre-existing delete/rename state and untracked files stayed
+unstaged and tolerated.
 
 This traded the original per-commit Nix coverage/doctest/wasm proof for a short
 commit-time gate plus the existing `cargo xtask validate --no-e2e` pre-push
