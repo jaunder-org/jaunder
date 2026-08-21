@@ -132,6 +132,9 @@ pub trait MediaStorage: Send + Sync {
     /// Calculates the total storage used by a user's uploads (in bytes).
     async fn get_user_upload_usage(&self, user_id: UserId) -> sqlx::Result<ByteSize>;
 
+    /// Calculates total storage used by all local uploads (in bytes).
+    async fn total_upload_bytes(&self) -> sqlx::Result<ByteSize>;
+
     /// Finds a media record by its content hash and source across all users.
     ///
     /// This is used to avoid duplicate downloads of remote content.
@@ -155,6 +158,9 @@ pub trait MediaStorage: Send + Sync {
 pub trait MediaDialect: Backend {
     /// Returns the total upload bytes for `user_id` using backend-appropriate SQL.
     async fn get_user_upload_usage(pool: &Pool<Self>, user_id: UserId) -> sqlx::Result<ByteSize>;
+
+    /// Returns the total upload bytes across all users using backend-appropriate SQL.
+    async fn total_upload_bytes(pool: &Pool<Self>) -> sqlx::Result<ByteSize>;
 }
 
 /// Generic [`MediaStorage`] backed by any [`MediaDialect`] database.
@@ -397,6 +403,17 @@ where
         // The dialect twin decodes `COALESCE(SUM(…), 0)` straight into `ByteSize`; the
         // bridge's bound-checking `Decode` rejects a negative total at the column.
         DB::get_user_upload_usage(&self.pool, user_id).await
+    }
+
+    #[tracing::instrument(
+        name = "storage.media.total_upload_bytes",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn total_upload_bytes(&self) -> sqlx::Result<ByteSize> {
+        // Same shape as per-user usage, but intentionally all-users: this is the
+        // DB-declared upload footprint exported by observability, not filesystem usage.
+        DB::total_upload_bytes(&self.pool).await
     }
 
     #[tracing::instrument(
@@ -838,6 +855,40 @@ mod tests {
         base.close_pool().await;
         let result = state.media.get_user_upload_usage(UserId::from(1)).await;
         assert!(result.is_err());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn total_upload_bytes_sums_upload_rows(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let [alice] = seed_users(&env.state).await;
+        seed_media(&env.state, alice, "a.jpg").await;
+        seed_media(&env.state, alice, "b.jpg").await;
+
+        let total = env.state.media.total_upload_bytes().await.unwrap();
+
+        assert_eq!(total, parse_byte_size("2"));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn total_upload_bytes_excludes_non_upload_sources(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let [alice] = seed_users(&env.state).await;
+        seed_media(&env.state, alice, "upload.jpg").await;
+        env.base
+            .pool()
+            .execute(
+                "INSERT INTO media (user_id, sha256, filename, source, content_type, size_bytes) \
+                 VALUES (1, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', \
+                         'remote.jpg', 'cached', 'image/jpeg', 99)",
+            )
+            .await
+            .unwrap();
+
+        let total = env.state.media.total_upload_bytes().await.unwrap();
+
+        assert_eq!(total, parse_byte_size("1"));
     }
 
     #[apply(backends)]

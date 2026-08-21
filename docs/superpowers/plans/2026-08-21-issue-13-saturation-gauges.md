@@ -209,7 +209,7 @@ come from `manifest.json`, not filesystem mtime or name sorting.
   on `MediaDialect`.
 - Consumes existing `media.size_bytes` and `source = 'upload'` schema.
 
-- [ ] **Step 1: Write failing dual-backend tests**
+- [x] **Step 1: Write failing dual-backend tests**
 
   Add tests in `storage/src/media.rs`:
 
@@ -246,13 +246,13 @@ come from `manifest.json`, not filesystem mtime or name sorting.
   }
   ```
 
-- [ ] **Step 2: Run the focused tests and verify failure**
+- [x] **Step 2: Run the focused tests and verify failure**
 
   Run: `devtool run -- cargo nextest run -p storage total_upload_bytes`
 
   Expected: FAIL because `total_upload_bytes` is not defined.
 
-- [ ] **Step 3: Implement DB-declared media byte reads**
+- [x] **Step 3: Implement DB-declared media byte reads**
 
   Add the trait methods above. Reuse the same backend divergence as
   `get_user_upload_usage`: SQLite can use `COALESCE(SUM(size_bytes), 0)`;
@@ -260,13 +260,13 @@ come from `manifest.json`, not filesystem mtime or name sorting.
   whose `source = 'upload'`. Decode into `ByteSize`, so negative DB tampering
   fails rather than being silently exported.
 
-- [ ] **Step 4: Run the focused tests and verify pass**
+- [x] **Step 4: Run the focused tests and verify pass**
 
   Run: `devtool run -- cargo nextest run -p storage total_upload_bytes`
 
   Expected: PASS.
 
-- [ ] **Step 5: Gate and commit**
+- [x] **Step 5: Gate and commit**
 
   Run: `devtool run -- cargo xtask check`
 
