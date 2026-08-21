@@ -303,6 +303,28 @@
           ];
         };
 
+        mkOfflineCargoHome =
+          { name, vendorDir }:
+          pkgs.runCommand "${name}-cargo-home" { } ''
+            mkdir -p $out
+            cat > $out/config.toml <<EOF
+            [source.crates-io]
+            replace-with = "vendored-sources"
+
+            [source.vendored-sources]
+            directory = "${vendorDir}"
+
+            [net]
+            offline = true
+            EOF
+          '';
+
+        appCargoVendorDir = craneLib.vendorCargoDeps commonArgs;
+        appOfflineCargoHome = mkOfflineCargoHome {
+          name = "jaunder";
+          vendorDir = appCargoVendorDir;
+        };
+
         cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
         # Compile-only and test-only gates do not need full DWARF. Keep these
@@ -370,6 +392,12 @@
           strictDeps = true;
         };
         toolsCargoArtifacts = craneLib.buildDepsOnly toolsArgs;
+        toolsCargoVendorDir = craneLib.vendorCargoDeps toolsArgs;
+        toolsOfflineCargoHome = mkOfflineCargoHome {
+          name = "jaunder-tools";
+          vendorDir = toolsCargoVendorDir;
+        };
+
 
         # The in-sandbox dev tool (tools/ workspace: devtool + its coverage and
         # doctests path-deps). The offline coverage/doctests sandboxes run it
@@ -1272,13 +1300,15 @@
                   TZDIR = "${pkgs.tzdata}/share/zoneinfo";
                   E2E_TYPES_NODE_MODULES = "${e2ePackage}/node_modules";
                   E2E_PLAYWRIGHT_TEST = "${pkgs.playwright-test}/lib/node_modules/@playwright/test";
+                  JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
+                  JAUNDER_DEVTOOL_TOOLS_CARGO_HOME = "${toolsOfflineCargoHome}";
                 }
                 ''
                   # Writable copy: `devtool check tsc` provisions end2end/node_modules
                   # in-process (#229).
                   cp --no-preserve=mode -r ${staticCheckSrc} src
                   cd src
-                  devtool check --all
+                  devtool check --all --sandbox-cargo
                   touch $out
                 '';
             deny = craneLib.cargoDeny {

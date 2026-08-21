@@ -61,6 +61,9 @@ struct CheckArgs {
     /// Auto-fix (the formatters) instead of verifying.
     #[arg(long)]
     fix: bool,
+    /// Run Cargo-backed checks with workspace-specific offline Cargo config.
+    #[arg(long)]
+    sandbox_cargo: bool,
 }
 
 #[derive(clap::Args)]
@@ -154,7 +157,9 @@ fn main() -> anyhow::Result<()> {
         Command::Doctests(DoctestsCmd::Emit { out }) => doctests::emit::run(&out),
         Command::Pg(PgCmd::Run { cmd }) => pg::run_command(&cmd),
         Command::Run(args) => run::run(&args.cmd, args.cwd, args.timeout),
-        Command::Check(args) => check::run(args.name.as_deref(), args.all, args.fix),
+        Command::Check(args) => {
+            check::run(args.name.as_deref(), args.all, args.fix, args.sandbox_cargo)
+        }
         Command::CsrBundle(args) => csr_bundle::run(&args.wasm, &args.out),
         Command::SeedE2e(args) => {
             seed_e2e::run(&args.db, &args.test_support_bin, &args.jaunder_bin)
