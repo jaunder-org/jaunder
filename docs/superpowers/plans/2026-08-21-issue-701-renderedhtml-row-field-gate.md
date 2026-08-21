@@ -94,67 +94,67 @@ coverage, and general SQL column-to-field correspondence.
 
 **Implementation:**
 
-- [ ] Add a field population scanner that parses each source with `syn` and
+- [x] Add a field population scanner that parses each source with `syn` and
       walks Rust struct fields under the existing `POLICED_ROOTS`.
-- [ ] Reuse the existing owner-alias census for `RenderedHtml`, so imported
+- [x] Reuse the existing owner-alias census for `RenderedHtml`, so imported
       aliases and `type Html = RenderedHtml` style aliases are caught.
-- [ ] Treat direct path field types whose final segment is a known
+- [x] Treat direct path field types whose final segment is a known
       `RenderedHtml` owner alias as field mentions.
-- [ ] Treat direct single-ident field types that cannot be resolved to a local
+- [x] Treat direct single-ident field types that cannot be resolved to a local
       definition or import as field mentions, failing closed.
-- [ ] Ignore resolvable non-`RenderedHtml` direct types.
-- [ ] Ignore wrapper/container/borrowed forms on the expected path:
+- [x] Ignore resolvable non-`RenderedHtml` direct types.
+- [x] Ignore wrapper/container/borrowed forms on the expected path:
       `&RenderedHtml`, `Option<RenderedHtml>`, `Vec<RenderedHtml>`, and
       `Box<RenderedHtml>`.
-- [ ] Preserve the current test-code exemption policy for fields under
+- [x] Preserve the current test-code exemption policy for fields under
       `#[cfg(test)]`, `#[test]`, `#[rstest]`, and equivalent existing scanner
       handling.
-- [ ] Decide and implement the `storage/src/test_support.rs` policy explicitly:
+- [x] Decide and implement the `storage/src/test_support.rs` policy explicitly:
       either teach the field scanner to treat cfg-gated support files as
       test/support-only, or mark `SeededPost.rendered_html` with a reason that
       says it is an intentionally over-included test-support surface.
-- [ ] Merge existing `from_trusted` mentions and new field mentions per file
+- [x] Merge existing `from_trusted` mentions and new field mentions per file
       before calling marker classification and orphan detection.
-- [ ] Keep failure prose clear enough to distinguish a `from_trusted` door from
+- [x] Keep failure prose clear enough to distinguish a `from_trusted` door from
       a `RenderedHtml` field trust surface while preserving the current recovery
       path and marker census.
-- [ ] Update the module docs to describe the second population, direct-type
+- [x] Update the module docs to describe the second population, direct-type
       boundary, fail-closed unresolved-ident behavior, and unreadable classes.
 
 **Tests:**
 
-- [ ] Existing `from_trusted` tests still pass unchanged or with only wording
+- [x] Existing `from_trusted` tests still pass unchanged or with only wording
       adjustments forced by the new combined report.
-- [ ] An unmarked production field `rendered_html: RenderedHtml` fails.
-- [ ] A field marker on the line immediately above passes when it has a reason.
-- [ ] A bare field marker without a reason fails.
-- [ ] A stale/orphan field marker fails.
-- [ ] A marker for a field is not reported stale when there is no call-site
+- [x] An unmarked production field `rendered_html: RenderedHtml` fails.
+- [x] A field marker on the line immediately above passes when it has a reason.
+- [x] A bare field marker without a reason fails.
+- [x] A stale/orphan field marker fails.
+- [x] A marker for a field is not reported stale when there is no call-site
       mention on the next line.
-- [ ] A marker for a `from_trusted` call is not reported stale when there is no
+- [x] A marker for a `from_trusted` call is not reported stale when there is no
       field mention on the next line.
-- [ ] A marked line containing both a `from_trusted` mention and a
+- [x] A marked line containing both a `from_trusted` mention and a
       `RenderedHtml` field mention fails as a shared-line marker violation,
       proving the per-line site count is across both populations.
-- [ ] Test-only `RenderedHtml` fields are exempt under the same policy as the
+- [x] Test-only `RenderedHtml` fields are exempt under the same policy as the
       call-site scanner.
-- [ ] The field scanner catches: `RenderedHtml`, `common::render::RenderedHtml`,
+- [x] The field scanner catches: `RenderedHtml`, `common::render::RenderedHtml`,
       an in-file `use ... as ...` alias, and a type alias whose target is
       `RenderedHtml`.
-- [ ] The direct-type boundary is pinned with tests showing `&RenderedHtml`,
+- [x] The direct-type boundary is pinned with tests showing `&RenderedHtml`,
       `Option<RenderedHtml>`, `Vec<RenderedHtml>`, and `Box<RenderedHtml>` are
       ignored.
-- [ ] Unrelated resolvable types do not need markers, including names that only
+- [x] Unrelated resolvable types do not need markers, including names that only
       contain the `RenderedHtml` substring.
-- [ ] An unresolved direct field type requires a marker, and both marked and
+- [x] An unresolved direct field type requires a marker, and both marked and
       unmarked cases are covered.
-- [ ] A direct field inside an inline module whose type is defined only inside
+- [x] A direct field inside an inline module whose type is defined only inside
       that inline module is either correctly recognized as resolvable or is
       covered by an explicit conservative-overreach test/documentation path.
 
 **Check:**
 
-- [ ] Run `devtool run -- cargo xtask check --no-test`.
+- [x] Run `devtool run -- cargo xtask check --no-test`.
 
 ---
 
@@ -176,31 +176,31 @@ coverage, and general SQL column-to-field correspondence.
 
 **Implementation:**
 
-- [ ] Run the new gate and use its derived population to confirm every current
+- [x] Run the new gate and use its derived population to confirm every current
       production direct `RenderedHtml` field under `POLICED_ROOTS`.
-- [ ] Add immediate-above-line markers with specific reasons to legitimate
+- [x] Add immediate-above-line markers with specific reasons to legitimate
       fields. Expected current production sites are: `PostRow.rendered_html`,
       `PostRecord.rendered_html`, `PostRevisionRecord.rendered_html`,
       `RenderedPost.rendered_html`, `FeedItem.content_html`, and
       `RenderOutput.html`.
-- [ ] Confirm whether `SeededPost.rendered_html` in
+- [x] Confirm whether `SeededPost.rendered_html` in
       `storage/src/test_support.rs` is exempted by the chosen support-file
       policy or marked as accepted over-inclusion; do not leave its behavior
       accidental.
-- [ ] Do not weaken typing or change field names, derives, SQL, serde, storage,
+- [x] Do not weaken typing or change field names, derives, SQL, serde, storage,
       rendering, or wire behavior.
-- [ ] Update ADR-0079 so it states direct `RenderedHtml` fields are now part of
+- [x] Update ADR-0079 so it states direct `RenderedHtml` fields are now part of
       the `rendered-html-from-trusted` marker gate rather than a residual #701
       gap.
-- [ ] Update ADR-0123 so the sqlx decode bridge remains non-sanitizing, but row
+- [x] Update ADR-0123 so the sqlx decode bridge remains non-sanitizing, but row
       and direct trust-carrying fields are mechanically reviewed by the widened
       gate.
-- [ ] Update `docs/ARCHITECTURE.md` with the projected current truth from those
+- [x] Update `docs/ARCHITECTURE.md` with the projected current truth from those
       ADRs.
 
 **Check:**
 
-- [ ] Run `devtool run -- cargo xtask check --no-test`.
+- [x] Run `devtool run -- cargo xtask check --no-test`.
 
 ---
 

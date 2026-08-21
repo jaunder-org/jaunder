@@ -110,6 +110,7 @@ pub struct FeedItem {
     pub title: Option<PostTitle>,
     pub permalink: PermalinkUrl,
     pub summary: Option<PostSummary>,
+    // rendered-html-from-trusted:allow Syndication Feed item carries already-rendered post HTML (#701)
     pub content_html: RenderedHtml,
     pub published_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

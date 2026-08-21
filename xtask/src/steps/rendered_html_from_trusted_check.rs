@@ -1,7 +1,8 @@
-//! The `rendered-html-from-trusted` static check (#398, extended #445, #778): pins
-//! every `from_trusted` in production code — above all
+//! The `rendered-html-from-trusted` static check (#398, extended #445, #778,
+//! #701): pins every `from_trusted` in production code — above all
 //! `RenderedHtml::from_trusted`, the *inheriting* door of the
-//! `common::render::RenderedHtml` newtype.
+//! `common::render::RenderedHtml` newtype — and every direct production
+//! `RenderedHtml` struct field.
 //!
 //! `RenderedHtml` marks HTML that is safe to emit **unescaped** into the DOM
 //! (`inner_html`). Two doors carry that invariant, and they mean different things:
@@ -21,7 +22,9 @@
 //! **Population** (read structurally, ADR-0085 principle 1): every `from_trusted`
 //! under [`POLICED_ROOTS`] whose qualifier is **`RenderedHtml`'s**, plus every one
 //! whose qualifier cannot be determined — in ordinary code and inside macro token
-//! streams.
+//! streams — and every direct struct field whose type is `RenderedHtml`,
+//! path-qualified `...::RenderedHtml`, a harvested owner alias, or an unresolved
+//! single-ident type that the scanner cannot prove is something else (#701).
 //!
 //! Deciding *membership* is structural — it identifies the door — and is not the
 //! same act as *exempting* a site from it (ADR-0085 principle 3 governs only the
@@ -37,15 +40,21 @@
 //!   `ContentType::from_trusted` carries no marker. A qualifier the gate *cannot*
 //!   resolve — glob import, generic parameter, unqualified call, macro body — stays
 //!   in the population, so obscuring one buys a failure, not an exemption.
+//! - **Another type's field owes nothing** once the gate can see what the type is.
+//!   `field: OtherType` carries no marker when `OtherType` is imported, locally
+//!   defined, fully qualified, or a known Rust scalar/prelude type. A direct
+//!   single-ident field type the scanner cannot resolve stays in the population.
 //! - A `from_trusted` **definition** is in the population when it sits in
 //!   `impl RenderedHtml` — `syn` visits a fn's own `sig.ident` — so `pub fn
 //!   from_trusted` carries a marker saying it is the door itself. A definition in
 //!   another type's `impl` does not.
 //!
 //! Every member fails unless the line **immediately above** it carries a
-//! `// rendered-html-from-trusted:allow <reason>` marker. The scan, the marker rule
-//! and the derived census are [`crate::steps::ident_gate`]; this module is the
-//! population and the prose.
+//! `// rendered-html-from-trusted:allow <reason>` marker. The marker rule and the
+//! derived census are [`crate::steps::ident_gate`]. This module owns the combined
+//! population because field markers and call-site markers share the same token: the
+//! two populations must be classified together or each population would misread the
+//! other's legitimate markers as stale.
 //!
 //! Test/fixture code (anything under a `#[cfg(test)]` module/fn, or a `#[test]`/
 //! `#[rstest]` fn) is exempt — fixtures legitimately mint `RenderedHtml` to stand
@@ -59,19 +68,29 @@
 //!
 //! **Unreadable classes** (ADR-0085's honesty obligation) specific to this gate:
 //! resolution reads names, not types, so it can be misled by a chain of renames. The
-//! three ways, all fail-**open**, are enumerated as class 1 in
+//! three call-site ways, all fail-**open**, are enumerated as class 1 in
 //! [`crate::steps::ident_gate`] — a rename of a rename, a renaming re-export outside
 //! the roots, and a free `fn` nested inside another type's `impl`. None has a live
-//! instance. Each is strictly narrower than the blind spot #778 removed, which handed
-//! out a tree-wide exemption for one aliased qualifier. The classes inherent to the
-//! shared scan (the unwalked attribute-macro tokens, the absent call graph, and that a
-//! marker is trusted rather than verified) are also stated there. A
-//! `syn` parse failure is a **hard error** (a file we cannot walk could hide a
-//! spurious door — a false pass), matching
+//! instance. Field scanning is intentionally direct only: `&RenderedHtml`,
+//! `Option<RenderedHtml>`, `Vec<RenderedHtml>` and `Box<RenderedHtml>` are not in the
+//! population. That is a documented out-of-scope class for #701 rather than implied
+//! coverage. The field scanner can also over-include a direct field inside an inline
+//! module whose non-`RenderedHtml` type is defined only in that same inline module;
+//! that fails closed. Each class is strictly narrower than the blind spot #778
+//! removed, which handed out a tree-wide exemption for one aliased qualifier. The
+//! classes inherent to the shared scan (the unwalked attribute-macro tokens, the
+//! absent call graph, and that a marker is trusted rather than verified) are also
+//! stated there. A `syn` parse failure is a **hard error** (a file we cannot walk
+//! could hide a spurious door or field — a false pass), matching
 //! [`crate::steps::server_fn_registrar_check`].
 
+use std::collections::BTreeSet;
+
 use crate::result::CommandResult;
-use crate::steps::ident_gate::{self, Gate, Report};
+use crate::steps::ident_gate::{
+    self, Gate, Marked, Membership, Mention, Report, Scan, Unexempt, Why,
+};
+use syn::spanned::Spanned;
 
 /// Source roots scanned recursively for `.rs` files — production `src` trees, not
 /// the `tests/` integration crates (whose fixtures mint freely).
@@ -87,6 +106,8 @@ const POLICED_ROOTS: &[&str] = &[
 
 /// The associated-fn ident this guard pins.
 const DOORS: &[&str] = &["from_trusted"];
+
+const FIELD_CONTEXT_PREFIX: &str = "field:";
 
 /// The gate: population, roots and prose. Exemptions are in-source markers on the
 /// line above each door (#778), so there is no list here.
@@ -131,13 +152,62 @@ const GATE: Gate = Gate {
 /// itself, so this is the single-source convenience the unit tests assert through.
 #[cfg(test)]
 fn violations(source: &str) -> Result<Vec<(usize, String)>, String> {
-    GATE.violations(source)
+    let aliases = ident_gate::owner_aliases(&[(String::new(), source.to_string())], "RenderedHtml");
+    let c = ident_gate::classify(
+        source,
+        &combined_scan(source, Some(("RenderedHtml", &aliases)))?,
+        &GATE.marker_token(),
+    );
+    let mut out: Vec<(usize, String)> = c
+        .unexempt
+        .into_iter()
+        .map(|u| (u.line, u.function))
+        .collect();
+    out.extend(c.orphans.into_iter().map(|line| (line, String::new())));
+    out.sort();
+    Ok(out)
 }
 
 /// The failure detail for every offending mention across the scanned files, or
 /// `None` when every door is marked.
 pub fn problems(scanned: &[(String, String)]) -> Option<String> {
-    GATE.problems(scanned)
+    let token = GATE.marker_token();
+    let aliases = ident_gate::owner_aliases(scanned, "RenderedHtml");
+    let mut lines = Vec::new();
+    let mut census = Vec::new();
+    for (path, source) in scanned {
+        match combined_scan(source, Some(("RenderedHtml", &aliases))) {
+            Err(msg) => lines.push(format!(
+                "{path}: {msg} — an unparsed file is invisible to this gate, which is exactly \
+                 the blind spot it exists to close. Fix the file or the parser; do not skip it."
+            )),
+            Ok(found) => {
+                let c = ident_gate::classify(source, &found, &token);
+                for u in c.unexempt {
+                    lines.push(format_unexempt(path, &token, &u));
+                }
+                for line in c.orphans {
+                    lines.push(format!(
+                        "{path}:{line}: `{token}` marker on a line with no `{}` site — a stale \
+                         exemption; delete it",
+                        GATE.step
+                    ));
+                }
+                census.extend(c.marked.into_iter().map(|m| (path.clone(), m)));
+            }
+        }
+    }
+
+    if lines.is_empty() {
+        return None;
+    }
+    lines.sort();
+    lines.push(GATE.report.recovery.to_string());
+    census.sort_by(|a, b| (&a.0, a.1.line).cmp(&(&b.0, b.1.line)));
+    for (path, m) in census {
+        lines.push(format_marked(&path, &m));
+    }
+    Some(lines.join("\n"))
 }
 
 /// Scan every Rust file under each [`POLICED_ROOTS`] and push the result step. A
@@ -145,6 +215,173 @@ pub fn problems(scanned: &[(String, String)]) -> Option<String> {
 /// disable the guard.
 pub fn run(result: &mut CommandResult) {
     ident_gate::run_scan(result, GATE.step, GATE.roots, problems);
+}
+
+fn combined_scan(source: &str, owner: Option<(&str, &BTreeSet<String>)>) -> Result<Scan, String> {
+    let mut found = ident_gate::scan(source, DOORS, owner)?;
+    if let Some((_, owners)) = owner {
+        let fields = field_scan(source, owners)?;
+        found.mentions.extend(fields.mentions);
+        found.test_ranges.extend(fields.test_ranges);
+        found.mentions.sort_by_key(|m| m.line);
+    }
+    Ok(found)
+}
+
+fn field_scan(source: &str, owners: &BTreeSet<String>) -> Result<Scan, String> {
+    let file = syn::parse_file(source).map_err(|e| format!("cannot parse as Rust: {e}"))?;
+    let mut scanner = FieldScanner {
+        owners,
+        resolver: ident_gate::Resolver::for_file(&file),
+        test_depth: 0,
+        struct_stack: Vec::new(),
+        hits: Vec::new(),
+        test_ranges: Vec::new(),
+    };
+    syn::visit::visit_file(&mut scanner, &file);
+    scanner.hits.sort_by_key(|m| m.line);
+    Ok(Scan {
+        mentions: scanner.hits,
+        test_ranges: scanner.test_ranges,
+    })
+}
+
+fn format_unexempt(path: &str, token: &str, u: &Unexempt) -> String {
+    match field_context(&u.function) {
+        Some(context) => format_field_unexempt(path, token, u, context),
+        None => format_door_unexempt(path, token, u),
+    }
+}
+
+fn format_door_unexempt(path: &str, token: &str, u: &Unexempt) -> String {
+    let where_ = if u.function.is_empty() {
+        "at module scope".to_string()
+    } else {
+        format!("in fn `{}`", u.function)
+    };
+    match u.why {
+        Why::Unmarked => format!(
+            "{path}:{}: {} {where_} {}",
+            u.line, GATE.report.subject, GATE.report.verdict
+        ),
+        Why::NoReason => format!(
+            "{path}:{}: {} {where_} carries a bare `{token}` marker — an exemption with no \
+             reason is not an exemption; say why this site is safe",
+            u.line, GATE.report.subject
+        ),
+        Why::Shared(n) => format_shared(path, u.line, n),
+    }
+}
+
+fn format_field_unexempt(path: &str, token: &str, u: &Unexempt, context: &str) -> String {
+    match u.why {
+        Why::Unmarked => format!(
+            "{path}:{}: a `RenderedHtml` field at `{context}` is not marked — direct \
+             `RenderedHtml` fields carry trusted HTML across storage, domain, or wire boundaries \
+             and must explain why that trust is legitimate (#701)",
+            u.line
+        ),
+        Why::NoReason => format!(
+            "{path}:{}: a `RenderedHtml` field at `{context}` carries a bare `{token}` marker — \
+             an exemption with no reason is not an exemption; say why this field is safe",
+            u.line
+        ),
+        Why::Shared(n) => format_shared(path, u.line, n),
+    }
+}
+
+fn format_shared(path: &str, line: usize, n: usize) -> String {
+    format!(
+        "{path}:{line}: {n} `{}` sites share this line, so one marker cannot justify them — split \
+         the line so each carries its own",
+        GATE.step
+    )
+}
+
+fn format_marked(path: &str, m: &Marked) -> String {
+    format!("    - {path}:{} — {}", m.line, m.reason)
+}
+
+fn field_context(function: &str) -> Option<&str> {
+    function.strip_prefix(FIELD_CONTEXT_PREFIX)
+}
+
+struct FieldScanner<'a> {
+    owners: &'a BTreeSet<String>,
+    resolver: ident_gate::Resolver,
+    test_depth: usize,
+    struct_stack: Vec<String>,
+    hits: Vec<Mention>,
+    test_ranges: Vec<(usize, usize)>,
+}
+
+impl FieldScanner<'_> {
+    fn record_test_range<T: Spanned>(&mut self, item: &T) {
+        let span = item.span();
+        self.test_ranges.push((span.start().line, span.end().line));
+    }
+
+    fn record_field(&mut self, field: &syn::Field) {
+        if self.test_depth > 0 {
+            return;
+        }
+        match self.resolver.direct_type_membership(&field.ty, self.owners) {
+            Membership::Door | Membership::Unknown => {}
+            Membership::OtherType => return,
+        }
+        let line = field
+            .ident
+            .as_ref()
+            .map_or_else(|| field.ty.span().start().line, |id| id.span().start().line);
+        let field_name = field
+            .ident
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "<unnamed>".to_string());
+        let owner = self
+            .struct_stack
+            .last()
+            .cloned()
+            .unwrap_or_else(|| "<unknown>".to_string());
+        self.hits.push(Mention {
+            line,
+            function: format!("{FIELD_CONTEXT_PREFIX}{owner}.{field_name}"),
+        });
+    }
+}
+
+impl<'ast> syn::visit::Visit<'ast> for FieldScanner<'_> {
+    fn visit_item_mod(&mut self, i: &'ast syn::ItemMod) {
+        let test = ident_gate::is_test_cfg(&i.attrs);
+        if test {
+            self.record_test_range(i);
+        }
+        self.test_depth += usize::from(test);
+        syn::visit::visit_item_mod(self, i);
+        self.test_depth -= usize::from(test);
+    }
+
+    fn visit_item_struct(&mut self, i: &'ast syn::ItemStruct) {
+        let test = ident_gate::is_test_cfg(&i.attrs);
+        if test {
+            self.record_test_range(i);
+        }
+        self.test_depth += usize::from(test);
+        self.struct_stack.push(i.ident.to_string());
+        syn::visit::visit_item_struct(self, i);
+        self.struct_stack.pop();
+        self.test_depth -= usize::from(test);
+    }
+
+    fn visit_field(&mut self, i: &'ast syn::Field) {
+        let test = ident_gate::is_test_cfg(&i.attrs);
+        if test {
+            self.record_test_range(i);
+        }
+        self.test_depth += usize::from(test);
+        self.record_field(i);
+        self.test_depth -= usize::from(test);
+    }
 }
 
 #[cfg(test)]
@@ -306,6 +543,171 @@ impl RenderedHtml {
     fn an_orphan_marker_fails() {
         let src = "// rendered-html-from-trusted:allow stale\nfn f() { harmless(); }\n";
         assert_eq!(violations(src).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_unmarked_rendered_html_field_is_flagged() {
+        let src = "\
+struct PostRow {
+    rendered_html: RenderedHtml,
+}
+";
+        assert_eq!(
+            violations(src).unwrap(),
+            vec![(2, "field:PostRow.rendered_html".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_marked_rendered_html_field_passes() {
+        let src = "\
+struct PostRow {
+    // rendered-html-from-trusted:allow storage row decodes sanitized rendered_html (#701)
+    rendered_html: RenderedHtml,
+}
+";
+        assert_eq!(violations(src).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn a_bare_field_marker_fails() {
+        let src = "\
+struct PostRow {
+    // rendered-html-from-trusted:allow
+    rendered_html: RenderedHtml,
+}
+";
+        assert_eq!(violations(src).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_field_marker_is_not_an_orphan_without_a_door_call() {
+        let src = "\
+struct PostRow {
+    // rendered-html-from-trusted:allow storage row decodes sanitized rendered_html (#701)
+    rendered_html: RenderedHtml,
+}
+";
+        assert_eq!(
+            problems(&[("storage/src/helpers.rs".to_string(), src.to_string())]),
+            None
+        );
+    }
+
+    #[test]
+    fn a_door_marker_is_not_an_orphan_without_a_field() {
+        let src = "\
+fn f(raw: String) -> RenderedHtml {
+    // rendered-html-from-trusted:allow storage wire rebuild (#701)
+    RenderedHtml::from_trusted(raw)
+}
+";
+        assert_eq!(
+            problems(&[("common/src/render.rs".to_string(), src.to_string())]),
+            None
+        );
+    }
+
+    #[test]
+    fn shared_line_counts_fields_and_door_calls_together() {
+        let src = "\
+// rendered-html-from-trusted:allow one reason cannot cover two trust sites (#701)
+struct Row { rendered_html: RenderedHtml } fn f(raw: String) { RenderedHtml::from_trusted(raw); }
+";
+        assert_eq!(violations(src).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn field_in_a_cfg_test_module_is_exempt() {
+        let src = "\
+#[cfg(test)]
+mod tests {
+    struct PostRow {
+        rendered_html: RenderedHtml,
+    }
+}
+";
+        assert_eq!(violations(src).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn field_spellings_that_resolve_to_rendered_html_are_flagged() {
+        let cases = [
+            "struct Row { rendered_html: RenderedHtml }\n",
+            "struct Row { rendered_html: common::render::RenderedHtml }\n",
+            "use common::render::RenderedHtml as Html;\nstruct Row { rendered_html: Html }\n",
+            "type Html = RenderedHtml;\nstruct Row { rendered_html: Html }\n",
+        ];
+        for src in cases {
+            assert_eq!(violations(src).unwrap().len(), 1, "{src}");
+        }
+    }
+
+    #[test]
+    fn borrowed_and_container_rendered_html_fields_are_out_of_scope() {
+        let src = "\
+struct Row<'a> {
+    borrowed: &'a RenderedHtml,
+    optional: Option<RenderedHtml>,
+    many: Vec<RenderedHtml>,
+    boxed: Box<RenderedHtml>,
+}
+";
+        assert_eq!(violations(src).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn unrelated_resolvable_field_types_are_ignored() {
+        let src = "\
+struct RenderedHtmlish;
+struct Other;
+struct Row {
+    a: RenderedHtmlish,
+    b: Other,
+    c: String,
+}
+";
+        assert_eq!(violations(src).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn unresolved_direct_field_type_fails_closed() {
+        let src = "\
+struct Row {
+    rendered_html: MaybeHtml,
+}
+";
+        assert_eq!(
+            violations(src).unwrap(),
+            vec![(2, "field:Row.rendered_html".to_string())]
+        );
+    }
+
+    #[test]
+    fn marked_unresolved_direct_field_type_passes() {
+        let src = "\
+struct Row {
+    // rendered-html-from-trusted:allow unresolved alias is known at this call site (#701)
+    rendered_html: MaybeHtml,
+}
+";
+        assert_eq!(violations(src).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn inline_module_local_type_is_conservatively_overincluded() {
+        let src = "\
+mod m {
+    struct Other;
+    struct Row {
+        value: Other,
+    }
+}
+";
+        assert_eq!(
+            violations(src).unwrap(),
+            vec![(4, "field:Row.value".to_string())]
+        );
     }
 
     #[test]

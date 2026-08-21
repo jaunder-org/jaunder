@@ -24,11 +24,11 @@ gate cannot inspect.
 
 **The blessing risk is real and is accepted**: decoding some other column into
 this type would still bless it. The decision rests on one argument only — typing
-a column as `RenderedHtml` is a deliberate, reviewable act. Note what does _not_
-back it: the `rendered-html-from-trusted` gate does **not** catch this — its
-population is `from_trusted` on this type, and a `FromRow` field typed
-`RenderedHtml` over the wrong column names no door at all. Widening the gate to
-flag `RenderedHtml`-typed row fields would close the hole — filed as #701.
+a column as `RenderedHtml` is a deliberate, reviewable act. Since #701, the
+`rendered-html-from-trusted` gate mechanically enforces that review point for
+direct `RenderedHtml` struct fields as well as `from_trusted` call sites. A
+`FromRow` field typed `RenderedHtml` over the wrong column still names no
+sanitizing door; it now fails the gate unless it carries a local reason marker.
 
 ## Rejected alternative
 
@@ -41,5 +41,6 @@ an instance ever accumulates rows written by a pre-#445 build.
 ## Consequences
 
 - `build_post_record` needs no `from_trusted` rebuild.
-- Any new `RenderedHtml`-typed `FromRow` field is a security-relevant review
-  point until #701 lands.
+- Any new direct `RenderedHtml`-typed production field, including a `FromRow`
+  field, is a security-relevant review point enforced by
+  `rendered-html-from-trusted:allow <reason>`.

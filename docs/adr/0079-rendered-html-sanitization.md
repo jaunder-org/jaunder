@@ -85,14 +85,14 @@ Supporting choices:
 - **A `Decode` blesses any text column decoded into `RenderedHtml`.** This was
   the original argument against having one. Accepted on a single ground: typing
   a column as `RenderedHtml` is a deliberate, reviewable act. The
-  `rendered-html-from-trusted` gate does **not** cover it — that gate's
-  population is `from_trusted` on **this** type, the definition and every use,
+  `rendered-html-from-trusted` gate now covers that review point too: its
+  population is `from_trusted` on **this** type, the definition and every use
   with the qualifier resolved since
-  [#790](https://github.com/jaunder-org/jaunder/issues/790), whereas a `FromRow`
-  field typed over the wrong column names no door at all. This is the one
-  residual risk in the design that nothing mechanical enforces; widening the
-  gate to flag `RenderedHtml`-typed row fields is filed as
-  [#701](https://github.com/jaunder-org/jaunder/issues/701).
+  [#790](https://github.com/jaunder-org/jaunder/issues/790), plus direct
+  production struct fields typed `RenderedHtml` since
+  [#701](https://github.com/jaunder-org/jaunder/issues/701). The bridge still
+  does not sanitize on decode; the mechanical guarantee is that every direct
+  trust-carrying field has a local reason marker.
 - **`from_trusted` survives, narrowed to inherited trust.** It is down to one
   production call site, and the gate keeps it greppable and confined.
 - **#282 must use `sanitize`** for ingested entry HTML. Recorded as an addendum
