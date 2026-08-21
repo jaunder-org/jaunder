@@ -1,10 +1,9 @@
 //! Deterministic typed-reference guard for flow documentation (#601).
 //!
 //! The checker reads only committed, reproducible inputs: mounted routes from the
-//! router source, server-function endpoints from the shared inventory, and
-//! covered/allowlisted status from the committed snapshot and allowlist. Typed
-//! backticked `route:`, `endpoint:`, and `matrix:` tokens are the only checked
-//! references.
+//! router source, server-function endpoints from the shared inventory, and coverage
+//! status from the committed snapshot. Typed backticked `route:`, `endpoint:`, and
+//! `matrix:` tokens are the only checked references.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -15,15 +14,14 @@ use syn::visit::Visit;
 
 use crate::files;
 use crate::result::StepResult;
-use crate::server_fn_coverage::io::{inventory, read_allowlist, read_artifact};
-use crate::server_fn_coverage::{AllowlistEntry, Snapshot};
+use crate::server_fn_coverage::Snapshot;
+use crate::server_fn_coverage::io::{inventory, read_artifact};
 
 const STEP: &str = "flow-docs";
 const FLOW_DIR: &str = "docs/flows";
 const ROUTER_PATH: &str = "web/src/app/component.rs";
 const WEB_SRC: &str = "web/src";
 const SNAPSHOT_PATH: &str = "docs/coverage/server-fns.json";
-const ALLOWLIST_PATH: &str = "docs/coverage/server-fns-allowlist.json";
 const FLOW_INDEX: &str = "docs/flows/README.md";
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -141,12 +139,6 @@ fn check(root: &Path) -> Result<Report> {
     let endpoints = endpoint_inventory(root)?;
     let snapshot: Snapshot = read_artifact(&root.join(SNAPSHOT_PATH))
         .with_context(|| format!("reading {}", root.join(SNAPSHOT_PATH).display()))?;
-    let allowlist = read_allowlist(&root.join(ALLOWLIST_PATH))
-        .with_context(|| format!("reading {}", root.join(ALLOWLIST_PATH).display()))?;
-    let allowlisted: BTreeMap<String, AllowlistEntry> = allowlist
-        .into_iter()
-        .map(|entry| (entry.server_fn.clone(), entry))
-        .collect();
 
     let mut refs = FlowRefs::default();
     let mut errors = Vec::new();
@@ -199,21 +191,12 @@ fn check(root: &Path) -> Result<Report> {
             endpoint_statuses.push(format!("{}: covered", endpoint_token(endpoint)));
             continue;
         }
-        if let Some(entry) = allowlisted.get(qualified) {
-            endpoint_statuses.push(format!(
-                "{}: allowlisted — {} ({})",
-                endpoint_token(endpoint),
-                entry.reason,
-                entry.issue
-            ));
-            continue;
-        }
+
         errors.push(format!(
-            "{}: declared in {} but missing from {} and {}",
+            "{}: declared in {} but missing from {}",
             endpoint_token(endpoint),
             locations.join(", "),
-            SNAPSHOT_PATH,
-            ALLOWLIST_PATH
+            SNAPSHOT_PATH
         ));
         endpoint_statuses.push(format!("{}: missing coverage", endpoint_token(endpoint)));
     }
@@ -804,19 +787,6 @@ fn app() {
         );
     }
 
-    fn write_allowlist(root: &Path, entries: &[(&str, &str, &str)]) {
-        let json = entries
-            .iter()
-            .map(|(server_fn, reason, issue)| {
-                format!(
-                    "{{\"server_fn\":\"{server_fn}\",\"reason\":\"{reason}\",\"issue\":\"{issue}\"}}"
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-        write(&root.join(ALLOWLIST_PATH), &format!("[{json}]"));
-    }
-
     fn write_matrix(root: &Path) {
         write(
             &root.join("docs/coverage/csr-e2e-matrix.md"),
@@ -1036,7 +1006,7 @@ graph TD
     }
 
     #[test]
-    fn declared_endpoints_must_be_covered_or_allowlisted() {
+    fn declared_endpoints_must_be_covered() {
         let tmp = base_fixture();
         write_server_fns(tmp.path(), &[("posts", &["create"])]);
         write_flow(
@@ -1050,7 +1020,7 @@ graph TD
         let detail = step.detail.unwrap_or_default();
         assert!(
             detail.contains(
-                "endpoint:/api/posts/create: declared in docs/flows/flow.md but missing from docs/coverage/server-fns.json and docs/coverage/server-fns-allowlist.json"
+                "endpoint:/api/posts/create: declared in docs/flows/flow.md but missing from docs/coverage/server-fns.json"
             ),
             "{detail}"
         );
@@ -1061,21 +1031,13 @@ graph TD
     }
 
     #[test]
-    fn covered_and_allowlisted_endpoints_are_reported_and_unmapped_routes_are_informational() {
+    fn covered_endpoints_are_reported_and_unmapped_routes_are_informational() {
         let tmp = base_fixture();
         write_server_fns(
             tmp.path(),
             &[("posts", &["create"]), ("sessions", &["revoke"])],
         );
-        write_snapshot(tmp.path(), &["posts::create"]);
-        write_allowlist(
-            tmp.path(),
-            &[(
-                "sessions::revoke",
-                "no second browser session in this fixture",
-                "#707",
-            )],
-        );
+        write_snapshot(tmp.path(), &["posts::create", "sessions::revoke"]);
         write_readme(
             tmp.path(),
             "# Flow index\n\n`route:<shell>`\n`route:/~:username/:year/:month/:day/:slug`\n",
@@ -1099,7 +1061,7 @@ graph TD
             "{detail}"
         );
         assert!(
-            detail.contains("endpoint:/api/sessions/revoke: allowlisted"),
+            detail.contains("endpoint:/api/sessions/revoke: covered"),
             "{detail}"
         );
         assert!(detail.contains("route:/login"), "{detail}");

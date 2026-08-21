@@ -8,11 +8,11 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#app-password-management`
 
 ## Endpoint census
 
-| Endpoint                                     | Status      | Surface                                                                                                                                                                                                            |
-| -------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `endpoint:/api/sessions/list`                | Covered     | Reloads the session inventory after page load, app-password creation, and revoke actions.                                                                                                                          |
-| `endpoint:/api/sessions/create_app_password` | Covered     | Mints a labelled app password and returns the raw token once for copy/paste into external clients.                                                                                                                 |
-| `endpoint:/api/sessions/revoke`              | Allowlisted | Browser-flow coverage is still allowlisted because the seeded capture has no second browser context; server integration already covers own-session revocation, auth requirements, and cross-user rejection (#707). |
+| Endpoint                                     | Status  | Surface                                                                                                                                        |
+| -------------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `endpoint:/api/sessions/list`                | Covered | Reloads the session inventory after page load, app-password creation, and revoke actions.                                                      |
+| `endpoint:/api/sessions/create_app_password` | Covered | Mints a labelled app password and returns the raw token once for copy/paste into external clients.                                             |
+| `endpoint:/api/sessions/revoke`              | Covered | The browser-flow snapshot now covers own-session revocation; server integration also covers auth requirements and cross-user rejection (#707). |
 
 `/sessions` is the authenticated user's app-password and session ledger. It
 always renders the current session alongside externally minted app passwords so

@@ -12,7 +12,7 @@ Markdown document per CSR matrix heading owns concise journey narrative,
 endpoint declarations, and only substantive sequence diagrams. A host-only
 `flow-docs` xtask step derives route/server-function facts from existing source
 enumerators, parses explicit typed tokens from the flow corpus, and compares
-coverage state only to deterministic snapshot/allowlist inputs.
+coverage state only to the deterministic snapshot input.
 
 **Tech Stack:** Markdown, Mermaid, Rust (`xtask`), `syn`, existing
 `web_server_fns`, CSR E2E matrix, server-function coverage artifacts.
@@ -77,8 +77,8 @@ omits; coverage status must remain independent of timing-dependent attribution.
 **Interfaces:**
 
 - Consumes: `crate::web_server_fns` for derived `(vertical, operation)` values;
-  `web/src/app/component.rs` route declarations; `docs/coverage/server-fns.json`
-  and `server-fns-allowlist.json` only.
+  `web/src/app/component.rs` route declarations; and
+  `docs/coverage/server-fns.json` only.
 - Produces: a test-only `flow_docs` module containing `run() -> StepResult`,
   parsed `FlowRefs { routes, endpoints, matrix_refs }`, and deterministic
   diagnostics; Task 4 promotes it to the production static-step surface.
@@ -92,8 +92,8 @@ omits; coverage status must remain independent of timing-dependent attribution.
   `/~:username/:year/:month/:day/:slug`; recognizes `<shell>`; and excludes the
   fallback. Add cases that fail for malformed/unknown typed tokens,
   duplicate/unassigned endpoints, a non-index flow document without `matrix:`,
-  missing matrix files/headings, and an endpoint missing both snapshot and
-  allowlist. Matrix fragments use the existing Markdown heading-slug form:
+  missing matrix files/headings, and an endpoint missing from the snapshot.
+  Matrix fragments use the existing Markdown heading-slug form:
   lowercase, punctuation removed, word separators collapsed to `-`; include
   `Audiences, subscriptions, and visibility`. Add a fixture with
   absent/incorrect `server-fns-evidence.json` and assert identical report
@@ -117,8 +117,8 @@ omits; coverage status must remain independent of timing-dependent attribution.
   including both username forms. Validate matrix fragments by the stated
   heading-slug algorithm. Return a failed `StepResult` for invalid declared
   references and endpoint assignment defects; include an informational sorted
-  unmapped-route section and covered/allowlisted endpoint status. Do not open or
-  name the evidence artifact. Add a separately named
+  unmapped-route section and covered endpoint status. Do not open or name the
+  evidence artifact. Add a separately named
   `repository_flow_corpus_is_valid` test, run only after Task 3, which invokes
   the same checker over repository docs.
 
@@ -195,8 +195,8 @@ omits; coverage status must remain independent of timing-dependent attribution.
   Add the six named documents, each with one or more stable `matrix:` links,
   relevant checked routes, concise journey prose, and unique endpoint tokens.
   Use prose/table endpoint census entries rather than low-value sequence arrows.
-  Assign `sessions/revoke` to app-password management and let its allowlist
-  status remain visible; do not add E2E coverage or hide the gap.
+  Assign `sessions/revoke` to app-password management; current snapshot coverage
+  must remain visible.
 
 - [x] **Step 2: Reconcile complete inventories**
 

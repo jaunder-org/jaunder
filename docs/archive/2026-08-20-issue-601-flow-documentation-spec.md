@@ -56,10 +56,10 @@ of a route/endpoint without reconstructing it from implementation files.
   `route:<shell>`; the router fallback is excluded from unmapped reporting.
 - **D6 — Telemetry is coverage state, never journey attribution.** For each
   declared endpoint, the gate reports whether the checked
-  `docs/coverage/server-fns.json` snapshot covers it or its allowlist records a
-  reason. It does not copy, validate, or infer flow ownership from
-  `server-fns-evidence.json` test titles. This preserves ADR-0081’s distinction
-  between deterministic covered keys and non-reproducible per-test attribution.
+  `docs/coverage/server-fns.json` snapshot covers it. It does not copy,
+  validate, or infer flow ownership from `server-fns-evidence.json` test titles.
+  This preserves ADR-0081’s distinction between deterministic covered keys and
+  non-reproducible per-test attribution.
 - **D7 — Matrix anchors are mechanically live.** Every flow document declares at
   least one `matrix:` token. The gate validates its target file and heading
   fragment, so an evidence link cannot silently rot as the existing Markdown
@@ -99,10 +99,9 @@ that composes existing router, server-function, matrix, and telemetry decisions.
   unassigned endpoints, missing/malformed matrix references, and unresolved
   matrix heading fragments; reports unmapped mounted routes without failing.
 - **AC6 — Telemetry status.** The same step reports each declared endpoint as
-  covered by the checked server-function snapshot or identified by its explicit
-  allowlist reason. It never reads `server-fns-evidence.json` or presents a
-  test-title as flow evidence; a focused test proves missing or altered evidence
-  data cannot affect the report.
+  covered by the checked server-function snapshot. It never reads
+  `server-fns-evidence.json` or presents a test-title as flow evidence; a
+  focused test proves missing or altered evidence data cannot affect the report.
 - **AC7 — Documentation integration.** `docs/ARCHITECTURE.md` links the flow
   index from the CSR/frontend section. The matrix intro replaces its temporary
   issue #601 link with `docs/flows/README.md` while retaining its canonical
@@ -112,5 +111,5 @@ that composes existing router, server-function, matrix, and telemetry decisions.
   documents it. Focused xtask tests cover parser normalization (including
   `ParamSegment` and `TildeUsername`), malformed/unknown/duplicate/unassigned
   reference failures, matrix fragment validation, unmapped-route reporting,
-  coverage/allowlist status, and deliberate missing/altered evidence data. The
+  coverage status, and deliberate missing/altered evidence data. The
   project’s full `cargo xtask validate` passes.
