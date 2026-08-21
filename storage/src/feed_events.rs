@@ -149,6 +149,9 @@ pub trait FeedEventStorage: Send + Sync {
         lease_timeout: Duration,
     ) -> Result<Vec<FeedEventRecord>, FeedEventError>;
 
+    /// Count rows currently claimable by the feed worker without claiming them.
+    async fn claimable_count(&self, lease_timeout: Duration) -> Result<u64, FeedEventError>;
+
     /// Stamp `regenerated_at = now` on the given rows. Status is unchanged
     /// (still `claimed` until ping resolves).
     async fn mark_regenerated(&self, ids: &[FeedEventId]) -> Result<(), FeedEventError>;
@@ -193,6 +196,13 @@ pub trait FeedEventDialect: Backend {
         lease_cutoff: DateTime<Utc>,
         limit_i: i64,
     ) -> Result<Vec<FeedEventRecord>, FeedEventError>;
+
+    /// Count rows eligible under the same predicate as `claim_pending_batch`.
+    async fn claimable_count(
+        pool: &Pool<Self>,
+        now: DateTime<Utc>,
+        lease_cutoff: DateTime<Utc>,
+    ) -> Result<u64, FeedEventError>;
 
     /// Stamp `regenerated_at = now` on all rows whose id is in `ids`.
     async fn mark_regenerated(pool: &Pool<Self>, ids: &[FeedEventId])
@@ -309,6 +319,17 @@ where
         let lease_cutoff = now - lease_timeout;
         let limit_i = i64::try_from(limit).unwrap_or(i64::MAX);
         DB::claim_pending_batch(&self.pool, now, lease_cutoff, limit_i).await
+    }
+
+    #[tracing::instrument(
+        name = "storage.feed_events.claimable_count",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn claimable_count(&self, lease_timeout: Duration) -> Result<u64, FeedEventError> {
+        let now = Utc::now();
+        let lease_cutoff = now - lease_timeout;
+        DB::claimable_count(&self.pool, now, lease_cutoff).await
     }
 
     #[tracing::instrument(
@@ -443,6 +464,108 @@ mod tests {
             .await
             .unwrap();
         assert!(claimed.is_empty());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn claimable_count_counts_pending_ready_rows(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.state
+            .feed_events
+            .enqueue(&fp("/feed.rss"))
+            .await
+            .unwrap();
+
+        let count = env
+            .state
+            .feed_events
+            .claimable_count(chrono::Duration::minutes(5))
+            .await
+            .unwrap();
+
+        assert_eq!(count, 1);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn claimable_count_ignores_delayed_retries(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let id = env
+            .state
+            .feed_events
+            .enqueue(&fp("/feed.rss"))
+            .await
+            .unwrap();
+        env.state
+            .feed_events
+            .mark_failed(
+                &[id],
+                "retry later",
+                chrono::Utc::now() + chrono::Duration::hours(1),
+            )
+            .await
+            .unwrap();
+
+        let count = env
+            .state
+            .feed_events
+            .claimable_count(chrono::Duration::minutes(5))
+            .await
+            .unwrap();
+
+        assert_eq!(count, 0);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn claimable_count_ignores_live_claims(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.state
+            .feed_events
+            .enqueue(&fp("/feed.rss"))
+            .await
+            .unwrap();
+        let claimed = env
+            .state
+            .feed_events
+            .claim_pending_batch(10, chrono::Duration::minutes(5))
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+
+        let count = env
+            .state
+            .feed_events
+            .claimable_count(chrono::Duration::minutes(5))
+            .await
+            .unwrap();
+
+        assert_eq!(count, 0);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn claimable_count_counts_expired_claims(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.state
+            .feed_events
+            .enqueue(&fp("/feed.rss"))
+            .await
+            .unwrap();
+        env.state
+            .feed_events
+            .claim_pending_batch(10, chrono::Duration::minutes(5))
+            .await
+            .unwrap();
+
+        let count = env
+            .state
+            .feed_events
+            .claimable_count(chrono::Duration::zero())
+            .await
+            .unwrap();
+
+        assert_eq!(count, 1);
     }
 
     #[apply(backends)]

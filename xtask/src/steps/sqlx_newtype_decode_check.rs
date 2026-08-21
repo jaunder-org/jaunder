@@ -654,6 +654,24 @@ const ALLOWLIST: &[Allowed] = &[
         category: Category::CountOrExists,
         reason: "database-exists probe before a teardown DROP",
     },
+    Allowed {
+        file: "postgres/feed_events.rs",
+        function: "claimable_count",
+        target: "i64",
+        what: "\"SELECTCOUNT(*)FROMfeed_events\\WHERE(status='pending'ANDnext_attempt_at<=$1)\\OR(status='claimed'ANDclaimed_at<$2)\"",
+        count: 1,
+        category: Category::CountOrExists,
+        reason: "COUNT(*) of claimable feed-event work items; a queue depth, not a row identity",
+    },
+    Allowed {
+        file: "sqlite/feed_events.rs",
+        function: "claimable_count",
+        target: "i64",
+        what: "\"SELECTCOUNT(*)FROMfeed_events\\WHERE(status='pending'ANDnext_attempt_at<=$1)\\OR(status='claimed'ANDclaimed_at<$2)\"",
+        count: 1,
+        category: Category::CountOrExists,
+        reason: "COUNT(*) of claimable feed-event work items; the SQLite twin",
+    },
     // ---- deliberately lossy / opaque ----
     Allowed {
         file: "helpers.rs",
