@@ -1,4 +1,5 @@
 use common::test_support::parse_audience_name;
+use common::visibility::local_subscriber_identity;
 use rstest::*;
 use rstest_reuse::*;
 use storage::AudienceError;
@@ -120,7 +121,7 @@ async fn audience_membership_round_trip(#[case] backend: Backend) {
     let local = local_channel_id(backend, &env).await;
     let sub = state
         .subscriptions
-        .subscribe(author, local, &bob.to_string())
+        .subscribe(author, &local_subscriber_identity(local, bob))
         .await
         .unwrap();
     let audience = state
@@ -187,7 +188,7 @@ async fn audience_add_member_cross_author_rejected(#[case] backend: Backend) {
     // Subscription owned by BOB.
     let bob_sub = state
         .subscriptions
-        .subscribe(bob, local, &alice.to_string())
+        .subscribe(bob, &local_subscriber_identity(local, alice))
         .await
         .unwrap();
     // Audience owned by ALICE.
@@ -229,7 +230,7 @@ async fn audience_members_are_author_scoped(#[case] backend: Backend) {
     // A subscription and audience both owned by ALICE, with the sub as a member.
     let alice_sub = state
         .subscriptions
-        .subscribe(alice, local, &bob.to_string())
+        .subscribe(alice, &local_subscriber_identity(local, bob))
         .await
         .unwrap();
     let alice_audience = state
@@ -283,7 +284,7 @@ async fn audience_delete_cascades_memberships(#[case] backend: Backend) {
     let local = local_channel_id(backend, &env).await;
     let sub = state
         .subscriptions
-        .subscribe(alice, local, &bob.to_string())
+        .subscribe(alice, &local_subscriber_identity(local, bob))
         .await
         .unwrap();
     let audience = state

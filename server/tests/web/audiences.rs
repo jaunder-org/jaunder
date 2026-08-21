@@ -1,6 +1,7 @@
 use axum::http::StatusCode;
 use common::ids::{AudienceId, SubscriptionId};
 use common::test_support::parse_audience_name;
+use common::visibility::local_subscriber_identity;
 use server_fn::ServerFn;
 
 use rstest::*;
@@ -197,7 +198,10 @@ async fn list_audience_members_returns_members(#[case] backend: Backend) {
     let channel = state.subscriptions.local_channel_id().await.unwrap();
     let sub_id = state
         .subscriptions
-        .subscribe(author.user_id, channel, &i64::from(subscriber).to_string())
+        .subscribe(
+            author.user_id,
+            &local_subscriber_identity(channel, subscriber),
+        )
         .await
         .unwrap();
 
@@ -241,7 +245,10 @@ async fn add_subscriber_nested_request_maps_both_ids(#[case] backend: Backend) {
     let channel = state.subscriptions.local_channel_id().await.unwrap();
     let sub_id = state
         .subscriptions
-        .subscribe(author.user_id, channel, &i64::from(subscriber).to_string())
+        .subscribe(
+            author.user_id,
+            &local_subscriber_identity(channel, subscriber),
+        )
         .await
         .unwrap();
     state
@@ -356,7 +363,10 @@ async fn remove_subscriber_nested_request_maps_both_ids(#[case] backend: Backend
     let channel = state.subscriptions.local_channel_id().await.unwrap();
     let subscription_id = state
         .subscriptions
-        .subscribe(author.user_id, channel, &i64::from(subscriber).to_string())
+        .subscribe(
+            author.user_id,
+            &local_subscriber_identity(channel, subscriber),
+        )
         .await
         .unwrap();
     state
@@ -417,7 +427,7 @@ async fn cross_author_audience_id_is_scoped_away(#[case] backend: Backend) {
     // Alice owns an audience with a member.
     let alice_sub = state
         .subscriptions
-        .subscribe(alice, channel, &i64::from(subscriber).to_string())
+        .subscribe(alice, &local_subscriber_identity(channel, subscriber))
         .await
         .unwrap();
     let alice_aud = state
@@ -484,8 +494,7 @@ async fn list_my_subscribers_resolves_usernames(#[case] backend: Backend) {
         .subscriptions
         .subscribe(
             author.user_id,
-            channel,
-            &i64::from(subscriber.user_id).to_string(),
+            &local_subscriber_identity(channel, subscriber.user_id),
         )
         .await
         .unwrap();
@@ -590,7 +599,7 @@ async fn cross_author_add_member_is_rejected(#[case] backend: Backend) {
     // Alice owns a subscription and an audience (no members yet).
     let alice_sub = state
         .subscriptions
-        .subscribe(alice, channel, &i64::from(subscriber).to_string())
+        .subscribe(alice, &local_subscriber_identity(channel, subscriber))
         .await
         .unwrap();
     let alice_aud = state

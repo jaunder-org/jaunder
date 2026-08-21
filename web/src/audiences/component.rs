@@ -3,9 +3,9 @@
 
 use super::api::{
     AddSubscriber, AudienceMembershipRequest, Create, Delete, RemoveSubscriber, Rename,
-    RenameAudienceRequest, SubscriberSummary, Summary, SummaryStoreFields, list_members, list_mine,
-    list_my_subscribers,
+    RenameAudienceRequest, list_members, list_mine, list_my_subscribers,
 };
+use super::model::{SubscriberSummary, Summary, SummaryStoreFields};
 use crate::error::WebResult;
 // `crate::forms::Field` (the validated-input field) is aliased to avoid colliding with
 // `reactive_stores::Field` (the keyed-store field used by `AudienceRow`).
@@ -25,7 +25,7 @@ use reactive_stores::{Field, Patch, Store};
 #[derive(Default, Store, Patch)]
 struct AudienceListData {
     #[store(key: AudienceId = |a| a.audience_id)]
-    audiences: Vec<super::api::Summary>,
+    audiences: Vec<Summary>,
 }
 
 /// The subscriber roster shared via context: a reactive signal over the roster's full

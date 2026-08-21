@@ -1,52 +1,20 @@
 //! The `#[server]` endpoints for named-audience management and the wire DTOs they
 //! exchange. See the module doc on [`super`] for the authorization model.
 
+use super::model::{SubscriberSummary, Summary};
 use crate::error::WebResult;
-// `AudienceName` is the wire-arg type of `create` / `rename`, so the
-// `#[server]`-generated arg structs reference it on both the client and server builds —
-// keep it ungated.
 use common::audience::AudienceName;
 use common::ids::{AudienceId, SubscriptionId};
-use reactive_stores::{Patch, Store};
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "server")]
 use {
+    super::model,
     crate::auth::require_auth,
-    common::ids::UserId,
     leptos::prelude::*,
     std::sync::Arc,
-    storage::{AudienceStorage, SubscriptionStorage, UserStorage},
+    storage::{AudienceStorage, SubscriptionStorage},
 };
-
-/// A named audience as shown in the management screen.
-///
-/// A `reactive_stores` keyed-store row (`Store`/`Patch`), so each field carries
-/// `#[patch(|this, new| *this = new)]` — the derive's escape hatch, which lets the
-/// fields keep their domain types instead of being flattened to `i64`/`String`.
-/// Rationale and the rejected alternatives:
-/// `docs/adr/0078-reactive-store-domain-newtype-fields.md`.
-///
-/// `audience_id`'s attribute is required to compile but is behaviorally inert: it is
-/// the store key, so `patch_field_keyed` has already matched the two rows *by* it
-/// before the closure is reached, and the value can never differ. Only `name`'s
-/// attribute does real work — and it is the one the audiences e2e guards.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Store, Patch)]
-pub struct Summary {
-    #[patch(|this, new| *this = new)]
-    pub audience_id: AudienceId,
-    #[patch(|this, new| *this = new)]
-    pub name: AudienceName,
-}
-
-/// One of the author's active subscribers, for the assignment checklist.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct SubscriberSummary {
-    pub subscription_id: SubscriptionId,
-    /// The local subscriber's username (resolved from `subscriber_ref`), or the
-    /// raw reference when it could not be resolved to a local user.
-    pub label: String,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenameAudienceRequest {
@@ -99,14 +67,7 @@ pub async fn delete(audience_id: AudienceId) -> WebResult<()> {
 pub async fn list_mine() -> WebResult<Vec<Summary>> {
     let audiences = expect_context::<Arc<dyn AudienceStorage>>();
     let auth = require_auth().await?;
-    let rows = audiences.list_audiences(auth.user_id).await?;
-    Ok(rows
-        .into_iter()
-        .map(|a| Summary {
-            audience_id: a.audience_id,
-            name: a.name,
-        })
-        .collect())
+    model::list_audiences(auth.user_id, audiences.as_ref()).await
 }
 
 /// Lists the authenticated author's active subscribers (for the assignment
@@ -114,36 +75,8 @@ pub async fn list_mine() -> WebResult<Vec<Summary>> {
 #[macros::server]
 pub async fn list_my_subscribers() -> WebResult<Vec<SubscriberSummary>> {
     let subscriptions = expect_context::<Arc<dyn SubscriptionStorage>>();
-    let users = expect_context::<Arc<dyn UserStorage>>();
     let auth = require_auth().await?;
-    let rows = subscriptions.list_subscribers(auth.user_id).await?;
-    let mut out = Vec::with_capacity(rows.len());
-    for row in rows {
-        // `subscriber_ref` is the local user id (as a string) for the local
-        // channel. Resolve it to a username for display; fall back to the
-        // raw reference if it cannot be resolved.
-        let label = match row.subscriber_ref.parse::<i64>() {
-            Ok(uid) => match users.get_user(UserId::from(uid)).await {
-                Ok(Some(user)) => user.username.to_string(),
-                Ok(None) => row.subscriber_ref.clone(),
-                Err(error) => {
-                    host::error::report_swallowed(
-                        host::error::ErrorKind::Storage,
-                        host::error::ErrorClass::Transient,
-                        "web.audiences.subscriber_label_lookup",
-                        host::error::SwallowedSource::Error(&error),
-                    );
-                    row.subscriber_ref.clone()
-                }
-            },
-            Err(_) => row.subscriber_ref.clone(),
-        };
-        out.push(SubscriberSummary {
-            subscription_id: row.subscription_id,
-            label,
-        });
-    }
-    Ok(out)
+    model::list_subscribers(auth.user_id, subscriptions.as_ref()).await
 }
 
 /// Adds a subscription to an audience, both owned by the authenticated author.

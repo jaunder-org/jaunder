@@ -15,7 +15,8 @@ use sqlx::{Database, Pool};
 
 use common::ids::{ChannelId, SubscriptionId, UserId};
 use common::visibility::{
-    SubscriptionPolicy, SubscriptionStatus, ViewerIdentity, local_subscriber_ref,
+    SubscriberIdentity, SubscriberRef, SubscriptionPolicy, SubscriptionStatus, ViewerIdentity,
+    local_subscriber_ref,
 };
 use host::error::InternalResult;
 
@@ -26,15 +27,27 @@ use crate::error::RequireRow;
 pub struct SubscriptionRecord {
     /// Unique internal identifier.
     pub subscription_id: SubscriptionId,
-    /// Channel the subscription is on (e.g. the `local` channel).
-    pub channel_id: ChannelId,
-    /// Channel-scoped opaque reference to the subscriber (the local user id,
-    /// rendered as a string, for the `local` channel).
-    pub subscriber_ref: String,
+    /// Persisted channel identity of the subscriber.
+    pub subscriber: SubscriberIdentity,
     /// Current admission status.
     pub status: SubscriptionStatus,
     /// When the subscription row was created.
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(sqlx::FromRow)]
+struct SubscriptionRecordRow {
+    subscription_id: SubscriptionId,
+    channel_id: ChannelId,
+    subscriber_ref: SubscriberRef,
+    created_at: DateTime<Utc>,
+}
+
+/// A subscriber row projected for named-audience presentation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SubscriberSummaryRecord {
+    pub subscription_id: SubscriptionId,
+    pub label: String,
 }
 
 /// Async operations on the `subscriptions` table.
@@ -46,16 +59,14 @@ pub trait SubscriptionStorage: Send + Sync {
     async fn subscribe(
         &self,
         author_user_id: UserId,
-        channel_id: ChannelId,
-        subscriber_ref: &str,
+        subscriber: &SubscriberIdentity,
     ) -> sqlx::Result<SubscriptionId>;
 
     /// Removes a subscription. A no-op if it does not exist.
     async fn unsubscribe(
         &self,
         author_user_id: UserId,
-        channel_id: ChannelId,
-        subscriber_ref: &str,
+        subscriber: &SubscriberIdentity,
     ) -> sqlx::Result<()>;
 
     /// Returns `true` only for an `active` subscription matching the viewer.
@@ -71,6 +82,12 @@ pub trait SubscriptionStorage: Send + Sync {
         &self,
         author_user_id: UserId,
     ) -> sqlx::Result<Vec<SubscriptionRecord>>;
+
+    /// Lists the author's active subscribers with the display label resolved.
+    async fn list_subscriber_summaries(
+        &self,
+        author_user_id: UserId,
+    ) -> sqlx::Result<Vec<SubscriberSummaryRecord>>;
 
     /// Returns the `channel_id` of the seeded `local` channel.
     ///
@@ -89,9 +106,11 @@ pub trait SubscriptionStorage: Send + Sync {
     async fn local_channel_id(&self) -> InternalResult<ChannelId>;
 }
 
-/// Per-backend SQL for [`SubscriptionStore`]. The statements differ only in the
-/// placeholder syntax (`SQLite` `?`, Postgres `$n`); the logical behavior is
-/// identical (ADR-0019).
+/// Per-backend marker for [`SubscriptionStore`].
+///
+/// The statements intentionally use the shared SQL subset both backends accept:
+/// numbered `$n` bind markers (accepted by `SQLite` and required by `Postgres`) and
+/// standard `CAST(... AS TEXT)` rather than backend-specific `::text`.
 pub trait SubscriptionDialect: Database {
     /// Idempotent upsert: resolves the status name to its `status_id` via a
     /// subquery and, on the `(author_user_id, channel_id, subscriber_ref)`
@@ -102,22 +121,56 @@ pub trait SubscriptionDialect: Database {
     /// `status_id` stays out of the `SET` list, so an existing subscription
     /// keeps its status. Bind order:
     /// `author_user_id, channel_id, subscriber_ref, status_name`.
-    const INSERT_SUBSCRIPTION: &'static str;
+    const INSERT_SUBSCRIPTION: &'static str = "INSERT INTO subscriptions \
+         (author_user_id, channel_id, subscriber_ref, status_id) \
+         VALUES ($1, $2, $3, (SELECT status_id FROM subscription_statuses WHERE name = $4)) \
+         ON CONFLICT (author_user_id, channel_id, subscriber_ref) \
+         DO UPDATE SET subscriber_ref = excluded.subscriber_ref \
+         RETURNING subscription_id";
     /// Deletes the row for the unique triple. Bind order:
     /// `author_user_id, channel_id, subscriber_ref`.
-    const DELETE_SUBSCRIPTION: &'static str;
-    /// `EXISTS` of an `active` subscription for the triple. Bind order:
+    const DELETE_SUBSCRIPTION: &'static str = "DELETE FROM subscriptions \
+         WHERE author_user_id = $1 AND channel_id = $2 AND subscriber_ref = $3";
+    /// `EXISTS` of an `active` subscription for the triple, shaped as an integer
+    /// so both backends decode into the same `(i64,)` row. Bind order:
     /// `author_user_id, channel_id, subscriber_ref`.
-    const IS_ACTIVE_SUBSCRIBER: &'static str;
+    const IS_ACTIVE_SUBSCRIBER: &'static str = "SELECT CASE WHEN EXISTS( \
+           SELECT 1 FROM subscriptions s \
+           JOIN subscription_statuses st ON st.status_id = s.status_id \
+           WHERE s.author_user_id = $1 AND s.channel_id = $2 AND s.subscriber_ref = $3 \
+             AND st.name = 'active') THEN CAST(1 AS BIGINT) ELSE CAST(0 AS BIGINT) END";
     /// `EXISTS` of an `active` subscription on the seeded `local` channel, whose
     /// id is resolved by subquery rather than bound — a local viewer's channel is
     /// never a free parameter (ADR-0020, #6). Bind order:
     /// `author_user_id, subscriber_ref`.
-    const IS_ACTIVE_LOCAL_SUBSCRIBER: &'static str;
+    const IS_ACTIVE_LOCAL_SUBSCRIBER: &'static str = "SELECT CASE WHEN EXISTS( \
+           SELECT 1 FROM subscriptions s \
+           JOIN subscription_statuses st ON st.status_id = s.status_id \
+           WHERE s.author_user_id = $1 \
+             AND s.channel_id = (SELECT channel_id FROM channels WHERE name = 'local') \
+             AND s.subscriber_ref = $2 \
+             AND st.name = 'active') THEN CAST(1 AS BIGINT) ELSE CAST(0 AS BIGINT) END";
     /// Lists the author's `active` subscriptions. Bind order: `author_user_id`.
-    const LIST_ACTIVE_SUBSCRIBERS: &'static str;
+    const LIST_ACTIVE_SUBSCRIBERS: &'static str = "SELECT \
+           s.subscription_id, s.channel_id, s.subscriber_ref, s.created_at \
+         FROM subscriptions s \
+         JOIN subscription_statuses st ON st.status_id = s.status_id \
+         WHERE s.author_user_id = $1 AND st.name = 'active' \
+         ORDER BY s.subscription_id";
+    /// Lists active subscribers with local-user display labels resolved by SQL.
+    /// Bind order: `author_user_id`.
+    const LIST_SUBSCRIBER_SUMMARIES: &'static str = "SELECT \
+           s.subscription_id, COALESCE(u.username, s.subscriber_ref) AS label \
+        FROM subscriptions s \
+        JOIN subscription_statuses st ON st.status_id = s.status_id \
+        LEFT JOIN users u \
+          ON s.channel_id = (SELECT channel_id FROM channels WHERE name = 'local') \
+         AND s.subscriber_ref = CAST(u.user_id AS TEXT) \
+        WHERE s.author_user_id = $1 AND st.name = 'active' \
+        ORDER BY s.subscription_id";
     /// Selects the `channel_id` of the seeded `local` channel. No binds.
-    const SELECT_LOCAL_CHANNEL_ID: &'static str;
+    const SELECT_LOCAL_CHANNEL_ID: &'static str =
+        "SELECT channel_id FROM channels WHERE name = 'local'";
 }
 
 /// Generic [`SubscriptionStorage`] backed by any database implementing
@@ -146,8 +199,10 @@ where
     (i64,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (SubscriptionId,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (ChannelId,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (SubscriptionId, ChannelId, String, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
+    SubscriptionRecordRow: for<'r> sqlx::FromRow<'r, DB::Row>,
+    (SubscriptionId, String): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> &'q SubscriberRef: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
@@ -155,12 +210,9 @@ where
     async fn subscribe(
         &self,
         author_user_id: UserId,
-        channel_id: ChannelId,
-        subscriber_ref: &str,
+        subscriber: &SubscriberIdentity,
     ) -> sqlx::Result<SubscriptionId> {
-        let status = self
-            .policy
-            .initial_status(author_user_id, channel_id, subscriber_ref);
+        let status = self.policy.initial_status(author_user_id, subscriber);
         // The insert resolves the status *name* to its FK `status_id` (the column is
         // an integer FK, not a TEXT-token enum column). Bind the name as a typed
         // `&'static str` (strum `IntoStaticStr`) — not a stringly `.as_str()` strip.
@@ -172,8 +224,8 @@ where
         // honest read.
         sqlx::query_as::<_, (SubscriptionId,)>(DB::INSERT_SUBSCRIPTION)
             .bind(author_user_id)
-            .bind(channel_id)
-            .bind(subscriber_ref)
+            .bind(subscriber.channel_id)
+            .bind(&subscriber.subscriber_ref)
             .bind(status_name)
             .fetch_one(&self.pool)
             .await
@@ -183,13 +235,12 @@ where
     async fn unsubscribe(
         &self,
         author_user_id: UserId,
-        channel_id: ChannelId,
-        subscriber_ref: &str,
+        subscriber: &SubscriberIdentity,
     ) -> sqlx::Result<()> {
         sqlx::query(DB::DELETE_SUBSCRIPTION)
             .bind(author_user_id)
-            .bind(channel_id)
-            .bind(subscriber_ref)
+            .bind(subscriber.channel_id)
+            .bind(&subscriber.subscriber_ref)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -211,7 +262,7 @@ where
                 let subscriber_ref = local_subscriber_ref(*user_id);
                 sqlx::query_as::<_, (i64,)>(DB::IS_ACTIVE_LOCAL_SUBSCRIBER)
                     .bind(author_user_id)
-                    .bind(subscriber_ref.as_str())
+                    .bind(&subscriber_ref)
                     .fetch_one(&self.pool)
                     .await?
             }
@@ -222,7 +273,7 @@ where
                 sqlx::query_as::<_, (i64,)>(DB::IS_ACTIVE_SUBSCRIBER)
                     .bind(author_user_id)
                     .bind(*channel_id)
-                    .bind(subscriber_ref.as_str())
+                    .bind(subscriber_ref)
                     .fetch_one(&self.pool)
                     .await?
             }
@@ -234,25 +285,44 @@ where
         &self,
         author_user_id: UserId,
     ) -> sqlx::Result<Vec<SubscriptionRecord>> {
-        let rows = sqlx::query_as::<_, (SubscriptionId, ChannelId, String, DateTime<Utc>)>(
-            DB::LIST_ACTIVE_SUBSCRIBERS,
-        )
-        .bind(author_user_id)
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = sqlx::query_as::<_, SubscriptionRecordRow>(DB::LIST_ACTIVE_SUBSCRIBERS)
+            .bind(author_user_id)
+            .fetch_all(&self.pool)
+            .await?;
         // The query filters to `st.name = 'active'`, so every returned row is an
         // active subscription — no per-row status decoding needed.
         Ok(rows
             .into_iter()
             .map(
-                |(subscription_id, channel_id, subscriber_ref, created_at)| SubscriptionRecord {
+                |SubscriptionRecordRow {
+                     subscription_id,
+                     channel_id,
+                     subscriber_ref,
+                     created_at,
+                 }| SubscriptionRecord {
                     subscription_id,
-                    channel_id,
-                    subscriber_ref,
+                    subscriber: SubscriberIdentity::new(channel_id, subscriber_ref),
                     status: SubscriptionStatus::Active,
                     created_at,
                 },
             )
+            .collect())
+    }
+
+    async fn list_subscriber_summaries(
+        &self,
+        author_user_id: UserId,
+    ) -> sqlx::Result<Vec<SubscriberSummaryRecord>> {
+        let rows = sqlx::query_as::<_, (SubscriptionId, String)>(DB::LIST_SUBSCRIBER_SUMMARIES)
+            .bind(author_user_id)
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|(subscription_id, label)| SubscriberSummaryRecord {
+                subscription_id,
+                label,
+            })
             .collect())
     }
 

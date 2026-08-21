@@ -1033,13 +1033,15 @@ by ADR-0056 before either):
 - `mod.rs` — module wiring and re-exports only, no items of its own (now a
   workspace-wide rule rather than a per-vertical one — see
   [Workspace](#workspace));
-- `api.rs` — the vertical's wire types and **every** `#[server]` fn,
-  dual-compiled;
+- `api.rs` — the vertical's request wire types and **every** `#[server]` fn,
+  dual-compiled; presentation DTOs that carry their assembly logic may live in a
+  sibling model leaf instead;
 - `server.rs` — `#[cfg(feature = "server")]` host-only helpers;
 - `component.rs` — the `#[component]` UI, declared
   `#[cfg(target_arch = "wasm32")]`;
-- plus ungated, host-tested, coverage-measured state/logic files
-  (`compose_state.rs`, `input_state.rs`, `state.rs`, `render.rs`, …).
+- plus ungated, host-tested, coverage-measured state/model/logic files
+  (`compose_state.rs`, `input_state.rs`, `model.rs`, `state.rs`, `render.rs`,
+  …).
 
 `web/src/pages/` is gone. Of the 28 directories under `web/src/`, all have
 `mod.rs`, 25 carry a `component.rs`, 15 carry an `api.rs`, and 6 (`audiences`,
@@ -1171,7 +1173,7 @@ flat lists stay plain `map`/`collect`
 adopter so far (`web/src/audiences/component.rs`). A domain newtype used as a
 **leaf** field of such a store row is declared as itself and given the derive's
 per-field escape hatch, `#[patch(|this, new| *this = new)]`
-(`web/src/audiences/api.rs`,
+(`web/src/audiences/model.rs`,
 [ADR-0078](adr/0078-reactive-store-domain-newtype-fields.md)) — which keeps
 `common` free of a `reactive_stores` dependency. The attribute is for leaves
 only; a field wrapping a nested `Store` needs granular descent instead.

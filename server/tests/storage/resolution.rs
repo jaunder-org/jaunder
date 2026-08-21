@@ -1,7 +1,7 @@
 use chrono::Utc;
 use common::ids::PostId;
 use common::test_support::{parse_audience_name, parse_row_limit};
-use common::visibility::{AudienceTarget, ViewerIdentity};
+use common::visibility::{AudienceTarget, ViewerIdentity, local_subscriber_identity};
 use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, SeedRawPost, backends, seed_users};
@@ -25,12 +25,12 @@ async fn resolution_matrix(#[case] backend: Backend) {
     let [a, s, m, n] = seed_users(state).await;
     state
         .subscriptions
-        .subscribe(a, local, &s.to_string())
+        .subscribe(a, &local_subscriber_identity(local, s))
         .await
         .unwrap();
     let m_sub = state
         .subscriptions
-        .subscribe(a, local, &m.to_string())
+        .subscribe(a, &local_subscriber_identity(local, m))
         .await
         .unwrap();
     let g = state
@@ -80,7 +80,7 @@ async fn resolution_matrix(#[case] backend: Backend) {
     let remote_channel = channel_id_by_name(backend, &env, "activitypub").await;
     let impostor = ViewerIdentity::Remote {
         channel_id: remote_channel,
-        subscriber_ref: a.to_string(),
+        subscriber_ref: a.to_string().into(),
     };
 
     let matrix: &[(&str, PostId, [bool; 6])] = &[

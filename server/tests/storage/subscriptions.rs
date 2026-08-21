@@ -1,10 +1,13 @@
 use std::sync::Arc;
 
-use common::ids::{ChannelId, UserId};
-use common::visibility::{SubscriptionPolicy, SubscriptionStatus, ViewerIdentity};
+use common::ids::UserId;
+use common::visibility::{
+    SubscriberIdentity, SubscriptionPolicy, SubscriptionStatus, ViewerIdentity,
+    local_subscriber_identity,
+};
 use rstest::*;
 use rstest_reuse::*;
-use storage::test_support::{Backend, backends, seed_users};
+use storage::test_support::{Backend, SeedUser, backends, seed_users};
 use storage::{PostgresSubscriptionStorage, SqliteSubscriptionStorage, SubscriptionStorage};
 
 use super::fixtures::{channel_id_by_name, local_channel_id, open_pool, raw_exec};
@@ -50,14 +53,15 @@ async fn subscribe_is_idempotent_and_active(#[case] backend: Backend) {
     let state = &env.state;
     let [author, bob] = seed_users(state).await;
     let local = local_channel_id(backend, &env).await;
+    let subscriber = local_subscriber_identity(local, bob);
     let id1 = state
         .subscriptions
-        .subscribe(author, local, &bob.to_string())
+        .subscribe(author, &subscriber)
         .await
         .unwrap();
     let id2 = state
         .subscriptions
-        .subscribe(author, local, &bob.to_string())
+        .subscribe(author, &subscriber)
         .await
         .unwrap();
     assert_eq!(id1, id2, "subscribe is idempotent");
@@ -79,13 +83,13 @@ async fn subscribe_is_idempotent_and_active(#[case] backend: Backend) {
     let subs = state.subscriptions.list_subscribers(author).await.unwrap();
     assert_eq!(subs.len(), 1);
     assert_eq!(subs[0].subscription_id, id1);
-    assert_eq!(subs[0].channel_id, local);
-    assert_eq!(subs[0].subscriber_ref, bob.to_string());
+    assert_eq!(subs[0].subscriber.channel_id, local);
+    assert_eq!(subs[0].subscriber.subscriber_ref.as_ref(), bob.to_string());
     assert_eq!(subs[0].status, SubscriptionStatus::Active);
     // Unsubscribe round-trips: no longer a subscriber, listing empties.
     state
         .subscriptions
-        .unsubscribe(author, local, &bob.to_string())
+        .unsubscribe(author, &subscriber)
         .await
         .unwrap();
     assert!(
@@ -102,6 +106,67 @@ async fn subscribe_is_idempotent_and_active(#[case] backend: Backend) {
             .await
             .unwrap()
             .is_empty()
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn list_subscriber_summaries_resolves_labels_on_both_dialects(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let author = SeedUser::new().seed(state).await.user_id;
+    let local_user = SeedUser::new().seed(state).await;
+    let local = local_channel_id(backend, &env).await;
+    raw_exec(
+        backend,
+        &env,
+        "INSERT INTO channels (name) VALUES ('activitypub')",
+    )
+    .await;
+    let remote = channel_id_by_name(backend, &env, "activitypub").await;
+
+    let resolved = state
+        .subscriptions
+        .subscribe(
+            author,
+            &local_subscriber_identity(local, local_user.user_id),
+        )
+        .await
+        .unwrap();
+    let numeric_remote_ref = local_user.user_id.to_string();
+    let remote_numeric = state
+        .subscriptions
+        .subscribe(
+            author,
+            &SubscriberIdentity::new(remote, numeric_remote_ref.clone().into()),
+        )
+        .await
+        .unwrap();
+    let missing_ref = "999999999";
+    let missing_local = state
+        .subscriptions
+        .subscribe(
+            author,
+            &SubscriberIdentity::new(local, missing_ref.to_owned().into()),
+        )
+        .await
+        .unwrap();
+
+    let rows = state
+        .subscriptions
+        .list_subscriber_summaries(author)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        rows.into_iter()
+            .map(|row| (row.subscription_id, row.label))
+            .collect::<Vec<_>>(),
+        vec![
+            (resolved, local_user.username.to_string()),
+            (remote_numeric, numeric_remote_ref),
+            (missing_local, missing_ref.to_string()),
+        ]
     );
 }
 
@@ -127,7 +192,10 @@ async fn is_subscriber_resolves_a_remote_viewer_by_its_own_channel(#[case] backe
     let actor = "https://remote.example/users/alice";
     state
         .subscriptions
-        .subscribe(author, remote, actor)
+        .subscribe(
+            author,
+            &SubscriberIdentity::new(remote, actor.to_owned().into()),
+        )
         .await
         .unwrap();
 
@@ -138,7 +206,7 @@ async fn is_subscriber_resolves_a_remote_viewer_by_its_own_channel(#[case] backe
                 author,
                 &ViewerIdentity::Remote {
                     channel_id: remote,
-                    subscriber_ref: actor.to_owned(),
+                    subscriber_ref: actor.to_owned().into(),
                 }
             )
             .await
@@ -152,7 +220,7 @@ async fn is_subscriber_resolves_a_remote_viewer_by_its_own_channel(#[case] backe
                 author,
                 &ViewerIdentity::Remote {
                     channel_id: local,
-                    subscriber_ref: actor.to_owned(),
+                    subscriber_ref: actor.to_owned().into(),
                 }
             )
             .await
@@ -170,7 +238,7 @@ async fn is_subscriber_resolves_a_remote_viewer_by_its_own_channel(#[case] backe
 async fn pending_subscription_is_not_admitted(#[case] backend: Backend) {
     struct StubPending;
     impl SubscriptionPolicy for StubPending {
-        fn initial_status(&self, _a: UserId, _c: ChannelId, _r: &str) -> SubscriptionStatus {
+        fn initial_status(&self, _a: UserId, _s: &SubscriberIdentity) -> SubscriptionStatus {
             SubscriptionStatus::Pending
         }
     }
@@ -205,7 +273,7 @@ async fn pending_subscription_is_not_admitted(#[case] backend: Backend) {
     let [author, bob] = seed_users(&env.state).await;
     let local = local_channel_id(backend, &env).await;
     store
-        .subscribe(author, local, &bob.to_string())
+        .subscribe(author, &local_subscriber_identity(local, bob))
         .await
         .unwrap();
     // Resolution admits only `active` → a pending subscriber is excluded.
@@ -217,4 +285,11 @@ async fn pending_subscription_is_not_admitted(#[case] backend: Backend) {
     );
     // ...and it is not listed (list_subscribers is active-only).
     assert!(store.list_subscribers(author).await.unwrap().is_empty());
+    assert!(
+        store
+            .list_subscriber_summaries(author)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }

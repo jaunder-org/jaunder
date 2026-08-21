@@ -18,7 +18,9 @@ use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::time::UtcInstant;
 use common::username::Username;
-use common::visibility::{AudienceTarget, TargetKind, ViewerIdentity, local_subscriber_ref};
+use common::visibility::{
+    AudienceTarget, SubscriberRef, TargetKind, ViewerIdentity, local_subscriber_ref,
+};
 use host::error::{InternalError, InternalResult};
 
 use crate::backend::Backend;
@@ -978,8 +980,9 @@ where
     // The viewer-resolution binds are NULL-able (`ResolutionBinds::bind_onto`).
     for<'q> Option<UserId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<ChannelId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> &'q SubscriberRef: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<&'q SubscriberRef>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `Slug`/`Tag`/`Username` bind and decode as themselves via the ADR-0071 sqlx
-    // bridge (the reads decode the `slug`/`tag_slug`/`username` columns straight
     // into their newtypes). The `Option<&PostTitle>` bound is the nullable `title`
     // bind, forwarded from `write_post_in_tx` (create paths).
     String: sqlx::Type<DB>,
@@ -1979,7 +1982,7 @@ enum ResolutionBinds {
         user_id: UserId,
         /// `s.subscriber_ref` for the subscribers/named branches: the viewer's
         /// user id in decimal, the form `subscribe_to` stores.
-        subref: String,
+        subref: SubscriberRef,
     },
     /// A non-local viewer: five binds — `NULL, channel, subref, channel, subref`.
     /// The author placeholder binds NULL, so the author branch cannot fire (#6).
@@ -1987,7 +1990,7 @@ enum ResolutionBinds {
         /// `s.channel_id` for the subscribers/named `EXISTS` branches.
         channel: ChannelId,
         /// `s.subscriber_ref` for the subscribers/named branches.
-        subref: String,
+        subref: SubscriberRef,
     },
 }
 
@@ -2110,6 +2113,8 @@ impl ResolutionBinds {
         DB: Database,
         i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
         &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        &'q SubscriberRef: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        Option<&'q SubscriberRef>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
         // sqlx implements `Encode for Option<T>` per concrete database (the
         // `impl_encode_for_option!` macro), not blanket over a generic `DB`, so
         // each NULL-able bind's type has to be restated here — and, per ADR-0019,
@@ -2122,19 +2127,19 @@ impl ResolutionBinds {
             Self::Anonymous => query
                 .bind(None::<UserId>)
                 .bind(None::<ChannelId>)
-                .bind(None::<&str>)
+                .bind(None::<&SubscriberRef>)
                 .bind(None::<ChannelId>)
-                .bind(None::<&str>),
+                .bind(None::<&SubscriberRef>),
             Self::Local { user_id, subref } => query
                 .bind(Some(*user_id))
-                .bind(Some(subref.as_str()))
-                .bind(Some(subref.as_str())),
+                .bind(Some(subref))
+                .bind(Some(subref)),
             Self::Remote { channel, subref } => query
                 .bind(None::<UserId>)
                 .bind(Some(*channel))
-                .bind(Some(subref.as_str()))
+                .bind(Some(subref))
                 .bind(Some(*channel))
-                .bind(Some(subref.as_str())),
+                .bind(Some(subref)),
         }
     }
 }
@@ -2379,6 +2384,8 @@ where
     // The viewer-resolution binds are NULL-able (`ResolutionBinds::bind_onto`).
     for<'q> Option<UserId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<ChannelId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> &'q SubscriberRef: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<&'q SubscriberRef>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `Username`/`Tag` bind as themselves via the ADR-0071 sqlx bridge, for the
     // surface `username`/`tag` binds.
@@ -2704,7 +2711,7 @@ mod tests {
     #[case::anonymous(ViewerIdentity::Anonymous)]
     #[case::remote(ViewerIdentity::Remote {
         channel_id: ChannelId::from(2),
-        subscriber_ref: "7".to_owned(),
+        subscriber_ref: "7".to_owned().into(),
     })]
     fn resolution_where_binds_the_channel_for_a_non_local_viewer(#[case] viewer: ViewerIdentity) {
         let (sql, _binds, next) = resolution_where(&viewer, 2);
