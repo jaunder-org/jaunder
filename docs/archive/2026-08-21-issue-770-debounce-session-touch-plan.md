@@ -18,7 +18,7 @@ load when no update happens.
 tests in the `jaunder` integration test binary.
 
 **Spec:**
-[`2026-08-21-issue-770-debounce-session-touch.md`](../specs/2026-08-21-issue-770-debounce-session-touch.md)
+[`2026-08-21-issue-770-debounce-session-touch-spec.md`](2026-08-21-issue-770-debounce-session-touch-spec.md)
 
 ## Review Header
 
