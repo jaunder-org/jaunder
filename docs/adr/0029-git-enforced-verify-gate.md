@@ -3,7 +3,8 @@
 - Status: accepted
 
 Historical note: the original Decision below recorded the #99/#113 hook shape.
-#1079 later amended the current hook contract; see the final supplement and
+#1079 and the later fast-local pre-push change amended the current hook
+contract; see the final supplement and
 [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md#the-verify-ladder--git-enforced-gate).
 
 ## Context
@@ -36,13 +37,14 @@ pointed at the default `.git/hooks`.
   `validate --no-e2e --allow-dirty` — that ran fmt/clippy twice to avoid
   touching the then-non-idempotent manifests; see Consequences.)
 
-- **Pre-push hook → `cargo xtask validate --no-e2e`.** Its value is the
-  clean-tree backstop below, not a re-verify of `check`.
+- **Pre-push hook → `cargo xtask validate --no-e2e`.** In the original hook
+  shape, its value was the clean-tree backstop below, not a re-verify of
+  `check`.
 - **`validate` refuses a dirty working tree** (`git status --porcelain`
   non-empty, including untracked non-gitignored files) unless `--allow-dirty`.
-  `check` does not — Fix-mode is meant to run on a dirty tree. This makes
-  pre-push the one point that proves _what was measured == the committed tip ==
-  what CI sees, nothing uncommitted hiding_ — a guarantee `check` structurally
+  `check` does not — Fix-mode is meant to run on a dirty tree. In that original
+  hook shape, pre-push was the point that proved _what was measured == the
+  committed tip, nothing uncommitted hiding_ — a guarantee `check` structurally
   cannot give.
 - **Self-healing install:** any `cargo xtask` run points `core.hooksPath` at the
   tracked, relative `.githooks` (so each worktree uses its own checkout).
@@ -104,6 +106,10 @@ diagnostics; pre-existing delete/rename state and untracked files stayed
 unstaged and tolerated.
 
 This traded the original per-commit Nix coverage/doctest/wasm proof for a short
-commit-time gate plus the existing `cargo xtask validate --no-e2e` pre-push
-clean-tree proof. The current materialized gate shape lives in
+commit-time gate plus a clean-tree pre-push proof. In #1113 the product Rust
+test portion moved to host-native `cargo xtask test-local`; the follow-up
+introduced `cargo xtask prepush` so the hook uses that fast local lane. The
+slower `cargo xtask validate --no-e2e` command remains available locally for
+hermetic confidence, and CI remains the non-bypassable hermetic backstop. The
+current materialized gate shape lives in
 [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md#the-verify-ladder--git-enforced-gate).
