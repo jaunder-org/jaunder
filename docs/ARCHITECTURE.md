@@ -1348,6 +1348,17 @@ silently dropping it; one binding at the `run()` dispatch boundary covers every
 command, and export failures are logged, never propagated
 ([ADR-0011](adr/0011-unified-observability.md)).
 
+Serve-only saturation gauges are registered in `host::metrics` as asynchronous
+OpenTelemetry gauges backed by a narrow `SaturationSnapshot`. `jaunder serve`
+starts the sampler only when the shared OTLP endpoint gate is configured, and
+`PreparedServer` owns both the observable guard and the sampler handle for the
+serve lifetime. The sampler reads feed queue depth, backup last-success time,
+database pool saturation, and database-declared media upload bytes into the
+snapshot; callbacks never query storage. Missing source values emit no datapoint
+rather than zero. The database pool observer is produced by storage opening and
+retained beside `AppState` at the serve composition root, preserving ADR-0016's
+rule that `AppState` remains storage-only while still allowing pool metrics.
+
 ### Errors at the boundary
 
 The carrier owns its boundary observability:

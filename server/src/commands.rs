@@ -2,7 +2,7 @@ use std::{
     fs, io,
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, RwLock},
 };
 
 use anyhow::Context as _;
@@ -495,7 +495,7 @@ struct RealStartupDatabaseOperations;
 
 struct StartupDatabase {
     state: Arc<storage::AppState>,
-    pool_observer: Option<storage::DbPoolObserver>,
+    pool_observer: storage::DbPoolObserver,
 }
 
 #[async_trait::async_trait]
@@ -507,7 +507,7 @@ impl StartupDatabaseOperations for RealStartupDatabaseOperations {
         let opened = open_existing_database_with_observer(options).await?;
         Ok(StartupDatabase {
             state: opened.state,
-            pool_observer: Some(opened.pool_observer),
+            pool_observer: opened.pool_observer,
         })
     }
 
@@ -624,6 +624,43 @@ pub struct PreparedServer {
     feed_scheduler: tokio_cron_scheduler::JobScheduler,
     /// Removes the runtime-info file on drop (see ADR-0035).
     runtime_guard: runtime_file::RuntimeFileGuard,
+    pub saturation_metrics: Option<PreparedSaturationMetrics>,
+}
+
+pub struct PreparedSaturationMetrics {
+    _observables: host::metrics::SaturationObservableGuard,
+    sampler: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for PreparedSaturationMetrics {
+    fn drop(&mut self) {
+        self.sampler.abort();
+    }
+}
+
+async fn prepare_saturation_metrics(
+    db: Arc<storage::AppState>,
+    pool_observer: storage::DbPoolObserver,
+) -> anyhow::Result<Option<PreparedSaturationMetrics>> {
+    if !host::telemetry::otlp_endpoint_configured() {
+        return Ok(None);
+    }
+    let backup_config = db
+        .site_config
+        .get_backup_config()
+        .await
+        .context("failed to load backup configuration for saturation metrics")?;
+    let backup_destination_root = backup_config.destination_path.as_deref().map(PathBuf::from);
+    let snapshot = Arc::new(RwLock::new(host::metrics::SaturationSnapshot::default()));
+    let observables = host::metrics::register_saturation_observables(snapshot.clone());
+    let sources =
+        crate::metrics::SaturationSources::real(db, backup_destination_root, pool_observer);
+    let sampler = crate::metrics::spawn_saturation_sampler(sources, snapshot);
+
+    Ok(Some(PreparedSaturationMetrics {
+        _observables: observables,
+        sampler,
+    }))
 }
 
 /// Performs all of [`cmd_serve`]'s setup — open the database (auto-initializing
@@ -664,8 +701,9 @@ pub async fn prepare_server(
 
     let StartupDatabase {
         state: db,
-        pool_observer: _pool_observer,
+        pool_observer,
     } = open_server_database(storage, prod).await?;
+    let saturation_metrics = prepare_saturation_metrics(db.clone(), pool_observer).await?;
 
     let backup_scheduler = crate::backup::start_backup_worker(
         db.site_config.clone(),
@@ -709,6 +747,7 @@ pub async fn prepare_server(
         backup_scheduler,
         feed_scheduler,
         runtime_guard,
+        saturation_metrics,
     })
 }
 
@@ -808,12 +847,14 @@ pub async fn cmd_serve(
         backup_scheduler,
         feed_scheduler,
         runtime_guard,
+        saturation_metrics,
     } = prepare_server(storage, bind, prod, runtime_file).await?;
 
     tracing::info!(bind = %bind, prod, "starting HTTP server");
     // Keep the worker schedulers alive for the lifetime of the serve loop.
     let _backup_scheduler = backup_scheduler;
     let _feed_scheduler = feed_scheduler;
+    let _saturation_metrics = saturation_metrics;
     #[cfg(unix)]
     {
         // Clone the runtime-file path for the forced-exit removal before the guard
@@ -1670,7 +1711,7 @@ mod tests {
         let database = open_server_database(&storage, false)
             .await
             .expect("open server database");
-        let snapshot = database.pool_observer.expect("pool observer").snapshot();
+        let snapshot = database.pool_observer.snapshot();
 
         assert!(snapshot.max >= 1);
         assert!(snapshot.used <= snapshot.max);
@@ -1700,6 +1741,51 @@ mod tests {
         assert!(db_path.exists(), "auto-init must have created the database");
         // Drop the prepared server (and its background workers) without serving.
         drop(prepared);
+    }
+
+    #[test]
+    fn prepare_server_registers_saturation_sampler_when_otel_endpoint_is_set() {
+        common::test_support::with_env(|env| {
+            env.set(
+                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
+                "http://127.0.0.1:4318",
+            );
+            env.remove("OTEL_EXPORTER_OTLP_ENDPOINT");
+            let runtime = tokio::runtime::Runtime::new().expect("runtime");
+            runtime.block_on(async {
+                let temp = TempDir::new().expect("temp dir");
+                let storage = sqlite_storage_args(&temp);
+                storage::open_database(&storage.db).await.expect("open db");
+                let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+
+                let prepared = prepare_server(&storage, bind, false, None)
+                    .await
+                    .expect("prepare server");
+
+                assert!(prepared.saturation_metrics.is_some());
+            });
+        });
+    }
+
+    #[test]
+    fn prepare_server_does_not_start_saturation_sampler_without_otel_endpoint() {
+        common::test_support::with_env(|env| {
+            env.remove("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
+            env.remove("OTEL_EXPORTER_OTLP_ENDPOINT");
+            let runtime = tokio::runtime::Runtime::new().expect("runtime");
+            runtime.block_on(async {
+                let temp = TempDir::new().expect("temp dir");
+                let storage = sqlite_storage_args(&temp);
+                storage::open_database(&storage.db).await.expect("open db");
+                let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+
+                let prepared = prepare_server(&storage, bind, false, None)
+                    .await
+                    .expect("prepare server");
+
+                assert!(prepared.saturation_metrics.is_none());
+            });
+        });
     }
 
     #[tokio::test]

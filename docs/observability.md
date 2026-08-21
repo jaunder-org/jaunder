@@ -9,12 +9,40 @@ processes, and end-to-end test runner.
   OTLP setup and shutdown live in `host::telemetry`; the server, production CLI
   commands, and `test-support` all hold the same guard. Server-scoped HTTP spans
   and e2e diagnostics stay in `server::observability`.
+- When an OTLP endpoint is configured, `jaunder serve` also registers saturation
+  gauges and starts a 30-second sampler owned by the serve lifetime. If no OTLP
+  endpoint is configured, the sampler is not started.
 - In e2e VM checks, the running server, production `jaunder site-config set`
   seed steps, and the `test-support` seed binary export to the in-VM collector.
   The collector writes under the capture-dir contract (#332):
   - `/var/lib/jaunder/capture/otel-traces.jsonl` (inside the VM)
   - lifted per combo inside `capture-<backend>.tar.gz` (the same bundle that
     carries `diag.log` and the mail/websub JSONL — see below)
+
+### Backend Saturation Gauges
+
+The backend exports these asynchronous gauge instruments through
+`host::metrics`:
+
+| Instrument                              | Unit | Meaning                                                       |
+| --------------------------------------- | ---- | ------------------------------------------------------------- |
+| `jaunder.feed.queue_depth`              | —    | Feed-regeneration rows currently claimable by the feed worker |
+| `jaunder.backup.last_success_timestamp` | `s`  | Unix timestamp of the newest successful backup artifact       |
+| `jaunder.db.pool.used`                  | —    | Database pool connections currently checked out               |
+| `jaunder.db.pool.idle`                  | —    | Database pool connections currently idle                      |
+| `jaunder.db.pool.max`                   | —    | Configured maximum database pool connections                  |
+| `jaunder.media.storage_bytes`           | `By` | Database-declared bytes for local uploaded media              |
+
+The sampler writes a shared snapshot; OpenTelemetry callbacks only read that
+snapshot and emit a datapoint for fields that are present. A failed source
+clears only its field and reports a fixed diagnostic context, so dashboards see
+absence rather than a misleading zero. An unconfigured backup destination is
+normal and therefore clears `jaunder.backup.last_success_timestamp` without a
+diagnostic.
+
+`jaunder.media.storage_bytes` is the storage table's declared upload total. It
+does not walk the media directory and does not include cached remote media. The
+separate on-disk media usage follow-up is tracked as #1103.
 
 ## End-to-End Tracing Layers
 

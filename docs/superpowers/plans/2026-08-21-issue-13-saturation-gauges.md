@@ -811,7 +811,7 @@ come from `manifest.json`, not filesystem mtime or name sorting.
   `fn test_storage_args() -> StorageArgs` that prepares isolated SQLite-backed
   storage arguments for `prepare_server` tests.
 
-- [ ] **Step 1: Write failing serve wiring tests**
+- [x] **Step 1: Write failing serve wiring tests**
 
   Add or extend `prepare_server` tests to prove:
 
@@ -861,14 +861,14 @@ come from `manifest.json`, not filesystem mtime or name sorting.
   owned guard/sampler presence through `PreparedServer` state or a small
   test-visible constructor boundary.
 
-- [ ] **Step 2: Run serve wiring tests and verify failure**
+- [x] **Step 2: Run serve wiring tests and verify failure**
 
   Run:
   `devtool run -- cargo nextest run -p jaunder saturation_sampler prepare_server`
 
   Expected: FAIL because serve wiring is not complete.
 
-- [ ] **Step 3: Wire serve setup**
+- [x] **Step 3: Wire serve setup**
 
   In `prepare_server`, after opening the database and before returning
   `PreparedServer`, register saturation observables and spawn the sampler only
@@ -877,7 +877,7 @@ come from `manifest.json`, not filesystem mtime or name sorting.
   `PreparedServer`. Use `ServerDatabase.state` for existing router/worker wiring
   and `ServerDatabase.pool_observer` only for saturation sampling.
 
-- [ ] **Step 4: Update docs**
+- [x] **Step 4: Update docs**
 
   In `docs/observability.md`, document the six new gauge names, snapshot
   sampling, no-datapoint-on-failure behavior, and the DB-declared media bytes
@@ -888,7 +888,7 @@ come from `manifest.json`, not filesystem mtime or name sorting.
   observable registration, pool observer outside `AppState`, and
   ADR-0011/ADR-0058 consistency.
 
-- [ ] **Step 5: Run focused tests and docs format**
+- [x] **Step 5: Run focused tests and docs format**
 
   Run:
   `devtool run -- cargo nextest run -p jaunder saturation_sampler prepare_server`
@@ -897,13 +897,13 @@ come from `manifest.json`, not filesystem mtime or name sorting.
 
   Expected: PASS for tests; Prettier exits 0.
 
-- [ ] **Step 6: Full local gate**
+- [x] **Step 6: Full local gate**
 
   Run: `devtool run -- cargo xtask check`
 
   Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
   Stage the plan checkbox update, serve wiring, and docs:
   `git add docs/superpowers/plans/2026-08-21-issue-13-saturation-gauges.md server/src/commands.rs docs/observability.md docs/ARCHITECTURE.md`
