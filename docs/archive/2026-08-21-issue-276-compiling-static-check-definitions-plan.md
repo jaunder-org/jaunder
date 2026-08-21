@@ -101,7 +101,7 @@ crane/Nix `flake.nix`, GitHub CI, Markdown docs/ADR.
   draft.
 - `CONTRIBUTING.md`: update the Nix VM checks section to describe the expanded
   `static-checks` derivation and removed crane outputs.
-- `docs/adr/drafts/devtool-owns-compiling-static-check-definitions.md`: keep the
+- `docs/adr/0146-devtool-owns-compiling-static-check-definitions.md`: keep the
   numberless ADR draft aligned with the implementation; promote during ship.
 
 ## Task 1: Add devtool compiling check specs
@@ -525,7 +525,7 @@ Only include `xtask/src` in the `git add` if Step 4 changed it.
 
 - Modify: `docs/ARCHITECTURE.md`
 - Modify: `CONTRIBUTING.md`
-- Modify: `docs/adr/drafts/devtool-owns-compiling-static-check-definitions.md`
+- Modify: `docs/adr/0146-devtool-owns-compiling-static-check-definitions.md`
 - Modify:
   `docs/superpowers/specs/2026-08-21-issue-276-compiling-static-check-definitions.md`
   only if implementation discovers a spec correction.
@@ -549,7 +549,7 @@ After implementation, remove any stale "Committed direction" language that is
 now current reality. Keep the draft ADR citation path:
 
 ```markdown
-(...[devtool owns compiling static-check definitions across host and Nix](adr/drafts/devtool-owns-compiling-static-check-definitions.md))
+(...[devtool owns compiling static-check definitions across host and Nix](adr/0146-devtool-owns-compiling-static-check-definitions.md))
 ```
 
 - [x] **Step 2: Update `CONTRIBUTING.md` Nix VM checks**
@@ -569,7 +569,7 @@ product/wasm/tools clippy, and cargo-deny's sandbox-safe policy.
 Read:
 
 ```bash
-sed -n '1,220p' docs/adr/drafts/devtool-owns-compiling-static-check-definitions.md
+sed -n '1,220p' docs/adr/0146-devtool-owns-compiling-static-check-definitions.md
 ```
 
 Ensure the draft matches the actual Task 3 wiring. Keep line 1
@@ -580,7 +580,7 @@ Ensure the draft matches the actual Task 3 wiring. Keep line 1
 Run:
 
 ```bash
-devtool run -- prettier -w docs/ARCHITECTURE.md CONTRIBUTING.md docs/adr/drafts/devtool-owns-compiling-static-check-definitions.md docs/superpowers/specs/2026-08-21-issue-276-compiling-static-check-definitions.md docs/superpowers/plans/2026-08-21-issue-276-compiling-static-check-definitions.md
+devtool run -- prettier -w docs/ARCHITECTURE.md CONTRIBUTING.md docs/adr/0146-devtool-owns-compiling-static-check-definitions.md docs/superpowers/specs/2026-08-21-issue-276-compiling-static-check-definitions.md docs/superpowers/plans/2026-08-21-issue-276-compiling-static-check-definitions.md
 ```
 
 Then run:

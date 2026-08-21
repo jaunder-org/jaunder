@@ -2226,7 +2226,7 @@ skips `advisories` and checks only `bans`, `licenses`, and `sources`
 The compiling project/tool static checks live behind `devtool check` as a shared
 command-definition surface, while keeping separate host and sandbox execution
 lanes
-([devtool owns compiling static-check definitions across host and Nix](adr/drafts/devtool-owns-compiling-static-check-definitions.md)).
+([devtool owns compiling static-check definitions across host and Nix](adr/0146-devtool-owns-compiling-static-check-definitions.md)).
 Host `xtask` lanes still execute host-local Cargo so target artifacts and
 sccache remain effective for day-to-day work; sandboxed Nix lanes execute the
 same definitions through `devtool check --all --sandbox-cargo` with
@@ -2465,7 +2465,7 @@ host-side subcommands are therefore chartered, not drift.
   `cargo deny check`, while sandbox mode skips `advisories`
   ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
   [Sandboxed cargo-deny skips advisories](adr/0145-sandbox-cargo-deny-skips-advisories.md),
-  [devtool owns compiling static-check definitions across host and Nix](adr/drafts/devtool-owns-compiling-static-check-definitions.md)).
+  [devtool owns compiling static-check definitions across host and Nix](adr/0146-devtool-owns-compiling-static-check-definitions.md)).
 
 **xtask is host-only — an enforced invariant.** Nix derivations never invoke
 xtask; the flow is strictly one-directional (host `cargo xtask` → `nix build`).
