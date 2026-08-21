@@ -1,7 +1,7 @@
 //! The migrated static checks. This is the single home of their tool + args:
-//! the host verify ladder runs the non-compiling checks via
-//! `cargo run -p devtool -- check <name>` (so a local `tools/` edit is
-//! reflected), and the nix `static-checks` derivation runs
+//! the host verify ladder runs each check via `cargo run -p devtool -- check
+//! <name>` (so a local `tools/` edit is reflected), and the nix
+//! `static-checks` derivation runs
 //! `devtool check --all --sandbox-cargo` from the prebuilt `devtoolBin`.
 //! `cargo-deny` joins only under its documented sandbox policy; Cargo-backed
 //! checks use separate host and sandbox lanes from this shared definition.
