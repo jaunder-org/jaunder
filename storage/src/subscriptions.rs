@@ -50,6 +50,8 @@ pub struct SubscriberSummaryRecord {
     pub label: String,
 }
 
+type SubscriberSummaryRow = (SubscriptionId, String);
+
 /// Async operations on the `subscriptions` table.
 #[cfg_attr(feature = "test-utils", mockall::automock)]
 #[async_trait]
@@ -200,7 +202,7 @@ where
     (SubscriptionId,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (ChannelId,): for<'r> sqlx::FromRow<'r, DB::Row>,
     SubscriptionRecordRow: for<'r> sqlx::FromRow<'r, DB::Row>,
-    (SubscriptionId, String): for<'r> sqlx::FromRow<'r, DB::Row>,
+    SubscriberSummaryRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q SubscriberRef: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -313,7 +315,7 @@ where
         &self,
         author_user_id: UserId,
     ) -> sqlx::Result<Vec<SubscriberSummaryRecord>> {
-        let rows = sqlx::query_as::<_, (SubscriptionId, String)>(DB::LIST_SUBSCRIBER_SUMMARIES)
+        let rows = sqlx::query_as::<_, SubscriberSummaryRow>(DB::LIST_SUBSCRIBER_SUMMARIES)
             .bind(author_user_id)
             .fetch_all(&self.pool)
             .await?;

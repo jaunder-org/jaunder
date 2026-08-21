@@ -753,19 +753,27 @@ const ALLOWLIST: &[Allowed] = &[
     },
     Allowed {
         file: "site_config.rs",
-        function: "list",
-        target: "(String,String)",
-        what: "\"SELECTkey,valueFROMsite_configORDERBYkey\"",
+        function: "",
+        target: "String",
+        what: "SiteConfigExportRow.0",
         count: 1,
         category: Category::DeferredNewtype,
-        reason: "two adjacent Strings — a real transposition hazard, and the only one in this \
-                 file. It survives #687 permanently, by design: `list` is a faithful dump of \
-                 what is physically stored, so it must be able to return a row whose key is \
-                 NOT in the registry — a legacy or hand-written orphan. Typing the first \
-                 element would make those rows undecodable, i.e. invisible, which is the one \
-                 thing an operator debugging a stale value cannot afford (#687 D4). The CLI \
-                 parses and judges them instead. The second element stays String per the \
-                 entry above",
+        reason: "the key half of SiteConfigExportRow. It survives #687 permanently, by design: \
+                 `list` is a faithful dump of what is physically stored, so it must be able to \
+                 return a row whose key is NOT in the registry — a legacy or hand-written \
+                 orphan. Typing this element would make those rows undecodable, i.e. invisible, \
+                 which is the one thing an operator debugging a stale value cannot afford \
+                 (#687 D4). The CLI parses and judges them instead",
+    },
+    Allowed {
+        file: "site_config.rs",
+        function: "",
+        target: "String",
+        what: "SiteConfigExportRow.1",
+        count: 1,
+        category: Category::OpaquePayload,
+        reason: "the value half of SiteConfigExportRow is deliberately polymorphic text (a URL, \
+                 a port, a token) parsed by each key's own getter; it stays String by design",
     },
     Allowed {
         file: "site_config.rs",
@@ -788,9 +796,9 @@ const ALLOWLIST: &[Allowed] = &[
     // ---- subscriptions ----
     Allowed {
         file: "subscriptions.rs",
-        function: "list_subscriber_summaries",
-        target: "(SubscriptionId,String)",
-        what: "DB::LIST_SUBSCRIBER_SUMMARIES",
+        function: "",
+        target: "String",
+        what: "SubscriberSummaryRow.1",
         count: 1,
         category: Category::OpaquePayload,
         reason: "label is already a display payload: either a Username joined from users or a \

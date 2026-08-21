@@ -397,13 +397,14 @@ git add docs/superpowers/plans/2026-08-21-issue-700-row-tuple-aliases.md storage
 git commit -m "refactor(storage): name post row tuples (#700)"
 ```
 
-### Task 4: Name selected local summary/export row shapes
+### Task 4: Name selected local summary/export row shapes — DONE
 
 **Files:**
 
 - Modify: `storage/src/audiences.rs`
 - Modify: `storage/src/subscriptions.rs`
 - Modify: `storage/src/site_config.rs`
+- Modify: `xtask/src/steps/sqlx_newtype_decode_check.rs`
 - Test: existing tests in those files.
 
 **Interfaces:**
@@ -413,7 +414,7 @@ git commit -m "refactor(storage): name post row tuples (#700)"
   `SubscriberSummaryRow = (SubscriptionId, String)`, and
   `SiteConfigExportRow = (String, String)`.
 
-- [ ] **Step 1: Add local aliases and replace decode targets**
+- [x] **Step 1: Add local aliases and replace decode targets**
 
 In `storage/src/audiences.rs`, add a private `AudienceSummaryRow` alias near
 `AudienceRecord`, decode `list_audiences` through it, and update the generic
@@ -427,7 +428,7 @@ In `storage/src/site_config.rs`, add a private `SiteConfigExportRow` alias near
 the `SiteConfigStorage` impl, decode `list` through it, and keep the trait and
 method return type as `Vec<(String, String)>`.
 
-- [ ] **Step 2: Run focused summary/export tests**
+- [x] **Step 2: Run focused summary/export tests**
 
 Run:
 
@@ -439,12 +440,12 @@ devtool run -- cargo nextest run -p storage site_config_primitives_round_trip
 
 Expected: PASS.
 
-- [ ] **Step 3: Run the type-safety population check**
+- [x] **Step 3: Run the type-safety population check**
 
 Run:
 
 ```bash
-devtool run -- rg "query_as::<_, \\((Option<DateTime<Utc>>, DateTime<Utc>)|(UserId, Option<DateTime<Utc>>)|(TagId, Tag)|(PostId, TagId, Tag, TagLabel)|(AudienceId, AudienceName, DateTime<Utc>)|(SubscriptionId, String)|(String, String))\\)" storage/src
+devtool run -- rg -F -e "query_as::<_, (Option<DateTime<Utc>>, DateTime<Utc>)" -e "query_as::<_, (UserId, Option<DateTime<Utc>>)" -e "query_as::<_, (TagId, Tag)" -e "query_as::<_, (PostId, TagId, Tag, TagLabel)" -e "query_as::<_, (AudienceId, AudienceName, DateTime<Utc>)" -e "query_as::<_, (SubscriptionId, String)" -e "query_as::<_, (String, String)" storage/src
 ```
 
 Expected: exit 1 with `stdout.lines = 0`. For this check, `ok:false` is the
@@ -453,7 +454,7 @@ needed to confirm it is empty. Remaining one-column tuples such as `(i64,)`,
 `(String,)`, `(UserId,)`, and typed SMTP value reads are expected and are out of
 scope.
 
-- [ ] **Step 4: Commit the local row aliases**
+- [x] **Step 4: Commit the local row aliases**
 
 Tick this task checkbox, then run:
 

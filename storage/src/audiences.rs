@@ -29,6 +29,8 @@ pub struct AudienceRecord {
     pub created_at: DateTime<Utc>,
 }
 
+type AudienceSummaryRow = (AudienceId, AudienceName, DateTime<Utc>);
+
 /// Failure modes for the mutating audience operations.
 #[derive(Debug)]
 pub enum AudienceError {
@@ -153,7 +155,7 @@ where
     // Restated from `Backend` (supertrait where-clauses don't propagate; ADR-0019).
     (AudienceId,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (SubscriptionId,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (AudienceId, AudienceName, DateTime<Utc>): for<'r> sqlx::FromRow<'r, DB::Row>,
+    AudienceSummaryRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `AudienceName` binds and decodes as itself via the ADR-0071 sqlx bridge
@@ -254,7 +256,7 @@ where
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn list_audiences(&self, author_user_id: UserId) -> sqlx::Result<Vec<AudienceRecord>> {
-        let rows = sqlx::query_as::<_, (AudienceId, AudienceName, DateTime<Utc>)>(
+        let rows = sqlx::query_as::<_, AudienceSummaryRow>(
             "SELECT audience_id, name, created_at FROM audiences \
              WHERE author_user_id = $1 ORDER BY audience_id",
         )
