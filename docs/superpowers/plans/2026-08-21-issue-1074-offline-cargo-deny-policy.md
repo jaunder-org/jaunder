@@ -67,10 +67,12 @@ clippy/wasm-clippy/tools-clippy migration; Cargo workspace membership changes.
 
 - `tools/devtool/src/check.rs`: add `cargo-deny` to `ALL`, model mode-specific
   Cargo arguments, and test host/sandbox command shape.
-- `flake.nix`: add `pkgs.cargo-deny` to the `static-checks` `nativeBuildInputs`.
-  Existing `static-checks` already exports `JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME`
-  and runs `devtool check --all --sandbox-cargo`; use the derivation as the
-  sandbox proof after the tool is on PATH.
+- `flake.nix`: preserve crane's generated vendored-source Cargo config in
+  `mkOfflineCargoHome`, and add `pkgs.cargo-deny` to the `static-checks`
+  `nativeBuildInputs`. Existing `static-checks` already exports
+  `JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME` and runs
+  `devtool check --all --sandbox-cargo`; use the derivation as the sandbox proof
+  after the tool is on PATH.
 - `xtask/src/steps/static_checks.rs`: no intended edit. Tests/assertions should
   continue proving the native `cargo-deny` StepSpec is unchanged.
 - `docs/superpowers/specs/2026-08-21-issue-1074-offline-cargo-deny-policy.md`:
@@ -263,7 +265,7 @@ git commit -m "feat(devtool): add offline cargo-deny check policy (#1074)"
 
 **Files:**
 
-- Modify: `flake.nix:1334-1342`
+- Modify: `flake.nix:306-319,1334-1342`
 - Test/proof: existing `checks.x86_64-linux.static-checks`
 
 **Interfaces:**
@@ -273,14 +275,29 @@ git commit -m "feat(devtool): add offline cargo-deny check policy (#1074)"
   - `JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}"`
   - `JAUNDER_DEVTOOL_TOOLS_CARGO_HOME = "${toolsOfflineCargoHome}"`
 - Produces:
+  - `mkOfflineCargoHome` copies crane's generated `vendorDir/config.toml` so git
+    patch source replacements remain available offline, then appends
+    `[net] offline = true`.
   - `pkgs.cargo-deny` is in the `static-checks` `nativeBuildInputs`.
   - A passing Nix `static-checks` derivation that now includes
     `cargo-deny bans licenses sources` through `devtool`.
 
-- [ ] **Step 1: Write the flake input change**
+- [x] **Step 1: Write the flake input change**
 
-In `flake.nix`, add `pkgs.cargo-deny` to the `static-checks` `nativeBuildInputs`
-list after `toolchain`:
+In `flake.nix`, preserve the generated vendor config in `mkOfflineCargoHome`:
+
+```nix
+cp ${vendorDir}/config.toml $out/config.toml
+chmod u+w $out/config.toml
+cat >> $out/config.toml <<EOF
+
+[net]
+offline = true
+EOF
+```
+
+Then add `pkgs.cargo-deny` to the `static-checks` `nativeBuildInputs` list after
+`toolchain`:
 
 ```nix
 nativeBuildInputs = [
@@ -297,7 +314,7 @@ nativeBuildInputs = [
 
 Do not edit the crane `deny` derivation.
 
-- [ ] **Step 2: Inspect the static-checks derivation**
+- [x] **Step 2: Inspect the static-checks derivation**
 
 Run:
 
@@ -309,7 +326,7 @@ Expected: The derivation includes `pkgs.cargo-deny`, exports both
 `JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME` and `JAUNDER_DEVTOOL_TOOLS_CARGO_HOME`, and
 runs `devtool check --all --sandbox-cargo`.
 
-- [ ] **Step 3: Build the sandbox proof**
+- [x] **Step 3: Build the sandbox proof**
 
 Run:
 
@@ -320,7 +337,7 @@ devtool run -- nix build .#checks.x86_64-linux.static-checks -L
 Expected: PASS. The derivation must finish without network access and without
 running `advisories`.
 
-- [ ] **Step 4: If the proof fails, inspect the parked log**
+- [x] **Step 4: If the proof fails, inspect the parked log**
 
 Read the `.xtask/run/<id>.err` and `.xtask/run/<id>.out` paths from Step 2's
 JSON result. Search the parked log for these strings in separate commands:
@@ -333,7 +350,7 @@ rg "cargo-deny|advisories|bans|licenses|sources|JAUNDER_DEVTOOL_PRODUCT_CARGO_HO
 Expected on failure: enough detail to fix command shape or missing sandbox env.
 Do not pipe the `nix build` command through a filter.
 
-- [ ] **Step 5: Commit Task 2**
+- [x] **Step 5: Commit Task 2**
 
 Tick completed checkboxes for Task 2, then run:
 
