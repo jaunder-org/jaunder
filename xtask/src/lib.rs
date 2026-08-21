@@ -108,14 +108,15 @@ impl E2eBrowser {
 #[derive(Subcommand)]
 pub enum Command {
     /// Inner loop (auto-fixes formatting): host static checks + clippy + the host
-    /// xtask unit suite, then the Nix coverage check (instrumented test suite +
-    /// coverage) and the Nix doctest check. `--no-test` skips only those two Nix
-    /// checks; static, clippy, and the xtask unit tests still run — as does the
-    /// host-side `doctest-fences` step, which gates the `xtask`/`tools` fence
-    /// population that no Nix check can see (#763).
+    /// xtask/tools unit suites, then the host-native root-workspace nextest suite
+    /// under an ephemeral PostgreSQL and the Nix-only wasm/doctest checks. `--no-test`
+    /// skips the root-workspace and Nix-only test checks; static, clippy, and the
+    /// xtask/tools unit tests still run — as does the host-side `doctest-fences`
+    /// step, which gates the `xtask`/`tools` fence population that no Nix check can
+    /// see (#763).
     Check {
-        /// Skip the Nix coverage and doctest checks — static + clippy + host xtask
-        /// unit tests only.
+        /// Skip the root-workspace and Nix-only test checks — static + clippy +
+        /// host xtask/tools unit tests only.
         #[arg(long)]
         no_test: bool,
     },
@@ -686,7 +687,10 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("check");
             run_host_gate(&sh, Mode::Fix, &mut result);
-            steps::nix::test_checks(&mut result, no_test);
+            if !no_test {
+                steps::test_local::run(&sh, &mut result, &[]);
+            }
+            steps::nix::check_supporting_test_checks(&mut result, no_test);
             finalize(&mut result, start);
             Ok(result)
         }
@@ -1104,6 +1108,26 @@ mod cli_tests {
             .position(|name| *name == "host-tests")
             .expect("validate includes host-tests");
         assert!(wasm_budget < host_tests);
+    }
+
+    #[test]
+    fn check_uses_local_product_tests_before_nix_only_test_checks() {
+        let mut names = host_gate_step_names_for_test(Mode::Fix);
+        names.push("test-local");
+        names.extend(steps::nix::check_supporting_test_check_names());
+
+        let test_local = names
+            .iter()
+            .position(|name| *name == "test-local")
+            .expect("check includes the host-native product test lane");
+        let wasm_tests = names
+            .iter()
+            .position(|name| *name == "wasm-tests")
+            .expect("check keeps the Nix-only wasm browser tests");
+
+        assert!(test_local < wasm_tests);
+        assert!(!names.contains(&"coverage"));
+        assert!(names.contains(&"doctests"));
     }
 
     #[test]

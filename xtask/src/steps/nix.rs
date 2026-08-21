@@ -20,6 +20,7 @@ enum TestCheck {
 }
 
 const TEST_CHECKS: [TestCheck; 3] = [TestCheck::Wasm, TestCheck::Coverage, TestCheck::Doctests];
+const CHECK_SUPPORTING_TEST_CHECKS: [TestCheck; 2] = [TestCheck::Wasm, TestCheck::Doctests];
 
 impl TestCheck {
     const fn name(self) -> &'static str {
@@ -54,9 +55,28 @@ fn test_check_names(no_test: bool) -> impl ExactSizeIterator<Item = &'static str
         .map(TestCheck::name)
 }
 
+#[cfg(test)]
+pub(crate) fn check_supporting_test_check_names() -> impl ExactSizeIterator<Item = &'static str> {
+    CHECK_SUPPORTING_TEST_CHECKS
+        .iter()
+        .copied()
+        .map(TestCheck::name)
+}
+
 /// Run the Nix-backed test checks unless `--no-test` disables the group.
 pub fn test_checks(result: &mut CommandResult, no_test: bool) {
     for check in selected_test_checks(no_test) {
+        check.run(result);
+    }
+}
+
+/// Run the Nix-backed test checks that still have no host-native replacement for
+/// the day-to-day `check` command.
+pub fn check_supporting_test_checks(result: &mut CommandResult, no_test: bool) {
+    if no_test {
+        return;
+    }
+    for check in CHECK_SUPPORTING_TEST_CHECKS {
         check.run(result);
     }
 }
@@ -787,10 +807,10 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     use super::{
-        CommandResult, FailedBuildDiagnostics, StepResult, doctest_sentinel_detail,
-        drain_build_stderr, failed_build_after_diagnostics_with, failed_status_step,
-        prepare_build_dirs_with, report_build_diagnostic_failure, sentinel_detail,
-        test_check_names,
+        CommandResult, FailedBuildDiagnostics, StepResult, check_supporting_test_check_names,
+        doctest_sentinel_detail, drain_build_stderr, failed_build_after_diagnostics_with,
+        failed_status_step, prepare_build_dirs_with, report_build_diagnostic_failure,
+        sentinel_detail, test_check_names,
     };
     use coverage::status::{CoverageStatus, StatusCategory};
     use doctests::check::{Kind, Violation};
@@ -799,6 +819,11 @@ mod tests {
     #[test]
     fn nix_test_check_names_include_wasm_tests() {
         assert!(test_check_names(false).eq(["wasm-tests", "coverage", "doctests"]));
+    }
+
+    #[test]
+    fn check_supporting_test_check_names_exclude_coverage() {
+        assert!(check_supporting_test_check_names().eq(["wasm-tests", "doctests"]));
     }
 
     #[test]
