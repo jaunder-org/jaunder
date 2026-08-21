@@ -88,6 +88,31 @@ test("an app password can be minted from the sessions page", async ({
   await expect(page.locator("li", { hasText: "MarsEdit e2e" })).toBeVisible();
 });
 
+test("an app password can be revoked from the sessions page", async ({
+  page,
+  request,
+}) => {
+  const username = await signInAsNewUser(page);
+  const label = "Revoked App Password e2e";
+
+  const token = await mintAppPassword(page, label);
+  const appPasswordRow = page.locator("li", { hasText: label });
+  await expect(appPasswordRow).toBeVisible();
+
+  await click(page, `li:has-text("${label}") button:has-text("Revoke")`);
+
+  await expect(appPasswordRow).toHaveCount(0);
+  await expect(page.locator("li", { hasText: "(current)" })).toBeVisible();
+
+  const auth =
+    "Basic " + Buffer.from(`${username}:${token}`).toString("base64");
+  const response = await request.get(`${BASE_URL}/atompub/service`, {
+    headers: { authorization: auth },
+  });
+  expect(response.ok()).toBeFalsy();
+  expect(response.status()).toBe(401);
+});
+
 test("full AtomPub publishing flow over HTTP with an app password", async ({
   page,
   request,

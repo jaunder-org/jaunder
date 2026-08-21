@@ -117,16 +117,10 @@ status and change behavior plus invalid verification-token error handling.
 revoke controls.
 
 **Covered evidence:**
-[`end2end/tests/atompub.spec.ts`](../../end2end/tests/atompub.spec.ts) creates
-and displays app passwords through `/sessions`. The external Protocol Client's
-AtomPub requests are protocol-only evidence and remain outside this CSR flow.
-
-**Uncovered revoke behavior:** duplicate search
-`is:open sessions app password revoke e2e` returned no candidates. Created
-[#1060](https://github.com/jaunder-org/jaunder/issues/1060),
-`test(e2e): cover app-password revocation`; its verified `Task` type, milestone
-6, `test-infra` label, Jaunder Backlog Project #1 P3 priority, and empty
-`blocked_by` list record its sole ownership of the gap.
+[`end2end/tests/atompub.spec.ts`](../../end2end/tests/atompub.spec.ts) creates,
+displays, and revokes App Passwords through `/sessions`. The external Protocol
+Client's AtomPub requests are protocol-only evidence and remain outside this CSR
+flow.
 
 ### Audiences, subscriptions, and visibility
 
