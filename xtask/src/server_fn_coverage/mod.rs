@@ -4,14 +4,11 @@
 //!
 //! Proves, from evidence rather than assertion, which server entry points a real
 //! browser session drives. [`extract`] is the pure seam — spans + inventory →
-//! [`Coverage`]; everything else (the committed snapshot, the allowlist, the
-//! two-lane gate) is built on top of it.
+//! [`Coverage`]; the committed snapshot and two-lane gate are built on top of it.
 
 pub mod extract;
 pub mod io;
 pub mod snapshot;
 
 pub use extract::{Coverage, extract};
-pub use snapshot::{
-    AllowlistEntry, Evidence, REGENERATE_CMD, Snapshot, evidence_verdict, render, verdict,
-};
+pub use snapshot::{Evidence, REGENERATE_CMD, Snapshot, evidence_verdict, render, verdict};

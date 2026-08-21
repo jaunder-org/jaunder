@@ -732,16 +732,15 @@ per-commit knob.
 **`#[server]` flow coverage is a separate gate** (#681, ADR — _empirical
 server-fn flow coverage_). Line coverage says a fn's body ran under _some_ test;
 this says a real browser session actually drove the endpoint. It is derived from
-the `sqlite × chromium` e2e run's OTLP traces, and committed as three files:
+the `sqlite × chromium` e2e run's OTLP traces, and committed as two files:
 
-| file                                      | what it holds                                          | compared?              |
-| ----------------------------------------- | ------------------------------------------------------ | ---------------------- |
-| `docs/coverage/server-fns.json`           | the covered `<vertical>::<ident>` set + orphan reasons | **yes**, byte-for-byte |
-| `docs/coverage/server-fns-evidence.json`  | which tests drove each fn                              | no                     |
-| `docs/coverage/server-fns-allowlist.json` | knowingly-uncovered fns                                | n/a (hand-maintained)  |
+| file                                     | what it holds                                          | compared?              |
+| ---------------------------------------- | ------------------------------------------------------ | ---------------------- |
+| `docs/coverage/server-fns.json`          | the covered `<vertical>::<ident>` set + orphan reasons | **yes**, byte-for-byte |
+| `docs/coverage/server-fns-evidence.json` | which tests drove each fn                              | no                     |
 
-The first two are generated — do not hand-edit; `regenerate` writes both, and
-the static lane fails if their key sets disagree.
+Both files are generated — do not hand-edit; `regenerate` writes both, and the
+static lane fails if their key sets disagree.
 
 **Only the fn set is compared, and that is deliberate (#745).** The verdict has
 never read a test title, and the titles are not reproducible: two runs of the
@@ -751,28 +750,18 @@ different point each run. Byte-comparing them made the gate go red on PRs that
 changed nothing. Nothing is misattributed — see ADR-0081 before concluding there
 is a trace-propagation bug.
 
-**Adding a `#[server]` fn therefore requires one of two things**, or the fast
-lane reddens immediately — `server-fn-coverage` runs in `cargo xtask check` and
-`cargo xtask validate --no-e2e`, so you do not wait for the e2e matrix to find
-out:
+**Adding a `#[server]` fn therefore requires an e2e flow that drives it**, or
+the fast lane reddens immediately — `server-fn-coverage` runs in
+`cargo xtask check` and `cargo xtask validate --no-e2e`, so you do not wait for
+the e2e matrix to find out:
 
-1. **An e2e flow that drives it**, then regenerate and commit the snapshot:
+```bash
+cargo xtask e2e sqlite chromium          # produces the capture
+cargo xtask server-fn-coverage regenerate
+```
 
-   ```bash
-   cargo xtask e2e sqlite chromium          # produces the capture
-   cargo xtask server-fn-coverage regenerate
-   ```
+One further property is worth knowing before you fight the gate:
 
-2. **An allowlist entry** in `docs/coverage/server-fns-allowlist.json` with a
-   **non-empty `reason` and `issue`** — both are enforced, so an entry cannot be
-   a silent bypass. "Covered by server-side integration tests but no browser
-   flow yet" is a sanctioned reason; file the issue for the missing flow.
-
-Two further properties are worth knowing before you fight the gate:
-
-- **The ratchet cannot loosen.** An allowlist entry for a fn the snapshot shows
-  as **covered** is itself a failure, so entries must be deleted once a flow
-  covers the fn rather than accumulating.
 - **Endpoint drift is no longer writable.** `#[macros::server]` derives the
   endpoint from the fn's file path and identifier (#714, ADR-0082), so there is
   no bare `#[server]` to reject and no hand-written literal that can disagree

@@ -82,9 +82,12 @@ export async function seedUserViaTool(
  *  so the marker matches what a real login would write. */
 export async function createSessionViaTool(
   username: string,
+  label?: string,
 ): Promise<SeedRecord> {
+  const args = ["create-session", "--username", username];
+  if (label !== undefined) args.push("--label", label);
   return withTimedAction(null, "tool.sessions.create", async () =>
-    runSeedTool(["create-session", "--username", username]),
+    runSeedTool(args),
   );
 }
 

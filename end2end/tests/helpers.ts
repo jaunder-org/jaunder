@@ -267,8 +267,12 @@ export async function signInAsNewUserKnown(
  * `testoperator` / `testlogin`) and inject it into `page`'s context. No UI
  * flow and NO navigation (spec D5).
  */
-export async function signInAs(page: Page, username: string): Promise<void> {
-  const record = await createSessionViaTool(username);
+export async function signInAs(
+  page: Page,
+  username: string,
+  label?: string,
+): Promise<void> {
+  const record = await createSessionViaTool(username, label);
   await applySeededSession(page.context(), record);
 }
 

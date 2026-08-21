@@ -42,6 +42,7 @@
     "registration::register",
     "sessions::create_app_password",
     "sessions::list",
+    "sessions::revoke",
     "site::get_identity",
     "site::is_base_url_warning_visible",
     "site::update_identity",

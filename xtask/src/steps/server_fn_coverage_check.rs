@@ -23,8 +23,8 @@ use anyhow::Result;
 
 use crate::result::{CommandResult, StepResult};
 use crate::server_fn_coverage::io::{
-    ALLOWLIST_PATH, CAPTURE_PATH, EVIDENCE_PATH, SNAPSHOT_PATH, WEB_SRC, coverage_from_capture,
-    inventory, read_allowlist, read_artifact, write_artifact,
+    CAPTURE_PATH, EVIDENCE_PATH, SNAPSHOT_PATH, WEB_SRC, coverage_from_capture, inventory,
+    read_artifact, write_artifact,
 };
 use crate::server_fn_coverage::{
     Evidence, REGENERATE_CMD, Snapshot, evidence_verdict, render, verdict,
@@ -49,24 +49,16 @@ const AUTHORITATIVE: (&str, &str) = ("sqlite", "chromium");
 /// **failure**, never a pass: the failure mode this gate guards against and the
 /// failure mode of its own plumbing would otherwise look identical.
 /// The two generated artifacts are adjacent in this signature and in
-/// [`regenerate_or_verify`]'s, so the pair reads the same way in both. They are
-/// all `&Path`, so a transposition is a silent swap rather than a type error —
-/// keeping one order is what makes it noticeable.
-fn check(
-    web_src: &Path,
-    snapshot_path: &Path,
-    evidence_path: &Path,
-    allowlist_path: &Path,
-) -> StepResult {
-    let (inventory, snapshot, allowlist, evidence) = match (
+/// [`regenerate_or_verify`]'s, so the pair reads the same way in both.
+fn check(web_src: &Path, snapshot_path: &Path, evidence_path: &Path) -> StepResult {
+    let (inventory, snapshot, evidence) = match (
         inventory(web_src),
         read_artifact::<Snapshot>(snapshot_path),
-        read_allowlist(allowlist_path),
         read_artifact::<Evidence>(evidence_path),
     ) {
-        (Ok(i), Ok(s), Ok(a), Ok(e)) => (i, s, a, e),
-        (i, s, a, e) => {
-            let detail = [i.err(), s.err(), a.err(), e.err()]
+        (Ok(i), Ok(s), Ok(e)) => (i, s, e),
+        (i, s, e) => {
+            let detail = [i.err(), s.err(), e.err()]
                 .into_iter()
                 .flatten()
                 .map(|e| format!("{e:#}"))
@@ -78,14 +70,13 @@ fn check(
 
     // Both rules in one step, so a failing run reports every reason at once
     // rather than making an author fix them one gate run at a time.
-    let mut violations = verdict(&inventory, &snapshot, &allowlist);
+    let mut violations = verdict(&inventory, &snapshot);
     violations.extend(evidence_verdict(&snapshot, &evidence));
     if violations.is_empty() {
         return StepResult::ok(STATIC_STEP).detail(format!(
-            "{} server fn(s) accounted for ({} covered, {} allowlisted)",
+            "{} server fn(s) accounted for ({} covered)",
             inventory.len(),
-            snapshot.covered.len(),
-            allowlist.len()
+            snapshot.covered.len()
         ));
     }
     StepResult::fail(STATIC_STEP).detail(violations.join("\n"))
@@ -98,7 +89,6 @@ pub fn run(result: &mut CommandResult) {
         Path::new(WEB_SRC),
         Path::new(SNAPSHOT_PATH),
         Path::new(EVIDENCE_PATH),
-        Path::new(ALLOWLIST_PATH),
     ));
 }
 
@@ -255,12 +245,7 @@ mod tests {
         write_json(&snap, r#"{"covered":["posts::create_post"],"orphans":{}}"#);
         let ev = evidence_for(tmp.path(), &["posts::create_post"]);
 
-        let step = check(
-            tmp.path(),
-            &snap,
-            &ev,
-            &tmp.path().join("absent-allowlist.json"),
-        );
+        let step = check(tmp.path(), &snap, &ev);
         assert!(step.ok, "{:?}", step.detail);
         assert!(step.detail.unwrap_or_default().contains("1 server fn"));
     }
@@ -275,32 +260,10 @@ mod tests {
         write_json(&snap, r#"{"covered":["posts::create_post"],"orphans":{}}"#);
         let ev = evidence_for(tmp.path(), &["posts::create_post"]);
 
-        let step = check(
-            tmp.path(),
-            &snap,
-            &ev,
-            &tmp.path().join("absent-allowlist.json"),
-        );
+        let step = check(tmp.path(), &snap, &ev);
         assert!(!step.ok);
         let detail = step.detail.unwrap_or_default();
         assert!(detail.contains("brand_new_uncovered_fn"), "{detail}");
-    }
-
-    #[test]
-    fn static_lane_accepts_a_substantive_allowlist_entry() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        web_src_with(tmp.path(), &["no_flow_yet"]);
-        let snap = tmp.path().join("snap.json");
-        write_json(&snap, r#"{"covered":[],"orphans":{}}"#);
-        let ev = evidence_for(tmp.path(), &[]);
-        let allow = tmp.path().join("allow.json");
-        write_json(
-            &allow,
-            r##"[{"server_fn":"posts::no_flow_yet","reason":"no UI surface yet","issue":"#700"}]"##,
-        );
-
-        let step = check(tmp.path(), &snap, &ev, &allow);
-        assert!(step.ok, "{:?}", step.detail);
     }
 
     #[test]
@@ -311,12 +274,7 @@ mod tests {
         write_json(&snap, r#"{"covered":["posts::create_post"],"orphans":{}}"#);
         let ev = evidence_for(tmp.path(), &[]);
 
-        let step = check(
-            tmp.path(),
-            &snap,
-            &ev,
-            &tmp.path().join("absent-allowlist.json"),
-        );
+        let step = check(tmp.path(), &snap, &ev);
         assert!(!step.ok);
         let detail = step.detail.unwrap_or_default();
         assert!(detail.contains("posts::create_post"), "{detail}");
@@ -333,12 +291,7 @@ mod tests {
         write_json(&snap, r#"{"covered":["posts::create_post"],"orphans":{}}"#);
         let ev = evidence_for(tmp.path(), &["posts::create_post", "posts::ghost"]);
 
-        let step = check(
-            tmp.path(),
-            &snap,
-            &ev,
-            &tmp.path().join("absent-allowlist.json"),
-        );
+        let step = check(tmp.path(), &snap, &ev);
         assert!(!step.ok);
         let detail = step.detail.unwrap_or_default();
         assert!(detail.contains("posts::ghost"), "{detail}");
@@ -360,12 +313,7 @@ mod tests {
         let snap = tmp.path().join("snap.json");
         write_json(&snap, r#"{"covered":["posts::create_post"],"orphans":{}}"#);
 
-        let step = check(
-            tmp.path(),
-            &snap,
-            &tmp.path().join("absent-evidence.json"),
-            &tmp.path().join("absent-allowlist.json"),
-        );
+        let step = check(tmp.path(), &snap, &tmp.path().join("absent-evidence.json"));
         assert!(!step.ok);
         let detail = step.detail.unwrap_or_default();
         assert!(
@@ -381,12 +329,7 @@ mod tests {
         web_src_with(tmp.path(), &["create_post"]);
         let ev = evidence_for(tmp.path(), &["posts::create_post"]);
 
-        let step = check(
-            tmp.path(),
-            &tmp.path().join("absent-snapshot.json"),
-            &ev,
-            &tmp.path().join("absent-allowlist.json"),
-        );
+        let step = check(tmp.path(), &tmp.path().join("absent-snapshot.json"), &ev);
         assert!(!step.ok);
         let detail = step.detail.unwrap_or_default();
         assert!(
@@ -403,12 +346,7 @@ mod tests {
         write_json(&snap, "{not json");
         let ev = evidence_for(tmp.path(), &["posts::create_post"]);
 
-        let step = check(
-            tmp.path(),
-            &snap,
-            &ev,
-            &tmp.path().join("absent-allowlist.json"),
-        );
+        let step = check(tmp.path(), &snap, &ev);
         assert!(!step.ok);
     }
 
@@ -549,24 +487,6 @@ mod tests {
     fn seed_coverage() -> crate::server_fn_coverage::Coverage {
         let inv = inventory(&repo_root().join(WEB_SRC)).expect("inventory enumerates");
         crate::server_fn_coverage::extract(&seed_spans(), &inv)
-    }
-
-    #[test]
-    fn every_allowlist_entry_is_absent_from_the_seed_captures_hit_set() {
-        // AC11. Without this, an evidence-seeded allowlist and a guessed one are
-        // byte-identical and nothing in the repo can tell them apart.
-        let coverage = seed_coverage();
-        let allowlist =
-            read_allowlist(&repo_root().join(ALLOWLIST_PATH)).expect("allowlist parses");
-        assert!(!allowlist.is_empty(), "the assertion is vacuous when empty");
-        for entry in allowlist {
-            assert!(
-                !coverage.covered.contains_key(&entry.server_fn),
-                "{} is allowlisted but the seed capture shows it covered — the allowlist was \
-                 not derived from evidence",
-                entry.server_fn
-            );
-        }
     }
 
     #[test]
