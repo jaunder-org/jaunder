@@ -71,6 +71,21 @@ pub enum CloseablePool {
     Postgres(PgPool),
 }
 
+/// Runs a block once for whichever concrete pool variant a [`CloseablePool`]
+/// holds.
+///
+/// This keeps both-backend tests from copy-pasting identical raw SQL bodies just
+/// to give `sqlx` a concrete `SqlitePool` or `PgPool` at the call site.
+#[macro_export]
+macro_rules! with_closeable_pool {
+    ($pool:expr, $backend_pool:ident, $body:block) => {
+        match $pool {
+            $crate::test_support::CloseablePool::Sqlite($backend_pool) => $body,
+            $crate::test_support::CloseablePool::Postgres($backend_pool) => $body,
+        }
+    };
+}
+
 impl CloseablePool {
     /// Closes the pool. Afterwards the next query through any storage handle
     /// backed by it returns `sqlx::Error::PoolClosed`, which the storage layer
@@ -78,10 +93,7 @@ impl CloseablePool {
     /// storage-error-propagation fault. `sqlx::Pool::close` is generic over the
     /// backend, so the behavior is identical on `SQLite` and Postgres.
     pub async fn close(&self) {
-        match self {
-            CloseablePool::Sqlite(pool) => pool.close().await,
-            CloseablePool::Postgres(pool) => pool.close().await,
-        }
+        crate::with_closeable_pool!(self, pool, { pool.close().await });
     }
 
     /// Runs a raw statement against whichever backend this env uses — the seed
@@ -92,14 +104,9 @@ impl CloseablePool {
     ///
     /// Returns the `sqlx::Error` if the statement fails to execute.
     pub async fn execute(&self, sql: &str) -> Result<(), sqlx::Error> {
-        match self {
-            CloseablePool::Sqlite(pool) => {
-                sqlx::query(sql).execute(pool).await?;
-            }
-            CloseablePool::Postgres(pool) => {
-                sqlx::query(sql).execute(pool).await?;
-            }
-        }
+        crate::with_closeable_pool!(self, pool, {
+            sqlx::query(sql).execute(pool).await?;
+        });
         Ok(())
     }
 
@@ -111,10 +118,9 @@ impl CloseablePool {
     ///
     /// Returns the `sqlx::Error` if the query fails.
     pub async fn scalar_i64(&self, sql: &str) -> Result<i64, sqlx::Error> {
-        match self {
-            CloseablePool::Sqlite(pool) => sqlx::query_scalar(sql).fetch_one(pool).await,
-            CloseablePool::Postgres(pool) => sqlx::query_scalar(sql).fetch_one(pool).await,
-        }
+        crate::with_closeable_pool!(self, pool, {
+            sqlx::query_scalar(sql).fetch_one(pool).await
+        })
     }
 
     /// Fetches every row of a three-`TEXT`-column query — the multi-row sibling of
@@ -128,10 +134,7 @@ impl CloseablePool {
         &self,
         sql: &str,
     ) -> Result<Vec<(String, String, String)>, sqlx::Error> {
-        match self {
-            CloseablePool::Sqlite(pool) => sqlx::query_as(sql).fetch_all(pool).await,
-            CloseablePool::Postgres(pool) => sqlx::query_as(sql).fetch_all(pool).await,
-        }
+        crate::with_closeable_pool!(self, pool, { sqlx::query_as(sql).fetch_all(pool).await })
     }
 
     /// Takes the same write lock `set_post_tags` takes and holds it until the

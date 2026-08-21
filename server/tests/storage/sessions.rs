@@ -1,8 +1,10 @@
+use chrono::{DateTime, Duration, Utc};
 use common::test_support::{parse_raw_token, parse_session_label};
+use common::token::TokenHash;
 use rstest::*;
 use rstest_reuse::*;
 use storage::SessionAuthError;
-use storage::test_support::{Backend, SeedUser, backends, seed_users};
+use storage::test_support::{Backend, CloseablePool, SeedUser, TestEnv, backends, seed_users};
 
 use crate::helpers::create_session_for;
 #[apply(backends)]
@@ -28,17 +30,62 @@ async fn create_session_then_authenticate_returns_correct_record(#[case] backend
 
 #[apply(backends)]
 #[tokio::test]
-async fn authenticate_updates_last_used_at(#[case] backend: Backend) {
+async fn authenticate_returns_session_record_for_valid_token(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
 
     let user_id = SeedUser::new().seed(state).await.user_id;
 
     let raw_token = create_session_for(state, user_id).await.token;
-    let first = state.sessions.authenticate(&raw_token).await.unwrap();
-    let second = state.sessions.authenticate(&raw_token).await.unwrap();
+    let record = state.sessions.authenticate(&raw_token).await.unwrap();
 
-    assert!(second.last_used_at >= first.last_used_at);
+    assert_eq!(record.user_id, user_id);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn fresh_authenticate_returns_the_persisted_last_used_at(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
+    let user_id = SeedUser::new().seed(&state).await.user_id;
+    let raw_token = state
+        .sessions
+        .create_session(user_id, &parse_session_label("test session"))
+        .await
+        .unwrap();
+
+    let token_hash = host::token::hash(&raw_token).unwrap();
+    let first_record = state.sessions.authenticate(&raw_token).await.unwrap();
+    let stored = first_record.last_used_at;
+
+    let record = state.sessions.authenticate(&raw_token).await.unwrap();
+    let persisted_after_auth = load_last_used_at(base.pool(), &token_hash).await;
+
+    assert_eq!(record.last_used_at, stored);
+    assert_eq!(persisted_after_auth, stored);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn stale_authenticate_refreshes_the_persisted_last_used_at(#[case] backend: Backend) {
+    let TestEnv { state, base } = backend.setup().await;
+    let user_id = SeedUser::new().seed(&state).await.user_id;
+    let raw_token = state
+        .sessions
+        .create_session(user_id, &parse_session_label("test session"))
+        .await
+        .unwrap();
+
+    let token_hash = host::token::hash(&raw_token).unwrap();
+    let stale = Utc::now() - Duration::seconds(120);
+    set_last_used_at(base.pool(), &token_hash, stale).await;
+
+    let record = state.sessions.authenticate(&raw_token).await.unwrap();
+    let persisted_after_auth = load_last_used_at(base.pool(), &token_hash).await;
+    let freshness_cutoff_after_auth = Utc::now() - Duration::seconds(60);
+
+    assert!(record.last_used_at > stale);
+    assert_eq!(record.last_used_at, persisted_after_auth);
+    assert!(persisted_after_auth >= freshness_cutoff_after_auth);
 }
 
 #[apply(backends)]
@@ -155,4 +202,29 @@ async fn session_list_operations(#[case] backend: Backend) {
         .await
         .expect("authenticate failed");
     assert_eq!(record.user_id, user);
+}
+
+async fn set_last_used_at(
+    pool: &CloseablePool,
+    token_hash: &TokenHash,
+    last_used_at: DateTime<Utc>,
+) {
+    storage::with_closeable_pool!(pool, pool, {
+        sqlx::query("UPDATE sessions SET last_used_at = $1 WHERE token_hash = $2")
+            .bind(last_used_at)
+            .bind(token_hash)
+            .execute(pool)
+            .await
+            .unwrap();
+    });
+}
+
+async fn load_last_used_at(pool: &CloseablePool, token_hash: &TokenHash) -> DateTime<Utc> {
+    storage::with_closeable_pool!(pool, pool, {
+        sqlx::query_scalar("SELECT last_used_at FROM sessions WHERE token_hash = $1")
+            .bind(token_hash)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    })
 }

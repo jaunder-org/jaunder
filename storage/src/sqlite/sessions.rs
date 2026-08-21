@@ -15,16 +15,8 @@ impl SessionDialect for Sqlite {
         pool: &Pool<Sqlite>,
         token_hash: &TokenHash,
         now: chrono::DateTime<chrono::Utc>,
+        stale_before: chrono::DateTime<chrono::Utc>,
     ) -> sqlx::Result<Option<SessionRow>> {
-        // Two statements in one tx: SQLite's RETURNING with a correlated
-        // subquery causes SQLITE_BUSY under concurrency, so update then select.
-        let mut tx = pool.begin().await?;
-        sqlx::query("UPDATE sessions SET last_used_at = $1 WHERE token_hash = $2")
-            .bind(now)
-            .bind(token_hash)
-            .execute(&mut *tx)
-            .await?;
-
         let row = sqlx::query_as::<_, SessionRow>(
             "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at
              FROM sessions s
@@ -32,10 +24,37 @@ impl SessionDialect for Sqlite {
              WHERE s.token_hash = $1",
         )
         .bind(token_hash)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(pool)
         .await?;
 
-        tx.commit().await?;
-        Ok(row)
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        let (_, _, _, _, _, last_used_at) = &row;
+        if *last_used_at >= stale_before {
+            return Ok(Some(row));
+        }
+
+        sqlx::query(
+            "UPDATE sessions
+             SET last_used_at = $1
+             WHERE token_hash = $2 AND last_used_at < $3",
+        )
+        .bind(now)
+        .bind(token_hash)
+        .bind(stale_before)
+        .execute(pool)
+        .await?;
+
+        sqlx::query_as::<_, SessionRow>(
+            "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at
+             FROM sessions s
+             JOIN users u ON u.user_id = s.user_id
+             WHERE s.token_hash = $1",
+        )
+        .bind(token_hash)
+        .fetch_optional(pool)
+        .await
     }
 }

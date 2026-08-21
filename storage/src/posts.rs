@@ -4280,24 +4280,14 @@ mod tests {
         // is not a valid slug character), binding it as a raw `&str` so the bad
         // value actually lands in the column — the typed bind could not produce it.
         let sql = "UPDATE posts SET slug = $1 WHERE post_id = $2";
-        match env.base.pool() {
-            CloseablePool::Sqlite(pool) => {
-                sqlx::query(sql)
-                    .bind("not a slug")
-                    .bind(post_id)
-                    .execute(pool)
-                    .await
-                    .unwrap();
-            }
-            CloseablePool::Postgres(pool) => {
-                sqlx::query(sql)
-                    .bind("not a slug")
-                    .bind(post_id)
-                    .execute(pool)
-                    .await
-                    .unwrap();
-            }
-        }
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query(sql)
+                .bind("not a slug")
+                .bind(post_id)
+                .execute(pool)
+                .await
+                .unwrap();
+        });
 
         // The read decodes the `slug` column into `Slug` via the sqlx bridge, which
         // validates through `FromStr`; the malformed value surfaces as a
@@ -4355,24 +4345,14 @@ mod tests {
         // produce it), then assert the read fails at column-decode — the bridge's
         // `Decode` error arm (`parse()` → `InvalidPostFormat`).
         let sql = "UPDATE posts SET format = $1 WHERE post_id = $2";
-        match env.base.pool() {
-            CloseablePool::Sqlite(pool) => {
-                sqlx::query(sql)
-                    .bind("bogus")
-                    .bind(post_id)
-                    .execute(pool)
-                    .await
-                    .unwrap();
-            }
-            CloseablePool::Postgres(pool) => {
-                sqlx::query(sql)
-                    .bind("bogus")
-                    .bind(post_id)
-                    .execute(pool)
-                    .await
-                    .unwrap();
-            }
-        }
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query(sql)
+                .bind("bogus")
+                .bind(post_id)
+                .execute(pool)
+                .await
+                .unwrap();
+        });
         let err = posts
             .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
             .await

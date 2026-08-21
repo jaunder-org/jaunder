@@ -508,7 +508,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{Backend, CloseablePool, SeedUser, backends};
+    use crate::test_support::{Backend, SeedUser, backends};
     use common::test_support::{
         parse_bio, parse_display_name, parse_email, parse_password, parse_username,
     };
@@ -593,24 +593,14 @@ mod tests {
         // `&str` so the bad value actually lands in the column — the typed bind
         // could not produce it.
         let sql = "UPDATE users SET username = $1 WHERE user_id = $2";
-        match env.base.pool() {
-            CloseablePool::Sqlite(pool) => {
-                sqlx::query(sql)
-                    .bind("bad name")
-                    .bind(user_id)
-                    .execute(pool)
-                    .await
-                    .unwrap();
-            }
-            CloseablePool::Postgres(pool) => {
-                sqlx::query(sql)
-                    .bind("bad name")
-                    .bind(user_id)
-                    .execute(pool)
-                    .await
-                    .unwrap();
-            }
-        }
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query(sql)
+                .bind("bad name")
+                .bind(user_id)
+                .execute(pool)
+                .await
+                .unwrap();
+        });
 
         // The read decodes the `username` column into `Username` via the sqlx
         // bridge, which validates through `FromStr`; the malformed value surfaces
@@ -851,18 +841,11 @@ mod tests {
         )
         .unwrap_err();
 
-        let result = match env.base.pool() {
-            CloseablePool::Sqlite(pool) => {
-                UserStore::new(pool.clone())
-                    .authenticate_with(&username, &password, crate::helpers::forced_verify_failure)
-                    .await
-            }
-            CloseablePool::Postgres(pool) => {
-                UserStore::new(pool.clone())
-                    .authenticate_with(&username, &password, crate::helpers::forced_verify_failure)
-                    .await
-            }
-        };
+        let result = crate::with_closeable_pool!(env.base.pool(), pool, {
+            UserStore::new(pool.clone())
+                .authenticate_with(&username, &password, crate::helpers::forced_verify_failure)
+                .await
+        });
 
         let error = result.unwrap_err();
         let UserAuthError::Internal(source) = &error else {
@@ -895,26 +878,11 @@ mod tests {
         let username = parse_username("absent");
         let password = parse_password("password123");
         let operation = async {
-            match env.base.pool() {
-                CloseablePool::Sqlite(pool) => {
-                    UserStore::new(pool.clone())
-                        .authenticate_with(
-                            &username,
-                            &password,
-                            crate::helpers::forced_verify_failure,
-                        )
-                        .await
-                }
-                CloseablePool::Postgres(pool) => {
-                    UserStore::new(pool.clone())
-                        .authenticate_with(
-                            &username,
-                            &password,
-                            crate::helpers::forced_verify_failure,
-                        )
-                        .await
-                }
-            }
+            crate::with_closeable_pool!(env.base.pool(), pool, {
+                UserStore::new(pool.clone())
+                    .authenticate_with(&username, &password, crate::helpers::forced_verify_failure)
+                    .await
+            })
         };
         let (result, trace) = crate::helpers::swallowed_test::capture_async(operation).await;
         assert!(matches!(result, Err(UserAuthError::InvalidCredentials)));

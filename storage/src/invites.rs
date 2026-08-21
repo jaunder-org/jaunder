@@ -103,7 +103,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{Backend, CloseablePool, TestEnv, backends};
+    use crate::test_support::{Backend, TestEnv, backends};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -136,26 +136,15 @@ mod tests {
         // rejects (a space is not a base64url character), binding it as a raw `&str`
         // so the bad value actually lands in the column (the typed bind could not).
         let sql = "INSERT INTO invites (code, created_at, expires_at) VALUES ($1, $2, $3)";
-        match base.pool() {
-            CloseablePool::Sqlite(pool) => {
-                sqlx::query(sql)
-                    .bind("bad code")
-                    .bind(now)
-                    .bind(expires_at)
-                    .execute(pool)
-                    .await
-                    .unwrap();
-            }
-            CloseablePool::Postgres(pool) => {
-                sqlx::query(sql)
-                    .bind("bad code")
-                    .bind(now)
-                    .bind(expires_at)
-                    .execute(pool)
-                    .await
-                    .unwrap();
-            }
-        }
+        crate::with_closeable_pool!(base.pool(), pool, {
+            sqlx::query(sql)
+                .bind("bad code")
+                .bind(now)
+                .bind(expires_at)
+                .execute(pool)
+                .await
+                .unwrap();
+        });
 
         // The read decodes the `code` column into `InviteCode` via the sqlx bridge,
         // which validates through `FromStr`; the malformed value surfaces as a
