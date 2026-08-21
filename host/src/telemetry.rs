@@ -101,50 +101,50 @@ fn write_fallback(mut writer: impl std::io::Write, kind: FallbackKind) -> std::i
     writeln!(writer, "{context}: {message}")
 }
 #[cfg(test)]
-struct TestFallbackCapture {
-    owner: std::thread::ThreadId,
-    output: Vec<u8>,
-}
+mod fallback_capture {
+    use super::{FallbackKind, write_fallback};
 
-#[cfg(test)]
-static TEST_FALLBACK_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
-#[cfg(test)]
-static TEST_FALLBACK_OUTPUT: std::sync::Mutex<Option<TestFallbackCapture>> =
-    std::sync::Mutex::new(None);
-
-#[cfg(test)]
-fn capture_fallbacks<R>(operation: impl FnOnce() -> R) -> (R, String) {
-    let _serial = TEST_FALLBACK_SERIAL
-        .lock()
-        .expect("fallback capture serial");
-    {
-        let mut capture = TEST_FALLBACK_OUTPUT.lock().expect("fallback capture lock");
-        assert!(capture.is_none(), "nested fallback capture");
-        *capture = Some(TestFallbackCapture {
-            owner: std::thread::current().id(),
-            output: Vec::new(),
-        });
+    struct Capture {
+        owner: std::thread::ThreadId,
+        output: Vec<u8>,
     }
-    let result = operation();
-    let output = TEST_FALLBACK_OUTPUT
-        .lock()
-        .expect("fallback capture lock")
-        .take()
-        .expect("capture")
-        .output;
-    (result, String::from_utf8(output).expect("fallback utf8"))
-}
 
-fn fallback(kind: FallbackKind) {
-    #[cfg(test)]
-    let captured = {
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static OUTPUT: std::sync::Mutex<Option<Capture>> = std::sync::Mutex::new(None);
+
+    pub(super) fn capture<R>(operation: impl FnOnce() -> R) -> (R, String) {
+        let _serial = SERIAL.lock().expect("fallback capture serial");
+        {
+            let mut capture = OUTPUT.lock().expect("fallback capture lock");
+            assert!(capture.is_none(), "nested fallback capture");
+            *capture = Some(Capture {
+                owner: std::thread::current().id(),
+                output: Vec::new(),
+            });
+        }
+        let result = operation();
+        let output = OUTPUT
+            .lock()
+            .expect("fallback capture lock")
+            .take()
+            .expect("capture")
+            .output;
+        (result, String::from_utf8(output).expect("fallback utf8"))
+    }
+
+    pub(super) fn try_capture(kind: FallbackKind) -> bool {
         let owner = std::thread::current().id();
-        let mut output = TEST_FALLBACK_OUTPUT.lock().expect("fallback capture lock");
+        let mut output = OUTPUT.lock().expect("fallback capture lock");
         output
             .as_mut()
             .filter(|capture| capture.owner == owner)
             .is_some_and(|capture| write_fallback(&mut capture.output, kind).is_ok())
-    };
+    }
+}
+
+fn fallback(kind: FallbackKind) {
+    #[cfg(test)]
+    let captured = fallback_capture::try_capture(kind);
     #[cfg(test)]
     if captured {
         return;
@@ -1384,7 +1384,7 @@ mod tests {
             .with_reader(PeriodicReader::builder(InMemoryMetricExporter::default()).build())
             .build();
         let (primary, output) = assert_zero_error_metrics(|| {
-            capture_fallbacks(|| {
+            fallback_capture::capture(|| {
                 let primary: Result<&str, &str> = Ok("preserved");
                 drop(TelemetryGuard {
                     meter: Some(meter),
@@ -1409,7 +1409,7 @@ mod tests {
             .with_batch_exporter(InMemorySpanExporter::default())
             .build();
         let (primary, output) = assert_zero_error_metrics(|| {
-            capture_fallbacks(|| {
+            fallback_capture::capture(|| {
                 let primary: Result<&str, &str> = Ok("preserved");
                 drop(TelemetryGuard {
                     meter: None,

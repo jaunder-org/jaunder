@@ -644,6 +644,12 @@
         # fail the check only after the copies are safe. On success the copies land
         # in $out; on failure they live in the --keep-failed build dir for xtask's
         # rescue_diagnostics to recover. Shared by both backends so they can't drift.
+        # Seed-span verification is VM-local test glue, not reusable application
+        # logic: it must run in the guest after the seed helper and before
+        # Playwright, with the collector stopped so short-lived seed-process spans
+        # are flushed into the JSONL file the VM owns. Keeping it beside the e2e
+        # script keeps the assertion, VM paths, and collector lifecycle in one
+        # place.
         assertSeedStorageSpans = ''
           def assert_seed_storage_spans():
             import json

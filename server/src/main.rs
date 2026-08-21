@@ -35,9 +35,11 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         unreachable!("Cli::parse_from([\"jaunder\", \"--help\"]) prints help and exits the process")
     };
     // `run` owns telemetry for *every* command after clap has resolved a runnable
-    // subcommand. `serve` also owns scoped server diagnostics; one-shot CLI
-    // commands get only process telemetry so `JAUNDER_CAPTURE_DIR` does not make
-    // them write `diag.log`.
+    // subcommand. `serve` goes through `server::observability` because the server
+    // owns scoped diagnostics (the diag JSONL layer and panic hook) and that
+    // initializer delegates process OTLP to the shared host guard. One-shot CLI
+    // commands call `host::telemetry` directly so `JAUNDER_CAPTURE_DIR` does not
+    // make them write `diag.log` or depend on server-only diagnostics.
     let _telemetry = if command.is_serve() {
         jaunder::observability::init_server_tracing(cli.verbose)
     } else {
