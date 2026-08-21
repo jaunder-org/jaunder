@@ -1,9 +1,17 @@
+//! Serve-owned saturation metric sampling.
+//!
+//! OpenTelemetry observable callbacks are synchronous, so this module keeps
+//! async storage and filesystem reads in a sampler task that updates a small
+//! in-memory snapshot. The server composition root injects only the storage
+//! handles and service facts each source needs; the sampler never owns the
+//! whole [`storage::AppState`].
+
 use std::path::PathBuf;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use host::metrics::SaturationSnapshot;
-use storage::{DbPoolObserver, DbPoolSnapshot};
+use storage::{DbPoolObserver, DbPoolSnapshot, FeedEventStorage, MediaStorage};
 use tokio::task::JoinHandle;
 
 use crate::backup::latest_successful_backup_timestamp;
@@ -25,7 +33,8 @@ enum SaturationSourcesInner {
 
 #[derive(Clone)]
 struct RealSaturationSources {
-    state: Arc<storage::AppState>,
+    feed_events: Arc<dyn FeedEventStorage>,
+    media: Arc<dyn MediaStorage>,
     backup_destination_root: Option<PathBuf>,
     db_pool: DbPoolObserver,
 }
@@ -65,13 +74,15 @@ enum FakeSaturationFailure {
 impl SaturationSources {
     #[must_use]
     pub fn real(
-        state: Arc<storage::AppState>,
+        feed_events: Arc<dyn FeedEventStorage>,
+        media: Arc<dyn MediaStorage>,
         backup_destination_root: Option<PathBuf>,
         db_pool: DbPoolObserver,
     ) -> Self {
         Self {
             inner: SaturationSourcesInner::Real(RealSaturationSources {
-                state,
+                feed_events,
+                media,
                 backup_destination_root,
                 db_pool,
             }),
@@ -81,7 +92,6 @@ impl SaturationSources {
     async fn feed_queue_depth(&self) -> anyhow::Result<u64> {
         match &self.inner {
             SaturationSourcesInner::Real(real) => real
-                .state
                 .feed_events
                 .claimable_count(FEED_CLAIM_LEASE_TIMEOUT)
                 .await
@@ -116,7 +126,6 @@ impl SaturationSources {
     async fn media_storage_bytes(&self) -> anyhow::Result<u64> {
         match &self.inner {
             SaturationSourcesInner::Real(real) => real
-                .state
                 .media
                 .total_upload_bytes()
                 .await
@@ -516,8 +525,12 @@ mod tests {
             serde_json::to_vec(&manifest).expect("manifest json"),
         )
         .expect("write manifest");
-        let sources =
-            SaturationSources::real(opened.state, Some(backup_root), opened.pool_observer);
+        let sources = SaturationSources::real(
+            opened.state.feed_events.clone(),
+            opened.state.media.clone(),
+            Some(backup_root),
+            opened.pool_observer,
+        );
         let snapshot = RwLock::new(SaturationSnapshot::default());
 
         sample_saturation_once(&sources, &snapshot).await;
@@ -548,7 +561,12 @@ mod tests {
         let opened = storage::open_database_with_observer(&options)
             .await
             .expect("open database");
-        let sources = SaturationSources::real(opened.state, None, opened.pool_observer);
+        let sources = SaturationSources::real(
+            opened.state.feed_events.clone(),
+            opened.state.media.clone(),
+            None,
+            opened.pool_observer,
+        );
         let snapshot = seeded_snapshot();
 
         sample_saturation_once(&sources, &snapshot).await;

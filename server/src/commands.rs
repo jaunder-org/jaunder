@@ -653,8 +653,12 @@ async fn prepare_saturation_metrics(
     let backup_destination_root = backup_config.destination_path.as_deref().map(PathBuf::from);
     let snapshot = Arc::new(RwLock::new(host::metrics::SaturationSnapshot::default()));
     let observables = host::metrics::register_saturation_observables(snapshot.clone());
-    let sources =
-        crate::metrics::SaturationSources::real(db, backup_destination_root, pool_observer);
+    let sources = crate::metrics::SaturationSources::real(
+        db.feed_events.clone(),
+        db.media.clone(),
+        backup_destination_root,
+        pool_observer,
+    );
     let sampler = crate::metrics::spawn_saturation_sampler(sources, snapshot);
 
     Ok(Some(PreparedSaturationMetrics {
