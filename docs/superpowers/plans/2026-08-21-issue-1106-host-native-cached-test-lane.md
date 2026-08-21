@@ -253,7 +253,7 @@ cargo run --quiet --manifest-path tools/Cargo.toml -p devtool -- \
 - Produces: `Command::TestLocal { nextest_args: Vec<String> }` and
   `steps::test_local::run`.
 
-- [ ] **Step 1: Write failing CLI and argument-construction tests.** Add parser
+- [x] **Step 1: Write failing CLI and argument-construction tests.** Add parser
       tests proving `cargo xtask test-local` parses with an empty trailing
       vector and `cargo xtask test-local -- -p storage post_creation` preserves
       the exact trailing arguments. Add `args_for` tests proving no-arg mode
@@ -272,7 +272,7 @@ cargo run --quiet --manifest-path tools/Cargo.toml -p devtool -- \
 
   Expected: FAIL while the command and module do not exist.
 
-- [ ] **Step 2: Implement command dispatch.** Add `TestLocal` to `Command`,
+- [x] **Step 2: Implement command dispatch.** Add `TestLocal` to `Command`,
       `Cli::command_name`, and `run`. Use `xshell::Shell`, create
       `CommandResult::new("test-local")`, call `steps::test_local::run`, then
       `finalize`. In `test_local::run`, build the local-devtool command with
@@ -280,7 +280,7 @@ cargo run --quiet --manifest-path tools/Cargo.toml -p devtool -- \
       `step_with_env`, and pass the shared cache env. If cache discovery returns
       a warning, append it to the step detail as static checks do.
 
-- [ ] **Step 3: Run focused passing tests.** Re-run:
+- [x] **Step 3: Run focused passing tests.** Re-run:
 
   ```bash
   devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml test_local parses_test_local
@@ -288,7 +288,7 @@ cargo run --quiet --manifest-path tools/Cargo.toml -p devtool -- \
 
   Expected: PASS, including default/passthrough command shape and command name.
 
-- [ ] **Step 4: Smoke the command without running the whole workspace.** Run a
+- [x] **Step 4: Smoke the command without running the whole workspace.** Run a
       narrow host-native command that exercises CLI dispatch, local devtool, the
       ephemeral PostgreSQL wrapper, and the cache env:
 

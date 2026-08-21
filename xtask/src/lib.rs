@@ -56,6 +56,7 @@ mod steps {
     pub mod sqlx_newtype_decode_check;
     pub mod static_checks;
     pub mod target_arch_placement_check;
+    pub mod test_local;
     pub mod test_pattern_check;
     pub mod thin_components;
     pub mod traced_context_check;
@@ -192,6 +193,16 @@ pub enum Command {
         /// Update every Chromium and Firefox visual baseline using release CSR.
         #[arg(long, conflicts_with = "test")]
         update_visual_snapshots: bool,
+    },
+    /// Run host-native Rust tests through nextest with the shared sccache setup and
+    /// an isolated PostgreSQL lifecycle. Pass nextest filters after `--`.
+    #[command(after_help = "EXAMPLES:\n  \
+        cargo xtask test-local\n  \
+        cargo xtask test-local -- -p storage site_config_primitives_round_trip")]
+    TestLocal {
+        /// Arguments forwarded to `cargo nextest run`.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        nextest_args: Vec<String>,
     },
     /// Build the CSR wasm bundle on the host (`cargo build -p csr` + the shared
     /// `devtool csr-bundle` post-processing) — the cargo-leptos-free bundle build
@@ -424,6 +435,7 @@ impl Cli {
             Command::AuditWasm { .. } => "audit-wasm",
             Command::E2e { .. } => "e2e",
             Command::E2eLocal { .. } => "e2e-local",
+            Command::TestLocal { .. } => "test-local",
             Command::BuildCsr { .. } => "build-csr",
             Command::Adr(AdrCommand::Renumber) => "adr-renumber",
             Command::Adr(AdrCommand::SyncReadme) => "adr-sync-readme",
@@ -789,6 +801,14 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("e2e-local");
             steps::e2e_local::run(&sh, &mut result, test.as_deref(), update_visual_snapshots);
+            finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::TestLocal { nextest_args } => {
+            let sh = xshell::Shell::new()?;
+            let start = std::time::Instant::now();
+            let mut result = CommandResult::new("test-local");
+            steps::test_local::run(&sh, &mut result, &nextest_args);
             finalize(&mut result, start);
             Ok(result)
         }
@@ -1267,6 +1287,37 @@ mod cli_tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn parses_test_local_defaults_and_forwarded_nextest_args() {
+        let cli = Cli::try_parse_from(["xtask", "test-local"]).unwrap();
+        match cli.command {
+            Command::TestLocal { ref nextest_args } => {
+                assert!(nextest_args.is_empty());
+            }
+            _ => panic!("expected test-local"),
+        }
+        assert_eq!(cli.command_name(), "test-local");
+
+        let cli = Cli::try_parse_from([
+            "xtask",
+            "test-local",
+            "--",
+            "-p",
+            "storage",
+            "site_config_primitives_round_trip",
+        ])
+        .unwrap();
+        match cli.command {
+            Command::TestLocal { nextest_args } => {
+                assert_eq!(
+                    nextest_args,
+                    ["-p", "storage", "site_config_primitives_round_trip"]
+                );
+            }
+            _ => panic!("expected test-local with nextest args"),
+        }
     }
 
     #[test]
