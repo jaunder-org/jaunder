@@ -3,8 +3,8 @@
 //! `cargo run -p devtool -- check <name>` (so a local `tools/` edit is
 //! reflected), and the nix `static-checks` derivation runs
 //! `devtool check --all --sandbox-cargo` from the prebuilt `devtoolBin`.
-//! `cargo-deny` joins only under its documented sandbox policy; `clippy` and
-//! workspace-local clippy checks stay outside this list.
+//! `cargo-deny` joins only under its documented sandbox policy; Cargo-backed
+//! checks use separate host and sandbox lanes from this shared definition.
 
 use std::ffi::OsString;
 use std::process::Command;
@@ -25,7 +25,10 @@ pub const ALL: &[&str] = &[
     "ert",
     "byte-compile",
     "cargo-deny",
+    "clippy",
+    "wasm-clippy",
     "tools-fmt",
+    "tools-clippy",
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -228,6 +231,29 @@ fn spec(name: &str, fix: bool) -> Result<CheckSpec> {
             host_args: owned(&["deny", "check"]),
             sandbox_args: owned(&["deny", "check", "bans", "licenses", "sources"]),
         }),
+        "clippy" => cargo_check(
+            CargoWorkspace::Product,
+            &["clippy", "--all-targets", "--", "-D", "warnings"],
+        ),
+        "wasm-clippy" => cargo_check(
+            CargoWorkspace::Product,
+            &[
+                "clippy",
+                "-p",
+                "web",
+                "-p",
+                "client",
+                "-p",
+                "csr",
+                "--features",
+                "csr",
+                "--target",
+                "wasm32-unknown-unknown",
+                "--",
+                "-D",
+                "warnings",
+            ],
+        ),
         "tools-fmt" => cargo_check(
             CargoWorkspace::Tools,
             if fix {
@@ -235,6 +261,10 @@ fn spec(name: &str, fix: bool) -> Result<CheckSpec> {
             } else {
                 &["fmt", "--all", "--check"]
             },
+        ),
+        "tools-clippy" => cargo_check(
+            CargoWorkspace::Tools,
+            &["clippy", "--all-targets", "--", "-D", "warnings"],
         ),
         other => bail!("unknown check '{other}' (known: {ALL:?})"),
     })
@@ -502,6 +532,68 @@ mod tests {
     }
 
     #[test]
+    fn clippy_matches_existing_host_ladder_args() {
+        let cmd = build_host("clippy", false);
+
+        assert_eq!(cmd.program, "cargo");
+        assert_eq!(
+            cmd.args,
+            vec!["clippy", "--all-targets", "--", "-D", "warnings"]
+        );
+        assert!(cmd.env.is_empty());
+        assert_eq!(build_host("clippy", true), cmd);
+    }
+
+    #[test]
+    fn wasm_clippy_matches_existing_host_ladder_args() {
+        let cmd = build_host("wasm-clippy", false);
+
+        assert_eq!(cmd.program, "cargo");
+        assert_eq!(
+            cmd.args,
+            vec![
+                "clippy",
+                "-p",
+                "web",
+                "-p",
+                "client",
+                "-p",
+                "csr",
+                "--features",
+                "csr",
+                "--target",
+                "wasm32-unknown-unknown",
+                "--",
+                "-D",
+                "warnings",
+            ]
+        );
+        assert!(cmd.env.is_empty());
+        assert_eq!(build_host("wasm-clippy", true), cmd);
+    }
+
+    #[test]
+    fn tools_clippy_targets_tools_workspace() {
+        let cmd = build_host("tools-clippy", false);
+
+        assert_eq!(cmd.program, "cargo");
+        assert_eq!(
+            cmd.args,
+            vec![
+                "clippy",
+                "--manifest-path",
+                "tools/Cargo.toml",
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings",
+            ]
+        );
+        assert!(cmd.env.is_empty());
+        assert_eq!(build_host("tools-clippy", true), cmd);
+    }
+
+    #[test]
     fn sandbox_cargo_deny_skips_advisories_and_uses_product_home() {
         let cmd = spec("cargo-deny", false)
             .unwrap()
@@ -539,6 +631,122 @@ mod tests {
             .to_string();
 
         assert!(err.contains("JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME"), "{err}");
+    }
+
+    #[test]
+    fn sandbox_clippy_uses_product_offline_home() {
+        let cmd = spec("clippy", false)
+            .unwrap()
+            .build_with_env(CargoMode::Sandbox, |name| match name {
+                "JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME" => {
+                    Some("/nix/store/product-cargo-home".into())
+                }
+                "JAUNDER_DEVTOOL_TOOLS_CARGO_HOME" => Some("/nix/store/tools-cargo-home".into()),
+                _ => None,
+            })
+            .unwrap();
+
+        assert_eq!(cmd.program, "cargo");
+        assert_eq!(
+            cmd.args,
+            vec![
+                "--offline",
+                "clippy",
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings",
+            ]
+        );
+        assert!(cmd.env.contains(&(
+            "CARGO_HOME",
+            OsString::from("/nix/store/product-cargo-home")
+        )));
+        assert!(
+            cmd.env
+                .contains(&("CARGO_NET_OFFLINE", OsString::from("true")))
+        );
+    }
+
+    #[test]
+    fn sandbox_wasm_clippy_uses_product_offline_home_and_target_args() {
+        let cmd = spec("wasm-clippy", false)
+            .unwrap()
+            .build_with_env(CargoMode::Sandbox, |name| match name {
+                "JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME" => {
+                    Some("/nix/store/product-cargo-home".into())
+                }
+                "JAUNDER_DEVTOOL_TOOLS_CARGO_HOME" => Some("/nix/store/tools-cargo-home".into()),
+                _ => None,
+            })
+            .unwrap();
+
+        assert_eq!(cmd.program, "cargo");
+        assert_eq!(
+            cmd.args,
+            vec![
+                "--offline",
+                "clippy",
+                "-p",
+                "web",
+                "-p",
+                "client",
+                "-p",
+                "csr",
+                "--features",
+                "csr",
+                "--target",
+                "wasm32-unknown-unknown",
+                "--",
+                "-D",
+                "warnings",
+            ]
+        );
+        assert!(cmd.env.contains(&(
+            "CARGO_HOME",
+            OsString::from("/nix/store/product-cargo-home")
+        )));
+        assert!(
+            cmd.env
+                .contains(&("CARGO_NET_OFFLINE", OsString::from("true")))
+        );
+    }
+
+    #[test]
+    fn sandbox_tools_clippy_uses_tools_offline_home() {
+        let cmd = spec("tools-clippy", false)
+            .unwrap()
+            .build_with_env(CargoMode::Sandbox, |name| match name {
+                "JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME" => {
+                    Some("/nix/store/product-cargo-home".into())
+                }
+                "JAUNDER_DEVTOOL_TOOLS_CARGO_HOME" => Some("/nix/store/tools-cargo-home".into()),
+                _ => None,
+            })
+            .unwrap();
+
+        assert_eq!(cmd.program, "cargo");
+        assert_eq!(
+            cmd.args,
+            vec![
+                "--offline",
+                "clippy",
+                "--manifest-path",
+                "tools/Cargo.toml",
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings",
+            ]
+        );
+        assert!(
+            cmd.env
+                .contains(&("CARGO_HOME", OsString::from("/nix/store/tools-cargo-home")))
+        );
+        assert!(
+            cmd.env
+                .contains(&("CARGO_NET_OFFLINE", OsString::from("true")))
+        );
     }
 
     #[test]
