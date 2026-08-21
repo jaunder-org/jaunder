@@ -136,21 +136,11 @@ fn sqlx_impls(name: &Ident, inner: &Type) -> TokenStream {
 /// The self-contained error type: a hand-written `Display` + `Error` (no `thiserror`), so
 /// any adopter crate needs no extra dependency.
 fn error_type(err_name: &Ident, message: &TokenStream) -> TokenStream {
-    quote! {
-        #[doc = "Error returned when a value is out of the declared numeric bounds."]
-        #[derive(::core::fmt::Debug, ::core::clone::Clone, ::core::marker::Copy, ::core::cmp::PartialEq, ::core::cmp::Eq)]
-        pub struct #err_name;
-
-        #[automatically_derived]
-        impl ::core::fmt::Display for #err_name {
-            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-                f.write_str(#message)
-            }
-        }
-
-        #[automatically_derived]
-        impl ::std::error::Error for #err_name {}
-    }
+    crate::public_unit_error_type(
+        err_name,
+        "Error returned when a value is out of the declared numeric bounds.",
+        message,
+    )
 }
 
 /// `impl X { pub fn value(self) -> I }` plus `From<X> for I` — the inner accessor and its

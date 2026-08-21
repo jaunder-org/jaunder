@@ -177,7 +177,7 @@ shared helper rather than only proving behavior.
 
 - Consumes: the Task 1 tests and existing macro expansion tests.
 
-- [ ] **Step 1: Add the shared helper**
+- [x] **Step 1: Add the shared helper**
 
   In `macros/src/lib.rs`, near the other shared codegen helpers, add:
 
@@ -208,7 +208,7 @@ shared helper rather than only proving behavior.
   The signature keeps the display text as already-resolved tokens so
   `NumNewtype` can pass either a literal override or generated literal tokens.
 
-- [ ] **Step 2: Route `NumNewtype` through the helper**
+- [x] **Step 2: Route `NumNewtype` through the helper**
 
   In `macros/src/num_newtype.rs`, replace the body of `error_type` with a
   delegation that preserves the current doc and message:
@@ -223,7 +223,7 @@ shared helper rather than only proving behavior.
   }
   ```
 
-- [ ] **Step 3: Route `#[text_enum]` through the helper**
+- [x] **Step 3: Route `#[text_enum]` through the helper**
 
   In `macros/src/text_enum.rs`, replace the body of `error_type` with a
   delegation that preserves the enum-specific doc:
@@ -236,7 +236,7 @@ shared helper rather than only proving behavior.
   }
   ```
 
-- [ ] **Step 4: Run focused macro tests**
+- [x] **Step 4: Run focused macro tests**
 
   Run:
 
@@ -254,7 +254,7 @@ shared helper rather than only proving behavior.
 
   Expected: PASS.
 
-- [ ] **Step 5: Run existing public macro integration tests**
+- [x] **Step 5: Run existing public macro integration tests**
 
   Run:
 
@@ -272,7 +272,7 @@ shared helper rather than only proving behavior.
 
   Expected: PASS.
 
-- [ ] **Step 6: Source-structure review**
+- [x] **Step 6: Source-structure review**
 
   Inspect the diff and confirm:
   - the derive/doc/struct/`Display`/`Error` quote block exists only in
@@ -281,7 +281,7 @@ shared helper rather than only proving behavior.
   - `text_enum::error_type` delegates to `crate::public_unit_error_type`;
   - the `#[text_enum]` parse error function still returns the bare error ident.
 
-- [ ] **Step 7: Commit the implementation task**
+- [x] **Step 7: Commit the implementation task**
 
   Tick this task's checkbox before the commit gate. Then run:
 
