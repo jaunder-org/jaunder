@@ -793,8 +793,11 @@ pass.
   (`storage/src/sessions.rs:70`) — no separate table, no `kind` column, so
   tokens are interchangeable across transports (accepted for the self-hosted
   single-user trust model). Sessions never expire; the `sessions` row is
-  `(token_hash, user_id, label, created_at, last_used_at)`
-  (`storage/src/sessions.rs:164`), and `label` is a mandatory validated newtype,
+  `(token_hash, user_id, label, created_at, last_used_at)`. `last_used_at` is
+  operator-facing metadata and is bounded-stale: authentication refreshes it
+  only when the stored value is more than 60 seconds old, so fresh authenticated
+  requests need not become database writers (`storage/src/sessions.rs:164`).
+  `label` is a mandatory validated newtype,
   `common::session_label::SessionLabel` — browser logins auto-generate a
   User-Agent/host label, app passwords carry a user-supplied name. Revocation is
   deleting the session in the Sessions UI

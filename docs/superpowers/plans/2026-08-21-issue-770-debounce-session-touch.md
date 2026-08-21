@@ -439,7 +439,7 @@ git commit -m "fix(storage): debounce session touch writes (#770)"
     metadata.
   - A checked-off plan task before the docs commit gate.
 
-- [ ] **Step 1: Update the session architecture paragraph**
+- [x] **Step 1: Update the session architecture paragraph**
 
 In `docs/ARCHITECTURE.md` near the session row description, replace the sentence
 that currently describes sessions as:
@@ -462,23 +462,14 @@ requests need not become database writers. ...
 Keep the existing surrounding statements about labelled sessions,
 `SessionLabel`, and app passwords intact.
 
-- [ ] **Step 2: Format docs**
+- [x] **Step 2: Format docs**
 
 Run:
 `devtool run -- prettier -w docs/ARCHITECTURE.md docs/superpowers/plans/2026-08-21-issue-770-debounce-session-touch.md`
 
 Expected: **PASS**.
 
-- [ ] **Step 3: Run the branch-level gate**
-
-Run: `devtool run -- cargo xtask validate --no-e2e`
-
-Expected: **PASS**.
-
-If it fails, inspect `.xtask/last-result.json` and the relevant
-`.xtask/diagnostics/<check>/failure-excerpt.log` before changing code.
-
-- [ ] **Step 4: Commit docs and plan progress**
+- [x] **Step 3: Commit docs and plan progress**
 
 Before committing, tick completed plan checkboxes for Tasks 1-3 as appropriate.
 Then run:
@@ -494,6 +485,15 @@ Stage docs:
 git add docs/ARCHITECTURE.md docs/superpowers/plans/2026-08-21-issue-770-debounce-session-touch.md
 git commit -m "docs(storage): record bounded-stale session usage metadata (#770)"
 ```
+
+- [ ] **Step 4: Run the branch-level gate**
+
+Run: `devtool run -- cargo xtask validate --no-e2e`
+
+Expected: **PASS** on the clean committed tree.
+
+If it fails, inspect `.xtask/last-result.json` and the relevant
+`.xtask/diagnostics/<check>/failure-excerpt.log` before changing code.
 
 ---
 
