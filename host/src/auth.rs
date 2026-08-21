@@ -116,9 +116,13 @@ pub fn resolve_credential(
                     CredentialTransport::Bearer,
                 )
             } else if header.starts_with("Basic ") {
-                let (username, token) = common::auth::parse_basic_auth(header)
-                    .ok_or(CredentialResolutionError::InvalidAuthorization)?;
-                (token, Some(username), CredentialTransport::Basic)
+                let credential = common::auth::parse_basic_auth(header)
+                    .map_err(|_| CredentialResolutionError::InvalidAuthorization)?;
+                (
+                    credential.token,
+                    Some(credential.username),
+                    CredentialTransport::Basic,
+                )
             } else {
                 return Err(CredentialResolutionError::InvalidAuthorization);
             };

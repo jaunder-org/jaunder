@@ -120,17 +120,17 @@ mod tests {
             posts_collection: CollectionDecl {
                 href: parse_url("https://h/atompub/alice/posts"),
                 title: crate::atompub::CollectionTitle::posts(),
-                accept: vec!["application/atom+xml;type=entry".parse().unwrap()],
+                accept: vec![ContentType::atom_entry()],
                 categories: vec!["rust".parse().unwrap(), "leptos".parse().unwrap()],
             },
             media_collection: CollectionDecl {
                 href: parse_url("https://h/atompub/alice/media"),
                 title: crate::atompub::CollectionTitle::media(),
                 accept: vec![
-                    "image/png".parse().unwrap(),
-                    "image/jpeg".parse().unwrap(),
-                    "image/gif".parse().unwrap(),
-                    "image/webp".parse().unwrap(),
+                    ContentType::image_png(),
+                    ContentType::image_jpeg(),
+                    ContentType::image_gif(),
+                    ContentType::image_webp(),
                 ],
                 categories: vec![],
             },

@@ -390,7 +390,7 @@ mod tests {
         // into a header that still looks well-formed, which is exactly the failure class
         // this issue exists to remove, so both parameters are pinned as exact strings.
         let value = content_disposition(
-            &"image/png".parse().unwrap(),
+            &ContentType::image_png(),
             &Filename::sanitized("my photo.jpg").unwrap(),
         );
         assert!(value.contains("filename=\"my photo.jpg\""), "{value}");
@@ -409,7 +409,7 @@ mod tests {
     fn content_disposition_picks_inline_or_attachment_by_type() {
         assert!(
             content_disposition(
-                &"image/png".parse().unwrap(),
+                &ContentType::image_png(),
                 &Filename::sanitized("p.png").unwrap()
             )
             .starts_with("inline; ")
@@ -443,7 +443,7 @@ mod tests {
     #[test]
     fn content_disposition_percent_encodes_non_ascii_in_filename_star() {
         let value = content_disposition(
-            &"image/png".parse().unwrap(),
+            &ContentType::image_png(),
             &Filename::sanitized("café.png").unwrap(),
         );
         // Non-ASCII dropped from the ASCII fallback...

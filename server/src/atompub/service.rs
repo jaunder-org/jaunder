@@ -17,14 +17,13 @@ use web::auth::AuthUser;
 
 use super::{HandlerError, required_base_url};
 
-/// Media types the media collection accepts.
-const MEDIA_ACCEPT: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
-
-fn accept_media_type(value: &str) -> ContentType {
-    match value.parse() {
-        Ok(content_type) => content_type,
-        Err(_) => unreachable!("service document accept value is valid: {value}"),
-    }
+fn media_accept() -> Vec<ContentType> {
+    vec![
+        ContentType::image_png(),
+        ContentType::image_jpeg(),
+        ContentType::image_gif(),
+        ContentType::image_webp(),
+    ]
 }
 
 /// `GET /atompub/service` — the authenticated user's `AtomPub` service document.
@@ -59,13 +58,13 @@ pub async fn service_document(
             // turbofish on the tag — the alias rule's stated exception.
             href: compose::<CollectionHref>(&base, &posts_path),
             title: CollectionTitle::posts(),
-            accept: vec![accept_media_type("application/atom+xml;type=entry")],
+            accept: vec![ContentType::atom_entry()],
             categories,
         },
         media_collection: CollectionDecl {
             href: compose::<CollectionHref>(&base, &media_path),
             title: CollectionTitle::media(),
-            accept: MEDIA_ACCEPT.iter().map(|s| accept_media_type(s)).collect(),
+            accept: media_accept(),
             categories: Vec::new(),
         },
     };
