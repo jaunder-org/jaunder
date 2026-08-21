@@ -364,12 +364,12 @@ like every other domain column, and deliberately does **not** sanitize on read
 an oversight — this is not new outside data, and routing it through
 `from_trusted` would put a gate-policed door on a path the gate cannot inspect.
 Its **blessing risk is real and accepted**: decoding some other text column into
-this type would bless it too, and the `rendered-html-from-trusted` check does
-not catch that (its population is `from_trusted` uses, and a `FromRow` field
-typed `RenderedHtml` names no door). The decision rests on one argument — typing
-a column as `RenderedHtml` is a deliberate, reviewable act — so every new
-`RenderedHtml`-typed row field is a security review point until
-[#701](https://github.com/jaunder-org/jaunder/issues/701) widens the gate
+this type would bless it too. The decision rests on one argument — typing a
+field as `RenderedHtml` is a deliberate, reviewable act — and #701 made that
+mechanical: the `rendered-html-from-trusted` check covers both `from_trusted`
+uses and direct production struct fields typed `RenderedHtml`, including
+`FromRow` decode fields, each requiring a local
+`rendered-html-from-trusted:allow <reason>` marker
 ([ADR-0123](adr/0123-rendered-html-storage-decode.md)). `ammonia` sits behind a
 `sanitize` feature on `common`, off for wasm, enabled by `storage`, and `render`
 itself does not _exist_ without it (`common/src/render.rs:241,605`) — absence
@@ -977,8 +977,10 @@ which shadows `maud::Markup` inside `web`. The single raw door is
 `Markup::from_rendered_html`, which takes a `&RenderedHtml`
 (`web/src/html.rs:59`) so the sanitization invariant is what opens it. Three
 xtask gates gate the area — `html_sink_check`, `raw_html_door_check`, and
-`rendered_html_from_trusted_check` — and the first two read inside macro bodies,
-so a hand-built `String` cannot reach a sink unescaped.
+`rendered_html_from_trusted_check` — all three read inside macro bodies, and
+`rendered_html_from_trusted_check` also enumerates direct `RenderedHtml` fields,
+so a hand-built `String` cannot reach a sink unescaped and a new trust-carrying
+field cannot appear without a local review marker.
 
 The authenticated owner stays flash-free by _enhancement_
 ([ADR-0044](adr/0044-authenticated-owner-flash-free-enhancement.md)): an

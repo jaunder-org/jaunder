@@ -163,7 +163,7 @@ pub enum Why {
 #[derive(Debug, Clone)]
 pub struct Unexempt {
     pub line: usize,
-    pub function: String,
+    pub context: MentionContext,
     pub why: Why,
 }
 
@@ -190,8 +190,36 @@ pub struct Classified {
 pub struct Mention {
     /// 1-based source line.
     pub line: usize,
-    /// Nearest enclosing fn name; empty at module scope.
-    pub function: String,
+    pub context: MentionContext,
+}
+
+/// The source context attached to a population mention.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MentionContext {
+    /// No enclosing function or field owner.
+    Module,
+    /// Nearest enclosing fn name.
+    Function(String),
+    /// Direct struct field, rendered as `Struct.field`.
+    Field(String),
+}
+
+impl MentionContext {
+    #[cfg(test)]
+    pub fn legacy_label(&self) -> String {
+        match self {
+            Self::Module => String::new(),
+            Self::Function(name) | Self::Field(name) => name.clone(),
+        }
+    }
+}
+
+fn mention_where(context: &MentionContext) -> String {
+    match context {
+        MentionContext::Module => "at module scope".to_string(),
+        MentionContext::Function(name) => format!("in fn `{name}`"),
+        MentionContext::Field(name) => format!("at field `{name}`"),
+    }
 }
 
 /// Every ident that can denote `owner` anywhere in the scanned tree.
@@ -340,6 +368,67 @@ impl Resolver {
         }
         Membership::Unknown
     }
+
+    /// Classify a direct struct-field type against an owner set.
+    ///
+    /// This is deliberately shallower than Rust type resolution. A plain path whose
+    /// leaf is a known owner alias is the guarded type. A plain single-ident path
+    /// that is neither imported nor locally defined is unknown and therefore remains
+    /// guarded. Containers, borrowed types and qualified non-owner paths are outside
+    /// the direct-field population.
+    pub fn direct_type_membership(&self, ty: &syn::Type, owners: &BTreeSet<String>) -> Membership {
+        let syn::Type::Path(p) = ty else {
+            return Membership::OtherType;
+        };
+        if p.qself.is_some() {
+            return Membership::OtherType;
+        }
+        let Some(final_segment) = p.path.segments.last() else {
+            return Membership::Unknown;
+        };
+        if !matches!(final_segment.arguments, syn::PathArguments::None) {
+            return Membership::OtherType;
+        }
+
+        let name = final_segment.ident.to_string();
+        if owners.contains(&name) {
+            return Membership::Door;
+        }
+        if is_known_non_owner_direct_type(&name) {
+            return Membership::OtherType;
+        }
+        if p.path.segments.len() > 1
+            || self.imported.contains(&name)
+            || self.defined.contains(&name)
+        {
+            return Membership::OtherType;
+        }
+        Membership::Unknown
+    }
+}
+
+fn is_known_non_owner_direct_type(name: &str) -> bool {
+    matches!(
+        name,
+        "String"
+            | "str"
+            | "bool"
+            | "char"
+            | "f32"
+            | "f64"
+            | "i8"
+            | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "isize"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "usize"
+    )
 }
 
 /// Every ident a non-glob `use` tree brings into scope, by the name it is bound to.
@@ -378,7 +467,7 @@ fn collect_owner_renames(tree: &syn::UseTree, owner: &str, set: &mut BTreeSet<St
 }
 
 /// The final path segment of a type, when it is a plain path — the type's own name.
-fn type_name(ty: &syn::Type) -> Option<&syn::Ident> {
+pub(crate) fn type_name(ty: &syn::Type) -> Option<&syn::Ident> {
     match ty {
         syn::Type::Path(p) => p.path.segments.last().map(|s| &s.ident),
         _ => None,
@@ -444,7 +533,7 @@ pub fn classify(source: &str, found: &Scan, token: &str) -> Classified {
     for m in &found.mentions {
         let unexempt = |why| Unexempt {
             line: m.line,
-            function: m.function.clone(),
+            context: m.context.clone(),
             why,
         };
         match m.line.checked_sub(1).and_then(marker_at) {
@@ -513,7 +602,7 @@ struct Scanner<'p> {
 /// `not`-guard biases the rare `cfg(all(not(x), test))` toward being **scanned** (a
 /// safe false-positive) rather than letting a production-only `cfg(not(test))` slip
 /// through unscanned.
-fn is_test_cfg(attrs: &[syn::Attribute]) -> bool {
+pub(crate) fn is_test_cfg(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|a| match &a.meta {
         syn::Meta::List(ml) if ml.path.is_ident("cfg") => {
             let toks = ml.tokens.to_string();
@@ -526,7 +615,7 @@ fn is_test_cfg(attrs: &[syn::Attribute]) -> bool {
 /// Whether an attribute list carries a test-harness attribute (`#[test]`,
 /// `#[tokio::test]`, `#[rstest]`). Belt-and-suspenders for a test fn that is not
 /// wrapped in a `#[cfg(test)]` module.
-fn has_test_attr(attrs: &[syn::Attribute]) -> bool {
+pub(crate) fn has_test_attr(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|a| {
         a.path()
             .segments
@@ -592,7 +681,12 @@ impl Scanner<'_> {
         }
         self.hits.push(Mention {
             line,
-            function: self.fn_stack.last().cloned().unwrap_or_default(),
+            context: self
+                .fn_stack
+                .last()
+                .cloned()
+                .map(MentionContext::Function)
+                .unwrap_or(MentionContext::Module),
         });
     }
 
@@ -785,7 +879,7 @@ impl Gate {
         let mut out: Vec<(usize, String)> = c
             .unexempt
             .into_iter()
-            .map(|u| (u.line, u.function))
+            .map(|u| (u.line, u.context.legacy_label()))
             .collect();
         out.extend(c.orphans.into_iter().map(|line| (line, String::new())));
         out.sort();
@@ -825,11 +919,7 @@ impl Gate {
                 Ok(found) => {
                     let c = classify(source, &found, &token);
                     for u in c.unexempt {
-                        let where_ = if u.function.is_empty() {
-                            "at module scope".to_string()
-                        } else {
-                            format!("in fn `{}`", u.function)
-                        };
+                        let where_ = mention_where(&u.context);
                         lines.push(match u.why {
                             Why::Unmarked => format!(
                                 "{path}:{}: {} {where_} {}",
@@ -1314,7 +1404,7 @@ mod marker_tests {
         let c = classified("fn a() { GUARDED; }\n");
         assert_eq!(c.unexempt.len(), 1);
         assert_eq!(c.unexempt[0].why, Why::Unmarked);
-        assert_eq!(c.unexempt[0].function, "a");
+        assert_eq!(c.unexempt[0].context.legacy_label(), "a");
         assert!(c.marked.is_empty());
     }
 

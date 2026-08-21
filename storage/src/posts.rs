@@ -58,6 +58,7 @@ pub struct PostRecord {
     pub format: PostFormat,
     /// HTML produced by `render()` from the `body`, sanitized at that mint point —
     /// safe to emit unescaped (#445).
+    // rendered-html-from-trusted:allow post read model carries render-sanitized HTML from storage (#701)
     pub rendered_html: RenderedHtml,
     /// When the post was first created.
     pub created_at: DateTime<Utc>,
@@ -131,6 +132,7 @@ pub struct PostRevisionRecord {
     pub format: PostFormat,
     /// HTML produced by `render()` at the time of this revision, sanitized at that
     /// mint point — safe to emit unescaped (#445).
+    // rendered-html-from-trusted:allow revision read model carries render-sanitized HTML from storage (#701)
     pub rendered_html: RenderedHtml,
     /// When this revision was created.
     pub edited_at: DateTime<Utc>,

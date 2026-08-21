@@ -325,6 +325,7 @@ pub(crate) struct PostRow {
     slug: Slug,
     body: PostBody,
     format: PostFormat,
+    // rendered-html-from-trusted:allow storage row decodes the reviewed sanitized rendered_html column (#701)
     rendered_html: RenderedHtml,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
