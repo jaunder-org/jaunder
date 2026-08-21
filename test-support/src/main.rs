@@ -116,6 +116,8 @@ async fn main() -> anyhow::Result<()> {
 /// evaluates to the handler's `Result<()>`, so `main` stays a thin shell and each
 /// command is a small, individually-covered unit (#232).
 async fn run(cli: Cli) -> anyhow::Result<()> {
+    let _telemetry = host::telemetry::init_tracing(false);
+
     match cli.command {
         Commands::SeedPosts {
             db,

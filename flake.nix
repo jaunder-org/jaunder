@@ -655,6 +655,44 @@
         # fail the check only after the copies are safe. On success the copies land
         # in $out; on failure they live in the --keep-failed build dir for xtask's
         # rescue_diagnostics to recover. Shared by both backends so they can't drift.
+        # Seed-span verification is VM-local test glue, not reusable application
+        # logic: it must run in the guest after the seed helper and before
+        # Playwright, with the collector stopped so short-lived seed-process spans
+        # are flushed into the JSONL file the VM owns. Keeping it beside the e2e
+        # script keeps the assertion, VM paths, and collector lifecycle in one
+        # place.
+        assertSeedStorageSpans = ''
+          def assert_seed_storage_spans():
+            import json
+            machine.succeed("systemctl stop otel-collector.service")
+            raw = machine.succeed("test -s /var/lib/jaunder/capture/otel-traces.jsonl && cat /var/lib/jaunder/capture/otel-traces.jsonl")
+            wanted = {"e2e.seed.jaunder", "e2e.seed.test-support"}
+            seen = set()
+            for line_number, line in enumerate(raw.splitlines(), 1):
+              try:
+                record = json.loads(line)
+              except json.JSONDecodeError as error:
+                raise AssertionError("malformed seed otel-traces.jsonl line %d: %s" % (line_number, error)) from error
+              for resource_span in record.get("resourceSpans", []):
+                attrs = {
+                  attr.get("key"): attr.get("value", {}).get("stringValue", "")
+                  for attr in resource_span.get("resource", {}).get("attributes", [])
+                }
+                process = attrs.get("jaunder.e2e.seed_process")
+                if process not in wanted:
+                  continue
+                for scope_span in resource_span.get("scopeSpans", []):
+                  if any(span.get("name", "").startswith("storage.") for span in scope_span.get("spans", [])):
+                    seen.add(process)
+            missing = sorted(wanted - seen)
+            assert not missing, "seed trace lacks storage spans for: %s" % ", ".join(missing)
+            machine.succeed("systemctl start otel-collector.service")
+            machine.wait_for_unit("otel-collector.service", timeout=60)
+            machine.succeed("systemctl start jaunder.service")
+            machine.wait_for_unit("jaunder.service", timeout=60)
+            machine.wait_for_open_port(3000, timeout=30)
+        '';
+
         e2eRunAndCapture =
           {
             backend,
@@ -792,6 +830,8 @@
               };
 
             testScript = ''
+              ${assertSeedStorageSpans}
+
               def seed_db():
                 # Seed the fresh VM's already-migrated DB. This VM is single-use and
                 # jaunder.service's boot preStart (`jaunder init`) has already created
@@ -799,11 +839,13 @@
                 # nothing writes user data before this point, so no wipe is needed
                 # (#271). Seeding runs against the running boot service.
                 machine.succeed(
-                  "JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture devtool seed-e2e"
+                  "JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317 devtool seed-e2e"
                   + " --db sqlite:/var/lib/jaunder/data/jaunder.db"
                   + " --test-support-bin test-support"
                   + " --jaunder-bin jaunder"
                 )
+                assert_seed_storage_spans()
+
 
               machine.start()
               machine.wait_for_unit("otel-collector.service", timeout=60)
@@ -927,6 +969,8 @@
 
               machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
 
+              ${assertSeedStorageSpans}
+
               def seed_db():
                 # Seed the fresh VM's already-migrated DB. This VM is single-use;
                 # create-pg-db + the delayed jaunder.service boot preStart
@@ -934,11 +978,13 @@
                 # (incl. migration 0018 reference data), and nothing writes user data
                 # before this point, so no TRUNCATE is needed (#271).
                 machine.succeed(
-                  "JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture devtool seed-e2e"
+                  "JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317 devtool seed-e2e"
                   + " --db postgres://jaunder:testpassword@127.0.0.1/jaunder"
                   + " --test-support-bin test-support"
                   + " --jaunder-bin jaunder"
                 )
+                assert_seed_storage_spans()
+
 
               # Seed a fresh DB and run the one browser this derivation targets.
               # Browsers run as separate derivations (one VM each) so their state

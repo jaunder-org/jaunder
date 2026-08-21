@@ -441,3 +441,19 @@ Browser auto-instrumentation, a browser OTel SDK, direct OTLP export, a public
 collector, and a dynamically traceparent-stamped CSR shell remain outside this
 decision. Diagnostic transport/export failure and panic diagnostics use only
 their local fallback sink so observability cannot recurse through itself.
+
+## Addendum (2026-08-20): shared host process telemetry (issue #769)
+
+OTLP process telemetry setup moved from `server::observability` into
+`host::telemetry`. The guard contract from the 2026-06-27 addendum is unchanged:
+the process that writes to the e2e database owns one `TelemetryGuard` across the
+command body, and dropping it flushes traces/metrics on every exit path without
+changing the command's status. The owners are now `jaunder serve`, one-shot
+production CLI commands, and the `test-support` seed binary.
+
+Scoped e2e diagnostics remain server-owned per ADR-0057. `diag.log` is still a
+server capture artifact; one-shot CLI commands and `test-support` write only
+OTLP telemetry when an endpoint is configured. The e2e seed harness marks its
+closed seed processes as `e2e.seed.jaunder` or `e2e.seed.test-support` so the VM
+gate can prove both binaries contributed `storage.*` spans to
+`otel-traces.jsonl`.

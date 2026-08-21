@@ -8,8 +8,9 @@
 //! (issue #334, ADR-0058 as clarified); [`auth`] holds host-side HTTP credential
 //! parsing + session-cookie construction pushed down from `web` (issue #334);
 //! [`metrics`] holds the cardinality-safe OpenTelemetry emitter facade pushed down
-//! from `common` (issue #345, ADR-0011/ADR-0058); and [`smtp_config`] holds the
-//! validated outbound relay aggregate (issue #257, ADR-0058).
+//! from `common` (issue #345, ADR-0011/ADR-0058); [`telemetry`] owns shared
+//! host-process OTLP setup/shutdown (ADR-0011/ADR-0058); and [`smtp_config`] holds
+//! the validated outbound relay aggregate (issue #257, ADR-0058).
 
 pub mod auth;
 pub mod capture;
@@ -17,4 +18,5 @@ pub mod error;
 pub mod invite;
 pub mod metrics;
 pub mod smtp_config;
+pub mod telemetry;
 pub mod token;

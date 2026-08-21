@@ -1,14 +1,17 @@
 # Observability
 
-This project emits OpenTelemetry traces from both the backend and end-to-end
-test runner.
+This project emits OpenTelemetry traces from the backend, host-side seed
+processes, and end-to-end test runner.
 
 ## Backend
 
-- Backend spans are produced via `tracing` + OpenTelemetry in the `server`
-  crate.
-- In e2e VM checks, traces are exported to the in-VM collector and written under
-  the capture-dir contract (#332):
+- Backend spans are produced via `tracing` + OpenTelemetry. Shared host-process
+  OTLP setup and shutdown live in `host::telemetry`; the server, production CLI
+  commands, and `test-support` all hold the same guard. Server-scoped HTTP spans
+  and e2e diagnostics stay in `server::observability`.
+- In e2e VM checks, the running server, production `jaunder site-config set`
+  seed steps, and the `test-support` seed binary export to the in-VM collector.
+  The collector writes under the capture-dir contract (#332):
   - `/var/lib/jaunder/capture/otel-traces.jsonl` (inside the VM)
   - lifted per combo inside `capture-<backend>.tar.gz` (the same bundle that
     carries `diag.log` and the mail/websub JSONL — see below)
@@ -23,7 +26,7 @@ exact:
 
 - **Spans**: `e2e.test.lifecycle`, `e2e.test`, `e2e.context_mint`, `e2e.page`,
   `e2e.teardown`, `e2e.flow.*` (browser side); `request`, `storage.*`,
-  `crypto.*`, `site.serve` (server side).
+  `crypto.*`, `site.serve` (server and seed-process side).
 - **Per-test JSON attributes on `e2e.test`**: actions (`e2e.action_top_json`),
   navigations (`e2e.navigation_top_json`), resources
   (`e2e.resource_summary_json`), long tasks (`e2e.long_tasks_json`), slow
