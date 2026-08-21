@@ -389,7 +389,7 @@ git commit -m "build(nix): exercise sandbox cargo-deny through devtool (#1074)"
   architecture projection. The ADR draft remains in the gitignored drafts pen
   until `jaunder-ship` runs `cargo xtask adr promote`.
 
-- [ ] **Step 1: Format docs**
+- [x] **Step 1: Format docs**
 
 Run:
 
@@ -399,7 +399,7 @@ devtool run -- prettier -w docs/superpowers/specs/2026-08-21-issue-1074-offline-
 
 Expected: PASS.
 
-- [ ] **Step 2: Run the full check gate**
+- [x] **Step 2: Run the full check gate**
 
 Run:
 
@@ -409,7 +409,7 @@ devtool run -- cargo xtask check
 
 Expected: PASS.
 
-- [ ] **Step 3: Inspect status**
+- [x] **Step 3: Inspect status**
 
 Run:
 
@@ -422,7 +422,7 @@ Expected tracked changes are limited to implementation files from earlier tasks,
 unless someone force-added ignored files; if it appears as staged, unstage it
 and keep it local for promotion.
 
-- [ ] **Step 4: Commit lifecycle docs**
+- [x] **Step 4: Commit lifecycle docs**
 
 Tick completed checkboxes for Task 3, then stage:
 
