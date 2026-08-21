@@ -1,16 +1,17 @@
-//! The 8 non-compiling static checks (#188). This is the single home of their tool +
-//! args: the host verify ladder runs them via `cargo run -p devtool -- check <name>`
-//! (so a local `tools/` edit is reflected) and the nix `static-checks` derivation runs
-//! `devtool check --all` from the prebuilt `devtoolBin`. The *compiling* checks
-//! (`clippy`/`deny`) stay on their crane derivations; `tools-clippy`/`xtask-*` stay
-//! host-only — see the ADR.
+//! The migrated static checks. This is the single home of their tool + args:
+//! the host verify ladder runs the non-compiling checks via
+//! `cargo run -p devtool -- check <name>` (so a local `tools/` edit is
+//! reflected), and the nix `static-checks` derivation runs
+//! `devtool check --all --sandbox-cargo` from the prebuilt `devtoolBin`.
+//! `cargo-deny` joins only under its documented sandbox policy; `clippy` and
+//! workspace-local clippy checks stay outside this list.
 
 use std::ffi::OsString;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-/// The 8 non-compiling static checks devtool owns, in the host gate's order.
+/// The static checks devtool owns, in the host gate's order.
 ///
 /// Kept in sync with the `devtool_check(<name>)` calls in
 /// `xtask/src/steps/static_checks.rs::specs()` (the host mirror — it can't import this
@@ -23,6 +24,7 @@ pub const ALL: &[&str] = &[
     "elisp-fmt",
     "ert",
     "byte-compile",
+    "cargo-deny",
     "tools-fmt",
 ];
 
@@ -81,7 +83,8 @@ enum CargoMode {
 #[derive(Debug, Eq, PartialEq)]
 struct CargoCheck {
     workspace: CargoWorkspace,
-    args: Vec<String>,
+    host_args: Vec<String>,
+    sandbox_args: Vec<String>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -111,10 +114,14 @@ impl CheckSpec {
                 args: args.clone(),
                 env: Vec::new(),
             }),
-            Self::Cargo(CargoCheck { workspace, args }) => match cargo_mode {
+            Self::Cargo(CargoCheck {
+                workspace,
+                host_args,
+                sandbox_args,
+            }) => match cargo_mode {
                 CargoMode::Host => Ok(BuiltCommand {
                     program: "cargo",
-                    args: workspace.cargo_args(args)?,
+                    args: workspace.cargo_args(host_args)?,
                     env: Vec::new(),
                 }),
                 CargoMode::Sandbox => {
@@ -127,7 +134,7 @@ impl CheckSpec {
                                 workspace.name()
                             )
                         })?;
-                    let routed_args = workspace.cargo_args(args)?;
+                    let routed_args = workspace.cargo_args(sandbox_args)?;
                     let mut sandbox_args = Vec::with_capacity(routed_args.len() + 1);
                     sandbox_args.push("--offline".to_string());
                     sandbox_args.extend(routed_args);
@@ -151,15 +158,19 @@ impl CheckSpec {
 /// `xtask::steps::static_checks::specs` — this is now their single source of truth.
 fn spec(name: &str, fix: bool) -> Result<CheckSpec> {
     let owned = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let cargo_check = |workspace, args: &[&str]| {
+        let args = owned(args);
+        CheckSpec::Cargo(CargoCheck {
+            workspace,
+            host_args: args.clone(),
+            sandbox_args: args,
+        })
+    };
     Ok(match name {
-        "fmt" => CheckSpec::Cargo(CargoCheck {
-            workspace: CargoWorkspace::Product,
-            args: if fix {
-                owned(&["fmt"])
-            } else {
-                owned(&["fmt", "--check"])
-            },
-        }),
+        "fmt" => cargo_check(
+            CargoWorkspace::Product,
+            if fix { &["fmt"] } else { &["fmt", "--check"] },
+        ),
         "leptosfmt" => CheckSpec::External {
             program: "leptosfmt",
             args: if fix {
@@ -212,14 +223,19 @@ fn spec(name: &str, fix: bool) -> Result<CheckSpec> {
             program: "emacs",
             args: owned(&["--batch", "-Q", "-l", "elisp/scripts/byte-compile.el"]),
         },
-        "tools-fmt" => CheckSpec::Cargo(CargoCheck {
-            workspace: CargoWorkspace::Tools,
-            args: if fix {
-                owned(&["fmt", "--all"])
-            } else {
-                owned(&["fmt", "--all", "--check"])
-            },
+        "cargo-deny" => CheckSpec::Cargo(CargoCheck {
+            workspace: CargoWorkspace::Product,
+            host_args: owned(&["deny", "check"]),
+            sandbox_args: owned(&["deny", "check", "bans", "licenses", "sources"]),
         }),
+        "tools-fmt" => cargo_check(
+            CargoWorkspace::Tools,
+            if fix {
+                &["fmt", "--all"]
+            } else {
+                &["fmt", "--all", "--check"]
+            },
+        ),
         other => bail!("unknown check '{other}' (known: {ALL:?})"),
     })
 }
@@ -357,7 +373,12 @@ mod tests {
     fn workspace_selection_owns_manifest_routing() {
         let err = CheckSpec::Cargo(CargoCheck {
             workspace: CargoWorkspace::Product,
-            args: vec![
+            host_args: vec![
+                "fmt".to_string(),
+                "--manifest-path".to_string(),
+                "tools/Cargo.toml".to_string(),
+            ],
+            sandbox_args: vec![
                 "fmt".to_string(),
                 "--manifest-path".to_string(),
                 "tools/Cargo.toml".to_string(),
@@ -468,6 +489,56 @@ mod tests {
             build_host("byte-compile", true),
             build_host("byte-compile", false)
         );
+    }
+
+    #[test]
+    fn cargo_deny_uses_full_host_policy() {
+        let cmd = build_host("cargo-deny", false);
+
+        assert_eq!(cmd.program, "cargo");
+        assert_eq!(cmd.args, vec!["deny", "check"]);
+        assert!(cmd.env.is_empty());
+        assert_eq!(build_host("cargo-deny", true), cmd);
+    }
+
+    #[test]
+    fn sandbox_cargo_deny_skips_advisories_and_uses_product_home() {
+        let cmd = spec("cargo-deny", false)
+            .unwrap()
+            .build_with_env(CargoMode::Sandbox, |name| match name {
+                "JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME" => {
+                    Some("/nix/store/product-cargo-home".into())
+                }
+                "JAUNDER_DEVTOOL_TOOLS_CARGO_HOME" => Some("/nix/store/tools-cargo-home".into()),
+                _ => None,
+            })
+            .unwrap();
+
+        assert_eq!(cmd.program, "cargo");
+        assert_eq!(
+            cmd.args,
+            vec!["--offline", "deny", "check", "bans", "licenses", "sources"]
+        );
+        assert!(!cmd.args.iter().any(|arg| arg == "advisories"));
+        assert!(cmd.env.contains(&(
+            "CARGO_HOME",
+            OsString::from("/nix/store/product-cargo-home")
+        )));
+        assert!(
+            cmd.env
+                .contains(&("CARGO_NET_OFFLINE", OsString::from("true")))
+        );
+    }
+
+    #[test]
+    fn sandbox_cargo_deny_requires_product_home() {
+        let err = spec("cargo-deny", false)
+            .unwrap()
+            .build_with_env(CargoMode::Sandbox, |_| None)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME"), "{err}");
     }
 
     #[test]
