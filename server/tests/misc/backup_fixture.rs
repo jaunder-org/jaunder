@@ -9,7 +9,7 @@ use common::test_support::{
     parse_display_name, parse_filename,
 };
 use common::username::Username;
-use common::visibility::{AudienceTarget, ViewerIdentity};
+use common::visibility::{AudienceTarget, ViewerIdentity, local_subscriber_identity};
 use jaunder::cli::StorageArgs;
 use std::sync::Arc;
 use storage::test_support::{SeedRawPost, fp};
@@ -113,7 +113,7 @@ async fn seed_named_audience_post(
         .expect("local channel");
     let subscription = state
         .subscriptions
-        .subscribe(author, local, &i64::from(viewer).to_string())
+        .subscribe(author, &local_subscriber_identity(local, viewer))
         .await
         .expect("subscribe viewer");
     let audience = state

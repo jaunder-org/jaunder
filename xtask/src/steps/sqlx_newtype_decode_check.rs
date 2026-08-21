@@ -788,17 +788,6 @@ const ALLOWLIST: &[Allowed] = &[
     // ---- subscriptions ----
     Allowed {
         file: "subscriptions.rs",
-        function: "list_subscribers",
-        target: "(SubscriptionId,ChannelId,String,DateTime<Utc>)",
-        what: "DB::LIST_ACTIVE_SUBSCRIBERS",
-        count: 1,
-        category: Category::DeferredNewtype,
-        reason: "subscriber_ref is a channel-scoped opaque reference — a domain value with no \
-                 type. Deferred to #750: the fix spans the admission seam, the ChannelId \
-                 pairing and the wire DTOs, not this decode",
-    },
-    Allowed {
-        file: "subscriptions.rs",
         function: "list_subscriber_summaries",
         target: "(SubscriptionId,String)",
         what: "DB::LIST_SUBSCRIBER_SUMMARIES",

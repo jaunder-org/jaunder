@@ -5,6 +5,7 @@ use chrono::Datelike;
 use common::ids::{PostId, UserId};
 use common::seed::{AuthoredPost, TimelinePage};
 use common::test_support::parse_audience_name;
+use common::visibility::local_subscriber_identity;
 use server_fn::ServerFn;
 use web::posts::{EditPostPreview, SavedPost};
 
@@ -339,7 +340,7 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
         .unwrap();
     let sub_id = state
         .subscriptions
-        .subscribe(author, local, &i64::from(subscriber).to_string())
+        .subscribe(author, &local_subscriber_identity(local, subscriber))
         .await
         .unwrap();
     state
@@ -477,7 +478,10 @@ async fn single_post_permalink_hides_subscribers_post_from_anonymous(#[case] bac
     let local = state.subscriptions.local_channel_id().await.unwrap();
     state
         .subscriptions
-        .subscribe(author.user_id, local, &i64::from(subscriber).to_string())
+        .subscribe(
+            author.user_id,
+            &local_subscriber_identity(local, subscriber),
+        )
         .await
         .unwrap();
 

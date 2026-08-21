@@ -1,6 +1,8 @@
 //! Shared visibility types: channels, subscription status, audience targeting,
 //! the viewer identity, and the subscription-admission seam. See ADR-0020.
 
+use macros::StrNewtype;
+
 use crate::ids::{AudienceId, ChannelId, UserId};
 
 // Every string-backed enum here is a closed string enum (`#[text_enum]`, ADR-0075 as
@@ -70,6 +72,42 @@ pub enum AudienceBase {
     Subscribers,
 }
 
+/// The stored `subscriptions.subscriber_ref` value.
+///
+/// This is a storage-domain value, not display text. It is interpreted only with
+/// its `channel_id`: for the seeded `local` channel it is the decimal local
+/// [`UserId`] spelling, while remote channels own their own free-form namespace.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, StrNewtype)]
+#[str_newtype(infallible)]
+pub struct SubscriberRef(String);
+
+impl From<String> for SubscriberRef {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+/// Persisted subscription identity.
+///
+/// The `subscriber_ref` leaf has meaning only inside its channel namespace. Keep
+/// the pair together across storage boundaries so local-user spellings cannot be
+/// confused with remote subscriber references.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct SubscriberIdentity {
+    pub channel_id: ChannelId,
+    pub subscriber_ref: SubscriberRef,
+}
+
+impl SubscriberIdentity {
+    #[must_use]
+    pub fn new(channel_id: ChannelId, subscriber_ref: SubscriberRef) -> Self {
+        Self {
+            channel_id,
+            subscriber_ref,
+        }
+    }
+}
+
 /// Who is reading. Wider than Layer A needs (only `Anonymous` and `Local` are
 /// constructed today) so non-local channels need no signature change in Layers
 /// B/C. `Remote`'s `subscriber_ref` makes this non-`Copy`. See ADR-0020.
@@ -91,10 +129,14 @@ pub enum ViewerIdentity {
     /// happens to parse as.
     Remote {
         channel_id: ChannelId,
-        subscriber_ref: String,
+        subscriber_ref: SubscriberRef,
     },
 }
 
+#[must_use]
+pub fn local_subscriber_identity(channel_id: ChannelId, user_id: UserId) -> SubscriberIdentity {
+    SubscriberIdentity::new(channel_id, local_subscriber_ref(user_id))
+}
 impl ViewerIdentity {
     /// Local viewer constructor used by Layer A: a logged-in account on the
     /// `local` channel.
@@ -114,8 +156,8 @@ impl ViewerIdentity {
 /// must agree on it exactly, or a subscription silently stops matching. This
 /// is the one place it is defined; call it rather than spelling it again (#6).
 #[must_use]
-pub fn local_subscriber_ref(user_id: UserId) -> String {
-    user_id.to_string()
+pub fn local_subscriber_ref(user_id: UserId) -> SubscriberRef {
+    user_id.to_string().into()
 }
 
 /// The local user id of an account viewer, for *display* of owner controls.
@@ -250,8 +292,7 @@ pub trait SubscriptionPolicy: Send + Sync {
     fn initial_status(
         &self,
         author_user_id: UserId,
-        channel_id: ChannelId,
-        subscriber_ref: &str,
+        subscriber: &SubscriberIdentity,
     ) -> SubscriptionStatus;
 }
 
@@ -259,7 +300,7 @@ pub trait SubscriptionPolicy: Send + Sync {
 pub struct OpenSubscriptionPolicy;
 
 impl SubscriptionPolicy for OpenSubscriptionPolicy {
-    fn initial_status(&self, _a: UserId, _c: ChannelId, _r: &str) -> SubscriptionStatus {
+    fn initial_status(&self, _a: UserId, _s: &SubscriberIdentity) -> SubscriptionStatus {
         SubscriptionStatus::Active // Layer A NOOP auto-approve; M13 swaps this here.
     }
 }
@@ -410,9 +451,12 @@ mod tests {
     }
 
     #[test]
-    fn open_policy_returns_active() {
+    fn open_policy_auto_approves() {
         assert_eq!(
-            OpenSubscriptionPolicy.initial_status(UserId::from(1), ChannelId::from(1), "1"),
+            OpenSubscriptionPolicy.initial_status(
+                UserId::from(1),
+                &local_subscriber_identity(ChannelId::from(1), UserId::from(2))
+            ),
             SubscriptionStatus::Active
         );
     }
@@ -455,7 +499,7 @@ mod tests {
         // owner-only controls render for a viewer who is not the owner.
         let impostor = ViewerIdentity::Remote {
             channel_id: ChannelId::from(2),
-            subscriber_ref: "42".to_owned(),
+            subscriber_ref: "42".to_owned().into(),
         };
         assert_eq!(viewer_user_id(&impostor), None);
     }
@@ -467,7 +511,7 @@ mod tests {
         assert_eq!(
             viewer_user_id(&ViewerIdentity::Remote {
                 channel_id: ChannelId::from(2),
-                subscriber_ref: "https://remote.example/users/alice".to_owned(),
+                subscriber_ref: "https://remote.example/users/alice".to_owned().into(),
             }),
             None
         );

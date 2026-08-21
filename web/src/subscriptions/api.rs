@@ -8,7 +8,7 @@ use super::server::resolve_author;
 #[cfg(feature = "server")]
 use {
     crate::auth::require_auth,
-    common::visibility::local_subscriber_ref,
+    common::visibility::local_subscriber_identity,
     leptos::prelude::*,
     std::sync::Arc,
     storage::{SubscriptionStorage, UserStorage},
@@ -26,9 +26,8 @@ pub async fn subscribe(author_username: Username) -> WebResult<()> {
     let auth = require_auth().await?;
     let author_id = resolve_author(users.as_ref(), &author_username, auth.user_id).await?;
     let channel_id = subscriptions.local_channel_id().await?;
-    subscriptions
-        .subscribe(author_id, channel_id, &local_subscriber_ref(auth.user_id))
-        .await?;
+    let subscriber = local_subscriber_identity(channel_id, auth.user_id);
+    subscriptions.subscribe(author_id, &subscriber).await?;
     Ok(())
 }
 
@@ -42,9 +41,8 @@ pub async fn unsubscribe(author_username: Username) -> WebResult<()> {
     let auth = require_auth().await?;
     let author_id = resolve_author(users.as_ref(), &author_username, auth.user_id).await?;
     let channel_id = subscriptions.local_channel_id().await?;
-    subscriptions
-        .unsubscribe(author_id, channel_id, &local_subscriber_ref(auth.user_id))
-        .await?;
+    let subscriber = local_subscriber_identity(channel_id, auth.user_id);
+    subscriptions.unsubscribe(author_id, &subscriber).await?;
     Ok(())
 }
 

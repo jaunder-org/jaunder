@@ -162,11 +162,11 @@ In `storage/src/subscriptions.rs`:
 
 - add `SubscriberSummaryRecord` near `SubscriptionRecord`;
 - add `list_subscriber_summaries` to `SubscriptionStorage`;
-- add `LIST_SUBSCRIBER_SUMMARIES` to `SubscriptionDialect`;
+- rely on `SubscriptionDialect`'s shared `LIST_SUBSCRIBER_SUMMARIES` default;
 - implement the method with `query_as::<_, (SubscriptionId, String)>`, binding
   `author_user_id` once and mapping rows to `SubscriberSummaryRecord`.
 
-SQLite SQL shape:
+Shared SQLite/Postgres SQL shape:
 
 ```sql
 SELECT s.subscription_id,
@@ -176,21 +176,6 @@ JOIN subscription_statuses st ON st.status_id = s.status_id
 LEFT JOIN users u
   ON s.channel_id = (SELECT channel_id FROM channels WHERE name = 'local')
  AND s.subscriber_ref = CAST(u.user_id AS TEXT)
-WHERE s.author_user_id = ?
-  AND st.name = 'active'
-ORDER BY s.subscription_id
-```
-
-Postgres SQL shape:
-
-```sql
-SELECT s.subscription_id,
-       COALESCE(u.username::text, s.subscriber_ref) AS label
-FROM subscriptions s
-JOIN subscription_statuses st ON st.status_id = s.status_id
-LEFT JOIN users u
-  ON s.channel_id = (SELECT channel_id FROM channels WHERE name = 'local')
- AND s.subscriber_ref = u.user_id::text
 WHERE s.author_user_id = $1
   AND st.name = 'active'
 ORDER BY s.subscription_id
