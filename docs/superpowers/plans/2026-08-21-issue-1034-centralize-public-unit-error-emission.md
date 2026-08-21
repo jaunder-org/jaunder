@@ -308,13 +308,13 @@ shared helper rather than only proving behavior.
 - Consumes: completed implementation from Tasks 1 and 2.
 - Produces: checked evidence that the branch satisfies the approved spec.
 
-- [ ] **Step 1: Re-read the approved spec against the final diff**
+- [x] **Step 1: Re-read the approved spec against the final diff**
 
   Confirm every acceptance criterion in
   `docs/superpowers/specs/2026-08-21-issue-1034-centralize-public-unit-error-emission.md`
   maps to the final diff and test evidence.
 
-- [ ] **Step 2: Run the full local check**
+- [x] **Step 2: Run the full local check**
 
   Run:
 
@@ -324,13 +324,13 @@ shared helper rather than only proving behavior.
 
   Expected: PASS.
 
-- [ ] **Step 3: Record completion in this plan**
+- [x] **Step 3: Record completion in this plan**
 
   Tick the final task checkbox and keep the concrete check evidence in the
   commit message or PR body. Do not add a separate evidence section unless the
   implementation uncovers an unusual caveat.
 
-- [ ] **Step 4: Commit final plan progress if needed**
+- [x] **Step 4: Commit final plan progress if needed**
 
   If only this plan file changed since Task 2, run the commit gate first:
 
