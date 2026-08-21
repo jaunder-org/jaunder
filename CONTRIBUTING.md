@@ -112,11 +112,11 @@ during the hook fail closed with diagnostics; pre-existing delete/rename state
 and untracked files stay unstaged and tolerated. Bypass with
 `SKIP_PRE_COMMIT=1 git commit` for WIP.
 
-**`pre-push`** runs `cargo xtask validate --no-e2e` (verify-only): the static
-checks plus the Nix `coverage` check, gating test failures and coverage
-regressions, and it refuses a dirty tree. The e2e VM checks are not run here —
-they run in CI, or locally via `cargo xtask validate`. Bypass with
-`SKIP_PRE_PUSH=1 git push` for WIP.
+**`pre-push`** runs `cargo xtask prepush`: the fast verify-only host surface
+plus the host-native product Rust test lane, with the same clean-tree refusal as
+`validate`. The e2e VM checks and hermetic Nix coverage/wasm/doctest checks are
+not run here — they run in CI, or locally via `cargo xtask validate`. Bypass
+with `SKIP_PRE_PUSH=1 git push` for WIP.
 
 ## Development workflow
 
@@ -206,9 +206,11 @@ it is needed.
 ## Testing
 
 There are several testing layers in this repository. Use the smallest one that
-matches the change first, then move up to the broader checks before pushing.
-Never remove functionality to pass tests, and never bypass or suppress testing,
-coverage, or linting without explicit approval.
+matches the change first, then move up only when the boundary needs a broader
+signal: `prepush` for local push, CI for hermetic PR proof, and full `validate`
+for local full-gate confidence. Never remove functionality to pass tests, and
+never bypass or suppress testing, coverage, or linting without explicit
+approval.
 
 Every HTTP endpoint must have both an integration test and an end-to-end test.
 Unit tests belong in the same file as the code being tested. End-to-end tests
@@ -351,17 +353,17 @@ consumes fails the test.
 The driver for all checks is `cargo xtask`. Host-side steps cover static checks,
 clippy, the standalone `xtask`/`tools` workspaces, and the day-to-day
 root-workspace Rust tests. Coverage, wasm browser tests, doctests, and e2e still
-run in hermetic Nix checks where that isolation is load-bearing. When
-`cargo xtask validate` is green, you may push.
+run in hermetic Nix checks where that isolation is load-bearing. The local push
+hook is intentionally faster than the hermetic CI backstop.
 
-| Command                         | Runs                                                                                                                                       | Formatting    |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------- |
-| `cargo xtask test-local`        | host-native root-workspace Rust tests through `nextest`, with an ephemeral PostgreSQL and shared `sccache` setup for repeated local runs   | never mutates |
-| `cargo xtask precommit`         | host surface from `cargo xtask check --no-test`, then safe-staging reconciliation — the `.githooks/pre-commit` hook runs this path         | auto-fixes    |
-| `cargo xtask check --no-test`   | host static checks + clippy + repo-shape/type-safety gates + host tests — the precommit host surface                                       | auto-fixes    |
-| `cargo xtask check`             | + `test-local` for root-workspace Rust tests, plus the Nix `wasm-tests` and `doctests`/`doctests-gate` checks                              | auto-fixes    |
-| `cargo xtask validate --no-e2e` | static + clippy + host tests + the Nix `wasm-tests`, `coverage`/`coverage-gate`, and `doctests`/`doctests-gate` checks — the pre-push gate | never mutates |
-| `cargo xtask validate`          | + e2e (all four `{sqlite,postgres}×{chromium,firefox}` combinations and the live elisp integration suite) — the full local gate            | never mutates |
+| Command                         | Runs                                                                                                                                                            | Formatting    |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| `cargo xtask check --no-test`   | host static checks + clippy + repo-shape/type-safety gates + host tests — the precommit host surface                                                            | auto-fixes    |
+| `cargo xtask check`             | + `test-local` for root-workspace Rust tests, plus the Nix `wasm-tests` and `doctests`/`doctests-gate` checks                                                   | auto-fixes    |
+| `cargo xtask precommit`         | host surface from `cargo xtask check --no-test`, then safe-staging reconciliation — the `.githooks/pre-commit` hook runs this path                              | auto-fixes    |
+| `cargo xtask prepush`           | verify-only host surface + `test-local`, with clean-tree refusal — the `.githooks/pre-push` hook runs this path                                                 | never mutates |
+| `cargo xtask validate --no-e2e` | static + clippy + host tests + the Nix `wasm-tests`, `coverage`/`coverage-gate`, and `doctests`/`doctests-gate` checks — the hermetic CI/static confidence gate | never mutates |
+| `cargo xtask validate`          | + e2e (all four `{sqlite,postgres}×{chromium,firefox}` combinations and the live elisp integration suite) — the full local gate                                 | never mutates |
 
 `cargo xtask check` is the normal agent/developer feedback command. Its product
 Rust test portion is implemented through the same host-native lane exposed as
@@ -687,9 +689,9 @@ avoids the issue entirely by discarding the whole cluster.
 ### Coverage and dependency policy
 
 - Coverage is gated **host-side by xtask**, which reads the Nix `coverage`
-  check's report. It is part of `cargo xtask check` and `cargo xtask validate`
-  (and therefore the pre-push gate and CI), so coverage regressions are caught
-  before push rather than at merge.
+  check's report. It is part of `cargo xtask check`, `cargo xtask validate`, and
+  CI. It is deliberately not part of `cargo xtask prepush`, so the local push
+  hook stays fast while CI remains the non-bypassable hermetic backstop.
 - `cargo deny check` verifies dependency policy, advisories, and licensing (run
   as one of the static checks).
 

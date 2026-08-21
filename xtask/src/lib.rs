@@ -124,6 +124,11 @@ pub enum Command {
     /// then re-stages only formatter/check mutations that are provably safe for the
     /// paths the author had already staged.
     Precommit,
+    /// Fast push-time gate. Refuses a dirty working tree, then runs the
+    /// verify-only host surface plus the host-native product Rust test lane. This
+    /// is the local hook path; hermetic Nix coverage, wasm, and doctest checks stay
+    /// in `validate --no-e2e` and CI.
+    Prepush,
     /// Full gate (never mutates the tree): static + clippy + the host xtask unit
     /// suite (verify-only) + the Nix coverage check + the e2e VMs. `--no-e2e` skips
     /// the e2e VMs. Refuses a dirty working tree unless `--allow-dirty`.
@@ -432,6 +437,7 @@ impl Cli {
         match self.command {
             Command::Check { .. } => "check",
             Command::Precommit => "precommit",
+            Command::Prepush => "prepush",
             Command::Validate { .. } => "validate",
             Command::AuditWasm { .. } => "audit-wasm",
             Command::E2e { .. } => "e2e",
@@ -636,6 +642,11 @@ fn run_host_gate(sh: &xshell::Shell, mode: Mode, result: &mut CommandResult) {
     HOST_TESTS_STEP.run(sh, mode, result);
 }
 
+fn run_local_push_gate(sh: &xshell::Shell, result: &mut CommandResult) {
+    run_host_gate(sh, Mode::Check, result);
+    steps::test_local::run(sh, result, &[]);
+}
+
 fn run_precommit_with_host_gate(
     dir: &Path,
     run_gate: impl FnOnce(&mut CommandResult),
@@ -672,6 +683,13 @@ fn precommit_host_step_names_for_test() -> Vec<&'static str> {
     host_gate_step_names_for_test(Mode::Fix)
 }
 
+#[cfg(test)]
+fn prepush_step_names_for_test() -> Vec<&'static str> {
+    let mut names = host_gate_step_names_for_test(Mode::Check);
+    names.push("test-local");
+    names
+}
+
 pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
     // Reject --json for commands with no structured payload (the `traces` reporting
     // commands) before doing any work — a hollow envelope is worse than an error.
@@ -699,6 +717,19 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             run_precommit_with_host_gate(Path::new("."), |result| {
                 run_host_gate(&sh, Mode::Fix, result);
             })
+        }
+        Command::Prepush => {
+            let sh = xshell::Shell::new()?;
+            let start = std::time::Instant::now();
+            let mut result = CommandResult::new("prepush");
+            let precheck = clean_tree_precheck(false);
+            let blocked = !precheck.ok && !precheck.skipped;
+            result.push(precheck);
+            if !blocked {
+                run_local_push_gate(&sh, &mut result);
+            }
+            finalize(&mut result, start);
+            Ok(result)
         }
         Command::Validate {
             no_e2e,
@@ -1062,6 +1093,7 @@ fn clean_tree_precheck(allow_dirty: bool) -> StepResult {
 
 #[cfg(test)]
 mod cli_tests {
+
     use super::*;
     use clap::Parser;
     use std::path::PathBuf;
@@ -1073,6 +1105,26 @@ mod cli_tests {
             Command::Precommit => {}
             _ => panic!("expected precommit"),
         }
+    }
+    #[test]
+    fn prepush_parses_as_first_class_subcommand() {
+        let cli = Cli::try_parse_from(["xtask", "prepush"]).unwrap();
+        match cli.command {
+            Command::Prepush => {}
+            _ => panic!("expected prepush"),
+        }
+        assert_eq!(cli.command_name(), "prepush");
+    }
+
+    #[test]
+    fn prepush_surface_is_local_verify_host_plus_product_tests() {
+        let prepush = prepush_step_names_for_test();
+        assert!(prepush.contains(&"test-local"));
+        assert!(!prepush.contains(&"wasm-budget"));
+        assert!(!prepush.contains(&"wasm-tests"));
+        assert!(!prepush.contains(&"coverage"));
+        assert!(!prepush.contains(&"doctests"));
+        assert!(!prepush.contains(&"e2e"));
     }
 
     #[test]
