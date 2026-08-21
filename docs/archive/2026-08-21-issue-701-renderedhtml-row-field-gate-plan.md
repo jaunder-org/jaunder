@@ -212,9 +212,9 @@ coverage, and general SQL column-to-field correspondence.
 
 **Steps:**
 
-- [ ] Run `devtool run -- cargo xtask check`.
-- [ ] Stage the checked implementation and docs with `git add`.
-- [ ] Commit: `tooling: gate rendered html fields (#701)`.
+- [x] Run `devtool run -- cargo xtask check`.
+- [x] Stage the checked implementation and docs with `git add`.
+- [x] Commit: `tooling: gate rendered html fields (#701)`.
 - [x] Run the jaunder review flow against the branch work.
 - [x] Address review findings with another checked commit if needed.
-- [ ] Stop for the ship gate once review is clean.
+- [x] Continue into the ship flow once review is clean.
