@@ -9,10 +9,11 @@ use std::{fmt, str::FromStr, sync::Arc};
 
 use sqlx::postgres::PgConnectOptions;
 use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::{PgPool, SqlitePool};
 
 use crate::AppState;
-use crate::postgres::open_postgres_database;
-use crate::sqlite::open_sqlite_database;
+use crate::postgres::open_postgres_database_with_pool;
+use crate::sqlite::open_sqlite_database_with_pool;
 
 // ---------------------------------------------------------------------------
 // DbConnectOptions
@@ -272,6 +273,50 @@ pub(crate) fn sql_slow_query_threshold() -> std::time::Duration {
     sql_slow_query_threshold_with(read_sql_slow_threshold_env, warn_sql_threshold)
 }
 
+#[derive(Clone)]
+pub struct DbPoolObserver {
+    inner: DbPoolObserverInner,
+}
+
+#[derive(Clone)]
+enum DbPoolObserverInner {
+    Sqlite(SqlitePool),
+    Postgres(PgPool),
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DbPoolSnapshot {
+    pub used: u64,
+    pub idle: u64,
+    pub max: u64,
+}
+
+pub struct OpenedDatabase {
+    pub state: Arc<AppState>,
+    pub pool_observer: DbPoolObserver,
+}
+
+impl DbPoolObserver {
+    #[must_use]
+    pub fn snapshot(&self) -> DbPoolSnapshot {
+        match &self.inner {
+            DbPoolObserverInner::Sqlite(pool) => pool_snapshot(pool),
+            DbPoolObserverInner::Postgres(pool) => pool_snapshot(pool),
+        }
+    }
+}
+
+fn pool_snapshot<DB: sqlx::Database>(pool: &sqlx::Pool<DB>) -> DbPoolSnapshot {
+    let size = u64::from(pool.size());
+    let idle = u64::try_from(pool.num_idle()).unwrap_or(u64::MAX);
+    let max = u64::from(pool.options().get_max_connections());
+    DbPoolSnapshot {
+        used: size.saturating_sub(idle),
+        idle,
+        max,
+    }
+}
+
 /// Opens (or creates) the database described by `opts`, runs pending
 /// migrations, and returns an [`AppState`] bundling all storage handles.
 ///
@@ -280,9 +325,35 @@ pub(crate) fn sql_slow_query_threshold() -> std::time::Duration {
 /// Returns `Err` if the database connection pool cannot be established.
 #[tracing::instrument(name = "storage.open_database", skip(opts))]
 pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
+    Ok(open_database_with_observer(opts).await?.state)
+}
+
+/// Opens (or creates) a database and returns its storage state plus a pool observer.
+///
+/// # Errors
+///
+/// Returns `Err` if the database connection pool cannot be established.
+#[tracing::instrument(name = "storage.open_database_with_observer", skip(opts))]
+pub async fn open_database_with_observer(opts: &DbConnectOptions) -> sqlx::Result<OpenedDatabase> {
     match opts {
-        DbConnectOptions::Sqlite(options) => open_sqlite_database(options, true).await,
-        DbConnectOptions::Postgres { options, .. } => open_postgres_database(options).await,
+        DbConnectOptions::Sqlite(options) => {
+            let (state, pool) = open_sqlite_database_with_pool(options, true).await?;
+            Ok(OpenedDatabase {
+                state,
+                pool_observer: DbPoolObserver {
+                    inner: DbPoolObserverInner::Sqlite(pool),
+                },
+            })
+        }
+        DbConnectOptions::Postgres { options, .. } => {
+            let (state, pool) = open_postgres_database_with_pool(options).await?;
+            Ok(OpenedDatabase {
+                state,
+                pool_observer: DbPoolObserver {
+                    inner: DbPoolObserverInner::Postgres(pool),
+                },
+            })
+        }
     }
 }
 
@@ -295,9 +366,37 @@ pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState
 /// Returns `Err` if the database connection pool cannot be established.
 #[tracing::instrument(name = "storage.open_existing_database", skip(opts))]
 pub async fn open_existing_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
+    Ok(open_existing_database_with_observer(opts).await?.state)
+}
+
+/// Opens an existing database and returns its storage state plus a pool observer.
+///
+/// # Errors
+///
+/// Returns `Err` if the database connection pool cannot be established.
+#[tracing::instrument(name = "storage.open_existing_database_with_observer", skip(opts))]
+pub async fn open_existing_database_with_observer(
+    opts: &DbConnectOptions,
+) -> sqlx::Result<OpenedDatabase> {
     match opts {
-        DbConnectOptions::Sqlite(options) => open_sqlite_database(options, false).await,
-        DbConnectOptions::Postgres { options, .. } => open_postgres_database(options).await,
+        DbConnectOptions::Sqlite(options) => {
+            let (state, pool) = open_sqlite_database_with_pool(options, false).await?;
+            Ok(OpenedDatabase {
+                state,
+                pool_observer: DbPoolObserver {
+                    inner: DbPoolObserverInner::Sqlite(pool),
+                },
+            })
+        }
+        DbConnectOptions::Postgres { options, .. } => {
+            let (state, pool) = open_postgres_database_with_pool(options).await?;
+            Ok(OpenedDatabase {
+                state,
+                pool_observer: DbPoolObserver {
+                    inner: DbPoolObserverInner::Postgres(pool),
+                },
+            })
+        }
     }
 }
 
@@ -330,7 +429,10 @@ pub async fn database_is_empty(options: &DbConnectOptions) -> sqlx::Result<bool>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{Backend, backends, recorded_postgres_url, sqlite_url};
     use common::test_support::with_env;
+    use rstest::*;
+    use rstest_reuse::*;
     use std::time::Duration;
     use tempfile::TempDir;
 
@@ -365,6 +467,28 @@ mod tests {
         let storage = std::path::Path::new("/nonexistent/path/to/storage");
         let result = init_storage(storage);
         assert!(result.is_err());
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn opened_database_carries_pool_observer(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let options = match backend {
+            Backend::Sqlite => sqlite_url(&env.base),
+            Backend::Postgres => recorded_postgres_url(&env.base)
+                .parse()
+                .expect("recorded postgres URL"),
+        };
+        let opened = open_existing_database_with_observer(&options)
+            .await
+            .expect("open existing database with observer");
+
+        let snapshot = opened.pool_observer.snapshot();
+
+        assert!(snapshot.max >= 1);
+        assert!(snapshot.used <= snapshot.max);
+        assert!(snapshot.idle <= snapshot.max);
+        assert!(Arc::strong_count(&opened.state) >= 1);
     }
 
     #[test]

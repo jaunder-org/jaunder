@@ -444,7 +444,7 @@ come from `manifest.json`, not filesystem mtime or name sorting.
 - Later tasks consume `OpenedDatabase.state` for existing wiring and
   `OpenedDatabase.pool_observer` for metrics sampling.
 
-- [ ] **Step 1: Write failing storage observer tests**
+- [x] **Step 1: Write failing storage observer tests**
 
   Add tests in `storage/src/db.rs`:
 
@@ -483,13 +483,13 @@ come from `manifest.json`, not filesystem mtime or name sorting.
   If `DbConnectOptions` is not directly available from the test base, add a
   small test-support accessor rather than reconstructing URLs from strings.
 
-- [ ] **Step 2: Run the focused storage tests and verify failure**
+- [x] **Step 2: Run the focused storage tests and verify failure**
 
   Run: `devtool run -- cargo nextest run -p storage pool_observer`
 
   Expected: FAIL because `OpenedDatabase` and `DbPoolObserver` are not defined.
 
-- [ ] **Step 3: Implement storage-owned opened database handle**
+- [x] **Step 3: Implement storage-owned opened database handle**
 
   In `storage/src/db.rs`, implement the public `open_*_with_observer` functions
   by calling the existing crate-private `sqlite::open_sqlite_database_with_pool`
@@ -514,7 +514,7 @@ come from `manifest.json`, not filesystem mtime or name sorting.
   registration. Do not add the observer to `AppState`, Axum extensions, or
   Leptos contexts.
 
-- [ ] **Step 4: Run focused storage and command tests**
+- [x] **Step 4: Run focused storage and command tests**
 
   Run: `devtool run -- cargo nextest run -p storage pool_observer`
 
@@ -523,7 +523,7 @@ come from `manifest.json`, not filesystem mtime or name sorting.
 
   Expected: PASS.
 
-- [ ] **Step 5: Gate and commit**
+- [x] **Step 5: Gate and commit**
 
   Run: `devtool run -- cargo xtask check`
 

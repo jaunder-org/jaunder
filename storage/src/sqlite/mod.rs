@@ -41,9 +41,8 @@ pub(crate) mod atomic;
 pub use atomic::SqliteAtomicOps;
 
 mod open;
-#[cfg(any(test, feature = "test-support"))]
+pub(crate) use open::database_is_empty;
 pub(crate) use open::open_sqlite_database_with_pool;
-pub(crate) use open::{database_is_empty, open_sqlite_database};
 
 pub(crate) mod backup;
 

@@ -115,15 +115,6 @@ pub(crate) async fn open_postgres_database_with_pool(
     Ok((make_postgres_app_state(pool.clone()), pool))
 }
 
-/// Opens the `PostgreSQL` database and returns just the [`AppState`]; the pool is
-/// dropped. Tests that need to inject a pool fault use
-/// [`open_postgres_database_with_pool`] via the `test_support` harness.
-pub(crate) async fn open_postgres_database(
-    options: &PgConnectOptions,
-) -> sqlx::Result<Arc<crate::AppState>> {
-    Ok(open_postgres_database_with_pool(options).await?.0)
-}
-
 /// Returns `true` if the `PostgreSQL` database holds no user data — every table
 /// except the migration-seeded lookups is empty.
 pub(crate) async fn database_is_empty(options: &PgConnectOptions) -> sqlx::Result<bool> {

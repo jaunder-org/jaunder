@@ -26,7 +26,9 @@ use host::capture;
 use host::smtp_config::SmtpConfig;
 use storage::load_smtp_config;
 use storage::{BackupExportOptions, BackupRestoreOptions, export_backup, restore_backup};
-use storage::{init_storage, open_database, open_existing_database};
+use storage::{
+    init_storage, open_database, open_existing_database, open_existing_database_with_observer,
+};
 
 const INIT_FIRST_CONTEXT: &str = "database could not be opened; run `jaunder init` first";
 
@@ -482,7 +484,7 @@ trait StartupDatabaseOperations: Sync {
     async fn open_existing(
         &self,
         options: &storage::DbConnectOptions,
-    ) -> sqlx::Result<Arc<storage::AppState>>;
+    ) -> sqlx::Result<StartupDatabase>;
 
     async fn init(&self, storage: &StorageArgs) -> anyhow::Result<()>;
 
@@ -491,13 +493,22 @@ trait StartupDatabaseOperations: Sync {
 
 struct RealStartupDatabaseOperations;
 
+struct StartupDatabase {
+    state: Arc<storage::AppState>,
+    pool_observer: Option<storage::DbPoolObserver>,
+}
+
 #[async_trait::async_trait]
 impl StartupDatabaseOperations for RealStartupDatabaseOperations {
     async fn open_existing(
         &self,
         options: &storage::DbConnectOptions,
-    ) -> sqlx::Result<Arc<storage::AppState>> {
-        open_existing_database(options).await
+    ) -> sqlx::Result<StartupDatabase> {
+        let opened = open_existing_database_with_observer(options).await?;
+        Ok(StartupDatabase {
+            state: opened.state,
+            pool_observer: Some(opened.pool_observer),
+        })
     }
 
     async fn init(&self, storage: &StorageArgs) -> anyhow::Result<()> {
@@ -555,7 +566,7 @@ async fn open_server_database_with(
     storage: &StorageArgs,
     prod: bool,
     operations: &impl StartupDatabaseOperations,
-) -> anyhow::Result<Arc<storage::AppState>> {
+) -> anyhow::Result<StartupDatabase> {
     let open_error = match operations.open_existing(&storage.db).await {
         Ok(database) => return Ok(database),
         Err(error) => error,
@@ -597,7 +608,7 @@ async fn open_server_database_with(
 async fn open_server_database(
     storage: &StorageArgs,
     prod: bool,
-) -> anyhow::Result<Arc<storage::AppState>> {
+) -> anyhow::Result<StartupDatabase> {
     open_server_database_with(storage, prod, &RealStartupDatabaseOperations).await
 }
 
@@ -651,7 +662,10 @@ pub async fn prepare_server(
         runtime_file::StartupCheck::Stale | runtime_file::StartupCheck::Proceed => {}
     }
 
-    let db = open_server_database(storage, prod).await?;
+    let StartupDatabase {
+        state: db,
+        pool_observer: _pool_observer,
+    } = open_server_database(storage, prod).await?;
 
     let backup_scheduler = crate::backup::start_backup_worker(
         db.site_config.clone(),
@@ -1182,7 +1196,7 @@ mod tests {
         async fn open_existing(
             &self,
             _options: &DbConnectOptions,
-        ) -> sqlx::Result<Arc<storage::AppState>> {
+        ) -> sqlx::Result<StartupDatabase> {
             Err(self
                 .errors
                 .lock()
@@ -1645,6 +1659,23 @@ mod tests {
 
         let invites = state.invites.list_invites().await.expect("list invites");
         assert_eq!(invites.len(), 1, "exactly one invite must be created");
+    }
+
+    #[tokio::test]
+    async fn open_server_database_carries_pool_observer() {
+        let temp = TempDir::new().expect("temp dir");
+        let storage = sqlite_storage_args(&temp);
+        storage::open_database(&storage.db).await.expect("open db");
+
+        let database = open_server_database(&storage, false)
+            .await
+            .expect("open server database");
+        let snapshot = database.pool_observer.expect("pool observer").snapshot();
+
+        assert!(snapshot.max >= 1);
+        assert!(snapshot.used <= snapshot.max);
+        assert!(snapshot.idle <= snapshot.max);
+        assert!(Arc::strong_count(&database.state) >= 1);
     }
 
     #[tokio::test]
