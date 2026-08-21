@@ -537,7 +537,7 @@ Only include `xtask/src` in the `git add` if Step 4 changed it.
 - Produces: docs that describe host-vs-sandbox lanes, expanded `static-checks`,
   removed crane outputs, and native `xtask` self-lints.
 
-- [ ] **Step 1: Reconcile architecture committed-direction prose**
+- [x] **Step 1: Reconcile architecture committed-direction prose**
 
 Update the two `docs/ARCHITECTURE.md` areas already touched during the spec
 step:
@@ -552,7 +552,7 @@ now current reality. Keep the draft ADR citation path:
 (...[devtool owns compiling static-check definitions across host and Nix](adr/drafts/devtool-owns-compiling-static-check-definitions.md))
 ```
 
-- [ ] **Step 2: Update `CONTRIBUTING.md` Nix VM checks**
+- [x] **Step 2: Update `CONTRIBUTING.md` Nix VM checks**
 
 In the `### Nix VM checks` list, replace the old bullets:
 
@@ -564,7 +564,7 @@ With prose that says `checks.x86_64-linux.static-checks` runs the shared
 `devtool check --all --sandbox-cargo` surface for formatting, TypeScript/elisp,
 product/wasm/tools clippy, and cargo-deny's sandbox-safe policy.
 
-- [ ] **Step 3: Reconcile ADR draft**
+- [x] **Step 3: Reconcile ADR draft**
 
 Read:
 
@@ -575,7 +575,7 @@ sed -n '1,220p' docs/adr/drafts/devtool-owns-compiling-static-check-definitions.
 Ensure the draft matches the actual Task 3 wiring. Keep line 1
 `# ADR-DRAFT: ...`, status `proposed`, and issue `#276`.
 
-- [ ] **Step 4: Format and run doc-focused checks through the normal gate**
+- [x] **Step 4: Format and run doc-focused checks through the normal gate**
 
 Run:
 
@@ -593,7 +593,7 @@ Expected: PASS, including `adr-format`, `adr-view-parity`, and `doc-links` after
 any required implementation state. The ADR draft remains numberless and ignored
 until ship promotion.
 
-- [ ] **Step 5: Commit Task 4**
+- [x] **Step 5: Commit Task 4**
 
 Tick this task checkbox, then run:
 
