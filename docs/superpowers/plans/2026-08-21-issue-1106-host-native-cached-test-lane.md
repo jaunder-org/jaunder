@@ -197,7 +197,7 @@ cargo run --quiet --manifest-path tools/Cargo.toml -p devtool -- \
   `RUSTC_WRAPPER=sccache`, `CARGO_INCREMENTAL=0`, optional `SCCACHE_BASEDIRS`,
   and optional warning detail.
 
-- [ ] **Step 1: Write failing shared-helper tests.** Move or duplicate the
+- [x] **Step 1: Write failing shared-helper tests.** Move or duplicate the
       current static-check cache tests so they target `compile_cache`: parsing
       absolute existing worktree roots, ignoring missing/non-absolute roots,
       including the current checkout, and omitting profile debug overrides. Add
@@ -212,12 +212,12 @@ cargo run --quiet --manifest-path tools/Cargo.toml -p devtool -- \
 
   Expected: FAIL while the helper does not exist.
 
-- [ ] **Step 2: Factor the implementation.** Create `xtask/src/compile_cache.rs`
+- [x] **Step 2: Factor the implementation.** Create `xtask/src/compile_cache.rs`
       with the existing `sccache_basedirs`, worktree parsing, and env assembly.
       Make `static_checks::run` call the shared helper and preserve its current
       warning-detail behavior exactly.
 
-- [ ] **Step 3: Run focused passing tests.** Re-run:
+- [x] **Step 3: Run focused passing tests.** Re-run:
 
   ```bash
   devtool run -- cargo nextest run --manifest-path xtask/Cargo.toml compile_cache static_checks
@@ -225,7 +225,7 @@ cargo run --quiet --manifest-path tools/Cargo.toml -p devtool -- \
 
   Expected: PASS, with no changed static-check command ordering.
 
-- [ ] **Step 4: Commit the shared cache helper.** Tick this task, run:
+- [x] **Step 4: Commit the shared cache helper.** Tick this task, run:
 
   ```bash
   devtool run -- cargo xtask check --no-test

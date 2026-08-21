@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 mod adr;
 mod adr_readme;
 mod audit_wasm;
+mod compile_cache;
 pub mod coverage;
 mod doc_links;
 mod files;
