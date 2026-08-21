@@ -421,8 +421,10 @@ job. Running every combo in parallel across runners cuts e2e wall-clock;
 - `elisp-fmt`, `ert`, and `byte-compile` run the elisp subproject's formatter,
   ERT suite, and warnings-as-errors byte-compilation under `emacs --batch` (see
   the Elisp subproject section below).
-- `cargo clippy --all-targets -- -D warnings` checks the whole workspace,
-  including test, bench, and example targets, for lint errors.
+- `clippy`, `wasm-clippy`, and `tools-clippy` run through `devtool check <name>`
+  from the host ladder. The commands still execute host-local Cargo with the
+  devshell toolchain and compile-cache environment, while sharing their argument
+  definitions with the Nix `static-checks` derivation.
 - `cargo nextest run` runs the default Rust unit and integration test suite.
 - Whole-test budgets are **ambient** — an auto fixture gives every test a scaled
   `DEFAULT_TEST_BUDGET_MS`, which covers the entire suite (#270). Don't set one
@@ -877,14 +879,12 @@ request; it is deliberately **not** part of per-commit `check`/`validate`
 
 `nix flake check` runs the full Nix-backed validation matrix, including:
 
-- `checks.x86_64-linux.clippy` and `.wasm-clippy` — clippy for the host and wasm
-  targets
-- `checks.x86_64-linux.static-checks` — the 8 non-compiling static checks
-  (`fmt`, `leptosfmt`, `prettier`, `tsc`, `elisp-fmt`, `ert`, `byte-compile`,
-  `tools-fmt`) run in one derivation via `devtool check --all` — the same
-  implementation the host verify ladder runs, so there is no hand-duplicated
-  sibling to drift (#188)
-- `checks.x86_64-linux.deny` — cargo-deny
+- `checks.x86_64-linux.static-checks` — the shared
+  `devtool check --all --sandbox-cargo` surface for formatting, TypeScript,
+  elisp, product clippy, wasm clippy, tools clippy, and cargo-deny's
+  sandbox-safe `bans`/`licenses`/`sources` policy. This is the same command
+  definition surface the host verify ladder uses, but executed hermetically with
+  offline Cargo homes instead of host-local Cargo artifacts (#188, #276).
 - `checks.x86_64-linux.wasm-tests` — `wasm-bindgen-test` cases executed in
   headless Nix-store Chromium through the matching Nix-store chromedriver. This
   is behavioral pass/fail execution for irreducible browser code, not wasm line

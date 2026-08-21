@@ -16,13 +16,11 @@ pub struct StepSpec {
 /// The ordered static-check steps for `mode`. Pure (no I/O) so the step list
 /// and its mode-dependent arguments can be unit-tested without shelling out.
 ///
-/// The 8 non-compiling checks (`fmt`, `leptosfmt`, `prettier`, `tsc`, `elisp-fmt`,
-/// `ert`, `byte-compile`, `tools-fmt`) run through `devtool check <name>` — devtool owns
-/// their tool +
-/// args (the single source of truth; #188), and the nix `static-checks` derivation runs
-/// the same command. The *compiling* checks (`clippy`, `cargo-deny`, `tools-clippy`) and
-/// the `xtask` self-lint stay native `cargo` invocations here — they need built deps, or
-/// `xtask/` is out of the flake source. `tools/` is a virtual workspace (needs `--all`);
+/// Devtool-owned checks run through `devtool check <name>` — devtool owns their
+/// tool + args (the single source of truth; #188/#276), and the nix
+/// `static-checks` derivation runs the same definitions. Product/tool
+/// compiling checks still opt into host `sccache` through `cache_rustc`; the
+/// `xtask` self-lint stays native because `xtask/` is out of the flake source.
 /// `xtask/` has a root package (no `--all`).
 pub fn specs(mode: Mode) -> Vec<StepSpec> {
     // xtask/ workspace: a separate workspace *with* a root package, so a bare
@@ -33,10 +31,10 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
     };
 
     vec![
-        // The migrated (non-compiling) checks — keep this set in sync with
+        // The migrated checks — keep this set in sync with
         // `devtool::check::ALL` (tools/devtool/src/check.rs), which drives the nix
         // `static-checks` derivation's `devtool check --all`. They are interleaved with
-        // the native compiling checks below in the host gate's order.
+        // the xtask-only native checks below in the host gate's order.
         devtool_check("fmt", mode),
         devtool_check("leptosfmt", mode),
         devtool_check("prettier", mode),
@@ -46,58 +44,11 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
         devtool_check("elisp-fmt", mode),
         devtool_check("ert", mode),
         devtool_check("byte-compile", mode),
-        StepSpec {
-            name: "cargo-deny",
-            program: "cargo",
-            args: vec!["deny", "check"],
-            cache_rustc: false,
-        },
-        // clippy — --all-targets, no --workspace
-        cargo_compile_check(
-            "clippy",
-            vec!["clippy", "--all-targets", "--", "-D", "warnings"],
-        ),
-        // wasm-clippy — `web::app`'s `component.rs` compiles wasm-only (#300), so the host
-        // `clippy` step above never sees it. Lint it on the wasm target: `-p web --features csr`
-        // pulls `app/component.rs` into the compile under `target_arch = "wasm32"`. The wasm-only
-        // `client` crate (ADR-0058 trio; #513) and the wasm-only `csr` entry crate (#519,
-        // also `#![cfg(target_arch = "wasm32")]` → empty rlib on host) are linted in the
-        // same invocation — for both this is their sole clippy gate. `--features csr` is a
-        // `web`/`client` feature; `csr` has none but rides the same command and pulls
-        // `web[csr]` via its own dep — if `web`'s `csr` is ever renamed, this arg needs
-        // updating too. This necessarily re-lints the whole `web` crate on wasm.
-        cargo_compile_check(
-            "wasm-clippy",
-            vec![
-                "clippy",
-                "-p",
-                "web",
-                "-p",
-                "client",
-                "-p",
-                "csr",
-                "--features",
-                "csr",
-                "--target",
-                "wasm32-unknown-unknown",
-                "--",
-                "-D",
-                "warnings",
-            ],
-        ),
+        devtool_check("cargo-deny", mode),
+        devtool_compile_check("clippy", mode),
+        devtool_compile_check("wasm-clippy", mode),
         devtool_check("tools-fmt", mode),
-        cargo_compile_check(
-            "tools-clippy",
-            vec![
-                "clippy",
-                "--manifest-path",
-                "tools/Cargo.toml",
-                "--all-targets",
-                "--",
-                "-D",
-                "warnings",
-            ],
-        ),
+        devtool_compile_check("tools-clippy", mode),
         StepSpec {
             name: "xtask-fmt",
             program: "cargo",
@@ -119,12 +70,21 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
     ]
 }
 
-/// A migrated (non-compiling) static check: run it through `devtool check <name>` so
-/// devtool is the single source of truth for its tool+args, launched via `cargo run`
-/// from the `tools/` workspace so a local edit is reflected — consistent with `xtask`
-/// itself being rebuilt each run. The nix `static-checks` derivation runs the same
-/// `devtool check` from the prebuilt `devtoolBin`. Fix mode appends `--fix`.
+/// A migrated static check: run it through `devtool check <name>` so devtool is
+/// the single source of truth for its tool+args, launched via `cargo run` from
+/// the `tools/` workspace so a local edit is reflected — consistent with
+/// `xtask` itself being rebuilt each run. The nix `static-checks` derivation
+/// runs the same `devtool check` from the prebuilt `devtoolBin`. Fix mode
+/// appends `--fix`.
 fn devtool_check(name: &'static str, mode: Mode) -> StepSpec {
+    devtool_check_with_cache(name, mode, false)
+}
+
+fn devtool_compile_check(name: &'static str, mode: Mode) -> StepSpec {
+    devtool_check_with_cache(name, mode, true)
+}
+
+fn devtool_check_with_cache(name: &'static str, mode: Mode, cache_rustc: bool) -> StepSpec {
     let mut args = vec![
         "run",
         "--quiet",
@@ -143,7 +103,7 @@ fn devtool_check(name: &'static str, mode: Mode) -> StepSpec {
         name,
         program: "cargo",
         args,
-        cache_rustc: false,
+        cache_rustc,
     }
 }
 
@@ -226,36 +186,8 @@ mod tests {
     }
 
     #[test]
-    fn wasm_clippy_lints_web_client_and_csr() {
-        for mode in [Mode::Check, Mode::Fix] {
-            let s = specs(mode);
-            let wasm_clippy = find(&s, "wasm-clippy");
-            assert_eq!(wasm_clippy.program, "cargo");
-            assert_eq!(
-                wasm_clippy.args,
-                [
-                    "clippy",
-                    "-p",
-                    "web",
-                    "-p",
-                    "client",
-                    "-p",
-                    "csr",
-                    "--features",
-                    "csr",
-                    "--target",
-                    "wasm32-unknown-unknown",
-                    "--",
-                    "-D",
-                    "warnings",
-                ]
-            );
-        }
-    }
-
-    #[test]
     fn migrated_checks_delegate_to_devtool() {
-        // The 8 non-compiling checks now run via `cargo run -p devtool -- check <name>`
+        // The static checks devtool owns run via `cargo run -p devtool -- check <name>`
         // (devtool owns their tool+args); fix mode appends --fix.
         let s = specs(Mode::Check);
         let fmt = find(&s, "fmt");
@@ -287,20 +219,34 @@ mod tests {
     }
 
     #[test]
-    fn native_checks_stay_native() {
-        // The compiling checks + xtask self-lint still run cargo directly.
+    fn compiling_project_checks_delegate_to_devtool_with_cacheability() {
         let s = specs(Mode::Check);
-        assert_eq!(
-            find(&s, "clippy").args,
-            ["clippy", "--all-targets", "--", "-D", "warnings"]
-        );
-        assert_eq!(find(&s, "cargo-deny").args, ["deny", "check"]);
-        assert_eq!(find(&s, "xtask-clippy").program, "cargo");
+
+        for name in ["cargo-deny", "clippy", "wasm-clippy", "tools-clippy"] {
+            let step = find(&s, name);
+            assert_eq!(step.program, "cargo");
+            assert_eq!(
+                step.args,
+                [
+                    "run",
+                    "--quiet",
+                    "--manifest-path",
+                    "tools/Cargo.toml",
+                    "-p",
+                    "devtool",
+                    "--",
+                    "check",
+                    name,
+                ]
+            );
+        }
+
+        assert!(!find(&s, "cargo-deny").cache_rustc);
         assert!(find(&s, "clippy").cache_rustc);
         assert!(find(&s, "wasm-clippy").cache_rustc);
         assert!(find(&s, "tools-clippy").cache_rustc);
+        assert_eq!(find(&s, "xtask-clippy").program, "cargo");
         assert!(find(&s, "xtask-clippy").cache_rustc);
-        assert!(!find(&s, "cargo-deny").cache_rustc);
     }
 
     #[test]

@@ -35,7 +35,7 @@ enum Command {
     /// Run one program (no shell), capturing output to .xtask/run/ and returning
     /// a structured JSON result; exits with the child's exit code.
     Run(RunArgs),
-    /// Run the non-compiling static checks (#188): one by name, or `--all`.
+    /// Run the migrated static checks (#188/#276): one by name, or `--all`.
     Check(CheckArgs),
     /// Post-process a built `csr.wasm` into the served CSR bundle
     /// (`pkg/jaunder.{js,wasm}`): wasm-bindgen + rename + js wasm-ref fix. Shared
@@ -55,7 +55,7 @@ enum Command {
 struct CheckArgs {
     /// Which check to run (omit and pass `--all` to run every check).
     name: Option<String>,
-    /// Run all the non-compiling static checks.
+    /// Run all migrated static checks.
     #[arg(long, conflicts_with = "name")]
     all: bool,
     /// Auto-fix (the formatters) instead of verifying.

@@ -1272,46 +1272,10 @@
             }
           )
           // {
-            clippy = craneLib.cargoClippy (
-              commonArgs
-              // {
-                cargoArtifacts = cargoArtifactsLeanDev;
-                # Crane defaults Clippy to release mode, but `--all-targets`
-                # activates the test-only `cheap-kdf` feature whose optimized-build
-                # guard must fail. Lint test targets in the development profile;
-                # production package builds remain release-mode. Clippy diagnostics
-                # do not need DWARF, so this derivation uses the lean dev profile.
-                CARGO_PROFILE = "dev";
-                CARGO_PROFILE_DEV_DEBUG = "0";
-                cargoClippyExtraArgs = "--all-targets -- -D warnings";
-              }
-            );
-            # wasm-clippy — `web::pages` compiles wasm-only (#300), so the host `clippy`
-            # above never sees it; likewise the wasm-only `client` and `csr` entry crates
-            # (#519). Lint them on the wasm target (mirrors the host xtask `wasm-clippy`
-            # step).
-            wasm-clippy = craneLib.cargoClippy (
-              commonArgs
-              // {
-                cargoArtifacts = craneLib.buildDepsOnly (
-                  commonArgs
-                  // leanDevProfile
-                  // {
-                    CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
-                    cargoExtraArgs = "-p web -p client -p csr --features csr";
-                    doCheck = false;
-                  }
-                );
-                CARGO_BUILD_TARGET = "wasm32-unknown-unknown";
-                CARGO_PROFILE_DEV_DEBUG = "0";
-                cargoClippyExtraArgs = "-p web -p client -p csr --features csr -- -D warnings";
-              }
-            );
-            # The non-compiling static checks (#188), unified behind one `devtool
-            # check --all` — the same command the host verify ladder runs. Not a crane
-            # derivation: none of these compiles, so no vendored deps are needed; a plain
-            # runCommand over a broad source tree suffices (and stays cheap). The
-            # compiling checks `clippy`/`deny` keep their crane derivations above/below.
+            # The static checks (#188/#276), unified behind one `devtool check
+            # --all --sandbox-cargo`. The host verify ladder runs the same
+            # devtool definitions through host-local lanes, while this derivation
+            # proves those definitions hermetically with offline Cargo homes.
             static-checks =
               let
                 staticCheckSrc = pkgs.lib.cleanSourceWith {
@@ -1329,6 +1293,10 @@
               pkgs.runCommand "static-checks"
                 {
                   nativeBuildInputs = [
+                    pkgs.stdenv.cc
+                  ]
+                  ++ commonArgs.nativeBuildInputs
+                  ++ [
                     devtoolBin
                     toolchain
                     pkgs.cargo-deny
@@ -1338,6 +1306,7 @@
                     pkgs.typescript
                     emacsForCi
                   ];
+                  buildInputs = commonArgs.buildInputs;
                   # ert needs a zone DB (#160); tsc needs BOTH node-dep envs
                   # (`devtool provision-node-modules`'s resolver errors on each when
                   # unset).
@@ -1355,11 +1324,6 @@
                   devtool check --all --sandbox-cargo
                   touch $out
                 '';
-            deny = craneLib.cargoDeny {
-              inherit src;
-              pname = "jaunder";
-              version = "0.1.0";
-            };
             coverage = craneLib.mkCargoDerivation (
               commonArgs
               // {
