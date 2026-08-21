@@ -88,7 +88,7 @@ use std::collections::BTreeSet;
 
 use crate::result::CommandResult;
 use crate::steps::ident_gate::{
-    self, Gate, Marked, Membership, Mention, Report, Scan, Unexempt, Why,
+    self, Gate, Marked, Membership, Mention, MentionContext, Report, Scan, Unexempt, Why,
 };
 use syn::spanned::Spanned;
 
@@ -106,8 +106,6 @@ const POLICED_ROOTS: &[&str] = &[
 
 /// The associated-fn ident this guard pins.
 const DOORS: &[&str] = &["from_trusted"];
-
-const FIELD_CONTEXT_PREFIX: &str = "field:";
 
 /// The gate: population, roots and prose. Exemptions are in-source markers on the
 /// line above each door (#778), so there is no list here.
@@ -161,7 +159,7 @@ fn violations(source: &str) -> Result<Vec<(usize, String)>, String> {
     let mut out: Vec<(usize, String)> = c
         .unexempt
         .into_iter()
-        .map(|u| (u.line, u.function))
+        .map(|u| (u.line, u.context.legacy_label()))
         .collect();
     out.extend(c.orphans.into_iter().map(|line| (line, String::new())));
     out.sort();
@@ -247,17 +245,19 @@ fn field_scan(source: &str, owners: &BTreeSet<String>) -> Result<Scan, String> {
 }
 
 fn format_unexempt(path: &str, token: &str, u: &Unexempt) -> String {
-    match field_context(&u.function) {
-        Some(context) => format_field_unexempt(path, token, u, context),
-        None => format_door_unexempt(path, token, u),
+    match &u.context {
+        MentionContext::Field(context) => format_field_unexempt(path, token, u, context),
+        MentionContext::Module | MentionContext::Function(_) => {
+            format_door_unexempt(path, token, u)
+        }
     }
 }
 
 fn format_door_unexempt(path: &str, token: &str, u: &Unexempt) -> String {
-    let where_ = if u.function.is_empty() {
-        "at module scope".to_string()
-    } else {
-        format!("in fn `{}`", u.function)
+    let where_ = match &u.context {
+        MentionContext::Module => "at module scope".to_string(),
+        MentionContext::Function(name) => format!("in fn `{name}`"),
+        MentionContext::Field(_) => unreachable!("field mentions use field-specific formatting"),
     };
     match u.why {
         Why::Unmarked => format!(
@@ -302,10 +302,6 @@ fn format_marked(path: &str, m: &Marked) -> String {
     format!("    - {path}:{} — {}", m.line, m.reason)
 }
 
-fn field_context(function: &str) -> Option<&str> {
-    function.strip_prefix(FIELD_CONTEXT_PREFIX)
-}
-
 struct FieldScanner<'a> {
     owners: &'a BTreeSet<String>,
     resolver: ident_gate::Resolver,
@@ -319,6 +315,15 @@ impl FieldScanner<'_> {
     fn record_test_range<T: Spanned>(&mut self, item: &T) {
         let span = item.span();
         self.test_ranges.push((span.start().line, span.end().line));
+    }
+
+    fn in_test_scope<T: Spanned>(&mut self, item: &T, test: bool, visit: impl FnOnce(&mut Self)) {
+        if test {
+            self.record_test_range(item);
+        }
+        self.test_depth += usize::from(test);
+        visit(self);
+        self.test_depth -= usize::from(test);
     }
 
     fn record_field(&mut self, field: &syn::Field) {
@@ -345,7 +350,7 @@ impl FieldScanner<'_> {
             .unwrap_or_else(|| "<unknown>".to_string());
         self.hits.push(Mention {
             line,
-            function: format!("{FIELD_CONTEXT_PREFIX}{owner}.{field_name}"),
+            context: MentionContext::Field(format!("{owner}.{field_name}")),
         });
     }
 }
@@ -353,54 +358,31 @@ impl FieldScanner<'_> {
 impl<'ast> syn::visit::Visit<'ast> for FieldScanner<'_> {
     fn visit_item_mod(&mut self, i: &'ast syn::ItemMod) {
         let test = ident_gate::is_test_cfg(&i.attrs);
-        if test {
-            self.record_test_range(i);
-        }
-        self.test_depth += usize::from(test);
-        syn::visit::visit_item_mod(self, i);
-        self.test_depth -= usize::from(test);
+        self.in_test_scope(i, test, |this| syn::visit::visit_item_mod(this, i));
     }
 
     fn visit_item_struct(&mut self, i: &'ast syn::ItemStruct) {
         let test = ident_gate::is_test_cfg(&i.attrs);
-        if test {
-            self.record_test_range(i);
-        }
-        self.test_depth += usize::from(test);
-        self.struct_stack.push(i.ident.to_string());
-        syn::visit::visit_item_struct(self, i);
-        self.struct_stack.pop();
-        self.test_depth -= usize::from(test);
+        self.in_test_scope(i, test, |this| {
+            this.struct_stack.push(i.ident.to_string());
+            syn::visit::visit_item_struct(this, i);
+            this.struct_stack.pop();
+        });
     }
 
     fn visit_item_fn(&mut self, i: &'ast syn::ItemFn) {
         let test = ident_gate::is_test_cfg(&i.attrs) || ident_gate::has_test_attr(&i.attrs);
-        if test {
-            self.record_test_range(i);
-        }
-        self.test_depth += usize::from(test);
-        syn::visit::visit_item_fn(self, i);
-        self.test_depth -= usize::from(test);
+        self.in_test_scope(i, test, |this| syn::visit::visit_item_fn(this, i));
     }
 
     fn visit_impl_item_fn(&mut self, i: &'ast syn::ImplItemFn) {
         let test = ident_gate::is_test_cfg(&i.attrs) || ident_gate::has_test_attr(&i.attrs);
-        if test {
-            self.record_test_range(i);
-        }
-        self.test_depth += usize::from(test);
-        syn::visit::visit_impl_item_fn(self, i);
-        self.test_depth -= usize::from(test);
+        self.in_test_scope(i, test, |this| syn::visit::visit_impl_item_fn(this, i));
     }
 
     fn visit_field(&mut self, i: &'ast syn::Field) {
         let test = ident_gate::is_test_cfg(&i.attrs);
-        if test {
-            self.record_test_range(i);
-        }
-        self.test_depth += usize::from(test);
-        self.record_field(i);
-        self.test_depth -= usize::from(test);
+        self.in_test_scope(i, test, |this| this.record_field(i));
     }
 }
 
@@ -574,7 +556,7 @@ struct PostRow {
 ";
         assert_eq!(
             violations(src).unwrap(),
-            vec![(2, "field:PostRow.rendered_html".to_string())]
+            vec![(2, "PostRow.rendered_html".to_string())]
         );
     }
 
@@ -712,7 +694,7 @@ struct Row {
 ";
         assert_eq!(
             violations(src).unwrap(),
-            vec![(2, "field:Row.rendered_html".to_string())]
+            vec![(2, "Row.rendered_html".to_string())]
         );
     }
 
@@ -737,10 +719,7 @@ mod m {
     }
 }
 ";
-        assert_eq!(
-            violations(src).unwrap(),
-            vec![(4, "field:Row.value".to_string())]
-        );
+        assert_eq!(violations(src).unwrap(), vec![(4, "Row.value".to_string())]);
     }
 
     #[test]

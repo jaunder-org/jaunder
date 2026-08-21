@@ -163,7 +163,7 @@ pub enum Why {
 #[derive(Debug, Clone)]
 pub struct Unexempt {
     pub line: usize,
-    pub function: String,
+    pub context: MentionContext,
     pub why: Why,
 }
 
@@ -190,8 +190,36 @@ pub struct Classified {
 pub struct Mention {
     /// 1-based source line.
     pub line: usize,
-    /// Nearest enclosing fn name; empty at module scope.
-    pub function: String,
+    pub context: MentionContext,
+}
+
+/// The source context attached to a population mention.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MentionContext {
+    /// No enclosing function or field owner.
+    Module,
+    /// Nearest enclosing fn name.
+    Function(String),
+    /// Direct struct field, rendered as `Struct.field`.
+    Field(String),
+}
+
+impl MentionContext {
+    #[cfg(test)]
+    pub fn legacy_label(&self) -> String {
+        match self {
+            Self::Module => String::new(),
+            Self::Function(name) | Self::Field(name) => name.clone(),
+        }
+    }
+}
+
+fn mention_where(context: &MentionContext) -> String {
+    match context {
+        MentionContext::Module => "at module scope".to_string(),
+        MentionContext::Function(name) => format!("in fn `{name}`"),
+        MentionContext::Field(name) => format!("at field `{name}`"),
+    }
 }
 
 /// Every ident that can denote `owner` anywhere in the scanned tree.
@@ -505,7 +533,7 @@ pub fn classify(source: &str, found: &Scan, token: &str) -> Classified {
     for m in &found.mentions {
         let unexempt = |why| Unexempt {
             line: m.line,
-            function: m.function.clone(),
+            context: m.context.clone(),
             why,
         };
         match m.line.checked_sub(1).and_then(marker_at) {
@@ -653,7 +681,12 @@ impl Scanner<'_> {
         }
         self.hits.push(Mention {
             line,
-            function: self.fn_stack.last().cloned().unwrap_or_default(),
+            context: self
+                .fn_stack
+                .last()
+                .cloned()
+                .map(MentionContext::Function)
+                .unwrap_or(MentionContext::Module),
         });
     }
 
@@ -846,7 +879,7 @@ impl Gate {
         let mut out: Vec<(usize, String)> = c
             .unexempt
             .into_iter()
-            .map(|u| (u.line, u.function))
+            .map(|u| (u.line, u.context.legacy_label()))
             .collect();
         out.extend(c.orphans.into_iter().map(|line| (line, String::new())));
         out.sort();
@@ -886,11 +919,7 @@ impl Gate {
                 Ok(found) => {
                     let c = classify(source, &found, &token);
                     for u in c.unexempt {
-                        let where_ = if u.function.is_empty() {
-                            "at module scope".to_string()
-                        } else {
-                            format!("in fn `{}`", u.function)
-                        };
+                        let where_ = mention_where(&u.context);
                         lines.push(match u.why {
                             Why::Unmarked => format!(
                                 "{path}:{}: {} {where_} {}",
@@ -1375,7 +1404,7 @@ mod marker_tests {
         let c = classified("fn a() { GUARDED; }\n");
         assert_eq!(c.unexempt.len(), 1);
         assert_eq!(c.unexempt[0].why, Why::Unmarked);
-        assert_eq!(c.unexempt[0].function, "a");
+        assert_eq!(c.unexempt[0].context.legacy_label(), "a");
         assert!(c.marked.is_empty());
     }
 
