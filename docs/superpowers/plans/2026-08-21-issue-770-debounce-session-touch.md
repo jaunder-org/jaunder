@@ -277,7 +277,7 @@ Update the `SessionStorage::authenticate` doc from “On success, updates...” 
 
 ```rust
 /// On success, refreshes `last_used_at` only when the stored value is at least
-/// 60 seconds stale.
+/// than the 60 second freshness window.
 ```
 
 Update `SessionDialect::touch_and_load` docs to say it returns the joined

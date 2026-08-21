@@ -75,8 +75,8 @@ pub trait SessionStorage: Send + Sync {
 
     /// Validates a raw session token and returns the associated record.
     ///
-    /// On success, refreshes `last_used_at` only when the stored value is at
-    /// least 60 seconds stale.
+    /// On success, refreshes `last_used_at` only when the stored value is older
+    /// than the 60 second freshness window.
     ///
     /// # Errors
     ///

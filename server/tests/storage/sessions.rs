@@ -54,7 +54,8 @@ async fn fresh_authenticate_returns_the_persisted_last_used_at(#[case] backend: 
         .unwrap();
 
     let token_hash = host::token::hash(&raw_token).unwrap();
-    let stored = load_last_used_at(base.pool(), &token_hash).await;
+    let first_record = state.sessions.authenticate(&raw_token).await.unwrap();
+    let stored = first_record.last_used_at;
 
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
     let persisted_after_auth = load_last_used_at(base.pool(), &token_hash).await;

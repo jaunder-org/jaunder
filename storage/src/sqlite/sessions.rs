@@ -31,7 +31,8 @@ impl SessionDialect for Sqlite {
             return Ok(None);
         };
 
-        if row.5 >= stale_before {
+        let (_, _, _, _, _, last_used_at) = &row;
+        if *last_used_at >= stale_before {
             return Ok(Some(row));
         }
 
