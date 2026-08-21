@@ -23,7 +23,10 @@ pub struct SessionRecord {
     pub label: SessionLabel,
     /// When the session was first created.
     pub created_at: DateTime<Utc>,
-    /// When the session was last used to authenticate a request.
+    /// When the session was last persisted as used to authenticate a request.
+    ///
+    /// This is operator-facing metadata with bounded staleness: authentication
+    /// may skip updating it for up to 60 seconds while the stored value is fresh.
     pub last_used_at: DateTime<Utc>,
 }
 
@@ -72,7 +75,8 @@ pub trait SessionStorage: Send + Sync {
 
     /// Validates a raw session token and returns the associated record.
     ///
-    /// On success, updates the `last_used_at` timestamp for the session.
+    /// On success, refreshes `last_used_at` only when the stored value is at
+    /// least 60 seconds stale.
     ///
     /// # Errors
     ///
@@ -95,6 +99,12 @@ use crate::backend::Backend;
 use crate::helpers::{SessionRow, session_record_from_row};
 use sqlx::{Database, Pool};
 
+const SESSION_TOUCH_FRESHNESS_SECONDS: i64 = 60;
+
+fn session_touch_cutoff(now: DateTime<Utc>) -> DateTime<Utc> {
+    now - chrono::Duration::seconds(SESSION_TOUCH_FRESHNESS_SECONDS)
+}
+
 /// Per-backend divergences of [`SessionStorage`]. The only operation that differs
 /// between `SQLite` and Postgres is the atomic touch-and-load used by
 /// `authenticate` (`SQLite`: explicit tx; Postgres: data-modifying CTE).
@@ -110,12 +120,14 @@ where
     for<'c> &'c sqlx::Pool<Self>: sqlx::Executor<'c, Database = Self>,
     SessionRow: for<'r> sqlx::FromRow<'r, Self::Row>,
 {
-    /// Update `last_used_at` for `token_hash` to `now` and return the joined
-    /// session row (with username), atomically. `None` if no such session.
+    /// Return the joined session row (with username), touching `last_used_at`
+    /// only when the stored value is older than `stale_before`. `None` if no
+    /// such session exists.
     async fn touch_and_load(
         pool: &Pool<Self>,
         token_hash: &TokenHash,
         now: DateTime<Utc>,
+        stale_before: DateTime<Utc>,
     ) -> sqlx::Result<Option<SessionRow>>;
 }
 
@@ -184,8 +196,9 @@ where
             host::token::hash(raw_token).map_err(|_| SessionAuthError::InvalidToken)?;
 
         let now = Utc::now();
+        let stale_before = session_touch_cutoff(now);
 
-        let row = DB::touch_and_load(&self.pool, &token_hash, now)
+        let row = DB::touch_and_load(&self.pool, &token_hash, now, stale_before)
             .await?
             .ok_or(SessionAuthError::SessionNotFound)?;
 
