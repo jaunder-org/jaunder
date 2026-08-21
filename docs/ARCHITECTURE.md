@@ -2126,29 +2126,35 @@ iteration.
 
 ### The verify ladder & git-enforced gate
 
-The ladder has two rungs, both driven by `xtask` (`xtask/src/lib.rs:452`,
-`:487`):
+The ladder has three local entrypoints, all driven by `xtask`
+(`xtask/src/lib.rs`: `run_host_gate`, `Command::Check`, `Command::Precommit`,
+and `Command::Validate`):
 
 - **`cargo xtask check`** runs the host static checks in **Fix** mode
   (formatters auto-fix), then every repo-shape and type-safety gate, then the
   host unit tests, and — unless `--no-test` — the Nix `wasm-tests`, `coverage`,
   and `doctests` derivations.
+- **`cargo xtask precommit`** is the hook entrypoint. It runs the same host
+  surface as `cargo xtask check --no-test`, then applies the safe-staging
+  policy: re-stage only formatter/check mutations to already-staged tracked
+  paths that had no pre-existing unstaged change; fail closed for mixed tracked
+  paths, newly-created untracked files, and delete/rename ambiguity.
+  Pre-existing untracked files stay unstaged and tolerated.
 - **`cargo xtask validate`** runs the same set **verify-only**, adds
   `wasm-budget` (kept out of `check` because it costs a `nix build .#site`,
   #836), and — unless `--no-e2e` — the e2e aggregate.
 
 Enforcement is git-native ([ADR-0029](adr/0029-git-enforced-verify-gate.md)).
-`.githooks/pre-commit` runs a single `cargo xtask check`, compares
-`git status --porcelain` before and after, and fails when the run changed the
-tree, so the author restages consciously rather than having the fix folded in
-silently; since the coverage gate went stateless this fires only on formatting
-fixes ([ADR-0050](adr/0050-stateless-coverage-gate.md)). `.githooks/pre-push`
-runs `cargo xtask validate --no-e2e`. `validate` opens with a `clean-tree`
-precheck that refuses a dirty tree unless `--allow-dirty` and returns before any
-expensive step (`xtask/src/lib.rs:801`), making pre-push the one point proving
-_what was measured == the committed tip == what CI sees_. Every `cargo xtask`
-run self-heals `core.hooksPath` to the tracked, relative `.githooks`
-(`xtask/src/git.rs:97`). `SKIP_PRE_COMMIT=1` / `SKIP_PRE_PUSH=1` are deliberate
+`.githooks/pre-commit` calls `cargo xtask precommit`; the `xtask` Cargo alias
+uses `cargo run --locked`, so Cargo cannot rewrite `xtask/Cargo.lock` before the
+precommit snapshot. Git/index reconciliation lives in Rust rather than the shell
+hook. `.githooks/pre-push` calls `cargo xtask validate --no-e2e`. `validate`
+opens with a `clean-tree` precheck that refuses a dirty tree unless
+`--allow-dirty` and returns before any expensive step (`xtask/src/lib.rs`:
+`clean_tree_precheck`), making pre-push the one point proving _what was measured
+== the committed tip == what CI sees_. Every `cargo xtask` run self-heals
+`core.hooksPath` to the tracked, relative `.githooks` (`xtask/src/git.rs`:
+`ensure_hooks_path`). `SKIP_PRE_COMMIT=1` / `SKIP_PRE_PUSH=1` are deliberate
 local escapes; CI is the non-bypassable authority.
 
 The heavy checks are Nix flake check derivations — the hermetic layer. xtask

@@ -1,12 +1,7 @@
 #!/usr/bin/env bash
-# Pre-commit gate: run the full `cargo xtask check` (fmt + clippy + the Nix
-# coverage/test gate in Fix mode) on every commit, so history stays green
-# commit-by-commit — defects are caught at the point of change, when they're
-# cheapest, before a buried bad commit forces history-rewriting later.
-#
-# `check` auto-fixes formatting (fmt/leptosfmt/prettier). When it changes the
-# tree we fail-and-restage: abort so the author consciously `git add`s the change
-# and re-commits, rather than us silently folding it into their commit.
+# Pre-commit gate: run the fast host-side `cargo xtask precommit` gate. The Rust
+# command owns Git/index reconciliation, preserving staged subsets while
+# auto-staging only formatter/check mutations that are provably safe.
 #
 # SKIP_PRE_COMMIT=1 bypasses for WIP commits.
 set -euo pipefail
@@ -16,14 +11,5 @@ if [ "${SKIP_PRE_COMMIT:-0}" = "1" ]; then
     exit 0
 fi
 
-echo "--- pre-commit: cargo xtask check (full gate) ---"
-pre=$(git status --porcelain)
-cargo xtask check
-post=$(git status --porcelain)
-
-if [ "$pre" != "$post" ]; then
-    echo "--- pre-commit: check applied fixes (formatting) — review, git add, and re-commit ---" >&2
-    exit 1
-fi
-
-echo "--- pre-commit: all checks passed ---"
+echo "--- pre-commit: running cargo xtask precommit ---"
+exec cargo xtask precommit

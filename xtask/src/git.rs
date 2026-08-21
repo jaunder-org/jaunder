@@ -1,6 +1,7 @@
 //! Git helpers for the verify gate: working-tree cleanliness (the `validate`
 //! backstop) and self-healing `core.hooksPath` installation.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
 
@@ -38,6 +39,26 @@ pub fn porcelain_is_dirty(porcelain: &str) -> bool {
     porcelain.lines().any(|line| !line.trim().is_empty())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitStatusSnapshot {
+    pub paths: BTreeMap<String, GitPathStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct GitPathStatus {
+    pub staged: bool,
+    pub unstaged: bool,
+    pub untracked: bool,
+    pub delete_or_rename: bool,
+    pub worktree_fingerprint: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrecommitStagePlan {
+    pub stage_paths: Vec<String>,
+    pub failures: Vec<String>,
+}
+
 /// Whether `core.hooksPath` needs (re)pointing at [`HOOKS_PATH`], given its current
 /// value (`None` = unset).
 pub fn needs_hooks_path(current: Option<&str>) -> bool {
@@ -50,6 +71,152 @@ pub fn needs_hooks_path(current: Option<&str>) -> bool {
 /// `git status --porcelain` text. Errors only if git itself cannot run.
 pub fn working_tree_status(dir: &Path) -> Result<String> {
     output(dir, &["status", "--porcelain"])
+}
+
+/// Snapshot the full dirty working tree visible to pre-commit. `--untracked-files=all`
+/// is load-bearing: without it, Git can collapse a dirty untracked directory to
+/// `?? dir/` and hide a new file created under that directory during the gate.
+/// `--find-renames` is also load-bearing: it preserves rename detection while
+/// overriding user config such as `status.renames=copies`, which can otherwise
+/// emit synthetic `C  old -> new` paths that cannot be fingerprinted or staged.
+pub fn status_snapshot(dir: &Path) -> Result<GitStatusSnapshot> {
+    let out = at(dir)
+        .args([
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--find-renames",
+        ])
+        .output()
+        .with_context(|| "running git status --porcelain --untracked-files=all --find-renames")?;
+    if !out.status.success() {
+        anyhow::bail!(
+            "git status --porcelain --untracked-files=all --find-renames failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    let mut snapshot = parse_status_snapshot(&String::from_utf8_lossy(&out.stdout));
+    for (path, status) in &mut snapshot.paths {
+        if !status.untracked && !status.delete_or_rename {
+            status.worktree_fingerprint = Some(output(dir, &["hash-object", "--", path])?);
+        }
+    }
+    Ok(snapshot)
+}
+
+pub fn parse_status_snapshot(porcelain: &str) -> GitStatusSnapshot {
+    let mut paths = BTreeMap::new();
+    for line in porcelain.lines().filter(|line| !line.trim().is_empty()) {
+        let bytes = line.as_bytes();
+        if bytes.len() < 3 {
+            continue;
+        }
+        let path = line.get(3..).unwrap_or("").trim();
+        if path.is_empty() {
+            continue;
+        }
+        let status = paths
+            .entry(path.to_string())
+            .or_insert_with(GitPathStatus::default);
+        let index = bytes[0];
+        let worktree = bytes[1];
+        if index == b'?' && worktree == b'?' {
+            status.untracked = true;
+            continue;
+        }
+        status.staged |= index != b' ' && index != b'?';
+        status.unstaged |= worktree != b' ' && worktree != b'?';
+        status.delete_or_rename |= matches!(index, b'D' | b'R') || matches!(worktree, b'D' | b'R');
+    }
+    GitStatusSnapshot { paths }
+}
+
+pub fn precommit_stage_plan(
+    before: &GitStatusSnapshot,
+    after: &GitStatusSnapshot,
+) -> PrecommitStagePlan {
+    let paths: BTreeSet<_> = before.paths.keys().chain(after.paths.keys()).collect();
+    let mut stage_paths = Vec::new();
+    let mut failures = Vec::new();
+    for path in paths {
+        let before_status = before.paths.get(path);
+        let after_status = after.paths.get(path);
+        if before_status.is_some_and(|s| s.delete_or_rename)
+            || after_status.is_some_and(|s| s.delete_or_rename)
+        {
+            failures.push(format!(
+                "{path}: delete/rename status is unsafe for auto-staging"
+            ));
+            continue;
+        }
+        if after_status.is_some_and(|s| s.untracked) {
+            if before_status.is_none() {
+                failures.push(format!(
+                    "{path}: new untracked file created during precommit"
+                ));
+            }
+            continue;
+        }
+        if before_status.is_some_and(|s| s.untracked) {
+            continue;
+        }
+        if !precommit_path_changed(before_status, after_status) {
+            continue;
+        }
+        match before_status {
+            Some(status) if status.staged && !status.unstaged => stage_paths.push(path.clone()),
+            Some(status) if status.staged && status.unstaged => {
+                failures.push(format!(
+                    "{path}: pre-existing mixed staged/unstaged state made auto-staging unsafe"
+                ));
+            }
+            _ => failures.push(format!("{path}: will not add work the user did not stage")),
+        }
+    }
+    stage_paths.sort();
+    stage_paths.dedup();
+    failures.sort();
+    failures.dedup();
+    PrecommitStagePlan {
+        stage_paths,
+        failures,
+    }
+}
+
+fn precommit_path_changed(before: Option<&GitPathStatus>, after: Option<&GitPathStatus>) -> bool {
+    fn comparable(
+        status: Option<&GitPathStatus>,
+    ) -> Option<(bool, bool, bool, bool, &Option<String>)> {
+        status.map(|s| {
+            (
+                s.staged,
+                s.unstaged,
+                s.untracked,
+                s.delete_or_rename,
+                &s.worktree_fingerprint,
+            )
+        })
+    }
+    comparable(before) != comparable(after)
+}
+
+pub fn apply_precommit_stage_plan(dir: &Path, plan: &PrecommitStagePlan) -> crate::StepResult {
+    let mut failures = plan.failures.clone();
+    for path in &plan.stage_paths {
+        if let Err(err) = run(dir, &["add", "--", path]) {
+            failures.push(err.to_string());
+        }
+    }
+    if !failures.is_empty() {
+        failures.sort();
+        failures.dedup();
+        return crate::StepResult::fail("precommit-staging").detail(failures.join("\n"));
+    }
+    if plan.stage_paths.is_empty() {
+        return crate::StepResult::ok("precommit-staging").detail("no staged fixes");
+    }
+    crate::StepResult::ok("precommit-staging")
+        .detail(format!("staged: {}", plan.stage_paths.join(", ")))
 }
 
 /// Tracked files matching `glob`, sorted, relative to `dir`.
@@ -243,7 +410,7 @@ pub(crate) fn config_set(dir: &Path, key: &str, value: &str) -> Result<()> {
 mod tests {
     use super::*;
 
-    use crate::test_support::commit;
+    use crate::test_support::{commit, git_ok, write};
 
     fn temp_repo(tag: &str) -> std::path::PathBuf {
         crate::test_support::temp_repo("git", tag)
@@ -407,5 +574,304 @@ mod tests {
     fn no_need_when_hooks_path_already_correct() {
         assert!(!needs_hooks_path(Some(".githooks")));
         assert!(!needs_hooks_path(Some(" .githooks \n")));
+    }
+
+    #[test]
+    fn precommit_status_parser_classifies_index_worktree_and_untracked() {
+        let snap = parse_status_snapshot("M  src/a.rs\n M src/b.rs\nMM src/c.rs\n?? scratch.rs\n");
+        assert!(snap.paths["src/a.rs"].staged);
+        assert!(!snap.paths["src/a.rs"].unstaged);
+        assert!(!snap.paths["src/b.rs"].staged);
+        assert!(snap.paths["src/b.rs"].unstaged);
+        assert!(snap.paths["src/c.rs"].staged);
+        assert!(snap.paths["src/c.rs"].unstaged);
+        assert!(snap.paths["scratch.rs"].untracked);
+    }
+
+    #[test]
+    fn precommit_status_parser_marks_delete_and_rename_unsafe() {
+        let snap = parse_status_snapshot("D  gone.rs\n D missing.rs\nR  old.rs -> new.rs\n");
+        assert!(snap.paths["gone.rs"].delete_or_rename);
+        assert!(snap.paths["missing.rs"].delete_or_rename);
+        assert!(snap.paths["old.rs -> new.rs"].delete_or_rename);
+    }
+
+    fn fp(mut snap: GitStatusSnapshot, path: &str, value: &str) -> GitStatusSnapshot {
+        snap.paths.get_mut(path).unwrap().worktree_fingerprint = Some(value.to_string());
+        snap
+    }
+
+    #[test]
+    fn precommit_stage_plan_stages_only_clean_previously_staged_tracked_paths() {
+        let before = fp(
+            fp(
+                parse_status_snapshot("M  a.rs\n M b.rs\n?? scratch.rs\n"),
+                "a.rs",
+                "old-a",
+            ),
+            "b.rs",
+            "old-b",
+        );
+        let after = fp(
+            fp(
+                parse_status_snapshot("MM a.rs\n M b.rs\n?? scratch.rs\n"),
+                "a.rs",
+                "new-a",
+            ),
+            "b.rs",
+            "old-b",
+        );
+        let plan = precommit_stage_plan(&before, &after);
+        assert_eq!(plan.stage_paths, vec!["a.rs".to_string()]);
+        assert!(plan.failures.is_empty());
+    }
+
+    #[test]
+    fn precommit_stage_plan_rejects_mixed_and_unstaged_only_mutations() {
+        let before = fp(
+            fp(
+                parse_status_snapshot("MM mixed.rs\n M unstaged.rs\n"),
+                "mixed.rs",
+                "old-mixed",
+            ),
+            "unstaged.rs",
+            "old-unstaged",
+        );
+        let after = fp(
+            fp(
+                parse_status_snapshot("MM mixed.rs\n M unstaged.rs\n"),
+                "mixed.rs",
+                "new-mixed",
+            ),
+            "unstaged.rs",
+            "new-unstaged",
+        );
+        let plan = precommit_stage_plan(&before, &after);
+        assert!(plan.stage_paths.is_empty());
+        assert!(
+            plan.failures
+                .iter()
+                .any(|f| f.contains("mixed.rs") && f.contains("pre-existing mixed"))
+        );
+        assert!(
+            plan.failures.iter().any(|f| f.contains("unstaged.rs")
+                && f.contains("will not add work the user did not stage"))
+        );
+    }
+
+    #[test]
+    fn precommit_stage_plan_rejects_clean_before_tracked_mutation() {
+        let before = parse_status_snapshot("");
+        let after = fp(
+            parse_status_snapshot(" M clean.rs\n"),
+            "clean.rs",
+            "new-clean",
+        );
+        let plan = precommit_stage_plan(&before, &after);
+        assert!(plan.stage_paths.is_empty());
+        assert!(
+            plan.failures.iter().any(|f| f.contains("clean.rs")
+                && f.contains("will not add work the user did not stage"))
+        );
+    }
+
+    #[test]
+    fn precommit_stage_plan_tolerates_old_untracked_and_rejects_new_untracked() {
+        let before = parse_status_snapshot("?? old.tmp\n");
+        let after = parse_status_snapshot("?? old.tmp\n?? new.tmp\n");
+        let plan = precommit_stage_plan(&before, &after);
+        assert!(plan.stage_paths.is_empty());
+        assert_eq!(plan.failures.len(), 1);
+        assert!(plan.failures[0].contains("new.tmp"));
+        assert!(plan.failures[0].contains("new untracked"));
+    }
+
+    #[test]
+    fn precommit_stage_plan_rejects_delete_or_rename_states() {
+        let before = parse_status_snapshot("M  keep.rs\n");
+        let after = parse_status_snapshot("D  keep.rs\nR  old.rs -> new.rs\n");
+        let plan = precommit_stage_plan(&before, &after);
+        assert!(plan.stage_paths.is_empty());
+        assert!(
+            plan.failures
+                .iter()
+                .any(|f| f.contains("keep.rs") && f.contains("delete/rename"))
+        );
+        assert!(
+            plan.failures
+                .iter()
+                .any(|f| f.contains("old.rs -> new.rs") && f.contains("delete/rename"))
+        );
+    }
+
+    #[test]
+    fn precommit_stage_plan_preserves_delete_recreate_as_delete_rename() {
+        let after = parse_status_snapshot("D  a.rs\n?? a.rs\n");
+        assert!(after.paths["a.rs"].delete_or_rename);
+        let plan = precommit_stage_plan(&parse_status_snapshot(""), &after);
+        assert!(plan.stage_paths.is_empty());
+        assert!(
+            plan.failures
+                .iter()
+                .any(|f| f.contains("a.rs") && f.contains("delete/rename"))
+        );
+    }
+
+    #[test]
+    fn precommit_apply_restages_only_the_previously_staged_file() {
+        let dir = temp_repo("precommit-restage");
+        commit(&dir, "a.rs", "fn a(){}\n");
+        commit(&dir, "b.rs", "fn b(){}\n");
+
+        write(&dir, "a.rs", "fn a() { }\n");
+        git_ok(&dir, &["add", "a.rs"]);
+        write(&dir, "b.rs", "fn b() { }\n");
+        let before = status_snapshot(&dir).unwrap();
+
+        write(&dir, "a.rs", "fn a() { }\n// formatted\n");
+        let after = status_snapshot(&dir).unwrap();
+        let plan = precommit_stage_plan(&before, &after);
+        let step = apply_precommit_stage_plan(&dir, &plan);
+
+        assert!(step.ok, "{step:?}");
+        assert_eq!(
+            output(&dir, &["diff", "--cached", "--name-only"]).unwrap(),
+            "a.rs"
+        );
+        assert_eq!(output(&dir, &["diff", "--name-only"]).unwrap(), "b.rs");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn status_snapshot_forces_rename_detection_not_copy_detection() {
+        let dir = temp_repo("status-no-copies");
+        commit(&dir, "a.rs", "same\n");
+        git_ok(&dir, &["config", "status.renames", "copies"]);
+        write(&dir, "b.rs", "same\n");
+        git_ok(&dir, &["add", "b.rs"]);
+
+        let snap = status_snapshot(&dir).unwrap();
+
+        assert!(snap.paths.contains_key("b.rs"));
+        assert!(!snap.paths.keys().any(|path| path.contains(" -> ")));
+        assert!(snap.paths["b.rs"].worktree_fingerprint.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn precommit_apply_stages_safe_paths_even_when_other_failures_exist() {
+        let dir = temp_repo("precommit-partial-failure");
+        commit(&dir, "a.rs", "one\n");
+        write(&dir, "a.rs", "two\n");
+        git_ok(&dir, &["add", "a.rs"]);
+        let before = status_snapshot(&dir).unwrap();
+
+        write(&dir, "a.rs", "three\n");
+        write(&dir, "new.tmp", "new\n");
+        let after = status_snapshot(&dir).unwrap();
+        let plan = precommit_stage_plan(&before, &after);
+        let step = apply_precommit_stage_plan(&dir, &plan);
+
+        assert!(!step.ok);
+        assert!(step.detail.as_deref().unwrap().contains("new untracked"));
+        assert_eq!(output(&dir, &["show", ":a.rs"]).unwrap(), "three");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn precommit_apply_refuses_mixed_staged_unstaged_file() {
+        let dir = temp_repo("precommit-mixed");
+        commit(&dir, "a.rs", "one\n");
+        write(&dir, "a.rs", "two\n");
+        git_ok(&dir, &["add", "a.rs"]);
+        write(&dir, "a.rs", "three\n");
+        let before = status_snapshot(&dir).unwrap();
+
+        write(&dir, "a.rs", "four\n");
+        let after = status_snapshot(&dir).unwrap();
+        let plan = precommit_stage_plan(&before, &after);
+        let step = apply_precommit_stage_plan(&dir, &plan);
+
+        assert!(!step.ok);
+        assert!(
+            step.detail
+                .as_deref()
+                .unwrap()
+                .contains("pre-existing mixed")
+        );
+        assert_eq!(output(&dir, &["show", ":a.rs"]).unwrap(), "two");
+        assert_eq!(std::fs::read_to_string(dir.join("a.rs")).unwrap(), "four\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn precommit_apply_refuses_unstaged_only_file() {
+        let dir = temp_repo("precommit-unstaged");
+        commit(&dir, "a.rs", "one\n");
+        let before = status_snapshot(&dir).unwrap();
+
+        write(&dir, "a.rs", "two\n");
+        let after = status_snapshot(&dir).unwrap();
+        let plan = precommit_stage_plan(&before, &after);
+        let step = apply_precommit_stage_plan(&dir, &plan);
+
+        assert!(!step.ok);
+        assert!(
+            step.detail
+                .as_deref()
+                .unwrap()
+                .contains("will not add work the user did not stage")
+        );
+        assert!(
+            output(&dir, &["diff", "--cached", "--name-only"])
+                .unwrap()
+                .is_empty()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn precommit_apply_refuses_new_untracked_file_without_staging_old_untracked() {
+        let dir = temp_repo("precommit-untracked");
+        commit(&dir, "tracked.rs", "one\n");
+        write(&dir, "old.tmp", "old\n");
+        let before = status_snapshot(&dir).unwrap();
+
+        write(&dir, "new.tmp", "new\n");
+        let after = status_snapshot(&dir).unwrap();
+        let plan = precommit_stage_plan(&before, &after);
+        let step = apply_precommit_stage_plan(&dir, &plan);
+
+        assert!(!step.ok);
+        assert!(step.detail.as_deref().unwrap().contains("new untracked"));
+        assert!(
+            output(&dir, &["diff", "--cached", "--name-only"])
+                .unwrap()
+                .is_empty()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn precommit_apply_refuses_new_file_inside_preexisting_untracked_dir() {
+        let dir = temp_repo("precommit-untracked-dir");
+        commit(&dir, "tracked.rs", "one\n");
+        write(&dir, "scratch/old.tmp", "old\n");
+        let before = status_snapshot(&dir).unwrap();
+
+        write(&dir, "scratch/new.tmp", "new\n");
+        let after = status_snapshot(&dir).unwrap();
+        let plan = precommit_stage_plan(&before, &after);
+        let step = apply_precommit_stage_plan(&dir, &plan);
+
+        assert!(!step.ok);
+        assert!(step.detail.as_deref().unwrap().contains("scratch/new.tmp"));
+        assert!(step.detail.as_deref().unwrap().contains("new untracked"));
+        assert!(
+            output(&dir, &["diff", "--cached", "--name-only"])
+                .unwrap()
+                .is_empty()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

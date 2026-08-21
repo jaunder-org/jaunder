@@ -116,6 +116,10 @@ pub enum Command {
         #[arg(long)]
         no_test: bool,
     },
+    /// Fast commit-time gate. Runs the same host surface as `check --no-test`,
+    /// then re-stages only formatter/check mutations that are provably safe for the
+    /// paths the author had already staged.
+    Precommit,
     /// Full gate (never mutates the tree): static + clippy + the host xtask unit
     /// suite (verify-only) + the Nix coverage check + the e2e VMs. `--no-e2e` skips
     /// the e2e VMs. Refuses a dirty working tree unless `--allow-dirty`.
@@ -413,6 +417,7 @@ impl Cli {
     pub fn command_name(&self) -> &'static str {
         match self.command {
             Command::Check { .. } => "check",
+            Command::Precommit => "precommit",
             Command::Validate { .. } => "validate",
             Command::AuditWasm { .. } => "audit-wasm",
             Command::E2e { .. } => "e2e",
@@ -456,6 +461,194 @@ impl Command {
     }
 }
 
+enum HostGateStep {
+    StaticChecks,
+    ResultOnly {
+        name: &'static str,
+        run: fn(&mut CommandResult),
+    },
+    HostTests,
+}
+
+impl HostGateStep {
+    fn run(&self, sh: &xshell::Shell, mode: Mode, result: &mut CommandResult) {
+        match self {
+            Self::StaticChecks => steps::static_checks::run(sh, mode, result),
+            Self::ResultOnly { name, run } => {
+                debug_assert!(!name.is_empty());
+                run(result);
+            }
+            Self::HostTests => steps::host_tests::run(sh, result),
+        }
+    }
+
+    #[cfg(test)]
+    fn push_names(&self, mode: Mode, names: &mut Vec<&'static str>) {
+        match self {
+            Self::StaticChecks => names.extend(
+                steps::static_checks::specs(mode)
+                    .into_iter()
+                    .map(|spec| spec.name),
+            ),
+            Self::ResultOnly { name, .. } => names.push(name),
+            Self::HostTests => names.push("host-tests"),
+        }
+    }
+}
+
+const HOST_GATE_NON_TEST_STEPS: &[HostGateStep] = &[
+    HostGateStep::StaticChecks,
+    HostGateStep::ResultOnly {
+        name: "sequence-check",
+        run: steps::sequence_check::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "adr-filenames",
+        run: steps::adr_check::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "doc-links",
+        run: steps::doc_links::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "error-swallowing-inventory",
+        run: steps::error_swallowing_inventory_check::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "test-patterns",
+        run: steps::test_pattern_check::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "server-fn-registrar",
+        run: steps::server_fn_registrar_check::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "server-fn-tracing",
+        run: steps::server_fn_tracing_check::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "server-fn-coverage",
+        run: steps::server_fn_coverage_check::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "server-fn-wire-arg-error",
+        run: steps::server_fn_wire_arg_error_check::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "traced-context",
+        run: steps::traced_context_check::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "proffered-secret",
+        run: steps::proffered_secret_check::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "proffered-filename",
+        run: steps::proffered_filename_check::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "no-full-reload",
+        run: steps::no_full_reload_check::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "e2e-goto-wrapper",
+        run: steps::e2e_goto_wrapper_check::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "target-arch-placement",
+        run: steps::target_arch_placement_check::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "lint-suppression",
+        run: steps::lint_suppression_check::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "thin-components",
+        run: steps::thin_components::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "sqlx-newtype-bind",
+        run: steps::sqlx_newtype_bind_check::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "sqlx-newtype-decode",
+        run: steps::sqlx_newtype_decode_check::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "doctest-fences",
+        run: steps::doctest_fences::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "rendered-html-from-trusted",
+        run: steps::rendered_html_from_trusted_check::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "raw-html-door",
+        run: steps::raw_html_door_check::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "html-sink",
+        run: steps::html_sink_check::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "e2e-scaffold",
+        run: steps::e2e_scaffold_check::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "xlang-literal",
+        run: steps::xlang_literal_check::run,
+    },
+];
+
+const HOST_TESTS_STEP: HostGateStep = HostGateStep::HostTests;
+
+fn run_host_gate_without_tests(sh: &xshell::Shell, mode: Mode, result: &mut CommandResult) {
+    for step in HOST_GATE_NON_TEST_STEPS {
+        step.run(sh, mode, result);
+    }
+}
+
+fn run_host_gate(sh: &xshell::Shell, mode: Mode, result: &mut CommandResult) {
+    run_host_gate_without_tests(sh, mode, result);
+    HOST_TESTS_STEP.run(sh, mode, result);
+}
+
+fn run_precommit_with_host_gate(
+    dir: &Path,
+    run_gate: impl FnOnce(&mut CommandResult),
+) -> anyhow::Result<CommandResult> {
+    let start = std::time::Instant::now();
+    let before = git::status_snapshot(dir)?;
+    let mut result = CommandResult::new("precommit");
+    run_gate(&mut result);
+    let after = git::status_snapshot(dir)?;
+    let plan = git::precommit_stage_plan(&before, &after);
+    result.push(git::apply_precommit_stage_plan(dir, &plan));
+    finalize(&mut result, start);
+    Ok(result)
+}
+
+#[cfg(test)]
+fn host_gate_step_names_for_test(mode: Mode) -> Vec<&'static str> {
+    let mut names = host_gate_without_tests_step_names_for_test(mode);
+    HOST_TESTS_STEP.push_names(mode, &mut names);
+    names
+}
+
+#[cfg(test)]
+fn host_gate_without_tests_step_names_for_test(mode: Mode) -> Vec<&'static str> {
+    let mut names = Vec::new();
+    for step in HOST_GATE_NON_TEST_STEPS {
+        step.push_names(mode, &mut names);
+    }
+    names
+}
+
+#[cfg(test)]
+fn precommit_host_step_names_for_test() -> Vec<&'static str> {
+    host_gate_step_names_for_test(Mode::Fix)
+}
+
 pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
     // Reject --json for commands with no structured payload (the `traces` reporting
     // commands) before doing any work — a hollow envelope is worse than an error.
@@ -470,36 +663,16 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let sh = xshell::Shell::new()?;
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("check");
-            steps::static_checks::run(&sh, Mode::Fix, &mut result);
-            steps::sequence_check::run(&mut result);
-            steps::adr_check::run(&mut result);
-            steps::doc_links::run(&mut result);
-            steps::error_swallowing_inventory_check::run(&mut result);
-            steps::test_pattern_check::run(&mut result);
-            steps::server_fn_registrar_check::run(&mut result);
-            steps::server_fn_tracing_check::run(&mut result);
-            steps::server_fn_coverage_check::run(&mut result);
-            steps::server_fn_wire_arg_error_check::run(&mut result);
-            steps::traced_context_check::run(&mut result);
-            steps::proffered_secret_check::run(&mut result);
-            steps::proffered_filename_check::run(&mut result);
-            steps::no_full_reload_check::run(&mut result);
-            steps::e2e_goto_wrapper_check::run(&mut result);
-            steps::target_arch_placement_check::run(&mut result);
-            steps::lint_suppression_check::run(&mut result);
-            steps::thin_components::run(&mut result);
-            steps::sqlx_newtype_bind_check::run(&mut result);
-            steps::sqlx_newtype_decode_check::run(&mut result);
-            steps::doctest_fences::run(&mut result);
-            steps::rendered_html_from_trusted_check::run(&mut result);
-            steps::raw_html_door_check::run(&mut result);
-            steps::html_sink_check::run(&mut result);
-            steps::e2e_scaffold_check::run(&mut result);
-            steps::xlang_literal_check::run(&mut result);
-            steps::host_tests::run(&sh, &mut result);
+            run_host_gate(&sh, Mode::Fix, &mut result);
             steps::nix::test_checks(&mut result, no_test);
             finalize(&mut result, start);
             Ok(result)
+        }
+        Command::Precommit => {
+            let sh = xshell::Shell::new()?;
+            run_precommit_with_host_gate(Path::new("."), |result| {
+                run_host_gate(&sh, Mode::Fix, result);
+            })
         }
         Command::Validate {
             no_e2e,
@@ -517,36 +690,11 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                 finalize(&mut result, start);
                 return Ok(result);
             }
-            steps::static_checks::run(&sh, Mode::Check, &mut result);
-            steps::sequence_check::run(&mut result);
-            steps::adr_check::run(&mut result);
-            steps::doc_links::run(&mut result);
-            steps::error_swallowing_inventory_check::run(&mut result);
-            steps::test_pattern_check::run(&mut result);
-            steps::server_fn_registrar_check::run(&mut result);
-            steps::server_fn_tracing_check::run(&mut result);
-            steps::server_fn_coverage_check::run(&mut result);
-            steps::server_fn_wire_arg_error_check::run(&mut result);
-            steps::traced_context_check::run(&mut result);
-            steps::proffered_secret_check::run(&mut result);
-            steps::proffered_filename_check::run(&mut result);
-            steps::no_full_reload_check::run(&mut result);
-            steps::e2e_goto_wrapper_check::run(&mut result);
-            steps::target_arch_placement_check::run(&mut result);
-            steps::lint_suppression_check::run(&mut result);
-            steps::thin_components::run(&mut result);
-            steps::sqlx_newtype_bind_check::run(&mut result);
-            steps::sqlx_newtype_decode_check::run(&mut result);
-            steps::doctest_fences::run(&mut result);
-            steps::rendered_html_from_trusted_check::run(&mut result);
-            steps::raw_html_door_check::run(&mut result);
-            steps::html_sink_check::run(&mut result);
-            steps::e2e_scaffold_check::run(&mut result);
-            steps::xlang_literal_check::run(&mut result);
+            run_host_gate_without_tests(&sh, Mode::Check, &mut result);
             // Deliberately in `validate` and not `check`: it costs a
             // `nix build .#site`, which the pre-commit gate should not pay (#836).
             steps::wasm_budget::run(&mut result);
-            steps::host_tests::run(&sh, &mut result);
+            HOST_TESTS_STEP.run(&sh, Mode::Check, &mut result);
             steps::nix::test_checks(&mut result, false);
             if !no_e2e {
                 // `e2e` builds the `e2e-checks` aggregate, which now includes the
@@ -883,6 +1031,106 @@ mod cli_tests {
     use clap::Parser;
     use std::path::PathBuf;
 
+    #[test]
+    fn precommit_parses_as_first_class_subcommand() {
+        let cli = Cli::try_parse_from(["xtask", "precommit"]).unwrap();
+        match cli.command {
+            Command::Precommit => {}
+            _ => panic!("expected precommit"),
+        }
+    }
+
+    #[test]
+    fn precommit_does_not_replace_check_no_test_parse() {
+        let cli = Cli::try_parse_from(["xtask", "check", "--no-test"]).unwrap();
+        match cli.command {
+            Command::Check { no_test } => assert!(no_test),
+            _ => panic!("expected check"),
+        }
+    }
+
+    #[test]
+    fn precommit_host_surface_is_check_no_test_surface() {
+        let check = host_gate_step_names_for_test(Mode::Fix);
+        let precommit = precommit_host_step_names_for_test();
+        assert_eq!(precommit, check);
+        assert!(!precommit.contains(&"nix-wasm-tests"));
+        assert!(!precommit.contains(&"nix-coverage"));
+        assert!(!precommit.contains(&"nix-doctests"));
+    }
+
+    #[test]
+    fn validate_host_surface_keeps_wasm_budget_before_host_tests() {
+        let mut validate = host_gate_without_tests_step_names_for_test(Mode::Check);
+        validate.push("wasm-budget");
+        HOST_TESTS_STEP.push_names(Mode::Check, &mut validate);
+
+        let wasm_budget = validate
+            .iter()
+            .position(|name| *name == "wasm-budget")
+            .expect("validate includes wasm-budget");
+        let host_tests = validate
+            .iter()
+            .position(|name| *name == "host-tests")
+            .expect("validate includes host-tests");
+        assert!(wasm_budget < host_tests);
+    }
+
+    #[test]
+    fn precommit_orchestration_restages_safe_fixture() {
+        let dir = crate::test_support::temp_repo("precommit", "orchestration-safe");
+        crate::test_support::commit(&dir, "a.rs", "fn a(){}\n");
+        crate::test_support::commit(&dir, "b.rs", "fn b(){}\n");
+        crate::test_support::write(&dir, "a.rs", "fn a() { }\n");
+        crate::test_support::git_ok(&dir, &["add", "a.rs"]);
+        crate::test_support::write(&dir, "b.rs", "fn b() { }\n");
+
+        let result = run_precommit_with_host_gate(&dir, |result| {
+            crate::test_support::write(&dir, "a.rs", "fn a() { }\n// formatted\n");
+            result.push(StepResult::ok("fake-host-gate"));
+        })
+        .unwrap();
+
+        assert!(result.ok);
+        assert_eq!(
+            git::output(&dir, &["diff", "--cached", "--name-only"]).unwrap(),
+            "a.rs"
+        );
+        assert_eq!(git::output(&dir, &["diff", "--name-only"]).unwrap(), "b.rs");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn precommit_orchestration_fails_clean_before_tracked_mutation() {
+        let dir = crate::test_support::temp_repo("precommit", "orchestration-unsafe");
+        crate::test_support::commit(&dir, "clean.rs", "one\n");
+
+        let result = run_precommit_with_host_gate(&dir, |result| {
+            crate::test_support::write(&dir, "clean.rs", "two\n");
+            result.push(StepResult::ok("fake-host-gate"));
+        })
+        .unwrap();
+
+        assert!(!result.ok);
+        let staging = result
+            .steps
+            .iter()
+            .find(|s| s.name == "precommit-staging")
+            .unwrap();
+        assert!(
+            staging
+                .detail
+                .as_deref()
+                .unwrap()
+                .contains("will not add work the user did not stage")
+        );
+        assert!(
+            git::output(&dir, &["diff", "--cached", "--name-only"])
+                .unwrap()
+                .is_empty()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     #[test]
     fn validate_allow_dirty_parses() {
         let cli = Cli::try_parse_from(["xtask", "validate", "--allow-dirty"]).unwrap();

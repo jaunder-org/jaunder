@@ -2,6 +2,10 @@
 
 - Status: accepted
 
+Historical note: the original Decision below recorded the #99/#113 hook shape.
+#1079 later amended the current hook contract; see the final supplement and
+[`docs/ARCHITECTURE.md`](../ARCHITECTURE.md#the-verify-ladder--git-enforced-gate).
+
 ## Context
 
 The verify gate (`cargo xtask check` / `validate`) was agent discipline, not
@@ -85,3 +89,20 @@ coverage-related, so eager re-heal would mean a heavy coverage run after every
 pull. Keep-ours already leaves a valid our-side baseline that the next
 pre-commit `cargo xtask check` re-heals lazily; lazy re-heal is sufficient and
 the eager cost is not justified.
+
+## Supplement (#1079): staged-subset pre-commit
+
+In #1079 the pre-commit hook was rerouted from `cargo xtask check` to
+`cargo xtask precommit` through the locked Cargo alias (`cargo run --locked`) so
+Cargo could not rewrite `xtask/Cargo.lock` before the precommit snapshot. The
+new command ran the fast Fix-mode host surface equivalent to
+`cargo xtask check --no-test`, then reconciled Git/index state in Rust. It
+re-staged only formatter/check mutations to already-staged tracked paths with no
+pre-existing unstaged change. Mixed tracked paths, newly-created untracked
+files, and delete/rename states failed closed with diagnostics; pre-existing
+untracked files stayed unstaged and tolerated.
+
+This traded the original per-commit Nix coverage/doctest/wasm proof for a short
+commit-time gate plus the existing `cargo xtask validate --no-e2e` pre-push
+clean-tree proof. The current materialized gate shape lives in
+[`docs/ARCHITECTURE.md`](../ARCHITECTURE.md#the-verify-ladder--git-enforced-gate).
