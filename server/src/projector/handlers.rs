@@ -107,8 +107,13 @@ async fn site_timeline(
 
 /// Project a username-keyed public page, or serve the SPA shell when the
 /// username is malformed or the route-specific fetch says no anonymous-public
-/// content exists. The fetch closure intentionally owns unknown-user semantics:
-/// profile's `fetch_user_posts` returns an empty page that stays cacheable, while
+/// content exists. Public projector routes intentionally soft-404 to the shell
+/// instead of returning a hard 404: the CSR client must get the same chance to
+/// resolve a draft, authenticated owner view, or client-side 404 that it had
+/// before the projector existed.
+///
+/// The fetch closure intentionally owns unknown-user semantics: profile's
+/// `fetch_user_posts` returns an empty page that stays cacheable, while
 /// user-tag's `fetch_user_posts_by_tag` returns an error that falls back here to
 /// the shell.
 async fn username_page_response<F, Fut>(
