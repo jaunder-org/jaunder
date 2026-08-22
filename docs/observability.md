@@ -979,6 +979,73 @@ workspace-wide, so setting it would flip the _server's_ release build to abort,
 where a panicking tokio task would kill the process. Recorded in the root
 `Cargo.toml` at the profile someone would add it to.
 
+## #864 — firefox's wasm initialization floor (pre-registration, 2026-08-22)
+
+#836 found that firefox's historical `responseEnd → boot.entry` residual fit
+`≈ 377 ms + 13.9 ms/MiB`; at the shipped size, most of the segment was
+size-independent. That historical field is not a direct initialization
+measurement — #887 replaced it with `direct-init-v1` diagnostics — so this cycle
+tests the floor with the current instrument rather than re-reading the old
+residual.
+
+### Deciding protocol
+
+Firefox is decisive; chromium is a control. The capture is sqlite,
+single-worker, quiescent host, three runs per arm unless a pre-capture dry run
+shows a larger variance that requires more. Every run uses a distinct `e2eSalt`
+so Nix cannot replay a cached trace. Arm order is randomized or explicitly
+counterbalanced run-by-run, and the realized order is recorded with the corpus.
+
+No final capture may change the SPA shell delivery path: `/pkg/jaunder.wasm`,
+the `/pkg/jaunder.js` import, `initMeasured`, content negotiation,
+compression/precompression, request count, and `wasmInitPath` distribution must
+remain comparable unless the change is the explicitly named candidate. A corpus
+without current `direct-init-v1` coverage, closure, arm-order reconciliation,
+host quiescence notes, and an independent in-trace arm discriminator is
+exploratory only.
+
+### Candidate A — module shape, not byte volume
+
+Arms:
+
+- `baseline`: the current shipped bundle.
+- `shape`: same delivery path, but an experiment-only bundle with actual module
+  shape counts changed and reported in trace: at minimum functions, imported
+  functions, exports, tables, memories, code bytes, decoded bytes, and raw
+  bytes.
+
+Prediction if module shape explains the fixed term: firefox `wasmApiMs` and/or
+`wasmInitMs` moves in the same direction as the shape-count delta even after the
+decoded-byte delta is too small to explain the change at #836's marginal 13.9
+ms/MiB. A null result is a measured elimination of the tested shape factor, not
+proof that every untested shape factor is irrelevant. Chromium may move
+differently; chromium-only movement does not close #864.
+
+### Candidate B — per-navigation or per-module engine setup
+
+This candidate is included only if implementation can preserve the delivery/API
+invariants above while producing an independent setup-arm discriminator. The
+intended contrast is not preload, cache busting, `arrayBuffer`/manual `compile`,
+or a second request path; those change delivery or WebAssembly API mode and
+would repeat #866's attribution failure. If no invariant-preserving setup arm
+exists, this cycle stops and either selects another separable size-independent
+candidate under the same corpus or returns for spec approval before reducing the
+experiment to one candidate.
+
+Prediction if the floor is mostly per-navigation setup: changing the module-side
+shape in Candidate A does not move firefox materially, while an
+invariant-preserving setup discriminator separates firefox `wasmApiMs` and/or
+`wasmInitMs` by a large fixed amount that is not explained by decoded bytes. A
+null setup contrast eliminates only the implemented setup mechanism.
+
+### Reporting rule
+
+Report firefox first. Report means over run means with uncertainty and cold/warm
+handling for every arm contrast. `wasmApiMs` and `wasmInitMs` are overlapping
+direct diagnostics, not compile-only durations and not additive parts of the
+ADR-0100 exclusive decomposition; the exclusive document-frame closure remains
+`wasmInitStartMs + wasmInitStartToBootEntryMs + bootPhases = bootTotalMs`.
+
 ## #866 — where the rest of boot goes (2026-08-09)
 
 #836 established that page boot is **43–47% of e2e suite wall-clock** and that
