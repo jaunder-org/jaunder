@@ -81,6 +81,21 @@ async fn user_tag_invalid_serves_shell(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
+async fn user_tag_invalid_tag_serves_shell(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let resp = projector_app(&state)
+        .oneshot(get("/~alice/tags/-rust"))
+        .await
+        .expect("request");
+    assert_eq!(resp.status(), StatusCode::OK, "unparseable tag → shell");
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(String::from_utf8_lossy(&body).contains("test-shell"));
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn user_tag_unknown_valid_username_serves_shell(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let resp = projector_app(&state)
