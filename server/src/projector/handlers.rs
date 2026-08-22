@@ -14,7 +14,7 @@ use common::username::Username;
 use common::visibility::ViewerIdentity;
 
 use crate::soft_path::SoftPath;
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 use storage::{PostStorage, UserStorage, fetch_post_record};
 use web::error::{SwallowedSource, report_swallowed};
 use web::timeline::{
@@ -105,42 +105,71 @@ async fn site_timeline(
     timeline_response(result, &headers, PageSeed::SiteTimeline)
 }
 
+/// Project a username-keyed public page, or serve the SPA shell when the
+/// username is malformed or the route-specific fetch says no anonymous-public
+/// content exists. Public projector routes intentionally soft-404 to the shell
+/// instead of returning a hard 404: the CSR client must get the same chance to
+/// resolve a draft, authenticated owner view, or client-side 404 that it had
+/// before the projector existed.
+///
+/// The fetch closure intentionally owns unknown-user semantics: profile's
+/// `fetch_user_posts` returns an empty page that stays cacheable, while
+/// user-tag's `fetch_user_posts_by_tag` returns an error that falls back here to
+/// the shell.
+async fn username_page_response<F, Fut>(
+    username: SoftPath<Username>,
+    headers: &HeaderMap,
+    shell: &Shell,
+    context: &'static str,
+    fetch_seed: F,
+) -> Response
+where
+    F: FnOnce(Username) -> Fut,
+    Fut: Future<Output = web::error::InternalResult<PageSeed>>,
+{
+    let Some(username) = username.into() else {
+        return shell_response(shell);
+    };
+    match fetch_seed(username).await {
+        Ok(seed) => cacheable(headers, &seed),
+        Err(error) => {
+            report_swallowed(
+                error.kind(),
+                error.class(),
+                context,
+                SwallowedSource::Error(&error),
+            );
+            shell_response(shell)
+        }
+    }
+}
+
 async fn profile(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
     Extension(shell): Extension<Shell>,
     headers: HeaderMap,
     Path(username): Path<SoftPath<Username>>,
 ) -> Response {
-    // An unparseable username or a storage error is never public content — serve the
-    // shell and let the client route it. A valid username (even an unknown one, which
-    // yields an empty profile) is cached like any other public page.
-    let seed = match username.into() {
-        Some(username) => match fetch_user_posts(
-            posts.as_ref(),
-            &ViewerIdentity::Anonymous,
-            &username,
-            None,
-            Some(PageSize::default()),
-        )
-        .await
-        {
-            Ok(page) => Some(PageSeed::Profile { username, page }),
-            Err(error) => {
-                report_swallowed(
-                    error.kind(),
-                    error.class(),
-                    "server.projector.profile",
-                    SwallowedSource::Error(&error),
-                );
-                None
-            }
+    // `username_page_response` documents why the valid-unknown-user result stays
+    // route-specific instead of normalized here.
+    username_page_response(
+        username,
+        &headers,
+        &shell,
+        "server.projector.profile",
+        |username| async move {
+            fetch_user_posts(
+                posts.as_ref(),
+                &ViewerIdentity::Anonymous,
+                &username,
+                None,
+                Some(PageSize::default()),
+            )
+            .await
+            .map(|page| PageSeed::Profile { username, page })
         },
-        None => None,
-    };
-    match seed {
-        Some(seed) => cacheable(&headers, &seed),
-        None => shell_response(&shell),
-    }
+    )
+    .await
 }
 
 async fn site_tag(
@@ -191,29 +220,31 @@ async fn user_tag(
     // `Tag::from_str` lowercases, so the projected heading and the client render
     // coincide. An unparseable username/tag is never public content — serve the
     // shell and let the client route it.
-    let (Some(username), Some(tag)) = (username.into(), tag.into()) else {
+    let Some(tag) = tag.into() else {
         return shell_response(&shell);
     };
-    // An unknown user or a storage error is likewise never public content.
-    let result = fetch_user_posts_by_tag(
-        posts.as_ref(),
-        users.as_ref(),
-        &ViewerIdentity::Anonymous,
-        &username,
-        &tag,
-        None,
-        Some(PageSize::default()),
-    )
-    .await;
-    tag_response(
-        result,
+    username_page_response(
+        username,
         &headers,
         &shell,
         "server.projector.user_tag",
-        |page| PageSeed::UserTag {
-            username,
-            tag,
-            page,
+        |username| async move {
+            fetch_user_posts_by_tag(
+                posts.as_ref(),
+                users.as_ref(),
+                &ViewerIdentity::Anonymous,
+                &username,
+                &tag,
+                None,
+                Some(PageSize::default()),
+            )
+            .await
+            .map(|page| PageSeed::UserTag {
+                username,
+                tag,
+                page,
+            })
         },
     )
+    .await
 }
