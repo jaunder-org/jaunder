@@ -1,10 +1,10 @@
 //! Shared `quick-xml` writer helpers for the `AtomPub` serializers.
 //!
 //! These exist to keep element and escaping behavior consistent across the
-//! service and categories serializers — one element-write spelling, not one per
-//! caller. (The Atom documents themselves — entry, feed, media-link — are written
-//! by `atom_syndication` and do not pass through here; the helper set is wider
-//! than the two callers strictly need.)
+//! service, categories, and RSD serializers — one element-write spelling, not one
+//! per caller. (The Atom documents themselves — entry, feed, media-link — are
+//! written by `atom_syndication` and do not pass through here; the helper set is
+//! wider than each individual caller strictly needs.)
 //!
 //! Every serializer writes into an in-memory `Writer<Vec<u8>>`, whose only
 //! failure mode is real I/O — which a `Vec<u8>` never produces. These helpers
@@ -12,9 +12,9 @@
 //! serializers can return a plain `String` rather than a `Result` with a dead
 //! error path.
 //!
-//! The RSD serializer (`rsd.rs`) is intentionally not a client of these: it
-//! formats a fixed template and escapes its two URLs directly, rather than
-//! driving a `quick-xml` writer.
+//! RSD still owns its document-specific shape in `rsd.rs`; this module only
+//! supplies the generic text/empty-element writes shared with the other
+//! non-Atom-document serializers.
 
 use quick_xml::Writer;
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
