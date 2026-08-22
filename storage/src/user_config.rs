@@ -123,6 +123,7 @@ where
         )
         .bind(user_id)
         .bind(key)
+        // sqlx-newtype-bind:allow permanent-primitive — typed user config values are persisted through their string representation.
         .bind(value)
         .execute(&self.pool)
         .await?;

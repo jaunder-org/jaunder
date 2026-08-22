@@ -243,12 +243,17 @@ fn bind_json_value<'q>(
 ) -> sqlx::query::Query<'q, sqlx::Sqlite, sqlx::sqlite::SqliteArguments<'q>> {
     match value {
         serde_json::Value::Null => query.bind(Option::<String>::None),
-        serde_json::Value::Bool(value) => query.bind(*value),
+        serde_json::Value::Bool(value) => {
+            let value: bool = *value;
+            // sqlx-newtype-bind:allow permanent-primitive — backup JSON bool cells are wire snapshot values retyped by the live schema on restore.
+            query.bind(value)
+        }
         serde_json::Value::Number(value) => {
             // Preserve integer affinity: bind as i64 (including u64 that fits) so
             // large ids round-trip exactly, falling back to f64 only for
             // genuinely non-integral numbers.
             if let Some(value) = value.as_i64() {
+                // sqlx-newtype-bind:allow permanent-primitive — backup JSON integer cells are wire snapshot values retyped by the live schema on restore.
                 query.bind(value)
             } else if value.as_u64().and_then(|v| i64::try_from(v).ok()).is_some() {
                 unreachable!("as_i64 already claims every u64 that fits in i64")

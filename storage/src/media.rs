@@ -363,6 +363,7 @@ where
             .bind(media.source)
             .bind(&media.sha256)
             .bind(&media.filename)
+            // sqlx-newtype-bind:allow permanent-primitive — force is a query-control flag, not a stored domain value.
             .bind(force)
             .fetch_optional(&self.pool)
             .await?;

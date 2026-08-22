@@ -7,7 +7,7 @@ pub mod event_status;
 pub use event_status::{FeedEventStatus, InvalidFeedEventStatus};
 
 pub mod settings;
-pub use settings::{FeedMinDays, FeedMinItems};
+pub use settings::{FeedEventClaimLimit, FeedMinDays, FeedMinItems};
 
 pub mod window;
 pub use window::{HasPublishedAt, HybridWindow};

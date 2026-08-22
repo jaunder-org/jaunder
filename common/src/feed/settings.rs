@@ -1,20 +1,24 @@
-//! Validated numeric-value newtypes for the feed-window settings stored in `site_config`
-//! (`feeds.min_items` / `feeds.min_days`). Both are `u32` with a **min-1** invariant — a
-//! "minimum" of zero items, or a zero-day history window, is degenerate — enforced by the
-//! `NumNewtype` derive's generated `FromStr`. Distinct types (not one shared `u32`) so the
-//! two can't be transposed at a `HybridWindow`/`FeedsConfig` construction site.
+//! Validated numeric-value newtypes for feed settings and queue batch limits.
+//!
+//! `FeedMinItems` / `FeedMinDays` are the feed-window settings stored in
+//! `site_config` (`feeds.min_items` / `feeds.min_days`). They are distinct types
+//! (not one shared primitive) so the two cannot be transposed at a
+//! `HybridWindow`/`FeedsConfig` construction site. `FeedMinItems` and
+//! `FeedEventClaimLimit` use `i64` inners because they cross sqlx `LIMIT`
+//! placeholders; the bound is declared by the newtype rather than implied by an
+//! unsigned primitive, matching the `RowLimit` rule from ADR-0071/#696.
 
 use macros::NumNewtype;
 
 /// The minimum number of items to include in any feed, regardless of age (default 20).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, NumNewtype)]
 #[num_newtype(
-    inner = u32,
+    inner = i64,
     min = 1,
     default = 20,
     error = "feeds.min_items must be a whole number of at least 1"
 )]
-pub struct FeedMinItems(u32);
+pub struct FeedMinItems(i64);
 
 /// The minimum age window, in days, of items to include in any feed, regardless of count
 /// (default 30).
@@ -26,6 +30,23 @@ pub struct FeedMinItems(u32);
     error = "feeds.min_days must be a whole number of at least 1"
 )]
 pub struct FeedMinDays(u32);
+
+/// Maximum feed-event rows to claim in one worker batch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, NumNewtype)]
+#[num_newtype(
+    inner = i64,
+    min = 0,
+    error = "feed event claim limit must be a whole number"
+)]
+pub struct FeedEventClaimLimit(i64);
+
+impl FeedEventClaimLimit {
+    /// Saturating conversion from the public storage API's `usize` batch cap.
+    #[must_use]
+    pub fn from_usize(limit: usize) -> Self {
+        Self(i64::try_from(limit).unwrap_or(i64::MAX))
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -50,7 +71,7 @@ mod tests {
         );
         assert_eq!(FeedMinItems::default().value(), 20);
         let d = FeedMinItems::default();
-        assert_eq!(u32::from(d), 20); // From<Self> for the inner
+        assert_eq!(i64::from(d), 20); // From<Self> for the inner
         assert_eq!(d.to_string(), "20");
         assert_eq!(d.to_string().parse::<FeedMinItems>().unwrap(), d);
         // serde: bare integer, wire-rejects out-of-range.

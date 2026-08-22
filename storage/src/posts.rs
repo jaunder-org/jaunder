@@ -1057,6 +1057,7 @@ where
             "SELECT post_id FROM idempotency_keys WHERE user_id = $1 AND key = $2",
         )
         .bind(user_id)
+        // sqlx-newtype-bind:allow deferred-newtype #1086 — idempotency keys are tracked for a domain value.
         .bind(key)
         .fetch_optional(&self.pool)
         .await?;
@@ -1178,6 +1179,7 @@ where
         let query = sqlx::query_as::<_, PostRow>(&sql)
             .bind(username)
             .bind(slug)
+            // sqlx-newtype-bind:allow permanent-primitive — permalink date is a formatted URL path part, not a domain value.
             .bind(date_str.as_str())
             .bind(now);
         let row = binds.bind_onto(query).fetch_optional(&self.pool).await?;
@@ -1214,6 +1216,7 @@ where
         let row = sqlx::query_as::<_, PostRow>(&sql)
             .bind(user_id)
             .bind(slug)
+            // sqlx-newtype-bind:allow permanent-primitive — permalink date is a formatted URL path part, not a domain value.
             .bind(date_str.as_str())
             .bind(now)
             .fetch_optional(&self.pool)
@@ -1819,6 +1822,7 @@ where
                      ORDER BY tag_slug
                      LIMIT $2",
                 )
+                // sqlx-newtype-bind:allow permanent-primitive — LIKE prefix pattern is derived query text, not a stored domain value.
                 .bind(like.as_str())
                 .bind(limit)
                 .fetch_all(&self.pool)
@@ -1861,9 +1865,13 @@ where
         // query. Only the JSON tag aggregation differs per backend, so the SQL
         // is shared via `DB::TAGS_SUBQUERY`.
         let cutoff = window.cutoff_date(now);
-        let min_items = i64::from(window.min_items.value());
         let rows = list_published_in_window_rows::<DB>(
-            &self.pool, surface, now, cutoff, min_items, viewer,
+            &self.pool,
+            surface,
+            now,
+            cutoff,
+            window.min_items,
+            viewer,
         )
         .await?;
         rows.into_iter().map(post_record_from_row).collect()
@@ -2151,13 +2159,12 @@ impl ResolutionBinds {
 }
 
 /// Maps an [`AudienceTarget`] to its `post_audiences` row shape:
-/// `(target_kind name, audience_id)`. `Private` produces no row.
-fn audience_target_row(target: &AudienceTarget) -> Option<(&'static str, Option<AudienceId>)> {
-    use common::visibility::TargetKind;
+/// `(target kind, audience_id)`. `Private` produces no row.
+fn audience_target_row(target: &AudienceTarget) -> Option<(TargetKind, Option<AudienceId>)> {
     match target {
-        AudienceTarget::Public => Some((TargetKind::Public.into(), None)),
-        AudienceTarget::Subscribers => Some((TargetKind::Subscribers.into(), None)),
-        AudienceTarget::Named(id) => Some((TargetKind::Named.into(), Some(*id))),
+        AudienceTarget::Public => Some((TargetKind::Public, None)),
+        AudienceTarget::Subscribers => Some((TargetKind::Subscribers, None)),
+        AudienceTarget::Named(id) => Some((TargetKind::Named, Some(*id))),
         AudienceTarget::Private => None,
     }
 }
@@ -2298,7 +2305,7 @@ where
     DB: PostDialect,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<AudienceId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> TargetKind: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
@@ -2307,11 +2314,11 @@ where
         .execute(&mut *conn)
         .await?;
     for target in audiences {
-        if let Some((kind_name, audience_id)) = audience_target_row(target) {
+        if let Some((kind, audience_id)) = audience_target_row(target) {
             sqlx::query(DB::INSERT_POST_AUDIENCE)
                 .bind(post_id)
                 .bind(audience_id)
-                .bind(kind_name)
+                .bind(kind)
                 .execute(&mut *conn)
                 .await?;
         }
@@ -2378,12 +2385,13 @@ async fn list_published_in_window_rows<DB>(
     surface: &common::feed::FeedSurface,
     now: DateTime<Utc>,
     cutoff: DateTime<Utc>,
-    min_items: i64,
+    min_items: common::feed::FeedMinItems,
     viewer: &ViewerIdentity,
 ) -> sqlx::Result<Vec<PostRow>>
 where
     DB: PostDialect,
     PostRow: for<'r> sqlx::FromRow<'r, DB::Row>,
+    for<'q> common::feed::FeedMinItems: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,

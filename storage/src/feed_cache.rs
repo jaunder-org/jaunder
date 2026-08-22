@@ -123,6 +123,7 @@ where
                generated_at = excluded.generated_at",
         )
         .bind(&row.feed_path)
+        // sqlx-newtype-bind:allow permanent-primitive — cached rendered Syndication Feed body is an opaque representation.
         .bind(row.body.as_str())
         .bind(&row.etag)
         .bind(&row.content_type)

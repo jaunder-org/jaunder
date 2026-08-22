@@ -1,226 +1,411 @@
-//! The `sqlx-newtype-bind` static check (#438, #686): forbids the
-//! newtype-stripping idioms at `sqlx` bind sites in `storage/src`.
+//! The `sqlx-newtype-bind` static check (#438, #686, #716): enumerates
+//! primitive `sqlx` bind arguments under `storage/src` and denies them by
+//! default.
 //!
-//! Every domain type that is stored now emits an `sqlx::Encode`/`Type`/`Decode` bridge
-//! from one shared codegen (`macros::sqlx_bridge`) — `StrNewtype` since #438,
-//! `IdNewtype` and `NumNewtype` since #686, and `SqlxBridge` plus the `text_enum`
-//! attribute's stored enums since #746 — so
-//! `.bind(value)` binds the typed value directly and every strip is dead weight
-//! that also re-opens the transposition hazard the newtype exists to close
-//! (ADR-0063 §2). Two idioms are policed:
+//! Domain values that are stored emit an `sqlx::Encode`/`Type`/`Decode` bridge
+//! from one shared codegen (`macros::sqlx_bridge`) — `StrNewtype`,
+//! `IdNewtype`, `NumNewtype`, `SqlxBridge`, and stored `#[text_enum(sqlx)]`
+//! enums — so storage code should bind the typed value directly. Stripping to a
+//! primitive at the bind boundary re-opens the transposition hazard the newtype
+//! exists to close (ADR-0063 §2).
 //!
-//! - **Stringly** (#438): `.bind(x.as_ref())` (via `AsRef<str>`), `.bind(&*x)` /
-//!   `.bind(&**x)` deref binds, and the `Option` map-deref forms
-//!   `.bind(x.map(|v| &*v))` / `&**v`.
-//! - **Numeric** (#686): `.bind(i64::from(x))`, which unwrapped an id or bounded
-//!   numeric to its inner `i64` before binding.
+//! This gate follows ADR-0085: it parses Rust, defines its population
+//! structurally, and fails closed. The population is a `.bind(...)` whose
+//! argument is visibly primitive without type inference: a literal, a cast to a
+//! primitive, a `.as_str()` borrow, or an identifier whose current function
+//! parameter / typed local binding is primitive (`bool`, `str`, `String`, or a
+//! numeric primitive, including references to those). That is deliberately wider
+//! than the old spelling search (`.as_ref()`, `&*`, `i64::from(...)`) and catches
+//! the #716 shape where a primitive parameter is bound after the strip occurred
+//! elsewhere.
 //!
-//! The scan is line-based over every `.rs` under `storage/src`. A `.bind(` region
-//! that contains `.as_ref()`, a `&*` deref, or `i64::from(` is a violation, unless
-//! the whole line matches an [`ALLOWLIST`] needle. `String::as_str` (e.g.
-//! `format.as_str()`) is a genuine owned-`String` slice, not a newtype strip, and
-//! is **not** policed.
+//! Exemptions are ADR-0094 markers, not a central allowlist: the line immediately
+//! above the bind must carry `// sqlx-newtype-bind:allow <category> — <reason>`.
+//! Categories are `permanent-primitive`, `test-fixture-corruption`, and
+//! `deferred-newtype`; `deferred-newtype` must name a tracking issue. A marker is
+//! an in-source assertion, not a proof: the gate checks that it is present,
+//! categorized, non-orphaned, and points at exactly one primitive bind, but it
+//! cannot prove the reason is true.
 //!
-//! **The hoisted form is policed too (#696).** Assigning the conversion to a local and
-//! binding that — `let x = i64::from(y); … .bind(x)` — would evade a scan that only
-//! looked at the text *after* `.bind(`, so `violations` also tracks locals bound to
-//! a stripping conversion within the enclosing item. Scope resets at a column-0 `}`.
+//! ## Structural limits
 //!
-//! **What it still cannot see: a strip laundered through a function parameter.** If the
-//! conversion happens in one function and the `.bind` in another, the binding function
-//! sees only an `i64` argument and there is nothing left to detect. That is **#716**,
-//! and two live instances are recorded there.
-//!
-//! **This gate does not conform to the "enumerate, don't search" decision**
-//! (`docs/adr/0085-static-type-safety-gates-enumerate.md`, #715), on two counts, and
-//! the laundering above is a symptom rather than the disease:
-//!
-//! - It decides a violation by *searching* for three strip spellings (`.as_ref()`,
-//!   `&*`, `i64::from(`). A fourth spelling — including passing the value through a
-//!   parameter — passes green, because the scan recognises nothing and treats that as
-//!   clean. A conforming gate defines its population structurally and denies by
-//!   default, so an unanticipated construct fails.
-//! - Its [`ALLOWLIST`] is **region-scoped**: as the doc below says, a needle exempts
-//!   every matching line under [`POLICED_ROOT`], not one site. A new violation that
-//!   happens to match an existing needle is absorbed silently.
-//!
-//! `sqlx-newtype-decode` is the conforming sibling; rebuilding this one the same way —
-//! deny bare-primitive binds unless an entry names the site and its multiplicity — is
-//! **#716**'s scope.
+//! No call graph: the gate detects the primitive bind, not the caller that may
+//! have stripped a domain value before passing it through a function or trait
+//! seam. No SQL semantics: `COUNT(*)`, timestamps, booleans, and driver-required
+//! primitives are not inferred from query text; they need markers. No type
+//! inference: an unannotated field such as `record.size_bytes` is not classified
+//! from the struct definition. The line-level marker is one level of indirection
+//! off the strongest possible key, so the gate requires exactly one primitive
+//! bind on the marked line and fails orphan markers.
 
+use std::collections::HashMap;
+
+use quote::ToTokens;
+use syn::visit::{self, Visit};
+
+use crate::markers;
 use crate::result::CommandResult;
 use crate::steps::scan::run_source_scan;
 
-/// A bind-expression exempt from the guard, matched by **substring** so it is
-/// robust to reflow (rustfmt can move a bind across lines) — unlike a line number
-/// or an inline `// allow` marker, which rustfmt can relocate.
-struct Allowed {
-    /// The bind-expression substring; a flagged line containing it is exempt.
-    needle: &'static str,
-    /// Why this bind legitimately keeps the stripping idiom.
-    reason: &'static str,
-}
-
-/// The exempt bind-expressions. The `as_ref()` pair each appears in `posts.rs`,
-/// `sqlite/posts.rs`, and `postgres/posts.rs`, and the substring match covers all
-/// three.
-///
-/// **Nothing numeric is exempt** — the numeric half of this rule is absolute, not
-/// absolute-with-footnotes (#686, #696: bounded `i64`-backed newtypes leave no
-/// widening to exempt).
-///
-/// **A needle exempts every matching line under [`POLICED_ROOT`], not one site.** That
-/// is what makes it reflow-proof, and it is also the cost: a needle like
-/// `i64::from(limit)` would exempt any future *newtype*-typed local that happened to be
-/// named `limit`. Keep needles specific enough that they cannot plausibly collide, and
-/// prefer deleting an entry over broadening one.
-const ALLOWLIST: &[Allowed] = &[
-    Allowed {
-        needle: "input.title.as_ref()",
-        // `title` is `Option<PostTitle>`, so this is `Option::as_ref()` →
-        // `Option<&PostTitle>` (a typed bind), NOT an `AsRef<str>` str-strip.
-        reason: "Option<PostTitle>::as_ref() — a typed Option bind, not an AsRef<str> strip",
-    },
-    Allowed {
-        needle: "input.summary.as_ref()",
-        // `summary` is `Option<PostSummary>`, so this is `Option::as_ref()` →
-        // `Option<&PostSummary>` (a typed bind), NOT an `AsRef<str>` str-strip.
-        reason: "Option<PostSummary>::as_ref() — a typed Option bind, not an AsRef<str> strip",
-    },
-];
-
 /// Source root scanned recursively for `.rs` files.
 const POLICED_ROOT: &str = "storage/src";
+const MARKER: &str = "sqlx-newtype-bind:allow";
 
-/// Whether `line` is an exempt bind — it contains an [`ALLOWLIST`] needle.
-fn is_allowed(line: &str) -> bool {
-    ALLOWLIST.iter().any(|a| line.contains(a.needle))
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Category {
+    PermanentPrimitive,
+    TestFixtureCorruption,
+    DeferredNewtype,
 }
 
-/// Whether `line` strips a newtype inside a `.bind(` argument: the region after the
-/// first `.bind(` contains `.as_ref()` (an `AsRef<str>` strip), a `&*` deref
-/// (covering `&*`, `&**`, and the `Option` map-deref `&*v`/`&**v` forms), or
-/// `i64::from(` (an id/numeric strip to the inner `i64`).
-///
-/// `.as_str()` is deliberately not matched — it is `String::as_str` on a genuine
-/// owned `String`, not a newtype. Pure, so it is unit-tested directly.
-fn strips_newtype_in_bind(line: &str) -> bool {
-    let Some(pos) = line.find(".bind(") else {
-        return false;
-    };
-    let region = &line[pos + ".bind(".len()..];
-    region.contains(".as_ref()") || region.contains("&*") || region.contains("i64::from(")
-}
+impl Category {
+    const ALL_LABELS: &[&str] = &[
+        "permanent-primitive",
+        "test-fixture-corruption",
+        "deferred-newtype",
+    ];
 
-/// The identifier a line binds a stripping conversion to, if any: the `x` in
-/// `let x = i64::from(y);`.
-///
-/// Deliberately narrow. It matches the **hoist** shape only — a `let` whose
-/// right-hand side is a conversion this gate already policies — because the point is to
-/// close the "assign then bind" evasion, not to track every local. `let x: i64 = …`,
-/// `as i64`, and `i64::try_from(…)` are **not** matched: the first two are not strips
-/// this gate defines, and the third is laundered across a function boundary in the one
-/// place it occurs, which no line scan can see (#716).
-fn hoisted_strip_binding(line: &str) -> Option<&str> {
-    let rest = line.trim_start().strip_prefix("let ")?;
-    let (name, value) = rest.split_once('=')?;
-    if !value.contains("i64::from(") {
-        return None;
+    fn parse(label: &str) -> Option<Self> {
+        match label {
+            "permanent-primitive" => Some(Self::PermanentPrimitive),
+            "test-fixture-corruption" => Some(Self::TestFixtureCorruption),
+            "deferred-newtype" => Some(Self::DeferredNewtype),
+            _ => None,
+        }
     }
-    // `let mut x` / `let x: T` both reduce to the identifier.
-    let name = name.trim().trim_start_matches("mut ").trim();
-    let name = name.split(':').next()?.trim();
-    (!name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_')).then_some(name)
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::PermanentPrimitive => "permanent-primitive",
+            Self::TestFixtureCorruption => "test-fixture-corruption",
+            Self::DeferredNewtype => "deferred-newtype",
+        }
+    }
 }
 
-/// Whether `line` binds `ident` — `.bind(ident)`, exactly, not merely containing it.
-///
-/// The closing paren matters: without it, `.bind(limit)` would match a hoisted
-/// `limit_i64` by prefix and flag an unrelated bind.
-fn binds_ident(line: &str, ident: &str) -> bool {
-    line.contains(&format!(".bind({ident})"))
+#[derive(Debug, Clone)]
+struct BindSite {
+    line: usize,
+    expr: String,
 }
 
-/// Whether `line` begins a function item — the boundary at which locals go out of scope.
-///
-/// Scoping on braces alone is not enough, and the failure is a **false positive**, which
-/// is the expensive direction for a gate: methods inside an `impl` close at an indented
-/// `}`, so a hoist in one method would still be "in scope" at the next method's
-/// parameter bind. Every storage type is an `impl` block, so that is the common shape.
-fn starts_a_function(line: &str) -> bool {
-    let mut rest = line.trim_start();
-    loop {
-        let Some((word, tail)) = rest.split_once(' ') else {
-            return false;
+#[derive(Debug, Clone)]
+struct MarkedSite {
+    line: usize,
+    category: Category,
+    reason: String,
+}
+
+#[derive(Debug, Default)]
+struct Scan {
+    sites: Vec<BindSite>,
+}
+
+#[derive(Default)]
+struct BindVisitor {
+    scopes: Vec<HashMap<String, String>>,
+    sites: Vec<BindSite>,
+}
+
+impl BindVisitor {
+    fn enter_scope(&mut self, inputs: &syn::punctuated::Punctuated<syn::FnArg, syn::token::Comma>) {
+        let mut scope = HashMap::new();
+        for input in inputs {
+            if let syn::FnArg::Typed(pat) = input
+                && let syn::Pat::Ident(ident) = pat.pat.as_ref()
+                && primitive_type(&pat.ty)
+            {
+                scope.insert(
+                    ident.ident.to_string(),
+                    pat.ty.to_token_stream().to_string(),
+                );
+            }
+        }
+        self.scopes.push(scope);
+    }
+
+    fn enter_closure_scope(
+        &mut self,
+        inputs: &syn::punctuated::Punctuated<syn::Pat, syn::token::Comma>,
+    ) {
+        let mut scope = HashMap::new();
+        for input in inputs {
+            if let syn::Pat::Type(pat_ty) = input
+                && let syn::Pat::Ident(ident) = pat_ty.pat.as_ref()
+                && primitive_type(&pat_ty.ty)
+            {
+                scope.insert(
+                    ident.ident.to_string(),
+                    pat_ty.ty.to_token_stream().to_string(),
+                );
+            }
+        }
+        self.scopes.push(scope);
+    }
+
+    fn leave_scope(&mut self) {
+        self.scopes.pop();
+    }
+
+    fn record_local(&mut self, local: &syn::Local) {
+        let syn::Pat::Type(pat_ty) = &local.pat else {
+            return;
         };
-        match word {
-            "fn" => return true,
-            "pub" | "async" | "const" | "unsafe" | "extern" | "default" => rest = tail.trim_start(),
-            w if w.starts_with("pub(") => rest = tail.trim_start(),
-            _ => return false,
+        let syn::Pat::Ident(ident) = pat_ty.pat.as_ref() else {
+            return;
+        };
+        if primitive_type(&pat_ty.ty)
+            && let Some(scope) = self.scopes.last_mut()
+        {
+            scope.insert(
+                ident.ident.to_string(),
+                pat_ty.ty.to_token_stream().to_string(),
+            );
+        }
+    }
+
+    fn ident_is_primitive(&self, ident: &str) -> bool {
+        self.scopes
+            .iter()
+            .rev()
+            .any(|scope| scope.contains_key(ident))
+    }
+
+    fn expr_is_primitive_bind(&self, expr: &syn::Expr) -> bool {
+        match expr {
+            syn::Expr::Lit(lit) => primitive_lit(&lit.lit),
+            syn::Expr::Path(path) => path
+                .path
+                .get_ident()
+                .is_some_and(|ident| self.ident_is_primitive(&ident.to_string())),
+            syn::Expr::Reference(reference) => self.expr_is_primitive_bind(&reference.expr),
+            syn::Expr::Cast(cast) => primitive_type(&cast.ty),
+            syn::Expr::Unary(unary) if matches!(unary.op, syn::UnOp::Deref(_)) => {
+                self.expr_is_primitive_bind(&unary.expr)
+            }
+            syn::Expr::MethodCall(call) => call.method == "as_str",
+            syn::Expr::Paren(paren) => self.expr_is_primitive_bind(&paren.expr),
+            _ => false,
         }
     }
 }
 
-/// 1-based line numbers of every bind that strips a newtype and is not allowlisted.
-///
-/// Two passes in one walk: the direct form (a conversion inside the `.bind(` itself),
-/// and the **hoisted** form (a conversion assigned to a local earlier in the same
-/// function, then bound by name). Hoisted names are dropped at a top-level `}` so a
-/// strip in one function cannot taint an identically-named bind in the next.
-///
-/// Pure given the source, so it is unit-tested directly.
-fn violations(source: &str) -> Vec<usize> {
-    let mut hoisted: Vec<&str> = Vec::new();
-    let mut out = Vec::new();
-
-    for (i, line) in source.lines().enumerate() {
-        // Locals do not outlive their function, so each `fn` starts a fresh scope. A
-        // column-0 `}` clears too, for a free item that ends without another following.
-        if starts_a_function(line) || line.starts_with('}') {
-            hoisted.clear();
-        }
-        if let Some(name) = hoisted_strip_binding(line) {
-            hoisted.push(name);
-        }
-        let hoisted_here = hoisted.iter().any(|name| binds_ident(line, name));
-        if (strips_newtype_in_bind(line) || hoisted_here) && !is_allowed(line) {
-            out.push(i + 1);
-        }
+impl<'ast> Visit<'ast> for BindVisitor {
+    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+        self.enter_scope(&node.sig.inputs);
+        visit::visit_block(self, &node.block);
+        self.leave_scope();
     }
-    out
+
+    fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+        self.enter_scope(&node.sig.inputs);
+        visit::visit_block(self, &node.block);
+        self.leave_scope();
+    }
+
+    fn visit_expr_closure(&mut self, node: &'ast syn::ExprClosure) {
+        self.enter_closure_scope(&node.inputs);
+        visit::visit_expr(self, &node.body);
+        self.leave_scope();
+    }
+
+    fn visit_local(&mut self, node: &'ast syn::Local) {
+        self.record_local(node);
+        visit::visit_local(self, node);
+    }
+
+    fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+        if node.method == "bind"
+            && let Some(arg) = node.args.first()
+            && self.expr_is_primitive_bind(arg)
+        {
+            self.sites.push(BindSite {
+                line: node.method.span().start().line,
+                expr: arg.to_token_stream().to_string(),
+            });
+        }
+        visit::visit_expr_method_call(self, node);
+    }
 }
 
-/// The failure detail for every offending bind across the scanned files, or `None`
-/// when every bind is typed or allowlisted. Pure given the `(path, source)` pairs,
-/// so it is unit-tested directly.
+fn primitive_lit(lit: &syn::Lit) -> bool {
+    matches!(
+        lit,
+        syn::Lit::Bool(_) | syn::Lit::Int(_) | syn::Lit::Float(_) | syn::Lit::Str(_)
+    )
+}
+
+fn primitive_type(ty: &syn::Type) -> bool {
+    match ty {
+        syn::Type::Reference(reference) => primitive_type(&reference.elem),
+        syn::Type::Path(path) => path.path.segments.last().is_some_and(|segment| {
+            matches!(
+                segment.ident.to_string().as_str(),
+                "bool"
+                    | "str"
+                    | "String"
+                    | "i8"
+                    | "i16"
+                    | "i32"
+                    | "i64"
+                    | "i128"
+                    | "isize"
+                    | "u8"
+                    | "u16"
+                    | "u32"
+                    | "u64"
+                    | "u128"
+                    | "usize"
+                    | "f32"
+                    | "f64"
+            )
+        }),
+        syn::Type::Paren(paren) => primitive_type(&paren.elem),
+        _ => false,
+    }
+}
+
+fn primitive_binds(source: &str) -> Result<Scan, String> {
+    let file = syn::parse_file(source).map_err(|e| format!("cannot parse as Rust: {e}"))?;
+    let mut visitor = BindVisitor::default();
+    visitor.visit_file(&file);
+    Ok(Scan {
+        sites: visitor.sites,
+    })
+}
+
+fn parse_marker(reason: &str) -> Result<(Category, String), String> {
+    if reason.trim().is_empty() {
+        return Err("marker has no reason".to_string());
+    }
+    let mut parts = reason.trim().splitn(2, char::is_whitespace);
+    let label = parts.next().unwrap_or_default();
+    let rest = parts
+        .next()
+        .unwrap_or_default()
+        .trim_start_matches([' ', '-', '—', ':'])
+        .trim()
+        .to_string();
+    let Some(category) = Category::parse(label) else {
+        return Err(format!(
+            "marker category `{label}` is not one of {}",
+            Category::ALL_LABELS.join(", ")
+        ));
+    };
+    if rest.is_empty() {
+        return Err("marker has no reason after its category".to_string());
+    }
+    if category == Category::DeferredNewtype && !names_issue(&rest) {
+        return Err("deferred-newtype marker must name a tracking issue like #750".to_string());
+    }
+    Ok((category, rest))
+}
+
+fn names_issue(reason: &str) -> bool {
+    let bytes = reason.as_bytes();
+    bytes.windows(2).enumerate().any(|(idx, pair)| {
+        pair[0] == b'#'
+            && pair[1].is_ascii_digit()
+            && reason[idx + 1..].bytes().any(|b| b.is_ascii_digit())
+    })
+}
+
+/// The failure detail for offending primitive binds and malformed markers, or `None`.
 pub fn problems(scanned: &[(String, String)]) -> Option<String> {
     let mut lines = Vec::new();
+    let mut marked = Vec::new();
+
     for (path, source) in scanned {
-        for ln in violations(source) {
-            let offending = source.lines().nth(ln - 1).unwrap_or("").trim();
-            lines.push(format!(
-                "{path}:{ln}: `{offending}` strips a newtype at a sqlx bind — the `StrNewtype` \
-                 (#438), `IdNewtype` and `NumNewtype` (#686) derives all emit an `sqlx::Encode`, \
-                 so bind the typed value directly (`.bind(x)` / `.bind(&x)`), not \
-                 `.as_ref()`/`&*`/`i64::from(…)`. This includes hoisting the conversion into \
-                 a local and binding that (#696) — move the type, don't move the strip."
-            ));
+        let scan = match primitive_binds(source) {
+            Ok(scan) => scan,
+            Err(e) => {
+                lines.push(format!(
+                    "{path}: {e} — an unparsed file is invisible to this gate, which is exactly \
+                     the blind spot it exists to close. Fix the file or the parser; do not skip it."
+                ));
+                continue;
+            }
+        };
+        let comments = markers::line_comments(source);
+        let mut sites_by_line: HashMap<usize, Vec<&BindSite>> = HashMap::new();
+        for site in &scan.sites {
+            sites_by_line.entry(site.line).or_default().push(site);
+        }
+
+        for (idx, comment) in comments.iter().enumerate() {
+            let marker_line = idx + 1;
+            let Some(reason) = comment.and_then(|c| markers::marker_in_comment(c, MARKER)) else {
+                continue;
+            };
+            let pointed_line = marker_line + 1;
+            match sites_by_line.get(&pointed_line).map(Vec::as_slice).unwrap_or(&[]) {
+                [] => lines.push(format!(
+                    "{path}:{marker_line}: `{MARKER}` marker is orphaned — the next line has no \
+                     primitive sqlx bind. Delete the stale marker or move it directly above the bind."
+                )),
+                [_site] => match parse_marker(reason) {
+                    Ok((category, parsed_reason)) => marked.push((
+                        path.clone(),
+                        MarkedSite {
+                            line: pointed_line,
+                            category,
+                            reason: parsed_reason,
+                        },
+                    )),
+                    Err(error) => lines.push(format!(
+                        "{path}:{marker_line}: malformed `{MARKER}` marker — {error}. Use \
+                         `// {MARKER} permanent-primitive — <reason>`, \
+                         `test-fixture-corruption`, or `deferred-newtype #NNNN`."
+                    )),
+                },
+                many => lines.push(format!(
+                    "{path}:{marker_line}: `{MARKER}` marker points at line {pointed_line}, which \
+                     has {} primitive sqlx binds. Split the bind chain so one marker covers one site.",
+                    many.len()
+                )),
+            }
+        }
+
+        for site in &scan.sites {
+            let marked_line = site
+                .line
+                .checked_sub(2)
+                .and_then(|idx| comments.get(idx))
+                .and_then(|comment| comment.and_then(|c| markers::marker_in_comment(c, MARKER)))
+                .is_some();
+            if !marked_line {
+                lines.push(format!(
+                    "{path}:{}: `.bind({})` binds a primitive value. Type the seam so a domain \
+                     value reaches sqlx, or add a one-line marker immediately above this bind with \
+                     category and reason.",
+                    site.line, site.expr
+                ));
+            }
         }
     }
+
     if lines.is_empty() {
         return None;
     }
+
     lines.push(
-        "  recovery: bind the newtype directly. If the value is genuinely not a newtype, prefer \
-         giving it one — a `u32` that has to be widened at every bind (sqlx has no Postgres \
-         `Encode` for unsigned types) is a type-design smell, and #696 removed the last two such \
-         exemptions rather than keeping them. Only add an ALLOWLIST entry, with a documented \
-         reason, when that is genuinely wrong. Currently exempt:"
+        "  recovery: this gate enumerates primitive binds rather than searching for known strip \
+         spellings. Typing the seam is the default fix. Markers are for scalar facts, intentional \
+         corrupt test rows, or tracked `deferred-newtype` debt; a marker is trusted prose, so keep \
+         the census small enough to re-read."
             .to_string(),
     );
-    for a in ALLOWLIST {
-        lines.push(format!("    - `{}`: {}", a.needle, a.reason));
+    if !marked.is_empty() {
+        lines.push("  currently marked primitive-bind exemptions:".to_string());
+        marked.sort_by(|a, b| (&a.0, a.1.line).cmp(&(&b.0, b.1.line)));
+        for (path, site) in marked {
+            lines.push(format!(
+                "    - {path}:{} — {} — {}",
+                site.line,
+                site.category.label(),
+                site.reason
+            ));
+        }
     }
     Some(lines.join("\n"))
 }
@@ -234,185 +419,153 @@ pub fn run(result: &mut CommandResult) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn typed_binds_are_clean() {
-        let src = "\
-    .bind(slug)
-    .bind(&code)
-    .bind(now)
-";
-        assert!(violations(src).is_empty());
+    fn site_lines(src: &str) -> Vec<usize> {
+        primitive_binds(src)
+            .expect("parse")
+            .sites
+            .into_iter()
+            .map(|s| s.line)
+            .collect()
     }
 
     #[test]
-    fn as_str_on_owned_string_is_clean() {
-        // `String::as_str` is a genuine owned-String slice, not a newtype strip.
-        let src = "    .bind(date_str.as_str())\n";
-        assert!(violations(src).is_empty());
+    fn typed_newtype_bind_is_clean() {
+        let src = "fn f(slug: Slug) { q.bind(slug); }";
+        assert!(site_lines(src).is_empty());
     }
 
     #[test]
-    fn as_ref_strip_is_flagged() {
-        // Proves the gate bites: a non-allowlisted newtype strip is a violation.
-        let src = "    .bind(username.as_ref())\n";
-        assert_eq!(violations(src), vec![1]);
+    fn primitive_parameter_bind_is_flagged_without_strip_spelling() {
+        let src = "fn f(min_items: i64) { q.bind(min_items); }";
+        assert_eq!(site_lines(src), vec![1]);
     }
 
     #[test]
-    fn deref_binds_are_flagged() {
-        let src = "\
-    .bind(&*value)
-    .bind(&**value)
-    .bind(display.map(|v| &*v))
-";
-        assert_eq!(violations(src), vec![1, 2, 3]);
+    fn primitive_closure_parameter_bind_is_flagged() {
+        let src = "fn f() { let bind_limit = |limit: i64| q.bind(limit); }";
+        assert_eq!(site_lines(src), vec![1]);
     }
 
     #[test]
-    fn i64_from_bind_is_flagged() {
-        // Proves the numeric half bites (#686): an id or bounded numeric unwrapped to
-        // its inner `i64` before binding is a violation, in every spelling the sweep
-        // removed.
-        let src = "\
-    .bind(i64::from(user_id))
-    .bind(i64::from(cursor.post_id))
-    .bind(i64::from(*channel_id))
-";
-        assert_eq!(violations(src), vec![1, 2, 3]);
+    fn dereferenced_primitive_reference_bind_is_flagged() {
+        let src = "fn f(value: &bool) { q.bind(*value); }";
+        assert_eq!(site_lines(src), vec![1]);
     }
 
     #[test]
-    fn hoisted_i64_from_bind_is_flagged() {
-        // The blind spot #696 found: hoisting the conversion into a local made the
-        // strip invisible, because the scan only ever looked after `.bind(`. Both the
-        // assignment and the bind are needed to flag — see the two tests below for the
-        // halves that must NOT flag on their own.
-        let src = "\
-    let limit_i64 = i64::from(limit);
-    sqlx::query(SQL)
-        .bind(limit_i64)
-";
-        assert_eq!(violations(src), vec![3]);
-    }
-
-    #[test]
-    fn hoisted_local_not_from_a_strip_is_clean() {
-        // A local that was never a newtype is an ordinary value; binding it is fine.
-        let src = "\
-    let count = row.count;
-        .bind(count)
-";
-        assert!(violations(src).is_empty());
-    }
-
-    #[test]
-    fn bind_of_an_unrelated_ident_is_clean() {
-        // No assignment in scope at all — the bind names a parameter or field.
-        let src = "        .bind(limit_i64)\n";
-        assert!(violations(src).is_empty());
-    }
-
-    #[test]
-    fn a_hoist_does_not_taint_a_later_method_in_the_same_impl() {
-        // The false-positive case that matters: methods close at an indented `}`, not a
-        // column-0 one, so scoping on top-level braces alone would let a hoist in one
-        // method flag a legitimate parameter bind in the next. Every storage type is an
-        // `impl` block, so this is the common shape, not an exotic one.
-        let src = "\
-impl Store {
-    async fn a(&self) {
-        let limit_i64 = i64::from(limit);
-        q.bind(limit_i64);
-    }
-
-    async fn b(&self, limit_i64: i64) {
-        q.bind(limit_i64);
-    }
+    fn primitive_local_and_as_str_bind_are_flagged() {
+        let src = r#"
+fn f() {
+    let limit: i64 = 10;
+    q.bind(limit);
+    q.bind("bad");
+    q.bind(name.as_str());
 }
-";
-        assert_eq!(violations(src), vec![4]);
+"#;
+        assert_eq!(site_lines(src), vec![4, 5, 6]);
     }
 
     #[test]
-    fn a_hoist_does_not_taint_a_later_function() {
-        // Scope resets at a top-level `}`: a strip hoisted in one fn must not make an
-        // identically-named bind in the next fn a violation.
-        let src = "\
-fn a() {
-    let limit_i64 = i64::from(limit);
-    q.bind(limit_i64);
+    fn categorized_marker_exempts_one_site() {
+        let src = r#"
+fn f(is_operator: bool) {
+    // sqlx-newtype-bind:allow permanent-primitive — boolean operator flag has no domain identity.
+    q.bind(is_operator);
 }
-fn b(limit_i64: i64) {
-    q.bind(limit_i64);
-}
-";
-        assert_eq!(violations(src), vec![3]);
-    }
-
-    #[test]
-    fn i64_from_outside_a_bind_is_ignored() {
-        // The widening is only policed at a bind site; `i64::from` elsewhere (a format
-        // argument, a comparison) is ordinary code.
-        let src = "        let sql = format!(\"... {}\", i64::from(post_id));\n";
-        assert!(violations(src).is_empty());
-    }
-
-    #[test]
-    fn numeric_widenings_are_no_longer_exempt() {
-        // #686 exempted these two as forced `u32 → i64` widenings. #696 gave `limit` and
-        // the offset `i64`-backed newtypes with declared bounds, so the widenings are
-        // gone and so are their entries — this asserts the exemption was actually
-        // removed, not merely that no site trips it today.
-        let src = "\
-    .bind(i64::from(limit))
-    .bind(i64::from(offset.value()))
-";
-        assert_eq!(violations(src), vec![1, 2]);
-    }
-
-    #[test]
-    fn allowlisted_title_is_clean() {
-        let src = "    .bind(input.title.as_ref())\n";
-        assert!(violations(src).is_empty());
-    }
-
-    #[test]
-    fn rendered_html_as_ref_bind_is_now_flagged() {
-        // #502 retired `RenderedHtml`'s allowlist entry once it gained a sqlx `Encode`
-        // bridge; the stringly `.as_ref()` bind must now be flagged like any newtype strip.
+"#;
         assert_eq!(
-            violations("    .bind(input.rendered_html.as_ref())\n"),
-            vec![1]
-        );
-    }
-
-    #[test]
-    fn non_bind_deref_is_ignored() {
-        // A `&*` outside any `.bind(` (e.g. a test `let posts = &*env...`) is fine.
-        let src = "        let posts = &*env.state.posts;\n";
-        assert!(violations(src).is_empty());
-    }
-
-    #[test]
-    fn problem_detail_names_file_line_and_recovery() {
-        let detail = problems(&[(
-            "storage/src/users.rs".to_string(),
-            "    .bind(username.as_ref())\n".to_string(),
-        )])
-        .expect("a problem");
-        assert!(detail.contains("storage/src/users.rs:1"));
-        assert!(detail.contains("username.as_ref()"));
-        assert!(detail.contains("ALLOWLIST"));
-    }
-
-    #[test]
-    fn clean_scan_reports_no_problems() {
-        assert_eq!(
-            problems(&[(
-                "storage/src/posts.rs".to_string(),
-                "    .bind(slug)\n    .bind(input.title.as_ref())\n".to_string(),
-            )]),
+            problems(&[("storage/src/users.rs".into(), src.into())]),
             None
         );
+    }
+
+    #[test]
+    fn unmarked_site_reports_recovery() {
+        let src = "fn f(min_items: i64) { q.bind(min_items); }";
+        let detail = problems(&[("storage/src/posts.rs".into(), src.into())]).expect("problem");
+        assert!(detail.contains("storage/src/posts.rs:1"));
+        assert!(detail.contains("binds a primitive value"));
+        assert!(detail.contains("Typing the seam is the default fix"));
+    }
+
+    #[test]
+    fn marker_with_no_reason_fails() {
+        let src = r#"
+fn f(is_operator: bool) {
+    // sqlx-newtype-bind:allow
+    q.bind(is_operator);
+}
+"#;
+        let detail = problems(&[("storage/src/users.rs".into(), src.into())]).expect("problem");
+        assert!(detail.contains("marker has no reason"));
+    }
+
+    #[test]
+    fn marker_with_unknown_category_fails() {
+        let src = r#"
+fn f(is_operator: bool) {
+    // sqlx-newtype-bind:allow because I said so
+    q.bind(is_operator);
+}
+"#;
+        let detail = problems(&[("storage/src/users.rs".into(), src.into())]).expect("problem");
+        assert!(detail.contains("marker category `because`"));
+    }
+
+    #[test]
+    fn deferred_marker_without_issue_fails() {
+        let src = r#"
+fn f(limit_i: i64) {
+    // sqlx-newtype-bind:allow deferred-newtype — type this later.
+    q.bind(limit_i);
+}
+"#;
+        let detail =
+            problems(&[("storage/src/feed_events.rs".into(), src.into())]).expect("problem");
+        assert!(detail.contains("deferred-newtype marker must name"));
+    }
+
+    #[test]
+    fn orphan_marker_fails() {
+        let src = r#"
+fn f(slug: Slug) {
+    // sqlx-newtype-bind:allow permanent-primitive — stale.
+    q.bind(slug);
+}
+"#;
+        let detail = problems(&[("storage/src/posts.rs".into(), src.into())]).expect("problem");
+        assert!(detail.contains("marker is orphaned"));
+    }
+
+    #[test]
+    fn shared_line_marker_fails() {
+        let src = r#"
+fn f(a: bool, b: bool) {
+    // sqlx-newtype-bind:allow permanent-primitive — two binds are ambiguous.
+    q.bind(a).bind(b);
+}
+"#;
+        let detail = problems(&[("storage/src/users.rs".into(), src.into())]).expect("problem");
+        assert!(detail.contains("has 2 primitive sqlx binds"));
+    }
+
+    #[test]
+    fn failure_includes_marker_census() {
+        let src = r##"
+fn f(ok: bool, bad: i64) {
+    // sqlx-newtype-bind:allow permanent-primitive — boolean operator flag has no domain identity.
+    q.bind(ok);
+    q.bind(bad);
+}
+"##;
+        let detail = problems(&[("storage/src/users.rs".into(), src.into())]).expect("problem");
+        assert!(detail.contains("currently marked primitive-bind exemptions"));
+        assert!(detail.contains("storage/src/users.rs:4 — permanent-primitive"));
+    }
+
+    #[test]
+    fn unparseable_file_fails_closed() {
+        let detail = problems(&[("storage/src/bad.rs".into(), "fn {".into())]).expect("problem");
+        assert!(detail.contains("cannot parse as Rust"));
     }
 }

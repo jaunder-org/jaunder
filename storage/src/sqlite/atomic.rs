@@ -184,6 +184,7 @@ impl AtomicOps for SqliteAtomicOps {
             .bind(&password_hash)
             .bind(display_name)
             .bind(now)
+            // sqlx-newtype-bind:allow permanent-primitive — boolean operator flag has no domain identity.
             .bind(is_operator)
             .fetch_one(&mut *conn)
             .await;
