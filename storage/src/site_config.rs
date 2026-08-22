@@ -373,6 +373,7 @@ where
              ON CONFLICT (key) DO UPDATE SET value = excluded.value",
         )
         .bind(key)
+        // sqlx-newtype-bind:allow permanent-primitive — typed site config values are persisted through their string representation.
         .bind(value)
         .execute(&self.pool)
         .await?;

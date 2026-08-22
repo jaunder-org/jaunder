@@ -407,6 +407,7 @@ where
         .bind(&password_hash)
         .bind(display_name)
         .bind(now)
+        // sqlx-newtype-bind:allow permanent-primitive — boolean operator flag has no domain identity.
         .bind(is_operator)
         .fetch_one(&self.pool)
         .instrument(tracing::info_span!(
@@ -484,6 +485,7 @@ where
     ) -> sqlx::Result<()> {
         sqlx::query("UPDATE users SET email = $1, email_verified = $2 WHERE user_id = $3")
             .bind(email)
+            // sqlx-newtype-bind:allow permanent-primitive — email verification is a boolean storage fact with no domain identity.
             .bind(verified)
             .bind(user_id)
             .execute(&self.pool)

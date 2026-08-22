@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use common::feed::FeedEventClaimLimit;
 use common::ids::FeedEventId;
 use sqlx::{Pool, Sqlite};
 
@@ -48,7 +49,7 @@ impl FeedEventDialect for Sqlite {
         pool: &Pool<Sqlite>,
         now: DateTime<Utc>,
         lease_cutoff: DateTime<Utc>,
-        limit_i: i64,
+        limit: FeedEventClaimLimit,
     ) -> Result<Vec<FeedEventRecord>, FeedEventError> {
         // Single autocommit statement: SQLite takes the write lock immediately,
         // so there is no deferred read-then-write lock upgrade (ADR-0021) and the
@@ -68,7 +69,7 @@ impl FeedEventDialect for Sqlite {
         .bind(now)
         .bind(now)
         .bind(lease_cutoff)
-        .bind(limit_i)
+        .bind(limit)
         .fetch_all(pool)
         .await?;
 
@@ -134,6 +135,7 @@ impl FeedEventDialect for Sqlite {
              SET status = 'pending', attempts = attempts + 1, last_error = ?, next_attempt_at = ?, claimed_at = NULL \
              WHERE id IN ({ph})"
         );
+        // sqlx-newtype-bind:allow permanent-primitive — stored diagnostic text has no domain identity.
         let mut q = sqlx::query(&sql).bind(error).bind(next_attempt_at);
         for id in ids {
             q = q.bind(*id);
@@ -150,6 +152,7 @@ impl FeedEventDialect for Sqlite {
         let ph = placeholders(ids.len());
         let sql =
             format!("UPDATE feed_events SET status = 'failed', last_error = ? WHERE id IN ({ph})");
+        // sqlx-newtype-bind:allow permanent-primitive — stored diagnostic text has no domain identity.
         let mut q = sqlx::query(&sql).bind(error);
         for id in ids {
             q = q.bind(*id);

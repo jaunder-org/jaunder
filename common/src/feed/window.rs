@@ -23,9 +23,10 @@ impl HybridWindow {
     #[must_use]
     pub fn select<'a, P: HasPublishedAt>(&self, posts: &'a [P], now: DateTime<Utc>) -> &'a [P] {
         let cutoff = self.cutoff_date(now);
+        let min_items = usize::try_from(self.min_items.value()).unwrap_or(usize::MAX);
         let mut end = 0usize;
         for (i, p) in posts.iter().enumerate() {
-            if i < self.min_items.value() as usize || p.published_at() >= cutoff {
+            if i < min_items || p.published_at() >= cutoff {
                 end = i + 1;
             } else {
                 break;

@@ -228,6 +228,7 @@ where
             .bind(author_user_id)
             .bind(subscriber.channel_id)
             .bind(&subscriber.subscriber_ref)
+            // sqlx-newtype-bind:allow permanent-primitive — FK-normalized subscription status binds its lookup token, not a text column value.
             .bind(status_name)
             .fetch_one(&self.pool)
             .await

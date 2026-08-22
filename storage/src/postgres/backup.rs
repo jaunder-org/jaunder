@@ -300,6 +300,7 @@ async fn columns(
          WHERE table_schema = 'public' AND table_name = $1
          ORDER BY ordinal_position",
     )
+    // sqlx-newtype-bind:allow permanent-primitive — Postgres catalog table names are introspection inputs, not domain values.
     .bind(table)
     .fetch_all(&mut *connection)
     .await?;

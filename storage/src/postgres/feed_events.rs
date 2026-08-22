@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use common::feed::FeedEventClaimLimit;
 use common::ids::FeedEventId;
 use sqlx::{Pool, Postgres};
 
@@ -41,7 +42,7 @@ impl FeedEventDialect for Postgres {
         pool: &Pool<Postgres>,
         now: DateTime<Utc>,
         lease_cutoff: DateTime<Utc>,
-        limit_i: i64,
+        limit: FeedEventClaimLimit,
     ) -> Result<Vec<FeedEventRecord>, FeedEventError> {
         // Postgres can express the whole claim atomically with FOR UPDATE
         // SKIP LOCKED + UPDATE … RETURNING in a single statement.
@@ -61,7 +62,7 @@ impl FeedEventDialect for Postgres {
         )
         .bind(now)
         .bind(lease_cutoff)
-        .bind(limit_i)
+        .bind(limit)
         .fetch_all(pool)
         .await?;
 
@@ -122,6 +123,7 @@ impl FeedEventDialect for Postgres {
                  last_error = $1, next_attempt_at = $2, claimed_at = NULL \
              WHERE id = ANY($3)",
         )
+        // sqlx-newtype-bind:allow permanent-primitive — stored diagnostic text has no domain identity.
         .bind(error)
         .bind(next_attempt_at)
         .bind(ids)
@@ -136,6 +138,7 @@ impl FeedEventDialect for Postgres {
         error: &str,
     ) -> Result<(), FeedEventError> {
         sqlx::query("UPDATE feed_events SET status = 'failed', last_error = $1 WHERE id = ANY($2)")
+            // sqlx-newtype-bind:allow permanent-primitive — stored diagnostic text has no domain identity.
             .bind(error)
             .bind(ids)
             .execute(pool)

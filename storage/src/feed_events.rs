@@ -4,7 +4,7 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
-use common::feed::FeedPath;
+use common::feed::{FeedEventClaimLimit, FeedPath};
 use common::ids::FeedEventId;
 use sqlx::{Database, Pool};
 use thiserror::Error;
@@ -194,7 +194,7 @@ pub trait FeedEventDialect: Backend {
         pool: &Pool<Self>,
         now: DateTime<Utc>,
         lease_cutoff: DateTime<Utc>,
-        limit_i: i64,
+        limit: FeedEventClaimLimit,
     ) -> Result<Vec<FeedEventRecord>, FeedEventError>;
 
     /// Count rows eligible under the same predicate as `claim_pending_batch`.
@@ -317,8 +317,8 @@ where
     ) -> Result<Vec<FeedEventRecord>, FeedEventError> {
         let now = Utc::now();
         let lease_cutoff = now - lease_timeout;
-        let limit_i = i64::try_from(limit).unwrap_or(i64::MAX);
-        DB::claim_pending_batch(&self.pool, now, lease_cutoff, limit_i).await
+        let limit = FeedEventClaimLimit::from_usize(limit);
+        DB::claim_pending_batch(&self.pool, now, lease_cutoff, limit).await
     }
 
     #[tracing::instrument(

@@ -32,6 +32,7 @@ mod tests {
             .expect("connect to bootstrap database");
         let exists: bool =
             sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)")
+                // sqlx-newtype-bind:allow permanent-primitive — bootstrap database name is a Postgres catalog lookup input.
                 .bind(db_name)
                 .fetch_one(&mut conn)
                 .await
