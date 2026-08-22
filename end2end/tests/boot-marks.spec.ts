@@ -255,7 +255,9 @@ test("boot fetches the wasm once and the harness captures the full mark set", as
       customSections: expect.any(Number),
     },
   });
-  expect([null, "baseline", "shape"]).toContain(completionDetail.experimentArm);
+  expect([null, "baseline", "shape", "shape-many"]).toContain(
+    completionDetail.experimentArm,
+  );
   expect(timing?.wasmInit).toMatchObject({
     path: "streaming",
     moduleShape: {
@@ -266,7 +268,7 @@ test("boot fetches the wasm once and the harness captures the full mark set", as
       customSections: expect.any(Number),
     },
   });
-  expect([null, "baseline", "shape"]).toContain(
+  expect([null, "baseline", "shape", "shape-many"]).toContain(
     timing?.wasmInit?.experimentArm,
   );
   expect(timing?.wasmInit?.startMs).not.toBeNull();

@@ -180,17 +180,24 @@ fn custom_section(name: &str, data: &[u8]) -> Vec<u8> {
     section
 }
 
-fn append_shape_section(wasm: &Path, label: &str) -> anyhow::Result<()> {
+fn append_shape_sections(wasm: &Path, label: &str, count: u32) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        count > 0,
+        "--wasm-shape-section-count must be greater than zero"
+    );
     let mut bytes = std::fs::read(wasm).with_context(|| format!("reading {}", wasm.display()))?;
     anyhow::ensure!(
         bytes.starts_with(b"\0asm\x01\0\0\0"),
         "{} is not a wasm module",
         wasm.display()
     );
-    bytes.extend_from_slice(&custom_section(
-        EXPERIMENT_SHAPE_SECTION_NAME,
-        label.as_bytes(),
-    ));
+    for index in 0..count {
+        let payload = format!("{label}:{index}");
+        bytes.extend_from_slice(&custom_section(
+            EXPERIMENT_SHAPE_SECTION_NAME,
+            payload.as_bytes(),
+        ));
+    }
     std::fs::write(wasm, bytes).with_context(|| format!("writing {}", wasm.display()))
 }
 
@@ -262,6 +269,7 @@ pub fn run(
     out: &Path,
     experiment_arm: Option<&str>,
     shape_section: Option<&str>,
+    shape_section_count: u32,
 ) -> anyhow::Result<()> {
     std::fs::create_dir_all(out).with_context(|| format!("creating out dir {}", out.display()))?;
 
@@ -295,7 +303,8 @@ pub fn run(
     // that actually ship.
     run_wasm_opt(&out.join(OUT_WASM)).context("optimising jaunder.wasm")?;
     if let Some(label) = shape_section {
-        append_shape_section(&out.join(OUT_WASM), label).context("adding wasm shape section")?;
+        append_shape_sections(&out.join(OUT_WASM), label, shape_section_count)
+            .context("adding wasm shape section")?;
     }
 
     // Precompress the final JS (post wasm-ref rewrite) and the wasm.
@@ -463,10 +472,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let wasm = dir.path().join("module.wasm");
         std::fs::write(&wasm, b"\0asm\x01\0\0\0").unwrap();
-        append_shape_section(&wasm, "arm-shape").unwrap();
+        append_shape_sections(&wasm, "arm-shape", 2).unwrap();
         let bytes = std::fs::read(&wasm).unwrap();
         assert!(bytes.starts_with(b"\0asm\x01\0\0\0"), "{bytes:?}");
-        assert!(bytes.ends_with(&custom_section(EXPERIMENT_SHAPE_SECTION_NAME, b"arm-shape",)));
+        assert!(bytes.ends_with(&custom_section(
+            EXPERIMENT_SHAPE_SECTION_NAME,
+            b"arm-shape:1",
+        )));
+        assert_eq!(
+            bytes
+                .windows(custom_section(EXPERIMENT_SHAPE_SECTION_NAME, b"arm-shape:0").len())
+                .filter(|window| *window
+                    == custom_section(EXPERIMENT_SHAPE_SECTION_NAME, b"arm-shape:0"))
+                .count(),
+            1
+        );
     }
 
     #[test]
