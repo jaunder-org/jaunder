@@ -212,6 +212,36 @@ fn spawn(args: &[&str]) -> Result<(i32, String, String), ApiError> {
     }
 }
 
+/// Run `gh` with a complete stdin payload and hand its outputs to [`classify`].
+pub fn run_gh_stdin(args: &[&str], stdin: &str) -> Result<Value, ApiError> {
+    let mut child = match Command::new("gh")
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Err(ApiError::GhMissing),
+        Err(e) => return Err(ApiError::Transport(format!("could not run gh: {e}"))),
+    };
+    let Some(mut pipe) = child.stdin.take() else {
+        return Err(ApiError::Transport("could not open gh stdin".into()));
+    };
+    pipe.write_all(stdin.as_bytes())
+        .map_err(|e| ApiError::Transport(format!("could not write gh stdin: {e}")))?;
+    drop(pipe);
+    let out = child
+        .wait_with_output()
+        .map_err(|e| ApiError::Transport(format!("could not wait for gh: {e}")))?;
+    classify(
+        out.status.code().unwrap_or(-1),
+        &String::from_utf8_lossy(&out.stdout),
+        &String::from_utf8_lossy(&out.stderr),
+    )
+    .map_err(with_reset)
+}
+
 /// Look up the reset time only when it can matter. `enrich_rate_limit` discards it for
 /// every other variant, so calling it eagerly would spawn a second `gh` on every 404
 /// and every transport blip.
