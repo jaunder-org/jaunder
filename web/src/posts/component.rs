@@ -77,6 +77,10 @@ where
     });
 }
 
+fn canonical_username_display(username: Memo<Option<Username>>) -> impl Fn() -> String {
+    move || username.get().map(String::from).unwrap_or_default()
+}
+
 /// The `.j-seg` Markdown/Org format toggle, shared by every post editor. Renders one
 /// button per user-selectable `PostFormat` — those carrying a `strum` editor message;
 /// `Html` has none (renderer-internal, #445), so it is filtered out. Adding a format is
@@ -1113,9 +1117,7 @@ pub fn UserTimelinePage() -> impl IntoView {
         }
     });
 
-    // The heading shows the canonical (parsed, lowercased) username, or empty for an
-    // invalid segment — the page renders a validation error in that case anyway.
-    let display_username = move || username.get().map(String::from).unwrap_or_default();
+    let display_username = canonical_username_display(username);
 
     view! {
         {move || {
@@ -1817,9 +1819,7 @@ pub fn UserTagPage() -> impl IntoView {
         }
     });
 
-    // Canonical (parsed, lowercased) username for the heading, or empty for an
-    // invalid segment — the page renders a validation error in that case anyway.
-    let read_username = move || username.get().map(String::from).unwrap_or_default();
+    let read_username = canonical_username_display(username);
     // The canonical tag for the heading (a newtype is not `IntoRender`), or empty
     // for an unparseable segment — the page renders a validation error anyway.
     let read_tag = move || tag.get().map(|t| t.to_string()).unwrap_or_default();
