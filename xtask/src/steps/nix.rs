@@ -648,13 +648,16 @@ fn failed_build_after_diagnostics_with(
 /// --accept-flake-config honors the jaunder-org cachix substituter for the
 /// untrusted local user; --out-link makes the closure a GC root.
 fn build_check(step_name: &str, check: &str) -> StepResult {
+    let start = std::time::Instant::now();
     let mut diagnostic_failed = match prepare_build_dirs_with(
         || std::fs::create_dir_all(".xtask/gcroots"),
         || std::fs::create_dir_all(format!(".xtask/diagnostics/{check}")),
     ) {
         Ok(failed) => failed,
         Err(error) => {
-            return StepResult::fail(step_name).detail(format!("creating .xtask/gcroots: {error}"));
+            return StepResult::fail(step_name)
+                .detail(format!("creating .xtask/gcroots: {error}"))
+                .with_duration(start.elapsed());
         }
     };
     let out_link = format!(".xtask/gcroots/{check}");
@@ -680,7 +683,9 @@ fn build_check(step_name: &str, check: &str) -> StepResult {
         Ok(child) => child,
         Err(error) => {
             report_build_diagnostic_failure(diagnostic_failed, &mut io::stderr());
-            return StepResult::fail(step_name).detail(error.to_string());
+            return StepResult::fail(step_name)
+                .detail(error.to_string())
+                .with_duration(start.elapsed());
         }
     };
 
@@ -700,16 +705,20 @@ fn build_check(step_name: &str, check: &str) -> StepResult {
         Ok(status) => status,
         Err(error) => {
             report_build_diagnostic_failure(diagnostic_failed, &mut io::stderr());
-            return StepResult::fail(step_name).detail(error.to_string());
+            return StepResult::fail(step_name)
+                .detail(error.to_string())
+                .with_duration(start.elapsed());
         }
     };
     if primary_output_failed {
         report_build_diagnostic_failure(diagnostic_failed, &mut io::stderr());
-        return StepResult::fail(step_name).detail("failed to stream nix build stderr");
+        return StepResult::fail(step_name)
+            .detail("failed to stream nix build stderr")
+            .with_duration(start.elapsed());
     }
     if status.success() {
         report_build_diagnostic_failure(diagnostic_failed, &mut io::stderr());
-        StepResult::ok(step_name)
+        StepResult::ok(step_name).with_duration(start.elapsed())
     } else {
         failed_build_after_diagnostics_with(
             FailedBuildDiagnostics {
@@ -723,6 +732,7 @@ fn build_check(step_name: &str, check: &str) -> StepResult {
             || rescue_diagnostics(check),
             &mut io::stderr(),
         )
+        .with_duration(start.elapsed())
     }
 }
 /// Run `nix eval --raw --accept-flake-config <installable>`, optionally in a

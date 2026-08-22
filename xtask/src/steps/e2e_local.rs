@@ -295,26 +295,37 @@ fn record_post_playwright_results(
     result: &mut CommandResult,
     browser: &str,
     playwright_result: Result<(), String>,
+    playwright_duration: Duration,
     panic_gate_result: Result<(), String>,
+    panic_gate_duration: Duration,
 ) {
     let playwright_step = step_name(browser, "playwright");
     match playwright_result {
-        Ok(()) => result.push(StepResult::ok(&playwright_step)),
-        Err(detail) => result.push(StepResult::fail(&playwright_step).detail(detail)),
+        Ok(()) => result.push(StepResult::ok(&playwright_step).with_duration(playwright_duration)),
+        Err(detail) => result.push(
+            StepResult::fail(&playwright_step)
+                .detail(detail)
+                .with_duration(playwright_duration),
+        ),
     }
 
-    record_panic_gate_result(result, browser, panic_gate_result);
+    record_panic_gate_result(result, browser, panic_gate_result, panic_gate_duration);
 }
 
 fn record_panic_gate_result(
     result: &mut CommandResult,
     browser: &str,
     panic_gate_result: Result<(), String>,
+    duration: Duration,
 ) {
     let panic_step = step_name(browser, "panic-gate");
     match panic_gate_result {
-        Ok(()) => result.push(StepResult::ok(&panic_step)),
-        Err(detail) => result.push(StepResult::fail(&panic_step).detail(detail)),
+        Ok(()) => result.push(StepResult::ok(&panic_step).with_duration(duration)),
+        Err(detail) => result.push(
+            StepResult::fail(&panic_step)
+                .detail(detail)
+                .with_duration(duration),
+        ),
     }
 }
 
@@ -330,7 +341,7 @@ fn finish_lifecycle(
     result: &mut CommandResult,
     server: &mut ServerChild,
     verification: &LifecycleVerification<'_>,
-    playwright_result: Option<Result<(), String>>,
+    playwright_result: Option<(Result<(), String>, Duration)>,
 ) {
     let server_log_step = step_name(verification.browser, "server-log");
     if let Err(error) = server.stop() {
@@ -343,21 +354,31 @@ fn finish_lifecycle(
     let test_support = verification.test_support;
     let capture = verification.capture;
     let server_stderr = verification.server_stderr;
+    let panic_gate_start = std::time::Instant::now();
     let panic_gate_result = cmd!(
         sh,
         "{test_support} verify-no-panics --capture-dir {capture} --server-log {server_stderr}"
     )
     .run()
     .map_err(|_| "shared zero-panic verifier failed".to_owned());
+    let panic_gate_duration = panic_gate_start.elapsed();
     if let Some(playwright_result) = playwright_result {
+        let (playwright_result, playwright_duration) = playwright_result;
         record_post_playwright_results(
             result,
             verification.browser,
             playwright_result,
+            playwright_duration,
             panic_gate_result,
+            panic_gate_duration,
         );
     } else {
-        record_panic_gate_result(result, verification.browser, panic_gate_result);
+        record_panic_gate_result(
+            result,
+            verification.browser,
+            panic_gate_result,
+            panic_gate_duration,
+        );
     }
 }
 
@@ -377,9 +398,12 @@ fn run_lifecycle(
 
     // A distinct temp storage directory gives every browser a fresh database,
     // capture directory, runtime file, port, server, and teardown.
+    let tmpdir_start = std::time::Instant::now();
     let Ok(storage) = tempfile::tempdir() else {
         result.push(
-            StepResult::fail(&tmpdir_step).detail("cannot create temp storage dir".to_owned()),
+            StepResult::fail(&tmpdir_step)
+                .detail("cannot create temp storage dir".to_owned())
+                .with_duration(tmpdir_start.elapsed()),
         );
         return;
     };
@@ -388,17 +412,20 @@ fn run_lifecycle(
     let runtime = storage.path().join("runtime.json");
     let capture = format!("{sp}/capture");
     let server_stderr = storage.path().join("server-stderr.log");
+    let server_log_start = std::time::Instant::now();
     let stderr_capture = match File::create(&server_stderr) {
         Ok(file) => file,
         Err(error) => {
             result.push(
                 StepResult::fail(&server_log_step)
-                    .detail(format!("failed to create server stderr capture: {error}")),
+                    .detail(format!("failed to create server stderr capture: {error}"))
+                    .with_duration(server_log_start.elapsed()),
             );
             return;
         }
     };
 
+    let server_start = std::time::Instant::now();
     let child = match Command::new(root.join("target/debug/jaunder"))
         .arg("serve")
         .env("JAUNDER_BIND", "127.0.0.1:0")
@@ -413,7 +440,8 @@ fn run_lifecycle(
         Err(error) => {
             result.push(
                 StepResult::fail(&server_step)
-                    .detail(format!("failed to spawn jaunder serve: {error}")),
+                    .detail(format!("failed to spawn jaunder serve: {error}"))
+                    .with_duration(server_start.elapsed()),
             );
             return;
         }
@@ -423,7 +451,8 @@ fn run_lifecycle(
         Err(error) => {
             result.push(
                 StepResult::fail(&server_log_step)
-                    .detail(format!("failed to start server stderr capture: {error}")),
+                    .detail(format!("failed to start server stderr capture: {error}"))
+                    .with_duration(server_log_start.elapsed()),
             );
             return;
         }
@@ -450,15 +479,17 @@ fn run_lifecycle(
     let Some(base_url) = discovered else {
         result.push(
             StepResult::fail(&server_step)
-                .detail("server not reachable via runtime.json within 15s".to_owned()),
+                .detail("server not reachable via runtime.json within 15s".to_owned())
+                .with_duration(server_start.elapsed()),
         );
         finish_lifecycle(sh, result, &mut server, &verification, None);
         return;
     };
-    result.push(StepResult::ok(&server_step));
+    result.push(StepResult::ok(&server_step).with_duration(server_start.elapsed()));
 
     let tools = root.join("tools/Cargo.toml");
     let jaunder = root.join("target/debug/jaunder");
+    let seed_start = std::time::Instant::now();
     if cmd!(
         sh,
         "cargo run --manifest-path {tools} -- seed-e2e --db {db} --test-support-bin {test_support} --jaunder-bin {jaunder}"
@@ -467,15 +498,20 @@ fn run_lifecycle(
     .run()
     .is_err()
     {
-        result.push(StepResult::fail(&seed_step).detail("devtool seed-e2e failed".to_owned()));
+        result.push(
+            StepResult::fail(&seed_step)
+                .detail("devtool seed-e2e failed".to_owned())
+                .with_duration(seed_start.elapsed()),
+        );
         finish_lifecycle(sh, result, &mut server, &verification, None);
         return;
     }
-    result.push(StepResult::ok(&seed_step));
+    result.push(StepResult::ok(&seed_step).with_duration(seed_start.elapsed()));
 
     // Playwright uses the environment resolved before any subprocess. The DB,
     // capture directory, and target/debug-prefixed PATH match the VM contract.
     sh.change_dir(root.join("end2end"));
+    let playwright_start = std::time::Instant::now();
     let mut playwright_result = Ok(());
     for invocation in &lifecycle.invocations {
         if cmd!(sh, "playwright")
@@ -502,7 +538,7 @@ fn run_lifecycle(
         result,
         &mut server,
         &verification,
-        Some(playwright_result),
+        Some((playwright_result, playwright_start.elapsed())),
     );
 }
 
@@ -533,8 +569,13 @@ pub fn run(
     if !result.ok {
         return;
     }
+    let root_start = std::time::Instant::now();
     let Ok(root) = git::toplevel(Path::new(".")) else {
-        result.push(StepResult::fail("e2e-local").detail("cannot locate repo root".to_owned()));
+        result.push(
+            StepResult::fail("e2e-local")
+                .detail("cannot locate repo root".to_owned())
+                .with_duration(root_start.elapsed()),
+        );
         return;
     };
 
@@ -542,11 +583,16 @@ pub fn run(
         ("jaunder", "e2e-local-build-server"),
         ("test-support", "e2e-local-build-support"),
     ] {
+        let build_start = std::time::Instant::now();
         if cmd!(sh, "cargo build -p {pkg}").run().is_err() {
-            result.push(StepResult::fail(label).detail(format!("cargo build -p {pkg} failed")));
+            result.push(
+                StepResult::fail(label)
+                    .detail(format!("cargo build -p {pkg} failed"))
+                    .with_duration(build_start.elapsed()),
+            );
             return;
         }
-        result.push(StepResult::ok(label));
+        result.push(StepResult::ok(label).with_duration(build_start.elapsed()));
     }
 
     for lifecycle in &plan.lifecycles {
@@ -702,7 +748,9 @@ mod tests {
             &mut result,
             "firefox",
             Err("visual Playwright invocation reported failures".to_owned()),
+            Duration::from_millis(11),
             Err("shared verifier rejected a panic".to_owned()),
+            Duration::from_millis(7),
         );
 
         assert!(!result.ok);
@@ -718,6 +766,8 @@ mod tests {
             .expect("panic step");
         assert!(!playwright.ok);
         assert!(!panic_gate.ok);
+        assert_eq!(playwright.duration_ms, 11);
+        assert_eq!(panic_gate.duration_ms, 7);
         assert_eq!(
             panic_gate.detail.as_deref(),
             Some("shared verifier rejected a panic")
@@ -727,7 +777,14 @@ mod tests {
     #[test]
     fn clean_post_playwright_results_are_both_successful() {
         let mut result = CommandResult::new("e2e-local");
-        record_post_playwright_results(&mut result, "chromium", Ok(()), Ok(()));
+        record_post_playwright_results(
+            &mut result,
+            "chromium",
+            Ok(()),
+            Duration::from_millis(11),
+            Ok(()),
+            Duration::from_millis(7),
+        );
         assert!(result.ok);
         assert_eq!(
             result
