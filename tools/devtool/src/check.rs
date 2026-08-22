@@ -20,15 +20,15 @@ pub const ALL: &[&str] = &[
     "fmt",
     "leptosfmt",
     "prettier",
-    "tsc",
     "elisp-fmt",
-    "ert",
+    "tools-fmt",
     "byte-compile",
+    "tsc",
     "cargo-deny",
     "clippy",
     "wasm-clippy",
-    "tools-fmt",
     "tools-clippy",
+    "ert",
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -4,6 +4,16 @@ use crate::compile_cache;
 use crate::result::{CommandResult, Mode};
 use crate::sh::{step, step_with_env};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Phase {
+    /// Fast source-shape checks that can auto-fix or report concrete files before
+    /// any expensive compile/type work starts.
+    SourceConsistency,
+    /// Checks that invoke compilers, type checkers, or dependency analyzers.
+    CompileAndType,
+    /// Runtime test surfaces that depend on prior compile/type success.
+    HostRuntime,
+}
 /// A single static-check step: a named command and its arguments, already
 /// resolved for the active `Mode`.
 pub struct StepSpec {
@@ -13,16 +23,14 @@ pub struct StepSpec {
     pub cache_rustc: bool,
 }
 
-/// The ordered static-check steps for `mode`. Pure (no I/O) so the step list
-/// and its mode-dependent arguments can be unit-tested without shelling out.
+/// The ordered static-check steps for `phase` and `mode`. Pure (no I/O) so the
+/// step list and its mode-dependent arguments can be unit-tested without
+/// shelling out.
 ///
-/// Devtool-owned checks run through `devtool check <name>` — devtool owns their
-/// tool + args (the single source of truth; #188/#276), and the nix
-/// `static-checks` derivation runs the same definitions. Product/tool
-/// compiling checks still opt into host `sccache` through `cache_rustc`; the
-/// `xtask` self-lint stays native because `xtask/` is out of the flake source.
-/// `xtask/` has a root package (no `--all`).
-pub fn specs(mode: Mode) -> Vec<StepSpec> {
+/// Ordering policy: fixable/source-shape checks first, then compiler/type
+/// surfaces. Repository-wide health checks that do not need a compiler are
+/// interleaved by the host gate between these phases.
+pub fn specs_for_phase(phase: Phase, mode: Mode) -> Vec<StepSpec> {
     // xtask/ workspace: a separate workspace *with* a root package, so a bare
     // `--manifest-path` covers it (no `--all`, unlike tools/).
     let xtask_fmt_args = match mode {
@@ -30,44 +38,57 @@ pub fn specs(mode: Mode) -> Vec<StepSpec> {
         Mode::Fix => vec!["fmt", "--manifest-path", "xtask/Cargo.toml"],
     };
 
-    vec![
-        // The migrated checks — keep this set in sync with
-        // `devtool::check::ALL` (tools/devtool/src/check.rs), which drives the nix
-        // `static-checks` derivation's `devtool check --all`. They are interleaved with
-        // the xtask-only native checks below in the host gate's order.
-        devtool_check("fmt", mode),
-        devtool_check("leptosfmt", mode),
-        devtool_check("prettier", mode),
-        // tsc — `devtool check tsc` provisions end2end/node_modules first (the former
-        // `tsc-deps` step, now folded in) then type-checks; verify-only.
-        devtool_check("tsc", mode),
-        devtool_check("elisp-fmt", mode),
-        devtool_check("ert", mode),
-        devtool_check("byte-compile", mode),
-        devtool_check("cargo-deny", mode),
-        devtool_compile_check("clippy", mode),
-        devtool_compile_check("wasm-clippy", mode),
-        devtool_check("tools-fmt", mode),
-        devtool_compile_check("tools-clippy", mode),
-        StepSpec {
-            name: "xtask-fmt",
-            program: "cargo",
-            args: xtask_fmt_args,
-            cache_rustc: false,
-        },
-        cargo_compile_check(
-            "xtask-clippy",
-            vec![
-                "clippy",
-                "--manifest-path",
-                "xtask/Cargo.toml",
-                "--all-targets",
-                "--",
-                "-D",
-                "warnings",
-            ],
-        ),
+    match phase {
+        Phase::SourceConsistency => vec![
+            devtool_check("fmt", mode),
+            devtool_check("leptosfmt", mode),
+            devtool_check("prettier", mode),
+            devtool_check("elisp-fmt", mode),
+            devtool_check("tools-fmt", mode),
+            StepSpec {
+                name: "xtask-fmt",
+                program: "cargo",
+                args: xtask_fmt_args,
+                cache_rustc: false,
+            },
+        ],
+        Phase::CompileAndType => vec![
+            // Byte-compilation is a compile/type precondition for the elisp runtime tests.
+            devtool_check("byte-compile", mode),
+            // tsc — `devtool check tsc` provisions end2end/node_modules first (the former
+            // `tsc-deps` step, now folded in) then type-checks; verify-only.
+            devtool_check("tsc", mode),
+            devtool_check("cargo-deny", mode),
+            devtool_compile_check("clippy", mode),
+            devtool_compile_check("wasm-clippy", mode),
+            devtool_compile_check("tools-clippy", mode),
+            cargo_compile_check(
+                "xtask-clippy",
+                vec![
+                    "clippy",
+                    "--manifest-path",
+                    "xtask/Cargo.toml",
+                    "--all-targets",
+                    "--",
+                    "-D",
+                    "warnings",
+                ],
+            ),
+        ],
+        Phase::HostRuntime => vec![devtool_check("ert", mode)],
+    }
+}
+
+#[cfg(test)]
+pub fn specs(mode: Mode) -> Vec<StepSpec> {
+    [
+        Phase::SourceConsistency,
+        Phase::CompileAndType,
+        Phase::HostRuntime,
     ]
+    .into_iter()
+    .flat_map(|phase| specs_for_phase(phase, mode))
+    .collect()
 }
 
 /// A migrated static check: run it through `devtool check <name>` so devtool is
@@ -116,10 +137,10 @@ fn cargo_compile_check(name: &'static str, args: Vec<&'static str>) -> StepSpec 
     }
 }
 
-/// Run the static check suite. In `Mode::Fix`, formatting commands auto-fix in
+/// Run one static-check phase. In `Mode::Fix`, formatting commands auto-fix in
 /// place; in `Mode::Check`, every command is read-only — safe for CI.
-pub fn run(sh: &Shell, mode: Mode, result: &mut CommandResult) {
-    for spec in specs(mode) {
+pub fn run_phase(sh: &Shell, mode: Mode, phase: Phase, result: &mut CommandResult) {
+    for spec in specs_for_phase(phase, mode) {
         if spec.cache_rustc {
             let (env, cache_detail) = compile_cache::cargo_compile_env();
             let mut step = step_with_env(sh, spec.name, spec.program, &spec.args, &env);
@@ -255,21 +276,55 @@ mod tests {
             "fmt",
             "leptosfmt",
             "prettier",
-            "tsc",
             "elisp-fmt",
-            "ert",
+            "tools-fmt",
+            "xtask-fmt",
             "byte-compile",
+            "tsc",
             "cargo-deny",
             "clippy",
             "wasm-clippy",
-            "tools-fmt",
             "tools-clippy",
-            "xtask-fmt",
             "xtask-clippy",
+            "ert",
         ];
         for mode in [Mode::Check, Mode::Fix] {
             let names: Vec<&str> = specs(mode).iter().map(|s| s.name).collect();
             assert_eq!(names, expected);
         }
+    }
+
+    #[test]
+    fn phase_order_is_policy_visible() {
+        let source_names: Vec<&str> = specs_for_phase(Phase::SourceConsistency, Mode::Check)
+            .iter()
+            .map(|s| s.name)
+            .collect();
+        assert_eq!(
+            source_names,
+            [
+                "fmt",
+                "leptosfmt",
+                "prettier",
+                "elisp-fmt",
+                "tools-fmt",
+                "xtask-fmt"
+            ]
+        );
+
+        let compile_names: Vec<&str> = specs_for_phase(Phase::CompileAndType, Mode::Check)
+            .iter()
+            .map(|s| s.name)
+            .collect();
+        assert_eq!(compile_names.first(), Some(&"byte-compile"));
+        assert!(compile_names.contains(&"clippy"));
+        assert!(compile_names.contains(&"xtask-clippy"));
+        assert!(!compile_names.contains(&"ert"));
+
+        let runtime_names: Vec<&str> = specs_for_phase(Phase::HostRuntime, Mode::Check)
+            .iter()
+            .map(|s| s.name)
+            .collect();
+        assert_eq!(runtime_names, ["ert"]);
     }
 }

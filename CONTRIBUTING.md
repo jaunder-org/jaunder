@@ -366,6 +366,15 @@ root-workspace Rust tests. Coverage, wasm browser tests, doctests, and e2e still
 run in hermetic Nix checks where that isolation is load-bearing. The local push
 hook is intentionally faster than the hermetic CI backstop.
 
+Within the host/local gate, health checks are ordered for fast, actionable
+feedback: clean/staged-tree preconditions first, source-format and generated-doc
+consistency before compile/type work, cheap repository-shape invariants before
+expensive Rust checks, compile/type checks before host runtime tests, and
+hermetic Nix checks only where isolation is load-bearing. A codebase-health
+check stays in xtask rather than `cargo test` when it spans files, generated
+artifacts, Git state, docs, Nix derivations, or multiple languages; use
+`cargo test` for one crate/module's behavior contract.
+
 For product Rust behavior changes, use the focused host-native lane before broad
 gates when one Rust test, module, package, or subsystem can answer the current
 question:
