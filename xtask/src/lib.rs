@@ -504,7 +504,15 @@ impl HostGateStep {
             Self::StaticChecks => steps::static_checks::run(sh, mode, result),
             Self::ResultOnly { name, run } => {
                 debug_assert!(!name.is_empty());
+                let before = result.steps.len();
+                let start = std::time::Instant::now();
                 run(result);
+                let duration = start.elapsed().as_millis();
+                for step in &mut result.steps[before..] {
+                    if step.duration_ms == 0 {
+                        step.duration_ms = duration;
+                    }
+                }
             }
             Self::HostTests => steps::host_tests::run(sh, result),
         }
@@ -729,7 +737,8 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let sh = xshell::Shell::new()?;
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("prepush");
-            let precheck = clean_tree_precheck(false);
+            let precheck_start = std::time::Instant::now();
+            let precheck = clean_tree_precheck(false).with_duration(precheck_start.elapsed());
             let blocked = !precheck.ok && !precheck.skipped;
             result.push(precheck);
             if !blocked {
@@ -747,7 +756,8 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let mut result = CommandResult::new("validate");
             // Clean-tree backstop: refuse a dirty tree so what is measured equals the
             // committed tip (== what CI sees). Fail fast before the expensive steps.
-            let precheck = clean_tree_precheck(allow_dirty);
+            let precheck_start = std::time::Instant::now();
+            let precheck = clean_tree_precheck(allow_dirty).with_duration(precheck_start.elapsed());
             let blocked = !precheck.ok && !precheck.skipped;
             result.push(precheck);
             if blocked {
@@ -777,6 +787,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         } => {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("audit-wasm");
+            let step_start = std::time::Instant::now();
             if breakdown {
                 match audit_wasm::breakdown(wasm.as_deref()) {
                     Ok(report) => {
@@ -784,12 +795,15 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                         result.breakdown = Some(report);
                         result.push(
                             StepResult::ok("audit-wasm-breakdown")
-                                .detail(format!("{n} crate(s) attributed")),
+                                .detail(format!("{n} crate(s) attributed"))
+                                .with_duration(step_start.elapsed()),
                         );
                     }
                     Err(e) => {
                         result.push(
-                            StepResult::fail("audit-wasm-breakdown").detail(format!("{e:#}")),
+                            StepResult::fail("audit-wasm-breakdown")
+                                .detail(format!("{e:#}"))
+                                .with_duration(step_start.elapsed()),
                         );
                     }
                 }
@@ -798,11 +812,18 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                     Ok(report) => {
                         let n = report.artifacts.len();
                         result.audit = Some(report);
-                        result
-                            .push(StepResult::ok("audit-wasm").detail(format!("{n} artifact(s)")));
+                        result.push(
+                            StepResult::ok("audit-wasm")
+                                .detail(format!("{n} artifact(s)"))
+                                .with_duration(step_start.elapsed()),
+                        );
                     }
                     Err(e) => {
-                        result.push(StepResult::fail("audit-wasm").detail(format!("{e:#}")));
+                        result.push(
+                            StepResult::fail("audit-wasm")
+                                .detail(format!("{e:#}"))
+                                .with_duration(step_start.elapsed()),
+                        );
                     }
                 }
             }
@@ -832,7 +853,8 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         Command::Coverage(CoverageCommand::ProbeSource) => {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("coverage-probe-source");
-            result.push(coverage::probe::probe_source());
+            let step_start = std::time::Instant::now();
+            result.push(coverage::probe::probe_source().with_duration(step_start.elapsed()));
             finalize(&mut result, start);
             Ok(result)
         }
@@ -866,21 +888,24 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         Command::Adr(AdrCommand::Renumber) => {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("adr-renumber");
-            result.push(adr::renumber());
+            let step_start = std::time::Instant::now();
+            result.push(adr::renumber().with_duration(step_start.elapsed()));
             finalize(&mut result, start);
             Ok(result)
         }
         Command::Adr(AdrCommand::SyncReadme) => {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("adr-sync-readme");
-            result.push(adr_readme::sync_readme());
+            let step_start = std::time::Instant::now();
+            result.push(adr_readme::sync_readme().with_duration(step_start.elapsed()));
             finalize(&mut result, start);
             Ok(result)
         }
         Command::Adr(AdrCommand::Promote) => {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("adr-promote");
-            result.push(adr::promote());
+            let step_start = std::time::Instant::now();
+            result.push(adr::promote().with_duration(step_start.elapsed()));
             finalize(&mut result, start);
             Ok(result)
         }
@@ -906,7 +931,11 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             };
             let n = analysis.span_count;
             result.traces = Some(traces::render::render(&analysis, top as usize));
-            result.push(StepResult::ok("traces-analyze").detail(format!("{n} span(s)")));
+            result.push(
+                StepResult::ok("traces-analyze")
+                    .detail(format!("{n} span(s)"))
+                    .with_duration(start.elapsed()),
+            );
             finalize(&mut result, start);
             Ok(result)
         }
@@ -940,7 +969,11 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                 return Ok(result);
             };
             result.traces = Some(traces::render::render(&analysis, top as usize));
-            result.push(StepResult::ok("traces-run").detail(format!("{n} trace file(s)")));
+            result.push(
+                StepResult::ok("traces-run")
+                    .detail(format!("{n} trace file(s)"))
+                    .with_duration(start.elapsed()),
+            );
             finalize(&mut result, start);
             Ok(result)
         }
@@ -958,7 +991,11 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             };
             let n = rows.len();
             result.traces = Some(traces::boot_phases::render(&rows));
-            result.push(StepResult::ok("traces-boot-phases").detail(format!("{n} population(s)")));
+            result.push(
+                StepResult::ok("traces-boot-phases")
+                    .detail(format!("{n} population(s)"))
+                    .with_duration(start.elapsed()),
+            );
             finalize(&mut result, start);
             Ok(result)
         }
@@ -1031,7 +1068,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             // a `watcher-error` report, so the outcome that most needs to be legible
             // always reaches the sidecar.
             let report = pr::execute(number, cfg, operation.is_landing())?;
-            let mut result = pr::into_result(operation, report);
+            let mut result = pr::into_result(operation, report, start.elapsed());
             finalize(&mut result, start);
             Ok(result)
         }
@@ -1061,7 +1098,11 @@ fn trace_attribute_owner_result<T>(
                 .downcast_ref::<traces::parse::MalformedJsonAttr>()
                 .is_some() =>
         {
-            result.push(StepResult::fail(step).detail(format!("{error:#}")));
+            result.push(
+                StepResult::fail(step)
+                    .detail(format!("{error:#}"))
+                    .with_duration(std::time::Duration::ZERO),
+            );
             Ok(None)
         }
         Err(error) => Err(error),

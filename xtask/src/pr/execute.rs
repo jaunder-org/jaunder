@@ -195,7 +195,11 @@ pub fn execute_with<S: PrSource, A: land::PrArmer, C: watch::Clock>(
 
 /// Wrap a report in the command envelope.
 ///
-pub fn into_result(operation: PrOperation, report: PrReport) -> CommandResult {
+pub fn into_result(
+    operation: PrOperation,
+    report: PrReport,
+    duration: std::time::Duration,
+) -> CommandResult {
     let command = operation.as_str();
     let mut result = CommandResult::new(command);
     let step = if operation.succeeds_with(report.outcome) {
@@ -203,7 +207,7 @@ pub fn into_result(operation: PrOperation, report: PrReport) -> CommandResult {
     } else {
         StepResult::fail(command)
     };
-    result.push(step.detail(report.outcome.as_str()));
+    result.push(step.detail(report.outcome.as_str()).with_duration(duration));
     result.pr = Some(report);
     result
 }
@@ -422,22 +426,30 @@ mod tests {
         }
     }
 
+    fn result(operation: PrOperation, outcome: Outcome) -> CommandResult {
+        into_result(
+            operation,
+            report(outcome),
+            std::time::Duration::from_millis(42),
+        )
+    }
+
     #[test]
     fn merged_result_is_ok_and_exits_zero() {
-        let r = into_result(PrOperation::Watch, report(Outcome::Merged));
+        let r = result(PrOperation::Watch, Outcome::Merged);
         assert!(r.ok);
         assert_eq!(r.exit_code(), 0);
     }
 
     #[test]
     fn ready_to_land_succeeds_only_for_watch() {
-        let watched = into_result(PrOperation::Watch, report(Outcome::ReadyToLand));
+        let watched = result(PrOperation::Watch, Outcome::ReadyToLand);
         assert!(watched.ok);
         assert_eq!(watched.exit_code(), 0);
         assert_eq!(watched.steps.len(), 1);
         assert!(watched.steps[0].ok);
 
-        let landed = into_result(PrOperation::Land, report(Outcome::ReadyToLand));
+        let landed = result(PrOperation::Land, Outcome::ReadyToLand);
         assert!(!landed.ok);
         assert_eq!(landed.exit_code(), 1);
     }
@@ -457,7 +469,7 @@ mod tests {
             Outcome::Pending,
         ] {
             for operation in [PrOperation::Watch, PrOperation::Land] {
-                let r = into_result(operation, report(outcome));
+                let r = result(operation, outcome);
                 assert!(!r.ok, "{operation:?} {outcome:?} must not be ok");
                 assert_eq!(r.exit_code(), 1, "{operation:?} {outcome:?} must exit 1");
             }
@@ -468,9 +480,10 @@ mod tests {
     fn exactly_one_step_is_pushed() {
         // Load-bearing: `push()` recomputes `ok` from the step vector, so a second
         // step would decouple `ok` from the outcome.
-        let r = into_result(PrOperation::Watch, report(Outcome::ChecksFailed));
+        let r = result(PrOperation::Watch, Outcome::ChecksFailed);
         assert_eq!(r.steps.len(), 1);
         assert_eq!(r.steps[0].name, "pr-watch");
+        assert_eq!(r.steps[0].duration_ms, 42);
     }
 
     #[test]
@@ -494,7 +507,7 @@ mod tests {
 
     #[test]
     fn report_rides_the_envelope_json() {
-        let r = into_result(PrOperation::Watch, report(Outcome::Ejected));
+        let r = result(PrOperation::Watch, Outcome::Ejected);
         let v = serde_json::to_value(&r).unwrap();
         assert_eq!(v["pr"]["outcome"], "ejected");
         assert_eq!(v["pr"]["pr"], 731);

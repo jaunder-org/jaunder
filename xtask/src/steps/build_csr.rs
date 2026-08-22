@@ -19,8 +19,13 @@ use crate::result::{CommandResult, StepResult};
 /// selects the optimized profile (CI parity); the default debug build is faster
 /// for the dev loop.
 pub fn run(sh: &Shell, result: &mut CommandResult, release: bool) {
+    let root_start = std::time::Instant::now();
     let Ok(root) = git::toplevel(Path::new(".")) else {
-        result.push(StepResult::fail("build-csr").detail("cannot locate repo root".to_owned()));
+        result.push(
+            StepResult::fail("build-csr")
+                .detail("cannot locate repo root".to_owned())
+                .with_duration(root_start.elapsed()),
+        );
         return;
     };
     sh.change_dir(&root);
@@ -30,17 +35,20 @@ pub fn run(sh: &Shell, result: &mut CommandResult, release: bool) {
     if release {
         cargo_args.push("--release");
     }
+    let wasm_start = std::time::Instant::now();
     if cmd!(sh, "cargo").args(cargo_args).run().is_err() {
         result.push(
             StepResult::fail("build-csr-wasm")
-                .detail("cargo build -p csr (wasm32-unknown-unknown) failed".to_owned()),
+                .detail("cargo build -p csr (wasm32-unknown-unknown) failed".to_owned())
+                .with_duration(wasm_start.elapsed()),
         );
         return;
     }
-    result.push(StepResult::ok("build-csr-wasm"));
+    result.push(StepResult::ok("build-csr-wasm").with_duration(wasm_start.elapsed()));
 
     let wasm = format!("{root}/target/wasm32-unknown-unknown/{profile}/csr.wasm");
     let out = format!("{root}/target/site/pkg");
+    let bundle_start = std::time::Instant::now();
     if cmd!(
         sh,
         "cargo run --manifest-path tools/devtool/Cargo.toml -- csr-bundle --wasm {wasm} --out {out}"
@@ -50,9 +58,10 @@ pub fn run(sh: &Shell, result: &mut CommandResult, release: bool) {
     {
         result.push(
             StepResult::fail("build-csr-bundle")
-                .detail("checked-out devtool csr-bundle failed".to_owned()),
+                .detail("checked-out devtool csr-bundle failed".to_owned())
+                .with_duration(bundle_start.elapsed()),
         );
         return;
     }
-    result.push(StepResult::ok("build-csr-bundle"));
+    result.push(StepResult::ok("build-csr-bundle").with_duration(bundle_start.elapsed()));
 }

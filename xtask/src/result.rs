@@ -1,7 +1,10 @@
 use std::io::Write;
 use std::path::Path;
+use std::time::Duration;
 
 use serde::Serialize;
+
+const SLOW_STEP_MS: u128 = 1_000;
 
 #[derive(Clone, Copy)]
 pub enum Mode {
@@ -14,6 +17,7 @@ pub struct StepResult {
     pub name: String,
     pub ok: bool,
     pub skipped: bool,
+    pub duration_ms: u128,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }
@@ -24,6 +28,7 @@ impl StepResult {
             name: name.into(),
             ok: true,
             skipped: false,
+            duration_ms: 0,
             detail: None,
         }
     }
@@ -32,6 +37,7 @@ impl StepResult {
             name: name.into(),
             ok: false,
             skipped: false,
+            duration_ms: 0,
             detail: None,
         }
     }
@@ -40,11 +46,17 @@ impl StepResult {
             name: name.into(),
             ok: true,
             skipped: true,
+            duration_ms: 0,
             detail: None,
         }
     }
     pub fn detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = Some(detail.into());
+        self
+    }
+
+    pub fn with_duration(mut self, duration: Duration) -> Self {
+        self.duration_ms = duration.as_millis();
         self
     }
 }
@@ -155,6 +167,13 @@ impl CommandResult {
         Ok(())
     }
 
+    fn human_step_duration(step: &StepResult) -> String {
+        if !step.ok || step.duration_ms >= SLOW_STEP_MS {
+            format!(" ({} ms)", step.duration_ms)
+        } else {
+            String::new()
+        }
+    }
     fn print_human(&self) {
         for s in &self.steps {
             let mark = if s.skipped {
@@ -164,12 +183,13 @@ impl CommandResult {
             } else {
                 "FAIL"
             };
+            let duration = Self::human_step_duration(s);
             let detail = s
                 .detail
                 .as_deref()
                 .map(|d| format!(" — {d}"))
                 .unwrap_or_default();
-            println!("[{mark}] {}{detail}", s.name);
+            println!("[{mark}] {}{duration}{detail}", s.name);
         }
         // Informational payload: the audit subcommand's whole point is this table,
         // not the pass/fail line, so render it inline when present.
@@ -216,8 +236,10 @@ mod tests {
         assert_eq!(v["command"], "validate");
         assert_eq!(v["ok"], false);
         assert_eq!(v["steps"][0]["name"], "clippy");
+        assert_eq!(v["steps"][0]["duration_ms"], 0);
         assert_eq!(v["steps"][0]["detail"], "0 warnings");
         assert_eq!(v["steps"][1]["ok"], false);
+        assert_eq!(v["steps"][1]["duration_ms"], 0);
     }
 
     #[test]
@@ -266,6 +288,33 @@ mod tests {
         r.push(StepResult::skip("clippy"));
         assert!(r.ok);
         assert_eq!(r.exit_code(), 0);
+    }
+
+    #[test]
+    fn step_duration_serializes_and_helper_assigns_milliseconds() {
+        let step = StepResult::ok("clippy").with_duration(Duration::from_millis(1234));
+        assert_eq!(step.duration_ms, 1234);
+
+        let v: serde_json::Value = serde_json::to_value(step).unwrap();
+        assert_eq!(v["duration_ms"], 1234);
+    }
+
+    #[test]
+    fn human_step_duration_renders_failed_or_slow_steps_only() {
+        assert_eq!(
+            CommandResult::human_step_duration(&StepResult::ok("fast")),
+            ""
+        );
+        assert_eq!(
+            CommandResult::human_step_duration(
+                &StepResult::ok("slow").with_duration(Duration::from_millis(SLOW_STEP_MS as u64))
+            ),
+            format!(" ({} ms)", SLOW_STEP_MS)
+        );
+        assert_eq!(
+            CommandResult::human_step_duration(&StepResult::fail("failed")),
+            " (0 ms)"
+        );
     }
     #[test]
     fn pr_summary_renders_outcome_head_detail_and_pointer_labels() {

@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use xshell::Shell;
 
 use crate::result::StepResult;
@@ -16,6 +18,7 @@ pub fn step_with_env(
     args: &[&str],
     env: &[(String, String)],
 ) -> StepResult {
+    let start = Instant::now();
     let mut cmd = sh.cmd(program).args(args).quiet().ignore_status();
     for (key, value) in env {
         cmd = cmd.env(key, value);
@@ -23,7 +26,7 @@ pub fn step_with_env(
     match cmd.output() {
         Ok(output) => {
             if output.status.success() {
-                StepResult::ok(name)
+                StepResult::ok(name).with_duration(start.elapsed())
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let stdout = String::from_utf8_lossy(&output.stdout);
@@ -35,9 +38,13 @@ pub fn step_with_env(
                         format!("exited with status {}", output.status.code().unwrap_or(-1))
                     }
                 };
-                StepResult::fail(name).detail(detail)
+                StepResult::fail(name)
+                    .detail(detail)
+                    .with_duration(start.elapsed())
             }
         }
-        Err(err) => StepResult::fail(name).detail(err.to_string()),
+        Err(err) => StepResult::fail(name)
+            .detail(err.to_string())
+            .with_duration(start.elapsed()),
     }
 }
