@@ -126,9 +126,10 @@ mod tests {
     #[test]
     fn renders_titleless_post() {
         let out = render_rss(&meta(None, Some("A site")), &[item(None)]);
-        assert!(out.contains("<item>"));
-        // Description still emitted
-        assert!(out.contains("<description>"));
+        let channel = rss::Channel::read_from(out.as_bytes()).unwrap();
+        assert_eq!(channel.items().len(), 1);
+        assert!(channel.items()[0].title().is_none());
+        assert!(channel.items()[0].description().is_some());
     }
 
     #[test]
