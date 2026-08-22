@@ -122,6 +122,11 @@ impl SqliteAtomicOps {
 
 #[async_trait]
 impl AtomicOps for SqliteAtomicOps {
+    #[tracing::instrument(
+        name = "storage.atomic.create_user_with_invite",
+        skip(self, password, display_name, invite_code),
+        fields(username = %username, db.system = "sqlite")
+    )]
     async fn create_user_with_invite(
         &self,
         username: &Username,

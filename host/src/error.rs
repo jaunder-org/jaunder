@@ -14,6 +14,7 @@ use std::sync::LazyLock;
 use common::client_telemetry::ClientSourceKind;
 use opentelemetry::metrics::Counter;
 use opentelemetry::{KeyValue, global};
+use tracing_error::SpanTrace;
 
 pub type InternalResult<T> = Result<T, InternalError>;
 
@@ -184,6 +185,7 @@ pub fn report_swallowed(
         SwallowedSource::Error(source) => render_source(source),
         SwallowedSource::Redacted => "redacted".to_owned(),
     };
+    let span_trace = SpanTrace::capture();
     tracing::warn!(
         error.kind = kind.as_metric_str(), // cov:ignore
         error.class = class.as_metric_str(), // cov:ignore
@@ -191,6 +193,7 @@ pub fn report_swallowed(
         telemetry.origin = "server",
         error.context = context,
         error.source = %source,
+        error.span_trace = %span_trace,
         "error swallowed after reporting",
     );
     record_error(
@@ -215,6 +218,9 @@ fn client_source_kind_as_str(source_kind: ClientSourceKind) -> &'static str {
 ///
 /// Unlike [`report_swallowed`], this interface cannot accept arbitrary source
 /// text: the wire's closed source kind is mapped to a fixed tracing field here.
+/// It also deliberately does not capture a server-side [`SpanTrace`]: the
+/// failure happened in the browser, and the authenticated intake has only the
+/// bounded client payload, not the original browser span stack.
 pub fn report_client_swallowed(
     kind: ErrorKind,
     class: ErrorClass,
@@ -242,17 +248,19 @@ pub fn report_client_swallowed(
 }
 
 /// Server-side error carrier: the exact wire `public_message` plus structured,
-/// queryable operator data (`kind`, `class`, `context`) and the preserved
-/// `source` cause chain (carried via `anyhow`, never stringified eagerly). The
-/// outward wire type is *derived* by `web` from `(kind, public_message)` at the
-/// boundary — the carrier holds no wire type, so the operator-side payload is
-/// structurally absent from what can cross the wire.
+/// queryable operator data (`kind`, `class`, `context`), a captured active span
+/// stack, and the preserved `source` cause chain (carried via `anyhow`, never
+/// stringified eagerly). The outward wire type is *derived* by `web` from
+/// `(kind, public_message)` at the boundary — the carrier holds no wire type, so
+/// the operator-side payload is structurally absent from what can cross the
+/// wire.
 #[derive(Debug)]
 pub struct InternalError {
     kind: ErrorKind,
     class: ErrorClass,
     context: Vec<(&'static str, String)>,
     public_message: String,
+    span_trace: SpanTrace,
     source: Option<anyhow::Error>,
 }
 
@@ -292,6 +300,22 @@ impl Error for BoxedError {
 }
 
 impl InternalError {
+    fn new(
+        kind: ErrorKind,
+        class: ErrorClass,
+        public_message: impl Into<String>,
+        source: Option<anyhow::Error>,
+    ) -> Self {
+        Self {
+            kind,
+            class,
+            context: Vec::new(),
+            public_message: public_message.into(),
+            span_trace: SpanTrace::capture(),
+            source,
+        }
+    }
+
     pub fn unauthorized(message: impl Into<String>) -> Self {
         Self::masked(
             ErrorKind::Auth,
@@ -302,53 +326,48 @@ impl InternalError {
     }
 
     pub fn not_found(resource: impl Into<String>) -> Self {
-        Self {
-            kind: ErrorKind::NotFound,
-            class: ErrorClass::Client,
-            context: Vec::new(),
-            public_message: format!("{} not found", resource.into()),
-            source: None,
-        }
+        Self::new(
+            ErrorKind::NotFound,
+            ErrorClass::Client,
+            format!("{} not found", resource.into()),
+            None,
+        )
     }
 
     pub fn validation(message: impl Into<String>) -> Self {
-        Self {
-            kind: ErrorKind::Validation,
-            class: ErrorClass::Client,
-            context: Vec::new(),
-            public_message: message.into(),
-            source: None,
-        }
+        Self::new(
+            ErrorKind::Validation,
+            ErrorClass::Client,
+            message.into(),
+            None,
+        )
     }
 
     pub fn conflict(message: impl Into<String>) -> Self {
-        Self {
-            kind: ErrorKind::Conflict,
-            class: ErrorClass::Client,
-            context: Vec::new(),
-            public_message: message.into(),
-            source: None,
-        }
+        Self::new(
+            ErrorKind::Conflict,
+            ErrorClass::Client,
+            message.into(),
+            None,
+        )
     }
 
     pub fn storage(error: impl Error + Send + Sync + 'static) -> Self {
-        Self {
-            kind: ErrorKind::Storage,
-            class: ErrorClass::Bug,
-            context: Vec::new(),
-            public_message: "storage operation failed".to_string(),
-            source: Some(anyhow::Error::new(error)),
-        }
+        Self::new(
+            ErrorKind::Storage,
+            ErrorClass::Bug,
+            "storage operation failed",
+            Some(anyhow::Error::new(error)),
+        )
     }
 
     pub fn server(error: impl Error + Send + Sync + 'static) -> Self {
-        Self {
-            kind: ErrorKind::Internal,
-            class: ErrorClass::Bug,
-            context: Vec::new(),
-            public_message: "server operation failed".to_string(),
-            source: Some(anyhow::Error::new(error)),
-        }
+        Self::new(
+            ErrorKind::Internal,
+            ErrorClass::Bug,
+            "server operation failed",
+            Some(anyhow::Error::new(error)),
+        )
     }
 
     /// Like [`Self::server`] but for an already-boxed error. `Box<dyn Error + ...>`
@@ -362,26 +381,24 @@ impl InternalError {
     }
 
     pub fn server_message(message: impl Into<String>) -> Self {
-        Self {
-            kind: ErrorKind::Internal,
-            class: ErrorClass::Bug,
-            context: Vec::new(),
-            public_message: "server operation failed".to_string(),
-            source: Some(anyhow::Error::msg(message.into())),
-        }
+        Self::new(
+            ErrorKind::Internal,
+            ErrorClass::Bug,
+            "server operation failed",
+            Some(anyhow::Error::msg(message.into())),
+        )
     }
 
     /// A downstream dependency failure (mail, `WebSub`, …). Masks as a 500
     /// outwardly but classes as `External` so a dependency outage is
     /// distinguishable from a Jaunder bug during triage.
     pub fn external(error: impl Error + Send + Sync + 'static) -> Self {
-        Self {
-            kind: ErrorKind::External,
-            class: ErrorClass::External,
-            context: Vec::new(),
-            public_message: "server operation failed".to_string(),
-            source: Some(anyhow::Error::new(error)),
-        }
+        Self::new(
+            ErrorKind::External,
+            ErrorClass::External,
+            "server operation failed",
+            Some(anyhow::Error::new(error)),
+        )
     }
 
     /// Constructs a masked error directly from its projected `(kind, class)`, the
@@ -394,13 +411,7 @@ impl InternalError {
         public_message: impl Into<String>,
         source: anyhow::Error,
     ) -> Self {
-        Self {
-            kind,
-            class,
-            context: Vec::new(),
-            public_message: public_message.into(),
-            source: Some(source),
-        }
+        Self::new(kind, class, public_message, Some(source))
     }
 
     /// Lifts a typed error into a `Validation` (client / 400) carrier while
@@ -446,6 +457,13 @@ impl InternalError {
         &self.context
     }
 
+    /// Captured active span stack from the construction site. Operator-only:
+    /// `web` never projects this into its public wire error.
+    #[must_use]
+    pub fn span_trace(&self) -> &SpanTrace {
+        &self.span_trace
+    }
+
     /// The exact wire message for this error's `kind`, projected to a wire type
     /// by `web` at the boundary. Empty for kinds whose wire variant carries no
     /// message (e.g. `Auth` → unauthorized).
@@ -467,11 +485,11 @@ impl InternalError {
 
     /// Emits the structured boundary observability for a failed server function:
     /// discrete, queryable tracing fields (not one concatenated string) at the
-    /// level derived from the error class, and the `jaunder.errors` metric with
-    /// bounded kind, class, disposition, and origin attributes. `context` is
-    /// emitted as a single serialized field; promoting each k/v to a span field
-    /// is deferred to §4.6 (kq8w.22). Called by `web`'s `server_boundary`; the outward wire
-    /// projection stays in `web`.
+    /// level derived from the error class, the captured active span stack, and
+    /// the `jaunder.errors` metric with bounded kind, class, disposition, and
+    /// origin attributes. `context` is emitted as a single serialized field;
+    /// promoting each k/v to a span field is deferred to §4.6 (kq8w.22). Called
+    /// by `web`'s `server_boundary`; the outward wire projection stays in `web`.
     ///
     /// **Which server fn failed is not a field here.** The event is emitted inside
     /// the fn's ADR-0011 `#[tracing::instrument]` span, and both configured sinks
@@ -498,6 +516,7 @@ impl InternalError {
                     error.public = %self.public_message,
                     error.source = %source,
                     error.context = ?self.context,
+                    error.span_trace = %self.span_trace,
                     "server function failed",
                 )
             };
@@ -771,6 +790,48 @@ mod tests {
     }
 
     #[test]
+    fn internal_error_captures_active_span_stack_and_fields() {
+        use tracing_subscriber::prelude::*;
+
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_subscriber::fmt::layer().with_test_writer())
+            .with(tracing_error::ErrorLayer::default());
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let parent = tracing::info_span!(
+            "web.registration.register",
+            registration.policy = tracing::field::Empty
+        );
+        let _parent_guard = parent.enter();
+        parent.record(
+            "registration.policy",
+            tracing::field::display("invite_only"),
+        );
+        let child = tracing::info_span!("storage.user.create_user", db.system = "postgres");
+        let _child_guard = child.enter();
+
+        let error = InternalError::server_message("boom");
+        let trace = error.span_trace().to_string();
+
+        assert!(
+            trace.contains("web.registration.register"),
+            "span trace missed parent: {trace}"
+        );
+        assert!(
+            trace.contains("storage.user.create_user"),
+            "span trace missed child: {trace}"
+        );
+        assert!(
+            trace.contains("registration.policy") && trace.contains("invite_only"),
+            "span trace missed recorded determinant field: {trace}"
+        );
+        assert!(
+            trace.contains("db.system") && trace.contains("postgres"),
+            "span trace missed child field: {trace}"
+        );
+    }
+
+    #[test]
     fn client_error_operator_message_falls_back_to_public() {
         // A client error carries no source, so the operator rendering falls
         // back to the public message.
@@ -861,6 +922,45 @@ mod tests {
         })
         .emit_boundary_failure();
     }
+
+    #[test]
+    fn boundary_failure_event_emits_captured_span_trace() {
+        use tracing_subscriber::prelude::*;
+
+        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let fmt_layer = tracing_subscriber::fmt::layer()
+            .json()
+            .with_ansi(false)
+            .with_writer(SharedWriter(output.clone()));
+        let subscriber = tracing_subscriber::registry()
+            .with(fmt_layer)
+            .with(tracing_error::ErrorLayer::default());
+        tracing::subscriber::with_default(subscriber, || {
+            let span = tracing::info_span!(
+                "web.example.do_thing",
+                decision.path = tracing::field::Empty
+            );
+            let _guard = span.enter();
+            span.record("decision.path", tracing::field::display("example"));
+            InternalError::server_message("operator-only").emit_boundary_failure();
+        });
+
+        let text =
+            String::from_utf8(output.lock().expect("capture lock").clone()).expect("utf8 output");
+        let event = text
+            .lines()
+            .find(|line| line.contains("server function failed"))
+            .unwrap_or_else(|| panic!("boundary event missing: {text}"));
+        assert!(
+            event.contains(r#""error.kind":"Internal""#),
+            "event: {event}"
+        );
+        assert!(event.contains("error.span_trace"), "event: {event}");
+        assert!(event.contains("web.example.do_thing"), "event: {event}");
+        assert!(event.contains("decision.path"), "event: {event}");
+        assert!(event.contains("example"), "event: {event}");
+    }
+
     #[tokio::test]
     async fn report_swallowed_emits_one_warn_and_one_metric() {
         use opentelemetry::global;
@@ -868,6 +968,7 @@ mod tests {
             InMemoryMetricExporter, PeriodicReader, SdkMeterProvider,
             data::{AggregatedMetrics, MetricData},
         };
+        use tracing_subscriber::prelude::*;
 
         let exporter = InMemoryMetricExporter::default();
         let reader = PeriodicReader::builder(exporter.clone()).build();
@@ -875,13 +976,18 @@ mod tests {
         global::set_meter_provider(provider.clone());
 
         let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::fmt()
+        let fmt_layer = tracing_subscriber::fmt::layer()
             .json()
             .with_ansi(false)
-            .with_max_level(tracing::Level::TRACE)
-            .with_writer(SharedWriter(output.clone()))
-            .finish();
+            .with_writer(SharedWriter(output.clone()));
+        let subscriber = tracing_subscriber::registry()
+            .with(fmt_layer)
+            .with(tracing_error::ErrorLayer::default());
         tracing::subscriber::with_default(subscriber, || {
+            let span =
+                tracing::info_span!("server.test.work", cleanup.mode = tracing::field::Empty);
+            let _guard = span.enter();
+            span.record("cleanup.mode", tracing::field::display("best_effort"));
             let source = OuterError {
                 source: SourceError,
             };
@@ -908,6 +1014,9 @@ mod tests {
         assert!(event.contains(r#""telemetry.origin":"server""#));
         assert!(event.contains(r#""error.context":"server.test.cleanup""#));
         assert!(event.contains(r#""error.source":"outer failure: source context""#));
+        assert!(event.contains("server.test.work"), "event: {event}");
+        assert!(event.contains("cleanup.mode"), "event: {event}");
+        assert!(event.contains("best_effort"), "event: {event}");
 
         let metrics = exporter.get_finished_metrics().expect("metrics");
         let points: Vec<_> = metrics

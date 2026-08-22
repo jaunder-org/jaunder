@@ -58,7 +58,14 @@ pub async fn get_policy() -> WebResult<RegistrationPolicy> {
 /// the body (#533), so an XSS at registration time has no credential to read. The
 /// rule is recorded in
 /// `docs/adr/0107-web-session-establishment-is-cookie-only.md`.
-#[macros::server(skip_all)]
+#[macros::server(
+    skip_all,
+    fields(
+        registration.policy = tracing::field::Empty,
+        registration.invite_present = tracing::field::Empty,
+        registration.outcome = tracing::field::Empty
+    )
+)]
 pub async fn register(request: RegistrationRequest) -> WebResult<()> {
     let RegistrationRequest {
         username,
@@ -75,12 +82,15 @@ pub async fn register(request: RegistrationRequest) -> WebResult<()> {
     // `<ValidatedInput<_>>` (ADR-0065). `ProfferedPassword` is the inbound-secret
     // twin of the serde-free `Password` (ADR-0063); convert into it here.
     let password = Password::try_from(password)?;
+    let span = tracing::Span::current();
+    span.record("registration.invite_present", invite_code.is_some());
     let policy = site_config
         .get_registration_policy()
         .instrument(tracing::info_span!(
             "web.registration.register.get_registration_policy"
         ))
         .await?;
+    span.record("registration.policy", policy.as_ref());
 
     let metric_policy = match &policy {
         RegistrationPolicy::Open => host::metrics::RegistrationPolicy::Open,
@@ -88,37 +98,42 @@ pub async fn register(request: RegistrationRequest) -> WebResult<()> {
         RegistrationPolicy::Closed => host::metrics::RegistrationPolicy::Closed,
     };
     let user_id_result: Result<UserId, InternalError> = match policy {
-        RegistrationPolicy::Open => users
-            .create_user(&username, &password, None, false)
-            .instrument(tracing::info_span!(
-                "web.registration.register.create_user_open"
-            ))
-            .await
-            .map_err(Into::into),
+        RegistrationPolicy::Open => {
+            span.record("registration.outcome", "create_user");
+            users
+                .create_user(&username, &password, None, false)
+                .instrument(tracing::info_span!("web.registration.register.create_user"))
+                .await
+                .map_err(Into::into)
+        }
         RegistrationPolicy::InviteOnly => {
             // The client sends `None` for a blank field; a present code arrives already
             // shape-validated (deserialized through `ProfferedInviteCode`).
-            match invite_code {
-                Some(proffered) => {
-                    let code = InviteCode::try_from(proffered)
-                        .map_err(|_| InternalError::validation("invalid invite code"))?;
-                    let result = atomic
-                        .create_user_with_invite(&username, &password, None, false, &code)
-                        .instrument(tracing::info_span!(
-                            "web.registration.register.create_user_invite"
-                        ))
-                        .await
-                        .map_err(Into::into);
-                    // A successful invite registration redeems the code.
-                    if result.is_ok() {
-                        host::metrics::invite(host::metrics::InviteEvent::Redeemed);
-                    }
-                    result
+            if let Some(proffered) = invite_code {
+                span.record("registration.outcome", "create_user_with_invite");
+                let code = InviteCode::try_from(proffered)
+                    .map_err(|_| InternalError::validation("invalid invite code"))?;
+                let result = atomic
+                    .create_user_with_invite(&username, &password, None, false, &code)
+                    .instrument(tracing::info_span!(
+                        "web.registration.register.create_user_with_invite"
+                    ))
+                    .await
+                    .map_err(Into::into);
+                // A successful invite registration redeems the code.
+                if result.is_ok() {
+                    host::metrics::invite(host::metrics::InviteEvent::Redeemed);
                 }
-                None => Err(InternalError::validation("invite code required")),
+                result
+            } else {
+                span.record("registration.outcome", "invite_required");
+                Err(InternalError::validation("invite code required"))
             }
         }
-        RegistrationPolicy::Closed => Err(InternalError::validation("registration is closed")),
+        RegistrationPolicy::Closed => {
+            span.record("registration.outcome", "closed");
+            Err(InternalError::validation("registration is closed"))
+        }
     };
     host::metrics::registration(
         host::metrics::RegistrationSource::Web,

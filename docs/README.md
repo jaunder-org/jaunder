@@ -174,6 +174,7 @@ convention). See the Status column below for each ADR's current status.
 | [0144](adr/0144-process-configuration-cli-contract.md)              | Process Configuration and CLI Contract                                                                       | accepted   |
 | [0145](adr/0145-sandbox-cargo-deny-skips-advisories.md)             | Sandboxed cargo-deny skips advisories                                                                        | accepted   |
 | [0146](adr/0146-devtool-owns-compiling-static-check-definitions.md) | devtool owns compiling static-check definitions across host and Nix                                          | accepted   |
+| [0147](adr/0147-decision-path-observability.md)                     | Decision-Path Observability                                                                                  | accepted   |
 
 <!-- adr-table:end -->
 

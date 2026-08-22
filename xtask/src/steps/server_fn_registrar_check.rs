@@ -103,16 +103,17 @@ fn server_fns_in(src: &str) -> Result<Vec<ServerFn>, String> {
 
 /// Whether a `#[macros::server]` attribute leaves the generated type at its default
 /// name (`PascalCase(fn)`). True for the bare attribute and for a list of only
-/// `key = value` arguments (`input = Json`, …) plus the span's `skip(...)` /
-/// `skip_all`. A bare positional argument (`#[macros::server(SomeName)]`) renames
-/// the type → `Ok(false)`; an argument list we cannot parse as `Meta` → `Err`. Both
-/// are hard errors at the call site.
+/// `key = value` arguments (`input = Json`, …) plus the span's `skip(...)`,
+/// `skip_all`, and empty `fields(...)` declarations. A bare positional argument
+/// (`#[macros::server(SomeName)]`) renames the type → `Ok(false)`; an argument
+/// list we cannot parse as `Meta` → `Err`. Both are hard errors at the call site.
 ///
-/// The `skip`/`skip_all` arguments are filtered out before the test rather than
-/// exempted inside it: `skip(name)` is a `Meta::List` and `skip_all` a `Meta::Path`,
-/// the two shapes this test rejects as positional renames, but neither reaches
-/// `#[server]` at all. Filtering only those two leaves the detection intact, so
-/// `#[macros::server(SomeName)]` is still caught.
+/// The span arguments are filtered out before the test rather than exempted
+/// inside it: `skip(name)` and `fields(name = tracing::field::Empty)` are
+/// `Meta::List`, and `skip_all` is a `Meta::Path`, the two shapes this test
+/// rejects as positional renames, but none reaches `#[server]`. Filtering only
+/// these leaves the detection intact, so `#[macros::server(SomeName)]` is still
+/// caught.
 fn server_fn_default_named(attr: &syn::Attribute) -> Result<bool, String> {
     match web_server_fns::server_attr_args(attr)? {
         // The bare attribute keeps the default name.
@@ -130,7 +131,7 @@ fn server_fn_default_named(attr: &syn::Attribute) -> Result<bool, String> {
 /// rather than to `#[server]` (`macros/src/server_fn.rs`'s `route`). Those two say
 /// nothing about the generated type's name, so the naming test must not read them.
 fn routed_to_instrument(arg: &Meta) -> bool {
-    arg.path().is_ident("skip") || arg.path().is_ident("skip_all")
+    arg.path().is_ident("skip") || arg.path().is_ident("skip_all") || arg.path().is_ident("fields")
 }
 
 /// `snake_case` fn ident → `PascalCase` generated type name
@@ -402,10 +403,11 @@ mod tests {
 
     #[test]
     fn span_arguments_are_not_read_as_a_positional_rename() {
-        // `skip_all` is a `Meta::Path` and `skip(name)` a `Meta::List` — the two
-        // shapes the naming test rejects as positional renames. They belong to the
-        // span, not to `#[server]`, so the fn must still map to its default
-        // `PascalCase` type. `input = …` does reach `#[server]` and is accepted.
+        // `skip_all` is a `Meta::Path`; `skip(name)` and `fields(...)` are
+        // `Meta::List` — the shapes the naming test rejects as positional renames.
+        // They belong to the span, not to `#[server]`, so the fn must still map to
+        // its default `PascalCase` type. `input = …` does reach `#[server]` and is
+        // accepted.
         let all = "#[macros::server(skip_all)]\npub async fn create_post() {}\n";
         assert_eq!(server_fns_in(all).unwrap()[0].name, "CreatePost");
         let some = "#[macros::server(skip(name))]\npub async fn rename() {}\n";
@@ -413,12 +415,15 @@ mod tests {
         let both = "#[macros::server(input = MultipartFormData, skip_all)]\n\
                     pub async fn upload() {}\n";
         assert_eq!(server_fns_in(both).unwrap()[0].name, "Upload");
+        let fields = "#[macros::server(fields(policy = tracing::field::Empty))]\n\
+                      pub async fn register() {}\n";
+        assert_eq!(server_fns_in(fields).unwrap()[0].name, "Register");
     }
 
     #[test]
     fn a_positional_rename_is_a_hard_error() {
-        // Filtering `skip`/`skip_all` out of the naming test must not switch the
-        // detection off — only those two are exempt.
+        // Filtering span arguments out of the naming test must not switch the
+        // detection off — only those routed forms are exempt.
         let src = "#[macros::server(MyThing)]\npub async fn my_thing() {}\n";
         assert!(server_fns_in(src).is_err());
     }

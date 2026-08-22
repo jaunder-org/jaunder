@@ -14,6 +14,7 @@ use opentelemetry::KeyValue;
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::Resource;
+use tracing_error::ErrorLayer;
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
@@ -472,13 +473,13 @@ where
         opentelemetry_sdk::propagation::TraceContextPropagator::new(),
     );
 
-    let env_filter = resolved_filter(verbose);
     let slow_span_layer = SlowSpanLayer::new(slow_op_threshold());
 
     // Box the fmt layer so the json/pretty variants share one type, and carry
     // OTel as an `Option` layer (absent or failed setup is a no-op). This lets
     // every {OTel present/failed/none} × {json/pretty} combination flow through
     // a single registry-build chain.
+    let env_filter = resolved_filter(verbose);
     let fmt_layer = if use_json_format() {
         fmt::layer().json().boxed()
     } else {
@@ -515,19 +516,17 @@ where
         )
     });
 
-    // `try_init` fails only if a global subscriber is already installed. That
-    // leaves the process running without our configured layers, which is worth
-    // knowing about; emit to stderr since tracing itself is what failed to come
-    // up.
     install_subscriber_with(
         || {
-            tracing_subscriber::registry()
-                .with(extra_layer)
-                .with(env_filter)
-                .with(slow_span_layer)
-                .with(fmt_layer)
-                .with(otel_layer)
-                .try_init()
+            tracing::subscriber::set_global_default(
+                tracing_subscriber::registry()
+                    .with(extra_layer)
+                    .with(env_filter)
+                    .with(slow_span_layer)
+                    .with(ErrorLayer::default())
+                    .with(fmt_layer)
+                    .with(otel_layer),
+            )
         },
         || fallback(FallbackKind::SubscriberInstall),
     );

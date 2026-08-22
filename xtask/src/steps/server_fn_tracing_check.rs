@@ -24,10 +24,14 @@
 //!    argument has no single identifier to write in `skip(...)`, so it is refused
 //!    unless `skip_all` covers it. Otherwise it would be recorded by a span nobody
 //!    could opt it out of.
-//! 3. **An unmodelled attribute argument is refused** — the macro forwards only
-//!    `skip(...)`/`skip_all` to the span and `input = …` to `#[server]`. Anything
-//!    else could record a value this allowlist never inspected, so it fails here
-//!    until modelled.
+//! 3. **Declared span fields must stay declaration-only** — `fields(...)` is allowed
+//!    only as `field = tracing::field::Empty`. Values must be recorded later in the
+//!    function body where the author has context, and a value expression in the macro
+//!    argument is refused because the type allowlist never inspected it.
+//! 4. **An unmodelled attribute argument is refused** — the macro forwards only
+//!    `skip(...)`/`skip_all` and empty `fields(...)` declarations to the span, and
+//!    `input = …` to `#[server]`. Anything else could record a value this allowlist
+//!    never inspected, so it fails here until modelled.
 //!
 //! Like the registrar guard this is **mandatory with no per-fn opt-out**, and
 //! **fail-loud**: an unparseable or unreadable file is reported, never skipped,
@@ -37,7 +41,8 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use proc_macro2::{TokenStream, TokenTree};
-use syn::Meta;
+use syn::parse::{Parse, ParseStream, Parser};
+use syn::{Expr, Meta, Token};
 
 use crate::result::{CommandResult, StepResult};
 use crate::web_server_fns::{self, WEB_SRC, WebServerFn, vertical_of};
@@ -162,16 +167,70 @@ fn path_text(path: &syn::Path) -> String {
         .collect::<Vec<_>>()
         .join("::")
 }
+struct EmptyFieldDeclaration;
+
+impl Parse for EmptyFieldDeclaration {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let mut saw_ident = false;
+        while !input.peek(Token![=]) {
+            match input.parse::<TokenTree>()? {
+                TokenTree::Ident(_) => saw_ident = true,
+                TokenTree::Punct(punct) if punct.as_char() == '.' => {}
+                token => {
+                    return Err(syn::Error::new_spanned(
+                        token,
+                        "`fields` names may contain only identifiers and dots",
+                    ));
+                }
+            }
+        }
+        if !saw_ident {
+            return Err(input.error("`fields` declarations need a field name"));
+        }
+        input.parse::<Token![=]>()?;
+        let value: Expr = input.parse()?;
+        let Expr::Path(value) = value else {
+            return Err(syn::Error::new_spanned(
+                value,
+                "`fields` accepts only `field = tracing::field::Empty` declarations",
+            ));
+        };
+        if value
+            .path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect::<Vec<_>>()
+            != ["tracing", "field", "Empty"]
+        {
+            return Err(syn::Error::new_spanned(
+                value,
+                "`fields` accepts only `field = tracing::field::Empty` declarations",
+            ));
+        }
+        Ok(Self)
+    }
+}
+
+fn validate_empty_fields(list: &syn::MetaList) -> Result<(), String> {
+    let fields = syn::punctuated::Punctuated::<EmptyFieldDeclaration, Token![,]>::parse_terminated
+        .parse2(list.tokens.clone())
+        .map_err(|error| error.to_string())?;
+    if fields.is_empty() {
+        return Err("`fields` accepts only `field = tracing::field::Empty` declarations".into());
+    }
+    Ok(())
+}
 
 /// What a `#[macros::server]` attribute declares about its span.
 ///
-/// The macro forwards exactly `skip(...)` / `skip_all` to `#[tracing::instrument]`
-/// and `input = …` to `#[server]`, and rejects everything else — `endpoint` and
-/// `name` because it derives them, `fields(...)` because it retired the value-side
-/// PII check along with it (`macros/src/server_fn.rs`'s `route`). This mirrors that
-/// **default-deny**: an argument the macro might one day forward but this gate does
-/// not model could record a value the allowlist never inspected, so it fails here
-/// until modelled.
+/// The macro forwards `skip(...)` / `skip_all` plus empty `fields(...)`
+/// declarations to `#[tracing::instrument]`, forwards `input = …` to `#[server]`,
+/// and rejects everything else. `endpoint` and `name` are still derived, and
+/// `fields(...)` is accepted only as declaration-only
+/// `field = tracing::field::Empty` entries. This mirrors that **default-deny**:
+/// an argument the macro might one day forward but this gate does not model could
+/// record a value the allowlist never inspected, so it fails here until modelled.
 fn span_args(attr: &syn::Attribute) -> Result<SpanArgs, String> {
     let mut out = SpanArgs::default();
     let Some(args) = web_server_fns::server_attr_args(attr)? else {
@@ -194,13 +253,22 @@ fn span_args(attr: &syn::Attribute) -> Result<SpanArgs, String> {
                 out.skipped.extend(idents_in(&list.tokens));
             }
             "skip_all" => out.skip_all = true,
+            "fields" => {
+                let Meta::List(list) = &arg else {
+                    return Err(
+                        "`fields` must be `fields(name = tracing::field::Empty, ...)`".into(),
+                    );
+                };
+                validate_empty_fields(list)?;
+            }
             // Routed to `#[server]`, not to the span — it records nothing.
             "input" => {}
             other => {
                 return Err(format!(
                     "unrecognized #[macros::server] argument `{other}` — the macro forwards only \
-                     `skip(...)`/`skip_all` to the span and `input = …` to #[server], and an \
-                     unmodelled argument could record a value the allowlist never inspected"
+                     `skip(...)`/`skip_all` and empty `fields(...)` declarations to the span, \
+                     forwards `input = …` to #[server], and an unmodelled argument could record a \
+                     value the allowlist never inspected"
                 ));
             }
         }
@@ -452,17 +520,44 @@ mod tests {
     // --- default-deny on the attribute's own arguments ---
 
     #[test]
+    fn fields_accepts_only_empty_declarations() {
+        let accepted = src(
+            "posts",
+            "#[macros::server(fields(policy = tracing::field::Empty), skip(token))]\n\
+             pub async fn x(token: RawToken) -> R {}\n",
+        );
+        assert_eq!(problems(&accepted), None);
+
+        let valued = src(
+            "posts",
+            "#[macros::server(fields(who = token), skip(token))]\npub async fn x(token: RawToken) -> R {}\n",
+        );
+        let detail = problems(&valued).expect("value fields are rejected");
+        assert!(detail.contains("fields"), "{detail}");
+        assert!(detail.contains("Empty"), "{detail}");
+
+        let disguised = src(
+            "posts",
+            "#[macros::server(fields(who = { tracing::field::Empty; token }), skip(token))]\n\
+             pub async fn x(token: RawToken) -> R {}\n",
+        );
+        let detail = problems(&disguised).expect("non-empty field expression is rejected");
+        assert!(detail.contains("fields"), "{detail}");
+        assert!(detail.contains("Empty"), "{detail}");
+    }
+
+    #[test]
     fn an_unmodelled_attribute_argument_is_rejected() {
         // Default-deny, mirroring the macro's own `route`: an argument this gate
         // does not model could record a value the allowlist never inspected.
         let s = src(
             "posts",
-            "#[macros::server(fields(who = %token))]\npub async fn x(token: RawToken) -> R {}\n",
+            "#[macros::server(unknown(flag))]\npub async fn x() -> R {}\n",
         );
         assert!(
             problems(&s)
                 .expect("an unmodelled arg is rejected")
-                .contains("fields")
+                .contains("unknown")
         );
     }
 
