@@ -110,6 +110,7 @@ test("decodes initializer arm and module shape detail", () => {
             exportedFunctions: 1,
             exportedTables: 1,
             exportedMemories: 1,
+            customSections: 1,
           },
         },
       },
@@ -129,6 +130,7 @@ test("decodes initializer arm and module shape detail", () => {
       exportedFunctions: 1,
       exportedTables: 1,
       exportedMemories: 1,
+      customSections: 1,
     },
   });
 });
@@ -251,6 +253,7 @@ test("boot fetches the wasm once and the harness captures the full mark set", as
       exportedFunctions: expect.any(Number),
       imports: expect.any(Number),
       importedFunctions: expect.any(Number),
+      customSections: expect.any(Number),
     },
   });
   expect(timing?.wasmInit).toMatchObject({
@@ -261,6 +264,7 @@ test("boot fetches the wasm once and the harness captures the full mark set", as
       exportedFunctions: expect.any(Number),
       imports: expect.any(Number),
       importedFunctions: expect.any(Number),
+      customSections: expect.any(Number),
     },
   });
   expect(timing?.wasmInit?.startMs).not.toBeNull();

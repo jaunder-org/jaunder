@@ -554,6 +554,12 @@
           }
         );
 
+        # Measurement-only direct-init arm label. Empty is committed and preserves
+        # the normal e2e derivation hash; set for one #864 measurement arm, then
+        # revert before committing.
+        wasmExperimentArm = "";
+        wasmShapeSection = "";
+
         csrWasmBundle =
           pkgs.runCommand "jaunder-csr-wasm-bundle"
             {
@@ -569,7 +575,7 @@
               # SAME implementation the host build (`cargo xtask build-csr`) runs, so
               # host and Nix cannot drift (#236). devtool shells out to
               # `wasm-bindgen` (on PATH here) and does the rename + js wasm-ref fix.
-              devtool csr-bundle --wasm ${csrWasm}/lib/csr.wasm --out $out
+              devtool csr-bundle --wasm ${csrWasm}/lib/csr.wasm --out $out${pkgs.lib.optionalString (wasmExperimentArm != "") " --wasm-experiment-arm ${wasmExperimentArm}"}${pkgs.lib.optionalString (wasmShapeSection != "") " --wasm-shape-section ${wasmShapeSection}"}
             '';
 
         e2eOtelCollectorConfig = pkgs.writeText "jaunder-otel-collector.yaml" ''

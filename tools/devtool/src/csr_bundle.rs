@@ -23,6 +23,7 @@ const IN_WASM: &str = "csr_bg.wasm";
 /// The output name the SPA shell (`csr/index.html`) imports.
 const OUT_JS: &str = "jaunder.js";
 const OUT_WASM: &str = "jaunder.wasm";
+const EXPERIMENT_SHAPE_SECTION_NAME: &str = "jaunder.shape";
 
 /// The `wasm-opt` optimisation level, pinned by measurement on the real bundle
 /// (#836) — raw bytes of the shipped `pkg/jaunder.wasm`:
@@ -96,6 +97,7 @@ const __jaunderWasmModuleShape = (module) => {{\n\
         exportedFunctions: countKind(exports, \"function\"),\n\
         exportedTables: countKind(exports, \"table\"),\n\
         exportedMemories: countKind(exports, \"memory\"),\n\
+        customSections: WebAssembly.Module.customSections(module, \"jaunder.shape\").length,\n\
     }};\n\
 }};\n\
 \n\
@@ -150,6 +152,46 @@ fn gzip_compress(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
     let mut e = GzEncoder::new(Vec::new(), Compression::best());
     e.write_all(bytes).context("gzip write")?;
     e.finish().context("gzip finish")
+}
+
+fn encode_u32_leb(mut value: u32, out: &mut Vec<u8>) {
+    loop {
+        let mut byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        out.push(byte);
+        if value == 0 {
+            break;
+        }
+    }
+}
+
+fn custom_section(name: &str, data: &[u8]) -> Vec<u8> {
+    let mut payload = Vec::new();
+    encode_u32_leb(name.len() as u32, &mut payload);
+    payload.extend_from_slice(name.as_bytes());
+    payload.extend_from_slice(data);
+
+    let mut section = vec![0];
+    encode_u32_leb(payload.len() as u32, &mut section);
+    section.extend_from_slice(&payload);
+    section
+}
+
+fn append_shape_section(wasm: &Path, label: &str) -> anyhow::Result<()> {
+    let mut bytes = std::fs::read(wasm).with_context(|| format!("reading {}", wasm.display()))?;
+    anyhow::ensure!(
+        bytes.starts_with(b"\0asm\x01\0\0\0"),
+        "{} is not a wasm module",
+        wasm.display()
+    );
+    bytes.extend_from_slice(&custom_section(
+        EXPERIMENT_SHAPE_SECTION_NAME,
+        label.as_bytes(),
+    ));
+    std::fs::write(wasm, bytes).with_context(|| format!("writing {}", wasm.display()))
 }
 
 /// The `wasm-opt` argument vector: optimisation level, an explicit enable for
@@ -215,7 +257,12 @@ fn write_precompressed(path: &Path) -> anyhow::Result<()> {
 /// outputs to the `jaunder` names, fix the JS wasm reference, and write
 /// precompressed (`.br`/`.gz`) siblings for the JS/wasm. Byte-identical to the
 /// flake's inline `csrWasmBundle` steps for the raw outputs.
-pub fn run(wasm: &Path, out: &Path, experiment_arm: Option<&str>) -> anyhow::Result<()> {
+pub fn run(
+    wasm: &Path,
+    out: &Path,
+    experiment_arm: Option<&str>,
+    shape_section: Option<&str>,
+) -> anyhow::Result<()> {
     std::fs::create_dir_all(out).with_context(|| format!("creating out dir {}", out.display()))?;
 
     let status = Command::new("wasm-bindgen")
@@ -247,6 +294,9 @@ pub fn run(wasm: &Path, out: &Path, experiment_arm: Option<&str>) -> anyhow::Res
     // Optimise before compressing, so the `.br`/`.gz` siblings describe the bytes
     // that actually ship.
     run_wasm_opt(&out.join(OUT_WASM)).context("optimising jaunder.wasm")?;
+    if let Some(label) = shape_section {
+        append_shape_section(&out.join(OUT_WASM), label).context("adding wasm shape section")?;
+    }
 
     // Precompress the final JS (post wasm-ref rewrite) and the wasm.
     write_precompressed(&js_path).context("precompressing jaunder.js")?;
@@ -295,6 +345,7 @@ mod tests {
             "WebAssembly.Module.exports(module)",
             "performance.mark(\"jaunder.wasm.init_start\")",
             "performance.mark(\"jaunder.wasm.init_done\", { detail: { path, apiMs, experimentArm: __jaunderWasmExperimentArm, moduleShape } })",
+            "WebAssembly.Module.customSections(module, \"jaunder.shape\")",
             "WebAssembly.instantiateStreaming",
             "WebAssembly.instantiate",
             "performance.now()",
@@ -400,6 +451,22 @@ mod tests {
                 "sign-ext",
             ]
         );
+    }
+
+    #[test]
+    fn custom_section_encodes_name_and_payload() {
+        assert_eq!(custom_section("x", b"y"), vec![0, 3, 1, b'x', b'y']);
+    }
+
+    #[test]
+    fn shape_section_appends_to_wasm_module() {
+        let dir = tempfile::tempdir().unwrap();
+        let wasm = dir.path().join("module.wasm");
+        std::fs::write(&wasm, b"\0asm\x01\0\0\0").unwrap();
+        append_shape_section(&wasm, "arm-shape").unwrap();
+        let bytes = std::fs::read(&wasm).unwrap();
+        assert!(bytes.starts_with(b"\0asm\x01\0\0\0"), "{bytes:?}");
+        assert!(bytes.ends_with(&custom_section(EXPERIMENT_SHAPE_SECTION_NAME, b"arm-shape",)));
     }
 
     #[test]

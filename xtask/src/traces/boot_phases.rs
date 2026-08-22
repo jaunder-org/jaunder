@@ -299,6 +299,7 @@ fn shape_signature(nav: &Value) -> Option<String> {
         "exportedFunctions",
         "exportedTables",
         "exportedMemories",
+        "customSections",
     ] {
         let value = shape.get(key)?.as_u64()?;
         parts.push(format!("{key}={value}"));
@@ -642,6 +643,7 @@ mod tests {
             "exportedFunctions": exports,
             "exportedTables": 0,
             "exportedMemories": 1,
+            "customSections": 0,
         })
     }
 

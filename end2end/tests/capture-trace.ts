@@ -137,6 +137,7 @@ export type WasmModuleShape = {
   exportedFunctions: number;
   exportedTables: number;
   exportedMemories: number;
+  customSections: number;
 };
 
 /** Direct initializer marks and the successful WebAssembly API timing. Kept
@@ -170,6 +171,7 @@ function moduleShapeFromDetail(value: unknown): WasmModuleShape | null {
   const exportedFunctions = finiteShapeCount(shape.exportedFunctions);
   const exportedTables = finiteShapeCount(shape.exportedTables);
   const exportedMemories = finiteShapeCount(shape.exportedMemories);
+  const customSections = finiteShapeCount(shape.customSections);
   if (
     imports === null ||
     importedFunctions === null ||
@@ -178,7 +180,8 @@ function moduleShapeFromDetail(value: unknown): WasmModuleShape | null {
     exports === null ||
     exportedFunctions === null ||
     exportedTables === null ||
-    exportedMemories === null
+    exportedMemories === null ||
+    customSections === null
   ) {
     return null;
   }
@@ -191,6 +194,7 @@ function moduleShapeFromDetail(value: unknown): WasmModuleShape | null {
     exportedFunctions,
     exportedTables,
     exportedMemories,
+    customSections,
   };
 }
 
