@@ -80,6 +80,9 @@ pub struct CommandResult {
     /// branches on because command-specific success cannot encode every verdict.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr: Option<crate::pr::PrReport>,
+    /// `issue candidates` / `issue create` payloads (#1090/#1091).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue: Option<crate::issue::IssueReport>,
 }
 
 fn render_pr_summary(pr: &crate::pr::PrReport) -> String {
@@ -121,6 +124,7 @@ impl CommandResult {
             flaky: Vec::new(),
             traces: None,
             pr: None,
+            issue: None,
         }
     }
 
@@ -184,6 +188,9 @@ impl CommandResult {
         // The event log already streamed to stderr; this is the stable summary seam.
         if let Some(pr) = &self.pr {
             print!("{}", render_pr_summary(pr));
+        }
+        if let Some(issue) = &self.issue {
+            print!("{}", crate::issue::render_human(issue));
         }
         let verdict = if self.ok { "PASSED" } else { "FAILED" };
         println!(

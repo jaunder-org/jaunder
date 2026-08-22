@@ -11,6 +11,7 @@ mod doc_links;
 mod files;
 pub mod git;
 mod ids;
+pub mod issue;
 pub mod markers;
 mod nix_build;
 pub mod pr;
@@ -240,6 +241,10 @@ pub enum Command {
     /// Host-only manual command; needs `gh`.
     #[command(subcommand)]
     Pr(PrCommand),
+    /// Gather or apply Jaunder issue tracker metadata (#1090/#1091).
+    /// Host-only manual command; needs `gh`.
+    #[command(subcommand)]
+    Issue(issue::IssueCommand),
 }
 
 /// An explicit passive-observation target for `pr watch`.
@@ -460,6 +465,8 @@ impl Cli {
             Command::ElispIntegration => "elisp-integration",
             Command::Pr(PrCommand::Watch { .. }) => "pr-watch",
             Command::Pr(PrCommand::Land { .. }) => "pr-land",
+            Command::Issue(issue::IssueCommand::Candidates { .. }) => "issue-candidates",
+            Command::Issue(issue::IssueCommand::Create { .. }) => "issue-create",
         }
     }
 }
@@ -982,6 +989,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             finalize(&mut result, start);
             Ok(result)
         }
+        Command::Issue(sub) => issue::execute(sub),
         Command::Pr(sub) => {
             let start = std::time::Instant::now();
             let (operation, number, cfg) = match sub {
@@ -1114,6 +1122,68 @@ mod cli_tests {
             _ => panic!("expected prepush"),
         }
         assert_eq!(cli.command_name(), "prepush");
+    }
+
+    #[test]
+    fn issue_candidates_parses_milestone_and_command_name() {
+        let cli = Cli::try_parse_from([
+            "xtask",
+            "issue",
+            "candidates",
+            "--milestone",
+            "Developer tooling & DX",
+        ])
+        .unwrap();
+        assert_eq!(cli.command_name(), "issue-candidates");
+        match cli.command {
+            Command::Issue(issue::IssueCommand::Candidates { milestone }) => {
+                assert_eq!(milestone, "Developer tooling & DX");
+            }
+            _ => panic!("expected issue candidates"),
+        }
+    }
+
+    #[test]
+    fn issue_create_parses_required_metadata() {
+        let cli = Cli::try_parse_from([
+            "xtask",
+            "issue",
+            "create",
+            "--title",
+            "feat(xtask): add issue helpers",
+            "--type",
+            "Task",
+            "--milestone",
+            "Developer tooling & DX",
+            "--priority",
+            "p2",
+            "--label",
+            "tooling",
+            "--label",
+            "dx",
+            "--body-file",
+            "/tmp/body.md",
+        ])
+        .unwrap();
+        assert_eq!(cli.command_name(), "issue-create");
+        match cli.command {
+            Command::Issue(issue::IssueCommand::Create {
+                title,
+                issue_type,
+                milestone,
+                priority,
+                labels,
+                body_file,
+            }) => {
+                assert_eq!(title, "feat(xtask): add issue helpers");
+                assert_eq!(issue_type, "Task");
+                assert_eq!(milestone, "Developer tooling & DX");
+                assert_eq!(priority, issue::Priority::P2);
+                assert_eq!(labels, ["tooling", "dx"]);
+                assert_eq!(body_file, PathBuf::from("/tmp/body.md"));
+            }
+            _ => panic!("expected issue create"),
+        }
     }
 
     #[test]
