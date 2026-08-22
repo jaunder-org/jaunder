@@ -12,7 +12,10 @@
 //! error paths testable at all — and this crate is coverage-measured, so
 //! "untestable" would mean "unshippable".
 
+use proc_macro2::TokenTree;
 use quote::quote;
+use syn::parse::{Parse, ParseStream, Parser};
+use syn::{Expr, Token};
 
 /// Where a `#[server]` fn must live, relative to the repository root. The vertical
 /// is the single path segment between this marker and `api.rs`.
@@ -74,13 +77,80 @@ fn vertical_of(file: &str, ident: &syn::Ident) -> Result<String, syn::Error> {
 
 /// Route one attribute argument to `#[server]` or `#[tracing::instrument]`.
 ///
-/// Default-deny: only the three keys actually used across the tree are accepted, so
-/// an argument this macro does not model cannot silently reach either attribute.
+/// Default-deny: only the keys actually used across the tree are accepted, so an
+/// argument this macro does not model cannot silently reach either attribute.
 /// `endpoint` and `name` are refused because they are the macro's to derive —
-/// accepting them would reintroduce exactly the drift #714 removes. `fields(…)` is
-/// refused because re-admitting it means re-admitting the PII allowlist that
-/// polices its value expressions (`skip(email)` + `fields(who = %email)`); if it
-/// ever returns, it returns together with that check.
+/// accepting them would reintroduce exactly the drift #714 removes. `fields(…)`
+/// is accepted only for empty declarations (`field = tracing::field::Empty`):
+/// values recorded later still go through the span owner's code, and the macro
+/// never accepts value expressions that could smuggle PII past the recordable
+/// type gate.
+struct EmptyFieldDeclaration;
+
+impl Parse for EmptyFieldDeclaration {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let mut saw_ident = false;
+        while !input.peek(Token![=]) {
+            match input.parse::<TokenTree>()? {
+                TokenTree::Ident(_) => saw_ident = true,
+                TokenTree::Punct(punct) if punct.as_char() == '.' => {}
+                token => {
+                    return Err(syn::Error::new_spanned(
+                        token,
+                        "`fields` names may contain only identifiers and dots",
+                    ));
+                }
+            }
+        }
+        if !saw_ident {
+            return Err(input.error("`fields` declarations need a field name"));
+        }
+        input.parse::<Token![=]>()?;
+        let value: Expr = input.parse()?;
+        let Expr::Path(value) = value else {
+            return Err(syn::Error::new_spanned(
+                value,
+                "`fields` accepts only `field = tracing::field::Empty` declarations",
+            ));
+        };
+        if value
+            .path
+            .segments
+            .iter()
+            .map(|segment| segment.ident.to_string())
+            .collect::<Vec<_>>()
+            != ["tracing", "field", "Empty"]
+        {
+            return Err(syn::Error::new_spanned(
+                value,
+                "`fields` accepts only `field = tracing::field::Empty` declarations",
+            ));
+        }
+        Ok(Self)
+    }
+}
+
+fn validate_empty_fields(arg: &syn::Meta) -> Result<(), syn::Error> {
+    let syn::Meta::List(list) = arg else {
+        return Err(syn::Error::new_spanned(
+            arg,
+            "`fields` must be a list of empty declarations",
+        ));
+    };
+
+    let fields = syn::punctuated::Punctuated::<EmptyFieldDeclaration, Token![,]>::parse_terminated
+        .parse2(list.tokens.clone())
+        .map_err(|error| syn::Error::new_spanned(list, error))?;
+    if fields.is_empty() {
+        return Err(syn::Error::new_spanned(
+            list,
+            "#[macros::server] accepts only empty tracing fields; declare with \
+             `field = tracing::field::Empty` and record bounded values in the body",
+        ));
+    }
+    Ok(())
+}
+
 fn route(arg: &syn::Meta, derived: &mut Derived) -> Result<(), syn::Error> {
     let named = |key: &str| arg.path().is_ident(key);
 
@@ -98,12 +168,9 @@ fn route(arg: &syn::Meta, derived: &mut Derived) -> Result<(), syn::Error> {
         ));
     }
     if named("fields") {
-        return Err(syn::Error::new_spanned(
-            arg,
-            "#[macros::server] does not accept `fields(...)`: the PII allowlist that \
-             checked its value expressions was retired with it (#714). Reintroducing \
-             `fields` means reintroducing that check.",
-        ));
+        validate_empty_fields(arg)?;
+        derived.instrument_args.push(arg.clone());
+        return Ok(());
     }
     if named("input") {
         derived.server_args.push(arg.clone());
@@ -115,8 +182,9 @@ fn route(arg: &syn::Meta, derived: &mut Derived) -> Result<(), syn::Error> {
     }
     Err(syn::Error::new_spanned(
         arg,
-        "#[macros::server] accepts only `input = …` (forwarded to #[server]) and \
-         `skip(...)` / `skip_all` (forwarded to #[tracing::instrument])",
+        "#[macros::server] accepts only `input = …` (forwarded to #[server]), \
+         `skip(...)` / `skip_all`, and empty `fields(...)` declarations \
+         (forwarded to #[tracing::instrument])",
     ))
 }
 
@@ -230,6 +298,48 @@ mod tests {
     }
 
     #[test]
+    fn forwards_empty_fields_to_instrument() {
+        let args: Vec<syn::Meta> = vec![parse_quote!(fields(
+            registration.policy = tracing::field::Empty
+        ))];
+        let d = derive("web/src/registration/api.rs", &ident("register"), &args).expect("derives");
+        assert_eq!(d.instrument_args.len(), 1);
+        assert!(d.server_args.is_empty());
+    }
+
+    #[test]
+    fn rejects_fields_with_values_because_the_pii_allowlist_does_not_check_them() {
+        let args: Vec<syn::Meta> = vec![parse_quote!(fields(who = "x"))];
+        let e = expect_err(derive("web/src/audiences/api.rs", &ident("rename"), &args));
+        assert!(e.to_string().contains("tracing::field::Empty"), "{e}");
+        let args: Vec<syn::Meta> = vec![parse_quote!(fields(
+            who = {
+                tracing::field::Empty;
+                "x"
+            }
+        ))];
+        let e = expect_err(derive("web/src/audiences/api.rs", &ident("rename"), &args));
+        assert!(e.to_string().contains("tracing::field::Empty"), "{e}");
+    }
+
+    #[test]
+    fn rejects_malformed_empty_field_declarations() {
+        for args in [
+            vec![parse_quote!(fields("who" = tracing::field::Empty))],
+            vec![parse_quote!(fields(= tracing::field::Empty))],
+            vec![parse_quote!(fields(who = Empty))],
+            vec![parse_quote!(fields = "who")],
+            vec![parse_quote!(fields())],
+        ] {
+            let e = expect_err(derive("web/src/audiences/api.rs", &ident("rename"), &args));
+            assert!(
+                e.to_string().contains("fields") || e.to_string().contains("Empty"),
+                "{e}"
+            );
+        }
+    }
+
+    #[test]
     fn forwards_a_skip_list_to_instrument() {
         let args: Vec<syn::Meta> = vec![parse_quote!(skip(name))];
         let d = derive("web/src/audiences/api.rs", &ident("rename"), &args).expect("derives");
@@ -249,13 +359,6 @@ mod tests {
         let args: Vec<syn::Meta> = vec![parse_quote!(name = "web.x.y")];
         let e = expect_err(derive("web/src/audiences/api.rs", &ident("rename"), &args));
         assert!(e.to_string().contains("name"), "{e}");
-    }
-
-    #[test]
-    fn rejects_fields_because_the_pii_allowlist_no_longer_checks_it() {
-        let args: Vec<syn::Meta> = vec![parse_quote!(fields(who = "x"))];
-        let e = expect_err(derive("web/src/audiences/api.rs", &ident("rename"), &args));
-        assert!(e.to_string().contains("fields"), "{e}");
     }
 
     #[test]

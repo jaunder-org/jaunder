@@ -104,6 +104,11 @@ impl PostgresAtomicOps {
 
 #[async_trait]
 impl AtomicOps for PostgresAtomicOps {
+    #[tracing::instrument(
+        name = "storage.atomic.create_user_with_invite",
+        skip(self, password, display_name, invite_code),
+        fields(username = %username, db.system = "postgres")
+    )]
     async fn create_user_with_invite(
         &self,
         username: &Username,

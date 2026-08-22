@@ -18,6 +18,14 @@ processes, and end-to-end test runner.
   - `/var/lib/jaunder/capture/otel-traces.jsonl` (inside the VM)
   - lifted per combo inside `capture-<backend>.tar.gz` (the same bundle that
     carries `diag.log` and the mail/websub JSONL — see below)
+- Branch determinants are span attributes, not span-name suffixes. A span name
+  identifies an operation; fields such as `registration.policy`,
+  `registration.invite_present`, and `registration.outcome` explain the decision
+  path. `InternalError` boundary failures and native swallowed-error reports
+  also include `error.span_trace`, an operator-only snapshot of the active span
+  stack. Retention is collector-side: configure OTel tail sampling to keep
+  errored/slow traces rather than expecting Jaunder to dump buffered branch logs
+  in-process.
 
 ### Backend Saturation Gauges
 

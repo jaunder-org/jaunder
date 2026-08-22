@@ -93,6 +93,180 @@ fn login_input(username: &str, password: &str, label: Option<&str>) -> web::auth
     }
 }
 
+type RecordedField = (String, String);
+type RecordedSpan = (String, Vec<RecordedField>);
+
+#[derive(Default)]
+struct RecordedSpanFields(std::sync::Mutex<Vec<RecordedSpan>>);
+
+struct RegistrationSpanRecorder(std::sync::Arc<RecordedSpanFields>);
+
+struct Fields(Vec<RecordedField>);
+
+impl tracing::field::Visit for Fields {
+    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+        self.0.push((field.name().to_string(), value.to_string()));
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.0.push((field.name().to_string(), value.to_string()));
+    }
+
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.0
+            .push((field.name().to_string(), format!("{value:?}")));
+    }
+}
+
+impl<S> tracing_subscriber::layer::Layer<S> for RegistrationSpanRecorder
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
+    fn on_record(
+        &self,
+        id: &tracing::span::Id,
+        values: &tracing::span::Record<'_>,
+        ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let Some(span) = ctx.span(id) else {
+            return;
+        };
+        if span.metadata().name() != "web.registration.register" {
+            return;
+        }
+
+        let mut fields = Fields(Vec::new());
+        values.record(&mut fields);
+        self.0
+            .0
+            .lock()
+            .expect("registration span recorder mutex")
+            .push((span.metadata().name().to_string(), fields.0));
+    }
+}
+
+fn saw_registration_field(captured: &RecordedSpanFields, field: &str, expected: &str) -> bool {
+    captured
+        .0
+        .lock()
+        .expect("registration span recorder mutex")
+        .iter()
+        .any(|(span, fields)| {
+            span == "web.registration.register"
+                && fields
+                    .iter()
+                    .any(|(name, value)| name == field && value == expected)
+        })
+}
+
+async fn post_register(
+    state: &std::sync::Arc<storage::AppState>,
+    username: &str,
+    invite_code: Option<&str>,
+) -> StatusCode {
+    let (status, _, _) = post_server_fn_with_secure_flag(
+        state,
+        &register_input(username, "password123", invite_code),
+        None,
+        true,
+    )
+    .await;
+    status
+}
+
+// guard:low-level-db — observes one sqlite-backed server-fn span directly.
+#[tokio::test]
+async fn register_records_decision_determinants_on_the_server_fn_span() {
+    use tracing_subscriber::prelude::*;
+
+    let captured = std::sync::Arc::new(RecordedSpanFields::default());
+    let subscriber =
+        tracing_subscriber::registry().with(RegistrationSpanRecorder(captured.clone()));
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let TestEnv { state, base: _base } = Backend::Sqlite.setup().await;
+    state
+        .site_config
+        .set(SiteConfigKey::SiteRegistrationPolicy, "open")
+        .await
+        .unwrap();
+    let ignored_open_code = state
+        .invites
+        .create_invite(Utc::now() + chrono::Duration::hours(24))
+        .await
+        .unwrap();
+    assert_eq!(
+        post_register(&state, "detopen", Some(ignored_open_code.as_ref())).await,
+        StatusCode::OK
+    );
+
+    state
+        .site_config
+        .set(SiteConfigKey::SiteRegistrationPolicy, "invite_only")
+        .await
+        .unwrap();
+    let code = state
+        .invites
+        .create_invite(Utc::now() + chrono::Duration::hours(24))
+        .await
+        .unwrap();
+    assert_eq!(
+        post_register(&state, "detinvite", Some(code.as_ref())).await,
+        StatusCode::OK
+    );
+    assert_ne!(
+        post_register(&state, "detmissing", None).await,
+        StatusCode::OK
+    );
+
+    state
+        .site_config
+        .set(SiteConfigKey::SiteRegistrationPolicy, "closed")
+        .await
+        .unwrap();
+    assert_ne!(
+        post_register(&state, "detclosed", None).await,
+        StatusCode::OK
+    );
+
+    assert!(saw_registration_field(
+        &captured,
+        "registration.policy",
+        "open"
+    ));
+    assert!(saw_registration_field(
+        &captured,
+        "registration.policy",
+        "invite_only"
+    ));
+    assert!(saw_registration_field(
+        &captured,
+        "registration.policy",
+        "closed"
+    ));
+    assert!(saw_registration_field(
+        &captured,
+        "registration.invite_present",
+        "true"
+    ));
+    assert!(saw_registration_field(
+        &captured,
+        "registration.invite_present",
+        "false"
+    ));
+    for outcome in [
+        "create_user",
+        "create_user_with_invite",
+        "invite_required",
+        "closed",
+    ] {
+        assert!(
+            saw_registration_field(&captured, "registration.outcome", outcome),
+            "missing outcome {outcome}"
+        );
+    }
+}
+
 // M2.9.8: `register` with Open policy creates the user and establishes the session
 // through the HttpOnly cookie alone (#533).
 #[apply(backends)]

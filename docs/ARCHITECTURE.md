@@ -1245,7 +1245,10 @@ router, together with a `tower-http` `x-request-id` that it mints when absent
 and propagates onto the response. Inbound W3C `traceparent` headers are
 extracted onto the per-request span, so backend spans parent into the caller's
 trace. Span fields and metric attributes are exported, so they MUST NOT carry
-user PII or secrets — stable identifiers (`user_id`, `error.kind`) only.
+user PII or secrets — stable identifiers (`user_id`, `error.kind`) only. Branch
+determinants follow the same rule: record bounded decisions and stable internal
+IDs, never passwords, tokens, raw emails, invite codes, request bodies,
+arbitrary source text, or whole-struct dumps.
 
 ### Server-fn span names are macro-derived
 
@@ -1256,17 +1259,50 @@ the `#[tracing::instrument]` attribute itself with the name
 source, and none can drift ([ADR-0011](adr/0011-unified-observability.md),
 amended 2026-07-30). Hand-written `instrument` names do still exist outside that
 set — `require_auth` carries one (`web/src/auth/server.rs:112`) — because they
-are not server fns. The macro rejects `fields(…)`, `level`, `err`, and `ret`
-outright. What the author still writes is `skip(…)` / `skip_all`, and the
-`server-fn-tracing` gate holds a default-deny `RECORDABLE_TYPES` allowlist over
-every unskipped parameter type: an unlisted type fails the gate until someone
-classifies it. A type is admissible only if it is bounded by its own type, is
-operator configuration, is already published in a permalink, or is `Username`.
+are not server fns. The macro rejects `level`, `err`, `ret`, and any unmodeled
+key outright. It accepts `fields(…)` only as empty declarations such as
+`registration.policy = tracing::field::Empty`; server-function bodies may later
+record bounded determinant values into those declared fields. What the author
+still writes is `skip(…)` / `skip_all`, and the `server-fn-tracing` gate holds a
+default-deny `RECORDABLE_TYPES` allowlist over every unskipped parameter type:
+an unlisted type fails the gate until someone classifies it. A type is
+admissible only if it is bounded by its own type, is operator configuration, is
+already published in a permalink, or is `Username`
+([docs/adr/0147-decision-path-observability.md](adr/0147-decision-path-observability.md)).
 
 The earlier arrangement — the gate writing the `name = "…"` literal into
 `web/src`, and a `server_fn` field on the boundary log event — was retired with
 that addendum. Nothing under `web/src` is rewritten by `cargo xtask check` for
 span naming any more.
+
+### Decision-path fields
+
+A span name identifies the operation; fields describe the bounded facts and
+branch determinants for that operation. Determinants live on the narrowest span
+that owns the decision. Parent request/server-function spans carry request-wide
+decisions; child spans remain appropriate for called work that is worth timing,
+is reused by multiple parents, or has determinants/failures of its own.
+
+Determinant fields are declared per instrumentation site, not globally. A span
+declares the fields it may later record, usually with `tracing::field::Empty`,
+then records each value when the code reaches the decision. Branch-specific
+child span names are avoided: e.g. `web.registration.register` carries
+`registration.policy`, `registration.invite_present`, and
+`registration.outcome`, while the invite-backed atomic create remains a separate
+child operation span named `storage.atomic.create_user_with_invite`.
+
+`host::error::InternalError` captures a `tracing_error::SpanTrace` at
+construction time, while the active span stack still exists. Boundary failures
+emit that snapshot as `error.span_trace` beside `error.kind`, `error.class`,
+`error.public`, `error.source`, and `error.context`; native swallowed-error
+reporting emits the same active span context. Client-swallowed telemetry remains
+bounded-client-data-only because the server intake no longer has the browser's
+span stack. SpanTrace is operator-only and never crosses the
+`InternalError -> WebError` projection. The current retention decision is
+collector-side tail sampling: Jaunder emits determinant fields and SpanTrace,
+but does not buffer and dump branch logs in-process for successful non-slow
+spans
+([docs/adr/0147-decision-path-observability.md](adr/0147-decision-path-observability.md)).
 
 ### E2e traces
 
@@ -1367,25 +1403,27 @@ rule that `AppState` remains storage-only while still allowing pool metrics.
 ### Errors at the boundary
 
 The carrier owns its boundary observability:
-`InternalError::emit_boundary_failure` (`host/src/error.rs`) logs five discrete
+`InternalError::emit_boundary_failure` (`host/src/error.rs`) logs six discrete
 tracing fields — `error.kind`, `error.class`, `error.public`, `error.source`
-(the preserved typed chain, rendered once), `error.context` — at the level
-derived from the error class, and emits the `jaunder.errors` metric. The metric
-is an error-event counter whose bounded attributes include kind/class plus
-`error.disposition = boundary | swallowed` and
-`telemetry.origin = server | client`; it is not a unique-root-cause count.
-`server_boundary` (`web/src/error/server.rs`) calls it with `boundary/server`,
-then performs only the outward wire projection and returns the masked public
-error. Which fn failed is not a field: the event is raised inside the enclosing
-`web.<vertical>.<ident>` span, and both configured sinks render span context
+(the preserved typed chain, rendered once), `error.context`, and
+`error.span_trace` (the active span stack captured at error construction) — at
+the level derived from the error class, and emits the `jaunder.errors` metric.
+The metric is an error-event counter whose bounded attributes include kind/class
+plus `error.disposition = boundary | swallowed` and
+`telemetry.origin = server | client`; it is not a unique-root-cause count and it
+does not carry `error.span_trace`. `server_boundary` (`web/src/error/server.rs`)
+calls it with `boundary/server`, then performs only the outward wire projection
+and returns the masked public error. Which fn failed is not a field: the event
+is raised inside the enclosing `web.<vertical>.<ident>` span, and both
+configured sinks render span context
 ([ADR-0011](adr/0011-unified-observability.md),
 [ADR-0017](adr/0017-error-handling-and-the-public-boundary.md)).
 
 An unexpected native failure that deliberately preserves the primary result goes
-through one `host::error` reporting interface, which couples the fixed warning
-and `swallowed/server` metric so a caller cannot forget either side. Diagnostic
-self-failure uses only its console/stderr fallback; routing it through the same
-reporter would recurse.
+through one `host::error` reporting interface, which couples the fixed warning,
+active span trace, and `swallowed/server` metric so a caller cannot forget
+either side. Diagnostic self-failure uses only its console/stderr fallback;
+routing it through the same reporter would recurse.
 
 The authenticated raw client-telemetry intake accepts one versioned, closed-enum
 JSON event of at most 1,024 bytes from the Rust WASM client. A dedicated guard

@@ -490,6 +490,13 @@ Jaunder uses OpenTelemetry for deep performance analysis (see
   `db.system`, and `error.kind` instead. See
   [ADR-0011](docs/adr/0011-unified-observability.md).
 
+- **Span names identify operations; fields explain decisions**: do not encode
+  branch outcomes into new span-name suffixes. Record bounded determinants on
+  the narrowest span that owns the decision, declaring fields empty on the span
+  and recording values when known. Keep meaningful called work as child spans
+  when it is worth timing or has its own failure mode. See
+  [docs/adr/0147-decision-path-observability.md](docs/adr/0147-decision-path-observability.md).
+
 - **Trace Analysis**: Use `cargo xtask traces analyze` to process trace
   artifacts (JSONL) from VM runs or local tests.
 
