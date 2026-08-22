@@ -28,6 +28,11 @@ proc-macro2 = { version = "1", features = ["span-locations"] }
 # `ToTokens`, to render a decode's target type and SQL argument back to source text
 # for the `sqlx-newtype-decode` allowlist key (#715). Already in the tree via `syn`.
 quote = "1"
+oxc_allocator = "0.146.0"
+oxc_ast = "0.146.0"
+oxc_ast_visit = "0.146.0"
+oxc_parser = "0.146.0"
+oxc_span = "0.146.0"
 tempfile = "3"
 # Wasm bundle attribution (#836): section spans and the name section, so
 # `audit-wasm --breakdown` can say which crates the bytes belong to. Host-side
