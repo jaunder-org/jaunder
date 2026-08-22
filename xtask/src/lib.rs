@@ -491,7 +491,7 @@ impl Command {
 }
 
 enum HostGateStep {
-    StaticChecks,
+    StaticChecks(steps::static_checks::Phase),
     ResultOnly {
         name: &'static str,
         run: fn(&mut CommandResult),
@@ -502,7 +502,9 @@ enum HostGateStep {
 impl HostGateStep {
     fn run(&self, sh: &xshell::Shell, mode: Mode, result: &mut CommandResult) {
         match self {
-            Self::StaticChecks => steps::static_checks::run(sh, mode, result),
+            Self::StaticChecks(phase) => {
+                steps::static_checks::run_phase(sh, mode, *phase, result);
+            }
             Self::ResultOnly { name, run } => {
                 debug_assert!(!name.is_empty());
                 let before = result.steps.len();
@@ -522,8 +524,8 @@ impl HostGateStep {
     #[cfg(test)]
     fn push_names(&self, mode: Mode, names: &mut Vec<&'static str>) {
         match self {
-            Self::StaticChecks => names.extend(
-                steps::static_checks::specs(mode)
+            Self::StaticChecks(phase) => names.extend(
+                steps::static_checks::specs_for_phase(*phase, mode)
                     .into_iter()
                     .map(|spec| spec.name),
             ),
@@ -538,7 +540,9 @@ fn run_flow_docs(result: &mut CommandResult) {
 }
 
 const HOST_GATE_NON_TEST_STEPS: &[HostGateStep] = &[
-    HostGateStep::StaticChecks,
+    // Source consistency first: these are fixable or concrete file-shape errors,
+    // and they must run before expensive compile/type work.
+    HostGateStep::StaticChecks(steps::static_checks::Phase::SourceConsistency),
     HostGateStep::ResultOnly {
         name: "sequence-check",
         run: steps::sequence_check::run,
@@ -647,6 +651,10 @@ const HOST_GATE_NON_TEST_STEPS: &[HostGateStep] = &[
         name: "xlang-literal",
         run: steps::xlang_literal_check::run,
     },
+    // Compile/type surfaces after cheap repository-shape checks. They are still
+    // before host runtime tests, which cannot pass if compilation is broken.
+    HostGateStep::StaticChecks(steps::static_checks::Phase::CompileAndType),
+    HostGateStep::StaticChecks(steps::static_checks::Phase::HostRuntime),
 ];
 
 const HOST_TESTS_STEP: HostGateStep = HostGateStep::HostTests;
@@ -1260,6 +1268,45 @@ mod cli_tests {
         assert!(!precommit.contains(&"nix-wasm-tests"));
         assert!(!precommit.contains(&"nix-coverage"));
         assert!(!precommit.contains(&"nix-doctests"));
+    }
+
+    fn position(names: &[&str], name: &str) -> usize {
+        names
+            .iter()
+            .position(|candidate| *candidate == name)
+            .unwrap_or_else(|| panic!("{name} is present"))
+    }
+
+    #[test]
+    fn host_gate_order_prioritizes_cheap_actionable_feedback() {
+        let names = host_gate_step_names_for_test(Mode::Check);
+
+        let fmt = position(&names, "fmt");
+        let flow_docs = position(&names, "flow-docs");
+        let clippy = position(&names, "clippy");
+        let host_tests = position(&names, "host-tests");
+
+        assert!(
+            fmt < flow_docs,
+            "source consistency runs before repo-shape checks"
+        );
+        assert!(
+            flow_docs < clippy,
+            "repo-shape checks run before expensive compile checks"
+        );
+        assert!(
+            clippy < host_tests,
+            "compile checks run before host runtime tests"
+        );
+    }
+
+    #[test]
+    fn prepush_precondition_runs_before_host_gate_and_product_tests() {
+        let mut names = vec!["clean-tree"];
+        names.extend(prepush_step_names_for_test());
+
+        assert!(position(&names, "clean-tree") < position(&names, "fmt"));
+        assert!(position(&names, "clean-tree") < position(&names, "test-local"));
     }
 
     #[test]
