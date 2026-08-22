@@ -264,20 +264,30 @@ invoke it.
 
 - **Fast local loop** — `cargo xtask e2e-local` owns the whole loop: it builds
   the CSR bundle + server, starts its own `jaunder serve` on an ephemeral port
-  with a fresh per-run temp DB, seeds fixtures, and runs the Playwright
-  `chromium-visual → chromium → chromium-admin` project chain against it,
-  tearing the server down after. No pre-existing server needed. Use this while
-  iterating on the web UI; it uses the HTML reporter for interactive debugging.
-- **A single test** — `cargo xtask e2e-local <spec>` runs just that spec (e.g.
-  `cargo xtask e2e-local auth.spec.ts`), fully self-contained (its own ephemeral
-  server + temp DB), for the tightest edit→run loop. The host runs serial
-  (`JAUNDER_E2E_WORKERS=1`) because it serves an unoptimized debug wasm build;
-  the CI VM runs at 2 workers on release wasm.
+  with a fresh per-run SQLite temp DB, seeds fixtures, and runs the local
+  Chromium lifecycle, tearing the server down after. No pre-existing server
+  needed. Use this while iterating on the web UI; it uses the HTML reporter for
+  interactive debugging.
+- **Focused browser-flow proof** — `cargo xtask e2e-local <spec-or-file:line>`
+  scopes the local loop to one Playwright positional filter when that spec or
+  line covers the changed behavior:
+
+  ```bash
+  cargo xtask e2e-local auth.spec.ts
+  cargo xtask e2e-local auth.spec.ts:17
+  ```
+
+  This is the default proof for a changed browser flow before broader e2e gates.
+  Rerun the same focused command after a targeted fix. The command does not
+  forward arbitrary Playwright flags; use file or `file:line` targeting instead
+  of title `--grep` examples.
+
 - **The authoritative gate** — `cargo xtask e2e <backend> <browser>` runs one
   combo through the hermetic Nix VM (release build, the same derivation CI
   runs); `cargo xtask validate` runs all four
-  `{sqlite,postgres}×{chromium,firefox}` combos. The VM path is what green means
-  before you push.
+  `{sqlite,postgres}×{chromium,firefox}` combos. Escalate to these when the
+  changed behavior depends on backend/browser parity, release-build behavior, or
+  branch-boundary confidence. The VM path is what green means before you push.
 
 #### Visual snapshot workflow
 
