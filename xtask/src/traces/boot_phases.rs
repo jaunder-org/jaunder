@@ -71,6 +71,7 @@ pub struct BootPhaseRow {
     pub source: String,
     pub project: String,
     pub cache_warmth: String,
+    pub experiment_arm: String,
     pub navigations: usize,
     pub decomposed: usize,
     pub current: usize,
@@ -81,6 +82,13 @@ pub struct BootPhaseRow {
     pub legacy: usize,
     pub wasm_api_ms: Option<f64>,
     pub wasm_init_ms: Option<f64>,
+    pub shape_complete: usize,
+    pub shape_missing: usize,
+    pub wasm_api_mean_ms: Option<f64>,
+    pub wasm_api_se_ms: Option<f64>,
+    pub wasm_init_mean_ms: Option<f64>,
+    pub wasm_init_se_ms: Option<f64>,
+    pub unique_shapes: usize,
     /// Navigations whose segments missed `mount_done.startTime` by more than
     /// [`CLOSURE_TOLERANCE_MS`]. Excluded from every median and counted here —
     /// never silently included, never silently dropped.
@@ -116,6 +124,26 @@ fn field_f64(value: &Value, key: &str) -> Option<f64> {
         .get(key)
         .and_then(Value::as_f64)
         .filter(|n| n.is_finite())
+}
+
+fn mean_and_standard_error(values: &[f64]) -> (Option<f64>, Option<f64>) {
+    if values.is_empty() {
+        return (None, None);
+    }
+    let n = values.len() as f64;
+    let mean = values.iter().sum::<f64>() / n;
+    if values.len() < 2 {
+        return (Some(mean), None);
+    }
+    let variance = values
+        .iter()
+        .map(|value| {
+            let delta = value - mean;
+            delta * delta
+        })
+        .sum::<f64>()
+        / (n - 1.0);
+    (Some(mean), Some(variance.sqrt() / n.sqrt()))
 }
 
 /// One navigation's decomposition: the ordered segments and the two reported
@@ -234,6 +262,9 @@ struct Population {
     legacy: usize,
     wasm_api_ms: Vec<f64>,
     wasm_init_ms: Vec<f64>,
+    shape_complete: usize,
+    shape_missing: usize,
+    shapes: BTreeMap<String, usize>,
     closure_violations: usize,
     decomposed: Vec<Decomposition>,
 }
@@ -248,10 +279,37 @@ fn warmth_rank(warmth: &str) -> u8 {
     }
 }
 
-/// Group every navigation in `spans` into `(source, project, cacheWarmth)`
+fn experiment_arm(nav: &Value) -> String {
+    nav.get("wasmExperimentArm")
+        .and_then(Value::as_str)
+        .filter(|arm| !arm.is_empty())
+        .unwrap_or("-")
+        .to_string()
+}
+
+fn shape_signature(nav: &Value) -> Option<String> {
+    let shape = nav.get("wasmModuleShape")?.as_object()?;
+    let mut parts = Vec::new();
+    for key in [
+        "imports",
+        "importedFunctions",
+        "importedTables",
+        "importedMemories",
+        "exports",
+        "exportedFunctions",
+        "exportedTables",
+        "exportedMemories",
+    ] {
+        let value = shape.get(key)?.as_u64()?;
+        parts.push(format!("{key}={value}"));
+    }
+    Some(parts.join(","))
+}
+
+/// Group every navigation in `spans` into `(source, project, cacheWarmth, arm)`
 /// populations and take the medians.
 pub fn boot_phase_rows(spans: &[Span]) -> Result<Vec<BootPhaseRow>> {
-    type Key = (String, String, String);
+    type Key = (String, String, String, String);
     let mut groups: Vec<(Key, Population)> = Vec::new();
 
     for span in spans.iter().filter(|span| span.name == "e2e.test") {
@@ -286,7 +344,12 @@ pub fn boot_phase_rows(spans: &[Span]) -> Result<Vec<BootPhaseRow>> {
                 .and_then(Value::as_str)
                 .unwrap_or("-")
                 .to_string();
-            let key: Key = (span.source.clone(), project_name(span), warmth);
+            let key: Key = (
+                span.source.clone(),
+                project_name(span),
+                warmth,
+                experiment_arm(nav),
+            );
             let population = match groups.iter().position(|(k, _)| *k == key) {
                 Some(index) => &mut groups[index].1,
                 None => {
@@ -317,6 +380,12 @@ pub fn boot_phase_rows(spans: &[Span]) -> Result<Vec<BootPhaseRow>> {
                     "buffered" => population.buffered += 1,
                     _ => unreachable!("path was narrowed above"),
                 }
+                if let Some(shape) = shape_signature(nav) {
+                    population.shape_complete += 1;
+                    *population.shapes.entry(shape).or_default() += 1;
+                } else {
+                    population.shape_missing += 1;
+                }
             }
 
             let marks = nav
@@ -338,43 +407,57 @@ pub fn boot_phase_rows(spans: &[Span]) -> Result<Vec<BootPhaseRow>> {
     let mut rows: Vec<BootPhaseRow> = groups
         .into_iter()
         .map(
-            |((source, project, cache_warmth), mut population)| BootPhaseRow {
-                source,
-                project,
-                cache_warmth,
-                navigations: population.navigations,
-                decomposed: population.decomposed.len(),
-                current: population.current,
-                direct_complete: population.direct_complete,
-                direct_missing: population.current - population.direct_complete,
-                streaming: population.streaming,
-                buffered: population.buffered,
-                legacy: population.legacy,
-                wasm_api_ms: median(&mut population.wasm_api_ms),
-                wasm_init_ms: median(&mut population.wasm_init_ms),
-                closure_violations: population.closure_violations,
-                segments: segment_medians(&population.decomposed),
-                boot_total_ms: median(
-                    &mut population
-                        .decomposed
-                        .iter()
-                        .map(|d| d.boot_total_ms)
-                        .collect::<Vec<_>>(),
-                ),
-                commit_to_mount_ms: median(
-                    &mut population
-                        .decomposed
-                        .iter()
-                        .filter_map(|d| d.commit_to_mount_ms)
-                        .collect::<Vec<_>>(),
-                ),
-                frame_skew_ms: median(
-                    &mut population
-                        .decomposed
-                        .iter()
-                        .filter_map(|d| Some(d.commit_to_mount_ms? - d.boot_total_ms))
-                        .collect::<Vec<_>>(),
-                ),
+            |((source, project, cache_warmth, experiment_arm), mut population)| {
+                let (wasm_api_mean_ms, wasm_api_se_ms) =
+                    mean_and_standard_error(&population.wasm_api_ms);
+                let (wasm_init_mean_ms, wasm_init_se_ms) =
+                    mean_and_standard_error(&population.wasm_init_ms);
+                BootPhaseRow {
+                    source,
+                    project,
+                    cache_warmth,
+                    experiment_arm,
+                    navigations: population.navigations,
+                    decomposed: population.decomposed.len(),
+                    current: population.current,
+                    direct_complete: population.direct_complete,
+                    direct_missing: population.current - population.direct_complete,
+                    streaming: population.streaming,
+                    buffered: population.buffered,
+                    legacy: population.legacy,
+                    wasm_api_ms: median(&mut population.wasm_api_ms),
+                    wasm_init_ms: median(&mut population.wasm_init_ms),
+                    shape_complete: population.shape_complete,
+                    shape_missing: population.shape_missing,
+                    unique_shapes: population.shapes.len(),
+                    wasm_api_mean_ms,
+                    wasm_api_se_ms,
+                    wasm_init_mean_ms,
+                    wasm_init_se_ms,
+                    closure_violations: population.closure_violations,
+                    segments: segment_medians(&population.decomposed),
+                    boot_total_ms: median(
+                        &mut population
+                            .decomposed
+                            .iter()
+                            .map(|d| d.boot_total_ms)
+                            .collect::<Vec<_>>(),
+                    ),
+                    commit_to_mount_ms: median(
+                        &mut population
+                            .decomposed
+                            .iter()
+                            .filter_map(|d| d.commit_to_mount_ms)
+                            .collect::<Vec<_>>(),
+                    ),
+                    frame_skew_ms: median(
+                        &mut population
+                            .decomposed
+                            .iter()
+                            .filter_map(|d| Some(d.commit_to_mount_ms? - d.boot_total_ms))
+                            .collect::<Vec<_>>(),
+                    ),
+                }
             },
         )
         .collect();
@@ -384,12 +467,14 @@ pub fn boot_phase_rows(spans: &[Span]) -> Result<Vec<BootPhaseRow>> {
             &left.project,
             warmth_rank(&left.cache_warmth),
             &left.cache_warmth,
+            &left.experiment_arm,
         )
             .cmp(&(
                 &right.source,
                 &right.project,
                 warmth_rank(&right.cache_warmth),
                 &right.cache_warmth,
+                &right.experiment_arm,
             ))
     });
     Ok(rows)
@@ -450,8 +535,8 @@ pub fn render(rows: &[BootPhaseRow]) -> String {
     );
     for row in rows {
         out.push_str(&format!(
-            "== {} / {} / {} ==\n",
-            row.source, row.project, row.cache_warmth
+            "== {} / {} / {} / arm:{} ==\n",
+            row.source, row.project, row.cache_warmth, row.experiment_arm
         ));
         out.push_str(&format!(
             "navigations: {}  decomposed: {}  closure violations: {}\n",
@@ -459,17 +544,26 @@ pub fn render(rows: &[BootPhaseRow]) -> String {
         ));
         out.push_str(&format!(
             "current: {}  direct complete: {}  direct missing: {}  streaming: {}  buffered: {}  legacy: {}\n\
-             median wasmApiMs (n={}): {}  median wasmInitMs (n={}): {}\n",
+             shape complete: {}  shape missing: {}  unique shapes: {}\n\
+             median wasmApiMs (n={}): {}  median wasmInitMs (n={}): {}\n\
+             mean wasmApiMs ± SE: {} ± {}  mean wasmInitMs ± SE: {} ± {}\n",
             row.current,
             row.direct_complete,
             row.direct_missing,
             row.streaming,
             row.buffered,
             row.legacy,
+            row.shape_complete,
+            row.shape_missing,
+            row.unique_shapes,
             row.direct_complete,
             optional_ms(row.wasm_api_ms),
             row.direct_complete,
             optional_ms(row.wasm_init_ms),
+            optional_ms(row.wasm_api_mean_ms),
+            optional_ms(row.wasm_api_se_ms),
+            optional_ms(row.wasm_init_mean_ms),
+            optional_ms(row.wasm_init_se_ms),
         ));
         // Loud, because an empty table and "the instrument was dark" look
         // identical otherwise — and that is the #818 failure mode itself.
@@ -538,6 +632,18 @@ mod tests {
     const ENTRY: f64 = 35.0;
     const SEED_PARSED: f64 = 50.0;
     const RENDER_START: f64 = 75.0;
+    fn shape(imports: u64, exports: u64) -> Value {
+        json!({
+            "imports": imports,
+            "importedFunctions": imports,
+            "importedTables": 0,
+            "importedMemories": 0,
+            "exports": exports,
+            "exportedFunctions": exports,
+            "exportedTables": 0,
+            "exportedMemories": 1,
+        })
+    }
 
     fn mark(name: &str, start_time: f64) -> Value {
         json!({ "name": name, "startTime": start_time })
@@ -958,13 +1064,17 @@ mod tests {
         streaming["wasmApiMs"] = json!(10.0);
         streaming["wasmInitMs"] = json!(20.0);
         streaming["wasmInitPath"] = json!("streaming");
+        streaming["wasmExperimentArm"] = json!("shape");
+        streaming["wasmModuleShape"] = shape(2, 3);
 
         let mut malformed = nav(2, "warm", 105.0, Some(155.0));
         malformed["wasmApiMs"] = json!(30.0);
         malformed["wasmInitMs"] = json!(20.0);
         malformed["wasmInitPath"] = json!("buffered");
+        malformed["wasmExperimentArm"] = json!("shape");
 
-        let legacy = dark_nav(3, "warm");
+        let mut legacy = dark_nav(3, "warm");
+        legacy["wasmExperimentArm"] = json!("shape");
         let rows = boot_phase_rows(&test_span(
             "sqlite",
             "chromium",
@@ -991,5 +1101,51 @@ mod tests {
             (row.wasm_api_ms, row.wasm_init_ms),
             (Some(10.0), Some(20.0))
         );
+        assert_eq!(row.experiment_arm, "shape");
+        assert_eq!(
+            (row.shape_complete, row.shape_missing, row.unique_shapes),
+            (1, 0, 1)
+        );
+    }
+
+    #[test]
+    fn experiment_arm_groups_and_shape_integrity_are_reported_per_arm() {
+        let mut baseline = nav(1, "warm", 105.0, Some(155.0));
+        baseline["wasmApiMs"] = json!(10.0);
+        baseline["wasmInitMs"] = json!(20.0);
+        baseline["wasmInitPath"] = json!("streaming");
+        baseline["wasmExperimentArm"] = json!("baseline");
+        baseline["wasmModuleShape"] = shape(2, 3);
+
+        let mut changed = nav(2, "warm", 110.0, Some(160.0));
+        changed["wasmApiMs"] = json!(15.0);
+        changed["wasmInitMs"] = json!(25.0);
+        changed["wasmInitPath"] = json!("streaming");
+        changed["wasmExperimentArm"] = json!("shape");
+        changed["wasmModuleShape"] = shape(2, 5);
+
+        let rows = boot_phase_rows(&test_span(
+            "sqlite",
+            "firefox",
+            vec![changed, baseline],
+            vec![(1, boot_marks(105.0)), (2, boot_marks(110.0))],
+        ))
+        .unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.experiment_arm.as_str())
+                .collect::<Vec<_>>(),
+            ["baseline", "shape"]
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.shape_complete, row.shape_missing, row.unique_shapes))
+                .collect::<Vec<_>>(),
+            [(1, 0, 1), (1, 0, 1)]
+        );
+        let report = render(&rows);
+        assert!(report.contains("arm:baseline"), "{report}");
+        assert!(report.contains("arm:shape"), "{report}");
+        assert!(report.contains("shape complete: 1"), "{report}");
     }
 }

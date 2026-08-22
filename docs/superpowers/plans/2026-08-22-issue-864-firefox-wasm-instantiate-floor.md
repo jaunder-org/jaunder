@@ -54,7 +54,7 @@ Out:
     `wasmApiMs`/`wasmInitMs`. Run `devtool run -- cargo xtask check` before the
     task commit.
 
-- [ ] Task 3: Add focused #864 trace certification/reporting
+- [x] Task 3: Add focused #864 trace certification/reporting
   - Contract: Analyzer grouping includes source/project/cache-warmth/arm where
     arm exists. It reports current `direct-init-v1` counts, direct-complete and
     closure status, dropped/truncated populations, arm-order reconciliation,
