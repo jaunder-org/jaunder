@@ -1038,6 +1038,29 @@ invariant-preserving setup discriminator separates firefox `wasmApiMs` and/or
 `wasmInitMs` by a large fixed amount that is not explained by decoded bytes. A
 null setup contrast eliminates only the implemented setup mechanism.
 
+### Candidate C — custom-section count stress
+
+Added after the first ship review rejected the one-section probe as only one
+candidate. This keeps the same delivery/API invariants as Candidate A but
+changes the count of same-named post-`wasm-opt` custom sections from zero
+to 200. This is not a general module-shape probe: it isolates custom-section
+table iteration and metadata parsing pressure while keeping imports, exports,
+tables, memories, request URL, `wasmInitPath`, compression, and shell import
+constant.
+
+Arms:
+
+- `baseline`: current bundle, `customSections: 0`.
+- `shape-count`: same bundle plus 200 `jaunder.shape` custom sections, verified
+  in-trace as `customSections: 200`.
+
+Prediction if per-custom-section metadata setup explains a material part of the
+floor: firefox `wasmApiMs` and/or `wasmInitMs` increases in `shape-count` by a
+fixed amount larger than chromium's change and larger than the decoded-byte
+delta would predict from #836's 13.9 ms/MiB marginal slope. A null or
+chromium-matched result eliminates this custom-section-count mechanism, not
+function count, import/export count, table/memory shape, or code-section layout.
+
 ### Reporting rule
 
 Report firefox first. Report means over run means with uncertainty and cold/warm
