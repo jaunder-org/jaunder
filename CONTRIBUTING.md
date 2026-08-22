@@ -356,6 +356,23 @@ root-workspace Rust tests. Coverage, wasm browser tests, doctests, and e2e still
 run in hermetic Nix checks where that isolation is load-bearing. The local push
 hook is intentionally faster than the hermetic CI backstop.
 
+For product Rust behavior changes, use the focused host-native lane before broad
+gates when one Rust test, module, package, or subsystem can answer the current
+question:
+
+```bash
+cargo xtask test-local -- -p storage site_config_primitives_round_trip
+cargo xtask test-local -- -p jaunder storage::posts::post_create_and_get_by_id_works
+cargo xtask test-local -- -p jaunder -E 'test(/^web::/)'
+```
+
+After a targeted fix, rerun the same focused command first; it is the fastest
+proof that the regression moved from red to green. Escalate only at boundaries:
+`cargo xtask check --no-test` for host static/precommit-surface confidence,
+`cargo xtask check` before committing implementation work, `cargo xtask prepush`
+through the push hook, and CI/`validate --no-e2e` when hermetic confidence is
+the question. Focused `test-local` is an accelerator, not a certification gate.
+
 | Command                         | Runs                                                                                                                                                            | Formatting    |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
 | `cargo xtask check --no-test`   | host static checks + clippy + repo-shape/type-safety gates + host tests — the precommit host surface                                                            | auto-fixes    |
@@ -570,11 +587,15 @@ Test paths follow the nested module path to the test name. A shallow file yields
 `storage::posts::post_create_and_get_by_id_works`, and projector concern paths.
 `misc::commands::…` is another nested example.
 
-- One subsystem: `cargo nextest run -p jaunder -E 'test(/^web::/)'` (or
-  `atompub`, `feed`, `misc`, `projector`, `storage`).
+- One subsystem through the focused local lane:
+  `cargo xtask test-local -- -p jaunder -E 'test(/^web::/)'` (or `atompub`,
+  `feed`, `misc`, `projector`, `storage`).
 - One file, concern module, or test (substring match):
-  `cargo nextest run -p jaunder storage::posts::post_create_and_get_by_id_works`.
-- Library/unit tests only: `cargo test -p jaunder --lib`.
+  `cargo xtask test-local -- -p jaunder storage::posts::post_create_and_get_by_id_works`.
+- One storage-crate test:
+  `cargo xtask test-local -- -p storage site_config_primitives_round_trip`.
+- Library/unit tests only, when PostgreSQL-backed integration setup is
+  irrelevant: `cargo test -p jaunder --lib`.
 
 `cargo nextest list -p jaunder` shows every registered Rust test with its full
 `<subsystem>::…` path.
