@@ -128,6 +128,17 @@ export type WasmTiming = {
   transferSize: number;
 };
 
+export type WasmModuleShape = {
+  imports: number;
+  importedFunctions: number;
+  importedTables: number;
+  importedMemories: number;
+  exports: number;
+  exportedFunctions: number;
+  exportedTables: number;
+  exportedMemories: number;
+};
+
 /** Direct initializer marks and the successful WebAssembly API timing. Kept
  * separate from Rust boot marks because both direct durations overlap them. */
 export type WasmInitTiming = {
@@ -135,10 +146,53 @@ export type WasmInitTiming = {
   doneMs: number | null;
   apiMs: number | null;
   path: "streaming" | "buffered" | null;
+  experimentArm: string | null;
+  moduleShape: WasmModuleShape | null;
 };
 
 const WASM_INIT_START = "jaunder.wasm.init_start";
 const WASM_INIT_DONE = "jaunder.wasm.init_done";
+
+function finiteShapeCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : null;
+}
+
+function moduleShapeFromDetail(value: unknown): WasmModuleShape | null {
+  if (value === null || typeof value !== "object") return null;
+  const shape = value as Record<string, unknown>;
+  const imports = finiteShapeCount(shape.imports);
+  const importedFunctions = finiteShapeCount(shape.importedFunctions);
+  const importedTables = finiteShapeCount(shape.importedTables);
+  const importedMemories = finiteShapeCount(shape.importedMemories);
+  const exports = finiteShapeCount(shape.exports);
+  const exportedFunctions = finiteShapeCount(shape.exportedFunctions);
+  const exportedTables = finiteShapeCount(shape.exportedTables);
+  const exportedMemories = finiteShapeCount(shape.exportedMemories);
+  if (
+    imports === null ||
+    importedFunctions === null ||
+    importedTables === null ||
+    importedMemories === null ||
+    exports === null ||
+    exportedFunctions === null ||
+    exportedTables === null ||
+    exportedMemories === null
+  ) {
+    return null;
+  }
+  return {
+    imports,
+    importedFunctions,
+    importedTables,
+    importedMemories,
+    exports,
+    exportedFunctions,
+    exportedTables,
+    exportedMemories,
+  };
+}
 
 /** Decode only the closed completion payload the generated initializer writes. */
 export function wasmInitFromMarks(
@@ -148,12 +202,12 @@ export function wasmInitFromMarks(
   const done = marks.find((mark) => mark.name === WASM_INIT_DONE);
   if (!start && !done) return undefined;
   const detail = done?.detail;
-  const completion =
+  const completion: Record<string, unknown> | null =
     detail !== null &&
     typeof detail === "object" &&
     "path" in detail &&
     "apiMs" in detail
-      ? detail
+      ? (detail as Record<string, unknown>)
       : null;
   const candidatePath =
     completion?.path === "streaming"
@@ -165,6 +219,12 @@ export function wasmInitFromMarks(
     typeof completion?.apiMs === "number" && Number.isFinite(completion.apiMs)
       ? completion.apiMs
       : null;
+  const candidateExperimentArm =
+    typeof completion?.experimentArm === "string" &&
+    completion.experimentArm.length > 0
+      ? completion.experimentArm
+      : null;
+  const candidateModuleShape = moduleShapeFromDetail(completion?.moduleShape);
   const valid =
     candidatePath !== null && candidateApiMs !== null && candidateApiMs >= 0;
   const path = valid ? candidatePath : null;
@@ -174,6 +234,8 @@ export function wasmInitFromMarks(
     doneMs: done?.startTime ?? null,
     apiMs,
     path,
+    experimentArm: valid ? candidateExperimentArm : null,
+    moduleShape: valid ? candidateModuleShape : null,
   };
 }
 
@@ -188,6 +250,8 @@ function mergeWasmInit(
     doneMs: existing.doneMs ?? incoming.doneMs,
     apiMs: existing.apiMs ?? incoming.apiMs,
     path: existing.path ?? incoming.path,
+    experimentArm: existing.experimentArm ?? incoming.experimentArm,
+    moduleShape: existing.moduleShape ?? incoming.moduleShape,
   };
 }
 

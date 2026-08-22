@@ -41,7 +41,7 @@ Out:
     issue-local note before any final capture, and the wording identifies the
     independent in-trace discriminator for every included arm.
 
-- [ ] Task 2: Add experiment-arm and module-shape discriminators to capture
+- [x] Task 2: Add experiment-arm and module-shape discriminators to capture
   - Contract: Existing gate attrs remain unchanged. Experiment attrs or explicit
     bundle options produce distinct arms while preserving `/pkg/jaunder.wasm`,
     shell import, `initMeasured`, compression/content negotiation, and

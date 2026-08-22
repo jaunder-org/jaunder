@@ -74,14 +74,36 @@ fn rewrite_wasm_ref(js: &str) -> String {
 /// export. The wrapper surrounds the real delivery path, so its timings retain
 /// streaming versus buffered fallback behavior instead of introducing a second
 /// byte-first path.
-fn append_measured_initializer(js: &str) -> String {
+fn append_measured_initializer(js: &str, experiment_arm: Option<&str>) -> String {
+    let experiment_arm = serde_json::to_string(&experiment_arm).expect("serializes string option");
     format!(
         "{js}\n\
+\n\
+const __jaunderWasmExperimentArm = {experiment_arm};\n\
+const __jaunderWasmModuleShape = (module) => {{\n\
+    if (!(module instanceof WebAssembly.Module)) {{\n\
+        return null;\n\
+    }}\n\
+    const imports = WebAssembly.Module.imports(module);\n\
+    const exports = WebAssembly.Module.exports(module);\n\
+    const countKind = (items, kind) => items.filter((item) => item.kind === kind).length;\n\
+    return {{\n\
+        imports: imports.length,\n\
+        importedFunctions: countKind(imports, \"function\"),\n\
+        importedTables: countKind(imports, \"table\"),\n\
+        importedMemories: countKind(imports, \"memory\"),\n\
+        exports: exports.length,\n\
+        exportedFunctions: countKind(exports, \"function\"),\n\
+        exportedTables: countKind(exports, \"table\"),\n\
+        exportedMemories: countKind(exports, \"memory\"),\n\
+    }};\n\
+}};\n\
 \n\
 export async function initMeasured(moduleOrPath) {{\n\
     performance.mark(\"jaunder.wasm.init_start\");\n\
     let path = null;\n\
     let apiMs = null;\n\
+    let moduleShape = null;\n\
     const originalStreaming = WebAssembly.instantiateStreaming;\n\
     const originalInstantiate = WebAssembly.instantiate;\n\
     const measure = (original, successfulPath) => async function (...args) {{\n\
@@ -89,6 +111,7 @@ export async function initMeasured(moduleOrPath) {{\n\
         const result = await original.apply(this, args);\n\
         path = successfulPath;\n\
         apiMs = performance.now() - startedAt;\n\
+        moduleShape = __jaunderWasmModuleShape(result?.module ?? (result instanceof WebAssembly.Module ? result : null));\n\
         return result;\n\
     }};\n\
     if (typeof originalStreaming === \"function\") {{\n\
@@ -100,7 +123,7 @@ export async function initMeasured(moduleOrPath) {{\n\
     try {{\n\
         const exports = await __wbg_init(moduleOrPath);\n\
         if (path !== null && apiMs !== null) {{\n\
-            performance.mark(\"jaunder.wasm.init_done\", {{ detail: {{ path, apiMs }} }});\n\
+            performance.mark(\"jaunder.wasm.init_done\", {{ detail: {{ path, apiMs, experimentArm: __jaunderWasmExperimentArm, moduleShape }} }});\n\
         }}\n\
         return exports;\n\
     }} finally {{\n\
@@ -192,7 +215,7 @@ fn write_precompressed(path: &Path) -> anyhow::Result<()> {
 /// outputs to the `jaunder` names, fix the JS wasm reference, and write
 /// precompressed (`.br`/`.gz`) siblings for the JS/wasm. Byte-identical to the
 /// flake's inline `csrWasmBundle` steps for the raw outputs.
-pub fn run(wasm: &Path, out: &Path) -> anyhow::Result<()> {
+pub fn run(wasm: &Path, out: &Path, experiment_arm: Option<&str>) -> anyhow::Result<()> {
     std::fs::create_dir_all(out).with_context(|| format!("creating out dir {}", out.display()))?;
 
     let status = Command::new("wasm-bindgen")
@@ -217,7 +240,7 @@ pub fn run(wasm: &Path, out: &Path) -> anyhow::Result<()> {
         .with_context(|| format!("reading {}", js_path.display()))?;
     std::fs::write(
         &js_path,
-        append_measured_initializer(&rewrite_wasm_ref(&js)),
+        append_measured_initializer(&rewrite_wasm_ref(&js), experiment_arm),
     )
     .with_context(|| format!("writing {}", js_path.display()))?;
 
@@ -259,15 +282,19 @@ mod tests {
 
     #[test]
     fn appends_measured_initializer_after_renaming_wasm_reference() {
-        let js = append_measured_initializer("export { initSync, __wbg_init as default };");
+        let js = append_measured_initializer("export { initSync, __wbg_init as default };", None);
         assert!(
             js.starts_with("export { initSync, __wbg_init as default };"),
             "{js}"
         );
         for expected in [
             "export async function initMeasured(moduleOrPath)",
+            "const __jaunderWasmExperimentArm = null;",
+            "const __jaunderWasmModuleShape = (module)",
+            "WebAssembly.Module.imports(module)",
+            "WebAssembly.Module.exports(module)",
             "performance.mark(\"jaunder.wasm.init_start\")",
-            "performance.mark(\"jaunder.wasm.init_done\", { detail: { path, apiMs } })",
+            "performance.mark(\"jaunder.wasm.init_done\", { detail: { path, apiMs, experimentArm: __jaunderWasmExperimentArm, moduleShape } })",
             "WebAssembly.instantiateStreaming",
             "WebAssembly.instantiate",
             "performance.now()",
