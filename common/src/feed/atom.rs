@@ -130,6 +130,25 @@ mod tests {
     }
 
     #[test]
+    fn renders_explicit_title_for_titled_post() {
+        let out = render_atom(&meta(None, Some("A site")), &[item()]);
+
+        assert!(out.contains("<title>Hello</title>"), "out: {out}");
+        assert!(!out.contains("<title></title>"), "out: {out}");
+    }
+
+    #[test]
+    fn renders_empty_title_for_titleless_post() {
+        let mut item = item();
+        item.title = None;
+
+        let out = render_atom(&meta(None, Some("A site")), &[item]);
+
+        assert_eq!(out.matches("<title></title>").count(), 1, "out: {out}");
+        assert!(!out.contains("<title>hi</title>"), "out: {out}");
+    }
+
+    #[test]
     fn emits_self_link() {
         let out = render_atom(&meta(None, Some("A site")), &[]);
         assert!(out.contains("rel=\"self\""));
