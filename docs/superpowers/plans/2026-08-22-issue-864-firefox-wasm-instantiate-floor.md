@@ -68,7 +68,7 @@ Out:
     and delivery-invariant drift. Run the focused test lane first, then
     `devtool run -- cargo xtask check` before the task commit.
 
-- [ ] Task 4: Run the quiescent corpus and publish the finding
+- [x] Task 4: Run the quiescent corpus and publish the finding
   - Contract: Capture uses the pre-registered matrix and records host
     quiescence, realized arm order, salts, commands, output paths, and corpus
     certification. Firefox decides; chromium is a control. If an included arm
