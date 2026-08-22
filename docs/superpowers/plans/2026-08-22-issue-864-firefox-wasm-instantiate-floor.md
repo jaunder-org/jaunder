@@ -25,7 +25,7 @@ Out:
 
 ## Task outline
 
-- [ ] Task 1: Pre-register the #864 experiment arms
+- [x] Task 1: Pre-register the #864 experiment arms
   - Contract: Record the run matrix before capture: firefox deciding, chromium
     control, sqlite single-worker, distinct `e2eSalt` per run, randomized or
     counterbalanced realized arm order, quiescent host requirement, delivery
