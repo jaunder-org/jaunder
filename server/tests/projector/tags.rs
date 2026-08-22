@@ -81,6 +81,28 @@ async fn user_tag_invalid_serves_shell(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
+async fn user_tag_unknown_valid_username_serves_shell(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let resp = projector_app(&state)
+        .oneshot(get("/~ghost/tags/rust"))
+        .await
+        .expect("request");
+    assert_eq!(resp.status(), StatusCode::OK, "unknown user tag → shell");
+    assert_eq!(
+        resp.headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        Some("no-store"),
+        "unknown user tag is a shell fallback, not a projected page"
+    );
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(body.as_ref(), TEST_SHELL.as_bytes(), "exact CSR shell body");
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn site_tag_storage_failure_keeps_no_store_shell_and_reports_once(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
     seed_tagged_post(&state).await;

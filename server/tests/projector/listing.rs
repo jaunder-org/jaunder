@@ -73,6 +73,30 @@ async fn profile_invalid_username_serves_shell(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
+async fn profile_unknown_valid_username_is_cacheable_projection(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let resp = projector_app(&state)
+        .oneshot(get("/~ghost"))
+        .await
+        .expect("request");
+    assert_eq!(resp.status(), StatusCode::OK, "unknown profile → 200");
+    assert_eq!(
+        resp.headers()
+            .get(header::CACHE_CONTROL)
+            .and_then(|value| value.to_str().ok()),
+        Some("public, max-age=300"),
+        "valid unknown username projects an empty cacheable profile"
+    );
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = String::from_utf8_lossy(&body);
+    assert!(html.contains("Posts by ghost"), "profile heading: {html}");
+    assert!(html.contains(r#"id="jaunder-seed""#), "data blob present");
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn site_timeline_storage_failure_keeps_500_and_reports_boundary_once(
     #[case] backend: Backend,
 ) {
