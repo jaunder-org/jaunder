@@ -24,21 +24,22 @@ test("authed owner: own-post action column is additive (no content shift)", asyn
   page,
 }, testInfo) => {
   // signInAsNewUser (not the registeredPage fixture) so we get the username to
-  // scope the measurement to the owner's OWN post among the many on `/`.
+  // probe the owner's own author page instead of the shared `/` timeline.
   const username = await signInAsNewUser(page);
   await createPostViaApi(page, { body: "cls probe" }); // short → no wrap/reflow
 
   // The owner's own post, scoped by author handle (`@username`, rendered at
   // `posts/render.rs:208`). The handle is in the anonymous projector paint, so this
-  // scope is stable across BOTH phases and safe under `workers>1` — a concurrent
-  // test's post cannot match this unique username.
+  // scope is stable across BOTH phases and safe under `workers>1`. The author page
+  // holds only this test user's posts, so concurrent tests cannot prepend rows above
+  // the measured post.
   const ownPost = (p: typeof page) =>
     p.locator(".j-post", {
       has: p.locator(".j-post-handle", { hasText: `@${username}` }),
     });
 
   await expectNoShiftAcrossMount(page, {
-    url: "/",
+    url: `/~${username}`,
     targets: (p) => [
       { name: "post-head", locator: ownPost(p).locator(".j-post-head") },
       // The RENDERED body div (`posts/render.rs:212`) — not SEL.postBody, which is
