@@ -123,6 +123,22 @@ mod tests {
     use leptos::{context::provide_context, reactive::owner::Owner};
 
     #[test]
+    fn response_options_recovers_from_poisoned_lock() {
+        let options = ResponseOptions::default();
+        let poisoned = options.0.clone();
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = poisoned.write().expect("lock before poison");
+            panic!("poison response options");
+        });
+
+        options.set_status(StatusCode::NOT_FOUND);
+
+        let mut response = Response::new(Body::empty());
+        options.merge_into(&mut response);
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
     fn response_options_merge_status_and_headers() {
         let options = ResponseOptions::default();
         options.set_status(StatusCode::NOT_FOUND);
@@ -139,6 +155,18 @@ mod tests {
             response.headers().get("x-test"),
             Some(&HeaderValue::from_static("set"))
         );
+    }
+    #[tokio::test]
+    async fn extract_errors_without_request_parts_context() {
+        let error = Owner::new()
+            .with(extract::<axum::extract::Path<String>>)
+            .await;
+
+        assert!(matches!(
+            error,
+            Err(ServerFnErrorErr::ServerError(message))
+                if message.contains("Parts provided by Jaunder")
+        ));
     }
 
     #[test]
@@ -194,11 +222,35 @@ mod tests {
             assert_eq!(response.headers().get(REDIRECT_HEADER), None);
         });
     }
+    #[test]
+    fn redirect_without_contexts_returns_without_mutation() {
+        Owner::new().with(|| redirect("/"));
+    }
+
+    #[test]
+    fn redirect_with_invalid_location_returns_without_mutation() {
+        Owner::new().with(|| {
+            let parts = request_parts(
+                Request::builder()
+                    .uri("/api/auth/login")
+                    .body(Body::empty()),
+            );
+            let options = ResponseOptions::default();
+            provide_context(parts);
+            provide_context(options.clone());
+
+            redirect("not-a-header\n");
+
+            let mut response = Response::new(Body::empty());
+            options.merge_into(&mut response);
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers().get(LOCATION), None);
+            assert_eq!(response.headers().get(REDIRECT_HEADER), None);
+        });
+    }
 
     fn request_parts(result: Result<Request<Body>, http::Error>) -> Parts {
-        let Ok(request) = result else {
-            panic!("test request should build");
-        };
+        let request = result.expect("test request should build");
         let (parts, _) = request.into_parts();
         parts
     }

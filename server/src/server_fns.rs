@@ -86,13 +86,27 @@ fn missing_server_fn_response(path: &str) -> Response<Body> {
         .body(body)
     {
         Ok(response) => response,
-        Err(error) => Response::new(Body::from(error.to_string())),
+        Err(error) => Response::new(Body::from(error.to_string())), // cov:ignore - response builder with only status/body cannot fail
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn missing_server_fn_returns_bad_request() {
+        let response = handle_server_fns_with_context(
+            || {}, // cov:ignore - missing-service path returns before invoking context setup
+            Request::builder()
+                .uri("/api/no/such/function")
+                .body(Body::empty())
+                .expect("test request"),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 
     #[test]
     fn plain_form_fallback_redirects_to_referer_without_location() {
