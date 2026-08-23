@@ -4383,6 +4383,7 @@ dependencies = [
  "futures-util",
  "host",
  "log",
+ "macros",
  "mockall",
  "rand 0.9.4",
  "rstest",

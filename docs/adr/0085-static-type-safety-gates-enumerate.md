@@ -159,8 +159,10 @@ is free to work around is a gate that reports green.
   The gate now fails on it rather than guessing.
 
   The doc also states what the gate does **not** claim: type identity is not
-  column correspondence, so two adjacent `DateTime<Utc>` columns transpose
-  invisibly (#751).
+  column correspondence. At ADR acceptance time, the module doc listed #751's
+  adjacent `DateTime<Utc>` tuple decodes as that residual; #751 later removed
+  those named residuals with row structs and distinct timestamp role types,
+  while leaving this gate's no-SQL-column-order boundary intact.
 
 - **`raw-html-door`, `html-sink` and `rendered-html-from-trusted`** (#333, #398,
   #445, #778) conform. Each reads its population structurally — an ident under
