@@ -195,7 +195,7 @@ async fn command_source_chain_cmd_smtp_test_open(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
-async fn command_source_chain_cmd_smtp_test_invalid_sender(#[case] backend: Backend) {
+async fn command_source_chain_cmd_smtp_test_quoted_sender_reaches_send(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
     let (args, _pg) = storage_args(backend, &base).await;
     cmd_init(&args, false).await.expect("initialize");
@@ -215,12 +215,12 @@ async fn command_source_chain_cmd_smtp_test_invalid_sender(#[case] backend: Back
         .await
         .unwrap_err();
 
-    assert_eq!(error.to_string(), "failed to build SMTP transport");
+    assert_eq!(error.to_string(), "failed to send test email");
     assert!(
         error.chain().any(|source| source
-            .downcast_ref::<lettre::address::AddressError>()
+            .downcast_ref::<lettre::transport::smtp::Error>()
             .is_some()),
-        "cmd_smtp_test must retain the address source: {error:#}"
+        "quoted display sender must build and reach SMTP send: {error:#}"
     );
 }
 

@@ -1094,19 +1094,16 @@ mod tests {
 
     #[tokio::test]
     async fn command_source_chain_smtp_invalid_sender() {
-        let config = SmtpConfig {
-            sender: "Acme, Inc <noreply@example.com>"
-                .parse()
-                .expect("common mailbox accepts the display name"),
-            ..smtp_config()
-        };
         let mut store = storage::MockSiteConfigStorage::new();
         store
             .expect_get_smtp_config()
-            .return_once(move || Ok(Some(config)));
+            .return_once(|| Ok(Some(smtp_config())));
 
-        let error = smtp_test_with(&store, &parse_email("to@example.com"), |config| {
-            Ok(Box::new(LettreMailSender::from_config(config)?) as Box<dyn MailSender>)
+        let error = smtp_test_with(&store, &parse_email("to@example.com"), |_| {
+            let source = "not a mailbox"
+                .parse::<lettre::message::Mailbox>()
+                .expect_err("invalid mailbox yields lettre address error");
+            Err(crate::mailer::BuildMailerError::InvalidSender(source))
         })
         .await
         .unwrap_err();

@@ -67,11 +67,7 @@ impl FromStr for Mailbox {
             .parse()
             .map_err(|e: email_address::Error| InvalidMailbox::Address(e.to_string()))?;
         let display = parsed.display_part();
-        let display_name = if display.trim().is_empty() {
-            None
-        } else {
-            Some(display.parse::<DisplayName>()?)
-        };
+        let display_name = decode_display_name(display)?;
         // `parsed.email()` is the bare addr-spec `email_address` just validated; the
         // `Email` re-parse only normalizes its domain and cannot fail here.
         let Ok(address) = Email::from_str(&parsed.email()) else {
@@ -84,9 +80,55 @@ impl FromStr for Mailbox {
     }
 }
 
+fn decode_display_name(display: &str) -> Result<Option<DisplayName>, InvalidMailbox> {
+    let trimmed = display.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    let decoded = if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
+        let mut decoded = String::with_capacity(trimmed.len() - 2);
+        let mut chars = trimmed[1..trimmed.len() - 1].chars();
+        while let Some(ch) = chars.next() {
+            if ch == '\\' {
+                if let Some(escaped) = chars.next() {
+                    decoded.push(escaped);
+                }
+            } else {
+                decoded.push(ch);
+            }
+        }
+        decoded
+    } else {
+        trimmed.to_owned()
+    };
+
+    Ok(Some(decoded.parse::<DisplayName>()?))
+}
+
+fn needs_quoted_display_name(name: &str) -> bool {
+    name.chars()
+        .any(|ch| !matches!(ch, 'A'..='Z' | 'a'..='z' | '0'..='9' | '!' | '#' | '$' | '%' | '&' | '\'' | '*' | '+' | '-' | '/' | '=' | '?' | '^' | '_' | '`' | '{' | '|' | '}' | '~' | ' ' | '\t'))
+}
+
+fn write_quoted_display_name(f: &mut fmt::Formatter<'_>, name: &str) -> fmt::Result {
+    f.write_str("\"")?;
+    for ch in name.chars() {
+        if ch == '"' || ch == '\\' {
+            f.write_str("\\")?;
+        }
+        write!(f, "{ch}")?;
+    }
+    f.write_str("\"")
+}
+
 impl fmt::Display for Mailbox {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.display_name {
+            Some(name) if needs_quoted_display_name(name) => {
+                write_quoted_display_name(f, name)?;
+                write!(f, " <{}>", self.address)
+            }
             Some(name) => write!(f, "{name} <{}>", self.address),
             None => write!(f, "{}", self.address),
         }
@@ -126,6 +168,43 @@ mod tests {
             Err(InvalidMailbox::Address(_))
         ));
         assert!("bare-not-an-email".parse::<Mailbox>().is_err());
+    }
+
+    #[test]
+    fn mailbox_decodes_quoted_display_name() {
+        let m: Mailbox = r#""Acme, Inc" <noreply@example.com>"#.parse().unwrap();
+        assert_eq!(*m.display_name().unwrap(), "Acme, Inc");
+        assert_eq!(m.to_string(), r#""Acme, Inc" <noreply@example.com>"#);
+    }
+
+    #[test]
+    fn mailbox_decodes_quoted_display_name_escapes() {
+        let m: Mailbox = r#""The \"Boss\" \\ Team" <noreply@example.com>"#.parse().unwrap();
+        assert_eq!(*m.display_name().unwrap(), r#"The "Boss" \ Team"#);
+        assert_eq!(
+            m.to_string(),
+            r#""The \"Boss\" \\ Team" <noreply@example.com>"#
+        );
+        assert_eq!(m.to_string().parse::<Mailbox>().unwrap(), m);
+    }
+
+    #[test]
+    fn mailbox_display_quotes_names_that_are_not_rfc_phrase_atoms() {
+        for name in ["Acme, Inc", "Support: Jaunder", "Jaunder (Team)"] {
+            let address: Email = "noreply@example.com".parse().unwrap();
+            let m = Mailbox::new(address, Some(name.parse().unwrap()));
+
+            assert_eq!(m.to_string(), format!(r#""{name}" <noreply@example.com>"#));
+            assert_eq!(m.to_string().parse::<Mailbox>().unwrap(), m);
+        }
+    }
+
+    #[test]
+    fn mailbox_quotes_unquoted_display_names_that_need_it() {
+        let m: Mailbox = "Acme, Inc <noreply@example.com>".parse().unwrap();
+        assert_eq!(*m.display_name().unwrap(), "Acme, Inc");
+        assert_eq!(m.to_string(), r#""Acme, Inc" <noreply@example.com>"#);
+        assert_eq!(m.to_string().parse::<Mailbox>().unwrap(), m);
     }
 
     #[test]

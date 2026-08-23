@@ -139,24 +139,23 @@ mod tests {
         );
     }
 
-    // guard:no-backend — mock storage supplies typed config; no live database
+    // guard:no-backend — private constructor operation injects the lettre failure
     #[tokio::test]
     async fn mailer_source_chain_retains_invalid_sender_error() {
-        let config = SmtpConfig {
-            sender: "Acme, Inc <noreply@example.com>"
-                .parse()
-                .expect("common mailbox accepts the display name"),
-            ..smtp_config(SmtpTlsMode::Plain)
-        };
         let mut store = storage::MockSiteConfigStorage::new();
         store
             .expect_get_smtp_config()
-            .return_once(move || Ok(Some(config)));
+            .return_once(|| Ok(Some(smtp_config(SmtpTlsMode::Plain))));
 
-        let error = build_mailer(&store, None)
-            .await
-            .err()
-            .expect("invalid sender must fail startup");
+        let error = build_mailer_with(&store, None, |_| {
+            let source = "not a mailbox"
+                .parse::<lettre::message::Mailbox>()
+                .expect_err("invalid mailbox yields lettre address error");
+            Err(super::super::BuildMailerError::InvalidSender(source))
+        })
+        .await
+        .err()
+        .expect("invalid sender must fail startup");
 
         assert!(
             error.chain().any(|source| source
