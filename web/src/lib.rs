@@ -36,6 +36,8 @@ pub mod registration;
 /// (no `web_sys`), so it lives at the crate root — host-compiled and host-tested —
 /// rather than under the wasm-only `app` module that consumes it.
 pub mod route_segments;
+#[cfg(feature = "server")]
+pub mod server_fn_registration;
 pub mod sessions;
 pub mod sidebar;
 pub mod site;

@@ -819,9 +819,9 @@ mod tests {
     #[test]
     fn a_fn_in_the_retired_spelling_is_not_in_the_inventory() {
         // #714 narrowed the shared enumerator to `#[macros::server]`. An inventory
-        // that silently dropped every fn would make the whole gate vacuous, which is
-        // why `enumeration_of_web_src_matches_the_registrar` (in the registrar gate)
-        // asserts the real tree still enumerates; here we only pin the narrowing.
+        // that silently dropped every fn would make the whole gate vacuous, so this
+        // pins the narrowing here while the committed coverage snapshot keeps the
+        // real-tree inventory from becoming an empty silent green.
         let tmp = tempfile::tempdir().expect("tempdir");
         let vertical = tmp.path().join(VERTICAL);
         std::fs::create_dir_all(&vertical).expect("create the vertical's dir");

@@ -1,13 +1,10 @@
 //! Shared enumeration of the `web` crate's `#[macros::server]` functions.
 //!
-//! Three static checks need the same list — [`server_fn_registrar_check`] (#426,
-//! ADR-0066: every server fn must appear in the test registrar),
-//! [`server_fn_tracing_check`] (#511: every one's arguments must be PII-safe), and
-//! the flow-coverage inventory [`crate::server_fns`] (#681). Enumerating three
-//! times would let them drift, so the walk lives here and each gate applies its own
-//! rule to the result.
+//! Two static checks need the same list — [`server_fn_tracing_check`] (#511:
+//! every one's arguments must be PII-safe) and the flow-coverage inventory
+//! [`crate::server_fns`] (#681). Enumerating twice would let them drift, so the
+//! walk lives here and each gate applies its own rule to the result.
 //!
-//! [`server_fn_registrar_check`]: crate::steps::server_fn_registrar_check
 //! [`server_fn_tracing_check`]: crate::steps::server_fn_tracing_check
 //!
 //! The enumeration is deliberately **dumb**: it reports what it found and
@@ -20,9 +17,8 @@
 //! gate, which is the one failure mode none of them can detect for itself.
 //!
 //! Alongside the walk it holds [`vertical_of`], which each gate keys something on —
-//! the registrar's `(vertical, leaf)` match, the derived span name, the derived
-//! endpoint — so a change to what "vertical" means cannot land in one gate and not
-//! the others.
+//! the derived span name and the derived endpoint — so a change to what "vertical"
+//! means cannot land in one gate and not the other.
 
 use std::path::{Path, PathBuf};
 
@@ -92,11 +88,9 @@ struct Visitor {
 /// Matched on the **whole path**, not its last segment: leptos's bare `#[server]`
 /// is deliberately *not* enumerated, because a fn wearing it declares its own
 /// endpoint and span and is exactly what this migration retired. Nothing in
-/// `web/src` may reintroduce it, and `enumeration_of_web_src_matches_the_registrar`
-/// in `server_fn_registrar_check` is what keeps this predicate honest: every gate
-/// here returns "no problems" on an empty enumeration, so a predicate that matched
-/// nothing would be a **silent green** across the registrar, tracing and coverage
-/// gates at once rather than a loud failure.
+/// `web/src` may reintroduce it. The runtime wire contract in
+/// `server/tests/web/server_fn_wire.rs` keeps a real generated-type backstop, and
+/// the coverage snapshot keeps an empty inventory from looking like success.
 fn is_server_attr(attr: &syn::Attribute) -> bool {
     let segments = &attr.path().segments;
     segments.len() == 2 && segments[0].ident == "macros" && segments[1].ident == "server"
@@ -302,9 +296,9 @@ mod tests {
 
     #[test]
     fn a_non_ident_parameter_pattern_is_reported_as_nameless_not_rejected() {
-        // Judging it is the consuming gate's job: the registrar guard does not care,
-        // the tracing gate must refuse it. Reporting rather than erroring here keeps
-        // one gate's rule from silently widening the other's.
+        // Judging it is the consuming gate's job: the tracing gate must refuse it.
+        // Reporting rather than erroring here keeps one gate's rule from silently
+        // widening another's.
         let src = "#[macros::server]\npub async fn x((a, b): (u32, u32)) -> R {}\n";
         let fns = server_fns_in(src).unwrap();
         assert_eq!(fns[0].params.len(), 1);
@@ -316,8 +310,8 @@ mod tests {
         // #714 retired leptos's bare `#[server]` from `web/src`: a fn wearing it
         // declares its own endpoint and span, which is what the macro exists to
         // derive. Enumerating it would resurrect the gate branches that tolerated
-        // both spellings; the count assertion in `server_fn_registrar_check` is what
-        // stops this narrowing from becoming a silent green.
+        // both spellings; the runtime wire contract and coverage snapshot are what
+        // stop this narrowing from becoming a silent green on the real tree.
         let src = format!(
             "{}#[macros::server(skip(name))]\npub async fn create(name: AudienceName) -> R {{}}\n",
             retired_server_fn(
