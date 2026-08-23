@@ -401,6 +401,10 @@ mod tests {
             server_fn_type_ident(&ident("list_by_user_and_tag")).to_string(),
             "ListByUserAndTag"
         );
+        assert_eq!(
+            server_fn_type_ident(&ident("list__mine")).to_string(),
+            "ListMine"
+        );
     }
 
     #[test]
