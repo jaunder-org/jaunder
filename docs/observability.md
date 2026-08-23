@@ -979,6 +979,226 @@ workspace-wide, so setting it would flip the _server's_ release build to abort,
 where a panicking tokio task would kill the process. Recorded in the root
 `Cargo.toml` at the profile someone would add it to.
 
+## #864 — firefox's wasm initialization floor (pre-registration, 2026-08-22)
+
+#836 found that firefox's historical `responseEnd → boot.entry` residual fit
+`≈ 377 ms + 13.9 ms/MiB`; at the shipped size, most of the segment was
+size-independent. That historical field is not a direct initialization
+measurement — #887 replaced it with `direct-init-v1` diagnostics — so this cycle
+tests the floor with the current instrument rather than re-reading the old
+residual.
+
+### Deciding protocol
+
+Firefox is decisive; chromium is a control. The capture is sqlite,
+single-worker, quiescent host, three runs per arm unless a pre-capture dry run
+shows a larger variance that requires more. Every run uses a distinct `e2eSalt`
+so Nix cannot replay a cached trace. Arm order is randomized or explicitly
+counterbalanced run-by-run, and the realized order is recorded with the corpus.
+
+No final capture may change the SPA shell delivery path: `/pkg/jaunder.wasm`,
+the `/pkg/jaunder.js` import, `initMeasured`, content negotiation,
+compression/precompression, request count, and `wasmInitPath` distribution must
+remain comparable unless the change is the explicitly named candidate. A corpus
+without current `direct-init-v1` coverage, closure, arm-order reconciliation,
+host quiescence notes, and an independent in-trace arm discriminator is
+exploratory only.
+
+### Candidate A — module shape, not byte volume
+
+Arms:
+
+- `baseline`: the current shipped bundle.
+- `shape`: same delivery path, but an experiment-only bundle with actual module
+  shape counts changed and reported in trace: at minimum functions, imported
+  functions, exports, tables, memories, code bytes, decoded bytes, and raw
+  bytes.
+
+Prediction if module shape explains the fixed term: firefox `wasmApiMs` and/or
+`wasmInitMs` moves in the same direction as the shape-count delta even after the
+decoded-byte delta is too small to explain the change at #836's marginal 13.9
+ms/MiB. A null result is a measured elimination of the tested shape factor, not
+proof that every untested shape factor is irrelevant. Chromium may move
+differently; chromium-only movement does not close #864.
+
+### Candidate B — per-navigation or per-module engine setup
+
+This candidate is included only if implementation can preserve the delivery/API
+invariants above while producing an independent setup-arm discriminator. The
+intended contrast is not preload, cache busting, `arrayBuffer`/manual `compile`,
+or a second request path; those change delivery or WebAssembly API mode and
+would repeat #866's attribution failure. If no invariant-preserving setup arm
+exists, this cycle stops and either selects another separable size-independent
+candidate under the same corpus or returns for spec approval before reducing the
+experiment to one candidate.
+
+Prediction if the floor is mostly per-navigation setup: changing the module-side
+shape in Candidate A does not move firefox materially, while an
+invariant-preserving setup discriminator separates firefox `wasmApiMs` and/or
+`wasmInitMs` by a large fixed amount that is not explained by decoded bytes. A
+null setup contrast eliminates only the implemented setup mechanism.
+
+### Candidate C — custom-section count stress
+
+Added after the first ship review rejected the one-section probe as only one
+candidate. This keeps the same delivery/API invariants as Candidate A but
+changes the count of same-named post-`wasm-opt` custom sections from zero
+to 200. This is not a general module-shape probe: it isolates custom-section
+table iteration and metadata parsing pressure while keeping imports, exports,
+tables, memories, request URL, `wasmInitPath`, compression, and shell import
+constant.
+
+Arms:
+
+- `baseline`: current bundle, `customSections: 0`.
+- `shape-count`: same bundle plus 200 `jaunder.shape` custom sections, verified
+  in-trace as `customSections: 200`.
+
+Prediction if per-custom-section metadata setup explains a material part of the
+floor: firefox `wasmApiMs` and/or `wasmInitMs` increases in `shape-count` by a
+fixed amount larger than chromium's change and larger than the decoded-byte
+delta would predict from #836's 13.9 ms/MiB marginal slope. A null or
+chromium-matched result eliminates this custom-section-count mechanism, not
+function count, import/export count, table/memory shape, or code-section layout.
+
+### Reporting rule
+
+Report firefox first. Report means over run means with uncertainty and cold/warm
+handling for every arm contrast. `wasmApiMs` and `wasmInitMs` are overlapping
+direct diagnostics, not compile-only durations and not additive parts of the
+ADR-0100 exclusive decomposition; the exclusive document-frame closure remains
+`wasmInitStartMs + wasmInitStartToBootEntryMs + bootPhases = bootTotalMs`.
+
+### Finding — custom-section module-shape probe (2026-08-22)
+
+Corpus: `~/measurements/jaunder/issue-864-wasm-floor/`, extracted to
+`traces/*.jsonl`. The host was quiesced before capture. Runs were sqlite
+single-worker, three runs per arm, with realized order counterbalanced by run:
+`baseline-1 firefox→chromium`, `baseline-2 chromium→firefox`,
+`baseline-3 firefox→chromium`, `shape-1 chromium→firefox`,
+`shape-2 firefox→chromium`, `shape-3 chromium→firefox`.
+
+Salts were `issue864-baseline-{1,2,3}` and `issue864-shape-{1,2,3}`. Commands:
+`nix build --print-out-paths --no-link .#packages.x86_64-linux.e2e-sqlite-{firefox,chromium}-single-worker`,
+then `cargo xtask traces analyze <traces...>` and
+`cargo xtask traces boot-phases <traces...>`. Certification artifacts:
+`.xtask/run/1787433823720-3423114.out` (`traces analyze`) and
+`.xtask/run/1787433844049-3423325.out` (`traces boot-phases`).
+
+The implemented `shape` arm is deliberately narrow: it appends one tiny
+post-`wasm-opt` custom section named `jaunder.shape`. It preserves
+`/pkg/jaunder.wasm`, `/pkg/jaunder.js`, `initMeasured`, streaming delivery,
+precompression, request shape, and `wasmInitPath`; it changes decoded wasm by
+only **30 bytes** (2,296,722 → 2,296,752), encoded brotli by **103 bytes**
+(623,283 → 623,386), and the in-trace module shape only by
+`customSections: 0 → 1`. Imports, imported functions, exports, tables, memories,
+and exported functions stayed unchanged. Therefore this is a valid probe for
+“custom-section/module-metadata count” only, not for every module shape factor.
+
+Corpus integrity held for every arm/browser/run: cold populations had 166
+current direct-init completions per run with 2 unlabeled pre-test navigations;
+warm populations had 43 completions per run with 1 unlabeled pre-test
+navigation. Delivery shape matched by arm: cold runs were 164 streaming + 2
+buffered completions; warm runs were 43 streaming + 0 buffered. Each labeled
+population had one unique module shape, 100% shape completeness, and zero
+document-frame closure violations in `traces boot-phases`.
+
+Firefox moved downward, but the run-to-run variance is larger than the effect
+estimate:
+
+| browser  | warmth | arm      | `wasmApiMs` mean ± SE | `wasmInitMs` mean ± SE | exclusive boot total mean ± SE |
+| -------- | ------ | -------- | --------------------- | ---------------------- | ------------------------------ |
+| firefox  | cold   | baseline | 481.0 ± 50.4          | 630.1 ± 61.9           | 962.0 ± 99.3                   |
+| firefox  | cold   | shape    | 434.3 ± 29.1          | 572.3 ± 36.0           | 873.6 ± 56.9                   |
+| firefox  | warm   | baseline | 441.1 ± 48.3          | 578.0 ± 59.5           | 810.4 ± 93.5                   |
+| firefox  | warm   | shape    | 405.3 ± 18.1          | 534.8 ± 27.6           | 742.8 ± 42.2                   |
+| chromium | cold   | baseline | 154.9 ± 4.1           | 267.5 ± 7.1            | 471.3 ± 11.6                   |
+| chromium | cold   | shape    | 151.4 ± 12.0          | 264.2 ± 20.0           | 469.7 ± 33.3                   |
+| chromium | warm   | baseline | 123.6 ± 5.5           | 184.9 ± 7.3            | 337.8 ± 13.8                   |
+| chromium | warm   | shape    | 119.8 ± 5.7           | 185.0 ± 8.7            | 332.7 ± 16.8                   |
+
+Paired shape-minus-baseline deltas over run means:
+
+| browser  | warmth | `wasmApiMs`     | `wasmInitMs`    | exclusive boot total |
+| -------- | ------ | --------------- | --------------- | -------------------- |
+| firefox  | cold   | -46.7 ± 21.8 ms | -57.8 ± 26.6 ms | -88.4 ± 43.1 ms      |
+| firefox  | warm   | -35.8 ± 30.4 ms | -43.2 ± 32.1 ms | -67.5 ± 51.3 ms      |
+| chromium | cold   | -3.5 ± 14.5 ms  | -3.3 ± 24.1 ms  | -1.6 ± 40.4 ms       |
+| chromium | warm   | -3.7 ± 9.0 ms   | +0.1 ± 12.7 ms  | -5.2 ± 23.9 ms       |
+
+Interpretation: the one-section custom-section arm does **not** close #864. The
+firefox sign is consistent across cold and warm direct diagnostics, while
+chromium is near zero, but the uncertainty is too large for a decisive mechanism
+claim and the tested shape factor is only one custom-section metadata record.
+The remaining unknowns are the larger module-shape factors originally suspected
+by #864 — function count, import/export count, table/memory shape, and
+code-section layout — plus any invariant-preserving per-module engine setup
+discriminator.
+
+### Finding — custom-section count stress probe (2026-08-23)
+
+Corpus: `~/measurements/jaunder/issue-864-wasm-floor/`, extracted to
+`traces-count/*.jsonl`. The host was quiesced before capture. Runs were sqlite
+single-worker, three runs per arm, with realized order counterbalanced by run:
+`baseline-count-1 firefox→chromium`, `shape-count-1 chromium→firefox`,
+`baseline-count-2 chromium→firefox`, `shape-count-2 firefox→chromium`,
+`baseline-count-3 firefox→chromium`, `shape-count-3 chromium→firefox`.
+
+Salts were `issue864-baseline-count-{1,2,3}` and `issue864-shape-count-{1,2,3}`.
+Commands:
+`nix build --print-out-paths --no-link .#packages.x86_64-linux.e2e-sqlite-{firefox,chromium}-single-worker`,
+then `cargo xtask traces analyze <traces-count...>` and
+`cargo xtask traces boot-phases <traces-count...>`. Certification artifacts:
+`.xtask/run/1787449986508-3680541.out` (`traces analyze`) and
+`.xtask/run/1787450006807-3680762.out` (`traces boot-phases`).
+
+The `shape-count` arm appends **200** same-name `jaunder.shape` custom sections
+after `wasm-opt`. It preserves `/pkg/jaunder.wasm`, `/pkg/jaunder.js`,
+`initMeasured`, streaming delivery, precompression, request shape, and
+`wasmInitPath`; it changes decoded wasm by **6,000 bytes** (2,296,722 →
+2,302,722), keeping #836's decoded-byte slope prediction under **0.1 ms**.
+Imports, imported functions, exports, tables, memories, and exported functions
+stayed unchanged. The in-trace discriminator was `customSections: 0 → 200`, so
+this is the preregistered custom-section-count mechanism and still not a probe
+for function count, import/export count, table/memory shape, or code-section
+layout.
+
+Corpus integrity held for every arm/browser/run: cold populations had 152
+current direct-init completions per run; warm populations had 41 completions per
+run. Each labeled population had one unique module shape, 100% shape
+completeness, and zero document-frame closure violations in
+`traces boot-phases`.
+
+Firefox did **not** move upward when 200 custom sections were added:
+
+| browser  | warmth | arm         | `wasmApiMs` mean ± SE | `wasmInitMs` mean ± SE | exclusive boot total mean ± SE |
+| -------- | ------ | ----------- | --------------------- | ---------------------- | ------------------------------ |
+| firefox  | cold   | baseline    | 457.5 ± 51.3          | 600.9 ± 63.9           | 887.0 ± 98.5                   |
+| firefox  | cold   | shape-count | 439.2 ± 24.1          | 579.6 ± 31.5           | 855.7 ± 54.8                   |
+| firefox  | warm   | baseline    | 423.9 ± 43.7          | 559.9 ± 55.8           | 761.7 ± 94.2                   |
+| firefox  | warm   | shape-count | 409.1 ± 23.2          | 541.3 ± 32.0           | 729.3 ± 54.3                   |
+| chromium | cold   | baseline    | 144.3 ± 1.9           | 251.5 ± 3.2            | 408.6 ± 3.0                    |
+| chromium | cold   | shape-count | 144.0 ± 0.8           | 251.1 ± 1.5            | 410.1 ± 1.3                    |
+| chromium | warm   | baseline    | 110.8 ± 1.1           | 170.7 ± 1.9            | 300.2 ± 0.5                    |
+| chromium | warm   | shape-count | 110.4 ± 0.6           | 170.7 ± 0.8            | 300.5 ± 1.8                    |
+
+Paired shape-count-minus-baseline deltas over run means:
+
+| browser  | warmth | `wasmApiMs`     | `wasmInitMs`    | exclusive boot total |
+| -------- | ------ | --------------- | --------------- | -------------------- |
+| firefox  | cold   | -18.3 ± 29.3 ms | -21.3 ± 35.7 ms | -31.3 ± 46.2 ms      |
+| firefox  | warm   | -14.7 ± 20.7 ms | -18.5 ± 23.8 ms | -32.3 ± 41.6 ms      |
+| chromium | cold   | -0.3 ± 1.6 ms   | -0.4 ± 2.7 ms   | +1.5 ± 3.9 ms        |
+| chromium | warm   | -0.4 ± 1.0 ms   | -0.0 ± 1.6 ms   | +0.3 ± 1.3 ms        |
+
+Interpretation: custom-section count is not the size-independent firefox floor.
+The preregistered stressor increases the relevant metadata count by 200 and does
+not produce a firefox-specific positive delta. The one-section probe's downward
+firefox sign was run-order/noise, not a mechanism. #864 remains open for the
+larger module-shape factors: function count, import/export count, table/memory
+shape, code-section layout, and any invariant-preserving per-module engine setup
+discriminator.
+
 ## #866 — where the rest of boot goes (2026-08-09)
 
 #836 established that page boot is **43–47% of e2e suite wall-clock** and that

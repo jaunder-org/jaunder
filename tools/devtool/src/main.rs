@@ -74,6 +74,15 @@ struct CsrBundleArgs {
     /// Output directory for the bundle (the site `pkg` dir).
     #[arg(long)]
     out: std::path::PathBuf,
+    /// Optional experiment arm label embedded in the direct wasm-init trace detail.
+    #[arg(long)]
+    wasm_experiment_arm: Option<String>,
+    /// Optional tiny custom section embedded after optimisation to perturb module shape.
+    #[arg(long)]
+    wasm_shape_section: Option<String>,
+    /// Number of same-named shape custom sections to append.
+    #[arg(long, default_value_t = 1)]
+    wasm_shape_section_count: u32,
 }
 
 #[derive(clap::Args)]
@@ -160,7 +169,13 @@ fn main() -> anyhow::Result<()> {
         Command::Check(args) => {
             check::run(args.name.as_deref(), args.all, args.fix, args.sandbox_cargo)
         }
-        Command::CsrBundle(args) => csr_bundle::run(&args.wasm, &args.out),
+        Command::CsrBundle(args) => csr_bundle::run(
+            &args.wasm,
+            &args.out,
+            args.wasm_experiment_arm.as_deref(),
+            args.wasm_shape_section.as_deref(),
+            args.wasm_shape_section_count,
+        ),
         Command::SeedE2e(args) => {
             seed_e2e::run(&args.db, &args.test_support_bin, &args.jaunder_bin)
         }

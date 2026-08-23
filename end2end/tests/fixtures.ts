@@ -39,6 +39,7 @@ import {
   type NavigationRecord,
   type PagePerfSummary,
   type RequestRecord,
+  type WasmModuleShape,
   type TraceCapture,
 } from "./capture-trace";
 import {
@@ -106,6 +107,10 @@ type NavigationSummary = {
   wasmApiMs: number | null;
   wasmInitMs: number | null;
   wasmInitPath: "streaming" | "buffered" | null;
+  /** Arm-integrity metadata for measurement-only variants. Separate from the
+   *  boot decomposition and direct wasm timing diagnostics. */
+  wasmExperimentArm: string | null;
+  wasmModuleShape: WasmModuleShape | null;
   /** Wasm response sizes. `decoded` is the compiler's input; `encoded` is what
    *  crossed the wire. A `decoded > encoded` pair means the engine received the
    *  precompressed `jaunder.wasm.br`; equal sizes mean identity. Recorded because
@@ -740,6 +745,8 @@ const test = base.extend<{
             wasmApiMs: wasmInit?.apiMs ?? null,
             wasmInitMs,
             wasmInitPath: wasmInit?.path ?? null,
+            wasmExperimentArm: wasmInit?.experimentArm ?? null,
+            wasmModuleShape: wasmInit?.moduleShape ?? null,
             bootPhases: bootPhasesFrom(timing?.marks ?? []),
             mountToSettledMs: mountToSettledMs(
               navigation,

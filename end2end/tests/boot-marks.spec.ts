@@ -80,12 +80,59 @@ test("keeps a completion harvest that arrives after the fullest boot marks", () 
       doneMs: 30,
       apiMs: 12,
       path: "streaming",
+      experimentArm: null,
+      moduleShape: null,
     },
   };
 
   expect(mergeDocumentTiming(bootSnapshot, completionSnapshot)).toEqual(
     completionSnapshot,
   );
+});
+
+test("decodes initializer arm and module shape detail", () => {
+  expect(
+    wasmInitFromMarks([
+      { name: "jaunder.wasm.init_start", startTime: 10 },
+      {
+        name: "jaunder.wasm.init_done",
+        startTime: 30,
+        detail: {
+          path: "streaming",
+          apiMs: 12,
+          experimentArm: "shape",
+          moduleShape: {
+            imports: 2,
+            importedFunctions: 1,
+            importedTables: 0,
+            importedMemories: 1,
+            exports: 3,
+            exportedFunctions: 1,
+            exportedTables: 1,
+            exportedMemories: 1,
+            customSections: 1,
+          },
+        },
+      },
+    ]),
+  ).toEqual({
+    startMs: 10,
+    doneMs: 30,
+    apiMs: 12,
+    path: "streaming",
+    experimentArm: "shape",
+    moduleShape: {
+      imports: 2,
+      importedFunctions: 1,
+      importedTables: 0,
+      importedMemories: 1,
+      exports: 3,
+      exportedFunctions: 1,
+      exportedTables: 1,
+      exportedMemories: 1,
+      customSections: 1,
+    },
+  });
 });
 
 test("rejects malformed initializer completion detail", () => {
@@ -98,7 +145,14 @@ test("rejects malformed initializer completion detail", () => {
         detail: { path: "streaming", apiMs: Number.NaN },
       },
     ]),
-  ).toEqual({ startMs: 10, doneMs: 30, apiMs: null, path: null });
+  ).toEqual({
+    startMs: 10,
+    doneMs: 30,
+    apiMs: null,
+    path: null,
+    experimentArm: null,
+    moduleShape: null,
+  });
   expect(
     wasmInitFromMarks([
       { name: "jaunder.wasm.init_start", startTime: 10 },
@@ -108,7 +162,14 @@ test("rejects malformed initializer completion detail", () => {
         detail: { path: "buffered", apiMs: -1 },
       },
     ]),
-  ).toEqual({ startMs: 10, doneMs: 30, apiMs: null, path: null });
+  ).toEqual({
+    startMs: 10,
+    doneMs: 30,
+    apiMs: null,
+    path: null,
+    experimentArm: null,
+    moduleShape: null,
+  });
 });
 
 // The regression guard for #818's actual defect. Unthresholded on purpose: it
@@ -184,10 +245,32 @@ test("boot fetches the wasm once and the harness captures the full mark set", as
       ) as PerformanceMark;
     return entry.detail;
   });
-  expect(completionDetail).toMatchObject({ path: "streaming" });
+  expect(completionDetail).toMatchObject({
+    path: "streaming",
+    moduleShape: {
+      exports: expect.any(Number),
+      exportedFunctions: expect.any(Number),
+      imports: expect.any(Number),
+      importedFunctions: expect.any(Number),
+      customSections: expect.any(Number),
+    },
+  });
+  expect([null, "baseline", "shape", "shape-many", "shape-count"]).toContain(
+    completionDetail.experimentArm,
+  );
   expect(timing?.wasmInit).toMatchObject({
     path: "streaming",
+    moduleShape: {
+      exports: expect.any(Number),
+      exportedFunctions: expect.any(Number),
+      imports: expect.any(Number),
+      importedFunctions: expect.any(Number),
+      customSections: expect.any(Number),
+    },
   });
+  expect([null, "baseline", "shape", "shape-many", "shape-count"]).toContain(
+    timing?.wasmInit?.experimentArm,
+  );
   expect(timing?.wasmInit?.startMs).not.toBeNull();
   expect(timing?.wasmInit?.doneMs).not.toBeNull();
   expect(timing?.wasmInit?.apiMs).not.toBeNull();
@@ -306,6 +389,8 @@ test("failed streaming initialization stays incomplete and restores APIs", async
     doneMs: null,
     apiMs: null,
     path: null,
+    experimentArm: null,
+    moduleShape: null,
   });
   expect(
     await page.evaluate(

@@ -23,6 +23,7 @@ const IN_WASM: &str = "csr_bg.wasm";
 /// The output name the SPA shell (`csr/index.html`) imports.
 const OUT_JS: &str = "jaunder.js";
 const OUT_WASM: &str = "jaunder.wasm";
+const EXPERIMENT_SHAPE_SECTION_NAME: &str = "jaunder.shape";
 
 /// The `wasm-opt` optimisation level, pinned by measurement on the real bundle
 /// (#836) — raw bytes of the shipped `pkg/jaunder.wasm`:
@@ -74,14 +75,37 @@ fn rewrite_wasm_ref(js: &str) -> String {
 /// export. The wrapper surrounds the real delivery path, so its timings retain
 /// streaming versus buffered fallback behavior instead of introducing a second
 /// byte-first path.
-fn append_measured_initializer(js: &str) -> String {
+fn append_measured_initializer(js: &str, experiment_arm: Option<&str>) -> String {
+    let experiment_arm = serde_json::to_string(&experiment_arm).expect("serializes string option");
     format!(
         "{js}\n\
+\n\
+const __jaunderWasmExperimentArm = {experiment_arm};\n\
+const __jaunderWasmModuleShape = (module) => {{\n\
+    if (!(module instanceof WebAssembly.Module)) {{\n\
+        return null;\n\
+    }}\n\
+    const imports = WebAssembly.Module.imports(module);\n\
+    const exports = WebAssembly.Module.exports(module);\n\
+    const countKind = (items, kind) => items.filter((item) => item.kind === kind).length;\n\
+    return {{\n\
+        imports: imports.length,\n\
+        importedFunctions: countKind(imports, \"function\"),\n\
+        importedTables: countKind(imports, \"table\"),\n\
+        importedMemories: countKind(imports, \"memory\"),\n\
+        exports: exports.length,\n\
+        exportedFunctions: countKind(exports, \"function\"),\n\
+        exportedTables: countKind(exports, \"table\"),\n\
+        exportedMemories: countKind(exports, \"memory\"),\n\
+        customSections: WebAssembly.Module.customSections(module, \"jaunder.shape\").length,\n\
+    }};\n\
+}};\n\
 \n\
 export async function initMeasured(moduleOrPath) {{\n\
     performance.mark(\"jaunder.wasm.init_start\");\n\
     let path = null;\n\
     let apiMs = null;\n\
+    let moduleShape = null;\n\
     const originalStreaming = WebAssembly.instantiateStreaming;\n\
     const originalInstantiate = WebAssembly.instantiate;\n\
     const measure = (original, successfulPath) => async function (...args) {{\n\
@@ -89,6 +113,7 @@ export async function initMeasured(moduleOrPath) {{\n\
         const result = await original.apply(this, args);\n\
         path = successfulPath;\n\
         apiMs = performance.now() - startedAt;\n\
+        moduleShape = __jaunderWasmModuleShape(result?.module ?? (result instanceof WebAssembly.Module ? result : null));\n\
         return result;\n\
     }};\n\
     if (typeof originalStreaming === \"function\") {{\n\
@@ -100,7 +125,7 @@ export async function initMeasured(moduleOrPath) {{\n\
     try {{\n\
         const exports = await __wbg_init(moduleOrPath);\n\
         if (path !== null && apiMs !== null) {{\n\
-            performance.mark(\"jaunder.wasm.init_done\", {{ detail: {{ path, apiMs }} }});\n\
+            performance.mark(\"jaunder.wasm.init_done\", {{ detail: {{ path, apiMs, experimentArm: __jaunderWasmExperimentArm, moduleShape }} }});\n\
         }}\n\
         return exports;\n\
     }} finally {{\n\
@@ -127,6 +152,53 @@ fn gzip_compress(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
     let mut e = GzEncoder::new(Vec::new(), Compression::best());
     e.write_all(bytes).context("gzip write")?;
     e.finish().context("gzip finish")
+}
+
+fn encode_u32_leb(mut value: u32, out: &mut Vec<u8>) {
+    loop {
+        let mut byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        out.push(byte);
+        if value == 0 {
+            break;
+        }
+    }
+}
+
+fn custom_section(name: &str, data: &[u8]) -> Vec<u8> {
+    let mut payload = Vec::new();
+    encode_u32_leb(name.len() as u32, &mut payload);
+    payload.extend_from_slice(name.as_bytes());
+    payload.extend_from_slice(data);
+
+    let mut section = vec![0];
+    encode_u32_leb(payload.len() as u32, &mut section);
+    section.extend_from_slice(&payload);
+    section
+}
+
+fn append_shape_sections(wasm: &Path, label: &str, count: u32) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        count > 0,
+        "--wasm-shape-section-count must be greater than zero"
+    );
+    let mut bytes = std::fs::read(wasm).with_context(|| format!("reading {}", wasm.display()))?;
+    anyhow::ensure!(
+        bytes.starts_with(b"\0asm\x01\0\0\0"),
+        "{} is not a wasm module",
+        wasm.display()
+    );
+    for index in 0..count {
+        let payload = format!("{label}:{index}");
+        bytes.extend_from_slice(&custom_section(
+            EXPERIMENT_SHAPE_SECTION_NAME,
+            payload.as_bytes(),
+        ));
+    }
+    std::fs::write(wasm, bytes).with_context(|| format!("writing {}", wasm.display()))
 }
 
 /// The `wasm-opt` argument vector: optimisation level, an explicit enable for
@@ -192,7 +264,13 @@ fn write_precompressed(path: &Path) -> anyhow::Result<()> {
 /// outputs to the `jaunder` names, fix the JS wasm reference, and write
 /// precompressed (`.br`/`.gz`) siblings for the JS/wasm. Byte-identical to the
 /// flake's inline `csrWasmBundle` steps for the raw outputs.
-pub fn run(wasm: &Path, out: &Path) -> anyhow::Result<()> {
+pub fn run(
+    wasm: &Path,
+    out: &Path,
+    experiment_arm: Option<&str>,
+    shape_section: Option<&str>,
+    shape_section_count: u32,
+) -> anyhow::Result<()> {
     std::fs::create_dir_all(out).with_context(|| format!("creating out dir {}", out.display()))?;
 
     let status = Command::new("wasm-bindgen")
@@ -217,13 +295,17 @@ pub fn run(wasm: &Path, out: &Path) -> anyhow::Result<()> {
         .with_context(|| format!("reading {}", js_path.display()))?;
     std::fs::write(
         &js_path,
-        append_measured_initializer(&rewrite_wasm_ref(&js)),
+        append_measured_initializer(&rewrite_wasm_ref(&js), experiment_arm),
     )
     .with_context(|| format!("writing {}", js_path.display()))?;
 
     // Optimise before compressing, so the `.br`/`.gz` siblings describe the bytes
     // that actually ship.
     run_wasm_opt(&out.join(OUT_WASM)).context("optimising jaunder.wasm")?;
+    if let Some(label) = shape_section {
+        append_shape_sections(&out.join(OUT_WASM), label, shape_section_count)
+            .context("adding wasm shape section")?;
+    }
 
     // Precompress the final JS (post wasm-ref rewrite) and the wasm.
     write_precompressed(&js_path).context("precompressing jaunder.js")?;
@@ -259,15 +341,20 @@ mod tests {
 
     #[test]
     fn appends_measured_initializer_after_renaming_wasm_reference() {
-        let js = append_measured_initializer("export { initSync, __wbg_init as default };");
+        let js = append_measured_initializer("export { initSync, __wbg_init as default };", None);
         assert!(
             js.starts_with("export { initSync, __wbg_init as default };"),
             "{js}"
         );
         for expected in [
             "export async function initMeasured(moduleOrPath)",
+            "const __jaunderWasmExperimentArm = null;",
+            "const __jaunderWasmModuleShape = (module)",
+            "WebAssembly.Module.imports(module)",
+            "WebAssembly.Module.exports(module)",
             "performance.mark(\"jaunder.wasm.init_start\")",
-            "performance.mark(\"jaunder.wasm.init_done\", { detail: { path, apiMs } })",
+            "performance.mark(\"jaunder.wasm.init_done\", { detail: { path, apiMs, experimentArm: __jaunderWasmExperimentArm, moduleShape } })",
+            "WebAssembly.Module.customSections(module, \"jaunder.shape\")",
             "WebAssembly.instantiateStreaming",
             "WebAssembly.instantiate",
             "performance.now()",
@@ -372,6 +459,33 @@ mod tests {
                 "reference-types",
                 "sign-ext",
             ]
+        );
+    }
+
+    #[test]
+    fn custom_section_encodes_name_and_payload() {
+        assert_eq!(custom_section("x", b"y"), vec![0, 3, 1, b'x', b'y']);
+    }
+
+    #[test]
+    fn shape_section_appends_to_wasm_module() {
+        let dir = tempfile::tempdir().unwrap();
+        let wasm = dir.path().join("module.wasm");
+        std::fs::write(&wasm, b"\0asm\x01\0\0\0").unwrap();
+        append_shape_sections(&wasm, "arm-shape", 2).unwrap();
+        let bytes = std::fs::read(&wasm).unwrap();
+        assert!(bytes.starts_with(b"\0asm\x01\0\0\0"), "{bytes:?}");
+        assert!(bytes.ends_with(&custom_section(
+            EXPERIMENT_SHAPE_SECTION_NAME,
+            b"arm-shape:1",
+        )));
+        assert_eq!(
+            bytes
+                .windows(custom_section(EXPERIMENT_SHAPE_SECTION_NAME, b"arm-shape:0").len())
+                .filter(|window| *window
+                    == custom_section(EXPERIMENT_SHAPE_SECTION_NAME, b"arm-shape:0"))
+                .count(),
+            1
         );
     }
 
