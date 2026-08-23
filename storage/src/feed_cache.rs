@@ -216,6 +216,18 @@ mod tests {
         }
     }
 
+    #[test]
+    fn timestamp_role_wrappers_preserve_distinct_instants() {
+        let updated_at = Utc::now();
+        let generated_at = updated_at + chrono::Duration::seconds(5);
+
+        assert_eq!(FeedCacheUpdatedAt::from(updated_at).value(), updated_at);
+        assert_eq!(
+            FeedCacheGeneratedAt::from(generated_at).value(),
+            generated_at
+        );
+    }
+
     #[apply(backends)]
     #[tokio::test]
     async fn upsert_then_get_returns_row(#[case] backend: Backend) {
