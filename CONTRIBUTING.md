@@ -459,10 +459,12 @@ job. Running every combo in parallel across runners cuts e2e wall-clock;
 - `elisp-fmt`, `ert`, and `byte-compile` run the elisp subproject's formatter,
   ERT suite, and warnings-as-errors byte-compilation under `emacs --batch` (see
   the Elisp subproject section below).
-- `clippy`, `wasm-clippy`, and `tools-clippy` run through `devtool check <name>`
-  from the host ladder. The commands still execute host-local Cargo with the
-  devshell toolchain and compile-cache environment, while sharing their argument
-  definitions with the Nix `static-checks` derivation.
+- `clippy`, `web-server-clippy`, `wasm-clippy`, and `tools-clippy` run through
+  `devtool check <name>` from the host ladder. The commands still execute
+  host-local Cargo with the devshell toolchain and compile-cache environment,
+  while sharing their argument definitions with the Nix `static-checks`
+  derivation. `web-server-clippy` is the explicit host check for `web`'s
+  `feature = "server"` paths; workspace `--all-features` is not the gate policy.
 - `cargo nextest run` runs the default Rust unit and integration test suite.
 - Whole-test budgets are **ambient** — an auto fixture gives every test a scaled
   `DEFAULT_TEST_BUDGET_MS`, which covers the entire suite (#270). Don't set one
