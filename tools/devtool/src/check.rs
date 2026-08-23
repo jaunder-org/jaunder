@@ -26,6 +26,7 @@ pub const ALL: &[&str] = &[
     "tsc",
     "cargo-deny",
     "clippy",
+    "web-server-clippy",
     "wasm-clippy",
     "tools-clippy",
     "ert",
@@ -234,6 +235,20 @@ fn spec(name: &str, fix: bool) -> Result<CheckSpec> {
         "clippy" => cargo_check(
             CargoWorkspace::Product,
             &["clippy", "--all-targets", "--", "-D", "warnings"],
+        ),
+        "web-server-clippy" => cargo_check(
+            CargoWorkspace::Product,
+            &[
+                "clippy",
+                "-p",
+                "web",
+                "--features",
+                "server",
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings",
+            ],
         ),
         "wasm-clippy" => cargo_check(
             CargoWorkspace::Product,
@@ -542,6 +557,29 @@ mod tests {
         );
         assert!(cmd.env.is_empty());
         assert_eq!(build_host("clippy", true), cmd);
+    }
+
+    #[test]
+    fn web_server_clippy_lints_host_server_feature_paths() {
+        let cmd = build_host("web-server-clippy", false);
+
+        assert_eq!(cmd.program, "cargo");
+        assert_eq!(
+            cmd.args,
+            vec![
+                "clippy",
+                "-p",
+                "web",
+                "--features",
+                "server",
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings",
+            ]
+        );
+        assert!(cmd.env.is_empty());
+        assert_eq!(build_host("web-server-clippy", true), cmd);
     }
 
     #[test]

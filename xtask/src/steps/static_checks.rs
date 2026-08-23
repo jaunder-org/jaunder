@@ -60,6 +60,7 @@ pub fn specs_for_phase(phase: Phase, mode: Mode) -> Vec<StepSpec> {
             devtool_check("tsc", mode),
             devtool_check("cargo-deny", mode),
             devtool_compile_check("clippy", mode),
+            devtool_compile_check("web-server-clippy", mode),
             devtool_compile_check("wasm-clippy", mode),
             devtool_compile_check("tools-clippy", mode),
             cargo_compile_check(
@@ -243,7 +244,13 @@ mod tests {
     fn compiling_project_checks_delegate_to_devtool_with_cacheability() {
         let s = specs(Mode::Check);
 
-        for name in ["cargo-deny", "clippy", "wasm-clippy", "tools-clippy"] {
+        for name in [
+            "cargo-deny",
+            "clippy",
+            "web-server-clippy",
+            "wasm-clippy",
+            "tools-clippy",
+        ] {
             let step = find(&s, name);
             assert_eq!(step.program, "cargo");
             assert_eq!(
@@ -264,6 +271,7 @@ mod tests {
 
         assert!(!find(&s, "cargo-deny").cache_rustc);
         assert!(find(&s, "clippy").cache_rustc);
+        assert!(find(&s, "web-server-clippy").cache_rustc);
         assert!(find(&s, "wasm-clippy").cache_rustc);
         assert!(find(&s, "tools-clippy").cache_rustc);
         assert_eq!(find(&s, "xtask-clippy").program, "cargo");
@@ -283,6 +291,7 @@ mod tests {
             "tsc",
             "cargo-deny",
             "clippy",
+            "web-server-clippy",
             "wasm-clippy",
             "tools-clippy",
             "xtask-clippy",
