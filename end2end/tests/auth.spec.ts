@@ -23,6 +23,9 @@ test("register page shows form", async ({ page }) => {
   await expect(page.locator(SEL.password)).toBeVisible();
 });
 
+// #450 with-chrome proof: the registration form reaches ADR-0065 through
+// `ValidatedInput<T>`, which wraps the same bare-input/error primitives as direct-bind
+// sites while preserving disable-until-valid and touched-gated messages.
 test("register invalid fields do not dispatch", async ({ page }) => {
   let requests = 0;
   page.on("request", (request) => {

@@ -90,17 +90,75 @@ fn Labelled(
                         </span>
                     }
                 })}
-            {move || {
-                touched
-                    .get()
-                    .then(|| error.get())
-                    .flatten()
-                    .map(|msg| {
-                        view! { <span class="error">{msg}</span> }
-                    })
-            }}
+            {validated_error(
+                error,
+                touched,
+                |msg| view! { <span class="error">{msg}</span> }.into_any(),
+            )}
         </label>
     }
+}
+/// A bare `<input>` bound to a [`Field<T>`], for forms whose chrome/layout stays
+/// caller-owned.
+///
+/// This is the ADR-0065 direct-bind seam: callers choose labels, surrounding
+/// markup, error placement, and submit gates; the repeated value/error/touch
+/// wiring lives here.
+#[component]
+pub fn ValidatedBareInput<T>(
+    name: &'static str,
+    field: Field<T>,
+    #[prop(default = "text")] input_type: &'static str,
+    #[prop(optional_no_strip)] id: Option<&'static str>,
+    #[prop(optional_no_strip)] autocomplete: Option<&'static str>,
+    #[prop(optional_no_strip)] class: Option<&'static str>,
+    #[prop(optional_no_strip)] placeholder: Option<&'static str>,
+    #[prop(optional_no_strip)] aria_describedby: Option<String>,
+    /// Live input massaging before validation/display, e.g. `transform=str::to_lowercase`
+    /// for a username. `fn(&str) -> String`; a call site passes the bare fn (leptos wraps the
+    /// optional prop, and the fn-item coerces to the pointer at the known type — an `into`
+    /// on the prop would instead block that coercion).
+    #[prop(optional_no_strip)]
+    transform: Option<fn(&str) -> String>,
+) -> impl IntoView
+where
+    T: FromStr + 'static,
+    T::Err: Display,
+{
+    let on_input = move |ev| {
+        let raw = event_target_value(&ev);
+        let v = match transform {
+            Some(f) => f(&raw),
+            None => raw,
+        };
+        field.set_input(&v);
+    };
+    view! {
+        <input
+            class=class
+            type=input_type
+            id=id
+            name=name
+            autocomplete=autocomplete
+            placeholder=placeholder
+            aria-describedby=aria_describedby
+            prop:value=field.value
+            on:input=on_input
+            on:blur=move |_| field.touch()
+        />
+    }
+}
+
+/// Render a touched-gated validated-field error while leaving the element and
+/// placement to the caller. The validity inputs are erased signals, matching
+/// [`Labelled`]'s ADR-0117 seam rather than taking `Field<T>`.
+pub fn validated_error<E, R>(error: E, touched: Signal<bool>, render: R) -> impl IntoView
+where
+    E: Into<Signal<Option<String>>>,
+    R: Fn(String) -> AnyView + Send + Sync + 'static,
+{
+    let error = error.into();
+    move || touched.get().then(|| error.get()).flatten().map(&render)
 }
 
 /// A labelled input bound to a [`Field<T>`]: validates on input via [`field_error`], and
@@ -136,15 +194,6 @@ where
     T: FromStr + 'static,
     T::Err: Display,
 {
-    let on_input = move |ev| {
-        let raw = event_target_value(&ev);
-        let v = match transform {
-            Some(f) => f(&raw),
-            None => raw,
-        };
-        field.value.set(v.clone());
-        field.error.set(field.error_for(&v));
-    };
     // Only wire `aria-describedby` when a help line is actually rendered (its id must
     // resolve). Derived once here and handed to `Labelled` as `help_id`: the attribute
     // belongs on the control, the span lives in the chrome, and passing the one value
@@ -159,15 +208,14 @@ where
             help=help
             help_id=describedby.clone()
         >
-            <input
-                class=class
-                type=input_type
+            <ValidatedBareInput<T>
                 name=name
+                field=field
+                input_type=input_type
                 autocomplete=autocomplete
-                aria-describedby=describedby
-                prop:value=field.value
-                on:input=on_input
-                on:blur=move |_| field.touch()
+                class=Some(class)
+                aria_describedby=describedby
+                transform=transform
             />
         </Labelled>
     }

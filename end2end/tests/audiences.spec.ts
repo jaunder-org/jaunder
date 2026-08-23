@@ -626,10 +626,11 @@ test("Audiences: refresh pulls a mid-session new subscriber into the checklists"
   await expect(friendsX.locator('button:has-text("Add")')).toBeVisible();
 });
 
-// #350: the audience name is a typed `AudienceName` wire arg with client-side
-// pre-validation (ADR-0065, direct-bind). The create form must gate submit
-// disable-until-valid and show the newtype's own message inline once touched — a valid
-// name never reaches the (malicious-only) decode-time rejection.
+// #350/#450: the audience name is a typed `AudienceName` wire arg with client-side
+// pre-validation (ADR-0065, direct-bind via the shared bare-input/error primitives).
+// The create form must gate submit disable-until-valid and show the newtype's own
+// message inline once touched — a valid name never reaches the (malicious-only)
+// decode-time rejection.
 test("Audiences: create-name client-side validation gates submit", async ({
   page,
 }) => {

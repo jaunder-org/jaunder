@@ -62,19 +62,20 @@ pre-validation using the same newtype `FromStr` — never a re-implemented rule.
   `field.parsed() -> Option<T>`. Because empty is valid, `is_valid()` leaves
   submit **enabled** for a blank optional field while still gating a non-empty
   invalid entry. First adopter: `slug_override` (#408).
-- **Rendering: component or direct bind.** _Amended by #568._ The
+- **Rendering: component or direct bind.** _Amended by #568 and #450._ The
   `<ValidatedInput<T>>` and `<ValidatedTextarea<T>>` components are the default
   renderers for a standard labelled field (and for `ActionForm` name/value
   submission); both share one private `Labelled` chrome. A form with a bespoke
-  layout or a programmatic `.dispatch(...)` may bind the same `Field<T>`
-  **directly** to its own `<input>` — `prop:value=field.value`, an `on:input`
-  that sets `field.error = field.error_for(&v)`, `on:blur` → `field.touch()`,
-  and the touched-gated inline error — keeping the single validation source
-  without the component's fixed markup. The canonical direct-bind example is now
-  the backup destination field (`web/src/backup/component.rs`), which needs a
-  placeholder and bespoke classes the shared components cannot yet express
-  (#450); the post compose/edit forms, which this bullet previously cited, moved
-  onto the shared components in #568.
+  layout or a programmatic `.dispatch(...)` may still bind the same `Field<T>`
+  in caller-owned chrome, but the repeated input wiring is no longer
+  hand-written at every site: the bare input primitive owns
+  `prop:value=field.value`, the `on:input` update through `Field::set_input`,
+  and `on:blur` → `field.touch()`, while the error primitive owns the
+  touched-gated inline error. That keeps the single validation source without
+  the fixed labelled markup. The backup destination field
+  (`web/src/backup/component.rs`) remains a direct-bind adopter because it needs
+  its backup-specific label/error placement and classes, but its placeholder and
+  input classes are now ordinary props on the bare input primitive.
 - **Defense-in-depth.** The typed-arg `Deserialize` still validates server-side;
   because legitimate clients pre-validate, the generic-`ServerFunction`-error
   path is only reachable by a malformed/malicious request.
@@ -115,8 +116,8 @@ pre-validation using the same newtype `FromStr` — never a re-implemented rule.
 - `Field::parsed()` exposes the already-parsed value as a seam toward shipping
   request-aggregate domain types across the boundary (#417) — a larger, separate
   bet.
-- A boilerplate-reducing macro over `Field`/`ValidatedInput` is a sanctioned
-  future ergonomic addition (no redesign required).
+- Boilerplate-reducing wiring primitives over `Field`/`ValidatedInput` are the
+  sanctioned ergonomic addition (#450); no macro or redesign is required.
 - Typing a `#[server]` arg moves that value's validation into arg-**decode**: a
   malformed value (only reachable by a non-browser client, since the disabled
   button gates the browser) now fails _before_ the fn body, surfacing as a

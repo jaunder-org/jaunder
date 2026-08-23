@@ -1,6 +1,6 @@
 use crate::backup::{UpdateSettings, get_settings, is_warning_visible};
 use crate::error::WebError;
-use crate::forms::{Field, ValidatedInput};
+use crate::forms::{Field, ValidatedBareInput, ValidatedInput, validated_error};
 use crate::topbar::Topbar;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, DestinationPath, RetentionCount};
 use leptos::prelude::*;
@@ -44,34 +44,25 @@ pub fn BackupSettingsPage() -> impl IntoView {
     }
 }
 
-/// The destination path is optional and clearable, so it is a direct-bind `Field` (not a
-/// `ValidatedInput`) — that keeps the placeholder and bespoke classes the shared component
-/// can't yet express (#450). Extracted so `backup_settings_form` stays within the line budget.
+/// The destination path is optional and clearable, so it stays direct-bind while sharing
+/// the standard ADR-0065 value/error/touch wiring. Extracted so `backup_settings_form`
+/// stays within the line budget.
 fn backup_destination_field(destination: Field<DestinationPath>) -> impl IntoView {
     view! {
         <label class="j-backup-field j-backup-field-wide">
             <span class="j-edit-form-label">"Destination Path"</span>
-            <input
-                class="j-backup-input"
-                type="text"
+            <ValidatedBareInput<DestinationPath>
                 name="destination_path"
-                placeholder="/srv/jaunder/backups"
-                prop:value=destination.value
-                on:input=move |ev| {
-                    let v = event_target_value(&ev);
-                    destination.value.set(v.clone());
-                    destination.error.set(destination.error_for(&v));
-                }
-                on:blur=move |_| destination.touch()
+                field=destination
+                placeholder=Some("/srv/jaunder/backups")
+                class=Some("j-backup-input")
             />
         </label>
-        {move || {
-            destination
-                .is_touched()
-                .then(|| destination.error.get())
-                .flatten()
-                .map(|msg| view! { <p class="error">{msg}</p> })
-        }}
+        {validated_error(
+            destination.error,
+            Signal::derive(move || destination.is_touched()),
+            |msg| view! { <p class="error">{msg}</p> }.into_any(),
+        )}
     }
 }
 
