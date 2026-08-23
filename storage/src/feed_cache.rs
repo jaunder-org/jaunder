@@ -9,24 +9,7 @@ use sqlx::{Database, Pool};
 use thiserror::Error;
 
 use crate::backend::Backend;
-
-macro_rules! impl_role_instant {
-    ($name:ident) => {
-        impl $name {
-            /// The wrapped UTC instant.
-            #[must_use]
-            fn value(self) -> DateTime<Utc> {
-                self.0
-            }
-        }
-
-        impl From<DateTime<Utc>> for $name {
-            fn from(instant: DateTime<Utc>) -> Self {
-                Self(instant)
-            }
-        }
-    };
-}
+use crate::role_instant::impl_role_instant;
 
 /// The `feed_cache.updated_at` storage timestamp role, distinct from
 /// `generated_at` so mappings cannot transpose silently (#751).

@@ -5,6 +5,7 @@ use std::io;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
+use crate::role_instant::impl_role_instant;
 use crate::{
     InviteRecord, MediaRecord, PostFormat, PostRecord, PostTag, RenderedHtml, SessionRecord,
     UserRecord,
@@ -25,24 +26,6 @@ use common::tagged_url::MediaSourceUrl;
 use common::token::TokenHash;
 use common::username::Username;
 use host::invite::InviteCode;
-
-macro_rules! impl_role_instant {
-    ($name:ident) => {
-        impl $name {
-            /// The wrapped UTC instant.
-            #[must_use]
-            fn value(self) -> DateTime<Utc> {
-                self.0
-            }
-        }
-
-        impl From<DateTime<Utc>> for $name {
-            fn from(instant: DateTime<Utc>) -> Self {
-                Self(instant)
-            }
-        }
-    };
-}
 
 /// The `sessions.created_at` storage timestamp role, distinct from
 /// `last_used_at` so mappings cannot transpose silently (#751).
