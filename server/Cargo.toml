@@ -25,7 +25,6 @@ host = { workspace = true }
 storage.workspace = true
 web = { path = "../web", default-features = false, features = ["server"] }
 leptos = { workspace = true }
-leptos_axum.workspace = true
 
 anyhow.workspace = true
 argon2.workspace = true
@@ -34,6 +33,7 @@ rand.workspace = true
 rpassword.workspace = true
 sha2.workspace = true
 axum.workspace = true
+server_fn = { workspace = true, features = ["axum-no-default"] }
 clap.workspace = true
 tokio.workspace = true
 tower.workspace = true
@@ -78,7 +78,6 @@ maik = "0.2.0"
 nix = { version = "0.29", features = ["signal"] }
 rstest = { workspace = true }
 rstest_reuse = { workspace = true }
-server_fn = { version = "0.8", features = ["axum-no-default"] }
 serde_qs = "0.15"
 tempfile.workspace = true
 tower = { workspace = true }

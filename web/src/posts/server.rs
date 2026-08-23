@@ -1,9 +1,9 @@
 use crate::error::{ErrorClass, ErrorKind, InternalError, WebError};
+use crate::server_fn_adapter::ResponseOptions;
 use common::ids::UserId;
 use common::seed::{AuthoredPost, RenderedPost, TagSummary};
 use common::time::UtcInstant;
 use leptos::context::use_context;
-use leptos_axum::ResponseOptions;
 use storage::{PostRecord, PostTag};
 
 /// Build the listing row for a **published** post. `RenderedPost::published_at` is

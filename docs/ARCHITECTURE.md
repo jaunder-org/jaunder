@@ -166,12 +166,11 @@ codebase now pins reactive-owner lifetime for this: `server_boundary`
 the body and maps `InternalError → WebError`. The owner-pinning machinery was
 dismantled in two steps: `server_resource` went in #515, then
 `owner_ancestry_strong` and the `owner_lifetime` tests in #594. Dropping
-component SSR left only one server-fn invocation path —
-`leptos_axum::handle_server_fns_with_context` on `POST /api/…`, which holds a
-parentless root owner strong for the whole future by itself. The ADR-0016
-#89/#124/#138 addenda that described that pinning are explicitly marked
-superseded-and-historical inside the ADR
-([ADR-0016](adr/0016-dependency-injection-and-appstate.md)).
+component SSR left only one server-fn invocation path — Jaunder's
+`server_fn::axum` adapter on `POST /api/…`, which holds a parentless root owner
+strong for the whole future by itself. The ADR-0016 #89/#124/#138 addenda that
+described that pinning are explicitly marked superseded-and-historical inside
+the ADR ([ADR-0016](adr/0016-dependency-injection-and-appstate.md)).
 
 Operations that must span multiple traits atomically (`create_user_with_invite`,
 `confirm_password_reset`) live on the `AtomicOps` trait
@@ -936,9 +935,8 @@ The web UI is Leptos ([ADR-0002](adr/0002-frontend-framework.md)), rendered
 no hydration, a UI-free server — no reactive page render in the request path,
 which structurally eliminates the concurrent-SSR disposal class; server
 rendering a reactive component to string is the prohibited trap door back. The
-`web` crate does not enable `leptos/ssr`; the feature reaches the build only
-because `leptos_axum` requires it (`web/Cargo.toml:53-64`), and shedding that
-stack is tracked, not done.
+`web` crate does not enable `leptos/ssr`, and the server-function bridge is a
+Jaunder-owned `server_fn::axum` adapter rather than a Leptos rendering adapter.
 
 Mounted CSR journey ownership lives in
 [`docs/flows/README.md`](flows/README.md): it owns the only route graph. The
@@ -1088,13 +1086,12 @@ Server fns get their dependencies via per-trait Leptos context, never a bundle �
 `web/src/audiences/api.rs:66`. The macro also wraps each body in
 `crate::error::server_boundary` (`macros/src/server_fn.rs:166`); there is no
 hand-written `boundary!` call. ADR-0016's SSR-era owner-pinning addenda have
-been retired: the sole server-fn invocation path, `leptos_axum`'s `/api`
-handler, holds the owner strong for the whole call, so no `ScopedFuture` wrapper
-and no sanctioned `Resource` constructor exist — components call `Resource::new`
-directly (13 files across `web/src`), and no clippy `disallowed-methods` entry
-bans it — `clippy.toml` has no `disallowed-methods` entry at all; it only
-_relaxes_ `unwrap`/`expect` for tests, which the workspace otherwise denies
-(`Cargo.toml:141`).
+been retired: the sole server-fn invocation path, Jaunder's `server_fn::axum`
+adapter, holds the owner strong for the whole call, so no sanctioned `Resource`
+constructor exists — components call `Resource::new` directly (13 files across
+`web/src`), and no clippy `disallowed-methods` entry bans it — `clippy.toml` has
+no `disallowed-methods` entry at all; it only _relaxes_ `unwrap`/`expect` for
+tests, which the workspace otherwise denies (`Cargo.toml:141`).
 
 `web/` is a **thin shell**
 ([ADR-0059](adr/0059-thin-web-shell-error-layering.md)): it keeps only the

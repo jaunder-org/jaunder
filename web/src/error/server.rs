@@ -88,9 +88,9 @@ pub(crate) fn project(kind: ErrorKind, public_message: &str) -> WebError {
 /// Awaits the given future, converting any `InternalError` to its public
 /// `WebError` form. This is a thin error-projection boundary: it owns no leptos
 /// reactive-owner lifetime concerns. (No owner-pinning against context loss across
-/// an `.await` is needed — the sole server-fn invocation path, `leptos_axum`'s
-/// `/api` handler, holds the owner strong for the whole future itself; see the
-/// ADR-0016 retirement addendum, #594.)
+/// an `.await` is needed — Jaunder's `/api` server-fn adapter holds the owner
+/// strong for the whole future itself; see the ADR-0016 retirement addendum,
+/// #594.)
 ///
 /// # Errors
 ///

@@ -41,7 +41,6 @@ leptos = { version = "0.8.2" }
 leptos_dom = { version = "0.8.2" }
 leptos_meta = { version = "0.8.2" }
 leptos_router = { version = "0.8.2" }
-leptos_axum = { version = "0.8.2" }
 reactive_stores = { version = "0.4.3" }
 # Version-matched to leptos 0.8.2's transitive `server_fn` (Cargo.lock) so the
 # `multipart` codec reuses the existing vendor rather than pulling a second copy.

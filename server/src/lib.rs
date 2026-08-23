@@ -12,6 +12,7 @@ pub mod metrics;
 pub mod observability;
 pub mod projector;
 pub mod runtime_file;
+mod server_fns;
 pub mod site;
 mod soft_path;
 pub mod websub;
@@ -90,7 +91,7 @@ pub fn create_router(
             axum::routing::post(move |req: axum::extract::Request| {
                 let state = server_fn_state.clone();
                 let mailer = server_fn_mailer.clone();
-                leptos_axum::handle_server_fns_with_context(
+                crate::server_fns::handle_server_fns_with_context(
                     move || {
                         crate::context::provide_app_state_contexts(&state);
                         crate::context::provide_mailer_context(&mailer);

@@ -19,6 +19,7 @@ use common::username::Username;
 #[cfg(feature = "server")]
 use {
     super::server::{clear_session_cookie, optional_auth, set_session_cookie},
+    crate::server_fn_adapter::{extract, redirect},
     common::password::Password,
     leptos::prelude::*,
     std::sync::Arc,
@@ -102,7 +103,7 @@ pub async fn login(request: LoginRequest) -> WebResult<LoginResponse> {
         // MAX_SESSION_LABEL_CHARS, and supplies its own fallback label when there is
         // no usable header. Both the cap and the default live in `SessionLabel` —
         // never duplicated here, not even as a comment that could go stale.
-        let ua = leptos_axum::extract::<axum::http::HeaderMap>()
+        let ua = extract::<axum::http::HeaderMap>()
             .await
             .ok()
             .and_then(|headers| {
@@ -121,7 +122,7 @@ pub async fn login(request: LoginRequest) -> WebResult<LoginResponse> {
         .await?;
 
     set_session_cookie(&raw_token);
-    leptos_axum::redirect("/");
+    redirect("/");
     // The session travels only in the HttpOnly cookie set above (#533) — `raw_token`
     // is never returned, so the body carries just the marker seed. `record` is the
     // authenticated `UserRecord`, which already has `is_operator` — no extra query.
@@ -140,7 +141,7 @@ pub async fn logout() -> WebResult<()> {
         sessions.revoke_session(&auth.token_hash).await?;
     }
     clear_session_cookie();
-    leptos_axum::redirect("/");
+    redirect("/");
     Ok(())
 }
 

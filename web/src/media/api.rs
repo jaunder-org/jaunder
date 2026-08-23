@@ -21,11 +21,11 @@ use common::media::UploadResponse;
 use {
     crate::auth::require_auth,
     crate::error::{ErrorClass, ErrorKind, InternalError},
+    crate::server_fn_adapter::extract,
     common::media::MediaRef,
     // Server-only: the delete guard's key. The CSR build never runs a query.
     leptos::prelude::*,
     leptos::server_fn::error::ServerFnErrorErr,
-    leptos_axum::extract,
     std::path::PathBuf,
     std::sync::Arc,
     storage::{

@@ -32,6 +32,7 @@ pub struct RegistrationRequest {
 use {
     crate::auth::set_session_cookie,
     crate::error::InternalError,
+    crate::server_fn_adapter::redirect,
     common::ids::UserId,
     common::password::Password,
     common::session_label::SessionLabel,
@@ -155,7 +156,7 @@ pub async fn register(request: RegistrationRequest) -> WebResult<()> {
         .await?;
 
     set_session_cookie(&raw_token);
-    leptos_axum::redirect("/");
+    redirect("/");
     // Session establishment is cookie-only (#533) — nothing to return.
     Ok(())
 }

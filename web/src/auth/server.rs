@@ -277,12 +277,12 @@ fn verify_basic_username(
 }
 
 // ---------------------------------------------------------------------------
-// Cookie helpers (leptos/axum adapters over host's pure header builders)
+// Cookie helpers (server-fn adapter response-header writers over host's pure header builders)
 // ---------------------------------------------------------------------------
 
 pub fn set_session_cookie(raw_token: &RawToken) {
+    use crate::server_fn_adapter::ResponseOptions;
     use leptos::context::use_context;
-    use leptos_axum::ResponseOptions;
 
     let secure = use_context::<CookieSettings>().is_none_or(|settings| settings.secure);
 
@@ -295,8 +295,8 @@ pub fn set_session_cookie(raw_token: &RawToken) {
 }
 
 pub fn clear_session_cookie() {
+    use crate::server_fn_adapter::ResponseOptions;
     use leptos::context::use_context;
-    use leptos_axum::ResponseOptions;
 
     let secure = use_context::<CookieSettings>().is_none_or(|settings| settings.secure);
 
