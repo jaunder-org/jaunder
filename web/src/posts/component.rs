@@ -1362,6 +1362,40 @@ fn EditSaveActions(
     }
 }
 
+/// Draft-only slug override control shared by the full composer and editor.
+///
+/// The control is deliberately slug-specific: ADR-0065's generic labelled
+/// components remain the default for ordinary fields, while this options-aside row
+/// keeps its bespoke grid layout and direct `Field<Slug>` binding.
+#[component]
+fn SlugOverrideInput(slug_field: Field<Slug>) -> impl IntoView {
+    view! {
+        <label class="j-field-row" style="grid-template-columns:auto 1fr">
+            <span class="j-field-label">"Slug"</span>
+            <input
+                type="text"
+                name="slug_override"
+                placeholder="auto"
+                class="j-field-val"
+                prop:value=slug_field.value
+                on:input=move |ev| {
+                    let v = event_target_value(&ev);
+                    slug_field.value.set(v.clone());
+                    slug_field.error.set(slug_field.error_for(&v));
+                }
+                on:blur=move |_| slug_field.touch()
+            />
+            {move || {
+                slug_field
+                    .is_touched()
+                    .then(|| slug_field.error.get())
+                    .flatten()
+                    .map(|msg| view! { <span class="error">{msg}</span> })
+            }}
+        </label>
+    }
+}
+
 /// The options aside shared by the full-page composer and editor.
 ///
 /// The immutable loaded publication state owns which controls exist: drafts show
@@ -1387,29 +1421,7 @@ fn ComposeOptions(
             {match publication {
                 LoadedPublication::Draft => {
                     view! {
-                        <label class="j-field-row" style="grid-template-columns:auto 1fr">
-                            <span class="j-field-label">"Slug"</span>
-                            <input
-                                type="text"
-                                name="slug_override"
-                                placeholder="auto"
-                                class="j-field-val"
-                                prop:value=slug_field.value
-                                on:input=move |ev| {
-                                    let v = event_target_value(&ev);
-                                    slug_field.value.set(v.clone());
-                                    slug_field.error.set(slug_field.error_for(&v));
-                                }
-                                on:blur=move |_| slug_field.touch()
-                            />
-                            {move || {
-                                slug_field
-                                    .is_touched()
-                                    .then(|| slug_field.error.get())
-                                    .flatten()
-                                    .map(|msg| view! { <span class="error">{msg}</span> })
-                            }}
-                        </label>
+                        <SlugOverrideInput slug_field=slug_field />
                         <ScheduleControl state=state scheduled=None schedule_error=schedule_error />
                     }
                         .into_any()
