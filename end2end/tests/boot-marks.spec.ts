@@ -11,6 +11,7 @@ import {
   wasmInitFromMarks,
   type DocumentTiming,
 } from "./capture-trace";
+import { navigationBridgeFieldsFrom } from "./fixtures";
 import { goto } from "./helpers";
 
 const wasm = {
@@ -31,48 +32,114 @@ const marks = (count: number) =>
 // blended one. Copying would be a silent behavior change, so identity is the contract.
 test.describe("mergeDocumentTiming", () => {
   test("takes the incoming snapshot when there is no existing one", () => {
-    const incoming: DocumentTiming = { marks: marks(4), wasm };
+    const incoming: DocumentTiming = {
+      timeOriginMs: 10,
+      marks: marks(4),
+      wasm,
+    };
     expect(mergeDocumentTiming(undefined, incoming)).toBe(incoming);
   });
 
   test("prefers the snapshot with more marks when it arrives second", () => {
     // The firefox ordering: `load` harvests an empty document first, mount-ready
     // harvests the full one after.
-    const existing: DocumentTiming = { marks: [], wasm: null };
-    const incoming: DocumentTiming = { marks: marks(4), wasm };
+    const existing: DocumentTiming = {
+      timeOriginMs: 10,
+      marks: [],
+      wasm: null,
+    };
+    const incoming: DocumentTiming = {
+      timeOriginMs: 10,
+      marks: marks(4),
+      wasm,
+    };
     expect(mergeDocumentTiming(existing, incoming)).toBe(incoming);
   });
 
   test("prefers the snapshot with more marks when it arrived first", () => {
     // The clobber this rule exists to prevent: a late-resolving `load` harvest must
     // not overwrite a complete mount-ready one.
-    const existing: DocumentTiming = { marks: marks(4), wasm };
-    const incoming: DocumentTiming = { marks: [], wasm: null };
+    const existing: DocumentTiming = {
+      timeOriginMs: 10,
+      marks: marks(4),
+      wasm,
+    };
+    const incoming: DocumentTiming = {
+      timeOriginMs: 10,
+      marks: [],
+      wasm: null,
+    };
     expect(mergeDocumentTiming(existing, incoming)).toBe(existing);
   });
 
   test("breaks a mark-count tie toward the incoming snapshot's wasm timing", () => {
-    const existing: DocumentTiming = { marks: marks(4), wasm: null };
-    const incoming: DocumentTiming = { marks: marks(4), wasm };
+    const existing: DocumentTiming = {
+      timeOriginMs: 10,
+      marks: marks(4),
+      wasm: null,
+    };
+    const incoming: DocumentTiming = {
+      timeOriginMs: 10,
+      marks: marks(4),
+      wasm,
+    };
     expect(mergeDocumentTiming(existing, incoming)).toBe(incoming);
   });
 
   test("keeps the existing snapshot's wasm timing on a tie", () => {
-    const existing: DocumentTiming = { marks: marks(4), wasm };
-    const incoming: DocumentTiming = { marks: marks(4), wasm: null };
+    const existing: DocumentTiming = {
+      timeOriginMs: 10,
+      marks: marks(4),
+      wasm,
+    };
+    const incoming: DocumentTiming = {
+      timeOriginMs: 10,
+      marks: marks(4),
+      wasm: null,
+    };
     expect(mergeDocumentTiming(existing, incoming)).toBe(existing);
   });
 
   test("keeps the existing snapshot when a tie gives neither side more", () => {
-    const existing: DocumentTiming = { marks: marks(4), wasm };
-    const incoming: DocumentTiming = { marks: marks(4), wasm };
+    const existing: DocumentTiming = {
+      timeOriginMs: 10,
+      marks: marks(4),
+      wasm,
+    };
+    const incoming: DocumentTiming = {
+      timeOriginMs: 10,
+      marks: marks(4),
+      wasm,
+    };
     expect(mergeDocumentTiming(existing, incoming)).toBe(existing);
+  });
+
+  test("keeps the selected snapshot but fills a missing document epoch", () => {
+    const existing: DocumentTiming = {
+      timeOriginMs: null,
+      marks: marks(4),
+      wasm,
+    };
+    const incoming: DocumentTiming = {
+      timeOriginMs: 25,
+      marks: marks(4),
+      wasm: null,
+    };
+    expect(mergeDocumentTiming(existing, incoming)).toEqual({
+      ...existing,
+      timeOriginMs: 25,
+    });
   });
 });
 
 test("keeps a completion harvest that arrives after the fullest boot marks", () => {
-  const bootSnapshot: DocumentTiming = { marks: marks(4), wasm };
+  const bootSnapshot: DocumentTiming = {
+    timeOriginMs: 10,
+    marks: marks(4),
+    wasm,
+  };
   const completionSnapshot: DocumentTiming = {
+    timeOriginMs: 10,
     marks: marks(4),
     wasm,
     wasmInit: {
@@ -172,6 +239,94 @@ test("rejects malformed initializer completion detail", () => {
   });
 });
 
+test.describe("navigationBridgeFieldsFrom", () => {
+  const timingWithMountDone: DocumentTiming = {
+    timeOriginMs: 1_000,
+    marks: [
+      { name: "jaunder.boot.entry", startTime: 5 },
+      { name: "jaunder.boot.mount_done", startTime: 40 },
+    ],
+    wasm: null,
+  };
+
+  test("reports complete bridge diagnostics when all inputs exist", () => {
+    expect(
+      navigationBridgeFieldsFrom(
+        { committedMs: 900, mountedMs: 1_060 },
+        timingWithMountDone,
+      ),
+    ).toEqual({
+      frameSkewSchema: "bridge-v1",
+      documentTimeOriginMs: 1_000,
+      documentBootTotalMs: 40,
+      commitToDocumentStartMs: 100,
+      mountDoneToBindingMs: 20,
+      frameSkewRemainderMs: 0,
+    });
+  });
+
+  test("returns all-null bridge diagnostics when any required input is missing", () => {
+    expect(
+      navigationBridgeFieldsFrom(
+        { committedMs: null, mountedMs: 1_060 },
+        timingWithMountDone,
+      ),
+    ).toEqual({
+      frameSkewSchema: null,
+      documentTimeOriginMs: null,
+      documentBootTotalMs: null,
+      commitToDocumentStartMs: null,
+      mountDoneToBindingMs: null,
+      frameSkewRemainderMs: null,
+    });
+    expect(
+      navigationBridgeFieldsFrom(
+        { committedMs: 900, mountedMs: 1_060 },
+        { ...timingWithMountDone, marks: [] },
+      ),
+    ).toEqual({
+      frameSkewSchema: null,
+      documentTimeOriginMs: null,
+      documentBootTotalMs: null,
+      commitToDocumentStartMs: null,
+      mountDoneToBindingMs: null,
+      frameSkewRemainderMs: null,
+    });
+  });
+
+  test("returns all-null bridge diagnostics when timing inputs are malformed", () => {
+    expect(
+      navigationBridgeFieldsFrom(
+        { committedMs: 900, mountedMs: 1_060 },
+        { ...timingWithMountDone, timeOriginMs: Number.NaN },
+      ),
+    ).toEqual({
+      frameSkewSchema: null,
+      documentTimeOriginMs: null,
+      documentBootTotalMs: null,
+      commitToDocumentStartMs: null,
+      mountDoneToBindingMs: null,
+      frameSkewRemainderMs: null,
+    });
+    expect(
+      navigationBridgeFieldsFrom(
+        { committedMs: 900, mountedMs: 1_060 },
+        {
+          ...timingWithMountDone,
+          marks: [{ name: "jaunder.boot.mount_done", startTime: Number.NaN }],
+        },
+      ),
+    ).toEqual({
+      frameSkewSchema: null,
+      documentTimeOriginMs: null,
+      documentBootTotalMs: null,
+      commitToDocumentStartMs: null,
+      mountDoneToBindingMs: null,
+      frameSkewRemainderMs: null,
+    });
+  });
+});
+
 // The regression guard for #818's actual defect. Unthresholded on purpose: it
 // asserts the mechanism works at all, which needs no knowledge of the coverage
 // distribution and so can ship before the distribution exists. Gradual erosion is
@@ -223,6 +378,8 @@ test("boot fetches the wasm once and the harness captures the full mark set", as
     timing,
     "no document timing was harvested for the mounted navigation",
   ).toBeDefined();
+
+  expect(timing?.timeOriginMs).toEqual(expect.any(Number));
 
   // Assert the SHAPE, never the names: mark names live only in Rust and are
   // discovered by prefix, so enumerating them here would reintroduce exactly the
