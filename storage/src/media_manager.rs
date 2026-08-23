@@ -17,11 +17,11 @@ use tokio::io::AsyncWriteExt;
 
 use common::ids::UserId;
 use common::media::{
-    ByteSize, ContentHash, ContentType, Filename, MaxFileSize, MediaSource, UploadResponse,
-    UserQuota, detect_content_type, media_path, media_url,
+    ByteSize, ContentHash, ContentType, Filename, MaxFileSize, MediaRef, MediaSource,
+    UploadResponse, UserQuota, detect_content_type, media_path, media_url,
 };
 
-use crate::{CreateMediaError, MediaRecord, MediaStorage, SiteConfigStorage};
+use crate::{CreateMediaError, MediaRecord, MediaStorage, SiteConfigStorage, TryDeleteOutcome};
 
 /// A media upload failure with a bounded, client-mappable classification. `pub`
 /// so the HTTP boundary in `server` can `downcast_ref` it to a `StatusCode`
@@ -410,6 +410,59 @@ impl MediaManager {
             .await
     }
 
+    /// Deletes a media row and reclaims the on-disk entry when no remaining row or
+    /// live Post names the same canonical media address.
+    ///
+    /// # Errors
+    ///
+    /// Returns storage errors from the row decision or reclamation check, and I/O
+    /// errors from removing a reclaimable file.
+    pub async fn delete_media(
+        &self,
+        user_id: UserId,
+        media: &MediaRef,
+        force: bool,
+    ) -> anyhow::Result<TryDeleteOutcome> {
+        let outcome = self.media.try_delete_media(user_id, media, force).await?;
+        if outcome == TryDeleteOutcome::Deleted {
+            Self::reclaim_deleted_media_file(
+                self.media.as_ref(),
+                self.storage_path.as_ref(),
+                media,
+            )
+            .await?;
+        }
+        Ok(outcome)
+    }
+
+    /// Reclaims the file for an already-deleted media row when the canonical entry is
+    /// no longer named by any remaining row or live Post.
+    ///
+    /// # Errors
+    ///
+    /// Returns storage errors from the reclaimability query and I/O errors from
+    /// removing a reclaimable file.
+    pub async fn reclaim_deleted_media_file(
+        media_storage: &dyn MediaStorage,
+        storage_path: &Path,
+        media: &MediaRef,
+    ) -> anyhow::Result<()> {
+        if !media_storage.media_entry_is_reclaimable(media).await? {
+            return Ok(());
+        }
+
+        let file_path = storage_path.join("media").join(media_path(
+            &media.source,
+            &media.sha256,
+            &media.filename,
+        ));
+        match fs::remove_file(&file_path).await {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(MediaError::Internal(Box::new(error)).into()),
+        }
+    }
+
     async fn stream_to_temp<S, E>(
         &self,
         mut stream: S,
@@ -474,9 +527,12 @@ impl MediaManager {
 mod tests {
     use super::*;
     use crate::SiteConfigKey;
-    use crate::test_support::{Backend, SeedUser, backends};
+    use crate::test_support::{
+        Backend, SeedUser, backends, create_post_via_service, media_row_exists,
+    };
+    use common::media::MediaRef;
     use common::test_support::{
-        parse_byte_size, parse_content_hash, parse_content_type, parse_filename,
+        parse_byte_size, parse_content_hash, parse_content_type, parse_filename, parse_post_body,
     };
     use rstest::*;
     use rstest_reuse::*;
@@ -491,6 +547,19 @@ mod tests {
             Arc::new(crate::MockSiteConfigStorage::new()),
             storage_path,
         )
+    }
+
+    fn upload_ref(response: &UploadResponse) -> MediaRef {
+        MediaRef {
+            source: MediaSource::Upload,
+            sha256: response.sha256.clone(),
+            filename: response.filename.clone(),
+        }
+    }
+
+    fn stored_path(root: &Path, media: &MediaRef) -> PathBuf {
+        root.join("media")
+            .join(media_path(&media.source, &media.sha256, &media.filename))
     }
 
     #[test]
@@ -899,5 +968,219 @@ mod tests {
             resp.url,
             media_url(&MediaSource::Upload, &expected, &filename)
         );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn delete_media_reclaims_unreferenced_file_and_quota(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let manager = MediaManager::new(
+            env.state.media.clone(),
+            env.state.site_config.clone(),
+            Arc::new(env.base.path().to_path_buf()),
+        );
+
+        let uploaded = manager
+            .upload_bytes(
+                user_id,
+                &parse_filename("photo.jpg"),
+                "image/jpeg".parse().unwrap(),
+                b"jpeg-ish",
+            )
+            .await
+            .unwrap();
+        let media = upload_ref(&uploaded);
+        let file_path = stored_path(env.base.path(), &media);
+        assert!(file_path.exists(), "upload stores the file before deletion");
+
+        assert_eq!(
+            manager.delete_media(user_id, &media, false).await.unwrap(),
+            TryDeleteOutcome::Deleted
+        );
+
+        assert!(!media_row_exists(&env.state, user_id, &media).await);
+        assert_eq!(
+            env.state
+                .media
+                .get_user_upload_usage(user_id)
+                .await
+                .unwrap(),
+            parse_byte_size("0")
+        );
+        assert!(!file_path.exists(), "unreferenced delete reclaims the path");
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn delete_media_surfaces_unexpected_file_reclaim_error(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let manager = MediaManager::new(
+            env.state.media.clone(),
+            env.state.site_config.clone(),
+            Arc::new(env.base.path().to_path_buf()),
+        );
+
+        let uploaded = manager
+            .upload_bytes(
+                user_id,
+                &parse_filename("blocked.jpg"),
+                "image/jpeg".parse().unwrap(),
+                b"jpeg-ish",
+            )
+            .await
+            .unwrap();
+        let media = upload_ref(&uploaded);
+        let file_path = stored_path(env.base.path(), &media);
+        std::fs::remove_file(&file_path).unwrap();
+        std::fs::create_dir(&file_path).unwrap();
+
+        let error = manager
+            .delete_media(user_id, &media, false)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error.downcast_ref::<MediaError>(),
+            Some(MediaError::Internal(_))
+        ));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn delete_media_force_refuses_rowless_referenced_file(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let manager = MediaManager::new(
+            env.state.media.clone(),
+            env.state.site_config.clone(),
+            Arc::new(env.base.path().to_path_buf()),
+        );
+
+        let uploaded = manager
+            .upload_bytes(
+                user_id,
+                &parse_filename("photo.jpg"),
+                "image/jpeg".parse().unwrap(),
+                b"jpeg-ish",
+            )
+            .await
+            .unwrap();
+        let media = upload_ref(&uploaded);
+        let file_path = stored_path(env.base.path(), &media);
+        create_post_via_service(
+            &env.state,
+            user_id,
+            parse_post_body(&format!("<img src=\"{}\">", uploaded.url)),
+        )
+        .await;
+
+        assert_eq!(
+            manager.delete_media(user_id, &media, true).await.unwrap(),
+            TryDeleteOutcome::RefusedReferenced
+        );
+        assert!(media_row_exists(&env.state, user_id, &media).await);
+        assert!(file_path.exists(), "refused delete leaves referenced bytes");
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn delete_media_keeps_shared_path_until_last_row_is_deleted(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let first_user = SeedUser::new().seed(&env.state).await.user_id;
+        let second_user = SeedUser::new().seed(&env.state).await.user_id;
+        let manager = MediaManager::new(
+            env.state.media.clone(),
+            env.state.site_config.clone(),
+            Arc::new(env.base.path().to_path_buf()),
+        );
+
+        let first = manager
+            .upload_bytes(
+                first_user,
+                &parse_filename("photo.jpg"),
+                "image/jpeg".parse().unwrap(),
+                b"jpeg-ish",
+            )
+            .await
+            .unwrap();
+        let second = manager
+            .upload_bytes(
+                second_user,
+                &parse_filename("photo.jpg"),
+                "image/jpeg".parse().unwrap(),
+                b"jpeg-ish",
+            )
+            .await
+            .unwrap();
+        let media = upload_ref(&first);
+        let file_path = stored_path(env.base.path(), &media);
+        assert_eq!(upload_ref(&second), media);
+
+        manager
+            .delete_media(first_user, &media, false)
+            .await
+            .unwrap();
+
+        assert!(!media_row_exists(&env.state, first_user, &media).await);
+        assert!(media_row_exists(&env.state, second_user, &media).await);
+        assert!(file_path.exists(), "remaining media row retains the file");
+
+        manager
+            .delete_media(second_user, &media, false)
+            .await
+            .unwrap();
+
+        assert!(!file_path.exists(), "last row deletion reclaims the file");
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn delete_media_reclaims_one_hard_link_without_removing_another_filename(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let manager = MediaManager::new(
+            env.state.media.clone(),
+            env.state.site_config.clone(),
+            Arc::new(env.base.path().to_path_buf()),
+        );
+
+        let first = manager
+            .upload_bytes(
+                user_id,
+                &parse_filename("first.jpg"),
+                "image/jpeg".parse().unwrap(),
+                b"jpeg-ish",
+            )
+            .await
+            .unwrap();
+        let second = manager
+            .upload_bytes(
+                user_id,
+                &parse_filename("second.jpg"),
+                "image/jpeg".parse().unwrap(),
+                b"jpeg-ish",
+            )
+            .await
+            .unwrap();
+        let first_media = upload_ref(&first);
+        let second_media = upload_ref(&second);
+        let first_path = stored_path(env.base.path(), &first_media);
+        let second_path = stored_path(env.base.path(), &second_media);
+
+        manager
+            .delete_media(user_id, &first_media, false)
+            .await
+            .unwrap();
+
+        assert!(!first_path.exists(), "deleted filename path is reclaimed");
+        assert!(
+            second_path.exists(),
+            "different filename entry for the same hash remains served"
+        );
+        assert!(media_row_exists(&env.state, user_id, &second_media).await);
     }
 }
