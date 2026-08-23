@@ -1,6 +1,7 @@
 //! SMTP mail transport backed by [`lettre`].
 
 use async_trait::async_trait;
+use common::mailbox::Mailbox as CommonMailbox;
 use common::mailer::{EmailMessage, MailError, MailSender};
 use common::smtp_tls_mode::SmtpTlsMode;
 use host::smtp_config::SmtpConfig;
@@ -16,12 +17,11 @@ use thiserror::Error;
 /// Errors that can occur when constructing a [`LettreMailSender`].
 #[derive(Debug, Error)]
 pub enum BuildMailerError {
-    /// The configured sender could not be rendered as an address lettre
-    /// accepts. Not the address itself — that is an
-    /// [`Email`](common::email::Email) and always parses — but the display
-    /// name: [`common::mailbox::Mailbox`] emits it unquoted, and a name
-    /// containing a comma, colon or parenthesis is then unreadable as an RFC
-    /// 5322 `phrase`. See #837.
+    /// The configured sender rendered to a display form lettre rejected.
+    ///
+    /// The address half is a validated [`Email`](common::email::Email), and
+    /// [`common::mailbox::Mailbox`] owns display-name quoting. This is therefore
+    /// a defensive error for any remaining mismatch at the lettre boundary.
     #[error("invalid sender address: {0}")]
     InvalidSender(#[source] lettre::address::AddressError),
     /// Failed to build the SMTP transport.
@@ -50,9 +50,7 @@ impl LettreMailSender {
     /// # Errors
     ///
     /// Returns an error if the SMTP transport cannot be built, or if the
-    /// configured sender's *display name* cannot be rendered as an RFC 5322
-    /// `phrase` — see [`BuildMailerError::InvalidSender`]. The sender's
-    /// address half cannot fail.
+    /// configured sender renders to a display form lettre rejects.
     pub fn from_config(config: &SmtpConfig) -> Result<Self, BuildMailerError> {
         Self::from_config_with(
             config,
@@ -67,14 +65,14 @@ impl LettreMailSender {
         tls_relay: fn(&str) -> Result<AsyncSmtpTransportBuilder, SmtpTransportError>,
     ) -> Result<Self, BuildMailerError> {
         // Fallible, unlike the conversions in `build_message`. Those take an
-        // `Email`, which always survives lettre's parser (#297). This takes a
-        // `common::mailbox::Mailbox`, whose *display name* `DisplayName` admits
-        // any characters and whose `Display` emits unquoted — so an ordinary
-        // `Acme, Inc <noreply@example.com>` renders as something lettre cannot
-        // read back as a `phrase`. The address half is fine; the name is not.
-        // Root cause is #837; until then this reports rather than panics.
-        let sender: Mailbox = config
-            .sender
+        // `Email`, which always survives lettre's parser (#297). This takes an
+        // operator-authored `SmtpSender`: parse it through `common::Mailbox` to
+        // normalize any accepted display-name spelling to Mailbox's RFC-safe render
+        // form (#837), then let lettre validate its own boundary.
+        let Ok(common_sender) = config.sender.to_string().parse::<CommonMailbox>() else {
+            unreachable!("SmtpSender invariant guarantees common::Mailbox parseability")
+        };
+        let sender: Mailbox = common_sender
             .to_string()
             .parse()
             .map_err(BuildMailerError::InvalidSender)?;
@@ -466,8 +464,15 @@ mod tests {
     #[test]
     fn from_config_accepts_a_sender_the_display_parser_rejected() {
         // `SmtpConfig`'s sender is a `common::mailbox::Mailbox`, so this covers
-        // the named form too — the display name must not disturb the address.
-        for raw in ["user@[192.0.2.1]", "Jaunder <\"has space\"@example.com>"] {
+        // named forms too — display-name quoting must not disturb the address.
+        for raw in [
+            "user@[192.0.2.1]",
+            "Jaunder <\"has space\"@example.com>",
+            "Acme, Inc <noreply@example.com>",
+            "Support: Jaunder <noreply@example.com>",
+            "Jaunder (Team) <noreply@example.com>",
+            "\"Acme, Inc\" <noreply@example.com>",
+        ] {
             let config = SmtpConfig {
                 sender: raw.parse().expect("Mailbox accepts it"),
                 ..base_config(SmtpTlsMode::Plain)
@@ -476,35 +481,6 @@ mod tests {
             assert!(
                 LettreMailSender::from_config(&config).is_ok(),
                 "could not build a mailer for sender {raw}"
-            );
-        }
-    }
-
-    #[test]
-    fn from_config_reports_a_display_name_lettre_cannot_read() {
-        // The sender's *name*, not its address, is the fallible half.
-        // `DisplayName` admits any character and `common::mailbox::Mailbox`
-        // renders it unquoted, so these ordinary configurations produce a
-        // string lettre cannot parse back as a `phrase`. Reported, not panicked
-        // — an admin typo must not take the server down. Root cause is #837.
-        for raw in [
-            "Acme, Inc <noreply@example.com>",
-            "Support: Jaunder <noreply@example.com>",
-            "Jaunder (Team) <noreply@example.com>",
-        ] {
-            let config = SmtpConfig {
-                sender: raw.parse().expect("common::Mailbox accepts it"),
-                ..base_config(SmtpTlsMode::Plain)
-            };
-            let error = LettreMailSender::from_config(&config)
-                .err()
-                .expect("invalid display name must be reported");
-            let error = anyhow::Error::new(error);
-            assert!(
-                error.chain().any(|source| source
-                    .downcast_ref::<lettre::address::AddressError>()
-                    .is_some()),
-                "concrete address source must remain in the chain for {raw}: {error:#}",
             );
         }
     }
