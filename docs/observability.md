@@ -1138,11 +1138,11 @@ discriminator.
 ### Finding — custom-section count stress probe (2026-08-23)
 
 Corpus: `~/measurements/jaunder/issue-864-wasm-floor/`, extracted to
-`traces-count/*.jsonl`. Runs were sqlite single-worker, three runs per arm, with
-realized order counterbalanced by run: `baseline-count-1 firefox→chromium`,
-`shape-count-1 chromium→firefox`, `baseline-count-2 chromium→firefox`,
-`shape-count-2 firefox→chromium`, `baseline-count-3 firefox→chromium`,
-`shape-count-3 chromium→firefox`.
+`traces-count/*.jsonl`. The host was quiesced before capture. Runs were sqlite
+single-worker, three runs per arm, with realized order counterbalanced by run:
+`baseline-count-1 firefox→chromium`, `shape-count-1 chromium→firefox`,
+`baseline-count-2 chromium→firefox`, `shape-count-2 firefox→chromium`,
+`baseline-count-3 firefox→chromium`, `shape-count-3 chromium→firefox`.
 
 Salts were `issue864-baseline-count-{1,2,3}` and `issue864-shape-count-{1,2,3}`.
 Commands:
