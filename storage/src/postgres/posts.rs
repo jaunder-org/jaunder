@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::{Pool, Postgres};
 
-use crate::helpers::{PostRow, post_record_from_row};
 use crate::posts::{
     DELETE_POST_TAG_BY_SLUG, INSERT_POST_TAG, PostOwnershipRow, PostTagRow, SELECT_POST_TAGS,
     UPSERT_TAG_RETURNING_ID, post_tag_diff, post_tags_from_rows,
@@ -111,7 +110,7 @@ impl PostDialect for Postgres {
         .execute(&mut *tx)
         .await?;
 
-        let row = sqlx::query_as::<_, PostRow>(
+        let row = sqlx::query_as::<_, PostRecord>(
             "UPDATE posts
              SET title = $1,
                  slug = CASE WHEN published_at IS NULL THEN $2 ELSE slug END,
@@ -162,7 +161,7 @@ impl PostDialect for Postgres {
             .await?;
 
         tx.commit().await?;
-        post_record_from_row(row).map_err(UpdatePostError::Internal)
+        Ok(row)
     }
 
     async fn set_post_tags(

@@ -24,8 +24,7 @@ use common::visibility::{
 use host::error::{InternalError, InternalResult};
 
 use crate::backend::Backend;
-use crate::helpers::{PostRow, post_record_from_row};
-
+use crate::helpers::parse_post_tags_json;
 pub use common::render::{InvalidPostFormat, PostFormat, RenderOutput, RenderedHtml};
 
 /// The validated calendar date of a public permalink lookup key. Re-exported from
@@ -108,6 +107,64 @@ impl PostRecord {
     #[must_use]
     pub fn fallback_summary_label(&self) -> PostSummary {
         PostSummary::from_body_line(&self.body)
+    }
+}
+
+/// Decodes the shared post projection directly into its public storage record.
+///
+/// Every column except the JSON aggregate arrives as its domain type through its `SQLx`
+/// bridge. `tags` remains an aggregate boundary: its text is parsed after the post id is
+/// available to attach to each decoded tag.
+impl<'r, R> sqlx::FromRow<'r, R> for PostRecord
+where
+    R: Row,
+    &'r str: sqlx::ColumnIndex<R>,
+    PostId: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+    UserId: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+    Username: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+    PostTitle: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+    Slug: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+    PostBody: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+    PostFormat: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+    RenderedHtml: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+    DateTime<Utc>: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+    PostSummary: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+    String: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+{
+    fn from_row(row: &'r R) -> sqlx::Result<Self> {
+        let post_id = row.try_get::<PostId, _>("post_id")?;
+        let user_id = row.try_get::<UserId, _>("user_id")?;
+        let author_username = row.try_get::<Username, _>("username")?;
+        let title = row.try_get::<Option<PostTitle>, _>("title")?;
+        let slug = row.try_get::<Slug, _>("slug")?;
+        let body = row.try_get::<PostBody, _>("body")?;
+        let format = row.try_get::<PostFormat, _>("format")?;
+        // rendered-html-from-trusted:allow post row decodes render-sanitized HTML from rendered_html (#619)
+        let rendered_html = row.try_get::<RenderedHtml, _>("rendered_html")?;
+        let created_at = row.try_get::<DateTime<Utc>, _>("created_at")?;
+        let updated_at = row.try_get::<DateTime<Utc>, _>("updated_at")?;
+        let published_at = row.try_get::<Option<DateTime<Utc>>, _>("published_at")?;
+        let deleted_at = row.try_get::<Option<DateTime<Utc>>, _>("deleted_at")?;
+        let summary = row.try_get::<Option<PostSummary>, _>("summary")?;
+        let tags_json = row.try_get::<String, _>("tags")?;
+        let tags = parse_post_tags_json(&tags_json, post_id)?;
+
+        Ok(Self {
+            post_id,
+            user_id,
+            author_username,
+            title,
+            slug,
+            body,
+            format,
+            rendered_html,
+            created_at,
+            updated_at,
+            published_at,
+            deleted_at,
+            summary,
+            tags,
+        })
     }
 }
 
@@ -1046,7 +1103,7 @@ impl<DB: Database> PostStore<DB> {
 impl<DB> PostStorage for PostStore<DB>
 where
     DB: PostDialect,
-    PostRow: for<'r> sqlx::FromRow<'r, DB::Row>,
+    PostRecord: for<'r> sqlx::FromRow<'r, DB::Row>,
     (PostId,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (bool,): for<'r> sqlx::FromRow<'r, DB::Row>,
     PostTagRow: for<'r> sqlx::FromRow<'r, DB::Row>,
@@ -1167,9 +1224,8 @@ where
                AND {resolution}",
             tags = DB::TAGS_SUBQUERY,
         );
-        let query = sqlx::query_as::<_, PostRow>(&sql).bind(post_id);
-        let row = binds.bind_onto(query).fetch_optional(&self.pool).await?;
-        Ok(row.map(post_record_from_row).transpose()?)
+        let query = sqlx::query_as::<_, PostRecord>(&sql).bind(post_id);
+        Ok(binds.bind_onto(query).fetch_optional(&self.pool).await?)
     }
 
     #[tracing::instrument(
@@ -1258,14 +1314,13 @@ where
             tags = DB::TAGS_SUBQUERY,
             date_clause = DB::PERMALINK_DATE_CLAUSE,
         );
-        let query = sqlx::query_as::<_, PostRow>(&sql)
+        let query = sqlx::query_as::<_, PostRecord>(&sql)
             .bind(username)
             .bind(slug)
             // sqlx-newtype-bind:allow permanent-primitive — permalink date is a formatted URL path part, not a domain value.
             .bind(date_str.as_str())
             .bind(now);
-        let row = binds.bind_onto(query).fetch_optional(&self.pool).await?;
-        Ok(row.map(post_record_from_row).transpose()?)
+        Ok(binds.bind_onto(query).fetch_optional(&self.pool).await?)
     }
 
     #[tracing::instrument(
@@ -1295,7 +1350,7 @@ where
                AND (p.published_at IS NULL OR p.published_at > $4)
                AND p.deleted_at IS NULL"
         );
-        let row = sqlx::query_as::<_, PostRow>(&sql)
+        let row = sqlx::query_as::<_, PostRecord>(&sql)
             .bind(user_id)
             .bind(slug)
             // sqlx-newtype-bind:allow permanent-primitive — permalink date is a formatted URL path part, not a domain value.
@@ -1303,7 +1358,7 @@ where
             .bind(now)
             .fetch_optional(&self.pool)
             .await?;
-        Ok(row.map(post_record_from_row).transpose()?)
+        Ok(row)
     }
 
     #[tracing::instrument(
@@ -1378,11 +1433,11 @@ where
              WHERE p.post_id = $1",
             tags = DB::TAGS_SUBQUERY,
         );
-        let row = sqlx::query_as::<_, PostRow>(&sql)
+        let row = sqlx::query_as::<_, PostRecord>(&sql)
             .bind(post_id)
             .fetch_one(&self.pool)
             .await?;
-        post_record_from_row(row).map_err(UpdatePostError::Internal)
+        Ok(row)
     }
 
     #[tracing::instrument(
@@ -1448,7 +1503,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRow>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(&sql)
                 .bind(username)
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
@@ -1478,14 +1533,16 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRow>(&sql).bind(username).bind(now);
+            let query = sqlx::query_as::<_, PostRecord>(&sql)
+                .bind(username)
+                .bind(now);
             binds
                 .bind_onto(query)
                 .bind(limit)
                 .fetch_all(&self.pool)
                 .await?
         };
-        rows.into_iter().map(post_record_from_row).collect()
+        Ok(rows)
     }
 
     #[tracing::instrument(
@@ -1520,7 +1577,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRow>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(&sql)
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
                 .bind(cursor.post_id)
@@ -1548,14 +1605,14 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRow>(&sql).bind(now);
+            let query = sqlx::query_as::<_, PostRecord>(&sql).bind(now);
             binds
                 .bind_onto(query)
                 .bind(limit)
                 .fetch_all(&self.pool)
                 .await?
         };
-        rows.into_iter().map(post_record_from_row).collect()
+        Ok(rows)
     }
 
     #[tracing::instrument(
@@ -1587,7 +1644,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT $6"
             );
-            sqlx::query_as::<_, PostRow>(&sql)
+            sqlx::query_as::<_, PostRecord>(&sql)
                 .bind(user_id)
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
@@ -1611,14 +1668,14 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT $3"
             );
-            sqlx::query_as::<_, PostRow>(&sql)
+            sqlx::query_as::<_, PostRecord>(&sql)
                 .bind(user_id)
                 .bind(now)
                 .bind(limit)
                 .fetch_all(&self.pool)
                 .await?
         };
-        rows.into_iter().map(post_record_from_row).collect()
+        Ok(rows)
     }
 
     #[tracing::instrument(
@@ -1707,7 +1764,7 @@ where
                  ORDER BY p.updated_at DESC, p.post_id DESC
                  LIMIT $4"
             );
-            sqlx::query_as::<_, PostRow>(&sql)
+            sqlx::query_as::<_, PostRecord>(&sql)
                 .bind(user_id)
                 .bind(cursor.updated_at)
                 .bind(cursor.post_id)
@@ -1726,13 +1783,13 @@ where
                  ORDER BY p.updated_at DESC, p.post_id DESC
                  LIMIT $2"
             );
-            sqlx::query_as::<_, PostRow>(&sql)
+            sqlx::query_as::<_, PostRecord>(&sql)
                 .bind(user_id)
                 .bind(limit)
                 .fetch_all(&self.pool)
                 .await?
         };
-        rows.into_iter().map(post_record_from_row).collect()
+        Ok(rows)
     }
 
     #[tracing::instrument(
@@ -1795,7 +1852,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRow>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(&sql)
                 .bind(tag_slug)
                 .bind(cursor.created_at)
                 .bind(cursor.created_at)
@@ -1827,7 +1884,9 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRow>(&sql).bind(tag_slug).bind(now);
+            let query = sqlx::query_as::<_, PostRecord>(&sql)
+                .bind(tag_slug)
+                .bind(now);
             binds
                 .bind_onto(query)
                 .bind(limit)
@@ -1835,10 +1894,7 @@ where
                 .await?
         };
 
-        rows.into_iter()
-            .map(post_record_from_row)
-            .collect::<sqlx::Result<_>>()
-            .map_err(ListByTagError::Internal)
+        Ok(rows)
     }
 
     #[tracing::instrument(
@@ -1890,7 +1946,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRow>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(&sql)
                 .bind(user_id)
                 .bind(tag_slug)
                 .bind(cursor.created_at)
@@ -1924,7 +1980,7 @@ where
                  ORDER BY p.created_at DESC, p.post_id DESC
                  LIMIT ${limit_idx}"
             );
-            let query = sqlx::query_as::<_, PostRow>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(&sql)
                 .bind(user_id)
                 .bind(tag_slug)
                 .bind(now);
@@ -1935,10 +1991,7 @@ where
                 .await?
         };
 
-        rows.into_iter()
-            .map(post_record_from_row)
-            .collect::<sqlx::Result<_>>()
-            .map_err(ListByTagError::Internal)
+        Ok(rows)
     }
 
     #[tracing::instrument(
@@ -2017,7 +2070,7 @@ where
             viewer,
         )
         .await?;
-        rows.into_iter().map(post_record_from_row).collect()
+        Ok(rows)
     }
 
     #[tracing::instrument(
@@ -2032,10 +2085,10 @@ where
     ) -> sqlx::Result<Vec<GoLivePost>> {
         // `published_at > $1 AND published_at <= $2` selects exactly the posts
         // that crossed into "live" within the half-open window `(after, upto]`.
-        // The standard post projection (incl. the JSON tag subquery) is reused
-        // so the row decodes through `post_record_from_row`; we then keep only
-        // the username + tag slugs the feed fan-out needs. No viewer filter:
-        // go-live regeneration is independent of any reader's audience.
+        // The standard post projection (incl. the JSON tag subquery) is reused so the row
+        // decodes directly into `PostRecord`; we then keep only the username + tag slugs
+        // the feed fan-out needs. No viewer filter: go-live regeneration is independent of
+        // any reader's audience.
         let tags = DB::TAGS_SUBQUERY;
         let sql = format!(
             "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
@@ -2048,20 +2101,18 @@ where
                AND p.deleted_at IS NULL
              ORDER BY p.published_at ASC, p.post_id ASC"
         );
-        let rows = sqlx::query_as::<_, PostRow>(&sql)
+        let rows = sqlx::query_as::<_, PostRecord>(&sql)
             .bind(after)
             .bind(upto)
             .fetch_all(&self.pool)
             .await?;
-        rows.into_iter()
-            .map(|row| {
-                let rec = post_record_from_row(row)?;
-                Ok(GoLivePost {
-                    username: rec.author_username,
-                    tag_slugs: rec.tags.into_iter().map(|t| t.tag_slug).collect(),
-                })
+        Ok(rows
+            .into_iter()
+            .map(|rec| GoLivePost {
+                username: rec.author_username,
+                tag_slugs: rec.tags.into_iter().map(|t| t.tag_slug).collect(),
             })
-            .collect()
+            .collect())
     }
 
     #[tracing::instrument(
@@ -2264,8 +2315,8 @@ impl ResolutionBinds {
     /// afterward, at the index [`resolution_where`] returned.
     fn bind_onto<'q, DB>(
         &'q self,
-        query: sqlx::query::QueryAs<'q, DB, PostRow, DB::Arguments<'q>>,
-    ) -> sqlx::query::QueryAs<'q, DB, PostRow, DB::Arguments<'q>>
+        query: sqlx::query::QueryAs<'q, DB, PostRecord, DB::Arguments<'q>>,
+    ) -> sqlx::query::QueryAs<'q, DB, PostRecord, DB::Arguments<'q>>
     where
         DB: Database,
         i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -2518,7 +2569,7 @@ where
     Ok(())
 }
 
-/// Runs the hybrid-window query for `surface`, returning raw [`PostRow`]s.
+/// Runs the hybrid-window query for `surface`, returning [`PostRecord`]s.
 ///
 /// Shared across backends: the four `FeedSurface` variants differ only in the
 /// ranked-CTE source/predicate and bind list, and the JSON tag aggregation is
@@ -2530,10 +2581,10 @@ async fn list_published_in_window_rows<DB>(
     cutoff: DateTime<Utc>,
     min_items: common::feed::FeedMinItems,
     viewer: &ViewerIdentity,
-) -> sqlx::Result<Vec<PostRow>>
+) -> sqlx::Result<Vec<PostRecord>>
 where
     DB: PostDialect,
-    PostRow: for<'r> sqlx::FromRow<'r, DB::Row>,
+    PostRecord: for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> common::feed::FeedMinItems: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -2560,7 +2611,7 @@ where
             // nothing binds after it and the returned `next` is discarded.
             let (resolution, binds, _) = resolution_where(viewer, 4);
             let sql = window_sql(surface, tags, &resolution);
-            let query = sqlx::query_as::<_, PostRow>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(&sql)
                 .bind(now)
                 .bind(min_items)
                 .bind(cutoff);
@@ -2571,7 +2622,7 @@ where
             // variant-sized resolution fragment last, from $5.
             let (resolution, binds, _) = resolution_where(viewer, 5);
             let sql = window_sql(surface, tags, &resolution);
-            let query = sqlx::query_as::<_, PostRow>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(&sql)
                 .bind(now)
                 .bind(username)
                 .bind(min_items)
@@ -2583,7 +2634,7 @@ where
             // variant-sized resolution fragment last, from $5.
             let (resolution, binds, _) = resolution_where(viewer, 5);
             let sql = window_sql(surface, tags, &resolution);
-            let query = sqlx::query_as::<_, PostRow>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(&sql)
                 .bind(now)
                 .bind(tag)
                 .bind(min_items)
@@ -2595,7 +2646,7 @@ where
             // the variant-sized resolution fragment last, from $6.
             let (resolution, binds, _) = resolution_where(viewer, 6);
             let sql = window_sql(surface, tags, &resolution);
-            let query = sqlx::query_as::<_, PostRow>(&sql)
+            let query = sqlx::query_as::<_, PostRecord>(&sql)
                 .bind(now)
                 .bind(username)
                 .bind(tag)
@@ -4441,6 +4492,49 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(untitled.title, None);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_post_rejects_malformed_aggregated_tags_as_decode_error(#[case] backend: Backend) {
+        // Keep the whole `TestEnv` bound: dropping `base` unlinks the SQLite file
+        // (ADR-0053 TempDir hazard).
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let posts = &*env.state.posts;
+        let post_id = SeedRawPost::new(user_id)
+            .draft()
+            .seed(&env.state)
+            .await
+            .post_id;
+        posts
+            .set_post_tags(post_id, &[parse_tag_label("Rust")])
+            .await
+            .expect("seed tag");
+
+        // The tags aggregate reads `tag_slug` from `tags`. Land a value the `Tag`
+        // serde bridge rejects with a raw bind, because a typed bind cannot create it.
+        let sql = "UPDATE tags SET tag_slug = $1
+                   WHERE tag_id = (SELECT tag_id FROM post_tags WHERE post_id = $2)";
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query(sql)
+                .bind("not a slug")
+                .bind(post_id)
+                .execute(pool)
+                .await
+                .expect("corrupt tag slug");
+        });
+
+        // Exercise the public read boundary: malformed aggregate state must become
+        // the decode error from PostRecord's JSON aggregate decoder.
+        let err = posts
+            .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
+            .await
+            .expect_err("malformed aggregated tag must fail the read");
+        assert!(
+            matches!(err, sqlx::Error::Decode(_)),
+            "expected an aggregate decode error, got: {err:?}"
+        );
     }
 
     #[apply(backends)]

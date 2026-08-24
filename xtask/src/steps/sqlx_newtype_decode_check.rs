@@ -56,13 +56,16 @@
 //! as a target. That is not a hole: every field and element is **separately policed at the
 //! declaration**, which is where the newtype belongs — a second population, not a promise.
 //!
+//! A hand-written `FromRow` is never approved by structure. Its query targets need exact,
+//! counted [`ALLOWLIST`] entries; its direct typed `get`/`try_get` calls remain normal decode
+//! sites and are policed independently. This is intentionally narrow: a future hand-written
+//! decoder earns no approval until a human adds exact scope and rationale.
+//!
 //! Hence the scoping, and note it is *narrower* than the approve-set's. A bridge-carrying
 //! type is approved wherever it is declared, because the bridge is the whole claim. A
-//! composite is approved because its fields were checked — and that check runs under the
-//! policed root only, so a composite declared in `common/src` or `host/src` has had no
-//! field examined and stays unrecognised.
-//! A composite with a *hand-written* `FromRow` (`ClaimedRow`) has no policed fields either,
-//! so it takes an allowlist entry accounting for its parts.
+//! derived composite is approved because its fields or elements were checked — and that check
+//! runs under the policed root only, so a composite declared in `common/src` or `host/src`
+//! has had neither examined and stays unrecognised.
 //!
 //! `Result<T, E>` recurses into `T` only — the error arm is never decoded from a column.
 //!
@@ -368,9 +371,9 @@ enum Category {
     NotADecodeTarget,
     /// Test scaffolding whose type comes from a generic helper's signature.
     TestScaffolding,
-    /// A row target whose `FromRow` is **hand-written**, so delegation cannot back it:
-    /// the gate polices a derived struct's fields and a tuple alias's elements, and a
-    /// hand-written impl has neither. Its parts are accounted for in the reason instead.
+    /// A query target whose hand-written `FromRow` decoder is intentionally not approved by
+    /// delegation. Each exact target is listed here; the decoder's direct typed column gets
+    /// remain independently policed.
     HandWrittenFromRow,
     /// **Residue, not a verdict.** This should be a domain type; the fix is a vertical
     /// tracked elsewhere. The reason must name the issue.
@@ -745,14 +748,15 @@ const ALLOWLIST: &[Allowed] = &[
                  domain field; this is not a sqlx row decode",
     },
     Allowed {
-        file: "helpers.rs",
-        function: "",
+        file: "posts.rs",
+        function: "from_row",
         target: "String",
-        what: "tags",
+        what: "\"tags\"",
         count: 1,
         category: Category::OpaquePayload,
-        reason: "PostRow's tags column is the JSON aggregate built by TAGS_SUBQUERY, parsed \
-                 by build_post_record — the one column of that row that is not a domain type",
+        reason: "the tags JSON aggregate built by TAGS_SUBQUERY: aggregate semantics require \
+                 parsing its text after the post id is available, rather than decoding one \
+                 domain column directly",
     },
     Allowed {
         file: "feed_events.rs",
@@ -871,6 +875,133 @@ const ALLOWLIST: &[Allowed] = &[
         reason: "label is already a display payload: either a Username joined from users or a \
                  channel-scoped opaque subscriber_ref fallback. The branch that produced it is \
                  the domain fact; the final text has no single stricter type",
+    },
+    // ---- hand-written post row: every target is exact; typed column gets stay policed ----
+    Allowed {
+        file: "posts.rs",
+        function: "get_post_by_id",
+        target: "PostRecord",
+        what: "&sql",
+        count: 1,
+        category: Category::HandWrittenFromRow,
+        reason: "PostRecord's hand-written decoder uses direct typed column gets, which remain policed (#619)",
+    },
+    Allowed {
+        file: "posts.rs",
+        function: "get_post_by_permalink",
+        target: "PostRecord",
+        what: "&sql",
+        count: 1,
+        category: Category::HandWrittenFromRow,
+        reason: "PostRecord's hand-written decoder uses direct typed column gets, which remain policed (#619)",
+    },
+    Allowed {
+        file: "posts.rs",
+        function: "get_unpublished_post_by_permalink",
+        target: "PostRecord",
+        what: "&sql",
+        count: 1,
+        category: Category::HandWrittenFromRow,
+        reason: "PostRecord's hand-written decoder uses direct typed column gets, which remain policed (#619)",
+    },
+    Allowed {
+        file: "posts.rs",
+        function: "publish_post",
+        target: "PostRecord",
+        what: "&sql",
+        count: 1,
+        category: Category::HandWrittenFromRow,
+        reason: "PostRecord's hand-written decoder uses direct typed column gets, which remain policed (#619)",
+    },
+    Allowed {
+        file: "posts.rs",
+        function: "list_published_by_user",
+        target: "PostRecord",
+        what: "&sql",
+        count: 2,
+        category: Category::HandWrittenFromRow,
+        reason: "PostRecord's cursor and first-page decoders use direct typed column gets, which remain policed (#619)",
+    },
+    Allowed {
+        file: "posts.rs",
+        function: "list_published",
+        target: "PostRecord",
+        what: "&sql",
+        count: 2,
+        category: Category::HandWrittenFromRow,
+        reason: "PostRecord's cursor and first-page decoders use direct typed column gets, which remain policed (#619)",
+    },
+    Allowed {
+        file: "posts.rs",
+        function: "list_drafts_by_user",
+        target: "PostRecord",
+        what: "&sql",
+        count: 2,
+        category: Category::HandWrittenFromRow,
+        reason: "PostRecord's cursor and first-page decoders use direct typed column gets, which remain policed (#619)",
+    },
+    Allowed {
+        file: "posts.rs",
+        function: "list_collection_by_user",
+        target: "PostRecord",
+        what: "&sql",
+        count: 2,
+        category: Category::HandWrittenFromRow,
+        reason: "PostRecord's cursor and first-page decoders use direct typed column gets, which remain policed (#619)",
+    },
+    Allowed {
+        file: "posts.rs",
+        function: "list_posts_by_tag",
+        target: "PostRecord",
+        what: "&sql",
+        count: 2,
+        category: Category::HandWrittenFromRow,
+        reason: "PostRecord's cursor and first-page decoders use direct typed column gets, which remain policed (#619)",
+    },
+    Allowed {
+        file: "posts.rs",
+        function: "list_user_posts_by_tag",
+        target: "PostRecord",
+        what: "&sql",
+        count: 2,
+        category: Category::HandWrittenFromRow,
+        reason: "PostRecord's cursor and first-page decoders use direct typed column gets, which remain policed (#619)",
+    },
+    Allowed {
+        file: "posts.rs",
+        function: "list_posts_gone_live_between",
+        target: "PostRecord",
+        what: "&sql",
+        count: 1,
+        category: Category::HandWrittenFromRow,
+        reason: "PostRecord's hand-written decoder uses direct typed column gets, which remain policed (#619)",
+    },
+    Allowed {
+        file: "posts.rs",
+        function: "list_published_in_window_rows",
+        target: "PostRecord",
+        what: "&sql",
+        count: 4,
+        category: Category::HandWrittenFromRow,
+        reason: "PostRecord's four feed-surface decoders use direct typed column gets, which remain policed (#619)",
+    },
+    Allowed {
+        file: "postgres/posts.rs",
+        function: "update_post",
+        target: "PostRecord",
+        what: "\"UPDATEpostsSETtitle=$1,slug=CASEWHENpublished_atISNULLTHEN$2ELSEslugEND,body=$3,format=$4,rendered_html=$5,published_at=CASEWHEN$6THENNULLWHEN$7ISNOTNULLTHEN$8ELSECOALESCE(published_at,$9)END,updated_at=$10,summary=$11WHEREpost_id=$12RETURNINGpost_id,user_id,(SELECTusernameFROMusersWHEREuser_id=posts.user_id)ASusername,title,slug,body,format,rendered_html,created_at,updated_at,published_at,deleted_at,summary,COALESCE((SELECTjson_agg(json_build_object('tag_id',t.tag_id,'tag_slug',t.tag_slug,'tag_display',pt.tag_display))FROMpost_tagsptJOINtagstONpt.tag_id=t.tag_idWHEREpt.post_id=posts.post_id),'[]'::json)::textAStags\"",
+        count: 1,
+        category: Category::HandWrittenFromRow,
+        reason: "PostRecord's Postgres update readback uses its direct typed decoder calls, which remain policed (#619)",
+    },
+    Allowed {
+        file: "sqlite/posts.rs",
+        function: "update_post",
+        target: "PostRecord",
+        what: "\"UPDATEpostsSETtitle=$1,slug=CASEWHENpublished_atISNULLTHEN$2ELSEslugEND,body=$3,format=$4,rendered_html=$5,published_at=CASEWHEN$6THENNULLWHEN$7ISNOTNULLTHEN$8ELSECOALESCE(published_at,$9)END,updated_at=$10,summary=$11WHEREpost_id=$12RETURNINGpost_id,user_id,(SELECTusernameFROMusersWHEREuser_id=posts.user_id)ASusername,title,slug,body,format,rendered_html,created_at,updated_at,published_at,deleted_at,summary,COALESCE((SELECTjson_group_array(json_object('tag_id',t.tag_id,'tag_slug',t.tag_slug,'tag_display',pt.tag_display))FROMpost_tagsptJOINtagstONpt.tag_id=t.tag_idWHEREpt.post_id=posts.post_id),'[]')AStags\"",
+        count: 1,
+        category: Category::HandWrittenFromRow,
+        reason: "PostRecord's SQLite update readback uses its direct typed decoder calls, which remain policed (#619)",
     },
     // ---- the claim wrapper ----
     Allowed {
@@ -1031,19 +1162,18 @@ const APPROVED_FOREIGN: &[(&str, &str)] = &[(
      shape already carries any needed role identity",
 )];
 
-/// The types a decode may land in: domain types with a bridge, plus the composites whose
-/// parts this gate polices separately.
+/// The types a decode may land in: domain types with a bridge, plus derived composites whose
+/// fields or tuple elements this gate polices separately.
 #[derive(Default)]
 pub(crate) struct ApproveSet {
     /// Types declared with a bridge-emitting macro, plus [`APPROVED_FOREIGN`].
     approved: std::collections::HashSet<String>,
     /// `#[derive(FromRow)]` structs and tuple aliases declared under a scanned root.
     ///
-    /// Approved **by delegation**: every field and element is itself policed, at the
-    /// declaration, by [`Scanner::visit_item_struct`] / [`Scanner::visit_item_type`]. This
-    /// is a second policed population, not a promise — which is why the delegation is
-    /// scoped to composites declared under a root this gate actually reads. One declared
-    /// elsewhere has had no field checked, so it stays unrecognised and fails.
+    /// Approved **by delegation**: every derived field and tuple element is policed at its
+    /// declaration. Hand-written `FromRow` implementations are never structurally approved:
+    /// each real query target needs its own exact [`ALLOWLIST`] entry, while its direct typed
+    /// decoder calls remain in [`Scanner`]'s population.
     composites: std::collections::HashSet<String>,
     /// Type aliases, mapping the alias ident to the last path segment of its target
     /// (`HubUrl` → `TaggedUrl`).
@@ -1111,14 +1241,11 @@ fn is_from_row(attrs: &[syn::Attribute]) -> bool {
         .any(|a| a.path().is_ident("derive") && render(&a.meta).contains("FromRow"))
 }
 
-/// Folds one file's declarations into `set`.
-///
-/// `policed` says whether this file sits under [`POLICED_ROOT`], and it gates **only** the
-/// composites. A bridge-carrying type is approved wherever it is declared — the bridge is
-/// the whole claim. A composite is approved because its fields are checked, and that check
-/// runs under the policed root alone; collecting composites from the wider declaration
-/// roots would approve a `FromRow` struct or tuple alias with **zero fields examined**,
-/// which is precisely the unbacked promise delegation must not make.
+/// `root` gates composites: bridge-carrying types are approved wherever declared because the
+/// bridge is the whole claim. Derived `FromRow` structs and tuple aliases are approved only
+/// under the policed root, where their fields or elements are checked. Hand-written `FromRow`
+/// implementations are deliberately not collected: query targets for them require exact
+/// allowlist entries, so a new handwritten decoder cannot inherit approval.
 ///
 /// Only top-level `file.items` are read: a declaration inside an inline `mod` is not seen.
 /// That direction is safe — an unseen declaration is an unapproved type, so the gate bites
@@ -1723,7 +1850,7 @@ pub fn run(result: &mut CommandResult) {
     // — a file missed here would silently shrink what the gate accepts, which changes the
     // rule rather than the population, and is worse.
     let mut approve = ApproveSet::default();
-    // Delegation is only sound where field policing runs, and that link is a *string*
+    // Delegation is only sound where composite policing runs, and that link is a *string*
     // match between the two consts. Check it rather than assume it: a `DECLARATION_ROOTS`
     // that spells the policed root differently would silently stop collecting composites.
     // That direction fails closed (every composite target becomes unrecognised and the

@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::{Pool, Sqlite};
 
-use crate::helpers::{PostRow, post_record_from_row};
 use crate::posts::{
     DELETE_POST_TAG_BY_SLUG, INSERT_POST_TAG, PostOwnershipRow, PostTagRow, SELECT_POST_TAGS,
     UPSERT_TAG_RETURNING_ID, post_tag_diff, post_tags_from_rows,
@@ -79,7 +78,7 @@ impl PostDialect for Sqlite {
         sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
         let now = Utc::now();
 
-        let result: Result<PostRow, UpdatePostError> = async {
+        let result: Result<PostRecord, UpdatePostError> = async {
             let existing = sqlx::query_as::<_, PostOwnershipRow>(
                 "SELECT user_id, deleted_at FROM posts WHERE post_id = $1",
             )
@@ -105,7 +104,7 @@ impl PostDialect for Sqlite {
             .execute(&mut *conn)
             .await?;
 
-            let row = sqlx::query_as::<_, PostRow>(
+            let row = sqlx::query_as::<_, PostRecord>(
                 "UPDATE posts
                  SET title = $1,
                      slug = CASE WHEN published_at IS NULL THEN $2 ELSE slug END,
@@ -162,7 +161,7 @@ impl PostDialect for Sqlite {
         match result {
             Ok(row) => {
                 sqlx::query("COMMIT").execute(&mut *conn).await?;
-                post_record_from_row(row).map_err(UpdatePostError::Internal)
+                Ok(row)
             }
             Err(error) => finish_post_update(
                 Err(error),
