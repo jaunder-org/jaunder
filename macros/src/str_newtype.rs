@@ -8,22 +8,8 @@
 use quote::quote;
 use syn::DeriveInput;
 
-/// Which trailer the derive emits — the three are mutually exclusive (grouped into an
-/// enum rather than parallel bools so an invalid combination is unrepresentable and the
-/// `Opts` bool count stays in bounds).
-enum Kind {
-    /// The full default trailer (`Display`/`Deref`/serde/`TryFrom`/`FromStr` routing).
-    Default,
-    /// The tight `secret` surface (redacting `Debug`, `AsRef` + `TryFrom` only).
-    Secret,
-    /// The infallible trailer (construction via a hand-written `From<String>`).
-    Infallible,
-}
-
 /// How the sqlx storage bridge is selected — the `sqlx`/`no_sqlx` flags collapsed into one
-/// field, so "both at once" is unrepresentable in [`Opts`] rather than merely rejected, and
-/// the struct's bool count stays inside clippy's `struct_excessive_bools` bound. Same reason
-/// [`Kind`] is an enum.
+/// field, so "both at once" is unrepresentable in [`Opts`] rather than merely rejected.
 enum SqlxMode {
     /// No explicit flag — the default-on-except-secret policy applies.
     Default,
@@ -34,17 +20,16 @@ enum SqlxMode {
     Off,
 }
 
-/// The `#[str_newtype(...)]` options: the trailer `kind`, whether a secret re-opens the
-/// serde bridge (`secret, serde`) for an inbound wire value, and the sqlx bridge control.
-/// The sqlx bridge (feature-gated `Type`/`Encode`/`Decode`) is **on by default** for every
-/// non-secret type and dropped for a `secret` one; [`SqlxMode`] carries the two overrides.
+/// The `#[str_newtype(...)]` options: whether the type is a secret, whether a secret
+/// re-opens the serde bridge (`secret, serde`) for an inbound wire value, and the sqlx
+/// bridge control. The sqlx bridge (feature-gated `Type`/`Encode`/`Decode`) is **on by
+/// default** for every non-secret type and dropped for a `secret` one; [`SqlxMode`] carries
+/// the two overrides.
 struct Opts {
-    kind: Kind,
+    secret: bool,
     serde: bool,
     sqlx: SqlxMode,
-    /// Whether the author opted *out* of the ordering half of the trailer (#761) —
-    /// false iff `no_ord` was written. Whether a given [`Kind`] orders at all is decided
-    /// in `expand`, not here.
+    /// Whether the author opted *out* of the ordering half of the trailer (#761).
     ord: bool,
 }
 
@@ -69,12 +54,10 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
     // The user's generics, threaded through every emitted impl (#875). Nothing the derive
     // emits ever constructs `Self`, so the phantom marker field never has to be named:
     // `TryFrom`, `Deserialize`, and the sqlx `Decode` all route through the author's
-    // `FromStr`/`From<String>`, which is where the `PhantomData` is supplied.
+    // `FromStr`, which is where the `PhantomData` is supplied.
     let generics = &input.generics;
 
-    // The sqlx storage bridge is a per-kind decision (default-on except secret),
-    // computed once here; each trailer is a sibling helper, so the three arms stay
-    // short and parallel.
+    // The sqlx storage bridge is selected once from the secret/default policy.
     let sqlx = sqlx_bridge(&opts, name, generics);
     // The ordering half (#761), suppressed by `no_ord` and never emitted for a secret.
     let ord = if opts.ord {
@@ -82,70 +65,58 @@ pub(crate) fn expand(input: &DeriveInput) -> proc_macro2::TokenStream {
     } else {
         quote! {}
     };
-    match opts.kind {
+    if opts.secret {
         // The tight secret surface; `secret, serde` re-opens the serde bridge for an
         // inbound wire value (its inbound-only role is enforced by an xtask gate).
-        Kind::Secret => {
-            let trailer = secret_trailer(name, generics);
-            let serde = if opts.serde {
-                serde_impls(name, generics)
-            } else {
-                quote! {}
-            };
-            quote! {
-                #trailer
-                #serde
-                #sqlx
-            }
+        let trailer = secret_trailer(name, generics);
+        let serde = if opts.serde {
+            serde_impls(name, generics)
+        } else {
+            quote! {}
+        };
+        quote! {
+            #trailer
+            #serde
+            #sqlx
         }
-        // Construction never rejects (a hand-written `From<String>` chokepoint), so the
-        // trailer omits `FromStr`/`TryFrom` and the bridges route through `From<String>`.
-        Kind::Infallible => {
-            let trailer = infallible_trailer(name, generics);
-            quote! {
-                #trailer
-                #ord
-                #sqlx
-            }
-        }
+    } else {
         // The full ergonomic trailer plus the validating serde and sqlx bridges.
-        Kind::Default => {
-            let trailer = default_trailer(name, generics);
-            let serde = serde_impls(name, generics);
-            quote! {
-                #trailer
-                #serde
-                #ord
-                #sqlx
-            }
+        let trailer = default_trailer(name, generics);
+        let serde = serde_impls(name, generics);
+        quote! {
+            #trailer
+            #serde
+            #ord
+            #sqlx
         }
     }
 }
 
 /// The sqlx storage bridge for `name`, per the default-on-except-secret policy: a
 /// non-secret type gets it unless `no_sqlx` opts out (`RawToken`); a `secret` gets it
-/// only with an explicit `sqlx` (a stored secret, `InviteCode`). `Infallible` types
-/// decode via `From<String>`; the rest validate via `FromStr`. The `opts` guarantees
-/// from `parse_opts` (no bare `sqlx` off a secret, no `no_sqlx` on a secret) keep the
-/// arms consistent.
+/// only with an explicit `sqlx` (a stored secret, `InviteCode`). Every bridge validates
+/// through `FromStr`.
 fn sqlx_bridge(
     opts: &Opts,
     name: &syn::Ident,
     generics: &syn::Generics,
 ) -> proc_macro2::TokenStream {
-    match opts.kind {
-        Kind::Secret if matches!(opts.sqlx, SqlxMode::Forced) => sqlx_impls(name, generics),
-        Kind::Secret => quote! {},
-        _ if matches!(opts.sqlx, SqlxMode::Off) => quote! {},
-        Kind::Infallible => sqlx_impls_infallible(name, generics),
-        Kind::Default => sqlx_impls(name, generics),
+    if opts.secret {
+        if matches!(opts.sqlx, SqlxMode::Forced) {
+            sqlx_impls(name, generics)
+        } else {
+            quote! {}
+        }
+    } else if matches!(opts.sqlx, SqlxMode::Off) {
+        quote! {}
+    } else {
+        sqlx_impls(name, generics)
     }
 }
 
 /// The full **ergonomic default trailer**: `Display`, `AsRef`/`Borrow`/`Deref<str>`,
 /// `TryFrom<String>` (the fallible door, via `FromStr`), `From<Self> for String`, and
-/// `PartialEq<str>`/`<&str>`. The serde and sqlx bridges are appended by [`expand`], so
-/// this mirrors [`secret_trailer`]/[`infallible_trailer`] as one of the three trailers.
+/// `PartialEq<str>`/`<&str>`. The serde and sqlx bridges are appended by [`expand`].
 fn default_trailer(name: &syn::Ident, generics: &syn::Generics) -> proc_macro2::TokenStream {
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     quote! {
@@ -247,118 +218,6 @@ fn serde_impls(name: &syn::Ident, generics: &syn::Generics) -> proc_macro2::Toke
     }
 }
 
-/// The **infallible trailer**: the full default trailer *minus* the fallible door.
-/// Construction never rejects, so there is no `FromStr`/`TryFrom<String>` — instead the
-/// type author hand-writes the one `From<String>` chokepoint (pure-wrap or normalizing),
-/// and the derived `Deserialize` routes a deserialized `String` through *that*, so wire
-/// values are normalized identically to in-process construction. Emits `Display`,
-/// `AsRef`/`Borrow`/`Deref<str>`, `From<Self> for String`, `PartialEq<str>`/`<&str>`, and
-/// the infallible serde bridge; deliberately omits `TryFrom<String>` (which would collide
-/// with the hand-written `From<String>` via the std blanket `impl<T, U: Into<T>> TryFrom<U>`).
-fn infallible_trailer(name: &syn::Ident, generics: &syn::Generics) -> proc_macro2::TokenStream {
-    let serde = serde_impls_infallible(name, generics);
-    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
-    quote! {
-        #[automatically_derived]
-        impl #impl_generics ::core::fmt::Display for #name #ty_generics #where_clause {
-            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-                f.write_str(&self.0)
-            }
-        }
-
-        #[automatically_derived]
-        impl #impl_generics ::core::convert::AsRef<str> for #name #ty_generics #where_clause {
-            fn as_ref(&self) -> &str {
-                &self.0
-            }
-        }
-
-        #[automatically_derived]
-        impl #impl_generics ::core::borrow::Borrow<str> for #name #ty_generics #where_clause {
-            fn borrow(&self) -> &str {
-                &self.0
-            }
-        }
-
-        #[automatically_derived]
-        impl #impl_generics ::core::ops::Deref for #name #ty_generics #where_clause {
-            type Target = str;
-            fn deref(&self) -> &str {
-                &self.0
-            }
-        }
-
-        #[automatically_derived]
-        impl #impl_generics ::core::convert::From<#name #ty_generics>
-            for ::std::string::String #where_clause
-        {
-            fn from(v: #name #ty_generics) -> Self {
-                v.0
-            }
-        }
-
-        // A borrowed-source alias for the owned `From<String>` chokepoint: routes through
-        // it (so any normalization still happens in one place) and lets a `&str`/literal
-        // construct the newtype with a single `.into()` / `X::from("…")`, no `.to_owned()`.
-        #[automatically_derived]
-        impl #impl_generics ::core::convert::From<&str> for #name #ty_generics #where_clause {
-            fn from(s: &str) -> Self {
-                <#name #ty_generics as ::core::convert::From<::std::string::String>>::from(
-                    ::std::string::String::from(s),
-                )
-            }
-        }
-
-        #[automatically_derived]
-        impl #impl_generics ::core::cmp::PartialEq<str> for #name #ty_generics #where_clause {
-            fn eq(&self, other: &str) -> bool {
-                self.0 == *other
-            }
-        }
-
-        #[automatically_derived]
-        impl #impl_generics ::core::cmp::PartialEq<&str> for #name #ty_generics #where_clause {
-            fn eq(&self, other: &&str) -> bool {
-                self.0 == **other
-            }
-        }
-
-        #serde
-    }
-}
-
-/// The infallible serde bridge: serialize borrows (as the default); deserialize a `String`
-/// and route it through the type's own `From<String>` (never `FromStr`), so it cannot fail
-/// and normalizes wire input identically to construction.
-fn serde_impls_infallible(name: &syn::Ident, generics: &syn::Generics) -> proc_macro2::TokenStream {
-    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
-    let de = crate::with_leading_param(generics, syn::parse_quote!('de));
-    let (de_impl_generics, _, _) = de.split_for_impl();
-    quote! {
-        #[automatically_derived]
-        impl #impl_generics ::serde::Serialize for #name #ty_generics #where_clause {
-            fn serialize<S: ::serde::Serializer>(
-                &self,
-                serializer: S,
-            ) -> ::core::result::Result<S::Ok, S::Error> {
-                serializer.serialize_str(&self.0)
-            }
-        }
-
-        #[automatically_derived]
-        impl #de_impl_generics ::serde::Deserialize<'de> for #name #ty_generics #where_clause {
-            fn deserialize<D: ::serde::Deserializer<'de>>(
-                deserializer: D,
-            ) -> ::core::result::Result<Self, D::Error> {
-                let s = <::std::string::String as ::serde::Deserialize>::deserialize(deserializer)?;
-                ::core::result::Result::Ok(
-                    <#name #ty_generics as ::core::convert::From<::std::string::String>>::from(s),
-                )
-            }
-        }
-    }
-}
-
 /// The inner type every string newtype's sqlx bridge delegates to.
 fn sqlx_inner() -> proc_macro2::TokenStream {
     quote! { ::std::string::String }
@@ -382,29 +241,6 @@ fn sqlx_impls(name: &syn::Ident, generics: &syn::Generics) -> proc_macro2::Token
         decode_inner: quote! { &'r str },
         convert: quote! {
             ::core::result::Result::Ok(<#name #ty_generics as ::core::str::FromStr>::from_str(v)?)
-        },
-        // `String: PgHasArrayType`, so a slice binds as `TEXT[]` (#891).
-        pg_array: true,
-    })
-}
-
-/// The **infallible sqlx bridge**: as `sqlx_impls`, but `Decode` wraps the decoded
-/// `String` via the type's infallible `From<String>` (no validation to run).
-fn sqlx_impls_infallible(name: &syn::Ident, generics: &syn::Generics) -> proc_macro2::TokenStream {
-    let (_, ty_generics, _) = generics.split_for_impl();
-    crate::sqlx_bridge::bridge(&crate::sqlx_bridge::BridgeSpec {
-        name,
-        generics,
-        type_inner: sqlx_inner(),
-        encode_inner: sqlx_inner(),
-        to_inner: quote! { &self.0 },
-        // Stays `String`: the `From<String>` chokepoint takes the decoded value by
-        // value, so borrowing here would add an allocation, not remove one.
-        decode_inner: sqlx_inner(),
-        convert: quote! {
-            ::core::result::Result::Ok(
-                <#name #ty_generics as ::core::convert::From<::std::string::String>>::from(v),
-            )
         },
         // `String: PgHasArrayType`, so a slice binds as `TEXT[]` (#891).
         pg_array: true,
@@ -445,16 +281,12 @@ fn secret_trailer(name: &syn::Ident, generics: &syn::Generics) -> proc_macro2::T
     }
 }
 
-/// Reads the six `#[str_newtype(...)]` options — `secret`, `serde`, `infallible`, `sqlx`,
-/// `no_sqlx`, `no_ord`. Errors on any other so a typo fails loudly rather than silently
-/// un-redacting, and on the combinations that are contradictory or redundant: a bare
-/// `serde` (the default trailer already has the bridge — `serde` is only a re-opener for a
-/// `secret`), `infallible` with `secret`/`serde`, `no_sqlx` with `secret` or with `sqlx`,
-/// a bare `sqlx` off a secret, and `no_ord` on a secret (already unordered).
+/// Reads the five `#[str_newtype(...)]` options — `secret`, `serde`, `sqlx`, `no_sqlx`,
+/// and `no_ord`. Errors on any other so a typo fails loudly rather than silently
+/// un-redacting, and on combinations that are contradictory or redundant.
 fn parse_opts(input: &DeriveInput) -> syn::Result<Opts> {
     let mut secret = false;
     let mut serde = false;
-    let mut infallible = false;
     let mut sqlx = false;
     let mut no_sqlx = false;
     let mut no_ord = false;
@@ -467,9 +299,6 @@ fn parse_opts(input: &DeriveInput) -> syn::Result<Opts> {
                 } else if meta.path.is_ident("serde") {
                     serde = true;
                     Ok(())
-                } else if meta.path.is_ident("infallible") {
-                    infallible = true;
-                    Ok(())
                 } else if meta.path.is_ident("sqlx") {
                     sqlx = true;
                     Ok(())
@@ -481,19 +310,11 @@ fn parse_opts(input: &DeriveInput) -> syn::Result<Opts> {
                     Ok(())
                 } else {
                     Err(meta.error(
-                        "unknown `str_newtype` option (expected `secret`, `serde`, `infallible`, `sqlx`, `no_sqlx`, or `no_ord`)",
+                        "unknown `str_newtype` option (expected `secret`, `serde`, `sqlx`, `no_sqlx`, or `no_ord`)",
                     ))
                 }
             })?;
         } // cov:ignore `?`-fall-through closing brace; executed by the secret unit tests but llvm-cov leaves the gap region unmarked
-    }
-    // Checked before the `serde`-needs-`secret` guard so `infallible, serde` reports the
-    // exclusivity error rather than falling through to it.
-    if infallible && (secret || serde) {
-        return Err(syn::Error::new_spanned(
-            input,
-            "`str_newtype(infallible)` is exclusive with `secret`/`serde` (infallible mode already includes the serde bridge)",
-        ));
     }
     if serde && !secret {
         return Err(syn::Error::new_spanned(
@@ -525,16 +346,6 @@ fn parse_opts(input: &DeriveInput) -> syn::Result<Opts> {
             "bare `sqlx` is only valid with `secret`; non-secret newtypes get the bridge by default — use `no_sqlx` to opt out",
         ));
     }
-    let kind = if secret {
-        Kind::Secret
-    } else if infallible {
-        Kind::Infallible
-    } else {
-        Kind::Default
-    };
-    // Parsing stays on plain locals so every guard above keeps its exact spelling and
-    // message; only the fold into `Opts` is typed. The `no_sqlx && sqlx` guard has already
-    // fired by here, so at most one of the two is set and this chain cannot lose a flag.
     let sqlx = if sqlx {
         SqlxMode::Forced
     } else if no_sqlx {
@@ -542,16 +353,11 @@ fn parse_opts(input: &DeriveInput) -> syn::Result<Opts> {
     } else {
         SqlxMode::Default
     };
-    // Just the author's opt-out. Whether a *kind* orders is `expand`'s call — the secret
-    // arm simply never interpolates `#ord` — so this does not also test for `Kind::Secret`:
-    // one rule, one place. Anding it in here would silently override a future arm that
-    // deliberately emitted ordering.
-    let ord = !no_ord;
     Ok(Opts {
-        kind,
+        secret,
         serde,
         sqlx,
-        ord,
+        ord: !no_ord,
     })
 }
 
@@ -582,19 +388,5 @@ mod tests {
         let out = norm(&sqlx_impls(&n, &syn::Generics::default()));
         assert!(out.contains("<::std::string::Stringas::sqlx::Type<DB>>::type_info()"));
         assert!(out.contains("letinner:&::std::string::String=&self.0;"));
-    }
-
-    #[test]
-    fn infallible_bridge_is_untouched_on_all_three_inners() {
-        // The infallible bridge's `From<String>` MOVES the value, so borrowing here
-        // would ADD an allocation rather than remove one. Standing guard for the #758
-        // boundary. (The identifier is arbitrary; no production type takes
-        // `infallible` today.)
-        let n = quote::format_ident!("PostBody");
-        let out = norm(&sqlx_impls_infallible(&n, &syn::Generics::default()));
-        assert!(out.contains("<::std::string::Stringas::sqlx::Type<DB>>::type_info()"));
-        assert!(out.contains("letinner:&::std::string::String=&self.0;"));
-        assert!(out.contains("<::std::string::Stringas::sqlx::Decode<'r,DB>>::decode(value)?"));
-        assert!(!out.contains("&'rstras::sqlx::Decode"));
     }
 }

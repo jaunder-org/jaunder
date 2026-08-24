@@ -14,6 +14,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{Database, Pool};
 
 use common::ids::{ChannelId, SubscriptionId, UserId};
+use common::username::Username;
 use common::visibility::{
     SubscriberIdentity, SubscriberRef, SubscriptionPolicy, SubscriptionStatus, ViewerIdentity,
     local_subscriber_ref,
@@ -50,7 +51,7 @@ pub struct SubscriberSummaryRecord {
     pub label: String,
 }
 
-type SubscriberSummaryRow = (SubscriptionId, String);
+type SubscriberSummaryRow = (SubscriptionId, Option<Username>, SubscriberRef);
 
 /// Async operations on the `subscriptions` table.
 #[cfg_attr(feature = "test-utils", mockall::automock)]
@@ -159,10 +160,11 @@ pub trait SubscriptionDialect: Database {
          JOIN subscription_statuses st ON st.status_id = s.status_id \
          WHERE s.author_user_id = $1 AND st.name = 'active' \
          ORDER BY s.subscription_id";
-    /// Lists active subscribers with local-user display labels resolved by SQL.
-    /// Bind order: `author_user_id`.
+    /// Lists active subscribers with local-user display labels resolved after
+    /// both the optional username and raw subscriber reference have crossed
+    /// their typed decode boundaries. Bind order: `author_user_id`.
     const LIST_SUBSCRIBER_SUMMARIES: &'static str = "SELECT \
-           s.subscription_id, COALESCE(u.username, s.subscriber_ref) AS label \
+           s.subscription_id, u.username, s.subscriber_ref \
         FROM subscriptions s \
         JOIN subscription_statuses st ON st.status_id = s.status_id \
         LEFT JOIN users u \
@@ -322,10 +324,12 @@ where
             .await?;
         Ok(rows
             .into_iter()
-            .map(|(subscription_id, label)| SubscriberSummaryRecord {
-                subscription_id,
-                label,
-            })
+            .map(
+                |(subscription_id, username, subscriber_ref)| SubscriberSummaryRecord {
+                    subscription_id,
+                    label: username.map_or_else(|| String::from(subscriber_ref), String::from),
+                },
+            )
             .collect())
     }
 

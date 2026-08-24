@@ -80,7 +80,7 @@ async fn resolution_matrix(#[case] backend: Backend) {
     let remote_channel = channel_id_by_name(backend, &env, "activitypub").await;
     let impostor = ViewerIdentity::Remote {
         channel_id: remote_channel,
-        subscriber_ref: a.to_string().into(),
+        subscriber_ref: a.to_string().parse().unwrap(),
     };
 
     let matrix: &[(&str, PostId, [bool; 6])] = &[

@@ -236,27 +236,6 @@ mod text_enum;
 /// let _ = a < b;
 /// ```
 ///
-/// `#[str_newtype(infallible)]` selects the **infallible** trailer for a newtype whose
-/// invariant never rejects: construction is a hand-written `From<String>` (the single
-/// pure-wrap or normalizing chokepoint) rather than `FromStr`, so there is no
-/// `TryFrom<String>`/`FromStr`. The derive also emits a `From<&str>` alias that routes
-/// through that `From<String>` — so a literal constructs with one `.into()`, no
-/// `.to_owned()` — and a `Deserialize` that routes wire input through it too, so it cannot
-/// fail and normalizes identically. Exclusive with `secret`/`serde` (the infallible
-/// trailer already includes the serde bridge):
-///
-/// ```
-/// use macros::StrNewtype;
-/// #[derive(Clone, PartialEq, Eq, StrNewtype)]
-/// #[str_newtype(infallible)]
-/// struct Inf(String);
-/// impl From<String> for Inf {
-///     fn from(s: String) -> Self { Inf(s) }
-/// }
-/// let v: Inf = "x".into();                                        // From<&str>, one hop
-/// assert_eq!(serde_json::to_string(&v).unwrap(), "\"x\"");        // serde bridge
-/// let _back: Inf = serde_json::from_str("\"x\"").unwrap();        // deserialize via From<String>
-/// ```
 ///
 /// # The phantom-tagged form (#875)
 ///
@@ -933,53 +912,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn str_newtype_infallible_emits_from_string_serde_and_omits_fallible_door() {
-        // Infallible mode: Display/AsRef/Deref/Serialize/Deserialize present; the
-        // fallible door (TryFrom / FromStr routing) is absent — the author writes
-        // From<String> and Deserialize routes through it.
-        let input: DeriveInput = parse_quote! {
-            #[str_newtype(infallible)]
-            struct X(String);
-        };
-        let out = str_newtype::expand(&input).to_string();
-        assert!(out.contains("Display"));
-        assert!(out.contains("AsRef"));
-        assert!(out.contains("Deref"));
-        assert!(out.contains("Serialize"));
-        assert!(out.contains("Deserialize"));
-        // The fallible door (TryFrom / FromStr routing) is absent — the author writes
-        // From<String> and Deserialize routes through it.
-        assert!(!out.contains("TryFrom"));
-        assert!(!out.contains("FromStr"));
-    }
-
-    #[test]
-    fn str_newtype_infallible_with_secret_emits_compile_error() {
-        let input: DeriveInput = parse_quote! {
-            #[str_newtype(infallible, secret)]
-            struct X(String);
-        };
-        assert!(
-            str_newtype::expand(&input)
-                .to_string()
-                .contains("compile_error")
-        );
-    }
-
-    #[test]
-    fn str_newtype_infallible_with_serde_emits_compile_error() {
-        let input: DeriveInput = parse_quote! {
-            #[str_newtype(infallible, serde)]
-            struct X(String);
-        };
-        assert!(
-            str_newtype::expand(&input)
-                .to_string()
-                .contains("compile_error")
-        );
-    }
-
     /// The generic form's headers, at the token level (#875). The integration fixture
     /// `macros/tests/str_newtype.rs` proves the emitted code *works*; this pins the two
     /// merged-generics spellings that a plain `split_for_impl` would get wrong — the
@@ -1253,29 +1185,6 @@ mod tests {
     }
 
     #[test]
-    fn str_newtype_infallible_emits_the_infallible_sqlx_bridge() {
-        // Infallible types are stored: the bridge is on by default and Decode wraps via
-        // From<String> (no FromStr).
-        let input: DeriveInput = parse_quote! {
-            #[str_newtype(infallible)]
-            struct X(String);
-        };
-        let out = str_newtype::expand(&input).to_string();
-        assert!(has_sqlx_bridge(&out));
-        assert!(!out.contains("from_str"));
-    }
-
-    #[test]
-    fn str_newtype_infallible_no_sqlx_omits_the_bridge() {
-        let input: DeriveInput = parse_quote! {
-            #[str_newtype(infallible, no_sqlx)]
-            struct X(String);
-        };
-        let out = str_newtype::expand(&input).to_string();
-        assert!(!has_sqlx_bridge(&out));
-    }
-
-    #[test]
     fn str_newtype_no_sqlx_with_secret_emits_compile_error() {
         // A secret is already bridge-less — `no_sqlx` is redundant/invalid.
         let input: DeriveInput = parse_quote! {
@@ -1314,19 +1223,6 @@ mod tests {
         let out = str_newtype::expand(&input).to_string();
         assert!(out.contains("fn partial_cmp"));
         assert!(out.contains("fn cmp"));
-    }
-
-    #[test]
-    fn str_newtype_infallible_emits_ordering() {
-        let input: DeriveInput = parse_quote! {
-            #[str_newtype(infallible)]
-            struct X(String);
-        };
-        assert!(
-            str_newtype::expand(&input)
-                .to_string()
-                .contains("fn partial_cmp")
-        );
     }
 
     #[test]
@@ -1373,19 +1269,6 @@ mod tests {
         let out = str_newtype::expand(&input).to_string();
         assert!(out.contains("compile_error"));
         assert!(out.contains("already unordered"));
-    }
-
-    #[test]
-    fn str_newtype_infallible_no_ord_is_accepted() {
-        // An infallible newtype can lack `Eq` for the same reasons a default one can,
-        // so the pair is legal (unlike `infallible, secret`).
-        let input: DeriveInput = parse_quote! {
-            #[str_newtype(infallible, no_ord)]
-            struct X(String);
-        };
-        let out = str_newtype::expand(&input).to_string();
-        assert!(!out.contains("compile_error"));
-        assert!(!out.contains("fn partial_cmp"));
     }
 
     #[test]

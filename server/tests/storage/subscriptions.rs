@@ -138,7 +138,7 @@ async fn list_subscriber_summaries_resolves_labels_on_both_dialects(#[case] back
         .subscriptions
         .subscribe(
             author,
-            &SubscriberIdentity::new(remote, numeric_remote_ref.clone().into()),
+            &SubscriberIdentity::new(remote, numeric_remote_ref.parse().unwrap()),
         )
         .await
         .unwrap();
@@ -147,7 +147,7 @@ async fn list_subscriber_summaries_resolves_labels_on_both_dialects(#[case] back
         .subscriptions
         .subscribe(
             author,
-            &SubscriberIdentity::new(local, missing_ref.to_owned().into()),
+            &SubscriberIdentity::new(local, missing_ref.parse().unwrap()),
         )
         .await
         .unwrap();
@@ -167,6 +167,48 @@ async fn list_subscriber_summaries_resolves_labels_on_both_dialects(#[case] back
             (remote_numeric, numeric_remote_ref),
             (missing_local, missing_ref.to_string()),
         ]
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn subscriber_application_reads_reject_unicode_blank_stored_refs(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let author = SeedUser::new().seed(state).await.user_id;
+    let local = local_channel_id(backend, &env).await;
+
+    // Unicode whitespace is deliberately beyond the portable database
+    // constraint, so insert it beneath the Rust write boundary to prove both
+    // application reads still enforce the full domain invariant.
+    let sql = format!(
+        "INSERT INTO subscriptions \
+         (author_user_id, channel_id, subscriber_ref, status_id) \
+         VALUES ({author}, {local}, '\u{2003}', \
+         (SELECT status_id FROM subscription_statuses WHERE name = 'active'))"
+    );
+    raw_exec(backend, &env, &sql).await;
+
+    let listing_error = state
+        .subscriptions
+        .list_subscribers(author)
+        .await
+        .unwrap_err();
+    let listing_message = listing_error.to_string();
+    assert!(
+        listing_message.contains("subscriber reference must not be blank"),
+        "listing must reject the invalid typed decode, got: {listing_message}"
+    );
+
+    let summary_error = state
+        .subscriptions
+        .list_subscriber_summaries(author)
+        .await
+        .unwrap_err();
+    let summary_message = summary_error.to_string();
+    assert!(
+        summary_message.contains("subscriber reference must not be blank"),
+        "summary must reject the invalid typed decode, got: {summary_message}"
     );
 }
 
@@ -194,7 +236,7 @@ async fn is_subscriber_resolves_a_remote_viewer_by_its_own_channel(#[case] backe
         .subscriptions
         .subscribe(
             author,
-            &SubscriberIdentity::new(remote, actor.to_owned().into()),
+            &SubscriberIdentity::new(remote, actor.parse().unwrap()),
         )
         .await
         .unwrap();
@@ -206,7 +248,7 @@ async fn is_subscriber_resolves_a_remote_viewer_by_its_own_channel(#[case] backe
                 author,
                 &ViewerIdentity::Remote {
                     channel_id: remote,
-                    subscriber_ref: actor.to_owned().into(),
+                    subscriber_ref: actor.parse().unwrap(),
                 }
             )
             .await
@@ -220,7 +262,7 @@ async fn is_subscriber_resolves_a_remote_viewer_by_its_own_channel(#[case] backe
                 author,
                 &ViewerIdentity::Remote {
                     channel_id: local,
-                    subscriber_ref: actor.to_owned().into(),
+                    subscriber_ref: actor.parse().unwrap(),
                 }
             )
             .await

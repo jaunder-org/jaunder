@@ -1,7 +1,10 @@
 //! Shared visibility types: channels, subscription status, audience targeting,
 //! the viewer identity, and the subscription-admission seam. See ADR-0020.
 
+use std::str::FromStr;
+
 use macros::StrNewtype;
+use thiserror::Error;
 
 use crate::ids::{AudienceId, ChannelId, UserId};
 
@@ -76,14 +79,25 @@ pub enum AudienceBase {
 ///
 /// This is a storage-domain value, not display text. It is interpreted only with
 /// its `channel_id`: for the seeded `local` channel it is the decimal local
-/// [`UserId`] spelling, while remote channels own their own free-form namespace.
+/// [`UserId`] spelling, while remote channels own their own opaque namespace.
+/// Untrusted strings enter through [`FromStr`], which rejects blank references
+/// without normalizing accepted spellings.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, StrNewtype)]
-#[str_newtype(infallible)]
 pub struct SubscriberRef(String);
 
-impl From<String> for SubscriberRef {
-    fn from(value: String) -> Self {
-        Self(value)
+/// Error returned when a string cannot be parsed as a [`SubscriberRef`].
+#[derive(Debug, Error)]
+#[error("subscriber reference must not be blank")]
+pub struct InvalidSubscriberRef;
+
+impl FromStr for SubscriberRef {
+    type Err = InvalidSubscriberRef;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.trim().is_empty() {
+            return Err(InvalidSubscriberRef);
+        }
+        Ok(Self(value.to_owned()))
     }
 }
 
@@ -157,7 +171,9 @@ impl ViewerIdentity {
 /// is the one place it is defined; call it rather than spelling it again (#6).
 #[must_use]
 pub fn local_subscriber_ref(user_id: UserId) -> SubscriberRef {
-    user_id.to_string().into()
+    // A decimal integer spelling is necessarily non-blank, so `UserId` is the
+    // proof that this private construction preserves the domain invariant.
+    SubscriberRef(user_id.to_string())
 }
 
 /// The local user id of an account viewer, for *display* of owner controls.
@@ -542,13 +558,55 @@ mod tests {
     }
 
     #[test]
+    fn subscriber_ref_rejects_empty_and_unicode_whitespace() {
+        for blank in ["", "\u{2003}", "\u{00a0}\t\n"] {
+            assert!(
+                blank.parse::<SubscriberRef>().is_err(),
+                "expected {blank:?} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_subscriber_ref_display_is_stable() {
+        assert_eq!(
+            InvalidSubscriberRef.to_string(),
+            "subscriber reference must not be blank"
+        );
+    }
+
+    #[test]
+    fn subscriber_ref_serde_rejects_unicode_blank_input() {
+        assert!(serde_json::from_str::<SubscriberRef>("\"\\u2003\"").is_err());
+    }
+
+    #[test]
+    fn subscriber_ref_preserves_opaque_input_byte_for_byte() {
+        let input = " \u{2003}HTTPS://Remote.Example/Alice%2F\u{00df}\n";
+        let subscriber_ref = input
+            .parse::<SubscriberRef>()
+            .expect("fixture is a non-blank subscriber reference");
+        assert_eq!(subscriber_ref.as_bytes(), input.as_bytes());
+        assert_eq!(
+            String::from(subscriber_ref.clone()).as_bytes(),
+            input.as_bytes()
+        );
+        assert_eq!(
+            serde_json::from_str::<SubscriberRef>(&serde_json::to_string(&subscriber_ref).unwrap())
+                .unwrap()
+                .as_bytes(),
+            input.as_bytes()
+        );
+    }
+
+    #[test]
     fn viewer_user_id_is_none_for_a_remote_viewer_with_a_numeric_ref() {
         // The #6 hole in its second form: a remote ref that happens to be the
         // decimal form of a local user id must not project to that user, or the
         // owner-only controls render for a viewer who is not the owner.
         let impostor = ViewerIdentity::Remote {
             channel_id: ChannelId::from(2),
-            subscriber_ref: "42".to_owned().into(),
+            subscriber_ref: "42".parse().unwrap(),
         };
         assert_eq!(viewer_user_id(&impostor), None);
     }
@@ -560,7 +618,7 @@ mod tests {
         assert_eq!(
             viewer_user_id(&ViewerIdentity::Remote {
                 channel_id: ChannelId::from(2),
-                subscriber_ref: "https://remote.example/users/alice".to_owned().into(),
+                subscriber_ref: "https://remote.example/users/alice".parse().unwrap(),
             }),
             None
         );

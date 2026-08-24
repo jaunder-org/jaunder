@@ -24,6 +24,8 @@ mod helpers;
 mod invites;
 mod media;
 mod media_manager;
+#[cfg(test)]
+mod migrations;
 mod password;
 mod post_service;
 mod postgres;

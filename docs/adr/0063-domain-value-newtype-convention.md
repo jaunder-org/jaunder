@@ -380,6 +380,13 @@ displaced. The first-users list is **gone rather than updated**: `PostTitle` was
 corrected in #830 and `PostBody` in #811, so neither is an infallible newtype
 any more, and no production type takes the flag today (ADR-0101 decision 2).
 
+**2026-08-24 correction.** The final present-state sentence above became stale
+when `SubscriberRef` adopted the flag during #750. The #857 audit then applied
+ADR-0101's question, found that blank strings must be refused, made
+`SubscriberRef` validating, and removed the separate zero-user macro mode. The
+Decision text remains historical; current architecture follows
+`docs/adr/drafts/subscriber-reference-invariant.md`.
+
 ### 4. Boundary rule
 
 Parse into the newtype at the **outermost** boundary — `#[server]` argument and

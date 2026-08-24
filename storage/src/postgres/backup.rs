@@ -41,11 +41,10 @@ fn finish_restore_rollback<T>(
     )
 }
 
-/// Map a Postgres integrity-constraint violation (SQLSTATE class `23`, e.g. `23503`
-/// `foreign_key_violation`) to `ConstraintViolation`, so a restore that violates the
-/// schema fails uniformly with `SQLite` (which detects it via `foreign_key_check`).
-/// Any other database error is a genuine infrastructure failure and passes through as
-/// `Sqlx`.
+/// Map every `PostgreSQL` integrity-constraint violation (SQLSTATE class `23`) to
+/// the backend-independent restore category. `SQLite` applies the same contract
+/// to its native constraint kinds and final foreign-key validation; all other
+/// database errors remain infrastructure failures.
 fn map_restore_error(error: sqlx::Error) -> BackupError {
     let constraint_message = error
         .as_database_error()

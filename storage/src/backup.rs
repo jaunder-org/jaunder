@@ -1205,6 +1205,93 @@ mod tests {
         );
         Ok(())
     }
+    // Raw backup rows re-enter through the live schema rather than the Rust
+    // domain constructor, so the schema rejection and public error category
+    // must agree across both restore implementations.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn restore_rejects_zero_length_subscriber_ref_and_rolls_back(
+        #[case] backend: Backend,
+    ) -> Result<(), BackupError> {
+        let source = backend.setup().await;
+        let author = SeedUser::new().seed(&source.state).await;
+        crate::with_closeable_pool!(source.base.pool(), pool, {
+            sqlx::query(
+                "INSERT INTO subscriptions \
+                 (author_user_id, channel_id, subscriber_ref, status_id) \
+                 SELECT $1, channels.channel_id, 'valid-ref', subscription_statuses.status_id \
+                 FROM channels CROSS JOIN subscription_statuses \
+                 WHERE channels.name = 'local' AND subscription_statuses.name = 'active'",
+            )
+            .bind(author.user_id)
+            .execute(pool)
+            .await?;
+        });
+
+        let temp = TempDir::new()?;
+        let media = temp.path().join("media");
+        fs::create_dir_all(&media)?;
+        let backup = temp.path().join("backup");
+        let source_db = backup_db_options(backend, &source.base)?;
+        export_backup(BackupExportOptions {
+            database: &source_db,
+            media_path: &media,
+            destination_path: &backup,
+            mode: BackupMode::Directory,
+        })
+        .await?;
+
+        let subscriptions_ndjson = backup.join("db").join("subscriptions.ndjson");
+        let mut rows: Vec<serde_json::Map<String, serde_json::Value>> =
+            fs::read_to_string(&subscriptions_ndjson)?
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(serde_json::from_str)
+                .collect::<Result<_, _>>()?;
+        assert_eq!(rows.len(), 1, "expected one exported subscription");
+        rows[0].insert(
+            "subscriber_ref".to_owned(),
+            serde_json::Value::String(String::new()),
+        );
+        let corrupted = rows
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<Result<Vec<_>, _>>()?
+            .join("\n")
+            + "\n";
+        fs::write(&subscriptions_ndjson, corrupted)?;
+
+        let target = backend.setup().await;
+        let target_db = backup_db_options(backend, &target.base)?;
+        assert!(crate::database_is_empty(&target_db).await?);
+        let error = restore_backup(BackupRestoreOptions {
+            database: &target_db,
+            media_path: &temp.path().join("restored-media"),
+            source_path: &backup,
+        })
+        .await
+        .expect_err("the live schema must reject an empty subscriber reference");
+
+        assert!(matches!(error, BackupError::ConstraintViolation(_)));
+        assert!(
+            crate::database_is_empty(&target_db).await?,
+            "a failed restore must roll back every imported user-data row"
+        );
+        let seeded_lookup_rows = target
+            .base
+            .pool()
+            .scalar_i64(
+                "SELECT (SELECT COUNT(*) FROM channels WHERE name = 'local') \
+                   + (SELECT COUNT(*) FROM subscription_statuses WHERE name = 'active')",
+            )
+            .await?;
+        assert_eq!(
+            seeded_lookup_rows, 2,
+            "a failed restore must leave migration-seeded target rows intact"
+        );
+        Ok(())
+    }
+
     // Both backends' restore path shares the ragged-NDJSON contract: a row that
     // omits a column present in row 0 is rejected as `InvalidBackup`, and the
     // failed import rolls the restore transaction back. One `#[apply(backends)]`
