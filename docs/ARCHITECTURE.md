@@ -2739,12 +2739,13 @@ The `doc-links` gate has no ADR of its own; its decision lives in issue
 [#682](https://github.com/jaunder-org/jaunder/issues/682), cited from
 `xtask/src/steps/doc_links.rs:1`.
 
-A draft is **not** invisible as a link _target_, and the asymmetry has teeth.
-`doc-links` resolves a target with `.exists()` against the working tree
-(`xtask/src/doc_links.rs:207-210`), not against the tracked set — so a tracked
-document linking a gitignored draft passes locally, where the pen is populated,
-and fails in a fresh clone, where it is not. `adr promote` is what closes the
-window: it rewrites every `drafts/<slug>` path-form reference repo-wide to the
+A draft path is not live merely because it exists locally. `doc-links` strips
+any fragment and resolves relative targets against Git's tracked content, not
+the developer's working-tree filesystem: a file target is live only when the
+stripped target path is tracked, and a directory target is live only when at
+least one tracked path lives below it. Untracked or gitignored drafts therefore
+fail locally the same way they fail in a fresh clone or CI. `adr promote` is
+what rewrites every `drafts/<slug>` path-form reference repo-wide to the
 assigned number before the branch is pushed
 ([ADR-0048](adr/0048-adr-out-of-git-draft-workflow.md)). Referencing a draft by
 path is therefore not a convention but a prerequisite — a link written any other
