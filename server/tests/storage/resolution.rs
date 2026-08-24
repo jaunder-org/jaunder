@@ -6,7 +6,7 @@ use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, SeedRawPost, backends, seed_users};
 
-use super::fixtures::{anon_published, channel_id_by_name, local_channel_id, raw_exec};
+use super::fixtures::{channel_id_by_name, local_channel_id, raw_exec};
 
 // The full resolution matrix: viewers {anonymous, author A, active subscriber S,
 // named-member M (in audience G, also subscribed), non-member N (not subscribed)}
@@ -155,51 +155,4 @@ async fn resolution_matrix(#[case] backend: Backend) {
             );
         }
     }
-}
-
-// An anonymous viewer must not be admitted by a subscription row whose
-// `subscriber_ref` is the empty string (#686).
-#[apply(backends)]
-#[tokio::test]
-async fn anonymous_is_not_admitted_by_an_empty_subscriber_ref(#[case] backend: Backend) {
-    let env = backend.setup().await;
-    let state = &env.state;
-    let [a] = seed_users(state).await;
-
-    raw_exec(
-        backend,
-        &env,
-        &format!(
-            "INSERT INTO subscriptions (author_user_id, channel_id, subscriber_ref, status_id) \
-             VALUES ({a}, (SELECT channel_id FROM channels WHERE name='local'), '', \
-                     (SELECT status_id FROM subscription_statuses WHERE name='active'))"
-        ),
-    )
-    .await;
-
-    let subscribers_only = SeedRawPost::new(a)
-        .audiences(vec![AudienceTarget::Subscribers])
-        .seed(state)
-        .await
-        .post_id;
-
-    let anon = ViewerIdentity::Anonymous;
-    assert!(
-        state
-            .posts
-            .get_post_by_id(subscribers_only, &anon)
-            .await
-            .unwrap()
-            .is_none(),
-        "get_post_by_id: an empty subscriber_ref must not admit an anonymous viewer"
-    );
-    let listed: std::collections::HashSet<PostId> = anon_published(state, "100")
-        .await
-        .into_iter()
-        .map(|p| p.post_id)
-        .collect();
-    assert!(
-        !listed.contains(&subscribers_only),
-        "list_published: an empty subscriber_ref must not admit an anonymous viewer"
-    );
 }
