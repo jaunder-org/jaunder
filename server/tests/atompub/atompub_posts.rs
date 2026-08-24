@@ -6,6 +6,7 @@ use common::ids::PostId;
 use common::tag::{MAX_TAGS_PER_POST, TagLabel};
 use common::test_support::{parse_post_body, parse_post_title, permalink_date};
 use common::time::UtcInstant;
+use common::visibility::{AudienceTarget, DefaultAudience};
 use tower::ServiceExt;
 
 use rstest::*;
@@ -1520,22 +1521,28 @@ async fn member_get_serves_owner_non_public_post(#[case] backend: Backend) {
     assert!(body.contains("Secret body"), "body should contain content");
 }
 
-#[apply(backends)]
+#[apply(backends_matrix)]
+#[case(DefaultAudience::Public, AudienceTarget::Public)]
+#[case(DefaultAudience::Subscribers, AudienceTarget::Subscribers)]
+#[case(DefaultAudience::Private, AudienceTarget::Private)]
 #[tokio::test]
-async fn create_adopts_default_audience(#[case] backend: Backend) {
+async fn create_widens_each_default_audience(
+    backend: Backend,
+    #[case] default_audience: DefaultAudience,
+    #[case] expected_audience: AudienceTarget,
+) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
 
-    // The instance default audience is Subscribers; an AtomPub POST (which has no
-    // audience field) must adopt it.
+    // AtomPub has no audience field, so post creation is the per-Post boundary
+    // that widens this instance-wide default.
     state
         .site_config
-        .set_default_audience(&common::visibility::AudienceTarget::Subscribers)
+        .set_default_audience(&default_audience)
         .await
         .unwrap();
 
     let app = make_app(&state, &base);
-
     let xml = entry_xml("Hello", "text", "the body");
     let response = app
         .oneshot(atompub_post_xml(&session, "posts", &xml))
@@ -1543,23 +1550,15 @@ async fn create_adopts_default_audience(#[case] backend: Backend) {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::CREATED);
-    let loc = response
-        .headers()
-        .get(header::LOCATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|p| p.rsplit('/').next())
-        .and_then(|id| id.parse::<i64>().ok())
-        .unwrap();
-
     let audiences = state
         .posts
-        .get_post_audiences(PostId::from(loc))
+        .get_post_audiences(PostId::from(location_post_id(&response)))
         .await
         .unwrap();
     assert_eq!(
         audiences,
-        vec![common::visibility::AudienceTarget::Subscribers],
-        "AtomPub create must adopt the configured default audience"
+        vec![expected_audience],
+        "AtomPub create must widen the configured DefaultAudience"
     );
 }
 

@@ -27,7 +27,7 @@ async fn user_with_cookie(state: &Arc<storage::AppState>) -> String {
 
 #[apply(backends)]
 #[tokio::test]
-async fn default_audience_selection_returns_public_by_default(#[case] backend: Backend) {
+async fn default_audience_selection_returns_private_by_default(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let cookie = author_with_cookie(&state).await;
 
@@ -41,7 +41,7 @@ async fn default_audience_selection_returns_public_by_default(#[case] backend: B
 
     assert_eq!(status, StatusCode::OK, "body: {body}");
     let selection: AudienceSelection = serde_json::from_str(&body).unwrap();
-    assert_eq!(selection.base, AudienceBase::Public);
+    assert_eq!(selection.base, AudienceBase::Private);
     assert!(selection.named.is_empty());
 }
 
