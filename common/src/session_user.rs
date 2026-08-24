@@ -9,11 +9,12 @@
 //! `web::auth::marker_storage` (#514). Lives in `common` so the `test-support`
 //! binary can build markers without linking `web` (#791).
 
+use crate::local_storage_key::LocalStorageKey;
 use crate::username::Username;
 use serde::{Deserialize, Serialize};
 
-/// The localStorage key holding the marker. Kept in sync with the pre-paint script.
-pub const MARKER_KEY: &str = "jaunder_auth";
+/// The localStorage key holding the marker. Compatibility alias for the registry.
+pub const MARKER_KEY: &str = LocalStorageKey::AuthMarker.as_str();
 
 /// The whole client-visible session identity (#181, #591, ADR-0044): who is logged
 /// in and whether they are an operator. Persisted in the advisory marker and
