@@ -1118,9 +1118,10 @@ Wire args are **domain newtypes, validated client-side against the same
 newtype's `FromStr`** ([ADR-0065](adr/0065-client-side-domain-validation.md)) —
 never a re-implemented rule. The chokepoint is the pure `forms::field_error<T>`
 (`web/src/forms/field.rs:11`) driving a parent-owned `Field<T>`
-(`web/src/forms/field.rs:22`), rendered by `<ValidatedInput<T>>` /
-`<ValidatedTextarea<T>>` (`web/src/forms/component.rs:110,185`) or bound
-directly for a bespoke layout. The chrome both shells wrap themselves in,
+(`web/src/forms/field.rs:22`). Standard labelled fields render through
+`<ValidatedInput<T>>` / `<ValidatedTextarea<T>>`; bespoke direct-bind layouts
+use the shared bare-input and touched-error primitives so only chrome and
+placement stay caller-owned. The chrome the labelled shells wrap themselves in,
 `Labelled` (`web/src/forms/component.rs:56`), is deliberately **not** generic
 over `T`: it takes the validity as two erased signals (`error`, `touched`)
 rather than a `Field<T>`

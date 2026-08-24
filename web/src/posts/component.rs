@@ -18,7 +18,7 @@ use crate::audiences::{self, list_mine};
 use crate::avatar::Avatar;
 use crate::error::WebError;
 use crate::feed_discovery::{FeedDiscovery, RsdDiscovery};
-use crate::forms::{Field, ValidatedTextarea};
+use crate::forms::{Field, ValidatedBareInput, ValidatedTextarea, validated_error};
 use crate::media::MediaUpload;
 // `Get`/`Update` are deliberately absent from this list: naming the generated
 // structs here would shadow the identically-named `leptos::prelude` traits this
@@ -1372,26 +1372,17 @@ fn SlugOverrideInput(slug_field: Field<Slug>) -> impl IntoView {
     view! {
         <label class="j-field-row" style="grid-template-columns:auto 1fr">
             <span class="j-field-label">"Slug"</span>
-            <input
-                type="text"
+            <ValidatedBareInput<Slug>
                 name="slug_override"
-                placeholder="auto"
-                class="j-field-val"
-                prop:value=slug_field.value
-                on:input=move |ev| {
-                    let v = event_target_value(&ev);
-                    slug_field.value.set(v.clone());
-                    slug_field.error.set(slug_field.error_for(&v));
-                }
-                on:blur=move |_| slug_field.touch()
+                field=slug_field
+                placeholder=Some("auto")
+                class=Some("j-field-val")
             />
-            {move || {
-                slug_field
-                    .is_touched()
-                    .then(|| slug_field.error.get())
-                    .flatten()
-                    .map(|msg| view! { <span class="error">{msg}</span> })
-            }}
+            {validated_error(
+                slug_field.error,
+                Signal::derive(move || slug_field.is_touched()),
+                |msg| view! { <span class="error">{msg}</span> }.into_any(),
+            )}
         </label>
     }
 }

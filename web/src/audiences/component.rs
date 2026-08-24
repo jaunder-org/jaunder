@@ -9,7 +9,9 @@ use super::model::{SubscriberSummary, Summary, SummaryStoreFields};
 use crate::error::WebResult;
 // `crate::forms::Field` (the validated-input field) is aliased to avoid colliding with
 // `reactive_stores::Field` (the keyed-store field used by `AudienceRow`).
-use crate::forms::{Field as ValidatedField, server_action_submit};
+use crate::forms::{
+    Field as ValidatedField, ValidatedBareInput, server_action_submit, validated_error,
+};
 use crate::icon::Icons;
 use crate::reactive::{Invalidator, invalidator_scope};
 use crate::topbar::Topbar;
@@ -166,17 +168,10 @@ fn CreateAudienceForm() -> impl IntoView {
                 </div>
             </div>
             <ActionForm action=create_action>
-                <input
-                    type="text"
+                <ValidatedBareInput<AudienceName>
                     name="name"
-                    placeholder="Audience name"
-                    prop:value=name.value
-                    on:input=move |ev| {
-                        let v = event_target_value(&ev);
-                        name.value.set(v.clone());
-                        name.error.set(name.error_for(&v));
-                    }
-                    on:blur=move |_| name.touch()
+                    field=name
+                    placeholder=Some("Audience name")
                 />
                 <button
                     type="submit"
@@ -187,12 +182,11 @@ fn CreateAudienceForm() -> impl IntoView {
                 </button>
             </ActionForm>
             // Touched-gated inline validation message (the newtype's own `Display`).
-            {move || {
-                name.is_touched()
-                    .then(|| name.error.get())
-                    .flatten()
-                    .map(|m| view! { <p class="error">{m}</p> })
-            }}
+            {validated_error(
+                name.error,
+                Signal::derive(move || name.is_touched()),
+                |m| view! { <p class="error">{m}</p> }.into_any(),
+            )}
             // Server-action error (e.g. a duplicate name).
             {move || {
                 create_action
@@ -241,26 +235,15 @@ fn AudienceHeader(audience_id: AudienceId, name: AudienceName) -> impl IntoView 
     view! {
         <div class="j-audience-head">
             <form on:submit=submit_rename>
-                <input
-                    type="text"
-                    name="name"
-                    prop:value=name.value
-                    on:input=move |ev| {
-                        let v = event_target_value(&ev);
-                        name.value.set(v.clone());
-                        name.error.set(name.error_for(&v));
-                    }
-                    on:blur=move |_| name.touch()
-                />
+                <ValidatedBareInput<AudienceName> name="name" field=name />
                 <button type="submit" class="j-btn" prop:disabled=move || rename_disabled.get()>
                     "Rename"
                 </button>
-                {move || {
-                    name.is_touched()
-                        .then(|| name.error.get())
-                        .flatten()
-                        .map(|m| view! { <p class="error">{m}</p> })
-                }}
+                {validated_error(
+                    name.error,
+                    Signal::derive(move || name.is_touched()),
+                    |m| view! { <p class="error">{m}</p> }.into_any(),
+                )}
                 {move || {
                     rename_action
                         .value()

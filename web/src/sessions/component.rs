@@ -1,4 +1,4 @@
-use crate::forms::Field;
+use crate::forms::{Field, ValidatedBareInput, validated_error};
 use crate::topbar::Topbar;
 use common::session_label::SessionLabel;
 use leptos::prelude::*;
@@ -83,25 +83,17 @@ fn AppPasswordCreator(create_action: ServerAction<CreateAppPassword>) -> impl In
                 "Create a password to publish from an external editor (such as MarsEdit) over AtomPub."
             </p>
             <label for="app-password-label">"Label"</label>
-            <input
-                type="text"
-                id="app-password-label"
-                placeholder="Label (e.g. MarsEdit)"
-                prop:value=label_field.value
-                on:input=move |ev| {
-                    let v = event_target_value(&ev);
-                    label_field.value.set(v.clone());
-                    label_field.error.set(label_field.error_for(&v));
-                }
-                on:blur=move |_| label_field.touch()
+            <ValidatedBareInput<SessionLabel>
+                name="label"
+                field=label_field
+                id=Some("app-password-label")
+                placeholder=Some("Label (e.g. MarsEdit)")
             />
-            {move || {
-                label_field
-                    .is_touched()
-                    .then(|| label_field.error.get())
-                    .flatten()
-                    .map(|msg| view! { <p class="error">{msg}</p> })
-            }}
+            {validated_error(
+                label_field.error,
+                Signal::derive(move || label_field.is_touched()),
+                |msg| view! { <p class="error">{msg}</p> }.into_any(),
+            )}
             <button
                 type="button"
                 class="j-btn"
