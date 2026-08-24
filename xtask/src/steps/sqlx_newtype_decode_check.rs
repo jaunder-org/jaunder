@@ -942,6 +942,15 @@ const ALLOWLIST: &[Allowed] = &[
     },
     Allowed {
         file: "posts.rs",
+        function: "list_scheduled_by_user",
+        target: "PostRecord",
+        what: "&sql",
+        count: 2,
+        category: Category::HandWrittenFromRow,
+        reason: "PostRecord's cursor and first-page decoders use direct typed column gets, which remain policed (#619)",
+    },
+    Allowed {
+        file: "posts.rs",
         function: "list_collection_by_user",
         target: "PostRecord",
         what: "&sql",

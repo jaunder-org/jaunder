@@ -1706,7 +1706,7 @@ where
                  ORDER BY p.published_at ASC, p.post_id ASC
                  LIMIT $6"
             );
-            sqlx::query_as::<_, PostRow>(&sql)
+            sqlx::query_as::<_, PostRecord>(&sql)
                 .bind(user_id)
                 .bind(cursor.published_at)
                 .bind(cursor.published_at)
@@ -1729,14 +1729,14 @@ where
                  ORDER BY p.published_at ASC, p.post_id ASC
                  LIMIT $3"
             );
-            sqlx::query_as::<_, PostRow>(&sql)
+            sqlx::query_as::<_, PostRecord>(&sql)
                 .bind(user_id)
                 .bind(now)
                 .bind(limit)
                 .fetch_all(&self.pool)
                 .await?
         };
-        rows.into_iter().map(post_record_from_row).collect()
+        Ok(rows)
     }
 
     #[tracing::instrument(
