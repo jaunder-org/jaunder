@@ -18,6 +18,13 @@ pub(crate) const NAV_ITEMS: &[(&str, &str, &str, Option<&'static str>, bool)] = 
     ("replies", "Replies", Icons::REPLY, None, true),
     ("bookmarks", "Bookmarks", Icons::BOOKMARK, None, true),
     ("drafts", "Drafts", Icons::EDIT, Some("/drafts"), true),
+    (
+        "scheduled",
+        "Scheduled",
+        Icons::EDIT,
+        Some("/scheduled"),
+        true,
+    ),
     ("media", "Media", Icons::MEDIA, Some("/media"), true),
     (
         "audiences",
@@ -111,6 +118,7 @@ mod tests {
         assert!(html.contains("<span>Home</span>"), "{html}");
         // Auth-required items must NOT appear for the anonymous sidebar.
         assert!(!html.contains(">Drafts<"), "{html}");
+        assert!(!html.contains(">Scheduled<"), "{html}");
         assert!(!html.contains(">Settings<"), "{html}");
         // Sources section + empty footer.
         assert!(

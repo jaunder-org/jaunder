@@ -60,6 +60,36 @@ async function openPostFromDrafts(page: Page, title: string): Promise<string> {
   return openEditor(page);
 }
 
+async function openPostFromScheduled(page: Page, title: string): Promise<void> {
+  if (new URL(page.url()).pathname !== "/scheduled") {
+    await navigateInApp(
+      page,
+      () => click(page, '.j-nav a[href="/scheduled"]'),
+      {
+        url: "/scheduled",
+        ready: '[data-test="scheduled-list"], [data-test="scheduled-empty"]',
+      },
+    );
+  }
+  const row = page.locator('[data-test="scheduled-row"]', { hasText: title });
+  await expect(row).toBeVisible();
+  const editHref = await row
+    .locator('[data-test="scheduled-edit-link"]')
+    .getAttribute("href");
+  expect(
+    editHref,
+    `scheduled row for "${title}" has no edit link`,
+  ).toBeTruthy();
+  await navigateInApp(
+    page,
+    () => row.locator('[data-test="scheduled-edit-link"]').click(),
+    {
+      url: editHref!,
+      ready: SEL.postBody,
+    },
+  );
+}
+
 test("authenticated user can create a post through the UI", async ({
   registeredPage,
 }) => {
@@ -1426,6 +1456,85 @@ test("scheduling a post shows a Scheduled-for badge on the drafts page", async (
     ready: "article.j-post",
   });
   await expect(page.locator("article.j-post")).toContainText("Scheduled Draft");
+});
+
+test("scheduled management page requires auth before listing rows", async ({
+  page,
+}) => {
+  await goto(page, "/scheduled");
+  await expect(
+    page.locator('[data-test="scheduled-auth-required"]'),
+  ).toBeVisible();
+  await expect(page.locator('[data-test="scheduled-list"]')).toHaveCount(0);
+  await expect(page.locator('a[href="/login"]')).toContainText("Sign in");
+});
+
+test("scheduled management page opens editor for reschedule and pullback", async ({
+  registeredPage,
+}) => {
+  const ORIGINAL_SCHEDULE = "2999-01-01T09:00";
+  const REPLACEMENT_SCHEDULE = "2999-02-03T10:15";
+  const page = await registeredPage("/posts/new");
+
+  await page.fill(
+    SEL.postBody,
+    "# Scheduled Management\n\nbody for scheduled management",
+  );
+  await page.fill(SEL.publishAt, ORIGINAL_SCHEDULE);
+  await click(page, SEL.publishButton("true"));
+  await waitForSelector(page, SEL.saveSummary);
+
+  await navigateInApp(page, () => click(page, '.j-nav a[href="/scheduled"]'), {
+    url: "/scheduled",
+    ready: '[data-test="scheduled-list"]',
+  });
+  const row = page.locator('[data-test="scheduled-row"]', {
+    hasText: "Scheduled Management",
+  });
+  await expect(row).toBeVisible();
+  await expect(row.locator('[data-test="scheduled-go-live"]')).toContainText(
+    "2999-01-01",
+  );
+
+  await openPostFromScheduled(page, "Scheduled Management");
+  await page.fill(SEL.publishAt, REPLACEMENT_SCHEDULE);
+  await click(page, SEL.publishButton("true"));
+  await page.waitForURL((url) => !url.pathname.endsWith("/edit"));
+
+  await navigateInApp(page, () => click(page, '.j-nav a[href="/scheduled"]'), {
+    url: "/scheduled",
+    ready: '[data-test="scheduled-list"]',
+  });
+  const rescheduled = page.locator('[data-test="scheduled-row"]', {
+    hasText: "Scheduled Management",
+  });
+  await expect(
+    rescheduled.locator('[data-test="scheduled-go-live"]'),
+  ).toContainText("2999-02-03");
+
+  await openPostFromScheduled(page, "Scheduled Management");
+  await click(page, SEL.clearSchedule);
+  await click(page, SEL.publishButton("true"));
+  await waitForSelector(page, SEL.saveSummary);
+  await expect(page.locator(SEL.saveSummary)).toContainText("Draft saved.");
+
+  await navigateInApp(page, () => click(page, '.j-nav a[href="/scheduled"]'), {
+    url: "/scheduled",
+    ready: '[data-test="scheduled-empty"]',
+  });
+  await expect(
+    page.locator('[data-test="scheduled-row"]', {
+      hasText: "Scheduled Management",
+    }),
+  ).toHaveCount(0);
+
+  await navigateInApp(page, () => click(page, '.j-nav a[href="/drafts"]'), {
+    url: "/drafts",
+    ready: '.j-topbar h1:has-text("Drafts")',
+  });
+  const draftRow = page.locator("li", { hasText: "Scheduled Management" });
+  await expect(draftRow).toBeVisible();
+  await expect(draftRow.locator(".j-badge-scheduled")).toHaveCount(0);
 });
 test.describe("scheduled editor local time", () => {
   test.use({ timezoneId: "America/New_York" });

@@ -21,7 +21,7 @@ use storage::test_support::{
 
 use super::fixtures::{
     create_post_json, get_post_form, list_drafts, list_home_feed, list_local_timeline,
-    publish_post_form, update_post_json,
+    list_scheduled, publish_post_form, update_post_json,
 };
 
 async fn get_post_preview_form(
@@ -47,6 +47,7 @@ enum UnauthEndpoint {
     CreatePost,
     UpdatePost,
     ListDrafts,
+    ListScheduled,
     PublishPost,
     ListHomeFeed,
 }
@@ -72,6 +73,7 @@ async fn unauthenticated_request(
             .await
         }
         UnauthEndpoint::ListDrafts => list_drafts(state, None, 10, None).await,
+        UnauthEndpoint::ListScheduled => list_scheduled(state, None, 10, None).await,
         UnauthEndpoint::PublishPost => publish_post_form(state, PostId::from(99), None).await,
         UnauthEndpoint::ListHomeFeed => list_home_feed(state, None, 50, None).await,
     }
@@ -84,6 +86,7 @@ async fn unauthenticated_request(
 #[case::create_post(UnauthEndpoint::CreatePost)]
 #[case::update_post(UnauthEndpoint::UpdatePost)]
 #[case::list_drafts(UnauthEndpoint::ListDrafts)]
+#[case::list_scheduled(UnauthEndpoint::ListScheduled)]
 #[case::publish_post(UnauthEndpoint::PublishPost)]
 #[case::list_home_feed(UnauthEndpoint::ListHomeFeed)]
 #[tokio::test]

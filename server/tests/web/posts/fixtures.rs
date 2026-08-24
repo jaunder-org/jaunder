@@ -75,8 +75,8 @@ pub(super) async fn get_post_form(
     post_form(state, <web::posts::Get as ServerFn>::PATH, body, cookie).await
 }
 
-// The six listing helpers below post JSON, not a form: their `cursor` is a nested
-// `PageCursor`, which the default form-urlencoded codec cannot carry, so the six
+// The listing helpers below post JSON, not a form: their `cursor` is a nested
+// `PageCursor`, which the default form-urlencoded codec cannot carry, so the
 // endpoints declare `input = Json`.
 pub(super) async fn list_drafts(
     state: &Arc<storage::AppState>,
@@ -87,6 +87,21 @@ pub(super) async fn list_drafts(
     post_json(
         state,
         <web::posts::ListDrafts as ServerFn>::PATH,
+        serde_json::json!({ "cursor": cursor, "limit": limit }),
+        cookie,
+    )
+    .await
+}
+
+pub(super) async fn list_scheduled(
+    state: &Arc<storage::AppState>,
+    cursor: Option<PageCursor>,
+    limit: u32,
+    cookie: Option<&str>,
+) -> (StatusCode, String) {
+    post_json(
+        state,
+        <web::posts::ListScheduled as ServerFn>::PATH,
         serde_json::json!({ "cursor": cursor, "limit": limit }),
         cookie,
     )
