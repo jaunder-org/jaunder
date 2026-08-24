@@ -64,10 +64,12 @@ exact:
   `e2e.teardown`, `e2e.flow.*` (browser side); `request`, `storage.*`,
   `crypto.*`, `site.serve` (server and seed-process side).
 - **Per-test JSON attributes on `e2e.test`**: actions (`e2e.action_top_json`),
-  navigations (`e2e.navigation_top_json`), resources
+  default-page navigations (`e2e.navigation_top_json`), resources
   (`e2e.resource_summary_json`), long tasks (`e2e.long_tasks_json`), slow
-  requests (`e2e.request_top_slow_json`). `action.timed` / `action.failed` /
-  `navigation.lifecycle` / `request.slow` are span **events**, not spans.
+  requests (`e2e.request_top_slow_json`). **Per-secondary-page JSON attributes
+  on `e2e.page`**: secondary-page navigations (`e2e.navigation_top_json`).
+  `action.timed` / `action.failed` / `navigation.lifecycle` / `request.slow` are
+  span **events**, not spans.
 
 Counting "spans named `action.timed`" therefore finds nothing; the data is
 inside the attribute blobs.
@@ -100,6 +102,20 @@ comparable**: #794 delimited the composite flows (`flow.login`,
 `flow.verify_email`, …) and wrapped the previously-invisible waits, so the
 action count legitimately rose. Diff the request and navigation counts across
 that boundary; do not diff the action counts.
+
+Secondary-page navigation counts are deliberately separate. `e2e.test`'s
+`e2e.navigation_count` and `e2e.navigation_top_json` remain default-page-only
+for ADR-0096 comparability; each instrumented `e2e.page` span carries the same
+navigation count/top-list vocabulary for its own page. The canonical document
+load total for an e2e trace corpus is therefore:
+
+```
+sum(e2e.test.navigation_count) + sum(e2e.page.navigation_count)
+```
+
+`cargo xtask traces analyze` treats `e2e.test` and `e2e.page` spans carrying
+`e2e.navigation_top_json` as navigation-bearing for URL/phase and boot-coverage
+reports. Sections that say `e2e.test` alone remain default-page-only.
 
 **Every `e2e.`-prefixed span must carry an `e2e.project` attribute.**
 `traces analyze --project <name>` drops any `e2e.`-named span whose
@@ -206,28 +222,34 @@ is always empty on Firefox and `e2e.long_tasks_dropped` is always 0. There is
 nothing to fix and nothing to chase: the column is empty because the data source
 does not exist in that engine. Chromium reports normally.
 
-### The two layers
+### Browser-side e2e spans
 
 - `e2e.test` (automatic, from `end2end/tests/fixtures.ts`)
   - one span per test
   - request timing summary
-  - navigation lifecycle summary (`e2e.navigation_top_json`)
+  - default-page navigation lifecycle summary (`e2e.navigation_top_json`)
   - each navigation record includes `cacheWarmth` (`cold` for first document
     navigation in the test, `warm` for subsequent ones)
   - includes `commit -> mount` timing (commit → CSR mount-ready)
   - resource summary
   - timed action summary (`e2e.action_top_json`)
+- `e2e.page` (automatic for extra contexts opened through `tracedContext`)
+  - one span per secondary capture, normally one secondary Playwright page
+  - secondary-context navigation lifecycle summary (`e2e.navigation_top_json`)
+  - contributes to document-load URL/phase analysis, but not to `e2e.test`
+    request/action counts
 - `e2e.flow.*` (manual semantic phases, from `end2end/tests/perf.ts`)
   - opt-in for selected scenarios
   - mark-to-mark phase timing for domain-specific flow analysis
 
-Both layers share one **trace id** (from `JAUNDER_E2E_TRACEPARENT`) so browser
-and backend spans are correlated in a single trace. Since #681 the **parent span
-id** is per test, not run-wide: `fixtures.ts` mints the `e2e.test` span id
-before the test body and sends `traceparent: 00-<traceId>-<testSpanId>-01` on
-every context the test uses, and the server adopts that as its request span's
-parent. Server request spans therefore carry the id of the test that caused
-them, which is the structural join the flow-coverage gate below walks.
+These browser-side spans share one **trace id** (from `JAUNDER_E2E_TRACEPARENT`)
+so browser and backend spans are correlated in a single trace. Since #681 the
+**parent span id** is per test, not run-wide: `fixtures.ts` mints the `e2e.test`
+span id before the test body and sends
+`traceparent: 00-<traceId>-<testSpanId>-01` on every context the test uses. The
+server adopts that as its request span's parent. Server request spans therefore
+carry the id of the test that caused them, which is the structural join the
+flow-coverage gate below walks.
 
 The run-wide `JAUNDER_E2E_TRACEPARENT` value remains installed as
 `playwright.config.ts`'s static `use.extraHTTPHeaders`, so it is still what
@@ -432,18 +454,19 @@ The analyzer reports:
 - slowest spans overall
 - slowest `e2e.test` spans
 - top e2e action hotspots
-- top navigation phase hotspots and slow targets (including
-  `navigation.commit_to_mount`, the commit → CSR mount-ready phase)
+- top navigation phase hotspots and slow targets from both `e2e.test` and
+  `e2e.page` navigation JSON (including `navigation.commit_to_mount`, the commit
+  → CSR mount-ready phase)
 - per-project/browser e2e duration breakdown
 - per-trace duration totals
 - per-test span coverage: Playwright-reported duration vs the time covered by
   the lifecycle span tree, and the uncovered remainder
-- **boot-decomposition coverage**, per `(source, project)`: navigations, how
-  many mounted, how many carried a full mark set, and how many were dropped by
-  `e2e.navigation_top_json`'s cap. Keyed on the trace **file** as well as the
-  project because `projectName` is the browser and names no backend — keying on
-  project alone would pool sqlite's navigations with postgres's. Certify this
-  before drawing conclusions from a corpus (#818).
+- **boot-decomposition coverage**, per `(source, project)`: `e2e.test` plus
+  `e2e.page` navigations, how many mounted, how many carried a full mark set,
+  and how many were dropped by `e2e.navigation_top_json`'s cap. Keyed on the
+  trace **file** as well as the project because `projectName` is the browser and
+  names no backend — keying on project alone would pool sqlite's navigations
+  with postgres's. Certify this before drawing conclusions from a corpus (#818).
 
 ### `site.serve` — what the server actually served (#818)
 
@@ -1206,9 +1229,16 @@ discriminator.
 #836 established that page boot is **43–47% of e2e suite wall-clock** and that
 wasm explains only part of it. This is the rest.
 
-**Denominator, stated once.** Each suite run performs **211 navigations**, of
-which **208 mount** and carry boot marks. Every per-suite second below is
-`mean × 208`. **Means, never medians** — `median(a+b) ≠ median(a) + median(b)`,
+**Denominator, stated once.** The corrected deterministic document-load total
+for the certified corpus is **231 per suite run**: **211 default-page loads**
+from `e2e.test.navigation_count` plus **20 secondary-page loads** from
+`e2e.page.navigation_count`. All 12 JSONL files under
+`~/measurements/jaunder/issue-866-preload/traces/` agree exactly: 137 `e2e.test`
+spans, 17 `e2e.page` spans, 11 tests with secondary-page loads, and
+`e2e.navigation_top_dropped = 0`. The segment tables below predate #895's
+secondary-page navigation detail, so their per-suite seconds remain
+`mean × 208`, where 208 is the mounted default-page navigation count carrying
+boot marks. **Means, never medians** — `median(a+b) ≠ median(a) + median(b)`,
 and #818 saw a 2–7% apparent residual that was purely that artifact.
 
 Source: #836's arm-C captures (the shipped bundle), single-worker sqlite, three

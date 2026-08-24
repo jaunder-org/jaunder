@@ -14,8 +14,8 @@ use url::Url;
 
 /// A single flattened span with the scalar fields the reports read, its e2e
 /// project, and the raw span object for on-demand `e2e.*_json` reads (only
-/// `e2e.test` spans carry those, so they are parsed lazily by the sections that
-/// need them).
+/// `e2e.test`/`e2e.page` spans carry navigation blobs, so heavier attributes are
+/// parsed lazily by the sections that need them).
 ///
 /// `span_id`/`parent_span_id` were originally omitted (no report read them), but
 /// the flow-coverage gate (#681) walks `parent_span_id` upward from a server-fn

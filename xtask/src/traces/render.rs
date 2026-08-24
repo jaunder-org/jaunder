@@ -310,7 +310,7 @@ pub fn render(analysis: &Analysis, top: usize) -> String {
     // as this table (#818).
     section::<BootCoverageDisplay>(
         &mut out,
-        "Boot decomposition coverage (from e2e.navigation_top_json)",
+        "Boot decomposition coverage (from e2e.test/e2e.page navigation JSON)",
         &all_display(&analysis.boot_coverage),
     );
 
@@ -331,7 +331,7 @@ pub fn render(analysis: &Analysis, top: usize) -> String {
     );
     section::<HotspotDisplay>(
         &mut out,
-        &format!("Top {top} navigation phase hotspots (from e2e.navigation_top_json)"),
+        &format!("Top {top} navigation phase hotspots (from e2e.test/e2e.page navigation JSON)"),
         &top_display(&analysis.navigation_phase_hotspots, top),
     );
     section::<TargetDisplay>(

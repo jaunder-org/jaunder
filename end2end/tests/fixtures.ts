@@ -86,7 +86,7 @@ const tracedContextRecords = new Map<string, TracedContextRecord[]>();
  */
 const captureByTestSpanId = new Map<string, TraceCapture>();
 
-type NavigationSummary = {
+export type NavigationSummary = {
   id: number;
   url: string;
   cacheWarmth: "cold" | "warm";
@@ -225,13 +225,13 @@ function bootPhasesFrom(marks: BootMark[]): Record<string, number> | null {
  * start. That last clause is what keeps a post-mount user click's fetches from
  * being counted as app boot cost.
  *
- * KNOWN APPROXIMATION: `requests` is the default context's sink, but `actions`
- * is the whole test's — including `flow.*` driven on `tracedContext` pages. An
- * action on an unrelated context can therefore close the boundary early and
- * truncate this window, biasing the figure DOWN. Actions are not tagged with the
- * context that ran them (`ActionRecord` carries a page URL, not an identity), so
- * closing this needs a wider change than #794; an under-estimate was preferred
- * to over-attributing a later navigation's fetches to this one.
+ * KNOWN APPROXIMATION: `requests` belongs to the capture sink whose navigations
+ * are being summarized, but `actions` is the whole test's — including `flow.*`
+ * driven on other `tracedContext` pages. An action on an unrelated context can
+ * therefore close the boundary early and truncate this window, biasing the figure
+ * DOWN. Actions are not tagged with the context that ran them (`ActionRecord`
+ * carries a page URL, not an identity), so closing this needs a wider change; an
+ * under-estimate was preferred to over-attributing later fetches to this boot.
  */
 function mountToSettledMs(
   navigation: NavigationRecord,
@@ -332,6 +332,129 @@ export function navigationBridgeFieldsFrom(
       documentBootTotalMs -
       commitToDocumentStartMs -
       mountDoneToBindingMs,
+  };
+}
+
+export type NavigationTopTelemetry = {
+  topNavigations: NavigationSummary[];
+  json: string;
+  dropped: number;
+};
+
+export function navigationSummariesFrom(
+  navigations: NavigationRecord[],
+  requests: RequestRecord[],
+  actions: ActionRecord[],
+  timingFor: (navigationId: number) => DocumentTiming | undefined,
+): NavigationSummary[] {
+  return navigations
+    .map((navigation, index): NavigationSummary => {
+      const endMs =
+        navigation.mountedMs ??
+        navigation.loadMs ??
+        navigation.domContentLoadedMs ??
+        navigation.requestFinishedMs ??
+        navigation.committedMs ??
+        navigation.startedMs;
+      const requestMs =
+        navigation.committedMs !== null
+          ? navigation.committedMs - navigation.startedMs
+          : null;
+      const commitToDomContentLoadedMs =
+        navigation.committedMs !== null &&
+        navigation.domContentLoadedMs !== null
+          ? navigation.domContentLoadedMs - navigation.committedMs
+          : null;
+      const commitToMountMs =
+        navigation.committedMs !== null && navigation.mountedMs !== null
+          ? navigation.mountedMs - navigation.committedMs
+          : null;
+      const domContentLoadedToLoadMs =
+        navigation.domContentLoadedMs !== null && navigation.loadMs !== null
+          ? navigation.loadMs - navigation.domContentLoadedMs
+          : null;
+      // `commitToMountMs` ends at `data-mounted`, which `csr` sets the instant
+      // `mount_to_body` returns — so the shell/route fetches are NOT in it.
+      // The boot marks decompose what IS in it; `mountToSettledMs` covers what
+      // follows. Sizing mount cost needs both (#801).
+      const timing = timingFor(navigation.id);
+      const wasm = timing?.wasm ?? null;
+      const bootEntry = timing?.marks.find(
+        (mark) => mark.name === "jaunder.boot.entry",
+      );
+      const bridge = navigationBridgeFieldsFrom(navigation, timing);
+      const stylesheetModule = stylesheetModuleDiagnosticsFrom(timing);
+      const wasmInit = timing?.wasmInit;
+      const wasmInitMs =
+        wasmInit?.startMs !== null &&
+        wasmInit?.startMs !== undefined &&
+        wasmInit.doneMs !== null &&
+        wasmInit.doneMs !== undefined &&
+        wasmInit.doneMs >= wasmInit.startMs
+          ? wasmInit.doneMs - wasmInit.startMs
+          : null;
+      // Positional, not `startedMs >`: navigations are pushed in start order, and
+      // two can share a `Date.now()` millisecond. A `>` search skips the tied
+      // neighbour and lands on the one after it, widening the window so a later
+      // navigation's fetches get counted as this one's settle.
+      const next = navigations[index + 1];
+      return {
+        id: navigation.id,
+        url: navigation.url,
+        cacheWarmth: navigation.id === 1 ? "cold" : "warm",
+        totalMs: endMs - navigation.startedMs,
+        requestMs,
+        commitToDomContentLoadedMs,
+        commitToMountMs,
+        domContentLoadedToLoadMs,
+        requestFailed: navigation.requestFailed,
+        wasmFetchStartMs: wasm?.startTime ?? null,
+        ...stylesheetModule,
+        wasmFetchMs: wasm?.durationMs ?? null,
+        wasmDecodedBytes: wasm?.decodedBodySize ?? null,
+        wasmEncodedBytes: wasm?.encodedBodySize ?? null,
+        wasmTransferBytes: wasm?.transferSize ?? null,
+        wasmTimingSchema: "direct-init-v1",
+        wasmInitStartMs: wasmInit?.startMs ?? null,
+        wasmInitStartToBootEntryMs:
+          wasmInit?.startMs !== null &&
+          wasmInit?.startMs !== undefined &&
+          bootEntry !== undefined &&
+          bootEntry.startTime >= wasmInit.startMs
+            ? bootEntry.startTime - wasmInit.startMs
+            : null,
+        wasmApiMs: wasmInit?.apiMs ?? null,
+        wasmInitMs,
+        wasmInitPath: wasmInit?.path ?? null,
+        wasmExperimentArm: wasmInit?.experimentArm ?? null,
+        wasmModuleShape: wasmInit?.moduleShape ?? null,
+        frameSkewSchema: bridge.frameSkewSchema,
+        documentTimeOriginMs: bridge.documentTimeOriginMs,
+        documentBootTotalMs: bridge.documentBootTotalMs,
+        commitToDocumentStartMs: bridge.commitToDocumentStartMs,
+        mountDoneToBindingMs: bridge.mountDoneToBindingMs,
+        frameSkewRemainderMs: bridge.frameSkewRemainderMs,
+        bootPhases: bootPhasesFrom(timing?.marks ?? []),
+        mountToSettledMs: mountToSettledMs(
+          navigation,
+          next?.startedMs ?? null,
+          requests,
+          actions,
+        ),
+      };
+    })
+    .sort((left, right) => right.totalMs - left.totalMs);
+}
+
+export function navigationTopTelemetryFrom(
+  navigationSummary: NavigationSummary[],
+  navigationCount: number,
+): NavigationTopTelemetry {
+  const topNavigations = navigationSummary.slice(0, 20);
+  return {
+    topNavigations,
+    json: JSON.stringify(topNavigations),
+    dropped: navigationCount - topNavigations.length,
   };
 }
 
@@ -601,9 +724,12 @@ const test = base.extend<{
       // Snapshot the client-side perf BEFORE the context closes. `on("close")`
       // fires *after* closing, when `page.evaluate` would throw — and the caller
       // owns this context's lifetime, so wrapping `close` is the only hook that
-      // reliably runs while a page is still alive.
+      // reliably runs while a page is still alive. Settle first so secondary
+      // captures expose the same complete per-navigation timing as the default
+      // page before any read consumes them.
       const close = context.close.bind(context);
       context.close = async (...args: Parameters<typeof close>) => {
+        await capture.settle();
         const [page] = context.pages();
         if (page !== undefined) {
           record.perf = await capture.readPagePerf(page);
@@ -801,104 +927,17 @@ const test = base.extend<{
       const topActions = [...actions]
         .sort((left, right) => right.durationMs - left.durationMs)
         .slice(0, 30);
-      const navigationSummary: NavigationSummary[] = navigations
-        .map((navigation, index): NavigationSummary => {
-          const endMs =
-            navigation.mountedMs ??
-            navigation.loadMs ??
-            navigation.domContentLoadedMs ??
-            navigation.requestFinishedMs ??
-            navigation.committedMs ??
-            navigation.startedMs;
-          const requestMs =
-            navigation.committedMs !== null
-              ? navigation.committedMs - navigation.startedMs
-              : null;
-          const commitToDomContentLoadedMs =
-            navigation.committedMs !== null &&
-            navigation.domContentLoadedMs !== null
-              ? navigation.domContentLoadedMs - navigation.committedMs
-              : null;
-          const commitToMountMs =
-            navigation.committedMs !== null && navigation.mountedMs !== null
-              ? navigation.mountedMs - navigation.committedMs
-              : null;
-          const domContentLoadedToLoadMs =
-            navigation.domContentLoadedMs !== null && navigation.loadMs !== null
-              ? navigation.loadMs - navigation.domContentLoadedMs
-              : null;
-          // `commitToMountMs` ends at `data-mounted`, which `csr` sets the instant
-          // `mount_to_body` returns — so the shell/route fetches are NOT in it.
-          // The boot marks decompose what IS in it; `mountToSettledMs` covers what
-          // follows. Sizing mount cost needs both (#801).
-          const timing = capture.timingFor(navigation.id);
-          const wasm = timing?.wasm ?? null;
-          const bootEntry = timing?.marks.find(
-            (mark) => mark.name === "jaunder.boot.entry",
-          );
-          const bridge = navigationBridgeFieldsFrom(navigation, timing);
-          const stylesheetModule = stylesheetModuleDiagnosticsFrom(timing);
-          const wasmInit = timing?.wasmInit;
-          const wasmInitMs =
-            wasmInit?.startMs !== null &&
-            wasmInit?.startMs !== undefined &&
-            wasmInit.doneMs !== null &&
-            wasmInit.doneMs !== undefined &&
-            wasmInit.doneMs >= wasmInit.startMs
-              ? wasmInit.doneMs - wasmInit.startMs
-              : null;
-          // Positional, not `startedMs >`: navigations are pushed in start order,
-          // and two can share a `Date.now()` millisecond. A `>` search skips the
-          // tied neighbour and lands on the one after it, widening the window so
-          // a later navigation's fetches get counted as this one's settle.
-          const next = navigations[index + 1];
-          return {
-            id: navigation.id,
-            url: navigation.url,
-            cacheWarmth: navigation.id === 1 ? "cold" : "warm",
-            totalMs: endMs - navigation.startedMs,
-            requestMs,
-            commitToDomContentLoadedMs,
-            commitToMountMs,
-            domContentLoadedToLoadMs,
-            requestFailed: navigation.requestFailed,
-            wasmFetchStartMs: wasm?.startTime ?? null,
-            ...stylesheetModule,
-            wasmFetchMs: wasm?.durationMs ?? null,
-            wasmDecodedBytes: wasm?.decodedBodySize ?? null,
-            wasmEncodedBytes: wasm?.encodedBodySize ?? null,
-            wasmTransferBytes: wasm?.transferSize ?? null,
-            wasmTimingSchema: "direct-init-v1",
-            wasmInitStartMs: wasmInit?.startMs ?? null,
-            wasmInitStartToBootEntryMs:
-              wasmInit?.startMs !== null &&
-              wasmInit?.startMs !== undefined &&
-              bootEntry !== undefined &&
-              bootEntry.startTime >= wasmInit.startMs
-                ? bootEntry.startTime - wasmInit.startMs
-                : null,
-            wasmApiMs: wasmInit?.apiMs ?? null,
-            wasmInitMs,
-            wasmInitPath: wasmInit?.path ?? null,
-            wasmExperimentArm: wasmInit?.experimentArm ?? null,
-            wasmModuleShape: wasmInit?.moduleShape ?? null,
-            frameSkewSchema: bridge.frameSkewSchema,
-            documentTimeOriginMs: bridge.documentTimeOriginMs,
-            documentBootTotalMs: bridge.documentBootTotalMs,
-            commitToDocumentStartMs: bridge.commitToDocumentStartMs,
-            mountDoneToBindingMs: bridge.mountDoneToBindingMs,
-            frameSkewRemainderMs: bridge.frameSkewRemainderMs,
-            bootPhases: bootPhasesFrom(timing?.marks ?? []),
-            mountToSettledMs: mountToSettledMs(
-              navigation,
-              next?.startedMs ?? null,
-              requests,
-              actions,
-            ),
-          };
-        })
-        .sort((left, right) => right.totalMs - left.totalMs);
-      const topNavigations = navigationSummary.slice(0, 20);
+      const navigationSummary = navigationSummariesFrom(
+        navigations,
+        requests,
+        actions,
+        (navigationId) => capture.timingFor(navigationId),
+      );
+      const navigationTelemetry = navigationTopTelemetryFrom(
+        navigationSummary,
+        navigations.length,
+      );
+      const topNavigations = navigationTelemetry.topNavigations;
 
       const attributes = [
         otlpAttribute("e2e.file", testInfo.file),
@@ -957,13 +996,10 @@ const test = base.extend<{
           actions.length - topActions.length,
         ),
         otlpAttribute("e2e.navigation_count", navigations.length),
-        otlpAttribute(
-          "e2e.navigation_top_json",
-          JSON.stringify(topNavigations),
-        ),
+        otlpAttribute("e2e.navigation_top_json", navigationTelemetry.json),
         otlpAttribute(
           "e2e.navigation_top_dropped",
-          navigations.length - topNavigations.length,
+          navigationTelemetry.dropped,
         ),
         // Every `jaunder.*` mark the CSR client emitted, per navigation, keyed by
         // navigation id. Discovered by prefix — the names live only in Rust, so a
@@ -1134,7 +1170,17 @@ const test = base.extend<{
       // Private-post visibility test drives 9 `page.goto`s but reported
       // navigation_count 3, because only the default page was instrumented.
       for (const record of tracedContextRecords.get(testSpanId) ?? []) {
+        await record.capture.settle();
         const sink = record.capture.sinkFor("test");
+        const pageNavigationTelemetry = navigationTopTelemetryFrom(
+          navigationSummariesFrom(
+            sink.navigations,
+            sink.requests,
+            actions,
+            (navigationId) => record.capture.timingFor(navigationId),
+          ),
+          sink.navigations.length,
+        );
         spans.push(
           phaseSpan(
             "e2e.page",
@@ -1143,6 +1189,14 @@ const test = base.extend<{
             [
               otlpAttribute("e2e.request_count", sink.requests.length),
               otlpAttribute("e2e.navigation_count", sink.navigations.length),
+              otlpAttribute(
+                "e2e.navigation_top_json",
+                pageNavigationTelemetry.json,
+              ),
+              otlpAttribute(
+                "e2e.navigation_top_dropped",
+                pageNavigationTelemetry.dropped,
+              ),
               otlpAttribute(
                 "e2e.resource_summary_json",
                 JSON.stringify(record.perf?.resources ?? null),
