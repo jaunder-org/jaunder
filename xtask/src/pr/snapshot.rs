@@ -93,6 +93,13 @@ pub struct RunRef {
     pub conclusion: String,
 }
 
+/// Required-context observations for one exact commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitChecks {
+    pub sha: String,
+    pub checks: Vec<CheckEntry>,
+}
+
 /// One document for the whole state machine (#729 spec F4).
 pub const PR_QUERY: &str = r#"query($owner:String!,$name:String!,$number:Int!){
   repository(owner:$owner,name:$name){
@@ -114,6 +121,30 @@ pub const PR_QUERY: &str = r#"query($owner:String!,$name:String!,$number:Int!){
             __typename
             ... on CheckRun { name conclusion status detailsUrl startedAt completedAt }
             ... on StatusContext { context state targetUrl createdAt }
+          }
+        }
+      }
+    }
+  }
+}"#;
+
+/// Read the status rollup for an arbitrary commit rather than a pull request.
+///
+/// The promoter needs the same typed check union on both the immutable PR head
+/// and GitHub's ephemeral merge-group commit. Keeping the query and parser here
+/// preserves `snapshot` as the last layer that sees GitHub JSON.
+pub const COMMIT_CHECKS_QUERY: &str = r#"query($owner:String!,$name:String!,$oid:GitObjectID!){
+  repository(owner:$owner,name:$name){
+    object(oid:$oid){
+      ... on Commit {
+        oid
+        statusCheckRollup {
+          contexts(first:100){
+            nodes {
+              __typename
+              ... on CheckRun { name conclusion status detailsUrl startedAt completedAt }
+              ... on StatusContext { context state targetUrl createdAt }
+            }
           }
         }
       }
@@ -252,6 +283,25 @@ fn parse_check(node: &Value) -> Option<CheckEntry> {
             _ => owned(node, &["createdAt"]),
         },
     })
+}
+
+pub fn parse_commit_checks(v: &Value) -> Result<CommitChecks, ApiError> {
+    let commit = v
+        .get("data")
+        .and_then(|d| d.get("repository"))
+        .and_then(|r| r.get("object"))
+        .filter(|object| !object.is_null())
+        .ok_or_else(|| ApiError::Malformed("no commit object in response".into()))?;
+    let sha = owned(commit, &["oid"])
+        .ok_or_else(|| ApiError::Malformed("commit object has no oid".into()))?;
+    let checks = commit
+        .get("statusCheckRollup")
+        .and_then(|rollup| rollup.get("contexts"))
+        .and_then(|contexts| contexts.get("nodes"))
+        .and_then(Value::as_array)
+        .map(|nodes| nodes.iter().filter_map(parse_check).collect())
+        .unwrap_or_default();
+    Ok(CommitChecks { sha, checks })
 }
 
 pub fn parse_required_checks(v: &Value) -> Result<RequiredChecks, ApiError> {
@@ -516,6 +566,47 @@ mod tests {
         assert!(s.checks.iter().any(|c| c.name == "e2e gate"));
         assert!(s.checks.iter().all(|c| !c.name.is_empty()));
         assert!(s.checks.iter().all(|c| c.state == CheckState::Success));
+    }
+
+    #[test]
+    fn arbitrary_commit_checks_reuse_the_typed_rollup_parser() {
+        let value = serde_json::json!({
+            "data": {
+                "repository": {
+                    "object": {
+                        "oid": "merge-group-sha",
+                        "statusCheckRollup": {
+                            "contexts": {
+                                "nodes": [
+                                    {
+                                        "__typename": "CheckRun",
+                                        "name": "Validate (no e2e)",
+                                        "status": "COMPLETED",
+                                        "conclusion": "SUCCESS"
+                                    },
+                                    {
+                                        "__typename": "StatusContext",
+                                        "context": "e2e gate",
+                                        "state": "SUCCESS"
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        let parsed = parse_commit_checks(&value).unwrap();
+
+        assert_eq!(parsed.sha, "merge-group-sha");
+        assert_eq!(parsed.checks.len(), 2);
+        assert!(
+            parsed
+                .checks
+                .iter()
+                .all(|check| check.state == CheckState::Success)
+        );
     }
 
     #[test]

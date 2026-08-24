@@ -15,6 +15,15 @@ pub trait PrArmer {
     fn arm_auto_merge(&self, subject: &Subject) -> Result<(), ApiError>;
 }
 
+/// GitHub represents a successful arm in either of two ways: a pending
+/// auto-merge request or immediate membership in the live merge queue.
+///
+/// Keep this predicate shared with privileged automation so every caller
+/// verifies the same GitHub factors after `gh pr merge --auto`.
+pub(super) fn arm_is_verified(auto_merge_armed: bool, in_merge_queue: bool) -> bool {
+    auto_merge_armed || in_merge_queue
+}
+
 pub struct GhArmer;
 
 impl PrArmer for GhArmer {
@@ -248,7 +257,7 @@ pub fn land<S: PrSource, A: PrArmer, C: Clock>(
             }
         };
         head_sha = after.head_sha.clone();
-        if after.auto_merge_armed || after.queue.in_queue {
+        if arm_is_verified(after.auto_merge_armed, after.queue.in_queue) {
             let mut watch_cfg = cfg;
             watch_cfg.stop_at_ready = false;
             let progress = Progress::from_snapshot(&after);

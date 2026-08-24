@@ -1,18 +1,19 @@
 # ADR drafts
 
-New ADRs are authored here, **out of git**, and are numbered only at ship. This
-is the holding pen for the draft-out-of-git flow (issue #219); the mechanics
-live in the `jaunder-adr` skill and `CONTRIBUTING.md`.
+New ADRs are authored and committed here without a number. Their slug-bearing
+path is the draft's identity while the decision remains proposed; promotion
+assigns the shared number and accepts the decision. The local mechanics live in
+the `jaunder-adr` skill and `CONTRIBUTING.md`.
 
-## Why drafts live outside git
+## Why drafts are numberless
 
-An ADR number is a shared monotonic sequence, and the only moment the correct
-number is knowable is at integration. Assigning it earlier — and committing it —
-means a rebase can reveal a collision, forcing a rename that churns git history.
-So a draft carries **no number** until the moment it ships.
+An ADR number is a shared monotonic sequence. Assigning it on a feature branch
+means concurrent decisions can claim the same filename and generated-index row.
+A tracked draft instead carries **no number**, so feature branches can merge
+their distinct slug paths without ADR bookkeeping conflicts.
 
-Everything in this directory except this `README.md` is gitignored, so a draft
-**cannot** be committed with a premature number.
+Markdown files in this directory are tracked. This `README.md` remains the
+explainer rather than a draft, and `promote` intentionally skips it.
 
 ## Authoring a draft
 
@@ -26,12 +27,11 @@ Everything in this directory except this `README.md` is gitignored, so a draft
 3. Reference the draft **by path** (`docs/adr/drafts/<slug>.md`) from any code
    or prose that needs it. There is no bare `ADR-DRAFT` token — use the path so
    `promote` can rewrite it to the real number.
-4. Link sibling ADRs **as if the draft already lived in `docs/adr/`** —
-   `[ADR-0061](0061-web-keyed-list-reactive-store.md)`, not
-   `../0061-web-keyed-list-reactive-store.md`. `promote` moves the file up one
-   directory and strips one `../` level from every link target, so the bare form
-   is what survives. (The `../template.md` link in step 1 above is correct
-   _here_ — this README is never promoted.)
+4. Link a numbered sibling ADR relative to the draft's current location —
+   `[ADR-0061](../0061-web-keyed-list-reactive-store.md)`. This target resolves
+   while the draft is tracked here; when promotion moves the file up one
+   directory, it strips the leading `../`, so the same link resolves from
+   `docs/adr/` afterward.
 5. Link **another draft** as `[Aaa](../drafts/aaa.md)`. Promotion strips one
    level to `drafts/aaa.md`, which `promote` then rewrites to the number it
    assigned. Do **not** use the rule-3 repo-root form (`docs/adr/drafts/aaa.md`)
@@ -40,24 +40,24 @@ Everything in this directory except this `README.md` is gitignored, so a draft
    the `doc-links` gate. Rule 3 still applies to references from code and prose
    _outside_ `docs/adr/`.
 
-## Numbering at ship
+## Automated promotion
 
-At ship, after the final rebase onto `main`, run:
+Feature authors commit drafts and their path citations; they do **not** run
+`cargo xtask adr promote` while shipping. After the feature reaches `main`, the
+serialized ADR promoter invokes that deterministic local mutation against fresh
+`main` and opens its merge-queue PR.
 
-```console
-$ cargo xtask adr promote
-```
+For each tracked draft, sorted by slug, promotion assigns the next free number,
+stages the source deletion and numbered destination, rewrites the heading and
+the `proposed` status to `accepted`, rewrites path-form citations, and syncs and
+stages the generated ADR index. A successful rerun with no drafts is a clean
+no-op. The draft remains proposed during the normal promoter CI/queue interval;
+if the promoter fails, it remains proposed until that visible automation failure
+is repaired.
 
-For each draft this assigns the next free number, moves it to
-`docs/adr/NNNN-<slug>.md`, rewrites its path-form references, rewrites a
-`proposed` status to `accepted`, syncs the README table, and stages the result.
-The ADR's first appearance in git history is already correctly numbered and
-correctly statused.
-
-If a collision still surfaces between your ship commit and your merge,
-re-rebase, re-run, and **amend the commit that introduced the ADR** — never add
-a fixup commit. `cargo xtask adr renumber` remains the tool for an
-already-committed ADR.
+`cargo xtask adr renumber` is deprecated compatibility tooling, not feature
+recovery. Its removal is tracked by
+[#1169](https://github.com/jaunder-org/jaunder/issues/1169).
 
 ## Gate invisibility
 
@@ -66,6 +66,7 @@ one enumeration rule — `is_file` → `.md` → leading number, applied by a
 non-recursive `read_dir` over `docs/adr/`. A numberless draft in this
 subdirectory is excluded twice over, so drafts never trip a gate.
 
-`doc-links` enumerates differently — tracked files, via `git ls-files`.
-Everything here except this `README.md` is gitignored, so drafts stay invisible
-to it too, by a stronger rule: an uncommitted draft is not a tracked file.
+`doc-links` enumerates tracked Markdown, so it checks drafts before promotion.
+Use the numbered-ADR and cross-draft link forms above: they resolve in the
+tracked draft, then `promote` adjusts them for the one-directory move and path
+rewrite so they resolve in the numbered ADR too.

@@ -17,12 +17,12 @@ Two conventions keep it honest:
   made but not yet realized appear under **Committed direction** subheadings,
   never mixed into the present tense.
 
-This file is updated in the same change that ships any new ADR (the convention
-is stated in `docs/adr/template.md`; mechanical enforcement at
-`cargo xtask adr promote` is committed follow-up work), and periodically
-re-derived from the full log to catch drift. Process — how to build, verify, and
-land work — lives in [CONTRIBUTING.md](../CONTRIBUTING.md); the domain glossary
-lives in [CONTEXT.md](../CONTEXT.md).
+This file is updated in the feature change that commits a new ADR draft; the
+post-merge promoter later rewrites its draft citation to the accepted numbered
+path. It is also periodically re-derived from the full log to catch drift.
+Process — how to build, verify, and land work — lives in
+[CONTRIBUTING.md](../CONTRIBUTING.md); the domain glossary lives in
+[CONTEXT.md](../CONTEXT.md).
 
 ## Workspace
 
@@ -2657,10 +2657,10 @@ changes, a new ADR supersedes it with reciprocal pointers. In-place ADR edits
 are limited to metadata and navigation (status lines, moved pointers, short
 past-tense annotations), and any new addendum is written in past tense from
 birth — "as of <date>, Y held" — never as a present-tense patch. The view is
-kept current by two disciplines: shipping an ADR updates `ARCHITECTURE.md` (and
-`CONTEXT.md` when the ubiquitous language changes) in the same change, and a
-periodic replay audit re-derives the view from the log plus the code to catch
-un-ADR'd drift
+kept current by two disciplines: committing a draft updates `ARCHITECTURE.md`
+(and `CONTEXT.md` when the ubiquitous language changes) in the same feature
+change, and a periodic replay audit re-derives the view from the log plus the
+code to catch un-ADR'd drift
 ([the materialized-view ADR](adr/0127-architecture-view-materialized-from-adrs.md)).
 
 The documentation landscape, per [ADR-0000](adr/0000-documentation-strategy.md)
@@ -2686,17 +2686,41 @@ as amended by
   `YYYY-MM-DD-<slug>.md` files and kept there rather than deleted
   (`docs/README.md:149-152`).
 
-New ADRs are drafted **out of git** in `docs/adr/drafts/` — the directory is
-gitignored except its `README.md`, so a premature number cannot be committed
-([ADR-0048](adr/0048-adr-out-of-git-draft-workflow.md)). A draft carries the
-heading `# ADR-DRAFT: <title>` and is referenced only by its
-`docs/adr/drafts/<slug>.md` path — there is no bare `ADR-DRAFT` token, because
-the path is what `promote` can rewrite. At ship, after the final rebase,
-`cargo xtask adr promote` assigns each draft the next free number, moves it to
-`docs/adr/NNNN-<slug>.md`, strips one `../` level from its link targets,
-rewrites its path-form references repo-wide, syncs the README table, and stages
-the result — the ADR's first appearance in history is already correctly numbered
-([ADR-0048](adr/0048-adr-out-of-git-draft-workflow.md)).
+New ADRs are tracked, numberless `docs/adr/drafts/<slug>.md` files. A draft
+carries `# ADR-DRAFT: <title>`, remains `proposed`, and is cited only by its
+slug-bearing path; there is no parallel bare draft token. Feature PRs commit the
+draft and its architecture projection but neither promote it nor edit the
+generated index. ADR-0048 historically governed an out-of-git, ship-time form of
+this numberless workflow; the tracked
+[successor decision](adr/drafts/adr-numbering-happens-after-merge.md) proposes
+superseding those two requirements while preserving path-only identity and late
+allocation.
+
+After the feature reaches `main`, branch generation derives from fresh `main`,
+runs the deterministic ADR promotion mutation, and opens a stable promoter PR.
+Main-push and manual generation events share one coalescing concurrency group;
+per-PR dequeue recovery is separate so generation cannot replace it. Promotion
+stages the tracked-source rename, assigns the next free number, strips one `../`
+level from draft-internal relative link targets, rewrites path citations and
+`proposed` to `accepted`, and regenerates the index.
+
+The promoter uses a dedicated GitHub App limited to Actions read, Contents
+read/write, pull requests read/write, checks read, commit statuses read, and
+mandatory Metadata read. Actions read supplies historical merge-group
+workflow-run metadata for dequeue correlation; there is no Actions write,
+direct-main, or branch-protection bypass. Promotion commits use a deterministic
+App-bot author and committer, and only the ordinary merge queue writes the
+promoted result to `main`.
+
+There is at most one open promoter for its stable head/base identity. Its head
+SHA and generated diff are immutable; drafts merged later wait until it lands
+and a subsequent pass handles them. Queue and auto-merge metadata may change as
+the PR advances or safely recovers. After arming, exact-head auto-merge request
+or queue-membership state verifies success; an immediately queued green PR need
+not retain an auto-merge request. The normal pull-request and merge-group check
+interval is a healthy proposed-decision lag. Failure to create, check, or merge
+the promoter is different: the draft remains proposed until the visible
+automation failure is diagnosed and repaired.
 
 Promotion is also the **acceptance event**
 ([ADR-0088](adr/0088-promotion-is-the-acceptance-event.md)): in the same pass
@@ -2709,21 +2733,21 @@ renderer share one status-line parse, so they cannot disagree about which line
 they are reading (`xtask/src/adr.rs:105`, `xtask/src/adr_readme.rs:152`,
 `xtask/src/adr_readme.rs:391`).
 
-Identifier collisions are made loud, not silent
+Identifier collisions remain loud
 ([ADR-0036](adr/0036-identifier-collision-policy.md)): the
 `identifier-collisions` gate in `cargo xtask check`/`validate` fails on
-duplicate numeric prefixes in `docs/adr/` and the migration directories, and
-`cargo xtask adr renumber` resolves an already-committed collision in one
-command. The gate must see the _merged_ tree to be worth anything. ADR-0036's
-addendum obtained that with a strict up-to-date-before-merge ruleset; the merge
-queue supersedes that mechanism while keeping the guarantee — GitHub stacks the
-PR on an ephemeral queue branch and runs the required checks there
+duplicate numeric prefixes in `docs/adr/` and the migration directories. The
+serialized promoter prevents feature branches from allocating ADR numbers at
+all; `cargo xtask adr renumber` remains only as deprecated compatibility tooling
+pending [#1169](https://github.com/jaunder-org/jaunder/issues/1169), not as the
+current recovery path. The gate still runs against the merge-queue tree, where
+GitHub stacks the PR on an ephemeral queue branch and runs the required checks
 ([ADR-0077](adr/0077-adopt-github-merge-queue.md)).
 
 The ADR index table in `docs/README.md` is a generated projection of the ADR
-files' headings and Status lines: `cargo xtask adr sync-readme` (folded into
-`renumber` and `promote`) regenerates the number, link, and status cells between
-`<!-- adr-table:begin/end -->` markers, titles stay hand-curated, and the
+files' headings and Status lines: `cargo xtask adr sync-readme`, invoked by
+promotion, regenerates the number, link, and status cells between
+`<!-- adr-table:begin/end -->` markers; titles stay hand-curated, and the
 `adr-readme-parity` gate keeps table and directory in agreement, naming
 `sync-readme` as its recovery
 ([ADR-0036](adr/0036-identifier-collision-policy.md)). Parity is not
@@ -2731,27 +2755,22 @@ correctness: the check compares two artifacts and stays green when both are
 wrong in the same way, which is why the status rule is enforced at the file, not
 at the table ([ADR-0088](adr/0088-promotion-is-the-acceptance-event.md)).
 
-Four gates guard the log, and a draft is invisible to all of them **as a gated
-file**. `identifier-collisions`, `adr-format`, and `adr-readme-parity` share one
-enumeration rule — non-recursive `read_dir` over `docs/adr/`, then `is_file` →
-`.md` → leading number — which excludes a numberless file in a subdirectory
-twice over. `doc-links` enumerates tracked files instead, and an uncommitted
-draft is not tracked ([ADR-0048](adr/0048-adr-out-of-git-draft-workflow.md)).
-The `doc-links` gate has no ADR of its own; its decision lives in issue
+Three numbered-ADR gates ignore drafts. `identifier-collisions`, `adr-format`,
+and `adr-readme-parity` share one enumeration rule — non-recursive `read_dir`
+over `docs/adr/`, then `is_file` → `.md` → leading number — which excludes a
+numberless file in a subdirectory twice over. `doc-links` deliberately differs:
+it enumerates tracked Markdown, so it checks proposed drafts in feature PRs. The
+`doc-links` gate has no ADR of its own; its decision lives in issue
 [#682](https://github.com/jaunder-org/jaunder/issues/682), cited from
 `xtask/src/steps/doc_links.rs:1`.
 
-A draft path is not live merely because it exists locally. `doc-links` strips
-any fragment and resolves relative targets against Git's tracked content, not
-the developer's working-tree filesystem: a file target is live only when the
-stripped target path is tracked, and a directory target is live only when at
-least one tracked path lives below it. Untracked or gitignored drafts therefore
-fail locally the same way they fail in a fresh clone or CI. `adr promote` is
-what rewrites every `drafts/<slug>` path-form reference repo-wide to the
-assigned number before the branch is pushed
-([ADR-0048](adr/0048-adr-out-of-git-draft-workflow.md)). Referencing a draft by
-path is therefore not a convention but a prerequisite — a link written any other
-way survives promotion pointing at nothing.
+A draft path is live because the file is tracked, not merely because it exists
+in one working tree. Draft-internal links must use targets that resolve before
+and after the one-directory move: a numbered sibling is `../NNNN-slug.md`, and
+another draft is `../drafts/<slug>.md`. References elsewhere use the sole
+repo-root identity `docs/adr/drafts/<slug>.md`. Promotion rewrites those path
+forms to the numbered destination; a bare draft token or a different path form
+would survive pointing at nothing.
 
 This document is itself a gated artifact. The `adr-view-parity` step requires
 every `accepted` ADR to be cited here, and fails the ladder by name and title

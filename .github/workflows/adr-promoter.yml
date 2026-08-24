@@ -1,0 +1,59 @@
+name: ADR promoter
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    types: [dequeued]
+
+# The built-in token is only an input to setup-ci. Repository and PR mutation
+# use the repository-scoped installation token minted below.
+permissions:
+  contents: read
+
+# Generation runs coalesce together, while dequeue recovery is isolated per PR:
+# a main push must never replace the one event authorized to re-arm that head.
+concurrency:
+  group: adr-promoter-${{ github.event.pull_request.number || 'generate' }}
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Promote pending ADR drafts
+    runs-on: ubuntu-24.04
+    steps:
+      # With neither owner nor repositories set, v3 scopes the installation
+      # token to this repository rather than every repository in the App install.
+      - name: Mint ADR promoter token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.ADR_PROMOTER_CLIENT_ID }}
+          private-key: ${{ secrets.ADR_PROMOTER_APP_PRIVATE_KEY }}
+          permission-actions: read
+          permission-contents: write
+          permission-pull-requests: write
+          permission-checks: read
+          permission-statuses: read
+          permission-metadata: read
+
+      # pull_request events must never select or execute code from the PR head.
+      # Persisting the App credential gives the controller's explicit branch
+      # push an authenticated origin without granting direct-main authority.
+      - name: Checkout trusted main
+        uses: actions/checkout@v7
+        with:
+          ref: refs/heads/main
+          token: ${{ steps.app-token.outputs.token }}
+
+      - uses: ./.github/actions/setup-ci
+        with:
+          github-token: ${{ github.token }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: Run ADR promoter
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: cargo xtask adr promoter

@@ -1,7 +1,8 @@
 //! The `identifier-collisions` static check: scans the ADR and migration
 //! directories for duplicate numeric prefixes (which git merges silently because
 //! the filenames differ) and for sqlite/postgres backend parity. Read-only in
-//! every mode — resolution for ADRs is the separate `adr renumber` command.
+//! every mode. Tracked feature drafts avoid ADR collisions; the legacy
+//! `adr renumber` compatibility command is deprecated pending #1169.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -65,7 +66,14 @@ pub fn problems(adr: &[String], sqlite: &[String], postgres: &[String]) -> Optio
         ));
     }
     if !adr_dups.is_empty() {
-        lines.push("  recovery: cargo xtask adr renumber".to_string());
+        lines.push(
+            "  recovery: new ADRs must be tracked numberless drafts; diagnose why numbered files bypassed the serialized promoter"
+                .to_string(),
+        );
+        lines.push(
+            "  deprecated compatibility only: cargo xtask adr renumber (removal: https://github.com/jaunder-org/jaunder/issues/1169)"
+                .to_string(),
+        );
     }
 
     for (number, files) in ids::duplicate_prefixes(sqlite) {
@@ -125,12 +133,14 @@ mod tests {
     }
 
     #[test]
-    fn adr_collision_includes_recovery_command() {
+    fn adr_collision_points_to_tracked_drafts_and_deprecates_legacy_recovery() {
         let adr = vec!["0034-foo.md".to_string(), "0034-bar.md".to_string()];
         let detail = problems(&adr, &[], &[]).expect("a problem");
         assert!(detail.contains("ADR number 0034"));
         assert!(detail.contains("0034-bar.md"));
-        assert!(detail.contains("cargo xtask adr renumber"));
+        assert!(detail.contains("tracked numberless drafts"));
+        assert!(detail.contains("deprecated compatibility only"));
+        assert!(detail.contains("https://github.com/jaunder-org/jaunder/issues/1169"));
     }
 
     #[test]
@@ -154,8 +164,8 @@ mod tests {
     fn filenames_skips_the_drafts_subdir() {
         // A numberless ADR draft under `docs/adr/drafts/` must be invisible to the
         // `identifier-collisions` scan: `filenames` is non-recursive and file-only,
-        // so the `drafts` subdirectory entry (and anything inside it) is excluded
-        // (#219). Locks the enumeration rule the drafts-out-of-git flow relies on.
+        // so the `drafts` subdirectory entry (and anything inside it) is excluded.
+        // This is the numbered-gate boundary tracked feature drafts rely on.
         let dir =
             std::env::temp_dir().join(format!("jaunder-seqcheck-drafts-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

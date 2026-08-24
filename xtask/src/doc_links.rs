@@ -262,12 +262,12 @@ fn normalize_repo_rel(path: &Path) -> Option<String> {
     Some(parts.join("/"))
 }
 
-/// Tracked `*.md` under `repo`, minus [`EXCLUDED`] and minus tracked-but-absent
-/// paths.
+/// Tracked `*.md` under `repo`, including tracked ADR drafts, minus [`EXCLUDED`]
+/// and minus tracked-but-absent paths.
 ///
-/// Tracked, not on-disk: an untracked scratch file is nobody's contract, and a
-/// gitignored draft must stay invisible to the gate. Absent paths are dropped so a
-/// staged deletion fails at its `git rm`, not here.
+/// An untracked scratch file is nobody's contract and stays invisible to the
+/// gate. Absent paths are dropped so a staged deletion fails at its `git rm`, not
+/// here.
 fn gated_files(repo: &Path) -> Result<Vec<String>> {
     Ok(crate::git::ls_files_md(repo)?
         .into_iter()
@@ -519,6 +519,38 @@ mod tests {
             problems(&d).unwrap(),
             vec!["docs/a.md:1 -> gone.md".to_string()]
         );
+    }
+
+    #[test]
+    fn gate_checks_tracked_adr_drafts() {
+        let d = repo("tracked-draft-dead");
+        commit(
+            &d,
+            "docs/adr/drafts/decision.md",
+            "# ADR-DRAFT: Decision\n\n[missing](../missing.md)\n",
+        );
+        assert_eq!(
+            problems(&d).unwrap(),
+            vec!["docs/adr/drafts/decision.md:3 -> ../missing.md".to_string()]
+        );
+    }
+
+    #[test]
+    fn promotion_safe_links_in_tracked_drafts_pass_the_gate() {
+        let d = repo("tracked-draft-links");
+        commit(&d, "docs/adr/0001-base.md", "# ADR-0001: Base\n");
+        commit(
+            &d,
+            "docs/adr/drafts/aaa.md",
+            "# ADR-DRAFT: Aaa\n\n[base](../0001-base.md)\n",
+        );
+        commit(
+            &d,
+            "docs/adr/drafts/bbb.md",
+            "# ADR-DRAFT: Bbb\n\n[base](../0001-base.md) [aaa](../drafts/aaa.md)\n",
+        );
+
+        assert!(problems(&d).unwrap().is_empty());
     }
 
     #[test]

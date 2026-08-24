@@ -1,7 +1,7 @@
 # CI: GitHub merge queue — enable / rollback runbook
 
 This is the operational runbook for the merge queue adopted in
-`docs/adr/0077-adopt-github-merge-queue.md` (ADR, numbered at ship) for issue
+`docs/adr/0077-adopt-github-merge-queue.md` for issue
 [#627](https://github.com/jaunder-org/jaunder/issues/627). It gives the
 **exact** GitHub-API calls to enable the queue on `main` and to roll it back,
 plus the post-flip validation checklist.
@@ -200,6 +200,49 @@ the PR stays `OPEN`, which looks identical to "still queued". Don't eyeball it:
 still-queued, and points at the `gh-readonly-queue/main/pr-<N>-…` run that
 caused it. `cargo xtask pr watch <N> --once` answers the same question without
 blocking.
+
+## ADR promoter queue boundary
+
+The tracked-draft lifecycle uses `.github/workflows/adr-promoter.yml` and
+`cargo xtask adr promoter` after a feature merge; feature shipping never runs
+the local promotion mutation. Pushes to `main` and manual dispatches share a
+generation concurrency group that does not cancel an active run. Dequeue
+recovery uses a separate per-PR operation group, so a generation event cannot
+replace the event authorized to re-arm that head. The single job still derives
+from fresh `main` and owns the stable `automation/adr-promoter` branch and at
+most one open promoter PR. If that PR already exists or is queued, its head SHA
+and generated diff remain immutable; drafts merged later wait for the next pass
+after it lands.
+
+The workflow mints an installation token with
+`actions/create-github-app-token@v3` from repository variable
+`ADR_PROMOTER_CLIENT_ID` and secret `ADR_PROMOTER_APP_PRIVATE_KEY`. The
+dedicated GitHub App is limited to Actions read, Contents read/write, pull
+requests read/write, checks read, commit statuses read, and GitHub's mandatory
+Metadata read. Actions read is used only for historical `merge_group`
+workflow-run metadata needed by dequeue correlation. It has no Administration,
+Actions-write, ruleset or branch-protection bypass, or authority to write `main`
+directly. The built-in `GITHUB_TOKEN` is not used for promoter GitHub
+operations. Promotion commits use the deterministic `jaunder-adr-promoter[bot]`
+author and committer. The App arms auto-merge with the merge method; the normal
+pull-request and `merge_group` checks run, and the queue remains the only writer
+to `main`.
+
+The workflow also receives `pull_request: dequeued` events. Recovery is limited
+to the exact promoter head/base identity: the controller correlates the removed
+entry with its ephemeral merge-group SHA and re-arms auto-merge only when the
+required contexts on both that SHA and the unchanged PR head exist, are
+complete, and are green. After arming, either an auto-merge request or live
+queue membership on that exact head verifies success; GitHub commonly enqueues a
+green PR immediately. Failed, missing, incomplete, ambiguous, or mismatched
+evidence stops retry and leaves the immutable PR visible for diagnosis; it
+cannot loop a deterministic failure through the queue.
+
+A tracked draft remaining `proposed` for the promoter's ordinary PR checks,
+merge-group checks, and queue interval is healthy acceptance lag. If no promoter
+PR appears, its checks fail, dequeue recovery refuses to re-arm, or it otherwise
+stops progressing, the longer proposed interval is failed-promoter lag. Diagnose
+the visible workflow or PR; do not promote or renumber from the feature branch.
 
 ## Post-flip validation checklist (spec Acceptance #4)
 

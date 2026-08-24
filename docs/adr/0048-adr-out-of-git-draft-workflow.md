@@ -64,3 +64,13 @@ subdirectory.
   and the `CONTRIBUTING.md` / `jaunder-adr` docs carry the flow.
 - ADR-0036's always-`0000` authoring flow is retired; its collision-detection
   gate and `renumber` command are unchanged.
+
+## History
+
+- 2026-08-24: issue #742 implemented tracked feature-PR drafts and serialized
+  post-merge promotion. The
+  [tracked successor](drafts/adr-numbering-happens-after-merge.md) identifies
+  this ADR's out-of-git and ship-time requirements as the scope of its
+  replacement while preserving the numberless-authoring goal. The successor's
+  Status line records whether that replacement has been accepted; this Decision
+  is retained unchanged as the historically governing rule.
