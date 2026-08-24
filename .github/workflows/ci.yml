@@ -29,40 +29,22 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: cachix/install-nix-action@v31
+      - uses: ./.github/actions/setup-ci
         with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: cachix/cachix-action@v17
-        with:
-          name: jaunder-org
-          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
-          # Push build products to the cache, but NOT the test-result check
-          # derivations (jaunder-coverage / jaunder-e2e): CI must always re-run
-          # the tests and never trust a cached green check (flaky-pass / impurity
-          # protection).
-          pushFilter: "jaunder-coverage|jaunder-e2e"
-      # xtask is host-only, so cachix can't cover it; cache its compiled deps
-      # between runs.
-      - name: Cache xtask host build
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            xtask/target
-          key: xtask-${{ runner.os }}-${{ hashFiles('xtask/Cargo.lock', 'flake.lock') }}
-          restore-keys: |
-            xtask-${{ runner.os }}-
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Validate (static + clippy + coverage, via xtask)
-        run: nix develop .#ci --accept-flake-config -c cargo xtask validate --no-e2e
+        run:
+          nix develop .#ci --accept-flake-config -c cargo xtask validate
+          --no-e2e
       # Drift guard for the Nix coverage `src` filter (#241/#37): eval-only, so it
       # reuses this job's nix + cachix + xtask cache for ~seconds. `if: always()` so a
       # filter-drift signal is not masked by an unrelated `validate` failure.
       - name: Coverage source-drift probe (#241)
         if: always()
-        run: nix develop .#ci --accept-flake-config -c cargo xtask coverage probe-source
+        run:
+          nix develop .#ci --accept-flake-config -c cargo xtask coverage
+          probe-source
       - name: Upload coverage diagnostics
         if: always()
         uses: actions/upload-artifact@v7
@@ -86,38 +68,18 @@ jobs:
         browser: [chromium, firefox]
     steps:
       - uses: actions/checkout@v7
-      - uses: cachix/install-nix-action@v31
+      - uses: ./.github/actions/setup-ci
         with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: cachix/cachix-action@v17
-        with:
-          name: jaunder-org
-          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
-          # Push build products to the cache, but NOT the test-result check
-          # derivations (jaunder-coverage / jaunder-e2e): CI must always re-run
-          # the tests and never trust a cached green check (flaky-pass / impurity
-          # protection).
-          pushFilter: "jaunder-coverage|jaunder-e2e"
-      # xtask is host-only, so cachix can't cover it; cache its compiled deps
-      # between runs.
-      - name: Cache xtask host build
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            xtask/target
-          key: xtask-${{ runner.os }}-${{ hashFiles('xtask/Cargo.lock', 'flake.lock') }}
-          restore-keys: |
-            xtask-${{ runner.os }}-
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: e2e (${{ matrix.backend }}/${{ matrix.browser }}, via xtask)
         # xtask surfaces retried-but-passed tests itself: it reads the report it
         # lifts out of the VM, appends a table to $GITHUB_STEP_SUMMARY (inherited
         # env), records them in the sidecar, and prints a `flaky:` sentinel. See
         # xtask/src/steps/flaky.rs.
-        run: nix develop .#ci --accept-flake-config -c cargo xtask e2e ${{ matrix.backend }} ${{ matrix.browser }}
+        run:
+          nix develop .#ci --accept-flake-config -c cargo xtask e2e ${{
+          matrix.backend }} ${{ matrix.browser }}
       - name: Upload e2e diagnostics
         if: always()
         uses: actions/upload-artifact@v7
@@ -134,30 +96,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: cachix/install-nix-action@v31
+      - uses: ./.github/actions/setup-ci
         with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: cachix/cachix-action@v17
-        with:
-          name: jaunder-org
-          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
-          # Same rationale as the e2e jobs: never substitute a cached green for a
-          # VM test result (the `jaunder-e2e*` derivations are push-excluded).
-          pushFilter: "jaunder-coverage|jaunder-e2e"
-      - name: Cache xtask host build
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            xtask/target
-          key: xtask-${{ runner.os }}-${{ hashFiles('xtask/Cargo.lock', 'flake.lock') }}
-          restore-keys: |
-            xtask-${{ runner.os }}-
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: elisp-integration (live server, via xtask)
-        run: nix develop .#ci --accept-flake-config -c cargo xtask elisp-integration
+        run:
+          nix develop .#ci --accept-flake-config -c cargo xtask
+          elisp-integration
       - name: Upload elisp-integration diagnostics
         if: always()
         uses: actions/upload-artifact@v7

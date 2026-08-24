@@ -1,0 +1,43 @@
+name: Setup CI
+
+description: Install Nix, configure Cachix, and cache the xtask host build.
+
+inputs:
+  github-token:
+    description: GitHub token passed to cachix/install-nix-action.
+    required: true
+  cachix-auth-token:
+    description: Cachix auth token used to push build products.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: cachix/install-nix-action@v31
+      with:
+        extra_nix_config: |
+          experimental-features = nix-command flakes
+        github_access_token: ${{ inputs.github-token }}
+    - uses: cachix/cachix-action@v17
+      with:
+        name: jaunder-org
+        authToken: ${{ inputs.cachix-auth-token }}
+        # Push build products to the cache, but NOT the test-result check
+        # derivations (jaunder-coverage / jaunder-e2e): CI must always re-run
+        # the tests and never trust a cached green check (flaky-pass / impurity
+        # protection).
+        pushFilter: "jaunder-coverage|jaunder-e2e"
+    # xtask is host-only, so cachix can't cover it; cache its compiled deps
+    # between runs.
+    - name: Cache xtask host build
+      uses: actions/cache@v6
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          xtask/target
+        key:
+          xtask-${{ runner.os }}-${{ hashFiles('xtask/Cargo.lock', 'flake.lock')
+          }}
+        restore-keys: |
+          xtask-${{ runner.os }}-
