@@ -16,7 +16,7 @@ use common::root_relative_url::RootRelativeUrl;
 use common::tagged_url::{BaseUrl, EditMediaUriUrl, EditUriUrl, compose};
 use common::time::UtcInstant;
 use common::username::Username;
-use storage::{MediaRecord, MediaStorage, SiteConfigStorage};
+use storage::{MediaManager, MediaRecord, MediaStorage, SiteConfigStorage};
 use web::auth::AuthUser;
 
 use super::{HandlerError, required_base_url};
@@ -184,6 +184,8 @@ pub async fn member_get(
 #[tracing::instrument(name = "atompub.media.member_delete", skip_all)]
 pub async fn member_delete(
     Extension(media): Extension<Arc<dyn MediaStorage>>,
+    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
+    Extension(storage_path): Extension<Arc<PathBuf>>,
     auth_user: AuthUser,
     Path((username, sha, filename)): Path<(Username, ContentHash, ProfferedFilename)>,
 ) -> Result<Response, HandlerError> {
@@ -192,19 +194,51 @@ pub async fn member_delete(
     // pre-handler 400); a well-formed but absent record still yields `NotFound` below.
     // As in `member_get`, the segment arrives decoded and is rewrapped here (#720).
     let filename = Filename::from(filename);
-    // `force = true`: AtomPub has no confirmation UI to carry a refusal back to the
-    // client, and this endpoint's behaviour today is an unconditional delete, which
-    // the guard must not change (#711).
-    media
-        .try_delete_media(
-            auth_user.user_id,
-            &MediaRef {
-                source: MediaSource::Upload,
-                sha256: sha,
-                filename,
-            },
-            true,
-        )
-        .await?;
+    // `force = true`: AtomPub has no confirmation UI. The storage guard still refuses
+    // deletes that would leave referenced bytes without any remaining media row (#721).
+    let media_ref = MediaRef {
+        source: MediaSource::Upload,
+        sha256: sha,
+        filename,
+    };
+    let manager = MediaManager::new(media, site_config, storage_path);
+    let outcome = manager
+        .delete_media(auth_user.user_id, &media_ref, true)
+        .await
+        .map_err(map_delete_error)?;
+    if outcome == storage::TryDeleteOutcome::RefusedReferenced {
+        return Err(StatusCode::CONFLICT.into());
+    }
     Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+fn map_delete_error(err: anyhow::Error) -> HandlerError {
+    match err.downcast::<storage::DeleteMediaError>() {
+        Ok(storage::DeleteMediaError::NotFound) => HandlerError::NotFound,
+        Ok(error) => HandlerError::Internal(Box::new(error)),
+        Err(err) => err.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn map_delete_error_preserves_storage_internal_errors() {
+        let error =
+            map_delete_error(storage::DeleteMediaError::Internal(sqlx::Error::RowNotFound).into());
+
+        assert!(matches!(error, HandlerError::Internal(_)));
+    }
+
+    #[test]
+    fn map_delete_error_preserves_non_delete_errors() {
+        let error = map_delete_error(anyhow::anyhow!("media delete failed"));
+
+        assert!(matches!(
+            error,
+            HandlerError::Status(StatusCode::INTERNAL_SERVER_ERROR)
+        ));
+    }
 }

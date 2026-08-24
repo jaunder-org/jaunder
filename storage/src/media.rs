@@ -8,7 +8,7 @@ use sqlx::{Database, FromRow, Pool};
 use thiserror::Error;
 
 use crate::backend::Backend;
-use crate::posts::POSTS_REFERENCING_MEDIA_FROM_WHERE;
+use crate::posts::{ANY_POST_REFERENCING_MEDIA_FROM_WHERE, POSTS_REFERENCING_MEDIA_FROM_WHERE};
 use common::ids::UserId;
 use common::pagination::{PageOffset, RowLimit};
 
@@ -71,8 +71,8 @@ pub enum DeleteMediaError {
 pub enum TryDeleteOutcome {
     /// The record was removed.
     Deleted,
-    /// The record was left in place because one of the owner's live posts
-    /// references it and the caller did not force the delete.
+    /// The record was left in place because deleting it would violate either the
+    /// caller's unforced own-reference guard or the global rowless-reference guard.
     RefusedReferenced,
 }
 
@@ -111,12 +111,12 @@ pub trait MediaStorage: Send + Sync {
         offset: PageOffset,
     ) -> sqlx::Result<Vec<MediaRecord>>;
 
-    /// Deletes a media record, refusing when one of `user_id`'s live posts references
-    /// it unless `force`.
+    /// Deletes a media record, refusing when `force` is absent and one of
+    /// `user_id`'s live posts references it, or when deleting it would leave a
+    /// live Post anywhere naming a file with no remaining media row.
     ///
-    /// The guard and the delete are **one statement**, so no post can start
-    /// referencing the media between them (spec D8) — the reason the
-    /// refuse-unless-forced policy lives in storage rather than in the caller.
+    /// The guards and the delete are **one statement**, so the storage decision has
+    /// no check-then-delete window (spec D8, #721).
     ///
     /// # Errors
     ///
@@ -128,6 +128,10 @@ pub trait MediaStorage: Send + Sync {
         media: &MediaRef,
         force: bool,
     ) -> Result<TryDeleteOutcome, DeleteMediaError>;
+
+    /// Whether the physical file named by `media` can be unlinked after a row
+    /// delete: no remaining media row and no live Post anywhere still names it.
+    async fn media_entry_is_reclaimable(&self, media: &MediaRef) -> sqlx::Result<bool>;
 
     /// Calculates the total storage used by a user's uploads (in bytes).
     async fn get_user_upload_usage(&self, user_id: UserId) -> sqlx::Result<ByteSize>;
@@ -200,7 +204,7 @@ where
     for<'q> RowLimit: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> PageOffset: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    // `try_delete_media` binds `force` into the guard's `($5 OR NOT EXISTS …)`.
+    // `try_delete_media` binds `force` into the guard's boolean expressions.
     for<'q> bool: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
@@ -341,21 +345,34 @@ where
         media: &MediaRef,
         force: bool,
     ) -> Result<TryDeleteOutcome, DeleteMediaError> {
-        // The guard and the delete are the same statement, so a `post_media` insert
-        // cannot slip between them the way it could between a check and a delete
-        // (spec D8). A single statement is atomic in both engines, so this needs no
-        // transaction, no locking, and no isolation-level tuning. `RETURNING` is what
-        // makes the outcome readable generically — `.rows_affected()` is not callable
-        // on `DB::QueryResult`.
-        //
-        // The subquery is `POSTS_REFERENCING_MEDIA_FROM_WHERE`, the one definition of
-        // "referenced", shared with `list_posts_referencing_media` — which explains the
-        // refusal this statement decides. Its binds are `$1..=$4` in the same order the
-        // `DELETE`'s own `WHERE` uses them, so the two halves splice without renumbering.
+        // The owner's refusal guard and the rowless-reference guard are part of the
+        // same delete statement. A row can be removed only when (a) the caller is not
+        // overriding an own-post reference without `force`, and (b) the delete will not
+        // leave a live Post anywhere naming a file with no remaining media row to account
+        // for it (#721).
         let sql = format!(
             "DELETE FROM media \
              WHERE user_id = $1 AND source = $2 AND sha256 = $3 AND filename = $4 \
                AND ($5 OR NOT EXISTS (SELECT 1 {POSTS_REFERENCING_MEDIA_FROM_WHERE})) \
+               AND ( \
+                 NOT EXISTS ( \
+                   SELECT 1 \
+                   FROM post_media pm \
+                   JOIN posts p ON p.post_id = pm.post_id \
+                   WHERE p.deleted_at IS NULL \
+                     AND pm.source = $2 \
+                     AND pm.sha256 = $3 \
+                     AND pm.filename = $4 \
+                 ) \
+                 OR EXISTS ( \
+                   SELECT 1 \
+                   FROM media m2 \
+                   WHERE m2.source = $2 \
+                     AND m2.sha256 = $3 \
+                     AND m2.filename = $4 \
+                     AND m2.user_id <> $1 \
+                 ) \
+               ) \
              RETURNING sha256"
         );
         let removed = sqlx::query(&sql)
@@ -393,6 +410,31 @@ where
         } else {
             Err(DeleteMediaError::NotFound)
         }
+    }
+
+    #[tracing::instrument(
+        name = "storage.media.entry_reclaimable",
+        skip(self, media),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn media_entry_is_reclaimable(&self, media: &MediaRef) -> sqlx::Result<bool> {
+        let sql = format!(
+            "SELECT 1 \
+             WHERE NOT EXISTS ( \
+               SELECT 1 \
+               FROM media \
+               WHERE source = $1 AND sha256 = $2 AND filename = $3 \
+             ) \
+             AND NOT EXISTS (SELECT 1 {ANY_POST_REFERENCING_MEDIA_FROM_WHERE})"
+        );
+        let reclaimable = sqlx::query(&sql)
+            .bind(media.source)
+            .bind(&media.sha256)
+            .bind(&media.filename)
+            .fetch_optional(&self.pool)
+            .await?
+            .is_some();
+        Ok(reclaimable)
     }
 
     #[tracing::instrument(
@@ -716,7 +758,7 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn try_delete_media_refuses_a_referenced_item_unless_forced(#[case] backend: Backend) {
+    async fn try_delete_media_refuses_a_referenced_item_without_force(#[case] backend: Backend) {
         // A17b.
         let env = backend.setup().await;
         let [user] = seed_users::<1>(&env.state).await;
@@ -736,16 +778,55 @@ mod tests {
             media_row_exists(&env.state, user, &media).await,
             "refusal leaves the row"
         );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn try_delete_media_refuses_force_that_would_leave_rowless_reference(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+        let media = seed_media(&env.state, user, "photo.jpg").await;
+        let embed = format!("<img src=\"{}\">", media_url_for("photo.jpg"));
+        create_post_via_service(&env.state, user, parse_post_body(&embed)).await;
 
         assert_eq!(
             env.state
                 .media
                 .try_delete_media(user, &media, true)
                 .await
+                .expect("the forced delete succeeds as a query"),
+            TryDeleteOutcome::RefusedReferenced
+        );
+        assert!(
+            media_row_exists(&env.state, user, &media).await,
+            "refusal leaves the only accounting row"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn try_delete_media_allows_force_when_another_row_accounts_for_reference(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let [owner, other] = seed_users::<2>(&env.state).await;
+        let media = seed_media(&env.state, owner, "photo.jpg").await;
+        seed_media(&env.state, other, "photo.jpg").await;
+        let embed = format!("<img src=\"{}\">", media_url_for("photo.jpg"));
+        create_post_via_service(&env.state, owner, parse_post_body(&embed)).await;
+
+        assert_eq!(
+            env.state
+                .media
+                .try_delete_media(owner, &media, true)
+                .await
                 .expect("the forced delete succeeds"),
             TryDeleteOutcome::Deleted
         );
-        assert!(!media_row_exists(&env.state, user, &media).await);
+        assert!(!media_row_exists(&env.state, owner, &media).await);
+        assert!(media_row_exists(&env.state, other, &media).await);
     }
 
     #[apply(backends)]

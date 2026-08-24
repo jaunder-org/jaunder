@@ -29,7 +29,8 @@ use {
     std::path::PathBuf,
     std::sync::Arc,
     storage::{
-        MediaError, MediaManager, MediaStorage, PostStorage, SiteConfigStorage, TryDeleteOutcome,
+        DeleteMediaError, MediaError, MediaManager, MediaStorage, PostStorage, SiteConfigStorage,
+        TryDeleteOutcome,
     },
 };
 
@@ -131,8 +132,9 @@ pub async fn get_usage() -> WebResult<UsageData> {
 
 /// Deletes a media item owned by the authenticated user.
 ///
-/// If the item is referenced in any posts, it will not be deleted unless
-/// `request.force` is `Some(true)`.
+/// `force` can override the user's own reference guard, but deletion still
+/// refuses when it would leave referenced bytes without any media row accounting
+/// for them.
 #[macros::server(skip_all)]
 pub async fn delete(request: DeleteMediaRequest) -> WebResult<DeleteResult> {
     let DeleteMediaRequest {
@@ -144,6 +146,10 @@ pub async fn delete(request: DeleteMediaRequest) -> WebResult<DeleteResult> {
     let auth = require_auth().await?;
     let media = expect_context::<Arc<dyn MediaStorage>>();
     let posts = expect_context::<Arc<dyn PostStorage>>();
+    let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
+    let axum::Extension(storage_path) = extract::<axum::Extension<Arc<PathBuf>>>()
+        .await
+        .map_err(map_storage_path_extract_error)?;
 
     let media_ref = MediaRef {
         source,
@@ -151,19 +157,17 @@ pub async fn delete(request: DeleteMediaRequest) -> WebResult<DeleteResult> {
         filename,
     };
 
-    // The decision is made first and made in SQL: `try_delete_media`'s guard and delete
-    // are one statement, so this handler holds no check-then-delete window of its own
-    // (spec D8).
-    let outcome = media
-        .try_delete_media(auth.user_id, &media_ref, force.unwrap_or(false))
+    // The manager delegates the row decision to storage's one-statement guard, then
+    // reclaims the file only when that decision deleted the row.
+    let manager = MediaManager::new(media.clone(), site_config, storage_path);
+    let outcome = manager
+        .delete_media(auth.user_id, &media_ref, force.unwrap_or(false))
         .await
-        .map_err(InternalError::storage)?;
+        .map_err(map_delete_error)?;
 
     // Pure reporting, and only for a refusal — the one outcome that has to be explained.
-    // A successful delete therefore reports an empty list even when it was forced: the
-    // references it overrode did not block it, and the UI reads this field only on the
-    // `deleted == false` branch. Asking unconditionally would spend a second query on
-    // every happy-path delete to fill a field nothing reads.
+    // A successful delete reports an empty list, including forced deletes that are safe
+    // because another media row still accounts for the retained file.
     let referenced_in_posts: Vec<PostId> = if outcome == TryDeleteOutcome::RefusedReferenced {
         posts
             .list_posts_referencing_media(auth.user_id, &media_ref)
@@ -178,7 +182,7 @@ pub async fn delete(request: DeleteMediaRequest) -> WebResult<DeleteResult> {
     })
 }
 
-/// Maps an owned media upload failure to its bounded public classification while
+/// Maps an owned media operation failure to its bounded public classification while
 /// retaining the complete `anyhow` chain for the operator boundary.
 #[cfg(feature = "server")]
 fn map_media_error(err: anyhow::Error) -> InternalError {
@@ -203,6 +207,23 @@ fn map_media_error(err: anyhow::Error) -> InternalError {
         ),
     };
     InternalError::masked(kind, class, public_message, err)
+}
+
+/// Maps media deletion failures from the manager while preserving the existing
+/// `NotFound` classification from the storage path and the bounded media I/O
+/// classifications from file reclamation.
+#[cfg(feature = "server")]
+fn map_delete_error(err: anyhow::Error) -> InternalError {
+    if matches!(
+        err.downcast_ref::<DeleteMediaError>(),
+        Some(DeleteMediaError::NotFound)
+    ) {
+        return InternalError::not_found("media");
+    }
+    if err.downcast_ref::<MediaError>().is_some() {
+        return map_media_error(err);
+    }
+    InternalError::server_boxed(err.into_boxed_dyn_error())
 }
 
 /// Preserves the typed server-fn extractor rejection for a missing storage-path
@@ -293,7 +314,10 @@ pub async fn upload(data: MultipartData) -> WebResult<UploadResponse> {
 
 #[cfg(all(test, feature = "server"))]
 mod tests {
-    use super::{MediaError, map_media_error, map_multipart_error, map_storage_path_extract_error};
+    use super::{
+        DeleteMediaError, MediaError, map_delete_error, map_media_error, map_multipart_error,
+        map_storage_path_extract_error,
+    };
     use crate::error::{ErrorKind, InternalError};
     use leptos::server_fn::error::ServerFnErrorErr;
     use std::error::Error;
@@ -349,6 +373,28 @@ mod tests {
             map_media_error(anyhow::anyhow!("io boom")).kind(),
             ErrorKind::Internal
         );
+    }
+
+    #[test]
+    fn map_delete_error_classifies_manager_errors() {
+        assert_eq!(
+            map_delete_error(anyhow::anyhow!(DeleteMediaError::NotFound)).kind(),
+            ErrorKind::NotFound
+        );
+
+        let media = map_delete_error(anyhow::anyhow!(MediaError::Internal(Box::new(
+            std::io::Error::other("unlink sentinel"),
+        ))));
+        assert_eq!(media.kind(), ErrorKind::Internal);
+        assert!(
+            typed_source::<MediaError>(&media).is_some(),
+            "file reclamation failures remain typed"
+        );
+
+        let storage = map_delete_error(anyhow::anyhow!(DeleteMediaError::Internal(
+            sqlx::Error::RowNotFound,
+        )));
+        assert_eq!(storage.kind(), ErrorKind::Internal);
     }
 
     #[test]

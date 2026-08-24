@@ -292,7 +292,7 @@ test.describe("Media delete guard", () => {
     );
   });
 
-  test("forced media delete confirms, renders errors, and cannot double dispatch", async ({
+  test("forced media delete refuses rowless references and cannot double dispatch", async ({
     page,
   }) => {
     await signInAsNewUser(page);
@@ -321,9 +321,11 @@ test.describe("Media delete guard", () => {
     expect(counts.deleteRequests()).toBe(1);
     release();
 
-    await expect(page.getByRole("link", { name: "forced.jpg" })).toHaveCount(0);
-    await expect(page.locator("p.success")).toHaveText("Media deleted.");
-    await expect.poll(counts.listRequests).toBe(1);
+    await expect(
+      page.getByText(/Cannot delete: referenced in post/),
+    ).toBeVisible();
+    await expect(page.getByRole("link", { name: "forced.jpg" })).toBeVisible();
+    await expect.poll(counts.listRequests).toBe(0);
   });
 
   test("a post embedding the raw filename spelling blocks deletion", async ({

@@ -5,10 +5,11 @@ use axum::{
 use tempfile::TempDir;
 use tower::ServiceExt;
 
+use common::test_support::{parse_content_hash, parse_filename, parse_post_body};
 use rstest::*;
 use rstest_reuse::*;
 
-use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
+use storage::test_support::{Backend, SeedRawPost, TestEnv, backends, backends_matrix};
 
 use crate::helpers::{
     atompub, atompub_at, atompub_get, atompub_upload, body_string, create_user_and_session,
@@ -264,6 +265,40 @@ async fn delete_media_member_returns_204_then_404(#[case] backend: Backend) {
         .unwrap();
 
     assert_eq!(del_resp2.status(), StatusCode::NOT_FOUND);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn delete_media_member_refuses_rowless_referenced_file(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let storage = TempDir::new().unwrap();
+    let app = make_app(&state, &storage);
+
+    let loc = upload_and_member_url(&app, &session, "pic.png").await;
+    let sha256 = loc
+        .rsplit('/')
+        .nth(1)
+        .map(parse_content_hash)
+        .expect("member URL includes the content hash");
+    let filename = parse_filename("pic.png");
+    let media_url =
+        common::media::media_url(&common::media::MediaSource::Upload, &sha256, &filename);
+    SeedRawPost::new(session.user_id)
+        .body(parse_post_body(&format!("![referenced]({media_url})")))
+        .seed(&state)
+        .await;
+
+    let del_resp = app
+        .oneshot(
+            atompub_at(&session, "DELETE", &loc)
+                .body(Body::empty())
+                .expect("failed to build atompub DELETE request"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(del_resp.status(), StatusCode::CONFLICT);
 }
 
 /// Replaces the trailing filename segment of a member URL, keeping everything before it.

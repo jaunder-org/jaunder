@@ -943,6 +943,19 @@ pub(crate) const POSTS_REFERENCING_MEDIA_FROM_WHERE: &str = "\
        AND pm.sha256 = $3 \
        AND pm.filename = $4";
 
+/// The global version of [`POSTS_REFERENCING_MEDIA_FROM_WHERE`], used by media
+/// file reclamation where any live Post naming the on-disk entry keeps the file
+/// present, regardless of which user owns the media row being deleted.
+///
+/// Bind order: `$1` `source`, `$2` `sha256`, `$3` `filename`.
+pub(crate) const ANY_POST_REFERENCING_MEDIA_FROM_WHERE: &str = "\
+     FROM post_media pm \
+     JOIN posts p ON p.post_id = pm.post_id \
+     WHERE p.deleted_at IS NULL \
+       AND pm.source = $1 \
+       AND pm.sha256 = $2 \
+       AND pm.filename = $3";
+
 /// Generic [`PostStorage`] backed by any [`PostDialect`] database.
 ///
 /// Every read and the non-transactional shared mutations live here, splicing
