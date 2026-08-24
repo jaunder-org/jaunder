@@ -59,13 +59,10 @@ fn map_restore_error(error: sqlx::Error) -> BackupError {
     let constraint_message = error
         .as_database_error()
         .filter(|db| {
-            matches!(
-                db.kind(),
-                ErrorKind::UniqueViolation
-                    | ErrorKind::ForeignKeyViolation
-                    | ErrorKind::NotNullViolation
-                    | ErrorKind::CheckViolation
-            )
+            db.is_unique_violation()
+                || db.is_foreign_key_violation()
+                || db.kind() == ErrorKind::NotNullViolation
+                || db.is_check_violation()
         })
         .map(|db| db.message().to_owned());
     match constraint_message {
@@ -449,7 +446,9 @@ mod tests {
     // contract remains in the dual-backend server command suite.
     #[apply(sqlite_only)]
     #[tokio::test]
-    async fn map_restore_error_classifies_native_check_violations(#[case] backend: Backend) {
+    async fn map_restore_error_distinguishes_constraint_and_other_database_errors(
+        #[case] backend: Backend,
+    ) {
         let env = backend.setup().await;
         let CloseablePool::Sqlite(pool) = env.base.pool() else {
             unreachable!("sqlite_only yields a SQLite pool")
@@ -458,14 +457,22 @@ mod tests {
             .execute(pool)
             .await
             .expect("create check probe");
-        let error = sqlx::query("INSERT INTO restore_check_probe (value) VALUES ('')")
+        let constraint = sqlx::query("INSERT INTO restore_check_probe (value) VALUES ('')")
             .execute(pool)
             .await
             .expect_err("the probe check must reject an empty value");
-
         assert!(matches!(
-            map_restore_error(error),
+            map_restore_error(constraint),
             BackupError::ConstraintViolation(_)
+        ));
+
+        let other = sqlx::query("SELECT * FROM missing_restore_probe")
+            .execute(pool)
+            .await
+            .expect_err("the missing table must produce a database error");
+        assert!(matches!(
+            map_restore_error(other),
+            BackupError::Sqlx(sqlx::Error::Database(_))
         ));
     }
 
