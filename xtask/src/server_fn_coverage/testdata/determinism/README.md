@@ -1,17 +1,16 @@
-# Determinism fixtures (#745)
+# Determinism fixtures (#745, #757)
 
-Real `cargo xtask server-fn-coverage regenerate` output from **three distinct
-executions of the same e2e derivation on the same tree**. They are the evidence
-behind #745's central claim, and `snapshot.rs`'s
-`runs_that_disagree_on_titles_still_render_one_compared_snapshot` is what keeps
-that claim checkable in milliseconds instead of on trust.
+Real trace-derived coverage from **three distinct executions of the same e2e
+derivation on the same tree**. `snapshot.rs`'s
+`runs_that_disagree_on_titles_render_one_snapshot` keeps the single-artifact
+contract checkable in milliseconds instead of on trust.
 
 ## What they show
 
 The three files disagree — that is the whole point. They disagree **only** in
-`covered`'s test-title lists. Their covered fn key sets and their `orphans` maps
-are identical, which is why #745 could stop byte-comparing the titles without
-weakening what the gate asserts.
+`covered`'s internal test-title lists. Their covered fn key sets and their
+`orphans` maps are identical, so #757 can discard titles at the durable snapshot
+boundary without weakening what the gate asserts.
 
 The disagreement is a single title,
 `owner: jaunder_home_redirect='app' makes the pre-paint script redirect / → /app`,
@@ -24,10 +23,10 @@ requests really are that test's — but it is not reproducible.
 ## Format
 
 **The pre-#745 combined shape** —
-`{"covered": {key: [titles]}, "orphans": {...}}` — which the current code no
-longer parses. That is deliberate: they are historical artifacts, so the test
-brings its own `CombinedRun` deserialize struct rather than being rewritten into
-today's format, which would destroy the evidence.
+`{"covered": {key: [titles]}, "orphans": {...}}` — which the current snapshot
+parser does not accept. That is deliberate: the test brings its own
+`CombinedRun` deserialize struct and projects these historical captures through
+today's `Coverage::into_snapshot` boundary.
 
 ## Provenance
 
@@ -46,9 +45,9 @@ Nix reported the derivation "may not be deterministic" on every `--rebuild`,
 which is how the differing outputs were obtained at all: on an unchanged tree a
 plain re-run replays the cached output in ~4 s and cannot show the variance.
 
-There were **four** runs; two produced byte-identical snapshots, hence three
-files. `run-c.json` is the one that matched the artifact committed on `main` at
-the time.
+There were **four** runs; two projected to byte-identical snapshots, hence three
+files. `run-c.json` matched the coverage content committed on `main` at the
+time.
 
 The captures themselves are not committed — ~2.2 MB compressed each, ~26 MB of
 JSONL once extracted, and nothing in the repo reads them.

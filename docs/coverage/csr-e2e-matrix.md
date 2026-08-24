@@ -12,14 +12,14 @@ The host coverage gate does not measure wasm-only components; see
 [ADR-0070](../adr/0070-web-vertical-wasm-only-component-files.md).
 Server-function coverage remains a separate evidence surface under
 [ADR-0081](../adr/0081-empirical-server-fn-flow-coverage.md):
-[`server-fns.json`](server-fns.json) records the checked covered server-function
-set and [`server-fns-evidence.json`](server-fns-evidence.json) records per-test
-attribution. Neither is user-visible CSR-flow-to-spec evidence.
+[`server-fns.json`](server-fns.json) is its sole committed artifact and records
+the checked covered server-function set plus orphan reasons. It does not persist
+per-test attribution and is not user-visible CSR-flow-to-spec evidence.
 
 [`docs/flows/README.md`](../flows/README.md) is the checked route/journey index
 that consumes these heading anchors. Flow documents link the relevant heading
-below and do not recreate a `Pinned by` mapping or copy either server-function
-artifact or its per-test attribution.
+below and do not copy the server-function snapshot or infer request-to-test
+attribution from it.
 
 ## Candidate inventory
 
@@ -200,6 +200,6 @@ update the affected candidate row and flow section in the same change. Add a new
 flow heading before adding the first candidate to it. If review finds no
 behavioral spec for a flow, record the duplicate search and selection evidence
 here, then create or reuse exactly one milestone-6 `Task` follow-up; do not
-claim coverage from a filename, a server function, or either server-function
-evidence file. Future flow documents link the affected heading rather than
-copying its evidence list.
+claim coverage from a filename, a server function, or the server-function
+snapshot. Future flow documents link the affected heading rather than copying
+its evidence list.

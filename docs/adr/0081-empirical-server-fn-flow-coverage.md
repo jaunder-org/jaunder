@@ -155,6 +155,18 @@ Concretely:
   only its key set is checked — a renamed or deleted test leaves a wrong title
   in a green tree. Whether that file is worth its weight at all is **#757**.
 
+  > **Addendum (2026-08-24, #757).** The two-file compromise above was retired.
+  > `docs/coverage/server-fns.json` became the sole durable generated artifact:
+  > regeneration wrote only that deterministic snapshot, static verification
+  > read it with the source-derived inventory, and e2e verification recomputed
+  > and compared it from the authoritative capture. Structural per-test
+  > attribution remained internal to extraction because it distinguished
+  > test-driven requests from orphan traffic, but test titles were no longer
+  > persisted. The accepted Decision and Consequences remain the dated
+  > historical record; for current truth, read
+  > [Server-fn gates](../ARCHITECTURE.md#server-fn-gates) and current repository
+  > guidance rather than this historical Decision.
+
 - A fn may be **uncovered only as a failing gate finding**. There is no
   server-fn flow-coverage allowlist; add a browser flow instead.
 
