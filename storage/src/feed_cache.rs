@@ -9,7 +9,19 @@ use sqlx::{Database, Pool};
 use thiserror::Error;
 
 use crate::backend::Backend;
+use crate::role_instant::impl_role_instant;
 
+/// The `feed_cache.updated_at` storage timestamp role, distinct from
+/// `generated_at` so mappings cannot transpose silently (#751).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
+struct FeedCacheUpdatedAt(DateTime<Utc>);
+impl_role_instant!(FeedCacheUpdatedAt);
+
+/// The `feed_cache.generated_at` storage timestamp role, distinct from
+/// `updated_at` so mappings cannot transpose silently (#751).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
+struct FeedCacheGeneratedAt(DateTime<Utc>);
+impl_role_instant!(FeedCacheGeneratedAt);
 /// A single cached feed body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeedCacheRow {
@@ -37,27 +49,46 @@ pub trait FeedCacheStorage: Send + Sync {
     async fn delete(&self, feed_path: &FeedPath) -> Result<(), FeedCacheError>;
 }
 
-type CacheTuple = (
-    FeedPath,
-    String,
-    ETag,
-    ContentType,
-    DateTime<Utc>,
-    DateTime<Utc>,
-);
+#[derive(Debug, sqlx::FromRow)]
+struct FeedCacheRowRecord {
+    feed_url: FeedPath,
+    body: String,
+    etag: ETag,
+    content_type: ContentType,
+    updated_at: FeedCacheUpdatedAt,
+    generated_at: FeedCacheGeneratedAt,
+}
+
+struct FeedCacheRowParts {
+    feed_path: FeedPath,
+    body: String,
+    etag: ETag,
+    content_type: ContentType,
+    updated_at: FeedCacheUpdatedAt,
+    generated_at: FeedCacheGeneratedAt,
+}
 
 // Infallible: the `feed_url` and `content_type` columns decode straight into
 // `FeedPath` / `ContentType` via the sqlx bridge (#438), which validates through
 // `FromStr` at the query boundary — so a corrupt/migrated value is already rejected
-// as a `ColumnDecode` error before this mapper runs.
-fn row_from_tuple(t: CacheTuple) -> FeedCacheRow {
+// as a `ColumnDecode` error before this mapper runs. The adjacent timestamp pair
+// decodes through distinct role wrappers (#751), so a swap at this seam fails to compile.
+fn row_from_record(row: FeedCacheRowRecord) -> FeedCacheRow {
+    let parts = FeedCacheRowParts {
+        feed_path: row.feed_url,
+        body: row.body,
+        etag: row.etag,
+        content_type: row.content_type,
+        updated_at: row.updated_at,
+        generated_at: row.generated_at,
+    };
     FeedCacheRow {
-        feed_path: t.0,
-        body: t.1,
-        etag: t.2,
-        content_type: t.3,
-        updated_at: t.4,
-        generated_at: t.5,
+        feed_path: parts.feed_path,
+        body: parts.body,
+        etag: parts.etag,
+        content_type: parts.content_type,
+        updated_at: parts.updated_at.value(),
+        generated_at: parts.generated_at.value(),
     }
 }
 
@@ -80,7 +111,7 @@ impl<DB: Database> FeedCacheStore<DB> {
 impl<DB> FeedCacheStorage for FeedCacheStore<DB>
 where
     DB: Backend,
-    CacheTuple: for<'r> sqlx::FromRow<'r, DB::Row>,
+    FeedCacheRowRecord: for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `FeedPath` binds and decodes as itself via the ADR-0071 sqlx bridge (the
     // `feed_url` column decodes into `FeedPath`, and the binds encode `&FeedPath`).
@@ -96,14 +127,14 @@ where
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn get(&self, feed_path: &FeedPath) -> Result<Option<FeedCacheRow>, FeedCacheError> {
-        let row = sqlx::query_as::<_, CacheTuple>(
+        let row = sqlx::query_as::<_, FeedCacheRowRecord>(
             "SELECT feed_url, body, etag, content_type, updated_at, generated_at \
              FROM feed_cache WHERE feed_url = $1",
         )
         .bind(feed_path)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(row_from_tuple))
+        Ok(row.map(row_from_record))
     }
 
     #[tracing::instrument(
@@ -157,14 +188,27 @@ mod tests {
     use rstest_reuse::*;
 
     fn sample(url: &str) -> FeedCacheRow {
+        let updated_at = Utc::now();
         FeedCacheRow {
             feed_path: fp(url),
             body: "<rss/>".into(),
             etag: parse_etag("\"sha256-deadbeef\""),
             content_type: parse_content_type("application/rss+xml"),
-            updated_at: Utc::now(),
-            generated_at: Utc::now(),
+            updated_at,
+            generated_at: updated_at + chrono::Duration::seconds(5),
         }
+    }
+
+    #[test]
+    fn timestamp_role_wrappers_preserve_distinct_instants() {
+        let updated_at = Utc::now();
+        let generated_at = updated_at + chrono::Duration::seconds(5);
+
+        assert_eq!(FeedCacheUpdatedAt::from(updated_at).value(), updated_at);
+        assert_eq!(
+            FeedCacheGeneratedAt::from(generated_at).value(),
+            generated_at
+        );
     }
 
     #[apply(backends)]
@@ -183,6 +227,10 @@ mod tests {
             .await
             .unwrap()
             .expect("present");
+        assert_eq!(
+            got.generated_at,
+            got.updated_at + chrono::Duration::seconds(5)
+        );
         assert_eq!(got.feed_path, "/feed.rss");
         assert_eq!(got.body, "<rss/>");
     }

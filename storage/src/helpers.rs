@@ -5,6 +5,7 @@ use std::io;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
+use crate::role_instant::impl_role_instant;
 use crate::{
     InviteRecord, MediaRecord, PostFormat, PostRecord, PostTag, RenderedHtml, SessionRecord,
     UserRecord,
@@ -25,6 +26,30 @@ use common::tagged_url::MediaSourceUrl;
 use common::token::TokenHash;
 use common::username::Username;
 use host::invite::InviteCode;
+
+/// The `sessions.created_at` storage timestamp role, distinct from
+/// `last_used_at` so mappings cannot transpose silently (#751).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
+struct SessionCreatedAt(DateTime<Utc>);
+impl_role_instant!(SessionCreatedAt);
+
+/// The `sessions.last_used_at` storage timestamp role, distinct from
+/// `created_at` so mappings cannot transpose silently (#751).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
+struct SessionLastUsedAt(DateTime<Utc>);
+impl_role_instant!(SessionLastUsedAt);
+
+/// The `invites.created_at` storage timestamp role, distinct from `expires_at`
+/// so mappings cannot transpose silently (#751).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
+struct InviteCreatedAt(DateTime<Utc>);
+impl_role_instant!(InviteCreatedAt);
+
+/// The `invites.expires_at` storage timestamp role, distinct from `created_at`
+/// so mappings cannot transpose silently (#751).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
+struct InviteExpiresAt(DateTime<Utc>);
+impl_role_instant!(InviteExpiresAt);
 
 /// Preserves an already-selected primary result while reporting a failed
 /// secondary operation exactly once. Owning modules wrap this with private,
@@ -111,25 +136,37 @@ pub(crate) fn build_user_record(
 // SessionRecord helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) fn build_session_record(
+struct SessionRecordParts {
     token_hash: TokenHash,
     user_id: UserId,
     username: Username,
     label: SessionLabel,
-    created_at: DateTime<Utc>,
-    last_used_at: DateTime<Utc>,
-) -> SessionRecord {
-    // Every column arrives as its domain type — `token_hash`/`username` through the
-    // validating string bridge (#438), `user_id` through the id bridge (#686) — so a
-    // corrupt/migrated value is rejected as a column-decode error before we ever
-    // get here, and this build step is infallible.
-    SessionRecord {
+    created_at: SessionCreatedAt,
+    last_used_at: SessionLastUsedAt,
+}
+
+fn build_session_record(
+    SessionRecordParts {
         token_hash,
         user_id,
         username,
         label,
         created_at,
         last_used_at,
+    }: SessionRecordParts,
+) -> SessionRecord {
+    // Every column arrives as its domain type — `token_hash`/`username` through the
+    // validating string bridge (#438), `user_id` through the id bridge (#686), and
+    // the timestamp pair through distinct role wrappers (#751) — so a
+    // corrupt/migrated value is rejected as a column-decode error before we ever
+    // get here, and adjacent timestamp swaps fail at the row-to-parts seam.
+    SessionRecord {
+        token_hash,
+        user_id,
+        username,
+        label,
+        created_at: created_at.value(),
+        last_used_at: last_used_at.value(),
     }
 }
 
@@ -137,21 +174,31 @@ pub(crate) fn build_session_record(
 // InviteRecord helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) fn build_invite_record(
+struct InviteRecordParts {
     code: InviteCode,
-    created_at: DateTime<Utc>,
-    expires_at: DateTime<Utc>,
+    created_at: InviteCreatedAt,
+    expires_at: InviteExpiresAt,
     used_at: Option<DateTime<Utc>>,
     used_by: Option<UserId>,
-) -> InviteRecord {
-    // The `code` column decodes straight into `InviteCode` via the sqlx bridge (#438),
-    // which validates through `FromStr`, and `used_by` through the id bridge (#686), so a
-    // corrupt/migrated value is rejected as a decode error before we ever get here — this
-    // build step is infallible.
-    InviteRecord {
+}
+
+fn build_invite_record(
+    InviteRecordParts {
         code,
         created_at,
         expires_at,
+        used_at,
+        used_by,
+    }: InviteRecordParts,
+) -> InviteRecord {
+    // The `code` column decodes straight into `InviteCode` via the sqlx bridge (#438),
+    // `used_by` through the id bridge (#686), and the adjacent created/expires pair
+    // through distinct role wrappers (#751), so corrupt/migrated values are rejected
+    // before we ever get here and adjacent timestamp swaps fail at the row-to-parts seam.
+    InviteRecord {
+        code,
+        created_at: created_at.value(),
+        expires_at: expires_at.value(),
         used_at,
         used_by,
     }
@@ -266,43 +313,55 @@ pub(crate) fn user_record_from_row(row: UserRow) -> UserRecord {
     })
 }
 
-pub(crate) type SessionRow = (
-    TokenHash,
-    UserId,
-    Username,
-    String,
-    DateTime<Utc>,
-    DateTime<Utc>,
-);
+#[derive(sqlx::FromRow)]
+pub struct SessionRow {
+    token_hash: TokenHash,
+    user_id: UserId,
+    username: Username,
+    label: String,
+    created_at: SessionCreatedAt,
+    last_used_at: SessionLastUsedAt,
+}
+impl SessionRow {
+    #[must_use]
+    pub(crate) fn last_used_at(&self) -> DateTime<Utc> {
+        self.last_used_at.value()
+    }
+}
 
 pub(crate) fn session_record_from_row(row: SessionRow) -> SessionRecord {
-    let (token_hash, user_id, username, label, created_at, last_used_at) = row;
     // The `label` column decodes as a plain `String` and is sanitized into a
     // `SessionLabel` via the lossy constructor rather than a validating decode: a
     // label is a best-effort *display* value, so a pre-existing out-of-range row
     // (empty, over-long) is repaired on read instead of failing the whole
     // `list_sessions` query.
-    build_session_record(
-        token_hash,
-        user_id,
-        username,
-        SessionLabel::from_lossy(&label),
-        created_at,
-        last_used_at,
-    )
+    build_session_record(SessionRecordParts {
+        token_hash: row.token_hash,
+        user_id: row.user_id,
+        username: row.username,
+        label: SessionLabel::from_lossy(&row.label),
+        created_at: row.created_at,
+        last_used_at: row.last_used_at,
+    })
 }
 
-pub(crate) type InviteRow = (
-    InviteCode,
-    DateTime<Utc>,
-    DateTime<Utc>,
-    Option<DateTime<Utc>>,
-    Option<UserId>,
-);
+#[derive(sqlx::FromRow)]
+pub(crate) struct InviteRow {
+    code: InviteCode,
+    created_at: InviteCreatedAt,
+    expires_at: InviteExpiresAt,
+    used_at: Option<DateTime<Utc>>,
+    used_by: Option<UserId>,
+}
 
 pub(crate) fn invite_record_from_row(row: InviteRow) -> InviteRecord {
-    let (code, created_at, expires_at, used_at, used_by) = row;
-    build_invite_record(code, created_at, expires_at, used_at, used_by)
+    build_invite_record(InviteRecordParts {
+        code: row.code,
+        created_at: row.created_at,
+        expires_at: row.expires_at,
+        used_at: row.used_at,
+        used_by: row.used_by,
+    })
 }
 
 /// One row of the post read model, decoded **by column name** from every post SELECT.
@@ -690,14 +749,15 @@ mod tests {
     #[test]
     fn test_build_session_record() {
         let now = Utc::now();
-        let record = build_session_record(
-            parse_token_hash("hash"),
-            UserId::from(1),
-            parse_username("alice"),
-            parse_session_label("label"),
-            now,
-            now,
-        );
+        let later = now + chrono::Duration::seconds(5);
+        let record = build_session_record(SessionRecordParts {
+            token_hash: parse_token_hash("hash"),
+            user_id: UserId::from(1),
+            username: parse_username("alice"),
+            label: parse_session_label("label"),
+            created_at: now.into(),
+            last_used_at: later.into(),
+        });
         assert_eq!(record.token_hash, "hash");
         assert_eq!(record.username, "alice");
     }
@@ -707,13 +767,13 @@ mod tests {
         let created_at = Utc::now();
         let expires_at = created_at + chrono::Duration::days(7);
         let used_at = created_at + chrono::Duration::hours(1);
-        let record = build_invite_record(
-            parse_invite_code("invite-code"),
-            created_at,
-            expires_at,
-            Some(used_at),
-            Some(UserId::from(7)),
-        );
+        let record = build_invite_record(InviteRecordParts {
+            code: parse_invite_code("invite-code"),
+            created_at: created_at.into(),
+            expires_at: expires_at.into(),
+            used_at: Some(used_at),
+            used_by: Some(UserId::from(7)),
+        });
 
         assert_eq!(record.code.as_ref(), "invite-code");
         assert_eq!(record.created_at, created_at);
@@ -971,20 +1031,32 @@ mod tests {
     #[test]
     fn session_and_invite_row_helpers_round_trip() {
         let now = Utc::now();
-        let session: SessionRow = (
-            parse_token_hash("tokenhash"),
-            UserId::from(1),
-            parse_username("alice"),
-            "label".to_string(),
-            now,
-            now,
-        );
+        let last_used_at = now + chrono::Duration::seconds(5);
+        let session = SessionRow {
+            token_hash: parse_token_hash("tokenhash"),
+            user_id: UserId::from(1),
+            username: parse_username("alice"),
+            label: "label".to_string(),
+            created_at: now.into(),
+            last_used_at: last_used_at.into(),
+        };
         let session_record = session_record_from_row(session);
         assert_eq!(session_record.user_id, UserId::from(1));
+        assert_eq!(session_record.created_at, now);
+        assert_eq!(session_record.last_used_at, last_used_at);
 
-        let invite: InviteRow = (parse_invite_code("code"), now, now, None, None);
+        let expires_at = now + chrono::Duration::days(7);
+        let invite = InviteRow {
+            code: parse_invite_code("code"),
+            created_at: now.into(),
+            expires_at: expires_at.into(),
+            used_at: None,
+            used_by: None,
+        };
         let invite_record = invite_record_from_row(invite);
         assert_eq!(invite_record.code.as_ref(), "code");
+        assert_eq!(invite_record.created_at, now);
+        assert_eq!(invite_record.expires_at, expires_at);
     }
 
     #[test]
@@ -1166,18 +1238,20 @@ mod tests {
     #[test]
     fn invite_record_from_row_maps_some_fields() {
         let now = Utc::now();
-        let row: InviteRow = (
-            parse_invite_code("code"),
-            now,
-            now,
-            Some(now),
-            Some(UserId::from(1)),
-        );
+        let expires_at = now + chrono::Duration::days(7);
+        let used_at = now + chrono::Duration::hours(1);
+        let row = InviteRow {
+            code: parse_invite_code("code"),
+            created_at: now.into(),
+            expires_at: expires_at.into(),
+            used_at: Some(used_at),
+            used_by: Some(UserId::from(1)),
+        };
         let record = invite_record_from_row(row);
         assert_eq!(record.code.as_ref(), "code");
         assert_eq!(record.created_at, now);
-        assert_eq!(record.expires_at, now);
-        assert_eq!(record.used_at, Some(now));
+        assert_eq!(record.expires_at, expires_at);
+        assert_eq!(record.used_at, Some(used_at));
         assert_eq!(record.used_by, Some(UserId::from(1)));
     }
 }

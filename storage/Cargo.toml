@@ -20,6 +20,7 @@ clap = { workspace = true, features = ["derive"] }
 croner.workspace = true
 flate2.workspace = true
 futures-util.workspace = true
+macros = { path = "../macros" }
 log.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
@@ -56,6 +57,8 @@ tracing-subscriber.workspace = true
 mockall.workspace = true
 
 [features]
+default = ["sqlx"]
+sqlx = []
 test-utils = ["dep:mockall"]
 # `seed-posts` gates only `seed_post_input` (the shared timeline-post recipe)
 # and pulls NO extra deps, so the `test-support` binary can link the recipe

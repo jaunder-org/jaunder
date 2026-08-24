@@ -133,9 +133,9 @@
 //! # What this gate does not claim
 //!
 //! Type identity is not column correspondence. It can prove a target is **a** domain type;
-//! it can never prove it is the **right** one. Two adjacent `DateTime<Utc>` columns
-//! transpose invisibly and compile — `SessionRow`, `InviteRow` and `CacheTuple` each hold
-//! such a pair. That needs a different mechanism and is tracked in #751.
+//! it can never prove it is the **right** one. #751 removed this gate's named adjacent
+//! timestamp residuals by replacing the affected tuple decodes with named row structs and
+//! distinct timestamp role types; the gate still does not read SQL column correspondence.
 //!
 //! # Roots
 //!
@@ -677,7 +677,7 @@ const ALLOWLIST: &[Allowed] = &[
         file: "helpers.rs",
         function: "",
         target: "String",
-        what: "SessionRow.3",
+        what: "label",
         count: 1,
         category: Category::DeliberateLossy,
         reason: "the session label is stored lossily (SessionLabel::from_lossy truncates), so \
@@ -688,7 +688,7 @@ const ALLOWLIST: &[Allowed] = &[
         file: "feed_cache.rs",
         function: "",
         target: "String",
-        what: "CacheTuple.1",
+        what: "body",
         count: 1,
         category: Category::OpaquePayload,
         reason: "the cached feed body — rendered RSS/Atom/JSON this layer stores and serves \
@@ -978,9 +978,8 @@ const CONTAINERS: &[&str] = &["Vec", "Option", "Box", "Cow", "Arc", "Rc"];
 /// column straight into this type is right.
 const APPROVED_FOREIGN: &[(&str, &str)] = &[(
     "DateTime",
-    "chrono timestamps — the correct target for every temporal column; note this is also \
-     the residual ADR-0085 records, since two adjacent DateTime columns transpose \
-     invisibly (#751)",
+    "chrono timestamps — the correct target for temporal columns whose surrounding row \
+     shape already carries any needed role identity",
 )];
 
 /// The types a decode may land in: domain types with a bridge, plus the composites whose
@@ -1744,7 +1743,7 @@ mod tests {
     ///
     /// The names here stand in for what the real declaration scan finds: `Slug`/`PostId`
     /// for bridge-carrying domain types, `DateTime` for [`APPROVED_FOREIGN`], and
-    /// `PostRow`/`CacheTuple` for composites approved by delegation.
+    /// `PostRow`/`FeedCacheRowRecord` for composites approved by delegation.
     fn approve() -> ApproveSet {
         let names = |ns: &[&str]| ns.iter().map(|s| (*s).to_string()).collect();
         ApproveSet {
@@ -1759,7 +1758,7 @@ mod tests {
                 "Tag",
                 "DateTime",
             ]),
-            composites: names(&["PostRow", "CacheTuple"]),
+            composites: names(&["PostRow", "FeedCacheRowRecord"]),
             aliases: std::collections::HashMap::new(),
         }
     }

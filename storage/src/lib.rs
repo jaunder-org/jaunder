@@ -28,6 +28,7 @@ mod password;
 mod post_service;
 mod postgres;
 mod posts;
+mod role_instant;
 mod sessions;
 mod site_config;
 mod smtp;
