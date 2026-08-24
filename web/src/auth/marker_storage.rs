@@ -27,7 +27,7 @@ fn report_storage_error(context: ClientErrorContext, error: client::storage::Sto
 /// malformed advisory marker remains ordinary anonymous control flow.
 #[must_use]
 pub fn get() -> Option<SessionUser> {
-    match client::storage::get(LocalStorageKey::AuthMarker.as_str()) {
+    match client::storage::get(LocalStorageKey::AuthMarker.as_ref()) {
         Ok(raw) => raw.and_then(|raw| decode_marker(&raw)),
         Err(error) => {
             report_storage_error(ClientErrorContext::SessionMarkerRead, error);
@@ -40,7 +40,7 @@ pub fn get() -> Option<SessionUser> {
 /// `Effect` re-writes it on the next load — but is reported before continuing.
 pub fn set(user: &SessionUser) {
     if let Err(error) =
-        client::storage::set(LocalStorageKey::AuthMarker.as_str(), &encode_marker(user))
+        client::storage::set(LocalStorageKey::AuthMarker.as_ref(), &encode_marker(user))
     {
         report_storage_error(ClientErrorContext::SessionMarkerWrite, error);
     }
@@ -50,7 +50,7 @@ pub fn set(user: &SessionUser) {
 /// clears a stale marker against a dead session on the next load — but is
 /// reported before continuing.
 pub fn remove() {
-    if let Err(error) = client::storage::remove(LocalStorageKey::AuthMarker.as_str()) {
+    if let Err(error) = client::storage::remove(LocalStorageKey::AuthMarker.as_ref()) {
         report_storage_error(ClientErrorContext::SessionMarkerRemove, error);
     }
 }

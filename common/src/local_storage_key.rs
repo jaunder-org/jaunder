@@ -7,8 +7,8 @@
 /// A Jaunder-owned browser `localStorage` key.
 ///
 /// Closed by construction: parsing rejects any key not declared here, while
-/// [`as_str`](Self::as_str) gives product accessors the raw key expected by
-/// `client::storage`.
+/// `text_enum`'s generated `AsRef<str>` gives product accessors the raw key
+/// expected by `client::storage`.
 #[macros::text_enum(
     error = UnknownLocalStorageKey,
     message = "unknown localStorage key"
@@ -23,18 +23,6 @@ pub enum LocalStorageKey {
     HomeRedirectPreference,
 }
 
-impl LocalStorageKey {
-    /// Returns the browser storage key string for this registry entry.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::AuthMarker => "jaunder_auth",
-            Self::Theme => "jaunder_theme",
-            Self::HomeRedirectPreference => "jaunder_home_redirect",
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -46,8 +34,7 @@ mod tests {
     #[test]
     fn every_key_round_trips_its_storage_string() {
         for key in LocalStorageKey::VARIANTS {
-            let storage_key = key.as_str();
-            assert_eq!(key.as_ref(), storage_key);
+            let storage_key = key.as_ref();
             assert_eq!(
                 LocalStorageKey::from_str(storage_key).ok().as_ref(),
                 Some(key)

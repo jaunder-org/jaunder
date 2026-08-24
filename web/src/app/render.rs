@@ -262,7 +262,7 @@ mod tests {
             LocalStorageKey::AuthMarker,
             LocalStorageKey::HomeRedirectPreference,
         ] {
-            let read = format!("localStorage.getItem('{}')", key.as_str());
+            let read = format!("localStorage.getItem('{}')", key.as_ref());
             assert!(s.contains(&read), "{s}");
         }
         assert!(s.contains(".username"), "{s}");

@@ -181,7 +181,9 @@ async fn session_record(
         is_operator,
         set_cookie: host::auth::session_cookie_header(&token, false),
         token: token.to_string(),
-        marker_key: common::session_user::MARKER_KEY.to_owned(),
+        marker_key: common::local_storage_key::LocalStorageKey::AuthMarker
+            .as_ref()
+            .to_owned(),
         marker: common::session_user::encode_marker(&common::session_user::SessionUser {
             username: username.clone(),
             is_operator,
@@ -352,7 +354,8 @@ mod seed_session_tests {
     //! `UserStorage` / `SessionStorage`, implemented per backend — so the e2e
     //! matrix proves the dual-backend path; here we smoke the logic on `SQLite`.
     use super::*;
-    use common::session_user::{MARKER_KEY, decode_marker};
+    use common::local_storage_key::LocalStorageKey;
+    use common::session_user::decode_marker;
     use common::token::RawToken;
     use storage::test_support;
 
@@ -389,8 +392,8 @@ mod seed_session_tests {
         assert_eq!(session.user_id, UserId::from(record.user_id));
 
         // The marker round-trips to the seeded identity, keyed by the shared
-        // constant — never a restated literal.
-        assert_eq!(record.marker_key, MARKER_KEY);
+        // registry — never a restated literal.
+        assert_eq!(record.marker_key, LocalStorageKey::AuthMarker.as_ref());
         let marker = decode_marker(&record.marker).expect("marker decodes");
         assert_eq!(marker.username, "alice");
         assert!(!marker.is_operator);
