@@ -414,13 +414,14 @@ substitution content-derived.
 
 **The public content-addressed media route is strict at extraction.** One
 validated address owns `MediaSource`, `ContentHash`, both redundant hash
-prefixes, and the inbound-to-canonical `ProfferedFilename` → `Filename`
-conversion. A malformed component or prefix mismatch is an Axum 400 before the
-handler; only a syntactically valid but absent resource is 404. This supersedes
-#504 only for `/media/{source}/{p1}/{p2}/{hash}/{filename}`; projector and
-Syndication Feed soft routes retain `SoftPath`. HTTP serve-outcome counts belong
-to the front proxy, so the application emits upload-domain outcomes and bytes
-but no partial `jaunder.media.served` counter
+prefixes, and a canonical `Filename` parsed from Axum's decoded route segment
+through the extractor-private/common-owned decoded-segment door. A malformed
+component or prefix mismatch is an Axum 400 before the handler; only a
+syntactically valid but absent resource is 404. This supersedes #504 only for
+`/media/{source}/{p1}/{p2}/{hash}/{filename}`; projector and Syndication Feed
+soft routes retain `SoftPath`. HTTP serve-outcome counts belong to the front
+proxy, so the application emits upload-domain outcomes and bytes but no partial
+`jaunder.media.served` counter
 (`docs/adr/0140-strict-media-address-extraction.md`).
 
 **Slugs never fail and preserve Unicode**
@@ -2297,7 +2298,7 @@ native host checks because `xtask/` is excluded from the flake source.
 | `server-fn-tracing`                                        | each server fn's instrumentation                                                                                                                                 |
 | `server-fn-coverage`                                       | static lane of the flow-coverage snapshot                                                                                                                        |
 | `traced-context`                                           | context propagation                                                                                                                                              |
-| `proffered-secret`, `proffered-filename-position`          | untrusted-input handling                                                                                                                                         |
+| `proffered-secret`                                         | inbound-secret directional boundary                                                                                                                              |
 | `no-full-reload`                                           | SPA navigation                                                                                                                                                   |
 | `e2e-goto-wrapper`, `e2e-scaffold`                         | e2e harness shape; no committed `e2eSalt`                                                                                                                        |
 | `target-arch-placement`                                    | host/wasm split at module wiring only                                                                                                                            |

@@ -333,11 +333,11 @@ async fn upload_and_member_url(
 #[apply(backends)]
 #[tokio::test]
 async fn member_get_resolves_a_filename_needing_encoding(#[case] backend: Backend) {
-    // The re-encode's proof for `member_get` (#720). Every other test in this file uses
-    // `pic.png`, which encodes to itself — so none of them would fail if
-    // `ProfferedFilename`'s encode step were deleted. This one would: axum decodes the
-    // `my%20photo.jpg` segment to `my photo.jpg`, and only the re-encode recovers the
-    // stored spelling to match the row.
+    // The decoded-segment conversion proof for `member_get` (#720). Every other test in
+    // this file uses `pic.png`, which encodes to itself — so none would fail if the
+    // private member-address extractor skipped re-encoding. This one would: Axum decodes
+    // the `my%20photo.jpg` segment to `my photo.jpg`, and only the conversion recovers
+    // the stored spelling to match the row.
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
@@ -404,8 +404,8 @@ async fn an_over_long_segment_does_not_truncate_onto_a_stored_name(#[case] backe
     // that an over-long segment does not resolve would pass whether or not truncation was
     // removed — a name that never matched anything does not resolve either. So: store a
     // name sitting exactly at the budget, then request a *longer* one whose truncation
-    // would land on it. If `ProfferedFilename` ever repaired instead of rejecting, this
-    // would resolve to another user's file rather than missing.
+    // would land on it. If the decoded-segment conversion ever repaired instead of
+    // rejecting, this would resolve to another user's file rather than missing.
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
@@ -514,14 +514,14 @@ async fn member_forbids_other_user(backend: Backend, #[case] method: &str) {
 }
 
 // A malformed `{sha}` or `{filename}` segment on the authenticated member routes is
-// rejected by the typed `Path<(Username, ContentHash, ProfferedFilename)>` extractor as a
-// pre-handler 400 (the URL is one we minted, so a bad segment is the caller's fault) —
-// distinct from a well-formed-but-absent resource, which is 404 above.
+// rejected by the private member-address extractor as a pre-handler 400 (the URL is one
+// we minted, so a bad segment is the caller's fault) — distinct from a
+// well-formed-but-absent resource, which is 404 above.
 //
-// This test is unchanged by #720, and deliberately so: `ProfferedFilename` runs the
-// safe-leaf oracle on the decoded segment *before* re-encoding, so `a\b.png` is still
-// rejected at the door. Had the oracle been dropped or moved after the encode, this would
-// have quietly become a 404 lookup miss instead.
+// This test is unchanged by #720, and deliberately so: the decoded-segment conversion
+// runs the safe-leaf oracle before re-encoding, so `a\b.png` is still rejected at the
+// door. Had the oracle been dropped or moved after the encode, this would have quietly
+// become a 404 lookup miss instead.
 #[apply(backends)]
 #[tokio::test]
 async fn member_rejects_malformed_segment_returns_400(#[case] backend: Backend) {
@@ -539,7 +539,7 @@ async fn member_rejects_malformed_segment_returns_400(#[case] backend: Backend) 
     assert_eq!(bad_hash.status(), StatusCode::BAD_REQUEST);
 
     // Non-canonical filename segment (`a%5Cb.png` decodes to `a\b.png`, not a safe leaf)
-    // → ProfferedFilename parse fails → 400.
+    // → decoded-segment conversion fails → 400.
     let bad_name = app
         .oneshot(atompub_get(
             &session,

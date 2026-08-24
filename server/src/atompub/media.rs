@@ -8,10 +8,11 @@ use axum::body::Bytes;
 use axum::extract::Path;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use common::atompub::{MediaLinkEntry, render_media_link_entry};
-use common::media::{ContentHash, Filename, MediaRef, MediaSource, ProfferedFilename, media_url};
+use common::media::{ContentHash, Filename, MediaRef, MediaSource, media_url};
 use common::root_relative_url::RootRelativeUrl;
 use common::tagged_url::{BaseUrl, EditMediaUriUrl, EditUriUrl, compose};
 use common::time::UtcInstant;
@@ -147,25 +148,59 @@ pub async fn collection_post(
         .into_response())
 }
 
+#[derive(Deserialize)]
+struct RawMediaMemberAddress {
+    username: Username,
+    sha: ContentHash,
+    filename: String,
+}
+
+pub(super) struct MediaMemberAddress {
+    username: Username,
+    sha: ContentHash,
+    filename: Filename,
+}
+
+impl<'de> Deserialize<'de> for MediaMemberAddress {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let RawMediaMemberAddress {
+            username,
+            sha,
+            filename,
+        } = RawMediaMemberAddress::deserialize(deserializer)?;
+        let filename =
+            Filename::from_decoded_segment(&filename).map_err(serde::de::Error::custom)?;
+
+        Ok(Self {
+            username,
+            sha,
+            filename,
+        })
+    }
+}
+
 /// `GET /atompub/{username}/media/{sha}/{filename}` — fetch a media-link entry.
 ///
 /// # Errors
 /// `403` wrong user; `404` unknown; `500` on storage failure.
 #[tracing::instrument(name = "atompub.media.member_get", skip_all)]
-pub async fn member_get(
+pub(super) async fn member_get(
     Extension(media): Extension<Arc<dyn MediaStorage>>,
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     auth_user: AuthUser,
-    Path((username, sha, filename)): Path<(Username, ContentHash, ProfferedFilename)>,
+    Path(address): Path<MediaMemberAddress>,
 ) -> Result<Response, HandlerError> {
+    let MediaMemberAddress {
+        username,
+        sha,
+        filename,
+    } = address;
     super::require_user_match(&auth_user, &username)?;
-    // `sha` and `filename` are parsed by the typed extractor: a malformed segment is a
-    // pre-handler 400. The URL is one we minted in the media-link entry, so a bad segment
-    // is the caller's fault, not a missing resource.
-    //
-    // The filename arrives percent-*decoded* (axum decodes path parameters), so it comes
-    // in through the proffered door and is rewrapped here into the stored spelling (#720).
-    let filename = Filename::from(filename);
+    // The private address extractor parses `sha` and converts the Axum-decoded
+    // filename segment back to canonical storage spelling before handler logic runs.
     let record = media
         .get_media(auth_user.user_id, &sha, &filename, &MediaSource::Upload)
         .await?
@@ -182,18 +217,21 @@ pub async fn member_get(
 /// # Errors
 /// `403` wrong user; `404` unknown; `500` on storage failure.
 #[tracing::instrument(name = "atompub.media.member_delete", skip_all)]
-pub async fn member_delete(
+pub(super) async fn member_delete(
     Extension(media): Extension<Arc<dyn MediaStorage>>,
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     Extension(storage_path): Extension<Arc<PathBuf>>,
     auth_user: AuthUser,
-    Path((username, sha, filename)): Path<(Username, ContentHash, ProfferedFilename)>,
+    Path(address): Path<MediaMemberAddress>,
 ) -> Result<Response, HandlerError> {
+    let MediaMemberAddress {
+        username,
+        sha,
+        filename,
+    } = address;
     super::require_user_match(&auth_user, &username)?;
-    // `sha` and `filename` are parsed by the typed extractor (a malformed segment is a
-    // pre-handler 400); a well-formed but absent record still yields `NotFound` below.
-    // As in `member_get`, the segment arrives decoded and is rewrapped here (#720).
-    let filename = Filename::from(filename);
+    // The private address extractor rejects malformed segments before handler logic;
+    // a well-formed but absent record still yields `NotFound` below.
     // `force = true`: AtomPub has no confirmation UI. The storage guard still refuses
     // deletes that would leave referenced bytes without any remaining media row (#721).
     let media_ref = MediaRef {

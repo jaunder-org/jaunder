@@ -118,9 +118,10 @@ function, and is never supplied by a caller.**
    what was already extracted.
 
 7. **Filenames are canonicalised through the read path's existing door**
-   (percent-decode, then `ProfferedFilename`), on the write path, once.
-   Normalising at extraction rather than at comparison is the point: a transform
-   at a comparison point is precisely the bug class this decision closes.
+   (percent-decode, then the decoded-segment conversion into `Filename`), on the
+   write path, once. Normalising at extraction rather than at comparison is the
+   point: a transform at a comparison point is precisely the bug class this
+   decision closes.
 
 8. **The deletion guard is one conditional statement, so the policy lives in
    storage.** Asking "is it referenced?" and then deleting leaves a window in

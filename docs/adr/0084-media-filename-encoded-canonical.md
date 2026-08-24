@@ -1,4 +1,4 @@
-# ADR-0084: Media filename — the encoded form is canonical, with a proffered inbound twin
+# ADR-0084: Media filename — the encoded form is canonical, with an extractor-private decoded-segment door
 
 - Status: accepted
 - Date: 2026-07-30
@@ -77,23 +77,23 @@ emitted that no parser accepts. Running the oracle on the _encoded_ form does
 not work: `sanitize_filename("a%2Fb.jpg")` is `"a%2Fb.jpg"`, so it passes
 vacuously.
 
-**`ProfferedFilename` guards the inbound URL doors.** axum percent-_decodes_
-path parameters before a handler runs, and offers no un-decoded extractor
-(`RawPathParams` is "raw" only as in undeserialized; its values are
-`PercentDecodedStr`). Three routes therefore hold a decoded name: the media
-serve route, and the AtomPub media member `GET` and `DELETE`. They cannot share
-`Filename`'s `FromStr`, because encoding is **not idempotent** —
-`encode("my%20photo.jpg")` is `"my%2520photo.jpg"` — so a single door cannot
-serve both a decoded and an already-encoded input. Since these extractors select
-their door purely by the type parameter, a second type is the only mechanism
-that makes the choice compiler-checked rather than a comment.
+**Decoded route segments use an extractor-private door into `Filename`.** axum
+percent-_decodes_ path parameters before a handler runs, and offers no
+un-decoded extractor (`RawPathParams` is "raw" only as in undeserialized; its
+values are `PercentDecodedStr`). Three routes therefore receive a decoded name:
+the media serve route, and the AtomPub media member `GET` and `DELETE`. They
+cannot share `Filename`'s `FromStr`, because encoding is **not idempotent** —
+`encode("my%20photo.jpg")` is `"my%2520photo.jpg"` — so the decoded route
+segment needs a distinct door from the already-encoded canonical input.
 
-`ProfferedFilename::from_str` applies the same safe-leaf oracle to the decoded
-segment it already holds, then performs the dumb encode, so the type holds
-encoded bytes and `From<ProfferedFilename> for Filename` is a rewrap with no
-logic. The conversion is **infallible**, and stays so precisely _because_ the
-oracle runs here: `decode(encode(input)) == input`, so `Filename`'s decoded-form
-guard is satisfied by construction.
+That door is common-owned but does **not** expose a public decoded filename
+type. `Filename::from_decoded_segment` applies the same safe-leaf oracle to the
+decoded segment Axum has already produced, performs the dumb encode exactly
+once, rejects encoded values over the filesystem component budget, and returns
+canonical `Filename`. The conversion remains fallible at the door and leaves no
+decoded representation behind; after extraction, handler, domain, storage, DTO,
+and web surfaces can hold only `Filename` or a validated address struct
+containing it.
 
 Keeping the oracle at this door also means the existing miss behaviour is
 **unchanged** — a member-route segment like `a%5Cb.png`, which decodes to
@@ -103,24 +103,19 @@ Keeping the oracle at this door also means the existing miss behaviour is
 It **checks but never repairs**: it keeps the cheap non-empty / `.` / `..` /
 length rejections and never truncates. An encoded name over 255 bytes cannot
 exist on disk — that is the filesystem's per-component limit — so rejecting it
-is a provably correct early miss, and keeping the check is what makes the
-conversion infallible. Truncation is a lossy _repair_, and repair only makes
-sense at intake, where the alternative is losing the upload. This reuses
-ADR-0080's existing reject-vs-truncate split between the two doors rather than
-inventing a new one.
+is a provably correct early miss. Truncation is a lossy _repair_, and repair
+only makes sense at intake, where the alternative is losing the upload. This
+reuses ADR-0080's existing reject-vs-truncate split between the two doors rather
+than inventing a new one.
 
-`ProfferedFilename` takes a deliberately minimal trailer — **`FromStr` and
-`Deserialize` only**, no `Display`, `Serialize`, `Deref`, `AsRef`, or sqlx
-bridge. This is a considered ADR-0063 deviation: the type exists for exactly one
-hop, and the rest of the standard trailer is a hazard rather than an ergonomic
-win. The default `StrNewtype` derive emits the sqlx bridge, which would make
-this a second _storable_ spelling of a filename — a leak the gate below cannot
-catch, since it scans type positions, not query binds. And because `FromStr`
-stores a value different from its input, `Display`/`Serialize` would not
-round-trip through `FromStr`/`Deserialize` as every other `StrNewtype` here
-does; omitting them leaves no broken round-trip to document and no way to
-re-encode an already-encoded value. The double-encode hazard becomes
-structurally impossible rather than merely gated.
+Any server-private wrapper/intermediate around the decoded segment deliberately
+takes a minimal surface — no `Display`, `Serialize`, `Deref`, `AsRef`, sqlx
+bridge, or standard `StrNewtype` trailer. A public second filename type would be
+a second _storable_ spelling of a filename; `Display`/`Serialize` would invite a
+broken round-trip because the door stores a value different from its input; and
+an ergonomic string surface would make the one-hop representation usable far
+beyond extraction. Privacy makes the double-encode hazard structurally
+impossible rather than merely gated.
 
 A dumb re-encode can miss but can never resolve to a _different_ file, because
 percent-encoding under a fixed set is injective.
@@ -148,40 +143,33 @@ for no gain.
   into `FromStr`, but it is a better dependency — about _which spelling is
   canonical_, not _how much fits_.
 
-- **Amends [ADR-0063](0063-domain-value-newtype-convention.md):** the
-  `Proffered` prefix is generalized. It means "untrusted inbound twin of a
-  domain type", of which the _secret_ profile (`ProfferedInviteCode`,
-  `ProfferedPassword`, pinned to `#[server]` parameter positions by
-  `proffered_secret_check`) is one specialization carrying an extra gate.
-  `ProfferedFilename` is the first non-secret user; its concern is
-  representation, not secrecy. This is the same kind of loosening
-  [ADR-0068](0068-tag-identity-label-split.md) applied — a domain value is not
-  always exactly one newtype.
+- **Amends [ADR-0063](0063-domain-value-newtype-convention.md):** the filename
+  case is the first non-secret inbound representation, but it is not a public
+  `Proffered*` twin. The lesson is narrower: when an external protocol presents
+  a different representation of a domain value, `common` owns the validating
+  conversion into the domain type, while any decoded intermediate stays private
+  to the extractor seam. The inbound-secret `Proffered*` profile and
+  `proffered_secret_check` remain unchanged.
 
 - **`encode_filename_segment` is deleted** and `MEDIA_SEGMENT_ENCODE_SET`
   returns to a private const with no public escape hatch. "Only
   `common::media`'s doors encode" therefore becomes a compile fact via module
   privacy, requiring no gate.
 
-- **A new `xtask` gate confines `ProfferedFilename`** to axum extractor
-  positions, since it must be `pub` for the `server` crate's route signatures
-  and privacy cannot contain it. The discriminator is **bare versus wrapped**,
-  not field versus not: the serve route's legitimate extractor position is
-  itself a struct field (`ServeParams { filename: SoftPath<…> }`), so a "no
-  struct fields" rule would be undecidable. A _bare_ `ProfferedFilename` as a
-  struct field, `#[server]` parameter, return type, or plain fn parameter is
-  rejected; wrapped in `SoftPath<…>` or a `Path<(…)>` tuple it is permitted.
-  Modelled on `proffered_secret_check`, including its allowlist-of-named-types
-  shape.
+- **The old `proffered-filename-position` static check is deleted.** A decoded
+  filename intermediate is no longer a public `common` type, so `xtask` has no
+  cross-crate type-position surface to police. The boundary is Rust privacy plus
+  the public `Filename::from_decoded_segment` door: `common::media` exposes
+  canonical `Filename`, and server extractors retain only `Filename` past
+  extraction.
 
-**Media serve extractor amended on 2026-08-15.** The strict media-address
-decision in `docs/adr/0140-strict-media-address-extraction.md` supersedes #504's
-media-specific `SoftPath<ProfferedFilename>` policy. The public media route now
-establishes source, hash, both hash prefixes, and canonical filename during
+**Media serve extractor amended on 2026-08-15 and 2026-08-24.** The strict
+media-address decision in `docs/adr/0140-strict-media-address-extraction.md`
+supersedes #504's media-specific `SoftPath<ProfferedFilename>` policy and is
+later refined by #1149's extractor-private filename seam. The public media route
+establishes source, hash, both hash prefixes, and canonical `Filename` during
 strict Axum extraction; the AtomPub strict extractors and every
-canonical-filename decision above are unchanged. The
-`proffered-filename-position` gate follows that narrower set of legitimate
-extractor positions.
+canonical-filename decision above are unchanged.
 
 - **Sites that read _inside_ a name take the decoded form.**
   `detect_content_type` is given `.decoded()` at both callers: sniffing the

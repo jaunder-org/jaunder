@@ -6,19 +6,20 @@
 
 ## Context
 
-The repo carries 43 rustdoc code fences, 31 of them `compile_fail`. They are how
+The repo carries rustdoc code fences, many of them `compile_fail`. They are how
 it proves the negative type properties no unit test can express: that `RawToken`
 does not convert to `TokenHash`, that a bare `String` cannot masquerade as a
 `ContentHash`/`Filename`/`ContentType`/`ETag`/`RenderedHtml`, that a `PostBody`
-is not a `RenderedHtml`, that `ProfferedFilename` has no `Display`/`Serialize`
-(the structural half of [ADR-0084](0084-media-filename-encoded-canonical.md)),
-and that the [ADR-0063](0063-domain-value-newtype-convention.md) secret surface
-omits `Display`, serde, owned-`String`, `PartialEq`, `Deref` and `Borrow`.
+is not a `RenderedHtml`, that `common::media` exposes no public decoded filename
+intermediate (the structural half of
+[ADR-0084](0084-media-filename-encoded-canonical.md)), and that the
+[ADR-0063](0063-domain-value-newtype-convention.md) secret surface omits
+`Display`, serde, owned-`String`, `PartialEq`, `Deref` and `Borrow`.
 
-**No gate ran the root workspace's doctests** — 41 of those 43 fences, including
-every one of the 31 proofs. `cargo nextest` structurally cannot run doctests,
-the package build sets `doCheck = false`, and `--doc` appeared nowhere in
-`flake.nix`, `xtask/src`, or `tools/devtool`.
+**No gate ran the root workspace's doctests**, including the compile-fail
+proofs. `cargo nextest` structurally cannot run doctests, the package build sets
+`doCheck = false`, and `--doc` appeared nowhere in `flake.nix`, `xtask/src`, or
+`tools/devtool`.
 
 ### Running them is not enough, and the issue's own evidence shows why
 

@@ -11,10 +11,11 @@ The public content-addressed media route is five segments:
 
 `/media/{source}/{p1}/{p2}/{hash}/{filename}`
 
-Three segments already have domain types: `MediaSource`, `ContentHash`, and the
-inbound `ProfferedFilename`, which recovers canonical `Filename` bytes after
-Axum percent-decodes the URL segment. The two prefix segments are redundant
-projections of the hash.
+Three segments already have domain types: `MediaSource`, `ContentHash`, and
+`Filename`. The route's filename segment arrives from Axum as decoded text,
+while ADR-0084's `Filename` holds canonical encoded bytes; the decoded segment
+therefore needs a dedicated conversion before the handler sees it. The two
+prefix segments are redundant projections of the hash.
 
 Issue #504 deliberately wrapped the typed segments in `SoftPath<T>`. Parse
 misses reached `serve_handler` as `None` and became 404, making malformed
@@ -37,9 +38,9 @@ request status. A partial application counter is liable to be interpreted as
 complete.
 
 [ADR-0084](0084-media-filename-encoded-canonical.md) makes `Filename`'s encoded
-spelling canonical and confines `ProfferedFilename` to inbound extractor
-positions. That decision remains valid; only its media-serve extractor shape
-changes.
+spelling canonical and puts the decoded route-segment conversion behind an
+extractor-private seam that returns `Filename`. That representation decision
+remains valid; only the media-serve extractor shape changes here.
 
 ## Decision
 
@@ -48,10 +49,11 @@ changes.
 A private extraction type consumes all five route segments and establishes every
 address invariant before `serve_handler` runs:
 
-- parse `MediaSource`, `ContentHash`, and `ProfferedFilename`;
+- parse `MediaSource` and `ContentHash`;
+- parse the decoded filename segment through the extractor-private seam into a
+  canonical `Filename`;
 - compare both supplied prefix segments with the corresponding leading pairs of
-  the validated hash;
-- convert `ProfferedFilename` infallibly to canonical `Filename`; and
+  the validated hash; and
 - retain only `MediaSource`, `ContentHash`, and `Filename`.
 
 Any parse failure or prefix mismatch fails Axum extraction with HTTP 400.
@@ -63,11 +65,11 @@ This supersedes #504's soft-404 decision **only for the public media route**.
 `SoftPath` remains valid for projector and Syndication Feed routes whose miss
 behavior intentionally falls through or renders a shell.
 
-The `proffered-filename-position` gate permits `ProfferedFilename` only as an
-implementation detail of the validated Axum media-address extractor and the
-existing strict AtomPub `Path` extractors. It continues to reject the type in
-DTOs, storage, return values, server-function parameters, and ordinary helper
-parameters.
+The decoded filename intermediate is private to extractor implementation code,
+and `common::media` exposes only the validating decoded-segment conversion into
+`Filename`, not a public `ProfferedFilename` type. No DTO, storage record,
+return value, server-function parameter, ordinary helper parameter, or lower
+media address surface can retain anything but `Filename`.
 
 **HTTP serve-outcome counts belong to the front proxy.** Remove
 `jaunder.media.served` and its `ServeResult` classification rather than carrying
@@ -87,9 +89,9 @@ stored/deduplicated/quota/application semantics are not observable at the proxy.
 - Tests submit malformed values as URLs through the router; no unit helper
   bypasses extraction with adjacent raw strings.
 - [ADR-0084](0084-media-filename-encoded-canonical.md) is amended only in its
-  `ProfferedFilename` extractor/gate consequence. Its encoded-canonical
-  representation, safe-leaf oracle, intake order, and storage/wire decisions
-  stand.
+  decoded-route-segment extractor seam and obsolete gate consequence. Its
+  encoded-canonical representation, safe-leaf oracle, intake order, and
+  storage/wire decisions stand.
 - Projector and Syndication Feed soft routes are unchanged. This is not a
   repository-wide claim that every malformed route must return 400.
 - The application no longer exposes `jaunder.media.served`; operators obtain

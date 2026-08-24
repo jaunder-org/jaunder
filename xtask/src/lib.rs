@@ -44,7 +44,6 @@ mod steps {
     pub mod lint_suppression_check;
     pub mod nix;
     pub mod no_full_reload_check;
-    pub mod proffered_filename_check;
     pub mod proffered_secret_check;
     pub mod raw_html_door_check;
     pub mod rendered_html_from_trusted_check;
@@ -585,10 +584,6 @@ const HOST_GATE_NON_TEST_STEPS: &[HostGateStep] = &[
     HostGateStep::ResultOnly {
         name: "proffered-secret",
         run: steps::proffered_secret_check::run,
-    },
-    HostGateStep::ResultOnly {
-        name: "proffered-filename",
-        run: steps::proffered_filename_check::run,
     },
     HostGateStep::ResultOnly {
         name: "no-full-reload",
@@ -1263,6 +1258,7 @@ mod cli_tests {
         assert!(!precommit.contains(&"nix-wasm-tests"));
         assert!(!precommit.contains(&"nix-coverage"));
         assert!(!precommit.contains(&"nix-doctests"));
+        assert!(!precommit.contains(&"proffered-filename"));
     }
 
     fn position(names: &[&str], name: &str) -> usize {
