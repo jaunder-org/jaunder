@@ -12,9 +12,6 @@
 use crate::username::Username;
 use serde::{Deserialize, Serialize};
 
-/// The localStorage key holding the marker. Kept in sync with the pre-paint script.
-pub const MARKER_KEY: &str = "jaunder_auth";
-
 /// The whole client-visible session identity (#181, #591, ADR-0044): who is logged
 /// in and whether they are an operator. Persisted in the advisory marker and
 /// returned by `get_session()`. `is_operator` is advisory chrome only —

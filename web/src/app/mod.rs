@@ -8,6 +8,9 @@ pub use seed::decode_projector_seed;
 #[cfg(any(target_arch = "wasm32", test))]
 mod theme;
 
+#[cfg(target_arch = "wasm32")]
+mod theme_storage;
+
 mod render;
 pub use render::{
     DEFAULT_THEME, DISCOVERY_MARKER_ATTR, GLUE_URL, MODULE_BEFORE_INIT_MARK, PREPAINT_SCRIPT,

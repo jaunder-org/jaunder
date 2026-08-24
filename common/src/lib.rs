@@ -20,6 +20,7 @@ pub mod feed;
 pub mod ids;
 pub mod invite;
 pub mod list_state;
+pub mod local_storage_key;
 pub mod mailbox;
 pub mod mailer;
 pub mod media;

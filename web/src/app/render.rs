@@ -204,6 +204,7 @@ mod tests {
     // Shared with the reactive suite (`crate::posts::render`) so both assert the
     // projector↔reactive coincidence against the same fixture, not a divergent copy.
     use crate::posts::render::test_fixtures::{one_post_page, sample_post};
+    use common::local_storage_key::LocalStorageKey;
     use common::test_support::parse_username;
 
     #[test]
@@ -250,7 +251,7 @@ mod tests {
     }
 
     #[test]
-    fn prepaint_script_is_inline_blocking_and_reads_the_marker() {
+    fn prepaint_script_is_inline_blocking_and_reads_the_registered_storage_keys() {
         let s = PREPAINT_SCRIPT;
         assert!(s.starts_with("<script>") && s.ends_with("</script>"), "{s}");
         // No async/defer/src — a network round-trip would defeat pre-paint.
@@ -258,8 +259,15 @@ mod tests {
             !s.contains("src=") && !s.contains("defer") && !s.contains("async"),
             "{s}"
         );
-        // Reads the same key + field the marker module writes.
-        assert!(s.contains("jaunder_auth"), "{s}");
+        // Reads the same key + field the marker module writes, and the redirect
+        // preference key reserved for the pre-WASM home redirect path.
+        for key in [
+            LocalStorageKey::AuthMarker,
+            LocalStorageKey::HomeRedirectPreference,
+        ] {
+            let read = format!("localStorage.getItem('{}')", key.as_ref());
+            assert!(s.contains(&read), "{s}");
+        }
         assert!(s.contains(".username"), "{s}");
         assert!(s.contains("classList") && s.contains("authed"), "{s}");
     }

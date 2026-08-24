@@ -14,9 +14,9 @@
 //! localStorage marker is **advisory** (#181, ADR-0044) — it tunes pre-paint
 //! chrome and is never a credential; the real session is the HTTP-only cookie.
 
-/// The advisory auth-marker **codec** (#181, ADR-0044): pure `encode`/`decode` +
-/// `MARKER_KEY`, re-exported from `common::session_user` (#791). The wasm-only
-/// browser binding lives in [`marker_storage`].
+/// The advisory auth-marker **codec** (#181, ADR-0044): pure `encode`/`decode`,
+/// re-exported from `common::session_user` (#791). The wasm-only browser binding
+/// lives in [`marker_storage`].
 pub mod marker;
 
 /// Browser `localStorage` binding of the auth marker (wasm-only): `get`/`set`/

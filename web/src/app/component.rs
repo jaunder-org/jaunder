@@ -8,10 +8,6 @@
 use super::DEFAULT_THEME;
 use common::client_telemetry::ClientErrorContext;
 
-/// The localStorage key holding the persisted theme. Local to `web` — unlike the
-/// auth marker's key, it is not shared with the pre-paint script or any other layer.
-const THEME_KEY: &str = "jaunder_theme";
-
 use crate::audiences::AudiencesPage;
 use crate::auth::{LoginPage, LogoutPage};
 use crate::backup::{BackupBanner, BackupSettingsPage};
@@ -45,14 +41,14 @@ fn report_storage_error(context: ClientErrorContext, error: client::storage::Sto
     );
 }
 fn provide_theme_context() {
-    let resolution = super::theme::resolve_theme(client::storage::get(THEME_KEY), DEFAULT_THEME);
+    let resolution = super::theme::resolve_theme(super::theme_storage::get(), DEFAULT_THEME);
     if let Some(error) = resolution.error {
         report_storage_error(ClientErrorContext::ThemeStorageRead, error);
     }
     let theme = RwSignal::new(resolution.theme);
     provide_context(theme);
     Effect::new(move |_| {
-        if let Err(error) = client::storage::set(THEME_KEY, &theme.get()) {
+        if let Err(error) = super::theme_storage::set(&theme.get()) {
             report_storage_error(ClientErrorContext::ThemeStorageWrite, error);
         }
     });
