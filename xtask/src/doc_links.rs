@@ -6,7 +6,8 @@
 //! one scanner is what makes those two agree about code spans, URL schemes, and
 //! fragments — a second implementation would drift.
 
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::path::{Component, Path};
 
 use anyhow::{Context, Result};
 
@@ -188,31 +189,77 @@ pub struct DeadLink {
     pub target: String,
 }
 
-/// Relative links in `repo`/`rel` whose target does not exist on disk.
+/// Relative links in `repo`/`rel` whose stripped target is not tracked by Git.
 ///
 /// The shared per-file unit: `promote` checks the one file it just wrote, the gate
 /// maps this over the whole corpus. Neither owns a second resolver, so "what counts
 /// as dead" cannot diverge between a warning and a hard failure.
 ///
 /// Targets resolve against the file's own directory, and a `#fragment` is dropped
-/// first — anchors within a document are not validated (a link to a real file with a
-/// stale anchor still passes).
+/// first — anchors within a document are not validated (a link to a tracked file with
+/// a stale anchor still passes). Directory targets pass only when at least one
+/// tracked path lives below that directory.
 pub fn dead_links_in(repo: &Path, rel: &str) -> Result<Vec<DeadLink>> {
+    let tracked = tracked_paths(repo)?;
+    dead_links_in_with_tracked(repo, rel, &tracked)
+}
+
+fn dead_links_in_with_tracked(
+    repo: &Path,
+    rel: &str,
+    tracked: &BTreeSet<String>,
+) -> Result<Vec<DeadLink>> {
     let path = repo.join(rel);
     let body = std::fs::read_to_string(&path).with_context(|| format!("reading {rel}"))?;
-    let dir = path.parent().unwrap_or(repo).to_path_buf();
+    let dir = Path::new(rel).parent().unwrap_or_else(|| Path::new(""));
     Ok(links_in(&body)
         .into_iter()
         .filter(|link| is_relative_target(&link.target))
         .filter(|link| {
             let bare = link.target.split('#').next().unwrap_or_default();
-            !bare.is_empty() && !dir.join(bare).exists()
+            !bare.is_empty() && !tracked_target_is_live(tracked, dir, bare)
         })
         .map(|link| DeadLink {
             line: line_at(&body, link.span.start),
             target: link.target,
         })
         .collect())
+}
+
+fn tracked_paths(repo: &Path) -> Result<BTreeSet<String>> {
+    Ok(crate::git::lines(repo, &["ls-files"])?
+        .into_iter()
+        .collect())
+}
+
+fn tracked_target_is_live(tracked: &BTreeSet<String>, dir: &Path, bare: &str) -> bool {
+    let Some(target) = normalize_repo_rel(&dir.join(bare)) else {
+        return false;
+    };
+    if !bare.ends_with('/') && tracked.contains(&target) {
+        return true;
+    }
+
+    let prefix = format!("{target}/");
+    tracked
+        .range(prefix.clone()..)
+        .next()
+        .is_some_and(|path| path.starts_with(&prefix))
+}
+
+fn normalize_repo_rel(path: &Path) -> Option<String> {
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => parts.push(part.to_str()?.to_owned()),
+            Component::ParentDir => {
+                parts.pop()?;
+            }
+            Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    Some(parts.join("/"))
 }
 
 /// Tracked `*.md` under `repo`, minus [`EXCLUDED`] and minus tracked-but-absent
@@ -231,9 +278,10 @@ fn gated_files(repo: &Path) -> Result<Vec<String>> {
 
 /// Every dead link across [`gated_files`], formatted `<file>:<line> -> <target>`.
 pub fn problems(repo: &Path) -> Result<Vec<String>> {
+    let tracked = tracked_paths(repo)?;
     let mut out = Vec::new();
     for rel in gated_files(repo)? {
-        for dead in dead_links_in(repo, &rel)? {
+        for dead in dead_links_in_with_tracked(repo, &rel, &tracked)? {
             out.push(format!("{rel}:{} -> {}", dead.line, dead.target));
         }
     }
@@ -362,10 +410,10 @@ mod tests {
     // --- dead_links_in ---
 
     #[test]
-    fn existing_target_is_not_dead() {
+    fn tracked_file_target_is_not_dead() {
         let d = repo("alive");
+        commit(&d, "docs/b.md", "hi\n");
         write(&d, "docs/a.md", "[x](b.md)\n");
-        write(&d, "docs/b.md", "hi\n");
         assert!(dead_links_in(&d, "docs/a.md").unwrap().is_empty());
     }
 
@@ -380,18 +428,59 @@ mod tests {
     }
 
     #[test]
-    fn directory_target_resolves() {
+    fn untracked_existing_file_target_is_dead() {
+        let d = repo("untracked-target");
+        commit(&d, "docs/a.md", "[x](b.md)\n");
+        write(&d, "docs/b.md", "hi\n");
+        let found = dead_links_in(&d, "docs/a.md").unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].target, "b.md");
+    }
+
+    #[test]
+    fn gitignored_existing_file_target_is_dead() {
+        let d = repo("ignored-target");
+        commit(&d, ".gitignore", "docs/ignored.md\n");
+        commit(&d, "docs/a.md", "[x](ignored.md)\n");
+        write(&d, "docs/ignored.md", "hi\n");
+        let found = dead_links_in(&d, "docs/a.md").unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].target, "ignored.md");
+    }
+
+    #[test]
+    fn directory_target_with_tracked_child_resolves() {
         let d = repo("dir");
-        std::fs::create_dir_all(d.join("docs/adr")).unwrap();
+        commit(&d, "docs/adr/one.md", "hi\n");
         write(&d, "docs/a.md", "[x](adr/)\n");
         assert!(dead_links_in(&d, "docs/a.md").unwrap().is_empty());
     }
 
     #[test]
+    fn directory_target_with_only_untracked_content_is_dead() {
+        let d = repo("untracked-dir");
+        commit(&d, "docs/a.md", "[x](adr/)\n");
+        write(&d, "docs/adr/one.md", "hi\n");
+        let found = dead_links_in(&d, "docs/a.md").unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].target, "adr/");
+    }
+
+    #[test]
+    fn directory_target_does_not_resolve_to_tracked_file() {
+        let d = repo("dir-not-file");
+        commit(&d, "docs/adr", "hi\n");
+        write(&d, "docs/a.md", "[x](adr/)\n");
+        let found = dead_links_in(&d, "docs/a.md").unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].target, "adr/");
+    }
+
+    #[test]
     fn fragment_is_stripped_before_resolving() {
         let d = repo("frag");
+        commit(&d, "docs/b.md", "hi\n");
         write(&d, "docs/a.md", "[x](b.md#sec)\n");
-        write(&d, "docs/b.md", "hi\n");
         assert!(dead_links_in(&d, "docs/a.md").unwrap().is_empty());
     }
 
