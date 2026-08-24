@@ -457,7 +457,7 @@ their persisted identity is `SubscriberIdentity { channel_id, subscriber_ref }`.
 The reference is opaque inside its channel namespace, non-blank in Rust, and
 zero-length-rejected by both schemas. Typed reads validate before projecting
 display text; migration aborts rather than inventing or deleting an invalid
-identity (`docs/adr/drafts/subscriber-reference-invariant.md`,
+identity (`docs/adr/0151-subscriber-reference-invariant.md`,
 [ADR-0020](adr/0020-content-visibility-and-subscription-model.md)). The
 instance-wide Default Audience is separately the closed
 `DefaultAudience::{Public, Subscribers, Private}` value: it cannot be a
@@ -1788,7 +1788,7 @@ written, and reading it as evidence about the value mislabelled `PostTitle`,
 use `FromStr::Err = Infallible`; it does not need a separate macro mode.
 `#[str_newtype(infallible)]` was removed after its sole production adopter,
 `SubscriberRef`, gained its non-blank invariant
-(`docs/adr/drafts/subscriber-reference-invariant.md`,
+(`docs/adr/0151-subscriber-reference-invariant.md`,
 [ADR-0101](adr/0101-infallible-kind-is-invariant-first.md)).
 
 ADR-0101 also replaces trusted doors with typed proof wherever a caller can

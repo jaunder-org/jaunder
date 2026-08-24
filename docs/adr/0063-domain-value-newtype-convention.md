@@ -385,7 +385,7 @@ when `SubscriberRef` adopted the flag during #750. The #857 audit then applied
 ADR-0101's question, found that blank strings must be refused, made
 `SubscriberRef` validating, and removed the separate zero-user macro mode. The
 Decision text remains historical; current architecture follows
-`docs/adr/drafts/subscriber-reference-invariant.md`.
+`docs/adr/0151-subscriber-reference-invariant.md`.
 
 ### 4. Boundary rule
 
