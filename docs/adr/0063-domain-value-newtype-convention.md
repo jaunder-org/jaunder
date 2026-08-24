@@ -189,27 +189,26 @@ the domain type in a server-only crate (never built for wasm) makes "never
 client-side" a compile fact. `ProfferedInviteCode` (#400), paired with the
 domain `InviteCode`, is the first user.
 
-**`Proffered` generalized: inbound twins that are not secrets.** Amended by
-`docs/adr/0084-media-filename-encoded-canonical.md` (#720). The prefix names an
-**untrusted inbound twin of a domain type**, of which the inbound-_secret_
-profile above is one specialization. `ProfferedFilename` is the first non-secret
-user: its concern is _representation_, not secrecy. axum percent-decodes path
-parameters, so the routes carrying a filename hold the decoded spelling while
+**Inbound non-secret representations do not automatically become public twins.**
+Amended by `docs/adr/0084-media-filename-encoded-canonical.md` (#720, later
+refined by #1149). The `Proffered` prefix still names the inbound-_secret_
+profile above, but the filename case proved that representation seams can be
+narrower than a cross-crate domain type. axum percent-decodes path parameters,
+so routes carrying a filename temporarily hold a decoded spelling while
 `Filename` holds the canonical encoded one — and because encoding is not
 idempotent, one `FromStr` cannot serve both without double-encoding a value that
 is already canonical.
 
-It takes a **hand-written** surface (`FromStr`, `Deserialize`, `Clone`, `Debug`)
-rather than a third `#[str_newtype]` profile, because every other member of the
-standard trailer is a hazard for a type that exists for one hop: the default
-derive emits the `sqlx` bridge, which would make it a second _storable_ spelling
-of a filename, and `Display`/`Serialize` would not round-trip through
-`FromStr`/`Deserialize` as every other `StrNewtype` here does. Omitting them
-makes the double-encode structurally impossible rather than merely gated. The
-enforcement half follows the same pattern as the secret profile: a distinct
-`xtask` gate (`proffered-filename-position`) pins it to axum extractor
-positions, since it must be `pub` for the route declarations and privacy cannot
-contain it.
+That decoded spelling is an **extractor-private intermediate**, not a public
+`common` type. `common::media` owns the validating decoded-segment conversion to
+`Filename`: check the safe-leaf oracle on the decoded text, percent-encode once
+with the media segment encode set, enforce the encoded byte budget, and return
+the canonical `Filename`. Server extractors may wrap the raw route segment
+privately to select that door, but handler, domain, storage, DTO, and web
+surfaces retain only `Filename` or validated address structs containing it. The
+decoded intermediate takes no `Display`, `Serialize`, `Deref`, `AsRef`, sqlx
+bridge, or other string-newtype trailer because it is not a durable domain
+value.
 
 **Bearer-token profile.** A distinct case is a value that is _transmitted by
 design_ yet must not be logged — the session `RawToken` (#458), which the server

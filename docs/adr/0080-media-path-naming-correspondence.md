@@ -123,12 +123,12 @@ business.
   holds the raw name and `media_path` re-encodes it to recover the stored
   spelling. It reads like something to simplify away, and doing so breaks
   serving for any name needing encoding.
-  - **Relocated by `docs/adr/0084-media-filename-encoded-canonical.md` (#720):**
-    the re-encode still exists and is still not redundant, but it now lives in
-    `ProfferedFilename`'s door rather than in `media_path`, which only
-    interpolates. There is no un-decoded extractor to avoid it with —
-    `RawPathParams` is "raw" only in the sense of _undeserialized_; its values
-    are `PercentDecodedStr` too.
+  - **Relocated by `docs/adr/0084-media-filename-encoded-canonical.md` (#720,
+    #1149):** the re-encode still exists and is still not redundant, but it now
+    lives in `common::media`'s decoded-segment door into `Filename` rather than
+    in `media_path`, which only interpolates. There is no un-decoded extractor
+    to avoid it with — `RawPathParams` is "raw" only in the sense of
+    _undeserialized_; its values are `PercentDecodedStr` too.
 - **The effective filename-length ceiling is lower, so `Filename` is now bounded
   by its encoded length.** Encoding expands a name up to 3× (9× for multi-byte
   UTF-8), so a name that validated could exceed the 255-byte per-component

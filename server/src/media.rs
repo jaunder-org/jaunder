@@ -16,8 +16,7 @@ use tokio_util::io::ReaderStream;
 use common::etag::ETag;
 use common::ids::UserId;
 use common::media::{
-    ContentHash, ContentType, Filename, MediaSource, ProfferedFilename, detect_content_type,
-    media_path, should_inline,
+    ContentHash, ContentType, Filename, MediaSource, detect_content_type, media_path, should_inline,
 };
 use storage::{MediaError, MediaStorage};
 use web::auth::AuthUser;
@@ -111,8 +110,9 @@ struct RawServeAddress {
     p1: String,
     p2: String,
     hash: ContentHash,
-    /// Axum has percent-decoded this segment; this door restores its canonical encoding.
-    filename: ProfferedFilename,
+    /// Axum has percent-decoded this segment; the strict address extractor
+    /// restores its canonical encoding.
+    filename: String,
 }
 
 /// Fully validated path address for the public content-addressed media route.
@@ -139,10 +139,13 @@ impl<'de> Deserialize<'de> for ServeAddress {
             return Err(serde::de::Error::custom("media hash prefixes do not match"));
         }
 
+        let filename =
+            Filename::from_decoded_segment(&filename).map_err(serde::de::Error::custom)?;
+
         Ok(Self {
             source,
             hash,
-            filename: Filename::from(filename),
+            filename,
         })
     }
 }
