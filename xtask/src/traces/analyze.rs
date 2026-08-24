@@ -65,9 +65,28 @@ fn hotspot_rows(groups: Vec<(String, Agg)>) -> Vec<HotspotRow> {
     rows
 }
 
-/// Only the `e2e.test` spans (the ones carrying the `e2e.*_json` blobs).
+/// Only the `e2e.test` spans (the ones carrying default-page per-test blobs).
 fn e2e_tests(spans: &[Span]) -> impl Iterator<Item = &Span> {
     spans.iter().filter(|s| s.name == "e2e.test")
+}
+
+/// Whether `raw` carries the attribute that section-level JSON parsing needs.
+fn has_attr(raw: &Value, key: &str) -> bool {
+    raw.get("attributes")
+        .and_then(Value::as_array)
+        .is_some_and(|attrs| {
+            attrs
+                .iter()
+                .any(|attr| attr.get("key").and_then(Value::as_str) == Some(key))
+        })
+}
+
+/// Spans whose navigation JSON describes document loads for a test-owned page.
+fn navigation_bearing_spans(spans: &[Span]) -> impl Iterator<Item = &Span> {
+    spans.iter().filter(|s| {
+        s.name == "e2e.test"
+            || (s.name == "e2e.page" && has_attr(&s.raw, "e2e.navigation_top_json"))
+    })
 }
 
 /// The e2e project label a report groups on: the span's `e2e.project`, or `-`
@@ -105,9 +124,9 @@ pub struct Analysis {
     pub action_hotspots: Vec<HotspotRow>,
     /// Boot-decomposition coverage per `(trace file, project)`. All rows. Section 5 (#818).
     pub boot_coverage: Vec<BootCoverageRow>,
-    /// Navigation phase totals (`e2e.navigation_top_json`), `max_ms` desc. Section 4a.
+    /// Navigation phase totals (`e2e.test`/`e2e.page` navigation JSON), `max_ms` desc. Section 4a.
     pub navigation_phase_hotspots: Vec<HotspotRow>,
-    /// Slow navigation targets by URL path, `max_ms` desc. Section 4b.
+    /// Slow navigation targets by URL path across `e2e.test`/`e2e.page`, `max_ms` desc. Section 4b.
     pub navigation_targets: Vec<TargetRow>,
     /// Long-task hotspots by task name (`e2e.long_tasks_json`), `max_ms` desc. Section 6a.
     pub long_task_hotspots: Vec<HotspotRow>,
@@ -313,11 +332,12 @@ const NAV_PHASES: [(&str, &str); 5] = [
 ];
 
 /// Section 4 — navigation phase totals + slow navigation targets from
-/// `e2e.navigation_top_json`. Phases and targets drop negative/non-finite values.
+/// `e2e.navigation_top_json` on `e2e.test` and `e2e.page` spans. Phases and
+/// targets drop negative/non-finite values.
 fn navigation_sections(spans: &[Span]) -> Result<(Vec<HotspotRow>, Vec<TargetRow>)> {
     let mut phase_groups: Vec<(String, Agg)> = Vec::new();
     let mut url_groups: Vec<(String, Agg)> = Vec::new();
-    for s in e2e_tests(spans) {
+    for s in navigation_bearing_spans(spans) {
         let navs = parse_json_attr(&s.raw, "e2e.navigation_top_json", &s.source)?;
         let Some(arr) = navs.as_ref().and_then(Value::as_array) else {
             continue;
@@ -378,12 +398,13 @@ const MIN_BOOT_PHASES: usize = 3;
 /// whose commit was never observed (the `state.pending.shift()` path in
 /// `capture-trace.ts`) drops out of both the numerator and the denominator.
 ///
-/// `dropped` sums `e2e.navigation_top_dropped`, because `e2e.navigation_top_json`
-/// is the top 20 *by duration* per test — a biased sample, not a census. Without it
-/// a truncated capture reads as complete coverage.
+/// `dropped` sums `e2e.navigation_top_dropped` from `e2e.test` and `e2e.page`,
+/// because `e2e.navigation_top_json` is the top 20 *by duration* per page sink —
+/// a biased sample, not a census. Without it a truncated capture reads as
+/// complete coverage.
 fn boot_coverage_rows(spans: &[Span]) -> Result<Vec<BootCoverageRow>> {
     let mut rows: Vec<BootCoverageRow> = Vec::new();
-    for s in e2e_tests(spans) {
+    for s in navigation_bearing_spans(spans) {
         let project = project_label(&s.project);
         let existing = rows
             .iter()
@@ -1027,10 +1048,19 @@ mod tests {
         nav(Some(120.0), Some(3), Some(40.0))
     }
 
-    /// One `e2e.test` span carrying `navs` as `e2e.navigation_top_json`, parsed out
-    /// of the trace file `source` — the identity `boot_coverage_rows` keys on
-    /// alongside the project.
-    fn boot_span(
+    fn target_nav(url: &str, total_ms: f64, commit_to_mount_ms: f64) -> serde_json::Value {
+        serde_json::json!({
+            "url": url,
+            "totalMs": total_ms,
+            "commitToMountMs": commit_to_mount_ms,
+        })
+    }
+
+    /// One span carrying `navs` as `e2e.navigation_top_json`, parsed out of the
+    /// trace file `source` — the identity `boot_coverage_rows` keys on alongside
+    /// the project.
+    fn navigation_span(
+        span_name: &str,
         source: &str,
         project: &str,
         dropped: u64,
@@ -1040,7 +1070,7 @@ mod tests {
             "resourceSpans": [{
                 "scopeSpans": [{
                     "spans": [{
-                        "name": "e2e.test",
+                        "name": span_name,
                         "attributes": [
                             attr("e2e.project", serde_json::json!({ "stringValue": project })),
                             attr(
@@ -1059,6 +1089,15 @@ mod tests {
             }]
         });
         parse_spans(&line.to_string(), &Filters::default(), source).unwrap()
+    }
+
+    fn boot_span(
+        source: &str,
+        project: &str,
+        dropped: u64,
+        navs: Vec<serde_json::Value>,
+    ) -> Vec<Span> {
+        navigation_span("e2e.test", source, project, dropped, navs)
     }
 
     fn row_for<'a>(rows: &'a [BootCoverageRow], project: &str) -> &'a BootCoverageRow {
@@ -1195,9 +1234,9 @@ mod tests {
 
     #[test]
     fn boot_coverage_sums_navigation_top_dropped_so_truncation_is_never_silent() {
-        // `e2e.navigation_top_json` is the top 20 BY DURATION per test — a biased
-        // sample, not a census. Without the dropped count a truncated capture reads
-        // as complete coverage.
+        // `e2e.navigation_top_json` is the top 20 BY DURATION per page sink — a
+        // biased sample, not a census. Without the dropped count a truncated capture
+        // reads as complete coverage.
         let mut spans = boot_span("sqlite", "firefox", 3, vec![full_nav()]);
         spans.extend(boot_span("sqlite", "firefox", 5, vec![full_nav()]));
 
@@ -1205,6 +1244,65 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].navigations, 2);
         assert_eq!(rows[0].dropped, 8, "dropped accumulates across tests");
+    }
+
+    #[test]
+    fn navigation_sections_include_secondary_page_navigation_json() {
+        let mut spans = navigation_span(
+            "e2e.test",
+            "sqlite",
+            "chromium",
+            0,
+            vec![target_nav("http://jaunder.local:8080/default", 100.0, 40.0)],
+        );
+        spans.extend(navigation_span(
+            "e2e.page",
+            "sqlite",
+            "chromium",
+            0,
+            vec![target_nav(
+                "http://jaunder.local:8080/secondary",
+                250.0,
+                90.0,
+            )],
+        ));
+
+        let (phases, targets) = navigation_sections(&spans).unwrap();
+
+        let total = phases
+            .iter()
+            .find(|r| r.name == "navigation.total")
+            .expect("navigation.total present");
+        assert_eq!(total.count, 2);
+        assert_eq!(total.total_ms, 350.0);
+        assert_eq!(total.max_ms, 250.0);
+        assert!(
+            targets
+                .iter()
+                .any(|r| r.target == "jaunder.local:8080/secondary" && r.max_ms == 250.0),
+            "secondary-page URL must be present in slow navigation targets",
+        );
+    }
+
+    #[test]
+    fn boot_coverage_reconciles_test_and_page_navigation_sinks() {
+        let mut spans = boot_span("sqlite", "firefox", 2, vec![full_nav()]);
+        spans.extend(navigation_span(
+            "e2e.page",
+            "sqlite",
+            "firefox",
+            3,
+            vec![full_nav()],
+        ));
+
+        let rows = boot_coverage_rows(&spans).unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].navigations, 2);
+        assert_eq!(rows[0].dropped, 5);
+        assert_eq!(rows[0].current, 2);
+        assert_eq!(rows[0].mounted, 2);
+        assert_eq!(rows[0].full_marks, 2);
     }
 
     #[test]

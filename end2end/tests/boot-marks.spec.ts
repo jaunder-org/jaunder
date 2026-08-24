@@ -10,10 +10,14 @@ import {
   mergeDocumentTiming,
   wasmInitFromMarks,
   type DocumentTiming,
+  type NavigationRecord,
 } from "./capture-trace";
 import {
   navigationBridgeFieldsFrom,
+  navigationSummariesFrom,
+  navigationTopTelemetryFrom,
   stylesheetModuleDiagnosticsFrom,
+  type NavigationSummary,
 } from "./fixtures";
 import { goto } from "./helpers";
 
@@ -418,6 +422,38 @@ test.describe("navigationBridgeFieldsFrom", () => {
       frameSkewRemainderMs: null,
     });
   });
+});
+
+test("e2e.page navigation telemetry carries URL-bearing top JSON and dropped count", () => {
+  const navigations: NavigationRecord[] = Array.from(
+    { length: 21 },
+    (_, index) => ({
+      id: index + 1,
+      url: `https://example.test/secondary-${index}`,
+      startedMs: 0,
+      committedMs: 10,
+      domContentLoadedMs: 20,
+      loadMs: 30,
+      mountedMs: 100 + index,
+      requestFinishedMs: 40,
+      requestFailed: false,
+    }),
+  );
+
+  const telemetry = navigationTopTelemetryFrom(
+    navigationSummariesFrom(navigations, [], [], () => undefined),
+    navigations.length,
+  );
+  const top = JSON.parse(telemetry.json) as NavigationSummary[];
+
+  expect(top).toHaveLength(20);
+  expect(telemetry.dropped).toBe(1);
+  expect(top.map((navigation) => navigation.url)).toContain(
+    "https://example.test/secondary-20",
+  );
+  expect(
+    top.every((navigation) => navigation.url.includes("/secondary-")),
+  ).toBe(true);
 });
 
 // The regression guard for #818's actual defect. Unthresholded on purpose: it
