@@ -546,6 +546,26 @@ const ALLOWLIST: &[Allowed] = &[
         reason: "a SQLite declared column type from PRAGMA table_info",
     },
     Allowed {
+        file: "backup/restore_validation.rs",
+        function: "backed_up_schema_columns",
+        target: "String",
+        what: "\"SELECTnameFROMsqlite_masterWHEREtype='table'\"",
+        count: 1,
+        category: Category::SchemaIntrospection,
+        reason: "test-only live schema table inventory used to prove restore typed-column \
+                 coverage is tied to the backed-up table surface",
+    },
+    Allowed {
+        file: "backup/restore_validation.rs",
+        function: "backed_up_schema_columns",
+        target: "String",
+        what: "\"name\"",
+        count: 1,
+        category: Category::SchemaIntrospection,
+        reason: "test-only PRAGMA table_info column name used to prove restore typed-column \
+                 coverage entries exist in the live backed-up schema",
+    },
+    Allowed {
         file: "sqlite/backup.rs",
         function: "export_table",
         target: "String",
@@ -694,6 +714,17 @@ const ALLOWLIST: &[Allowed] = &[
         reason: "the cached feed body — rendered RSS/Atom/JSON this layer stores and serves \
                  verbatim, never inspects. Note the same tuple's feed_url and content_type \
                  DO decode into FeedPath/ContentType",
+    },
+    Allowed {
+        file: "backup/restore_validation.rs",
+        function: "restore_text",
+        target: "Option<RestoreText>",
+        what: "column",
+        count: 1,
+        category: Category::OpaquePayload,
+        reason: "restore validation reads an NDJSON cell selected by table-specific row \
+                 validator code, then immediately parses it through the typed restore-row \
+                 domain field; this is not a sqlx row decode",
     },
     Allowed {
         file: "helpers.rs",

@@ -148,7 +148,7 @@ async fn seed_side_tables(state: &AppState, author: UserId) {
         .create_media(&MediaRecord {
             user_id: author,
             sha256: parse_content_hash(FIXTURE_MEDIA_SHA256),
-            filename: parse_filename("photo.jpg"),
+            filename: parse_filename("my%20photo.jpg"),
             source: MediaSource::Upload,
             content_type: parse_content_type("image/jpeg"),
             size_bytes: parse_byte_size("4"),
@@ -234,7 +234,7 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
             .get_media(
                 ids.author,
                 &parse_content_hash(FIXTURE_MEDIA_SHA256),
-                &parse_filename("photo.jpg"),
+                &parse_filename("my%20photo.jpg"),
                 &MediaSource::Upload
             )
             .await

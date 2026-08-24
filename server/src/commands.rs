@@ -25,7 +25,10 @@ use common::username::Username;
 use host::capture;
 use host::smtp_config::SmtpConfig;
 use storage::load_smtp_config;
-use storage::{BackupExportOptions, BackupRestoreOptions, export_backup, restore_backup};
+use storage::{
+    BackupExportOptions, BackupRestoreOptions, BackupRestoreOutcome, RestoreValidationReport,
+    export_backup, restore_backup,
+};
 use storage::{
     init_storage, open_database, open_existing_database, open_existing_database_with_observer,
 };
@@ -87,7 +90,7 @@ impl Commands {
                 mode,
                 path,
             } => cmd_backup(&storage, mode.into(), path).await.map(drop),
-            Commands::Restore { storage, path } => cmd_restore(&storage, &path).await,
+            Commands::Restore { storage, path } => cmd_restore(&storage, &path).await.map(drop),
             // First nested subcommand group: the arm stays a thin delegation to
             // SiteConfigAction::execute (a sibling match), preserving the low-CRAP
             // one-arm-per-command dispatch shape. Copy this pattern for future groups.
@@ -414,7 +417,10 @@ pub async fn cmd_backup(
 ///
 /// Returns an error if the backup does not exist, or if the target database or
 /// media directory is not empty.
-pub async fn cmd_restore(storage: &StorageArgs, path: &Path) -> anyhow::Result<()> {
+pub async fn cmd_restore(
+    storage: &StorageArgs,
+    path: &Path,
+) -> anyhow::Result<BackupRestoreOutcome> {
     if !path.exists() {
         return Err(anyhow::anyhow!(
             "backup path does not exist: {}",
@@ -422,7 +428,7 @@ pub async fn cmd_restore(storage: &StorageArgs, path: &Path) -> anyhow::Result<(
         ));
     }
     ensure_restore_target_empty(storage).await?;
-    let manifest = restore_backup(BackupRestoreOptions {
+    let outcome = restore_backup(BackupRestoreOptions {
         database: &storage.db,
         media_path: &storage.storage_path.join("media"),
         source_path: path,
@@ -432,9 +438,24 @@ pub async fn cmd_restore(storage: &StorageArgs, path: &Path) -> anyhow::Result<(
     println!(
         "Restore complete: path={} tables={}",
         path.display(),
-        manifest.tables.len()
+        outcome.manifest.tables.len()
     );
-    Ok(())
+    print_restore_validation_report(&outcome.validation_report);
+    Ok(outcome)
+}
+
+fn print_restore_validation_report(report: &RestoreValidationReport) {
+    if report.is_empty() {
+        return;
+    }
+
+    println!(
+        "Restore validation issues: count={} (data restored; repair may be needed before normal reads)",
+        report.len()
+    );
+    for issue in report.issues() {
+        println!("- {issue}");
+    }
 }
 
 fn default_backup_path(storage: &StorageArgs, mode: BackupMode) -> PathBuf {

@@ -15,7 +15,9 @@ use jaunder::commands::{
     app_password_create, cmd_app_password_create, cmd_backup, cmd_init, cmd_restore, cmd_serve,
     cmd_smtp_test, cmd_user_create, cmd_user_invite, prepare_server,
 };
-use storage::{BackupMode, open_database, open_existing_database};
+use storage::{
+    BackupMode, DbConnectOptions, open_database, open_existing_database, resolved_postgres_options,
+};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -40,6 +42,60 @@ async fn storage_args(backend: Backend, base: &TempDir) -> (StorageArgs, Option<
         }
     };
     (StorageArgs { storage_path, db }, guard)
+}
+
+fn rewrite_media_filename(backup_path: &std::path::Path, filename: &str) {
+    let media_ndjson = backup_path.join("db").join("media.ndjson");
+    let mut rows: Vec<serde_json::Map<String, serde_json::Value>> =
+        std::fs::read_to_string(&media_ndjson)
+            .expect("read media backup")
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(serde_json::from_str)
+            .collect::<Result<_, _>>()
+            .expect("parse media backup rows");
+    for row in &mut rows {
+        row.insert("filename".to_owned(), serde_json::json!(filename));
+    }
+
+    let mut rewritten = String::new();
+    for row in rows {
+        writeln!(
+            rewritten,
+            "{}",
+            serde_json::to_string(&row).expect("serialize media row")
+        )
+        .expect("append media row");
+    }
+    std::fs::write(media_ndjson, rewritten).expect("write media backup");
+}
+
+async fn raw_media_filename_exists(args: &StorageArgs, filename: &str) -> bool {
+    match &args.db {
+        DbConnectOptions::Sqlite(options) => {
+            let pool = sqlx::SqlitePool::connect_with(options.clone())
+                .await
+                .expect("connect sqlite");
+            let exists: i64 =
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM media WHERE filename = $1)")
+                    .bind(filename)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("query sqlite media");
+            exists != 0
+        }
+        DbConnectOptions::Postgres { options, .. } => {
+            let options = resolved_postgres_options(options).expect("resolve postgres options");
+            let pool = sqlx::PgPool::connect_with(options)
+                .await
+                .expect("connect postgres");
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM media WHERE filename = $1)")
+                .bind(filename)
+                .fetch_one(&pool)
+                .await
+                .expect("query postgres media")
+        }
+    }
 }
 
 fn uninitialized_storage_args(backend: Backend, base: &TempDir) -> StorageArgs {
@@ -715,11 +771,62 @@ async fn cmd_restore_restores_directory_backup(#[case] backend: Backend) {
     let target_base = TempDir::new().expect("target temp dir");
     let (target_args, _pg_target) = storage_args(backend, &target_base).await;
     cmd_init(&target_args, false).await.expect("init target");
-    cmd_restore(&target_args, &backup_path)
+    let outcome = cmd_restore(&target_args, &backup_path)
         .await
         .expect("restore");
+    assert!(
+        outcome.validation_report.is_empty(),
+        "canonical encoded media.filename should not report validation issues: {:?}",
+        outcome.validation_report.issues()
+    );
 
     assert_backup_fixture_restored(&target_args, &ids).await;
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_reports_invalid_media_filename_without_rolling_back(#[case] backend: Backend) {
+    let base = TempDir::new().expect("temp dir");
+    let (source_args, _pg_source) = storage_args(backend, &base).await;
+    cmd_init(&source_args, false).await.expect("init source");
+    populate_backup_fixture(&source_args).await;
+
+    let backup_path = base.path().join("backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
+    rewrite_media_filename(&backup_path, "my photo.jpg");
+
+    let target_base = TempDir::new().expect("target temp dir");
+    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
+    cmd_init(&target_args, false).await.expect("init target");
+
+    let outcome = cmd_restore(&target_args, &backup_path)
+        .await
+        .expect("restore with diagnostics");
+    assert!(
+        outcome.validation_report.issues().iter().any(|issue| {
+            issue.table == "media"
+                && issue.column == "filename"
+                && issue.value_class == "filename"
+                && issue.reason.contains("canonical percent-encoded")
+        }),
+        "restore report should name media.filename canonicity: {:?}",
+        outcome.validation_report.issues()
+    );
+    assert!(
+        raw_media_filename_exists(&target_args, "my photo.jpg").await,
+        "invalid backup media row should still be restored"
+    );
+    assert_eq!(
+        std::fs::read_to_string(target_args.storage_path.join("media").join("avatar.txt"))
+            .expect("read restored media"),
+        "media"
+    );
 }
 
 // #136: a backup with a dangling foreign key is rejected uniformly (DEC-C) —
