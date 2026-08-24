@@ -312,9 +312,10 @@ test("sidebar footer shows Sign out link when logged in", async ({
   // Wait for the authenticated nav to render from the marker (#181 — synchronous,
   // no Suspense swap).
   await waitForSelector(page, ".j-nav a[href='/drafts']");
-  // Home, Feed (/app cockpit, #181), Drafts, Media, and Audiences have hrefs.
+  await waitForSelector(page, ".j-nav a[href='/scheduled']");
+  // Home, Feed (/app cockpit, #181), Drafts, Scheduled, Media, and Audiences have hrefs.
   await waitForSelector(page, ".j-nav a[href='/audiences']");
-  await expect(page.locator(".j-nav a")).toHaveCount(5);
+  await expect(page.locator(".j-nav a")).toHaveCount(6);
 
   // Footer has Sign out.
   await expect(page.locator(SEL.logoutLink)).toBeVisible();

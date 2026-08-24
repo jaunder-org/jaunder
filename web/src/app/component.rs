@@ -18,7 +18,8 @@ use crate::invites::InvitesPage;
 use crate::media::MediaPage;
 use crate::password_reset::{ForgotPasswordPage, ResetPasswordPage};
 use crate::posts::{
-    CreatePostPage, DraftsPage, EditPostPage, PostPage, SiteTagPage, UserTagPage, UserTimelinePage,
+    CreatePostPage, DraftsPage, EditPostPage, PostPage, ScheduledPage, SiteTagPage, UserTagPage,
+    UserTimelinePage,
 };
 use crate::profile::ProfilePage;
 use crate::registration::RegisterPage;
@@ -126,6 +127,7 @@ pub fn App() -> impl IntoView {
                         view=CreatePostPage
                     />
                     <Route path=StaticSegment("drafts") view=DraftsPage />
+                    <Route path=StaticSegment("scheduled") view=ScheduledPage />
                     <Route path=StaticSegment("media") view=MediaPage />
                     <Route
                         path=(

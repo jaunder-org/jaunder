@@ -31,6 +31,7 @@
     "posts::get_default_audience_selection",
     "posts::get_preview",
     "posts::list_drafts",
+    "posts::list_scheduled",
     "posts::publish",
     "posts::unpublish",
     "posts::update",

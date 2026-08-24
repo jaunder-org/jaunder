@@ -74,6 +74,7 @@ wire_contract! {
     web::posts::GetDefaultAudienceSelection => "posts" / "get_default_audience_selection",
     web::posts::GetPreview => "posts" / "get_preview",
     web::posts::ListDrafts => "posts" / "list_drafts",
+    web::posts::ListScheduled => "posts" / "list_scheduled",
     web::posts::Publish => "posts" / "publish",
     web::posts::Unpublish => "posts" / "unpublish",
     web::posts::Update => "posts" / "update",

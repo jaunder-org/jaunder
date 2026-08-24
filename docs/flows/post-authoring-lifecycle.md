@@ -6,6 +6,7 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#post-authoring-lifecycle`
 
 - `route:/posts/new`
 - `route:/drafts`
+- `route:/scheduled`
 - `route:/posts/:post_id/edit`
 - `route:/~:username/:year/:month/:day/:slug`
 
@@ -17,6 +18,7 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#post-authoring-lifecycle`
 - `endpoint:/api/posts/get_default_audience_selection`
 - `endpoint:/api/posts/get_audience_selection`
 - `endpoint:/api/posts/list_drafts`
+- `endpoint:/api/posts/list_scheduled`
 - `endpoint:/api/posts/publish`
 - `endpoint:/api/posts/delete`
 - `endpoint:/api/posts/unpublish`
@@ -26,9 +28,13 @@ composer. The page seeds its audience picker from the site default, lets the
 author save a draft or publish immediately, and keeps the route in place after a
 successful create by showing the saved slug and a permalink link.
 
-`/drafts` is the unpublished-post queue. It re-reads after publish and delete
-mutations, shows both drafts and scheduled posts, and exposes the edit, publish,
-delete, and permalink controls from one list row.
+`/drafts` is the mixed unpublished-post queue. It re-reads after publish and
+delete mutations, shows both drafts and scheduled posts, and exposes the edit,
+publish, delete, and permalink controls from one list row.
+
+`/scheduled` is the Scheduled Post management queue. It waits for authenticated
+session confirmation before listing rows, shows only posts whose `published_at`
+is still in the future, and hands schedule changes off to the existing editor.
 
 `/posts/:post_id/edit` loads the editable post preview and the current audience
 selection together, seeds the shared compose state from that result, and keeps
@@ -62,6 +68,10 @@ sequenceDiagram
 
     Browser->>Posts: list_drafts
     Posts->>Store: list drafts and scheduled posts
+    Store-->>Posts: unpublished page
+
+    Browser->>Posts: list_scheduled
+    Posts->>Store: list future-scheduled posts
     Store-->>Posts: unpublished page
 
     Browser->>Posts: get_preview(post_id)

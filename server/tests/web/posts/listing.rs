@@ -13,7 +13,8 @@ use crate::helpers::{create_session_for, create_user_and_session, post_form, pos
 use storage::test_support::{Backend, SeedRawPost, SeedUser, TestEnv, backends, backends_matrix};
 
 use super::fixtures::{
-    create_post_json, list_drafts, list_home_feed, list_local_timeline, list_user_posts,
+    create_post_json, list_drafts, list_home_feed, list_local_timeline, list_scheduled,
+    list_user_posts,
 };
 
 async fn list_posts_by_tag(
@@ -172,7 +173,106 @@ async fn list_drafts_surfaces_scheduled_with_marker_excludes_live(#[case] backen
     );
 }
 
-// Shape B — invalid-cursor cluster across the four cursor-paginated endpoints.
+#[apply(backends)]
+#[tokio::test]
+async fn list_scheduled_returns_current_user_future_posts_ordered_by_schedule(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let author = create_user_and_session(&state).await;
+    let stranger = create_user_and_session(&state).await;
+    let author_cookie = author.cookie();
+
+    let now = chrono::Utc::now();
+    let same_time = now + chrono::Duration::days(3);
+
+    let draft_id = SeedRawPost::new(author.user_id)
+        .draft()
+        .seed(&state)
+        .await
+        .post_id;
+    let live_id = SeedRawPost::new(author.user_id)
+        .published_at(now - chrono::Duration::days(1))
+        .seed(&state)
+        .await
+        .post_id;
+    let deleted_id = SeedRawPost::new(author.user_id)
+        .published_at(now + chrono::Duration::days(2))
+        .seed(&state)
+        .await
+        .post_id;
+    state.posts.soft_delete_post(deleted_id).await.unwrap();
+    let other_id = SeedRawPost::new(stranger.user_id)
+        .published_at(now + chrono::Duration::days(1))
+        .seed(&state)
+        .await
+        .post_id;
+
+    let earlier_id = SeedRawPost::new(author.user_id)
+        .published_at(now + chrono::Duration::days(1))
+        .seed(&state)
+        .await
+        .post_id;
+    let same_a_id = SeedRawPost::new(author.user_id)
+        .published_at(same_time)
+        .seed(&state)
+        .await
+        .post_id;
+    let same_b_id = SeedRawPost::new(author.user_id)
+        .published_at(same_time)
+        .seed(&state)
+        .await
+        .post_id;
+    let later_id = SeedRawPost::new(author.user_id)
+        .published_at(now + chrono::Duration::days(5))
+        .seed(&state)
+        .await
+        .post_id;
+
+    let (status, body) = list_scheduled(&state, None, 2, Some(&author_cookie)).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let first_page: UnpublishedPage = serde_json::from_str(&body).unwrap();
+    assert_eq!(first_page.posts.len(), 2, "body: {body}");
+    assert!(first_page.has_more, "body: {body}");
+    let cursor = first_page
+        .next_cursor
+        .expect("page 1 has more, so it carries a cursor");
+
+    let (status, body) = list_scheduled(&state, Some(cursor), 10, Some(&author_cookie)).await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let second_page: UnpublishedPage = serde_json::from_str(&body).unwrap();
+    assert_eq!(second_page.posts.len(), 2, "body: {body}");
+    assert!(!second_page.has_more, "body: {body}");
+    assert!(second_page.next_cursor.is_none(), "body: {body}");
+
+    let ids: Vec<_> = first_page
+        .posts
+        .iter()
+        .chain(second_page.posts.iter())
+        .map(|row| row.post.post_id)
+        .collect();
+    let mut same_time_ids = [same_a_id, same_b_id];
+    same_time_ids.sort_unstable_by_key(|id| i64::from(*id));
+    let expected_ids = vec![earlier_id, same_time_ids[0], same_time_ids[1], later_id];
+    assert_eq!(ids, expected_ids);
+
+    for excluded_id in [draft_id, live_id, deleted_id, other_id] {
+        assert!(
+            !ids.contains(&excluded_id),
+            "scheduled list included excluded post {excluded_id}: {ids:?}"
+        );
+    }
+    assert!(
+        first_page
+            .posts
+            .iter()
+            .chain(second_page.posts.iter())
+            .all(|row| row.post.published_at.is_some()),
+        "scheduled rows must carry published_at"
+    );
+}
+
+// Shape B — invalid-cursor cluster across the five cursor-paginated endpoints.
 // Each fires two requests: a half-specified cursor (a `cursor` object carrying a
 // valid instant but no `post_id`) and an unparseable timestamp inside an
 // otherwise complete cursor. Both are rejected at arg-decode, before the
@@ -190,6 +290,11 @@ async fn list_drafts_surfaces_scheduled_with_marker_excludes_live(#[case] backen
     <web::posts::ListDrafts as ServerFn>::PATH,
     serde_json::json!({ "cursor": { "created_at": "2026-04-16T10:11:12+00:00" }, "limit": 10 }),
     serde_json::json!({ "cursor": { "created_at": "bad-time", "post_id": 10 }, "limit": 10 })
+)]
+#[case::list_scheduled(
+    <web::posts::ListScheduled as ServerFn>::PATH,
+    serde_json::json!({ "cursor": { "created_at": "2026-04-16T10:11:12+00:00" }, "limit": 10 }),
+    serde_json::json!({ "cursor": { "created_at": "bad-time", "post_id": 11 }, "limit": 10 })
 )]
 #[case::list_user_posts(
     <web::timeline::ListByUser as ServerFn>::PATH,

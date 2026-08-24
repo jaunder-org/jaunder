@@ -49,9 +49,10 @@ use {
     leptos::prelude::*,
     std::{collections::BTreeSet, sync::Arc},
     storage::{
-        FeedEventStorage, PostCreation, PostStorage, PostUpdate, PublishUpdate, SiteConfigStorage,
-        fetch_post_record, keyset_cursor, perform_post_creation, perform_post_update,
-        to_post_cursor, wire_cursor,
+        FeedEventStorage, PostCreation, PostRecord, PostStorage, PostUpdate, PublishUpdate,
+        SiteConfigStorage, fetch_post_record, keyset_cursor, perform_post_creation,
+        perform_post_update, scheduled_keyset_cursor, to_post_cursor, to_scheduled_post_cursor,
+        wire_cursor, wire_scheduled_cursor,
     },
 };
 
@@ -65,6 +66,23 @@ fn root_relative_path(path: String) -> RootRelativeUrl {
         unreachable!("server composes a valid root-relative path");
     };
     url
+}
+
+#[cfg(feature = "server")]
+fn unpublished_post_from_record(post: PostRecord) -> UnpublishedPost {
+    let summary_label = post.fallback_summary_label();
+    let permalink = post.permalink();
+    UnpublishedPost {
+        post: SavedPost {
+            post_id: post.post_id,
+            slug: post.slug,
+            published_at: post.published_at.map(UtcInstant::from),
+            permalink,
+        },
+        title: post.title,
+        summary_label,
+        edit_url: root_relative_path(format!("/posts/{}/edit", post.post_id)),
+    }
 }
 
 /// The saved post's identity, publication state, and where to find it.
@@ -446,23 +464,54 @@ pub async fn list_drafts(
         .flatten()
         .map(|c| wire_cursor(&c));
 
-    let unpublished = rows
-        .into_iter()
-        .map(|draft| UnpublishedPost {
-            post: SavedPost {
-                post_id: draft.post_id,
-                slug: draft.slug.clone(),
-                published_at: draft.published_at.map(UtcInstant::from),
-                permalink: draft.permalink(),
-            },
-            title: draft.title.clone(),
-            summary_label: draft.fallback_summary_label(),
-            edit_url: root_relative_path(format!("/posts/{}/edit", draft.post_id)),
-        })
-        .collect();
+    let unpublished = rows.into_iter().map(unpublished_post_from_record).collect();
 
     Ok(UnpublishedPage {
         posts: unpublished,
+        next_cursor,
+        has_more,
+    })
+}
+
+/// Lists the authenticated user's scheduled posts only.
+///
+/// The wire cursor reuses [`PageCursor`]'s timestamp field for the scheduled
+/// ordering key: on this endpoint it carries `published_at`, and rows are ordered
+/// `published_at ASC, post_id ASC`.
+#[macros::server(input = Json)]
+pub async fn list_scheduled(
+    cursor: Option<PageCursor>,
+    limit: Option<PageSize>,
+) -> WebResult<UnpublishedPage> {
+    let auth = require_auth().await?;
+    let posts = expect_context::<Arc<dyn PostStorage>>();
+
+    let parsed_cursor = scheduled_keyset_cursor(cursor);
+    let page_size = limit.unwrap_or_default();
+    let mut rows = posts
+        .list_scheduled_by_user(
+            auth.user_id,
+            parsed_cursor.as_ref(),
+            page_size.fetch_limit(),
+            chrono::Utc::now(),
+        )
+        .await?;
+
+    let has_more = page_size.has_more(rows.len());
+    rows.truncate(page_size.page_len());
+    let next_cursor = if has_more {
+        rows.last()
+            .map(to_scheduled_post_cursor)
+            .transpose()?
+            .map(|c| wire_scheduled_cursor(&c))
+    } else {
+        None
+    };
+
+    let scheduled = rows.into_iter().map(unpublished_post_from_record).collect();
+
+    Ok(UnpublishedPage {
+        posts: scheduled,
         next_cursor,
         has_more,
     })

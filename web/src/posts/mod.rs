@@ -63,9 +63,10 @@ pub use edit_state::{
 // registrar keep the stable `crate::posts::…` paths despite living in `api.rs`.
 pub use api::{
     Create, Delete, EditPostPreview, Get, GetAudienceSelection, GetDefaultAudienceSelection,
-    GetPreview, ListDrafts, PostInputs, Publish, SavedPost, Unpublish, UnpublishedPage,
-    UnpublishedPost, Update, create, delete, get, get_audience_selection,
-    get_default_audience_selection, get_preview, list_drafts, publish, unpublish, update,
+    GetPreview, ListDrafts, ListScheduled, PostInputs, Publish, SavedPost, Unpublish,
+    UnpublishedPage, UnpublishedPost, Update, create, delete, get, get_audience_selection,
+    get_default_audience_selection, get_preview, list_drafts, list_scheduled, publish, unpublish,
+    update,
 };
 
 // Re-exported for the `server` crate's public projector, which maps the fetched
@@ -84,5 +85,6 @@ pub use server::{authored_post, rendered_post};
 #[cfg(target_arch = "wasm32")]
 pub use component::{
     AudiencePicker, ComposerFields, CreatePostPage, DraftsPage, EditPostPage, InlineComposer,
-    PostCard, PostCreateForm, PostDisplay, PostPage, SiteTagPage, UserTagPage, UserTimelinePage,
+    PostCard, PostCreateForm, PostDisplay, PostPage, ScheduledPage, SiteTagPage, UserTagPage,
+    UserTimelinePage,
 };

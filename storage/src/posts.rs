@@ -191,6 +191,16 @@ pub struct PostCursor {
     pub post_id: PostId,
 }
 
+/// Cursor for keyset pagination of the scheduled-post listing
+/// (ordered by `published_at ASC, post_id ASC`).
+#[derive(Debug)]
+pub struct ScheduledPostCursor {
+    /// Publication timestamp of the last item in the previous page.
+    pub published_at: DateTime<Utc>,
+    /// ID of the last item in the previous page (used for stable ordering).
+    pub post_id: PostId,
+}
+
 /// Cursor for keyset pagination of the editor-facing per-user collection
 /// (ordered by `updated_at DESC, post_id DESC`).
 #[derive(Clone, Copy, Debug)]
@@ -512,6 +522,50 @@ pub fn wire_cursor(cursor: &PostCursor) -> PageCursor {
     }
 }
 
+/// Projects a wire [`PageCursor`] onto the storage-side scheduled-post cursor.
+///
+/// The existing wire cursor shape is reused for author-only post lists; on the
+/// scheduled surface its timestamp component carries the `published_at` key, not
+/// the creation timestamp.
+#[must_use]
+pub fn scheduled_keyset_cursor(cursor: Option<PageCursor>) -> Option<ScheduledPostCursor> {
+    cursor.map(|c| ScheduledPostCursor {
+        published_at: c.created_at.value(),
+        post_id: c.post_id,
+    })
+}
+
+/// Projects a scheduled row onto the keyset cursor that paginates after it.
+///
+/// The storage query that feeds this helper selects only `published_at IS NOT
+/// NULL` rows. Returning a typed error instead of silently dropping the cursor
+/// keeps a broken query projection from turning pagination into a duplicate page.
+///
+/// # Errors
+///
+/// Returns an internal error if a row from the scheduled-post listing lacks
+/// `published_at`, which would make the next-page cursor undefined.
+pub fn to_scheduled_post_cursor(post: &PostRecord) -> InternalResult<ScheduledPostCursor> {
+    let Some(published_at) = post.published_at else {
+        return Err(InternalError::server_message(
+            "scheduled listing row missing published_at",
+        ));
+    };
+    Ok(ScheduledPostCursor {
+        published_at,
+        post_id: post.post_id,
+    })
+}
+
+/// Projects the storage-side scheduled cursor back onto the shared wire cursor.
+#[must_use]
+pub fn wire_scheduled_cursor(cursor: &ScheduledPostCursor) -> PageCursor {
+    PageCursor {
+        created_at: UtcInstant::from(cursor.published_at),
+        post_id: cursor.post_id,
+    }
+}
+
 /// The shared public-permalink lookup used by both the `get_post` server fn and
 /// the non-reactive public projector.
 ///
@@ -705,6 +759,21 @@ pub trait PostStorage: Send + Sync {
         &self,
         user_id: UserId,
         cursor: Option<&'a PostCursor>,
+        limit: RowLimit,
+        now: DateTime<Utc>,
+    ) -> sqlx::Result<Vec<PostRecord>>;
+
+    /// Lists the authenticated author's scheduled posts only.
+    ///
+    /// Scheduled posts have a non-NULL `published_at` strictly greater than
+    /// explicit `now`. True drafts, live posts, soft-deleted posts, and posts
+    /// owned by other users are excluded. Results are ordered by
+    /// `published_at ASC, post_id ASC`.
+    // Explicit `'a` for `mockall::automock` — see `list_published_by_user`.
+    async fn list_scheduled_by_user<'a>(
+        &self,
+        user_id: UserId,
+        cursor: Option<&'a ScheduledPostCursor>,
         limit: RowLimit,
         now: DateTime<Utc>,
     ) -> sqlx::Result<Vec<PostRecord>>;
@@ -1540,6 +1609,67 @@ where
                    AND (p.published_at IS NULL OR p.published_at > $2)
                    AND p.deleted_at IS NULL
                  ORDER BY p.created_at DESC, p.post_id DESC
+                 LIMIT $3"
+            );
+            sqlx::query_as::<_, PostRow>(&sql)
+                .bind(user_id)
+                .bind(now)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?
+        };
+        rows.into_iter().map(post_record_from_row).collect()
+    }
+
+    #[tracing::instrument(
+        name = "storage.posts.list_scheduled_by_user",
+        skip(self),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn list_scheduled_by_user<'a>(
+        &self,
+        user_id: UserId,
+        cursor: Option<&'a ScheduledPostCursor>,
+        limit: RowLimit,
+        now: DateTime<Utc>,
+    ) -> sqlx::Result<Vec<PostRecord>> {
+        let tags = DB::TAGS_SUBQUERY;
+        let rows = if let Some(cursor) = cursor {
+            let sql = format!(
+                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
+                        {tags} AS tags
+                 FROM posts p
+                 JOIN users u ON p.user_id = u.user_id
+                 WHERE p.user_id = $1
+                   AND p.published_at IS NOT NULL
+                   AND p.published_at > $5
+                   AND p.deleted_at IS NULL
+                   AND (p.published_at > $2 OR (p.published_at = $3 AND p.post_id > $4))
+                 ORDER BY p.published_at ASC, p.post_id ASC
+                 LIMIT $6"
+            );
+            sqlx::query_as::<_, PostRow>(&sql)
+                .bind(user_id)
+                .bind(cursor.published_at)
+                .bind(cursor.published_at)
+                .bind(cursor.post_id)
+                .bind(now)
+                .bind(limit)
+                .fetch_all(&self.pool)
+                .await?
+        } else {
+            let sql = format!(
+                "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
+                        p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
+                        {tags} AS tags
+                 FROM posts p
+                 JOIN users u ON p.user_id = u.user_id
+                 WHERE p.user_id = $1
+                   AND p.published_at IS NOT NULL
+                   AND p.published_at > $2
+                   AND p.deleted_at IS NULL
+                 ORDER BY p.published_at ASC, p.post_id ASC
                  LIMIT $3"
             );
             sqlx::query_as::<_, PostRow>(&sql)
