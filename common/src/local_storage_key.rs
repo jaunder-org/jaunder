@@ -4,44 +4,35 @@
 //! `&str` (ADR-0069). Product code names its owned keys here, above that primitive,
 //! so runtime callers do not pass transposable literals around.
 
-/// Emits [`LocalStorageKey`] from the one product-owned key table.
-macro_rules! local_storage_keys {
-    ($(
-        $variant:ident => $lit:literal;
-    )+) => {
-        /// A Jaunder-owned browser `localStorage` key.
-        ///
-        /// Closed by construction: parsing rejects any key not declared in the table,
-        /// while [`as_str`](Self::as_str) gives product accessors the raw key expected by
-        /// `client::storage`.
-        #[macros::text_enum(
-            error = UnknownLocalStorageKey,
-            message = "unknown localStorage key"
-        )]
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, strum::VariantArray)]
-        pub enum LocalStorageKey {
-            $(
-                #[strum(serialize = $lit)]
-                $variant,
-            )+
-        }
-
-        impl LocalStorageKey {
-            /// Returns the browser storage key string for this registry entry.
-            #[must_use]
-            pub const fn as_str(self) -> &'static str {
-                match self {
-                    $( Self::$variant => $lit, )+
-                }
-            }
-        }
-    };
+/// A Jaunder-owned browser `localStorage` key.
+///
+/// Closed by construction: parsing rejects any key not declared here, while
+/// [`as_str`](Self::as_str) gives product accessors the raw key expected by
+/// `client::storage`.
+#[macros::text_enum(
+    error = UnknownLocalStorageKey,
+    message = "unknown localStorage key"
+)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, strum::VariantArray)]
+pub enum LocalStorageKey {
+    #[strum(serialize = "jaunder_auth")]
+    AuthMarker,
+    #[strum(serialize = "jaunder_theme")]
+    Theme,
+    #[strum(serialize = "jaunder_home_redirect")]
+    HomeRedirectPreference,
 }
 
-local_storage_keys! {
-    AuthMarker => "jaunder_auth";
-    Theme => "jaunder_theme";
-    HomeRedirectPreference => "jaunder_home_redirect";
+impl LocalStorageKey {
+    /// Returns the browser storage key string for this registry entry.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AuthMarker => "jaunder_auth",
+            Self::Theme => "jaunder_theme",
+            Self::HomeRedirectPreference => "jaunder_home_redirect",
+        }
+    }
 }
 
 #[cfg(test)]
