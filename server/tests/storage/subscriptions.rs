@@ -172,15 +172,22 @@ async fn list_subscriber_summaries_resolves_labels_on_both_dialects(#[case] back
 
 #[apply(backends)]
 #[tokio::test]
-async fn subscriber_application_reads_reject_unicode_blank_stored_refs(#[case] backend: Backend) {
+async fn subscriber_bulk_reads_skip_unicode_blank_stored_refs(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let author = SeedUser::new().seed(state).await.user_id;
+    let valid_subscriber = SeedUser::new().seed(state).await;
     let local = local_channel_id(backend, &env).await;
+    let valid_identity = local_subscriber_identity(local, valid_subscriber.user_id);
+    let valid_subscription_id = state
+        .subscriptions
+        .subscribe(author, &valid_identity)
+        .await
+        .expect("subscribe valid user");
 
     // Unicode whitespace is deliberately beyond the portable database
-    // constraint, so insert it beneath the Rust write boundary to prove both
-    // application reads still enforce the full domain invariant.
+    // constraint, so insert it beneath the Rust write boundary. ADR-0122 says
+    // the bad typed column costs exactly this row rather than the whole scan.
     let sql = format!(
         "INSERT INTO subscriptions \
          (author_user_id, channel_id, subscriber_ref, status_id) \
@@ -189,26 +196,28 @@ async fn subscriber_application_reads_reject_unicode_blank_stored_refs(#[case] b
     );
     raw_exec(backend, &env, &sql).await;
 
-    let listing_error = state
+    let listing = state
         .subscriptions
         .list_subscribers(author)
         .await
-        .unwrap_err();
-    let listing_message = listing_error.to_string();
-    assert!(
-        listing_message.contains("subscriber reference must not be blank"),
-        "listing must reject the invalid typed decode, got: {listing_message}"
-    );
+        .expect("list subscribers");
+    assert_eq!(listing.len(), 1, "only the valid subscriber is returned");
+    assert_eq!(listing[0].subscription_id, valid_subscription_id);
+    assert_eq!(listing[0].subscriber, valid_identity);
+    assert_eq!(listing[0].status, SubscriptionStatus::Active);
 
-    let summary_error = state
+    let summaries = state
         .subscriptions
         .list_subscriber_summaries(author)
         .await
-        .unwrap_err();
-    let summary_message = summary_error.to_string();
-    assert!(
-        summary_message.contains("subscriber reference must not be blank"),
-        "summary must reject the invalid typed decode, got: {summary_message}"
+        .expect("list subscriber summaries");
+    assert_eq!(
+        summaries
+            .into_iter()
+            .map(|summary| (summary.subscription_id, summary.label))
+            .collect::<Vec<_>>(),
+        vec![(valid_subscription_id, valid_subscriber.username.to_string())],
+        "the summary omits only the invalid subscriber"
     );
 }
 
