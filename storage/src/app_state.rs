@@ -55,3 +55,29 @@ pub struct AppState {
     /// Queue of feed-regeneration events drained by the feed worker.
     pub feed_events: Arc<dyn FeedEventStorage>,
 }
+
+impl AppState {
+    /// Borrows the site configuration store.
+    #[must_use]
+    pub fn site_config(&self) -> &dyn SiteConfigStorage {
+        self.site_config.as_ref()
+    }
+
+    /// Borrows the user account store.
+    #[must_use]
+    pub fn users(&self) -> &dyn UserStorage {
+        self.users.as_ref()
+    }
+
+    /// Borrows the session store.
+    #[must_use]
+    pub fn sessions(&self) -> &dyn SessionStorage {
+        self.sessions.as_ref()
+    }
+
+    /// Borrows the invite store.
+    #[must_use]
+    pub fn invites(&self) -> &dyn InviteStorage {
+        self.invites.as_ref()
+    }
+}

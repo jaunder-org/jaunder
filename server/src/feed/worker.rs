@@ -76,6 +76,30 @@ impl FeedWorker {
         }
     }
 
+    /// Borrows the site configuration store.
+    #[must_use]
+    pub fn site_config(&self) -> &dyn SiteConfigStorage {
+        self.site_config.as_ref()
+    }
+
+    /// Borrows the post store.
+    #[must_use]
+    pub fn posts(&self) -> &dyn PostStorage {
+        self.posts.as_ref()
+    }
+
+    /// Borrows the rendered-feed cache store.
+    #[must_use]
+    pub fn feed_cache(&self) -> &dyn FeedCacheStorage {
+        self.feed_cache.as_ref()
+    }
+
+    /// Borrows the feed-regeneration event store.
+    #[must_use]
+    pub fn feed_events(&self) -> &dyn FeedEventStorage {
+        self.feed_events.as_ref()
+    }
+
     /// Enqueues feed regeneration for posts that crossed into "live" since the
     /// last pass — the durability mechanism for future-dated posts, which reach
     /// cached feeds with no accompanying write (immediate/backdated publishes
@@ -98,10 +122,10 @@ impl FeedWorker {
     pub async fn go_live_pass(&self, now: DateTime<Utc>) -> anyhow::Result<()> {
         let mut last_tick = self.last_tick.lock().await;
         let urls = match *last_tick {
-            None => self.posts.feed_urls_needing_catchup(now).await?,
+            None => self.posts().feed_urls_needing_catchup(now).await?,
             Some(last) => {
                 let mut urls = Vec::new();
-                for post in self.posts.list_posts_gone_live_between(last, now).await? {
+                for post in self.posts().list_posts_gone_live_between(last, now).await? {
                     urls.extend(affected_feed_urls(&post.username, &post.tag_slugs));
                 }
                 urls
@@ -120,7 +144,7 @@ impl FeedWorker {
         // storage call at all), a normal tick one, and a post-outage catch-up
         // as many bounded holds as it needs — never one unbounded hold.
         for chunk in urls.chunks(ENQUEUE_CHUNK) {
-            self.feed_events.enqueue_many(chunk).await?;
+            self.feed_events().enqueue_many(chunk).await?;
         }
         *last_tick = Some(now);
         Ok(())
@@ -142,7 +166,7 @@ impl FeedWorker {
         }
 
         let claimed = match self
-            .feed_events
+            .feed_events()
             .claim_pending_batch(
                 BATCH_LIMIT,
                 chrono::Duration::from_std(LEASE_TIMEOUT).unwrap_or(chrono::Duration::seconds(300)),
@@ -172,7 +196,7 @@ impl FeedWorker {
 
         // Read hub URL and site identity once per tick. Their absence is normal;
         // a failed read degrades the tick in the same way but must be reported.
-        let hub_url = match self.site_config.get_feeds_websub_hub_url().await {
+        let hub_url = match self.site_config().get_feeds_websub_hub_url().await {
             Ok(hub) => hub,
             Err(error) => {
                 report_continuation(
@@ -184,7 +208,7 @@ impl FeedWorker {
                 None
             }
         };
-        let identity = match self.site_config.get_identity().await {
+        let identity = match self.site_config().get_identity().await {
             Ok(identity) => Some(identity),
             Err(error) => {
                 report_continuation(
@@ -217,9 +241,9 @@ impl FeedWorker {
         let started = std::time::Instant::now();
 
         match regenerate_feed(
-            self.site_config.as_ref(),
-            self.posts.as_ref(),
-            self.feed_cache.as_ref(),
+            self.site_config(),
+            self.posts(),
+            self.feed_cache(),
             &feed_path,
         )
         .await
@@ -229,7 +253,7 @@ impl FeedWorker {
                 host::metrics::feed_regen_duration_ms(
                     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 );
-                if let Err(error) = self.feed_events.mark_regenerated(&ids).await {
+                if let Err(error) = self.feed_events().mark_regenerated(&ids).await {
                     report_continuation(
                         host::error::ErrorKind::Storage,
                         host::error::ErrorClass::Transient,
@@ -293,7 +317,7 @@ impl FeedWorker {
                 Ok(()) => {
                     host::metrics::websub_ping(host::metrics::PingOutcome::Success);
                     tracing::info!(feed_url = %feed_url, hub = %hub, attempt, "feed.websub.ping.succeeded");
-                    if let Err(error) = self.feed_events.mark_pinged(ids).await {
+                    if let Err(error) = self.feed_events().mark_pinged(ids).await {
                         report_continuation(
                             host::error::ErrorKind::Storage,
                             host::error::ErrorClass::Transient,
@@ -314,7 +338,7 @@ impl FeedWorker {
                     if next_attempt_idx >= BACKOFFS_SECS.len() {
                         host::metrics::websub_ping(host::metrics::PingOutcome::Exhausted);
                         if let Err(error) =
-                            self.feed_events.mark_exhausted(ids, &e.to_string()).await
+                            self.feed_events().mark_exhausted(ids, &e.to_string()).await
                         {
                             report_continuation(
                                 host::error::ErrorKind::Storage,
@@ -330,7 +354,7 @@ impl FeedWorker {
                         let next = Utc::now() + delay;
                         host::metrics::websub_ping(host::metrics::PingOutcome::Failed);
                         if let Err(error) = self
-                            .feed_events
+                            .feed_events()
                             .mark_failed(ids, &e.to_string(), next)
                             .await
                         {
@@ -347,7 +371,7 @@ impl FeedWorker {
         } else {
             // No hub configured — treat as complete.
             host::metrics::websub_ping(host::metrics::PingOutcome::NoHub);
-            if let Err(error) = self.feed_events.mark_pinged(ids).await {
+            if let Err(error) = self.feed_events().mark_pinged(ids).await {
                 report_continuation(
                     host::error::ErrorKind::Storage,
                     host::error::ErrorClass::Transient,
@@ -373,7 +397,7 @@ impl FeedWorker {
         let attempt_usize = usize::try_from(attempt).unwrap_or(0);
         let next_attempt_idx = attempt_usize.saturating_sub(1);
         if next_attempt_idx >= BACKOFFS_SECS.len() {
-            if let Err(error) = self.feed_events.mark_exhausted(ids, &e.to_string()).await {
+            if let Err(error) = self.feed_events().mark_exhausted(ids, &e.to_string()).await {
                 report_continuation(
                     host::error::ErrorKind::Storage,
                     host::error::ErrorClass::Transient,
@@ -387,7 +411,7 @@ impl FeedWorker {
                     i64::try_from(BACKOFFS_SECS[next_attempt_idx]).unwrap_or(60),
                 );
             if let Err(error) = self
-                .feed_events
+                .feed_events()
                 .mark_failed(ids, &e.to_string(), next)
                 .await
             {
