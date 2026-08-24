@@ -245,6 +245,7 @@ impl ContentHash {
 ///
 /// There is no public decoded-intermediate filename type:
 /// ```compile_fail
+/// # use common::media::Filename;
 /// use common::media::ProfferedFilename;
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Hash, StrNewtype)]
