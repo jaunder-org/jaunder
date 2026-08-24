@@ -4,7 +4,9 @@ use axum::{
 };
 use common::etag::ETag;
 use common::seed::{PageSeed, TimelinePage};
-use web::app::{PREPAINT_SCRIPT, render_head, render_shell};
+use web::app::{
+    GLUE_URL, MODULE_BEFORE_INIT_MARK, PREPAINT_SCRIPT, WASM_URL, render_head, render_shell,
+};
 use web::error::{SwallowedSource, report_swallowed};
 use web::posts::authored_post;
 
@@ -27,19 +29,21 @@ pub fn document(seed: &PageSeed) -> String {
             "<!DOCTYPE html><html lang=\"en\"><head>{prepaint}{head}</head><body>",
             "<div id=\"app\">{body}</div>",
             "<script type=\"application/json\" id=\"jaunder-seed\">{blob}</script>",
-            "<script type=\"module\">import {{initMeasured}} from \"/pkg/jaunder.js\"; initMeasured(\"/pkg/jaunder.wasm\");</script>",
+            "<script type=\"module\">import {{initMeasured}} from \"{glue_url}\"; performance.mark(\"{module_before_init_mark}\"); initMeasured(\"{wasm_url}\");</script>",
             "</body></html>",
         ),
         prepaint = PREPAINT_SCRIPT,
         head = head,
         body = body,
+        glue_url = GLUE_URL,
+        module_before_init_mark = MODULE_BEFORE_INIT_MARK,
+        wasm_url = WASM_URL,
         // A verbatim `</script` inside the JSON would close the blob script
         // early; `<\/` is an equivalent JSON escape the parser reads back as
         // `</`. This is the only HTML-in-JSON breakout to neutralize.
         blob = blob.replace("</", "<\\/"),
     )
 }
-
 /// Build a 200 response for `seed` — with a strong `ETag` (content hash, feed
 /// convention) and cache headers — or a 304 when the client's `If-None-Match`
 /// already matches. Identical `seed` ⇒ identical bytes ⇒ identical `ETag`.
@@ -250,6 +254,31 @@ mod tests {
             web::app::WASM_URL,
             "the boot URL must be web::app::WASM_URL, the single definition every \
              copy of this path is checked against (#866)"
+        );
+    }
+    #[test]
+    fn document_marks_module_before_init_immediately_before_wasm_init() {
+        use super::document;
+        use common::seed::{PageSeed, TimelinePage};
+        let doc = document(&PageSeed::SiteTimeline(TimelinePage {
+            posts: vec![],
+            next_cursor: None,
+            has_more: false,
+        }));
+        let import = format!(r#"import {{initMeasured}} from "{}";"#, web::app::GLUE_URL);
+        let mark = format!(
+            r#"performance.mark("{}");"#,
+            web::app::MODULE_BEFORE_INIT_MARK
+        );
+        let init = format!(r#"initMeasured("{}")"#, web::app::WASM_URL);
+        let import_index = doc.find(&import).expect("projector shell imports glue");
+        let mark_index = doc
+            .find(&mark)
+            .expect("projector shell marks immediately before init");
+        let init_index = doc.find(&init).expect("projector shell calls initMeasured");
+        assert!(
+            import_index < mark_index && mark_index < init_index,
+            "projector document must keep import → mark → init order: {doc}"
         );
     }
 }
