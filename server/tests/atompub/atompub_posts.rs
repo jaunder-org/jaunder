@@ -881,7 +881,7 @@ async fn incoming_j_slug_is_ignored(#[case] backend: Backend) {
     assert_eq!(response.status(), StatusCode::CREATED);
     let post_id = location_post_id(&response);
 
-    let viewer = common::visibility::ViewerIdentity::Anonymous;
+    let viewer = common::visibility::ViewerIdentity::local(session.user_id);
     let rec = state
         .posts
         .get_post_by_id(PostId::from(post_id), &viewer)
@@ -920,7 +920,7 @@ async fn create_with_blank_title_stores_an_untitled_post(#[case] backend: Backen
     assert_eq!(response.status(), StatusCode::CREATED);
     let post_id = location_post_id(&response);
 
-    let viewer = common::visibility::ViewerIdentity::Anonymous;
+    let viewer = common::visibility::ViewerIdentity::local(session.user_id);
     let rec = state
         .posts
         .get_post_by_id(PostId::from(post_id), &viewer)
@@ -1522,14 +1522,18 @@ async fn member_get_serves_owner_non_public_post(#[case] backend: Backend) {
 }
 
 #[apply(backends_matrix)]
-#[case(DefaultAudience::Public, AudienceTarget::Public)]
-#[case(DefaultAudience::Subscribers, AudienceTarget::Subscribers)]
-#[case(DefaultAudience::Private, AudienceTarget::Private)]
+#[case(DefaultAudience::Public, vec![AudienceTarget::Public])]
+#[case(
+    DefaultAudience::Subscribers,
+    vec![AudienceTarget::Subscribers]
+)]
+// Private is the empty per-Post audience, so it persists no audience rows.
+#[case(DefaultAudience::Private, vec![])]
 #[tokio::test]
 async fn create_widens_each_default_audience(
     backend: Backend,
     #[case] default_audience: DefaultAudience,
-    #[case] expected_audience: AudienceTarget,
+    #[case] expected_audiences: Vec<AudienceTarget>,
 ) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
@@ -1556,8 +1560,7 @@ async fn create_widens_each_default_audience(
         .await
         .unwrap();
     assert_eq!(
-        audiences,
-        vec![expected_audience],
+        audiences, expected_audiences,
         "AtomPub create must widen the configured DefaultAudience"
     );
 }
@@ -1590,11 +1593,11 @@ async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
     assert_eq!(response.status(), StatusCode::CREATED);
     let post_id = location_post_id(&response);
 
-    // The stored post carries the explicit future timestamp.
-    let viewer = common::visibility::ViewerIdentity::Anonymous;
+    // The owner may inspect the scheduled private post's persisted timestamp.
+    let owner = common::visibility::ViewerIdentity::local(session.user_id);
     let rec = state
         .posts
-        .get_post_by_id(PostId::from(post_id), &viewer)
+        .get_post_by_id(PostId::from(post_id), &owner)
         .await
         .unwrap()
         .unwrap();
@@ -1602,6 +1605,8 @@ async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
         rec.published_at.unwrap().to_rfc3339(),
         "2099-01-01T00:00:00+00:00"
     );
+
+    let viewer = common::visibility::ViewerIdentity::Anonymous;
 
     // ...and it is invisible on the public permalink at "now".
     let public = state
@@ -1638,7 +1643,7 @@ async fn create_with_past_published_is_live_backdated(#[case] backend: Backend) 
     assert_eq!(response.status(), StatusCode::CREATED);
     let post_id = location_post_id(&response);
 
-    let viewer = common::visibility::ViewerIdentity::Anonymous;
+    let viewer = common::visibility::ViewerIdentity::local(session.user_id);
     let rec = state
         .posts
         .get_post_by_id(PostId::from(post_id), &viewer)
