@@ -59,6 +59,26 @@ impl<S: Send + Sync> FromRequestParts<S> for PostServices {
     }
 }
 
+impl PostServices {
+    /// Borrows the post store for one handler operation.
+    #[must_use]
+    pub fn posts(&self) -> &dyn PostStorage {
+        self.posts.as_ref()
+    }
+
+    /// Borrows the per-user configuration store for one handler operation.
+    #[must_use]
+    pub fn user_config(&self) -> &dyn UserConfigStorage {
+        self.user_config.as_ref()
+    }
+
+    /// Borrows the site configuration store for one handler operation.
+    #[must_use]
+    pub fn site_config(&self) -> &dyn SiteConfigStorage {
+        self.site_config.as_ref()
+    }
+}
+
 /// A strong, content-hash `ETag` for a post: `"sha256-<hex>"` over the post's
 /// content fields (title, stored body, format, summary, tag display names, and
 /// the draft flag) — never a timestamp. So identical content yields an identical
@@ -125,12 +145,13 @@ pub struct CollectionPaging {
 /// Returns `500` if storage fails.
 #[tracing::instrument(name = "atompub.posts.collection_get", skip_all)]
 pub async fn collection_get(
-    Extension(posts): Extension<Arc<dyn PostStorage>>,
-    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
+    services: PostServices,
     auth_user: AuthUser,
     Path(username): Path<Username>,
     Query(paging): Query<CollectionPaging>,
 ) -> Result<Response, HandlerError> {
+    let posts = services.posts();
+    let site_config = services.site_config();
     super::require_user_match(&auth_user, &username)?;
 
     let limit = paging.limit.map_or(DEFAULT_PAGE_SIZE, PageSize::clamped);
@@ -154,7 +175,7 @@ pub async fn collection_get(
         records.truncate(limit.page_len());
     }
 
-    let base = required_base_url(site_config.as_ref()).await?;
+    let base = required_base_url(site_config).await?;
     let collection_path = format!("/atompub/{username}/posts");
     let collection_url: FeedUrl = compose(&base, &collection_path);
 
@@ -237,13 +258,14 @@ async fn owned_post(
 /// Returns `500` if storage fails.
 #[tracing::instrument(name = "atompub.posts.member_get", skip_all)]
 pub async fn member_get(
-    Extension(posts): Extension<Arc<dyn PostStorage>>,
-    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
+    services: PostServices,
     auth_user: AuthUser,
     Path((username, post_id)): Path<(Username, PostId)>,
 ) -> Result<Response, HandlerError> {
-    let post = owned_post(posts.as_ref(), &auth_user, &username, post_id).await?;
-    let base = required_base_url(site_config.as_ref()).await?;
+    let posts = services.posts();
+    let site_config = services.site_config();
+    let post = owned_post(posts, &auth_user, &username, post_id).await?;
+    let base = required_base_url(site_config).await?;
     let entry = post_to_entry(&post, &base);
     let xml = entry_to_xml(&entry)?;
     Ok((
@@ -266,12 +288,13 @@ pub async fn member_get(
 /// Returns `500` if storage fails.
 #[tracing::instrument(name = "atompub.posts.member_delete", skip_all)]
 pub async fn member_delete(
-    Extension(posts): Extension<Arc<dyn PostStorage>>,
+    services: PostServices,
     auth_user: AuthUser,
     Path((username, post_id)): Path<(Username, PostId)>,
     headers: HeaderMap,
 ) -> Result<Response, HandlerError> {
-    let post = owned_post(posts.as_ref(), &auth_user, &username, post_id).await?;
+    let posts = services.posts();
+    let post = owned_post(posts, &auth_user, &username, post_id).await?;
 
     // Conditional delete: honour `If-Match` against the content ETag, as `member_put` does.
     if !if_match_satisfied(&headers, &etag_for(&post)) {
@@ -297,15 +320,12 @@ pub async fn collection_post(
     headers: HeaderMap,
     body: String,
 ) -> Result<Response, HandlerError> {
-    let PostServices {
-        posts,
-        user_config,
-        site_config,
-    } = services;
+    let posts = services.posts();
+    let user_config = services.user_config();
+    let site_config = services.site_config();
     super::require_user_match(&auth_user, &username)?;
     let entry: Entry = body.parse()?;
-    let default_format =
-        storage::get_default_post_format(user_config.as_ref(), auth_user.user_id).await?;
+    let default_format = storage::get_default_post_format(user_config, auth_user.user_id).await?;
     let fields = entry_to_post_fields(&entry, default_format)?;
     // Bound the tag set before anything is written: an over-cap entry must be
     // rejected, not created-then-rejected (#771 D9/D12, ADR-0092).
@@ -329,7 +349,7 @@ pub async fn collection_post(
         .filter(|s| !s.is_empty());
 
     let created = storage::perform_post_creation(
-        posts.as_ref(),
+        posts,
         storage::PostCreation {
             user_id: auth_user.user_id,
             body: fields.body,
@@ -345,7 +365,7 @@ pub async fn collection_post(
     )
     .await;
 
-    let base = required_base_url(site_config.as_ref()).await?;
+    let base = required_base_url(site_config).await?;
     // Re-fetch as the authenticated owner so a non-Public default audience is not
     // hidden, and so the response entry carries the post's tags.
     let viewer = owner_viewer(&auth_user);
@@ -419,20 +439,17 @@ pub async fn member_put(
     headers: HeaderMap,
     body: String,
 ) -> Result<Response, HandlerError> {
-    let PostServices {
-        posts,
-        user_config,
-        site_config,
-    } = services;
-    let current = owned_post(posts.as_ref(), &auth_user, &username, post_id).await?;
+    let posts = services.posts();
+    let user_config = services.user_config();
+    let site_config = services.site_config();
+    let current = owned_post(posts, &auth_user, &username, post_id).await?;
 
     if !if_match_satisfied(&headers, &etag_for(&current)) {
         return Err(HandlerError::PreconditionFailed);
     }
 
     let entry: Entry = body.parse()?;
-    let default_format =
-        storage::get_default_post_format(user_config.as_ref(), auth_user.user_id).await?;
+    let default_format = storage::get_default_post_format(user_config, auth_user.user_id).await?;
     let fields = entry_to_post_fields(&entry, default_format)?;
     // Bound the tag set before anything is written: an over-cap entry must be
     // rejected, not updated-then-rejected (#771 D9/D12, ADR-0092).
@@ -442,7 +459,7 @@ pub async fn member_put(
     // across the edit rather than resetting it.
     let audiences = posts.get_post_audiences(post_id).await?;
     storage::perform_post_update(
-        posts.as_ref(),
+        posts,
         storage::PostUpdate {
             post_id,
             editor_user_id: auth_user.user_id,
@@ -475,7 +492,7 @@ pub async fn member_put(
         .await?
         .ok_or(HandlerError::Invariant)?;
 
-    let base = required_base_url(site_config.as_ref()).await?;
+    let base = required_base_url(site_config).await?;
     let entry_out = post_to_entry(&post, &base);
     let xml = entry_to_xml(&entry_out)?;
 

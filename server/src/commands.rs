@@ -225,7 +225,7 @@ pub async fn cmd_user_create(
     };
 
     let user_id = create_command_user(
-        state.users.as_ref(),
+        state.users(),
         username,
         &password,
         display_name,
@@ -274,13 +274,7 @@ pub async fn app_password_create(
     username: &Username,
     label: &SessionLabel,
 ) -> anyhow::Result<RawToken> {
-    app_password_create_with(
-        state.users.as_ref(),
-        state.sessions.as_ref(),
-        username,
-        label,
-    )
-    .await
+    app_password_create_with(state.users(), state.sessions(), username, label).await
 }
 
 /// CLI wrapper: opens the database, mints an app password, prints it to stdout.
@@ -320,11 +314,11 @@ pub async fn cmd_user_invite(
     let expires_at =
         chrono::Utc::now() + chrono::Duration::hours(expires_in.unwrap_or_default().value());
 
-    let code = state.invites.create_invite(expires_at).await?;
+    let code = state.invites().create_invite(expires_at).await?;
     host::metrics::invite(host::metrics::InviteEvent::Created);
     // Deliberate operator-facing reveal via `AsRef` (InviteCode has no Display/serde). With a
     // configured base URL, print a ready-to-send invitation link; otherwise the bare code.
-    match state.site_config.get_identity().await?.base_url {
+    match state.site_config().get_identity().await?.base_url {
         Some(base_url) => {
             let register_url: MailConfirmUrl = compose(&base_url, "/register");
             println!("{register_url}?invite_code={}", code.as_ref());
@@ -345,7 +339,7 @@ pub async fn cmd_smtp_test(storage: &StorageArgs, to: &Email) -> anyhow::Result<
         .await
         .context(INIT_FIRST_CONTEXT)?;
 
-    smtp_test_with(state.site_config.as_ref(), to, |config| {
+    smtp_test_with(state.site_config(), to, |config| {
         Ok(Box::new(LettreMailSender::from_config(config)?) as Box<dyn MailSender>)
     })
     .await
@@ -727,11 +721,8 @@ pub async fn prepare_server(
     )
     .start()
     .await?;
-    let mailer = crate::mailer::build_mailer(
-        db.site_config.as_ref(),
-        capture::file(capture::Stream::Mail),
-    )
-    .await?;
+    let mailer =
+        crate::mailer::build_mailer(db.site_config(), capture::file(capture::Stream::Mail)).await?;
     let router = crate::create_router(db, mailer, prod, storage.storage_path.clone());
     let listener = tokio::net::TcpListener::bind(bind).await?;
     // `local_addr` cannot fail on a just-bound listener; fall back to the
