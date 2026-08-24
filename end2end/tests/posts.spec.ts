@@ -914,6 +914,28 @@ test("unpublishing from a permalink navigates to /drafts without a full reload",
   expect(unpublishNoReload).toBe(true);
 });
 
+// #735: `/app` renders the compact InlineComposer, whose optional summary field
+// uses the shared PostSummary validation gate but has its own action buttons.
+test("inline composer: over-long summary shows an inline error and gates submit", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/app");
+  await waitForSelector(page, ".j-composer");
+
+  await page.fill(`.j-composer ${SEL.postBody}`, "Compact summary gate");
+  const summaryInput = page.locator(`.j-composer ${SEL.postSummary}`);
+  await summaryInput.fill("a".repeat(501));
+  await summaryInput.blur();
+
+  await expect(page.locator(".j-composer .error")).toBeVisible();
+  await expect(
+    page.locator(`.j-composer ${SEL.publishButton("false")}`),
+  ).toBeDisabled();
+  await expect(
+    page.locator(`.j-composer ${SEL.publishButton("true")}`),
+  ).toBeDisabled();
+});
+
 test("inline composer: published post appears in timeline without page reload", async ({
   registeredPage,
 }, testInfo) => {
