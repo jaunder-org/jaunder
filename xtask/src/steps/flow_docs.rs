@@ -14,8 +14,7 @@ use syn::visit::Visit;
 
 use crate::files;
 use crate::result::StepResult;
-use crate::server_fn_coverage::Snapshot;
-use crate::server_fn_coverage::io::{inventory, read_artifact};
+use crate::server_fn_coverage::io::{inventory, read_snapshot};
 
 const STEP: &str = "flow-docs";
 const FLOW_DIR: &str = "docs/flows";
@@ -137,7 +136,7 @@ fn check(root: &Path) -> Result<Report> {
         .with_context(|| format!("scanning {}", flow_dir.display()))?;
     let routes = mounted_routes(root)?;
     let endpoints = endpoint_inventory(root)?;
-    let snapshot: Snapshot = read_artifact(&root.join(SNAPSHOT_PATH))
+    let snapshot = read_snapshot(&root.join(SNAPSHOT_PATH))
         .with_context(|| format!("reading {}", root.join(SNAPSHOT_PATH).display()))?;
 
     let mut refs = FlowRefs::default();
@@ -1069,7 +1068,9 @@ graph TD
     }
 
     #[test]
-    fn evidence_file_does_not_affect_the_report() {
+    fn retired_evidence_file_does_not_affect_the_report() {
+        // Issue #757 made the snapshot this step's only generated input. Keep a
+        // malformed retired file inert so reintroducing an evidence read bites.
         let tmp = base_fixture();
         write_server_fns(tmp.path(), &[("posts", &["create"])]);
         write_snapshot(tmp.path(), &["posts::create"]);

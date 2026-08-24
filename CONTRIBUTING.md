@@ -803,23 +803,21 @@ per-commit knob.
 **`#[server]` flow coverage is a separate gate** (#681, ADR — _empirical
 server-fn flow coverage_). Line coverage says a fn's body ran under _some_ test;
 this says a real browser session actually drove the endpoint. It is derived from
-the `sqlite × chromium` e2e run's OTLP traces, and committed as two files:
+the `sqlite × chromium` e2e run's OTLP traces. Its sole committed generated
+artifact is `docs/coverage/server-fns.json`, which records the covered
+`<vertical>::<ident>` set plus orphan reasons and is compared byte-for-byte. Do
+not hand-edit it: `regenerate` rewrites this snapshot, and `verify` recomputes
+and compares it from an authoritative capture. The static lane reads the
+snapshot together with the source-derived server-fn inventory.
 
-| file                                     | what it holds                                          | compared?              |
-| ---------------------------------------- | ------------------------------------------------------ | ---------------------- |
-| `docs/coverage/server-fns.json`          | the covered `<vertical>::<ident>` set + orphan reasons | **yes**, byte-for-byte |
-| `docs/coverage/server-fns-evidence.json` | which tests drove each fn                              | no                     |
-
-Both files are generated — do not hand-edit; `regenerate` writes both, and the
-static lane fails if their key sets disagree.
-
-**Only the fn set is compared, and that is deliberate (#745).** The verdict has
-never read a test title, and the titles are not reproducible: two runs of the
-same e2e derivation on the same tree disagree about them, because a test that
-ends mid-navigation leaves its page booting and the boot is truncated at a
-different point each run. Byte-comparing them made the gate go red on PRs that
-changed nothing. Nothing is misattributed — see ADR-0081 before concluding there
-is a trace-propagation bug.
+**Per-test attribution is structural but intentionally not persisted (#757).**
+The extractor still uses the propagated `e2e.test` span id to distinguish
+requests driven inside a test from unattributed orphan traffic. It does not
+commit test titles, because their sets are not reproducible: a test that ends
+mid-navigation leaves its page booting, and the boot is truncated at a different
+point each run. An uncompared title file could also go stale and therefore
+cannot serve as durable flow proof. If request-to-test attribution is needed,
+inspect a fresh trace capture; do not infer it from the committed snapshot.
 
 **Adding a `#[server]` fn therefore requires an e2e flow that drives it**, or
 the fast lane reddens immediately — `server-fn-coverage` runs in
@@ -827,8 +825,9 @@ the fast lane reddens immediately — `server-fn-coverage` runs in
 the e2e matrix to find out:
 
 ```bash
-cargo xtask e2e sqlite chromium          # produces the capture
-cargo xtask server-fn-coverage regenerate
+cargo xtask e2e sqlite chromium          # produces the authoritative capture
+cargo xtask server-fn-coverage regenerate # rewrites server-fns.json only
+cargo xtask server-fn-coverage verify     # compares that snapshot with the capture
 ```
 
 One further property is worth knowing before you fight the gate:

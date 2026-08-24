@@ -1,5 +1,5 @@
 //! Filesystem edges of the flow-coverage gate (#681): the syn inventory, the
-//! committed artifacts, and reading a capture bundle.
+//! committed snapshot, and reading a capture bundle.
 //!
 //! **Everything here fails closed.** A missing, empty, or unparseable capture is
 //! an error, never "no uncovered fns" — a silent pass would make the whole
@@ -10,7 +10,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
-use super::{Coverage, extract, render};
+use super::{Coverage, Snapshot, extract, render};
 use crate::files;
 use crate::server_fns::{ServerFn, module_path_of, server_fns_in};
 use crate::traces::parse::{Filters, parse_spans};
@@ -19,9 +19,6 @@ use crate::traces::parse::{Filters, parse_spans};
 pub const WEB_SRC: &str = "web/src";
 /// The committed, generated coverage snapshot — the byte-compared artifact.
 pub const SNAPSHOT_PATH: &str = "docs/coverage/server-fns.json";
-/// The committed, generated test-title evidence — regenerated beside the
-/// snapshot, never compared (#745).
-pub const EVIDENCE_PATH: &str = "docs/coverage/server-fns-evidence.json";
 /// Where `cargo xtask e2e sqlite chromium` lifts the authoritative capture.
 pub const CAPTURE_PATH: &str = ".xtask/diagnostics/e2e-sqlite-chromium/capture-sqlite.tar.gz";
 
@@ -81,16 +78,11 @@ pub fn coverage_from_capture(tarball: &Path, inventory: &[ServerFn]) -> Result<C
     coverage_from_jsonl(&jsonl, inventory)
 }
 
-/// Read a generated coverage artifact — [`Snapshot`] or [`Evidence`] — or fail
-/// naming the remedy.
+/// Read the generated coverage snapshot or fail naming the remedy.
 ///
-/// One function rather than one per artifact, so the two cannot acquire
-/// different read semantics. What they share is that **both fail closed**: a
-/// missing or unparseable file is an error, never an empty value. An absent
-/// evidence file would disagree with the snapshot on every covered fn, so
-/// `evidence_verdict` would report one violation per fn instead of the single
-/// fact that matters — it is not there.
-pub fn read_artifact<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+/// Missing or unparseable input is an error, never an empty value: static
+/// verification must fail closed when the sole artifact is absent or malformed.
+pub fn read_snapshot(path: &Path) -> Result<Snapshot> {
     let raw = std::fs::read_to_string(path).with_context(|| {
         format!(
             "reading {} — if it does not exist yet, generate it with `{}`",
@@ -101,15 +93,14 @@ pub fn read_artifact<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
 }
 
-/// Render a generated coverage artifact and write it, creating `docs/coverage/`
-/// if needed. The mirror of [`read_artifact`], and one function for the same
-/// reason: the two artifacts must not acquire different write semantics.
-pub fn write_artifact<T: serde::Serialize>(path: &Path, value: &T) -> Result<()> {
+/// Render and write the generated coverage snapshot, creating
+/// `docs/coverage/` if needed.
+pub fn write_snapshot(path: &Path, snapshot: &Snapshot) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
     }
-    std::fs::write(path, render(value)?).with_context(|| format!("writing {}", path.display()))
+    std::fs::write(path, render(snapshot)?).with_context(|| format!("writing {}", path.display()))
 }
 
 #[cfg(test)]
@@ -117,9 +108,6 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::*;
-    // Only the tests name the artifact types now that the read/write helpers are
-    // generic; importing them at module scope would be an unused-import warning.
-    use crate::server_fn_coverage::{Evidence, Snapshot};
 
     fn empty_inventory() -> Vec<ServerFn> {
         Vec::new()
@@ -161,37 +149,20 @@ mod tests {
 
     #[test]
     fn missing_snapshot_error_names_the_regenerate_command() {
-        let err = read_artifact::<Snapshot>(Path::new("/nonexistent-snapshot.json")).unwrap_err();
+        let err = read_snapshot(Path::new("/nonexistent-snapshot.json")).unwrap_err();
         let chain = format!("{err:#}");
         assert!(chain.contains(super::super::REGENERATE_CMD), "{chain}");
     }
 
     #[test]
-    fn missing_evidence_fails_closed_rather_than_reading_as_empty() {
-        // An absent evidence file would disagree with the snapshot on every
-        // covered fn, which is a confusing way to report "it is gone".
-        let err = read_artifact::<Evidence>(Path::new("/nonexistent-evidence.json")).unwrap_err();
-        let chain = format!("{err:#}");
-        assert!(chain.contains(super::super::REGENERATE_CMD), "{chain}");
-    }
-
-    #[test]
-    fn unparseable_evidence_fails_closed() {
+    fn write_snapshot_creates_the_directory_and_renders_stably() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let path = tmp.path().join("evidence.json");
-        std::fs::write(&path, "{not json").expect("write");
-        assert!(read_artifact::<Evidence>(&path).is_err());
-    }
-
-    #[test]
-    fn write_artifact_creates_the_directory_and_renders_stably() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let path = tmp.path().join("nested").join("evidence.json");
-        let (_, e) = one_entry_coverage().split();
-        write_artifact(&path, &e).expect("writes");
+        let path = tmp.path().join("nested").join("snapshot.json");
+        let snapshot = one_entry_coverage().into_snapshot();
+        write_snapshot(&path, &snapshot).expect("writes");
         assert_eq!(
             std::fs::read_to_string(&path).expect("read"),
-            render(&e).expect("renders")
+            render(&snapshot).expect("renders")
         );
     }
 }

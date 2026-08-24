@@ -1,9 +1,9 @@
 //! Both lanes of the `#[server]` flow-coverage gate (#681).
 //!
-//! **The static lane** ([`run`]) belongs to `check` / `validate --no-e2e`: it reads
-//! only committed files plus the syn inventory — no traces, no e2e run — so adding
-//! a `#[server]` fn with no browser flow reddens the build immediately, without
-//! waiting for the e2e matrix.
+//! **The static lane** ([`run`]) belongs to `check` / `validate --no-e2e`: it
+//! reads the committed snapshot plus the source-derived inventory — no traces,
+//! no e2e run — so adding a `#[server]` fn with no browser flow reddens the
+//! build immediately, without waiting for the e2e matrix.
 //!
 //! **The e2e lane** ([`from_capture`], [`verify_after_combo`]) is the half that
 //! keeps the snapshot honest: only a real run produces traces, so only there can
@@ -23,12 +23,10 @@ use anyhow::Result;
 
 use crate::result::{CommandResult, StepResult};
 use crate::server_fn_coverage::io::{
-    CAPTURE_PATH, EVIDENCE_PATH, SNAPSHOT_PATH, WEB_SRC, coverage_from_capture, inventory,
-    read_artifact, write_artifact,
+    CAPTURE_PATH, SNAPSHOT_PATH, WEB_SRC, coverage_from_capture, inventory, read_snapshot,
+    write_snapshot,
 };
-use crate::server_fn_coverage::{
-    Evidence, REGENERATE_CMD, Snapshot, evidence_verdict, render, verdict,
-};
+use crate::server_fn_coverage::{REGENERATE_CMD, Snapshot, render, verdict};
 
 /// The static lane's step name.
 const STATIC_STEP: &str = "server-fn-coverage";
@@ -45,20 +43,14 @@ const AUTHORITATIVE: (&str, &str) = ("sqlite", "chromium");
 
 /// The static-lane check, over explicit paths so it is testable without the repo.
 ///
-/// A missing snapshot, an unscannable `web/src`, or an unparseable artifact is a
+/// A missing snapshot, an unscannable `web/src`, or an unparseable snapshot is a
 /// **failure**, never a pass: the failure mode this gate guards against and the
 /// failure mode of its own plumbing would otherwise look identical.
-/// The two generated artifacts are adjacent in this signature and in
-/// [`regenerate_or_verify`]'s, so the pair reads the same way in both.
-fn check(web_src: &Path, snapshot_path: &Path, evidence_path: &Path) -> StepResult {
-    let (inventory, snapshot, evidence) = match (
-        inventory(web_src),
-        read_artifact::<Snapshot>(snapshot_path),
-        read_artifact::<Evidence>(evidence_path),
-    ) {
-        (Ok(i), Ok(s), Ok(e)) => (i, s, e),
-        (i, s, e) => {
-            let detail = [i.err(), s.err(), e.err()]
+fn check(web_src: &Path, snapshot_path: &Path) -> StepResult {
+    let (inventory, snapshot) = match (inventory(web_src), read_snapshot(snapshot_path)) {
+        (Ok(inventory), Ok(snapshot)) => (inventory, snapshot),
+        (inventory, snapshot) => {
+            let detail = [inventory.err(), snapshot.err()]
                 .into_iter()
                 .flatten()
                 .map(|e| format!("{e:#}"))
@@ -68,10 +60,7 @@ fn check(web_src: &Path, snapshot_path: &Path, evidence_path: &Path) -> StepResu
         }
     };
 
-    // Both rules in one step, so a failing run reports every reason at once
-    // rather than making an author fix them one gate run at a time.
-    let mut violations = verdict(&inventory, &snapshot);
-    violations.extend(evidence_verdict(&snapshot, &evidence));
+    let violations = verdict(&inventory, &snapshot);
     if violations.is_empty() {
         return StepResult::ok(STATIC_STEP).detail(format!(
             "{} server fn(s) accounted for ({} covered)",
@@ -82,14 +71,10 @@ fn check(web_src: &Path, snapshot_path: &Path, evidence_path: &Path) -> StepResu
     StepResult::fail(STATIC_STEP).detail(violations.join("\n"))
 }
 
-/// The static lane over the repo's real artifacts. Runs in `check` and
+/// The static lane over the repo's real snapshot. Runs in `check` and
 /// `validate --no-e2e`.
 pub fn run(result: &mut CommandResult) {
-    result.push(check(
-        Path::new(WEB_SRC),
-        Path::new(SNAPSHOT_PATH),
-        Path::new(EVIDENCE_PATH),
-    ));
+    result.push(check(Path::new(WEB_SRC), Path::new(SNAPSHOT_PATH)));
 }
 
 /// The e2e lane's core, over explicit paths so it is testable without the repo.
@@ -101,7 +86,6 @@ fn regenerate_or_verify(
     web_src: &Path,
     capture: &Path,
     snapshot_path: &Path,
-    evidence_path: &Path,
     regenerate: bool,
 ) -> Result<StepResult> {
     let name = if regenerate {
@@ -110,26 +94,15 @@ fn regenerate_or_verify(
         VERIFY_STEP
     };
     let inventory = inventory(web_src)?;
-    let coverage = coverage_from_capture(capture, &inventory)?;
-    let (snapshot, evidence) = coverage.split();
+    let snapshot = coverage_from_capture(capture, &inventory)?.into_snapshot();
     let covered = snapshot.covered.len();
 
     if regenerate {
-        let orphans = snapshot.orphans.len();
-        // Both, always: `evidence_verdict` fails on a key-set disagreement, so
-        // writing one without the other would redden the very next static check.
-        write_artifact(snapshot_path, &snapshot)?;
-        write_artifact(evidence_path, &evidence)?;
-        return Ok(StepResult::ok(name).detail(format!(
-            "{covered} covered, {orphans} fn(s) with unattributed hits → {} + {}",
-            snapshot_path.display(),
-            evidence_path.display()
-        )));
+        return regenerate_snapshot(name, snapshot_path, &snapshot);
     }
 
-    // Only the snapshot is compared. The evidence file is a timing-dependent
-    // observation (see `snapshot.rs`'s module docs) and comparing it is exactly
-    // the bug #745 fixed.
+    // The deterministic snapshot is the sole generated artifact and the sole
+    // value compared by verification.
     let committed = std::fs::read_to_string(snapshot_path).unwrap_or_default();
     compare_rendered(
         name,
@@ -138,6 +111,23 @@ fn regenerate_or_verify(
         snapshot_path,
         covered,
     )
+}
+
+/// Write the one generated artifact from an already-derived snapshot. Keeping
+/// this edge separate makes the one-output regeneration contract testable
+/// without manufacturing a capture tarball.
+fn regenerate_snapshot(
+    name: &'static str,
+    snapshot_path: &Path,
+    snapshot: &Snapshot,
+) -> Result<StepResult> {
+    let covered = snapshot.covered.len();
+    let orphans = snapshot.orphans.len();
+    write_snapshot(snapshot_path, snapshot)?;
+    Ok(StepResult::ok(name).detail(format!(
+        "{covered} covered, {orphans} fn(s) with unattributed hits → {}",
+        snapshot_path.display()
+    )))
 }
 
 /// The verify verdict for bytes already derived — pure over its inputs, so the
@@ -162,15 +152,13 @@ fn compare_rendered(
     )))
 }
 
-/// Derive coverage from an e2e capture over the repo's real roots, and either
-/// rewrite the committed artifacts (`regenerate`) or fail on any difference from
-/// the committed snapshot (`verify`).
+/// rewrite the committed snapshot (`regenerate`) or fail on any difference from
+/// it (`verify`).
 pub fn from_capture(capture: &Path, regenerate: bool) -> Result<StepResult> {
     regenerate_or_verify(
         Path::new(WEB_SRC),
         capture,
         Path::new(SNAPSHOT_PATH),
-        Path::new(EVIDENCE_PATH),
         regenerate,
     )
 }
@@ -206,7 +194,7 @@ mod tests {
     /// A `web/src`-shaped tree with one `#[macros::server]` fn per ident given, all
     /// in the [`VERTICAL`] vertical — a fn at the crate root has no vertical, so its
     /// coverage key would be a degenerate `::<ident>` and pin nothing about the
-    /// real artifacts. The endpoints are the `<vertical>/<ident>` the gate derives
+    /// real snapshot. The endpoints are the `<vertical>/<ident>` the gate derives
     /// from that placement.
     fn web_src_with(dir: &Path, idents: &[&str]) {
         let src: String = idents
@@ -222,104 +210,58 @@ mod tests {
         std::fs::write(path, json).expect("write json");
     }
 
-    /// Write an evidence file agreeing with `names`, so a test that is not about
-    /// evidence drift does not trip over `evidence_verdict`.
-    fn evidence_for(dir: &Path, names: &[&str]) -> std::path::PathBuf {
-        let path = dir.join("evidence.json");
-        let entries: Vec<String> = names
-            .iter()
-            .map(|n| format!(r#""{n}":["a test"]"#))
-            .collect();
-        write_json(
-            &path,
-            &format!(r#"{{"covered":{{{}}}}}"#, entries.join(",")),
-        );
-        path
-    }
-
     #[test]
     fn static_lane_passes_when_every_fn_is_covered() {
         let tmp = tempfile::tempdir().expect("tempdir");
         web_src_with(tmp.path(), &["create_post"]);
-        let snap = tmp.path().join("snap.json");
-        write_json(&snap, r#"{"covered":["posts::create_post"],"orphans":{}}"#);
-        let ev = evidence_for(tmp.path(), &["posts::create_post"]);
+        let snapshot = tmp.path().join("snap.json");
+        write_json(
+            &snapshot,
+            r#"{"covered":["posts::create_post"],"orphans":{}}"#,
+        );
 
-        let step = check(tmp.path(), &snap, &ev);
+        let step = check(tmp.path(), &snapshot);
         assert!(step.ok, "{:?}", step.detail);
         assert!(step.detail.unwrap_or_default().contains("1 server fn"));
     }
 
     #[test]
     fn static_lane_bites_on_an_uncovered_fn() {
-        // The wired-up half of AC12: `verdict`'s own bite test proves the rule,
-        // this proves the lane applies it to the real artifacts.
+        // `verdict`'s own bite test proves the rule; this proves the lane applies
+        // it to the real snapshot and source-derived inventory.
         let tmp = tempfile::tempdir().expect("tempdir");
         web_src_with(tmp.path(), &["create_post", "brand_new_uncovered_fn"]);
-        let snap = tmp.path().join("snap.json");
-        write_json(&snap, r#"{"covered":["posts::create_post"],"orphans":{}}"#);
-        let ev = evidence_for(tmp.path(), &["posts::create_post"]);
+        let snapshot = tmp.path().join("snap.json");
+        write_json(
+            &snapshot,
+            r#"{"covered":["posts::create_post"],"orphans":{}}"#,
+        );
 
-        let step = check(tmp.path(), &snap, &ev);
+        let step = check(tmp.path(), &snapshot);
         assert!(!step.ok);
         let detail = step.detail.unwrap_or_default();
         assert!(detail.contains("brand_new_uncovered_fn"), "{detail}");
     }
 
     #[test]
-    fn static_lane_fails_when_the_evidence_is_missing_a_covered_fn() {
+    fn static_lane_ignores_the_retired_evidence_path() {
+        // Issue #757 removed this input. A malformed file at the retired path
+        // must be inert, so a future evidence read cannot slip back into the
+        // static verdict unnoticed.
         let tmp = tempfile::tempdir().expect("tempdir");
         web_src_with(tmp.path(), &["create_post"]);
-        let snap = tmp.path().join("snap.json");
-        write_json(&snap, r#"{"covered":["posts::create_post"],"orphans":{}}"#);
-        let ev = evidence_for(tmp.path(), &[]);
-
-        let step = check(tmp.path(), &snap, &ev);
-        assert!(!step.ok);
-        let detail = step.detail.unwrap_or_default();
-        assert!(detail.contains("posts::create_post"), "{detail}");
-        assert!(detail.contains("missing from the evidence"), "{detail}");
-    }
-
-    #[test]
-    fn static_lane_fails_when_the_evidence_names_an_uncovered_fn() {
-        // The other direction, at the fixture-file level: stale evidence naming a
-        // fn the snapshot no longer covers.
-        let tmp = tempfile::tempdir().expect("tempdir");
-        web_src_with(tmp.path(), &["create_post"]);
-        let snap = tmp.path().join("snap.json");
-        write_json(&snap, r#"{"covered":["posts::create_post"],"orphans":{}}"#);
-        let ev = evidence_for(tmp.path(), &["posts::create_post", "posts::ghost"]);
-
-        let step = check(tmp.path(), &snap, &ev);
-        assert!(!step.ok);
-        let detail = step.detail.unwrap_or_default();
-        assert!(detail.contains("posts::ghost"), "{detail}");
-        assert!(detail.contains("stale evidence"), "{detail}");
-        // The remedy travels with BOTH directions, not just the missing-key one:
-        // an author who hits the stale direction needs the same two steps.
-        assert!(detail.contains(REGENERATE_CMD), "{detail}");
-        assert!(
-            detail.contains("cargo xtask e2e sqlite chromium"),
-            "{detail}"
+        let snapshot = tmp.path().join("snap.json");
+        write_json(
+            &snapshot,
+            r#"{"covered":["posts::create_post"],"orphans":{}}"#,
         );
-    }
-
-    #[test]
-    fn static_lane_fails_closed_on_a_missing_evidence_file() {
-        // The plumbing's own failure must not look like "nothing uncovered".
-        let tmp = tempfile::tempdir().expect("tempdir");
-        web_src_with(tmp.path(), &["create_post"]);
-        let snap = tmp.path().join("snap.json");
-        write_json(&snap, r#"{"covered":["posts::create_post"],"orphans":{}}"#);
-
-        let step = check(tmp.path(), &snap, &tmp.path().join("absent-evidence.json"));
-        assert!(!step.ok);
-        let detail = step.detail.unwrap_or_default();
-        assert!(
-            detail.contains(REGENERATE_CMD),
-            "names the remedy: {detail}"
+        write_json(
+            &tmp.path().join("server-fns-evidence.json"),
+            "{ definitely not json",
         );
+
+        let step = check(tmp.path(), &snapshot);
+        assert!(step.ok, "{:?}", step.detail);
     }
 
     #[test]
@@ -327,9 +269,8 @@ mod tests {
         // The plumbing's own failure must not look like "nothing uncovered".
         let tmp = tempfile::tempdir().expect("tempdir");
         web_src_with(tmp.path(), &["create_post"]);
-        let ev = evidence_for(tmp.path(), &["posts::create_post"]);
 
-        let step = check(tmp.path(), &tmp.path().join("absent-snapshot.json"), &ev);
+        let step = check(tmp.path(), &tmp.path().join("absent-snapshot.json"));
         assert!(!step.ok);
         let detail = step.detail.unwrap_or_default();
         assert!(
@@ -342,12 +283,59 @@ mod tests {
     fn static_lane_fails_closed_on_an_unparseable_snapshot() {
         let tmp = tempfile::tempdir().expect("tempdir");
         web_src_with(tmp.path(), &["create_post"]);
-        let snap = tmp.path().join("snap.json");
-        write_json(&snap, "{not json");
-        let ev = evidence_for(tmp.path(), &["posts::create_post"]);
+        let snapshot = tmp.path().join("snap.json");
+        write_json(&snapshot, "{not json");
 
-        let step = check(tmp.path(), &snap, &ev);
+        let step = check(tmp.path(), &snapshot);
         assert!(!step.ok);
+    }
+
+    #[test]
+    fn regeneration_writes_only_the_snapshot() {
+        // The retired file is a sentinel: regeneration must neither rewrite it
+        // nor create any replacement attribution artifact beside the snapshot.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let coverage_dir = tmp.path().join("docs/coverage");
+        std::fs::create_dir_all(&coverage_dir).expect("coverage directory");
+        let snapshot_path = coverage_dir.join("server-fns.json");
+        let retired_path = coverage_dir.join("server-fns-evidence.json");
+        write_json(&retired_path, "retired sentinel");
+        let snapshot = Snapshot {
+            covered: ["posts::create_post".to_string()].into_iter().collect(),
+            orphans: Default::default(),
+        };
+
+        let step =
+            regenerate_snapshot(REGENERATE_STEP, &snapshot_path, &snapshot).expect("regenerates");
+        assert!(step.ok, "{:?}", step.detail);
+        assert_eq!(
+            read_snapshot(&snapshot_path).expect("snapshot parses"),
+            snapshot
+        );
+        assert_eq!(
+            std::fs::read_to_string(&retired_path).expect("sentinel remains"),
+            "retired sentinel"
+        );
+
+        let mut generated: Vec<String> = std::fs::read_dir(&coverage_dir)
+            .expect("read coverage directory")
+            .map(|entry| {
+                entry
+                    .expect("directory entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        generated.sort();
+        assert_eq!(
+            generated,
+            vec![
+                "server-fns-evidence.json".to_string(),
+                "server-fns.json".to_string(),
+            ],
+            "regeneration created an unexpected artifact"
+        );
     }
 
     // ── The e2e lane's byte-compare ─────────────────────────────────────────
@@ -491,11 +479,10 @@ mod tests {
 
     #[test]
     fn seed_capture_covers_the_committed_snapshots_fns() {
-        // The fixture must still be the evidence behind the committed snapshot:
-        // every fn the snapshot calls covered is covered in the reduced capture too.
+        // The fixture must still underwrite the committed snapshot: every fn it
+        // calls covered is present in the reduced capture too.
         let coverage = seed_coverage();
-        let snapshot =
-            read_artifact::<Snapshot>(&repo_root().join(SNAPSHOT_PATH)).expect("snapshot parses");
+        let snapshot = read_snapshot(&repo_root().join(SNAPSHOT_PATH)).expect("snapshot parses");
         let missing: Vec<&String> = snapshot
             .covered
             .iter()
@@ -723,12 +710,12 @@ mod tests {
         );
     }
 
-    // ── AC16: the committed artifacts must not invalidate the e2e checks ─────────
+    // ── AC16: the committed snapshot must not invalidate the e2e checks ──────────
 
     /// Every string literal the app source filter (`flake.nix`'s top-level `src`,
     /// the tree the e2e VM checks build from) matches paths against. Pinned as a
     /// whole set rather than probed for the absence of "docs": a filter that began
-    /// admitting the coverage artifacts would do it through a *new* literal —
+    /// admitting the coverage snapshot would do it through a *new* literal —
     /// `".json"`, say — that a search for "docs" would sail straight past.
     const APP_SRC_FILTER_LITERALS: &[&str] =
         &["/xtask/", ".sql", ".css", "csr/index.html", "scripts/.*"];
@@ -746,12 +733,11 @@ mod tests {
     }
 
     #[test]
-    fn the_e2e_checks_source_filter_still_excludes_the_coverage_artifacts() {
-        // AC16: regenerating `docs/coverage/*.json` must leave the four e2e VM
-        // checks' input hashes untouched. It does because the app source filter is an
-        // ALLOWLIST — a path enters only by matching one of the literals above, and
-        // no `docs/…json` path matches any of them — and because `e2ePackage` roots
-        // at `./end2end`, which cannot contain `docs/`.
+    fn the_e2e_checks_source_filter_still_excludes_the_coverage_snapshot() {
+        // AC16: regenerating `docs/coverage/server-fns.json` must leave the four
+        // e2e VM checks' input hashes untouched. The app source filter is an
+        // allowlist and no `docs/…json` path matches it; `e2ePackage` roots at
+        // `./end2end`, which cannot contain `docs/`.
         //
         // This is a PROXY and does not prove AC16. It asserts the *reason* the drv
         // hashes are stable, not the hashes: only comparing
@@ -792,7 +778,6 @@ mod tests {
             tmp.path(),
             Path::new("/nonexistent-capture.tar.gz"),
             &tmp.path().join("snap.json"),
-            &tmp.path().join("evidence.json"),
             false,
         )
         .unwrap_err();
@@ -807,7 +792,6 @@ mod tests {
             &tmp.path().join("nonexistent"),
             Path::new("/nonexistent-capture.tar.gz"),
             &tmp.path().join("snap.json"),
-            &tmp.path().join("evidence.json"),
             false,
         )
         .unwrap_err();

@@ -2431,9 +2431,10 @@ run emits, matched forward from the inventory by `#[tracing::instrument]` span
 name plus `code.namespace`. A documentary convention was rejected precisely
 because a doc naming a spec that never touches the fn would stay green forever.
 The gate has two lanes (`xtask/src/steps/server_fn_coverage_check.rs`): a static
-lane in `check`/`validate --no-e2e` that reads only committed files, and an e2e
-lane (`server-fn-coverage-regenerate` / `-verify`) that runs on the per-combo
-`cargo xtask e2e sqlite chromium` path only.
+lane in `check`/`validate --no-e2e` that reads the sole committed
+`docs/coverage/server-fns.json` snapshot plus the source-derived inventory, and
+an e2e lane (`server-fn-coverage-regenerate` / `-verify`) that recomputes that
+snapshot from the per-combo `cargo xtask e2e sqlite chromium` traces.
 
 No server-fn host gate carries an **endpoint-drift check**, and that is
 deliberate ([ADR-0120](adr/0120-no-endpoint-drift-check.md)). The retired
