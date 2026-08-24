@@ -1401,12 +1401,30 @@ Serve-only saturation gauges are registered in `host::metrics` as asynchronous
 OpenTelemetry gauges backed by a narrow `SaturationSnapshot`. `jaunder serve`
 starts the sampler only when the shared OTLP endpoint gate is configured, and
 `PreparedServer` owns both the observable guard and the sampler handle for the
-serve lifetime. The sampler reads feed queue depth, backup last-success time,
-database pool saturation, and database-declared media upload bytes into the
-snapshot; callbacks never query storage. Missing source values emit no datapoint
-rather than zero. The database pool observer is produced by storage opening and
-retained beside `AppState` at the serve composition root, preserving ADR-0016's
-rule that `AppState` remains storage-only while still allowing pool metrics.
+serve lifetime. Every 30 seconds, including an immediate first collection, the
+sampler reads feed queue depth, backup last-success time, database pool
+saturation, and database-declared media upload bytes into the snapshot.
+
+`jaunder.media.storage_bytes` remains the database-declared upload total for
+accounting and quota semantics. The distinct `jaunder.media.filesystem_bytes`
+saturation gauge is a physical-drift diagnostic: its periodic collector walks
+the complete `<storage_path>/media` tree and sums the logical length of every
+regular directory entry. This includes cached, temporary, orphaned, and
+future-descendant files; independently hard-linked entries each count their own
+length. It does not report allocated blocks, deduplicated physical storage, or
+filesystem quota usage.
+
+OpenTelemetry callbacks only synchronously read the snapshot and never query
+storage. The filesystem walk runs through Tokio blocking work outside every HTTP
+request path; the sampler awaits it before another collection begins, so no two
+walks overlap. A missing or unreadable path, traversal or metadata error,
+symlink, or non-regular non-directory entry fails the whole filesystem sample:
+the collector reports the bounded `server.metrics.media_filesystem_bytes`
+diagnostic, clears that snapshot field, and emits no datapoint rather than zero
+or a partial value. The database pool observer is produced by storage opening
+and retained beside `AppState` at the serve composition root, preserving
+ADR-0016's rule that `AppState` remains storage-only while still allowing pool
+metrics.
 
 ### Errors at the boundary
 

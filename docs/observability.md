@@ -32,14 +32,15 @@ processes, and end-to-end test runner.
 The backend exports these asynchronous gauge instruments through
 `host::metrics`:
 
-| Instrument                              | Unit | Meaning                                                       |
-| --------------------------------------- | ---- | ------------------------------------------------------------- |
-| `jaunder.feed.queue_depth`              | —    | Feed-regeneration rows currently claimable by the feed worker |
-| `jaunder.backup.last_success_timestamp` | `s`  | Unix timestamp of the newest successful backup artifact       |
-| `jaunder.db.pool.used`                  | —    | Database pool connections currently checked out               |
-| `jaunder.db.pool.idle`                  | —    | Database pool connections currently idle                      |
-| `jaunder.db.pool.max`                   | —    | Configured maximum database pool connections                  |
-| `jaunder.media.storage_bytes`           | `By` | Database-declared bytes for local uploaded media              |
+| Instrument                              | Unit | Meaning                                                                                 |
+| --------------------------------------- | ---- | --------------------------------------------------------------------------------------- |
+| `jaunder.feed.queue_depth`              | —    | Feed-regeneration rows currently claimable by the feed worker                           |
+| `jaunder.backup.last_success_timestamp` | `s`  | Unix timestamp of the newest successful backup artifact                                 |
+| `jaunder.db.pool.used`                  | —    | Database pool connections currently checked out                                         |
+| `jaunder.db.pool.idle`                  | —    | Database pool connections currently idle                                                |
+| `jaunder.db.pool.max`                   | —    | Configured maximum database pool connections                                            |
+| `jaunder.media.storage_bytes`           | `By` | Database-declared bytes for local uploaded media, used for upload accounting and quotas |
+| `jaunder.media.filesystem_bytes`        | `By` | Logical length of every regular directory entry below `<storage_path>/media`            |
 
 The sampler writes a shared snapshot; OpenTelemetry callbacks only read that
 snapshot and emit a datapoint for fields that are present. A failed source
@@ -48,9 +49,27 @@ absence rather than a misleading zero. An unconfigured backup destination is
 normal and therefore clears `jaunder.backup.last_success_timestamp` without a
 diagnostic.
 
-`jaunder.media.storage_bytes` is the storage table's declared upload total. It
-does not walk the media directory and does not include cached remote media. The
-separate on-disk media usage follow-up is tracked as #1103.
+`jaunder.media.storage_bytes` remains the storage table's declared upload total:
+the database-only value used for upload accounting and quotas. It does not walk
+the media directory and does not include cached remote media.
+
+`jaunder.media.filesystem_bytes` is a separate physical-drift diagnostic. It
+walks the complete `<storage_path>/media` tree and sums the logical length of
+every regular directory entry, including `upload`, `cached`, `tmp`, orphaned
+files, and future descendants. Each hard-linked entry contributes its own
+length: this is namespace-level logical usage, not allocated-block,
+deduplicated-physical-storage, or filesystem-quota usage.
+
+The serve-owned 30-second sampler performs an immediate first collection and
+subsequent filesystem walks on Tokio's blocking-work facility, never on an HTTP
+request path or an async runtime worker. It awaits each walk before starting the
+next, so only one filesystem scan is in flight. The snapshot callback remains a
+synchronous read.
+
+The filesystem sample is all-or-nothing. A missing or unreadable path, traversal
+or metadata error, symlink, or non-regular non-directory entry reports the
+bounded `server.metrics.media_filesystem_bytes` diagnostic and clears the
+snapshot field, publishing no datapoint rather than zero or a partial value.
 
 ## End-to-End Tracing Layers
 

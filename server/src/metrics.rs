@@ -6,7 +6,9 @@
 //! handles and service facts each source needs; the sampler never owns the
 //! whole [`storage::AppState`].
 
-use std::path::PathBuf;
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
@@ -18,6 +20,96 @@ use crate::backup::latest_successful_backup_timestamp;
 
 const FEED_CLAIM_LEASE_TIMEOUT: chrono::Duration = chrono::Duration::minutes(5);
 const SATURATION_SAMPLE_INTERVAL: Duration = Duration::from_secs(30);
+
+fn measure_media_filesystem_bytes(root: &Path) -> io::Result<u64> {
+    measure_media_filesystem_bytes_with(root, read_media_metadata, read_media_directory)
+}
+
+fn read_media_metadata(path: &Path) -> io::Result<fs::Metadata> {
+    fs::symlink_metadata(path)
+}
+
+fn read_media_directory(path: &Path) -> io::Result<fs::ReadDir> {
+    fs::read_dir(path)
+}
+
+fn measure_media_filesystem_bytes_with(
+    root: &Path,
+    metadata: fn(&Path) -> io::Result<fs::Metadata>,
+    read_dir: fn(&Path) -> io::Result<fs::ReadDir>,
+) -> io::Result<u64> {
+    let root_metadata = metadata(root)?;
+    if root_metadata.file_type().is_symlink() {
+        return Err(unexpected_media_filesystem_entry(root, "symbolic link"));
+    }
+    if !root_metadata.is_dir() {
+        return Err(unexpected_media_filesystem_entry(
+            root,
+            "non-directory root",
+        ));
+    }
+    measure_media_directory_bytes(root, metadata, read_dir)
+}
+
+fn measure_media_directory_bytes(
+    directory: &Path,
+    metadata: fn(&Path) -> io::Result<fs::Metadata>,
+    read_dir: fn(&Path) -> io::Result<fs::ReadDir>,
+) -> io::Result<u64> {
+    let mut bytes: u64 = 0;
+    for entry in read_dir(directory)? {
+        let path = entry?.path();
+        let entry_metadata = metadata(&path)?;
+        let entry_bytes = if entry_metadata.file_type().is_symlink() {
+            return Err(unexpected_media_filesystem_entry(&path, "symbolic link"));
+        } else if entry_metadata.is_file() {
+            entry_metadata.len()
+        } else if entry_metadata.is_dir() {
+            measure_media_directory_bytes(&path, metadata, read_dir)?
+        } else {
+            return Err(unexpected_media_filesystem_entry(&path, "special entry"));
+        };
+        bytes = bytes
+            .checked_add(entry_bytes)
+            .ok_or_else(|| io::Error::other("media filesystem usage exceeds u64"))?;
+    }
+    Ok(bytes)
+}
+
+fn unexpected_media_filesystem_entry(path: &Path, kind: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("media filesystem contains {kind}: {}", path.display()),
+    )
+}
+#[derive(Clone)]
+struct MediaFilesystemSource {
+    root: PathBuf,
+    measure: fn(&Path) -> io::Result<u64>,
+}
+
+impl MediaFilesystemSource {
+    fn new(root: PathBuf) -> Self {
+        Self {
+            root,
+            measure: measure_media_filesystem_bytes,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_measurement(root: PathBuf, measure: fn(&Path) -> io::Result<u64>) -> Self {
+        Self { root, measure }
+    }
+
+    async fn sample(&self) -> anyhow::Result<u64> {
+        let root = self.root.clone();
+        let measure = self.measure;
+        tokio::task::spawn_blocking(move || measure(&root))
+            .await
+            .map_err(anyhow::Error::from)?
+            .map_err(anyhow::Error::from)
+    }
+}
 
 #[derive(Clone)]
 pub struct SaturationSources {
@@ -35,6 +127,7 @@ enum SaturationSourcesInner {
 struct RealSaturationSources {
     feed_events: Arc<dyn FeedEventStorage>,
     media: Arc<dyn MediaStorage>,
+    media_filesystem: MediaFilesystemSource,
     backup_destination_root: Option<PathBuf>,
     db_pool: DbPoolObserver,
 }
@@ -52,6 +145,7 @@ struct SaturationSample {
     backup_last_success_timestamp: i64,
     db_pool: DbPoolSnapshot,
     media_storage_bytes: u64,
+    media_filesystem_bytes: u64,
 }
 
 #[cfg(test)]
@@ -60,6 +154,7 @@ struct FakeSaturationSources {
     sample: SaturationSample,
     backup_configured: bool,
     failure: Option<FakeSaturationFailure>,
+    media_filesystem: Option<MediaFilesystemSource>,
 }
 
 #[cfg(test)]
@@ -69,6 +164,7 @@ enum FakeSaturationFailure {
     Backup,
     DbPool,
     Media,
+    MediaFilesystem,
 }
 
 impl SaturationSources {
@@ -76,6 +172,7 @@ impl SaturationSources {
     pub fn real(
         feed_events: Arc<dyn FeedEventStorage>,
         media: Arc<dyn MediaStorage>,
+        media_root: PathBuf,
         backup_destination_root: Option<PathBuf>,
         db_pool: DbPoolObserver,
     ) -> Self {
@@ -83,6 +180,7 @@ impl SaturationSources {
             inner: SaturationSourcesInner::Real(RealSaturationSources {
                 feed_events,
                 media,
+                media_filesystem: MediaFilesystemSource::new(media_root),
                 backup_destination_root,
                 db_pool,
             }),
@@ -136,6 +234,14 @@ impl SaturationSources {
         }
     }
 
+    async fn media_filesystem_bytes(&self) -> anyhow::Result<u64> {
+        match &self.inner {
+            SaturationSourcesInner::Real(real) => real.media_filesystem.sample().await,
+            #[cfg(test)]
+            SaturationSourcesInner::Fake(fake) => fake.read_media_filesystem_bytes().await,
+        }
+    }
+
     #[cfg(test)]
     fn fake_success(sample: SaturationSample) -> Self {
         Self::fake(sample, true, None)
@@ -167,6 +273,26 @@ impl SaturationSources {
     }
 
     #[cfg(test)]
+    fn fake_media_filesystem_failure(sample: SaturationSample) -> Self {
+        Self::fake(sample, true, Some(FakeSaturationFailure::MediaFilesystem))
+    }
+
+    #[cfg(test)]
+    fn fake_with_media_filesystem(
+        sample: SaturationSample,
+        media_filesystem: MediaFilesystemSource,
+    ) -> Self {
+        Self {
+            inner: SaturationSourcesInner::Fake(FakeSaturationSources {
+                sample,
+                backup_configured: true,
+                failure: None,
+                media_filesystem: Some(media_filesystem),
+            }),
+        }
+    }
+
+    #[cfg(test)]
     fn fake(
         sample: SaturationSample,
         backup_configured: bool,
@@ -177,6 +303,7 @@ impl SaturationSources {
                 sample,
                 backup_configured,
                 failure,
+                media_filesystem: None,
             }),
         }
     }
@@ -213,6 +340,16 @@ impl FakeSaturationSources {
         }
         Ok(self.sample.media_storage_bytes)
     }
+
+    async fn read_media_filesystem_bytes(&self) -> anyhow::Result<u64> {
+        if matches!(self.failure, Some(FakeSaturationFailure::MediaFilesystem)) {
+            anyhow::bail!("media filesystem bytes failed");
+        }
+        match &self.media_filesystem {
+            Some(media_filesystem) => media_filesystem.sample().await,
+            None => Ok(self.sample.media_filesystem_bytes),
+        }
+    }
 }
 
 pub async fn sample_saturation_once(
@@ -223,7 +360,7 @@ pub async fn sample_saturation_once(
     let backup_last_success_timestamp = sources.backup_last_success_timestamp();
     let db_pool = sources.db_pool();
     let media_storage_bytes = sources.media_storage_bytes().await;
-
+    let media_filesystem_bytes = sources.media_filesystem_bytes().await;
     let mut snapshot = snapshot.write().unwrap_or_else(PoisonError::into_inner);
     snapshot.feed_queue_depth = if let Ok(value) = feed_queue_depth {
         Some(value)
@@ -257,6 +394,18 @@ pub async fn sample_saturation_once(
         report_source_failure("server.metrics.media_storage_bytes");
         None
     };
+    snapshot.media_filesystem_bytes = match media_filesystem_bytes {
+        Ok(value) => Some(value),
+        Err(error) => {
+            host::error::report_swallowed(
+                host::error::ErrorKind::Storage,
+                host::error::ErrorClass::Transient,
+                "server.metrics.media_filesystem_bytes",
+                host::error::SwallowedSource::Error(error.as_ref()),
+            );
+            None
+        }
+    };
 }
 
 #[must_use]
@@ -264,8 +413,16 @@ pub fn spawn_saturation_sampler(
     sources: SaturationSources,
     snapshot: Arc<RwLock<SaturationSnapshot>>,
 ) -> JoinHandle<()> {
+    spawn_saturation_sampler_with_interval(sources, snapshot, SATURATION_SAMPLE_INTERVAL)
+}
+
+fn spawn_saturation_sampler_with_interval(
+    sources: SaturationSources,
+    snapshot: Arc<RwLock<SaturationSnapshot>>,
+    interval_duration: Duration,
+) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(SATURATION_SAMPLE_INTERVAL);
+        let mut interval = tokio::time::interval(interval_duration);
         loop {
             interval.tick().await;
             sample_saturation_once(&sources, &snapshot).await;
@@ -285,6 +442,8 @@ fn report_source_failure(context: &'static str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::{LazyLock, Mutex, OnceLock, mpsc};
 
     #[derive(Clone)]
     struct SharedWriter(Arc<std::sync::Mutex<Vec<u8>>>);
@@ -326,6 +485,168 @@ mod tests {
         String::from_utf8(output.lock().expect("trace lock").clone()).expect("utf8 trace")
     }
 
+    #[test]
+    fn media_filesystem_measurement_sums_nested_regular_entries() {
+        let temp = tempfile::TempDir::new().expect("tempdir");
+        let root = temp.path().join("media");
+        std::fs::create_dir_all(root.join("cached/deep")).expect("nested directory");
+        std::fs::create_dir(root.join("tmp")).expect("tmp directory");
+        std::fs::write(root.join("upload"), b"upload").expect("upload file");
+        std::fs::write(root.join("cached/deep/file"), b"cached").expect("cached file");
+        std::fs::write(root.join("tmp/file"), b"tmp").expect("tmp file");
+
+        assert_eq!(
+            measure_media_filesystem_bytes(&root).expect("filesystem measurement"),
+            15
+        );
+    }
+
+    struct BlockingMeasurement {
+        start_async: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+        entered: mpsc::Sender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+    }
+
+    static BLOCKING_MEASUREMENT: OnceLock<BlockingMeasurement> = OnceLock::new();
+
+    fn blocking_measurement(path: &Path) -> io::Result<u64> {
+        if path == Path::new("fail") {
+            return Err(io::Error::other("injected blocking measurement failure"));
+        }
+        let measurement = BLOCKING_MEASUREMENT.get().expect("blocking measurement");
+        measurement
+            .start_async
+            .lock()
+            .expect("start lock")
+            .take()
+            .expect("start sender")
+            .send(())
+            .expect("start async task");
+        measurement.entered.send(()).expect("measurement entered");
+        measurement
+            .release
+            .lock()
+            .expect("release lock")
+            .recv()
+            .expect("measurement release");
+        Ok(1)
+    }
+
+    struct SlowMeasurement {
+        active: AtomicUsize,
+        max_active: AtomicUsize,
+        calls: AtomicUsize,
+    }
+
+    static SLOW_MEASUREMENT: LazyLock<SlowMeasurement> = LazyLock::new(|| SlowMeasurement {
+        active: AtomicUsize::new(0),
+        max_active: AtomicUsize::new(0),
+        calls: AtomicUsize::new(0),
+    });
+
+    fn slow_measurement(path: &Path) -> io::Result<u64> {
+        if path == Path::new("fail") {
+            return Err(io::Error::other("injected slow measurement failure"));
+        }
+        let measurement = &*SLOW_MEASUREMENT;
+        let active = measurement.active.fetch_add(1, Ordering::SeqCst) + 1;
+        measurement.max_active.fetch_max(active, Ordering::SeqCst);
+        measurement.calls.fetch_add(1, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(25));
+        measurement.active.fetch_sub(1, Ordering::SeqCst);
+        Ok(1)
+    }
+
+    #[test]
+    fn media_filesystem_measurement_counts_hard_links_per_directory_entry() {
+        let temp = tempfile::TempDir::new().expect("tempdir");
+        let root = temp.path().join("media");
+        std::fs::create_dir_all(root.join("cached")).expect("cached directory");
+        let original = root.join("upload");
+        std::fs::write(&original, b"upload").expect("upload file");
+        std::fs::hard_link(&original, root.join("cached/reference")).expect("hard link");
+
+        assert_eq!(
+            measure_media_filesystem_bytes(&root).expect("filesystem measurement"),
+            12
+        );
+    }
+
+    #[test]
+    fn media_filesystem_measurement_rejects_missing_root() {
+        let temp = tempfile::TempDir::new().expect("tempdir");
+
+        let error =
+            measure_media_filesystem_bytes(&temp.path().join("missing")).expect_err("missing root");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn media_filesystem_measurement_rejects_symlinks_without_a_partial_result() {
+        let temp = tempfile::TempDir::new().expect("tempdir");
+        let root = temp.path().join("media");
+        std::fs::create_dir(&root).expect("media directory");
+        let regular = root.join("regular");
+        std::fs::write(&regular, b"regular").expect("regular file");
+        std::os::unix::fs::symlink(&regular, root.join("linked")).expect("symbolic link");
+
+        let error = measure_media_filesystem_bytes(&root).expect_err("symbolic links are rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn media_filesystem_measurement_rejects_special_entries() {
+        let temp = tempfile::TempDir::new().expect("tempdir");
+        let root = temp.path().join("media");
+        std::fs::create_dir(&root).expect("media directory");
+        let _socket = std::os::unix::net::UnixListener::bind(root.join("socket")).expect("socket");
+
+        let error =
+            measure_media_filesystem_bytes(&root).expect_err("special entries are rejected");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    fn denied_metadata(_: &std::path::Path) -> std::io::Result<std::fs::Metadata> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "metadata denied",
+        ))
+    }
+
+    fn denied_read_dir(_: &std::path::Path) -> std::io::Result<std::fs::ReadDir> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "read_dir denied",
+        ))
+    }
+
+    #[test]
+    fn media_filesystem_measurement_propagates_metadata_failures() {
+        let temp = tempfile::TempDir::new().expect("tempdir");
+
+        let error =
+            measure_media_filesystem_bytes_with(temp.path(), denied_metadata, read_media_directory)
+                .expect_err("metadata failure");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn media_filesystem_measurement_propagates_directory_read_failures() {
+        let temp = tempfile::TempDir::new().expect("tempdir");
+
+        let error =
+            measure_media_filesystem_bytes_with(temp.path(), read_media_metadata, denied_read_dir)
+                .expect_err("directory read failure");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    }
+
     fn sample() -> SaturationSample {
         SaturationSample {
             feed_queue_depth: 7,
@@ -336,6 +657,7 @@ mod tests {
                 max: 6,
             },
             media_storage_bytes: 8192,
+            media_filesystem_bytes: 12_345,
         }
     }
 
@@ -347,6 +669,7 @@ mod tests {
             db_pool_idle: Some(99),
             db_pool_max: Some(99),
             media_storage_bytes: Some(99),
+            media_filesystem_bytes: Some(99),
         })
     }
 
@@ -364,6 +687,7 @@ mod tests {
         assert_eq!(snapshot.db_pool_idle, Some(4));
         assert_eq!(snapshot.db_pool_max, Some(6));
         assert_eq!(snapshot.media_storage_bytes, Some(8192));
+        assert_eq!(snapshot.media_filesystem_bytes, Some(12_345));
     }
 
     #[tokio::test]
@@ -374,6 +698,106 @@ mod tests {
         sample_saturation_once(&sources, &snapshot).await;
 
         assert_success_snapshot(&read_snapshot(&snapshot));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn filesystem_measurement_runs_on_blocking_work() {
+        let (start_sender, start_receiver) = tokio::sync::oneshot::channel();
+        let (entered_sender, entered_receiver) = mpsc::channel();
+        let (release_sender, release_receiver) = mpsc::channel();
+        assert!(
+            BLOCKING_MEASUREMENT
+                .set(BlockingMeasurement {
+                    start_async: Mutex::new(Some(start_sender)),
+                    entered: entered_sender,
+                    release: Mutex::new(release_receiver),
+                })
+                .is_ok(),
+            "one blocking measurement"
+        );
+        let async_worker_progressed = Arc::new(AtomicBool::new(false));
+        let progress = async_worker_progressed.clone();
+        tokio::spawn(async move {
+            start_receiver.await.expect("blocking measurement starts");
+            progress.store(true, Ordering::SeqCst);
+        });
+        let releaser = std::thread::spawn(move || {
+            entered_receiver.recv().expect("measurement enters");
+            std::thread::sleep(Duration::from_millis(25));
+            let progressed = async_worker_progressed.load(Ordering::SeqCst);
+            release_sender.send(()).expect("release measurement");
+            progressed
+        });
+
+        let source = MediaFilesystemSource::with_measurement(PathBuf::new(), blocking_measurement);
+
+        assert_eq!(source.sample().await.expect("blocking measurement"), 1);
+        assert!(
+            releaser.join().expect("releaser thread"),
+            "an async worker must progress while filesystem work is blocked"
+        );
+    }
+
+    #[tokio::test]
+    async fn saturation_sampler_clears_filesystem_snapshot_after_measurement_failure() {
+        let temp = tempfile::TempDir::new().expect("tempdir");
+        let root = temp.path().join("media");
+        std::fs::create_dir(&root).expect("media directory");
+        std::fs::write(root.join("orphan"), b"filesystem").expect("orphan file");
+        let sources = SaturationSources::fake_with_media_filesystem(
+            sample(),
+            MediaFilesystemSource::new(root.clone()),
+        );
+        let snapshot = RwLock::new(SaturationSnapshot::default());
+
+        sample_saturation_once(&sources, &snapshot).await;
+
+        assert_eq!(read_snapshot(&snapshot).media_filesystem_bytes, Some(10));
+        std::fs::remove_dir_all(&root).expect("remove media directory");
+        let (guard, output) = trace_capture();
+        sample_saturation_once(&sources, &snapshot).await;
+        drop(guard);
+
+        let snapshot = read_snapshot(&snapshot);
+        assert_eq!(snapshot.media_filesystem_bytes, None);
+        assert_eq!(snapshot.media_storage_bytes, Some(8192));
+        let trace = trace_text(&output);
+        let collection_error = std::fs::symlink_metadata(&root)
+            .expect_err("media root remains absent")
+            .to_string();
+        assert!(trace.contains("server.metrics.media_filesystem_bytes"));
+        assert!(
+            trace.contains(&format!(r#""error.source":"{collection_error}""#)),
+            "{trace}"
+        );
+    }
+
+    #[tokio::test]
+    async fn saturation_sampler_never_overlaps_filesystem_measurements() {
+        let measurement = &*SLOW_MEASUREMENT;
+        let sources = SaturationSources::fake_with_media_filesystem(
+            sample(),
+            MediaFilesystemSource::with_measurement(PathBuf::new(), slow_measurement),
+        );
+        let snapshot = Arc::new(RwLock::new(SaturationSnapshot::default()));
+        let handle =
+            spawn_saturation_sampler_with_interval(sources, snapshot, Duration::from_millis(1));
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while measurement.calls.load(Ordering::SeqCst) < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("multiple filesystem measurements");
+        handle.abort();
+        let _ = handle.await;
+
+        assert_eq!(
+            measurement.max_active.load(Ordering::SeqCst),
+            1,
+            "the next periodic sample must await the prior filesystem measurement"
+        );
     }
 
     #[tokio::test]
@@ -392,6 +816,7 @@ mod tests {
         assert_eq!(snapshot.db_pool_idle, Some(4));
         assert_eq!(snapshot.db_pool_max, Some(6));
         assert_eq!(snapshot.media_storage_bytes, Some(8192));
+        assert_eq!(snapshot.media_filesystem_bytes, Some(12_345));
         assert!(
             !trace_text(&output).contains("server.metrics.backup_last_success"),
             "unconfigured backup destination should not report a failure"
@@ -400,11 +825,15 @@ mod tests {
 
     #[tokio::test]
     async fn saturation_sampler_clears_only_failed_source() {
-        let cases: [(&str, SaturationSources); 4] = [
+        let cases: [(&str, SaturationSources); 5] = [
             ("feed", SaturationSources::fake_feed_failure(sample())),
             ("backup", SaturationSources::fake_backup_failure(sample())),
             ("db_pool", SaturationSources::fake_db_pool_failure(sample())),
             ("media", SaturationSources::fake_media_failure(sample())),
+            (
+                "filesystem",
+                SaturationSources::fake_media_filesystem_failure(sample()),
+            ),
         ];
 
         for (failed, sources) in cases {
@@ -442,12 +871,17 @@ mod tests {
                 (failed != "media").then_some(8192),
                 "{failed}"
             );
+            assert_eq!(
+                got.media_filesystem_bytes,
+                (failed != "filesystem").then_some(12_345),
+                "{failed}"
+            );
         }
     }
 
     #[tokio::test]
     async fn saturation_sampler_reports_fixed_context_on_failure() {
-        let cases: [(&str, SaturationSources); 4] = [
+        let cases: [(&str, SaturationSources); 5] = [
             (
                 "server.metrics.feed_queue_depth",
                 SaturationSources::fake_feed_failure(sample()),
@@ -463,6 +897,10 @@ mod tests {
             (
                 "server.metrics.media_storage_bytes",
                 SaturationSources::fake_media_failure(sample()),
+            ),
+            (
+                "server.metrics.media_filesystem_bytes",
+                SaturationSources::fake_media_filesystem_failure(sample()),
             ),
         ];
 
@@ -507,6 +945,9 @@ mod tests {
             .enqueue(&storage::test_support::fp("/feed.rss"))
             .await
             .expect("enqueue feed event");
+        let media_root = base.path().join("media");
+        std::fs::create_dir_all(media_root.join("cached")).expect("cached media directory");
+        std::fs::write(media_root.join("cached/orphan"), b"orphan").expect("orphan media file");
         let backup_root = base.path().join("backups");
         let backup = backup_root.join("backup-20260102T000000Z");
         std::fs::create_dir_all(&backup).expect("backup dir");
@@ -528,6 +969,7 @@ mod tests {
         let sources = SaturationSources::real(
             opened.state.feed_events.clone(),
             opened.state.media.clone(),
+            media_root,
             Some(backup_root),
             opened.pool_observer,
         );
@@ -542,6 +984,7 @@ mod tests {
             Some(manifest.timestamp.timestamp())
         );
         assert_eq!(snapshot.media_storage_bytes, Some(0));
+        assert_eq!(snapshot.media_filesystem_bytes, Some(6));
         assert!(snapshot.db_pool_max.unwrap_or_default() > 0);
     }
 
@@ -561,9 +1004,12 @@ mod tests {
         let opened = storage::open_database_with_observer(&options)
             .await
             .expect("open database");
+        let media_root = base.path().join("media");
+        std::fs::create_dir(&media_root).expect("media directory");
         let sources = SaturationSources::real(
             opened.state.feed_events.clone(),
             opened.state.media.clone(),
+            media_root,
             None,
             opened.pool_observer,
         );
@@ -575,6 +1021,7 @@ mod tests {
         assert_eq!(snapshot.feed_queue_depth, Some(0));
         assert_eq!(snapshot.backup_last_success_timestamp, None);
         assert_eq!(snapshot.media_storage_bytes, Some(0));
+        assert_eq!(snapshot.media_filesystem_bytes, Some(0));
         assert!(snapshot.db_pool_max.unwrap_or_default() > 0);
     }
 

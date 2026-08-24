@@ -76,6 +76,7 @@ pub struct SaturationSnapshot {
     pub db_pool_idle: Option<u64>,
     pub db_pool_max: Option<u64>,
     pub media_storage_bytes: Option<u64>,
+    pub media_filesystem_bytes: Option<u64>,
 }
 
 pub struct SaturationObservableGuard {
@@ -85,6 +86,7 @@ pub struct SaturationObservableGuard {
     db_pool_idle: ObservableGauge<u64>,
     db_pool_max: ObservableGauge<u64>,
     media_storage_bytes: ObservableGauge<u64>,
+    media_filesystem_bytes: ObservableGauge<u64>,
 }
 
 impl SaturationObservableGuard {
@@ -96,6 +98,7 @@ impl SaturationObservableGuard {
             &self.db_pool_idle,
             &self.db_pool_max,
             &self.media_storage_bytes,
+            &self.media_filesystem_bytes,
         );
     }
 }
@@ -190,9 +193,21 @@ pub fn register_saturation_observables(
         .u64_observable_gauge("jaunder.media.storage_bytes")
         .with_unit("By")
         .with_callback({
+            let snapshot = snapshot.clone();
             move |observer| {
                 observe_u64(&snapshot, |snapshot| snapshot.media_storage_bytes, observer);
             }
+        })
+        .build();
+    let media_filesystem_bytes = m
+        .u64_observable_gauge("jaunder.media.filesystem_bytes")
+        .with_unit("By")
+        .with_callback(move |observer| {
+            observe_u64(
+                &snapshot,
+                |snapshot| snapshot.media_filesystem_bytes,
+                observer,
+            );
         })
         .build();
     let guard = SaturationObservableGuard {
@@ -202,6 +217,7 @@ pub fn register_saturation_observables(
         db_pool_idle,
         db_pool_max,
         media_storage_bytes,
+        media_filesystem_bytes,
     };
     guard.retain();
     guard
@@ -372,6 +388,7 @@ mod tests {
         "jaunder.media.uploads",
         "jaunder.media.upload_bytes",
         "jaunder.media.storage_bytes",
+        "jaunder.media.filesystem_bytes",
         "jaunder.feed.regenerations",
         "jaunder.feed.regeneration_duration",
         "jaunder.feed.websub_pings",
@@ -534,9 +551,13 @@ mod tests {
             u64_gauge_points(metrics, "jaunder.media.storage_bytes"),
             vec![4096]
         );
+        assert_eq!(
+            u64_gauge_points(metrics, "jaunder.media.filesystem_bytes"),
+            vec![12_345]
+        );
     }
 
-    fn assert_none_snapshot_field_emits_no_datapoint(
+    fn assert_missing_filesystem_snapshot_emits_no_datapoint(
         exporter: &InMemoryMetricExporter,
         provider: &SdkMeterProvider,
         saturation: &RwLock<SaturationSnapshot>,
@@ -545,12 +566,17 @@ mod tests {
         saturation
             .write()
             .unwrap_or_else(PoisonError::into_inner)
-            .media_storage_bytes = None;
+            .media_filesystem_bytes = None;
         provider.force_flush().expect("flush");
         let metrics = exporter.get_finished_metrics().expect("metrics");
         assert!(
-            u64_gauge_points(&metrics, "jaunder.media.storage_bytes").is_empty(),
-            "None snapshot fields should emit no datapoint"
+            u64_gauge_points(&metrics, "jaunder.media.filesystem_bytes").is_empty(),
+            "None filesystem snapshots should emit no datapoint"
+        );
+        assert_eq!(
+            u64_gauge_points(&metrics, "jaunder.media.storage_bytes"),
+            vec![4096],
+            "filesystem collection failures must not erase database accounting"
         );
     }
 
@@ -577,6 +603,7 @@ mod tests {
             db_pool_idle: Some(3),
             db_pool_max: Some(5),
             media_storage_bytes: Some(4096),
+            media_filesystem_bytes: Some(12_345),
         }));
         let _saturation_guard = register_saturation_observables(saturation.clone());
         // Both branches of the send-result mapping. The kinds are chosen to be
@@ -658,7 +685,7 @@ mod tests {
         );
 
         assert_saturation_gauges(&metrics);
-        assert_none_snapshot_field_emits_no_datapoint(&exporter, &provider, &saturation);
+        assert_missing_filesystem_snapshot_emits_no_datapoint(&exporter, &provider, &saturation);
     }
 
     /// The attribute vocabulary, pinned literally.
