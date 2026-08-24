@@ -153,11 +153,17 @@ export type WasmInitTiming = {
 
 const WASM_INIT_START = "jaunder.wasm.init_start";
 const WASM_INIT_DONE = "jaunder.wasm.init_done";
+const MODULE_BEFORE_INIT = "jaunder.module.before_init";
+const JAUNDER_CSS_PATH = "/style/jaunder.css";
+const JAUNDER_THEMES_CSS_PATH = "/style/jaunder-themes.css";
 
 function finiteShapeCount(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? value
     : null;
+}
+function finiteTimingOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function moduleShapeFromDetail(value: unknown): WasmModuleShape | null {
@@ -258,6 +264,12 @@ function mergeWasmInit(
     moduleShape: existing.moduleShape ?? incoming.moduleShape,
   };
 }
+function mergeFiniteTiming(
+  existing: number | null | undefined,
+  incoming: number | null | undefined,
+): number | null {
+  return finiteTimingOrNull(existing) ?? finiteTimingOrNull(incoming);
+}
 
 /**
  * Everything harvested from a single document, at mount-ready and again at `load`.
@@ -270,6 +282,9 @@ function mergeWasmInit(
 export type DocumentTiming = {
   timeOriginMs: number | null;
   marks: BootMark[];
+  moduleBeforeInitMs: number | null;
+  jaunderCssResponseEndMs: number | null;
+  jaunderThemesCssResponseEndMs: number | null;
   wasm: WasmTiming | null;
   /** Completion can arrive after mount/load snapshots; merge independently. */
   wasmInit?: WasmInitTiming;
@@ -286,7 +301,8 @@ export type DocumentTiming = {
  * would win under any rule that trusts arrival order. Comparing mark counts makes the
  * invariant local (#818).
  *
- * Picks a snapshot, never blends one — a caller may rely on identity.
+ * Picks the more complete snapshot for marks/wasm, then backfills missing scalar
+ * diagnostics from its sibling harvest.
  */
 export function mergeDocumentTiming(
   existing: DocumentTiming | undefined,
@@ -306,14 +322,36 @@ export function mergeDocumentTiming(
     Number.isFinite(incoming.timeOriginMs)
       ? incoming.timeOriginMs
       : null);
+  const moduleBeforeInitMs = mergeFiniteTiming(
+    existing.moduleBeforeInitMs,
+    incoming.moduleBeforeInitMs,
+  );
+  const jaunderCssResponseEndMs = mergeFiniteTiming(
+    existing.jaunderCssResponseEndMs,
+    incoming.jaunderCssResponseEndMs,
+  );
+  const jaunderThemesCssResponseEndMs = mergeFiniteTiming(
+    existing.jaunderThemesCssResponseEndMs,
+    incoming.jaunderThemesCssResponseEndMs,
+  );
   const wasmInit = mergeWasmInit(existing.wasmInit, incoming.wasmInit);
   if (
     (wasmInit === undefined || selected.wasmInit === wasmInit) &&
-    selected.timeOriginMs === timeOriginMs
+    selected.timeOriginMs === timeOriginMs &&
+    selected.moduleBeforeInitMs === moduleBeforeInitMs &&
+    selected.jaunderCssResponseEndMs === jaunderCssResponseEndMs &&
+    selected.jaunderThemesCssResponseEndMs === jaunderThemesCssResponseEndMs
   ) {
     return selected;
   }
-  return { ...selected, timeOriginMs, wasmInit };
+  return {
+    ...selected,
+    timeOriginMs,
+    moduleBeforeInitMs,
+    jaunderCssResponseEndMs,
+    jaunderThemesCssResponseEndMs,
+    wasmInit,
+  };
 }
 
 export type TraceCapture = {
@@ -400,41 +438,72 @@ export async function attachTraceCapture(
    */
   const harvestDocument = async (page: Page, navigationId: number) => {
     try {
-      const timing = await page.evaluate((prefix: string) => {
-        const marks = performance
-          .getEntriesByType("mark")
-          .filter((entry) => entry.name.startsWith(prefix))
-          .map((entry) => {
-            // `getEntriesByType` erases the concrete mark type.
-            const mark = entry as PerformanceMark;
-            return {
-              name: mark.name,
-              startTime: mark.startTime,
-              detail: mark.detail,
-            };
-          });
-        const wasmEntry = (
-          performance.getEntriesByType(
+      const timing = await page.evaluate(
+        ({
+          prefix,
+          moduleBeforeInitMark,
+          jaunderCssPath,
+          jaunderThemesCssPath,
+        }) => {
+          const marks = performance
+            .getEntriesByType("mark")
+            .filter((entry) => entry.name.startsWith(prefix))
+            .map((entry) => {
+              // `getEntriesByType` erases the concrete mark type.
+              const mark = entry as PerformanceMark;
+              return {
+                name: mark.name,
+                startTime: mark.startTime,
+                detail: mark.detail,
+              };
+            });
+          const resources = performance.getEntriesByType(
             "resource",
-          ) as PerformanceResourceTiming[]
-        )
-          .filter((entry) => entry.name.endsWith(".wasm"))
-          .sort((left, right) => left.startTime - right.startTime)[0];
-        return {
-          timeOriginMs: performance.timeOrigin,
-          marks,
-          wasm: wasmEntry
-            ? {
-                startTime: wasmEntry.startTime,
-                durationMs: wasmEntry.duration,
-                responseEndMs: wasmEntry.responseEnd,
-                decodedBodySize: wasmEntry.decodedBodySize,
-                encodedBodySize: wasmEntry.encodedBodySize,
-                transferSize: wasmEntry.transferSize,
-              }
-            : null,
-        };
-      }, MARK_PREFIX);
+          ) as PerformanceResourceTiming[];
+          const resourceForPath = (pathname: string) =>
+            resources
+              .filter((entry) => {
+                try {
+                  return (
+                    new URL(entry.name, location.href).pathname === pathname
+                  );
+                } catch {
+                  return false;
+                }
+              })
+              .sort((left, right) => left.startTime - right.startTime)[0];
+          const wasmEntry = resources
+            .filter((entry) => entry.name.endsWith(".wasm"))
+            .sort((left, right) => left.startTime - right.startTime)[0];
+          return {
+            timeOriginMs: performance.timeOrigin,
+            marks,
+            moduleBeforeInitMs:
+              marks.find((mark) => mark.name === moduleBeforeInitMark)
+                ?.startTime ?? null,
+            jaunderCssResponseEndMs:
+              resourceForPath(jaunderCssPath)?.responseEnd ?? null,
+            jaunderThemesCssResponseEndMs:
+              resourceForPath(jaunderThemesCssPath)?.responseEnd ?? null,
+            wasm: wasmEntry
+              ? {
+                  startTime: wasmEntry.startTime,
+                  durationMs: wasmEntry.duration,
+                  responseEndMs: wasmEntry.responseEnd,
+                  decodedBodySize: wasmEntry.decodedBodySize,
+                  encodedBodySize: wasmEntry.encodedBodySize,
+                  transferSize: wasmEntry.transferSize,
+                }
+              : null,
+          };
+        },
+        {
+          prefix: MARK_PREFIX,
+          moduleBeforeInitMark: MODULE_BEFORE_INIT,
+          jaunderCssPath: JAUNDER_CSS_PATH,
+          jaunderThemesCssPath: JAUNDER_THEMES_CSS_PATH,
+        },
+      );
       const harvested: DocumentTiming = {
         ...timing,
         timeOriginMs:
@@ -442,6 +511,13 @@ export async function attachTraceCapture(
           Number.isFinite(timing.timeOriginMs)
             ? timing.timeOriginMs
             : null,
+        moduleBeforeInitMs: finiteTimingOrNull(timing.moduleBeforeInitMs),
+        jaunderCssResponseEndMs: finiteTimingOrNull(
+          timing.jaunderCssResponseEndMs,
+        ),
+        jaunderThemesCssResponseEndMs: finiteTimingOrNull(
+          timing.jaunderThemesCssResponseEndMs,
+        ),
         wasmInit: wasmInitFromMarks(timing.marks),
       };
       documentTimings.set(

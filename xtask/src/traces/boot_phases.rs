@@ -105,6 +105,17 @@ pub struct BootPhaseRow {
     pub frame_skew_remainder_mean_ms: Option<f64>,
     pub frame_skew_remainder_se_ms: Option<f64>,
     pub frame_skew_remainder_max_abs_ms: Option<f64>,
+    pub style_complete: usize,
+    pub style_decisive: bool,
+    pub style_ordering_pass: usize,
+    pub style_to_module_before_init_mean_ms: Option<f64>,
+    pub style_to_module_before_init_se_ms: Option<f64>,
+    pub module_before_init_to_wasm_fetch_start_mean_ms: Option<f64>,
+    pub module_before_init_to_wasm_fetch_start_se_ms: Option<f64>,
+    pub style_max_response_end_mean_ms: Option<f64>,
+    pub style_max_response_end_se_ms: Option<f64>,
+    pub wasm_fetch_start_mean_ms: Option<f64>,
+    pub wasm_fetch_start_se_ms: Option<f64>,
     pub unique_shapes: usize,
     /// Navigations whose segments missed `mount_done.startTime` by more than
     /// [`CLOSURE_TOLERANCE_MS`]. Excluded from every median and counted here —
@@ -168,6 +179,13 @@ struct BridgeSample {
     mount_done_to_binding_ms: f64,
     frame_skew_remainder_ms: f64,
 }
+#[derive(Debug, Clone)]
+struct StyleSample {
+    style_max_response_end_ms: f64,
+    style_to_module_before_init_ms: f64,
+    module_before_init_to_wasm_fetch_start_ms: f64,
+    wasm_fetch_start_ms: f64,
+}
 
 /// One navigation's decomposition: the ordered segments and the reported
 /// (never decomposed) wall-clock quantities.
@@ -198,15 +216,30 @@ fn mark_starts(marks: &[Value]) -> BTreeMap<String, f64> {
         .collect()
 }
 
+/// A complete stylesheet/module diagnostic sample from one navigation. Historical
+/// traces simply omit these keys; that is non-decisive, not an error.
+fn style_sample(nav: &Value) -> Option<StyleSample> {
+    let _module_before_init_ms = field_f64(nav, "moduleBeforeInitMs")?;
+    let _jaunder_css_response_end_ms = field_f64(nav, "jaunderCssResponseEndMs")?;
+    let _jaunder_themes_css_response_end_ms = field_f64(nav, "jaunderThemesCssResponseEndMs")?;
+    Some(StyleSample {
+        style_max_response_end_ms: field_f64(nav, "styleMaxResponseEndMs")?,
+        style_to_module_before_init_ms: field_f64(nav, "styleToModuleBeforeInitMs")?,
+        module_before_init_to_wasm_fetch_start_ms: field_f64(
+            nav,
+            "moduleBeforeInitToWasmFetchStartMs",
+        )?,
+        wasm_fetch_start_ms: field_f64(nav, "wasmFetchStartMs")?,
+    })
+}
+
 /// A complete bridge diagnostic sample from one mounted navigation. Historical
 /// traces simply omit these keys; that is non-decisive, not an error.
 fn bridge_sample(nav: &Value) -> Option<BridgeSample> {
-    if nav.get("frameSkewSchema").and_then(Value::as_str) != Some(BRIDGE_SCHEMA) {
+    let schema = nav.get("frameSkewSchema")?.as_str()?;
+    if schema != BRIDGE_SCHEMA {
         return None;
     }
-    field_f64(nav, "commitToMountMs")?;
-    field_f64(nav, "documentTimeOriginMs")?;
-    field_f64(nav, "documentBootTotalMs")?;
     Some(BridgeSample {
         commit_to_document_start_ms: field_f64(nav, "commitToDocumentStartMs")?,
         mount_done_to_binding_ms: field_f64(nav, "mountDoneToBindingMs")?,
@@ -296,6 +329,7 @@ struct Population {
     navigations: usize,
     current: usize,
     mounted: usize,
+    style: Vec<StyleSample>,
     bridge: Vec<BridgeSample>,
     direct_complete: usize,
     streaming: usize,
@@ -403,6 +437,9 @@ pub fn boot_phase_rows(spans: &[Span]) -> Result<Vec<BootPhaseRow>> {
             if field_f64(nav, "commitToMountMs").is_some() {
                 population.mounted += 1;
             }
+            if let Some(style) = style_sample(nav) {
+                population.style.push(style);
+            }
             if let Some(bridge) = bridge_sample(nav) {
                 population.bridge.push(bridge);
             }
@@ -481,6 +518,44 @@ pub fn boot_phase_rows(spans: &[Span]) -> Result<Vec<BootPhaseRow>> {
                     mean_and_standard_error(&mount_done_to_binding_values);
                 let (frame_skew_remainder_mean_ms, frame_skew_remainder_se_ms) =
                     mean_and_standard_error(&frame_skew_remainder_values);
+                let style_max_response_end_values: Vec<f64> = population
+                    .style
+                    .iter()
+                    .map(|style| style.style_max_response_end_ms)
+                    .collect();
+                let style_to_module_before_init_values: Vec<f64> = population
+                    .style
+                    .iter()
+                    .map(|style| style.style_to_module_before_init_ms)
+                    .collect();
+                let module_before_init_to_wasm_fetch_start_values: Vec<f64> = population
+                    .style
+                    .iter()
+                    .map(|style| style.module_before_init_to_wasm_fetch_start_ms)
+                    .collect();
+                let wasm_fetch_start_values: Vec<f64> = population
+                    .style
+                    .iter()
+                    .map(|style| style.wasm_fetch_start_ms)
+                    .collect();
+                let (style_max_response_end_mean_ms, style_max_response_end_se_ms) =
+                    mean_and_standard_error(&style_max_response_end_values);
+                let (style_to_module_before_init_mean_ms, style_to_module_before_init_se_ms) =
+                    mean_and_standard_error(&style_to_module_before_init_values);
+                let (
+                    module_before_init_to_wasm_fetch_start_mean_ms,
+                    module_before_init_to_wasm_fetch_start_se_ms,
+                ) = mean_and_standard_error(&module_before_init_to_wasm_fetch_start_values);
+                let (wasm_fetch_start_mean_ms, wasm_fetch_start_se_ms) =
+                    mean_and_standard_error(&wasm_fetch_start_values);
+                let style_complete = population.style.len();
+                let style_ordering_pass = population
+                    .style
+                    .iter()
+                    .filter(|style| style.style_to_module_before_init_ms >= 0.0)
+                    .count();
+                let style_decisive =
+                    population.navigations > 0 && style_complete == population.navigations;
                 let frame_skew_remainder_max_abs_ms = frame_skew_remainder_values
                     .iter()
                     .map(|value| value.abs())
@@ -505,6 +580,17 @@ pub fn boot_phase_rows(spans: &[Span]) -> Result<Vec<BootPhaseRow>> {
                     mounted: population.mounted,
                     bridge_complete,
                     bridge_decisive,
+                    style_complete,
+                    style_decisive,
+                    style_ordering_pass,
+                    style_to_module_before_init_mean_ms,
+                    style_to_module_before_init_se_ms,
+                    module_before_init_to_wasm_fetch_start_mean_ms,
+                    module_before_init_to_wasm_fetch_start_se_ms,
+                    style_max_response_end_mean_ms,
+                    style_max_response_end_se_ms,
+                    wasm_fetch_start_mean_ms,
+                    wasm_fetch_start_se_ms,
                     direct_complete: population.direct_complete,
                     direct_missing: population.current - population.direct_complete,
                     streaming: population.streaming,
@@ -640,6 +726,20 @@ fn bridge_status(row: &BootPhaseRow) -> String {
     format!("non-decisive ({})", reasons.join(", "))
 }
 
+fn style_status(row: &BootPhaseRow) -> String {
+    if row.style_decisive {
+        return "decisive".to_string();
+    }
+    let mut reasons = Vec::new();
+    if row.navigations == 0 {
+        reasons.push("no navigations");
+    }
+    if row.style_complete != row.navigations {
+        reasons.push("coverage incomplete");
+    }
+    format!("non-decisive ({})", reasons.join(", "))
+}
+
 /// Render the rows as one block per population.
 pub fn render(rows: &[BootPhaseRow]) -> String {
     if rows.is_empty() {
@@ -661,8 +761,19 @@ pub fn render(rows: &[BootPhaseRow]) -> String {
             "navigations: {}  decomposed: {}  closure violations: {}\n",
             row.navigations, row.decomposed, row.closure_violations
         ));
+        let style_ordering_rate = if row.style_complete > 0 {
+            Some(row.style_ordering_pass as f64 / row.style_complete as f64 * 100.0)
+        } else {
+            None
+        };
         out.push_str(&format!(
             "current: {}  mounted: {}  bridge complete: {}  bridge certification: {}\n\
+             stylesheet complete: {}  stylesheet certification: {}\n\
+             stylesheet ordering pass (styleToModuleBeforeInitMs >= 0): {}/{} ({})\n\
+             mean styleToModuleBeforeInitMs ± SE (n={}): {} ± {}\n\
+             mean moduleBeforeInitToWasmFetchStartMs ± SE (n={}): {} ± {}\n\
+             mean styleMaxResponseEndMs ± SE (n={}): {} ± {}\n\
+             mean wasmFetchStartMs ± SE (n={}): {} ± {}\n\
              direct complete: {}  direct missing: {}  streaming: {}  buffered: {}  legacy: {}\n\
              shape complete: {}  shape missing: {}  unique shapes: {}\n\
              median wasmApiMs (n={}): {}  median wasmInitMs (n={}): {}\n\
@@ -674,6 +785,23 @@ pub fn render(rows: &[BootPhaseRow]) -> String {
             row.mounted,
             row.bridge_complete,
             bridge_status(row),
+            row.style_complete,
+            style_status(row),
+            row.style_ordering_pass,
+            row.style_complete,
+            style_ordering_rate.map_or_else(|| "-".to_string(), |rate| format!("{rate:.1}%")),
+            row.style_complete,
+            optional_ms(row.style_to_module_before_init_mean_ms),
+            optional_ms(row.style_to_module_before_init_se_ms),
+            row.style_complete,
+            optional_ms(row.module_before_init_to_wasm_fetch_start_mean_ms),
+            optional_ms(row.module_before_init_to_wasm_fetch_start_se_ms),
+            row.style_complete,
+            optional_ms(row.style_max_response_end_mean_ms),
+            optional_ms(row.style_max_response_end_se_ms),
+            row.style_complete,
+            optional_ms(row.wasm_fetch_start_mean_ms),
+            optional_ms(row.wasm_fetch_start_se_ms),
             row.direct_complete,
             row.direct_missing,
             row.streaming,
@@ -846,6 +974,44 @@ mod tests {
             json!(frame_skew_remainder_ms),
         );
     }
+
+    fn add_style(
+        nav: &mut Value,
+        module_before_init_ms: f64,
+        jaunder_css_response_end_ms: f64,
+        jaunder_themes_css_response_end_ms: f64,
+        wasm_fetch_start_ms: f64,
+    ) {
+        let style_max_response_end_ms =
+            jaunder_css_response_end_ms.max(jaunder_themes_css_response_end_ms);
+        let object = nav.as_object_mut().unwrap();
+        object.insert(
+            "moduleBeforeInitMs".to_string(),
+            json!(module_before_init_ms),
+        );
+        object.insert(
+            "jaunderCssResponseEndMs".to_string(),
+            json!(jaunder_css_response_end_ms),
+        );
+        object.insert(
+            "jaunderThemesCssResponseEndMs".to_string(),
+            json!(jaunder_themes_css_response_end_ms),
+        );
+        object.insert(
+            "styleMaxResponseEndMs".to_string(),
+            json!(style_max_response_end_ms),
+        );
+        object.insert(
+            "styleToModuleBeforeInitMs".to_string(),
+            json!(module_before_init_ms - style_max_response_end_ms),
+        );
+        object.insert(
+            "moduleBeforeInitToWasmFetchStartMs".to_string(),
+            json!(wasm_fetch_start_ms - module_before_init_ms),
+        );
+        object.insert("wasmFetchStartMs".to_string(), json!(wasm_fetch_start_ms));
+    }
+
     /// An unversioned navigation with no boot marks — retained raw legacy input.
     fn dark_nav(id: i64, warmth: &str) -> Value {
         json!({
@@ -1028,6 +1194,107 @@ mod tests {
         assert!(row.commit_to_document_start_mean_ms.is_none());
         assert!(row.mount_done_to_binding_mean_ms.is_none());
         assert!(row.frame_skew_remainder_mean_ms.is_none());
+    }
+
+    #[test]
+    fn stylesheet_diagnostics_report_complete_coverage_and_ordering_rate() {
+        let mut first = nav(1, "warm", 105.0, Some(155.0));
+        add_style(&mut first, 120.0, 80.0, 90.0, 150.0);
+        let mut second = nav(2, "warm", 95.0, Some(145.0));
+        add_style(&mut second, 95.0, 100.0, 90.0, 140.0);
+        let rows = boot_phase_rows(&test_span(
+            "sqlite",
+            "chromium",
+            vec![first, second],
+            vec![(1, boot_marks(105.0)), (2, boot_marks(95.0))],
+        ))
+        .unwrap();
+        let row = &rows[0];
+        assert_eq!(row.style_complete, 2);
+        assert!(row.style_decisive);
+        assert_eq!(row.style_ordering_pass, 1);
+        assert_eq!(row.style_to_module_before_init_mean_ms, Some(12.5));
+        assert_eq!(
+            row.module_before_init_to_wasm_fetch_start_mean_ms,
+            Some(37.5)
+        );
+        assert_eq!(row.style_max_response_end_mean_ms, Some(95.0));
+        assert_eq!(row.wasm_fetch_start_mean_ms, Some(145.0));
+        let report = render(&rows);
+        assert!(
+            report.contains("stylesheet certification: decisive"),
+            "{report}"
+        );
+        assert!(
+            report
+                .contains("stylesheet ordering pass (styleToModuleBeforeInitMs >= 0): 1/2 (50.0%)"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn stylesheet_diagnostics_mark_historical_missing_rows_non_decisive_without_panic() {
+        let mut complete = nav(1, "warm", 105.0, Some(155.0));
+        add_style(&mut complete, 120.0, 80.0, 90.0, 150.0);
+        let historical = nav(2, "warm", 95.0, Some(145.0));
+        let rows = boot_phase_rows(&test_span(
+            "sqlite",
+            "chromium",
+            vec![complete, historical],
+            vec![(1, boot_marks(105.0)), (2, boot_marks(95.0))],
+        ))
+        .unwrap();
+        let row = &rows[0];
+        assert_eq!(row.style_complete, 1);
+        assert!(!row.style_decisive);
+        assert_eq!(row.style_ordering_pass, 1);
+        assert_eq!(row.style_to_module_before_init_mean_ms, Some(30.0));
+        let report = render(&rows);
+        assert!(
+            report.contains("stylesheet certification: non-decisive (coverage incomplete)"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn stylesheet_diagnostics_report_ordering_failures_decisively() {
+        let mut navigation = nav(1, "warm", 105.0, Some(155.0));
+        add_style(&mut navigation, 95.0, 100.0, 90.0, 140.0);
+        let rows = boot_phase_rows(&test_span(
+            "sqlite",
+            "chromium",
+            vec![navigation],
+            vec![(1, boot_marks(105.0))],
+        ))
+        .unwrap();
+        let row = &rows[0];
+        assert!(row.style_decisive);
+        assert_eq!(row.style_ordering_pass, 0);
+        assert_eq!(row.style_to_module_before_init_mean_ms, Some(-5.0));
+        let report = render(&rows);
+        assert!(
+            report
+                .contains("stylesheet ordering pass (styleToModuleBeforeInitMs >= 0): 0/1 (0.0%)"),
+            "{report}"
+        );
+    }
+
+    #[test]
+    fn stylesheet_diagnostics_render_outside_the_decomposition_table() {
+        let mut navigation = dark_nav(1, "warm");
+        add_style(&mut navigation, 120.0, 80.0, 90.0, 150.0);
+        let rows = boot_phase_rows(&test_span(
+            "sqlite",
+            "chromium",
+            vec![navigation],
+            vec![(1, Vec::new())],
+        ))
+        .unwrap();
+        assert_eq!(rows[0].decomposed, 0);
+        let report = render(&rows);
+        let stylesheet_index = report.find("stylesheet certification: decisive").unwrap();
+        let no_decomposition_index = report.find("no decomposed navigations").unwrap();
+        assert!(stylesheet_index < no_decomposition_index, "{report}");
     }
 
     #[test]

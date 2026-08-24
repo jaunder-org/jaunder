@@ -1447,10 +1447,62 @@ which reattributes the glue load between arms. The floor may or may not depend
 on delivery; this capture cannot say, and #887 is now framed as a question about
 the instrument rather than a report of a regression.
 
-The pre-fetch window (#870's stylesheet question) remains open and is sharpened:
-166–195 ms of it is genuinely removable, and removing it this way converts
-almost none of it into boot time — because whatever else sits between
-`document_start` and `boot.entry` (the glue, at minimum) is still serial.
+The pre-fetch window (#870's stylesheet question) was left open here and is now
+answered by the 2026-08-24 follow-up below.
+
+## #870 — render-blocking stylesheets delay wasm fetch (finding, 2026-08-24)
+
+**Verdict up front: yes, the two render-blocking stylesheets delay the wasm
+fetch.** The browser does not start the shell module until the blocking
+stylesheets have finished, and the wasm fetch starts immediately after the
+module begins. The remaining `module_before_init → wasm_fetch_start` gap is only
+~2–3.5 ms, so the pre-fetch window is stylesheet-blocked rather than hidden in
+the module script.
+
+Corpus: `~/measurements/jaunder/issue-870-stylesheet-wasm-fetch/`, extracted to
+`issue-870-q*.jsonl`. The host was quiescent before capture. Runs were SQLite
+single-worker, three runs per engine, with realized order counterbalanced by
+run:
+
+- `issue-870-q1`: chromium→firefox
+- `issue-870-q2`: firefox→chromium
+- `issue-870-q3`: chromium→firefox
+
+Salts were `issue870-q{1,2,3}`. Commands:
+`nix build --print-out-paths --no-link .#packages.x86_64-linux.e2e-sqlite-{chromium,firefox}-single-worker`,
+then
+`cargo xtask traces boot-phases ~/measurements/jaunder/issue-870-stylesheet-wasm-fetch/issue-870-q*.jsonl`.
+
+The deciding rows are the complete stylesheet diagnostics emitted by the new
+document-frame mark `jaunder.module.before_init` plus the two stylesheet
+`PerformanceResourceTiming.responseEnd` values. Historical or incomplete rows
+remain non-decisive; they are counted by the analyzer and not backfilled.
+
+Coverage and ordering:
+
+| engine   | complete/total rows | coverage | ordering pass | `styleMaxResponseEndMs / wasmFetchStartMs` |
+| -------- | ------------------- | -------- | ------------- | ------------------------------------------ |
+| chromium | 630/636             | 99.1%    | 630/630       | 55.9%                                      |
+| firefox  | 633/636             | 99.5%    | 633/633       | 52.9%                                      |
+
+Per-cache timing:
+
+| engine   | cache | rows | `style_done→module_before_init` | `module_before_init→wasm_fetch_start` |
+| -------- | ----- | ---- | ------------------------------- | ------------------------------------- |
+| chromium | cold  | 501  | 97.1 ± 1.3 ms                   | 3.5 ± 0.1 ms                          |
+| chromium | warm  | 129  | 108.1 ± 1.4 ms                  | 2.0 ± 0.1 ms                          |
+| firefox  | cold  | 504  | 152.8 ± 2.4 ms                  | 2.9 ± 0.1 ms                          |
+| firefox  | warm  | 129  | 157.2 ± 3.5 ms                  | 3.0 ± 0.2 ms                          |
+
+Interpretation: module evaluation is serialized behind the stylesheets, and the
+wasm fetch is then launched promptly. That makes the pre-fetch window a shell
+delivery problem: making the wasm request independent of render-blocking CSS
+would recover roughly the stylesheet delay, subject to preserving ADR-0044's
+pre-paint authentication invariant and ADR-0121's no-double-download guard.
+
+This closes #870. It does **not** close #869, #895, #1103, or #1138. The finding
+does not reinterpret Node-frame `commitToMountMs` as document boot time and does
+not re-open wasm preload; ADR-0100 and ADR-0121 still apply.
 
 ## #868 — frame skew bridge (finding, 2026-08-24)
 

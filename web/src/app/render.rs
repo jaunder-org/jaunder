@@ -38,9 +38,9 @@ pub const DEFAULT_THEME: &str = "studio";
 /// `csr/index.html` and drift-guarded by a unit test.
 pub const PREPAINT_SCRIPT: &str = concat!(
     "<script>\n",
-    "  // prettier-ignore\n",
-    "  (function () {try {var m = localStorage.getItem('jaunder_auth'); if (m) {var u = JSON.parse(m).username; if (u) {var e = document.documentElement; e.classList.add('authed'); e.setAttribute('data-user', u); if (localStorage.getItem('jaunder_home_redirect') === 'app' && location.pathname === '/') {location.replace('/app');} } } } catch (_) { } })();\n",
-    " </script>",
+    "      // prettier-ignore\n",
+    "      (function () {try {var m = localStorage.getItem('jaunder_auth'); if (m) {var u = JSON.parse(m).username; if (u) {var e = document.documentElement; e.classList.add('authed'); e.setAttribute('data-user', u); if (localStorage.getItem('jaunder_home_redirect') === 'app' && location.pathname === '/') {location.replace('/app');} } } } catch (_) { } })();\n",
+    "    </script>",
 );
 
 /// The CSR SPA shell, embedded at compile time. The `cargo xtask build-csr` build
@@ -62,6 +62,9 @@ pub const SPA_SHELL: &str = include_str!("../../../csr/index.html");
 pub const WASM_URL: &str = "/pkg/jaunder.wasm";
 /// The wasm-bindgen JS glue's URL. See [`WASM_URL`].
 pub const GLUE_URL: &str = "/pkg/jaunder.js";
+/// The document-frame mark emitted immediately before `initMeasured()` starts the
+/// wasm fetch. Shared with both shell surfaces and drift-guarded in tests (#870).
+pub const MODULE_BEFORE_INIT_MARK: &str = "jaunder.module.before_init";
 
 /// The document `<head>` inner HTML: per-page title + description + Open Graph.
 /// This is the SEO/discoverability payload — the whole reason the public
@@ -294,8 +297,26 @@ mod tests {
     #[test]
     fn csr_index_html_imports_measured_initializer_from_the_glue_constant() {
         assert!(
-            SPA_SHELL.contains(&format!(r#"import {{initMeasured}} from "{GLUE_URL}""#)),
+            SPA_SHELL.contains(&format!(r#"import {{ initMeasured }} from "{GLUE_URL}""#)),
             "csr/index.html must import initMeasured from {GLUE_URL} (drift guard)"
+        );
+    }
+    #[test]
+    fn csr_index_html_marks_module_before_init_immediately_before_wasm_init() {
+        let import = format!(r#"import {{ initMeasured }} from "{GLUE_URL}";"#);
+        let mark = format!(
+            r#"performance.mark("{}");"#,
+            crate::app::MODULE_BEFORE_INIT_MARK
+        );
+        let init = format!(r#"initMeasured("{WASM_URL}")"#);
+        let import_index = SPA_SHELL.find(&import).expect("csr shell imports glue");
+        let mark_index = SPA_SHELL
+            .find(&mark)
+            .expect("csr shell marks immediately before init");
+        let init_index = SPA_SHELL.find(&init).expect("csr shell calls initMeasured");
+        assert!(
+            import_index < mark_index && mark_index < init_index,
+            "csr/index.html must keep import → mark → init order: {SPA_SHELL}"
         );
     }
 

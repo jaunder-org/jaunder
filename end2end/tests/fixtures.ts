@@ -101,6 +101,12 @@ type NavigationSummary = {
    *  report the input. */
   wasmTimingSchema: "direct-init-v1";
   wasmFetchStartMs: number | null;
+  moduleBeforeInitMs: number | null;
+  jaunderCssResponseEndMs: number | null;
+  jaunderThemesCssResponseEndMs: number | null;
+  styleMaxResponseEndMs: number | null;
+  styleToModuleBeforeInitMs: number | null;
+  moduleBeforeInitToWasmFetchStartMs: number | null;
   wasmFetchMs: number | null;
   wasmInitStartMs: number | null;
   wasmInitStartToBootEntryMs: number | null;
@@ -132,6 +138,57 @@ type NavigationSummary = {
    *  `mount_to_body` returns, so the shell/route fetches resolve after it. */
   mountToSettledMs: number | null;
 };
+export type StylesheetModuleDiagnostics = {
+  moduleBeforeInitMs: number | null;
+  jaunderCssResponseEndMs: number | null;
+  jaunderThemesCssResponseEndMs: number | null;
+  styleMaxResponseEndMs: number | null;
+  styleToModuleBeforeInitMs: number | null;
+  moduleBeforeInitToWasmFetchStartMs: number | null;
+};
+
+export function stylesheetModuleDiagnosticsFrom(
+  timing: DocumentTiming | undefined,
+): StylesheetModuleDiagnostics {
+  const moduleBeforeInitMs =
+    typeof timing?.moduleBeforeInitMs === "number" &&
+    Number.isFinite(timing.moduleBeforeInitMs)
+      ? timing.moduleBeforeInitMs
+      : null;
+  const jaunderCssResponseEndMs =
+    typeof timing?.jaunderCssResponseEndMs === "number" &&
+    Number.isFinite(timing.jaunderCssResponseEndMs)
+      ? timing.jaunderCssResponseEndMs
+      : null;
+  const jaunderThemesCssResponseEndMs =
+    typeof timing?.jaunderThemesCssResponseEndMs === "number" &&
+    Number.isFinite(timing.jaunderThemesCssResponseEndMs)
+      ? timing.jaunderThemesCssResponseEndMs
+      : null;
+  const wasmFetchStartMs =
+    typeof timing?.wasm?.startTime === "number" &&
+    Number.isFinite(timing.wasm.startTime)
+      ? timing.wasm.startTime
+      : null;
+  const styleMaxResponseEndMs =
+    jaunderCssResponseEndMs !== null && jaunderThemesCssResponseEndMs !== null
+      ? Math.max(jaunderCssResponseEndMs, jaunderThemesCssResponseEndMs)
+      : null;
+  return {
+    moduleBeforeInitMs,
+    jaunderCssResponseEndMs,
+    jaunderThemesCssResponseEndMs,
+    styleMaxResponseEndMs,
+    styleToModuleBeforeInitMs:
+      moduleBeforeInitMs !== null && styleMaxResponseEndMs !== null
+        ? moduleBeforeInitMs - styleMaxResponseEndMs
+        : null,
+    moduleBeforeInitToWasmFetchStartMs:
+      moduleBeforeInitMs !== null && wasmFetchStartMs !== null
+        ? wasmFetchStartMs - moduleBeforeInitMs
+        : null,
+  };
+}
 
 /**
  * Decompose one document's boot marks into consecutive phase durations.
@@ -780,6 +837,7 @@ const test = base.extend<{
             (mark) => mark.name === "jaunder.boot.entry",
           );
           const bridge = navigationBridgeFieldsFrom(navigation, timing);
+          const stylesheetModule = stylesheetModuleDiagnosticsFrom(timing);
           const wasmInit = timing?.wasmInit;
           const wasmInitMs =
             wasmInit?.startMs !== null &&
@@ -805,6 +863,7 @@ const test = base.extend<{
             domContentLoadedToLoadMs,
             requestFailed: navigation.requestFailed,
             wasmFetchStartMs: wasm?.startTime ?? null,
+            ...stylesheetModule,
             wasmFetchMs: wasm?.durationMs ?? null,
             wasmDecodedBytes: wasm?.decodedBodySize ?? null,
             wasmEncodedBytes: wasm?.encodedBodySize ?? null,

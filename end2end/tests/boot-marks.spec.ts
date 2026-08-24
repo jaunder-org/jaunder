@@ -11,7 +11,10 @@ import {
   wasmInitFromMarks,
   type DocumentTiming,
 } from "./capture-trace";
-import { navigationBridgeFieldsFrom } from "./fixtures";
+import {
+  navigationBridgeFieldsFrom,
+  stylesheetModuleDiagnosticsFrom,
+} from "./fixtures";
 import { goto } from "./helpers";
 
 const wasm = {
@@ -27,118 +30,148 @@ const marks = (count: number) =>
     name: `jaunder.boot.m${index}`,
     startTime: index,
   }));
+const documentTiming = (
+  overrides: Partial<DocumentTiming>,
+): DocumentTiming => ({
+  timeOriginMs: null,
+  marks: [],
+  moduleBeforeInitMs: null,
+  jaunderCssResponseEndMs: null,
+  jaunderThemesCssResponseEndMs: null,
+  wasm: null,
+  ...overrides,
+});
 
-// `toBe` (identity), not `toEqual`: the merge PICKS a snapshot, it never builds a
-// blended one. Copying would be a silent behavior change, so identity is the contract.
+// `toBe` (identity), not `toEqual`, in the snapshot-selection cases below: the
+// merge chooses one harvest for marks/wasm, and only scalar backfills allocate.
 test.describe("mergeDocumentTiming", () => {
   test("takes the incoming snapshot when there is no existing one", () => {
-    const incoming: DocumentTiming = {
+    const incoming: DocumentTiming = documentTiming({
       timeOriginMs: 10,
       marks: marks(4),
       wasm,
-    };
+    });
     expect(mergeDocumentTiming(undefined, incoming)).toBe(incoming);
   });
 
   test("prefers the snapshot with more marks when it arrives second", () => {
     // The firefox ordering: `load` harvests an empty document first, mount-ready
     // harvests the full one after.
-    const existing: DocumentTiming = {
+    const existing: DocumentTiming = documentTiming({
       timeOriginMs: 10,
       marks: [],
       wasm: null,
-    };
-    const incoming: DocumentTiming = {
+    });
+    const incoming: DocumentTiming = documentTiming({
       timeOriginMs: 10,
       marks: marks(4),
       wasm,
-    };
+    });
     expect(mergeDocumentTiming(existing, incoming)).toBe(incoming);
   });
 
   test("prefers the snapshot with more marks when it arrived first", () => {
     // The clobber this rule exists to prevent: a late-resolving `load` harvest must
     // not overwrite a complete mount-ready one.
-    const existing: DocumentTiming = {
+    const existing: DocumentTiming = documentTiming({
       timeOriginMs: 10,
       marks: marks(4),
       wasm,
-    };
-    const incoming: DocumentTiming = {
+    });
+    const incoming: DocumentTiming = documentTiming({
       timeOriginMs: 10,
       marks: [],
       wasm: null,
-    };
+    });
     expect(mergeDocumentTiming(existing, incoming)).toBe(existing);
   });
 
   test("breaks a mark-count tie toward the incoming snapshot's wasm timing", () => {
-    const existing: DocumentTiming = {
+    const existing: DocumentTiming = documentTiming({
       timeOriginMs: 10,
       marks: marks(4),
       wasm: null,
-    };
-    const incoming: DocumentTiming = {
+    });
+    const incoming: DocumentTiming = documentTiming({
       timeOriginMs: 10,
       marks: marks(4),
       wasm,
-    };
+    });
     expect(mergeDocumentTiming(existing, incoming)).toBe(incoming);
   });
 
   test("keeps the existing snapshot's wasm timing on a tie", () => {
-    const existing: DocumentTiming = {
+    const existing: DocumentTiming = documentTiming({
       timeOriginMs: 10,
       marks: marks(4),
       wasm,
-    };
-    const incoming: DocumentTiming = {
+    });
+    const incoming: DocumentTiming = documentTiming({
       timeOriginMs: 10,
       marks: marks(4),
       wasm: null,
-    };
+    });
     expect(mergeDocumentTiming(existing, incoming)).toBe(existing);
   });
 
   test("keeps the existing snapshot when a tie gives neither side more", () => {
-    const existing: DocumentTiming = {
+    const existing: DocumentTiming = documentTiming({
       timeOriginMs: 10,
       marks: marks(4),
       wasm,
-    };
-    const incoming: DocumentTiming = {
+    });
+    const incoming: DocumentTiming = documentTiming({
       timeOriginMs: 10,
       marks: marks(4),
       wasm,
-    };
+    });
     expect(mergeDocumentTiming(existing, incoming)).toBe(existing);
   });
 
   test("keeps the selected snapshot but fills a missing document epoch", () => {
-    const existing: DocumentTiming = {
+    const existing: DocumentTiming = documentTiming({
       timeOriginMs: null,
       marks: marks(4),
       wasm,
-    };
-    const incoming: DocumentTiming = {
+    });
+    const incoming: DocumentTiming = documentTiming({
       timeOriginMs: 25,
       marks: marks(4),
       wasm: null,
-    };
+    });
     expect(mergeDocumentTiming(existing, incoming)).toEqual({
       ...existing,
       timeOriginMs: 25,
     });
   });
+  test("backfills missing stylesheet and module diagnostics from a sibling harvest", () => {
+    const existing: DocumentTiming = documentTiming({
+      timeOriginMs: 10,
+      marks: marks(4),
+      moduleBeforeInitMs: 35,
+      wasm,
+    });
+    const incoming: DocumentTiming = documentTiming({
+      timeOriginMs: 10,
+      marks: marks(4),
+      jaunderCssResponseEndMs: 12,
+      jaunderThemesCssResponseEndMs: 20,
+    });
+    expect(mergeDocumentTiming(existing, incoming)).toEqual({
+      ...existing,
+      jaunderCssResponseEndMs: 12,
+      jaunderThemesCssResponseEndMs: 20,
+    });
+  });
 });
 
 test("keeps a completion harvest that arrives after the fullest boot marks", () => {
-  const bootSnapshot: DocumentTiming = {
+  const bootSnapshot: DocumentTiming = documentTiming({
     timeOriginMs: 10,
     marks: marks(4),
     wasm,
-  };
-  const completionSnapshot: DocumentTiming = {
+  });
+  const completionSnapshot: DocumentTiming = documentTiming({
     timeOriginMs: 10,
     marks: marks(4),
     wasm,
@@ -150,7 +183,7 @@ test("keeps a completion harvest that arrives after the fullest boot marks", () 
       experimentArm: null,
       moduleShape: null,
     },
-  };
+  });
 
   expect(mergeDocumentTiming(bootSnapshot, completionSnapshot)).toEqual(
     completionSnapshot,
@@ -238,16 +271,76 @@ test("rejects malformed initializer completion detail", () => {
     moduleShape: null,
   });
 });
+test.describe("stylesheetModuleDiagnosticsFrom", () => {
+  test("reports complete stylesheet/module diagnostics when all inputs exist", () => {
+    expect(
+      stylesheetModuleDiagnosticsFrom(
+        documentTiming({
+          moduleBeforeInitMs: 30,
+          jaunderCssResponseEndMs: 10,
+          jaunderThemesCssResponseEndMs: 20,
+          wasm: { ...wasm, startTime: 45 },
+        }),
+      ),
+    ).toEqual({
+      moduleBeforeInitMs: 30,
+      jaunderCssResponseEndMs: 10,
+      jaunderThemesCssResponseEndMs: 20,
+      styleMaxResponseEndMs: 20,
+      styleToModuleBeforeInitMs: 10,
+      moduleBeforeInitToWasmFetchStartMs: 15,
+    });
+  });
+
+  test("keeps only diagnostics whose required inputs exist", () => {
+    expect(
+      stylesheetModuleDiagnosticsFrom(
+        documentTiming({
+          moduleBeforeInitMs: 30,
+          jaunderCssResponseEndMs: 10,
+          wasm: { ...wasm, startTime: 45 },
+        }),
+      ),
+    ).toEqual({
+      moduleBeforeInitMs: 30,
+      jaunderCssResponseEndMs: 10,
+      jaunderThemesCssResponseEndMs: null,
+      styleMaxResponseEndMs: null,
+      styleToModuleBeforeInitMs: null,
+      moduleBeforeInitToWasmFetchStartMs: 15,
+    });
+  });
+
+  test("returns null stylesheet/module diagnostics for malformed inputs", () => {
+    expect(
+      stylesheetModuleDiagnosticsFrom(
+        documentTiming({
+          moduleBeforeInitMs: Number.NaN,
+          jaunderCssResponseEndMs: Number.NaN,
+          jaunderThemesCssResponseEndMs: Number.NaN,
+          wasm: { ...wasm, startTime: Number.NaN },
+        }),
+      ),
+    ).toEqual({
+      moduleBeforeInitMs: null,
+      jaunderCssResponseEndMs: null,
+      jaunderThemesCssResponseEndMs: null,
+      styleMaxResponseEndMs: null,
+      styleToModuleBeforeInitMs: null,
+      moduleBeforeInitToWasmFetchStartMs: null,
+    });
+  });
+});
 
 test.describe("navigationBridgeFieldsFrom", () => {
-  const timingWithMountDone: DocumentTiming = {
+  const timingWithMountDone: DocumentTiming = documentTiming({
     timeOriginMs: 1_000,
     marks: [
       { name: "jaunder.boot.entry", startTime: 5 },
       { name: "jaunder.boot.mount_done", startTime: 40 },
     ],
     wasm: null,
-  };
+  });
 
   test("reports complete bridge diagnostics when all inputs exist", () => {
     expect(
@@ -431,6 +524,9 @@ test("boot fetches the wasm once and the harness captures the full mark set", as
   expect(timing?.wasmInit?.startMs).not.toBeNull();
   expect(timing?.wasmInit?.doneMs).not.toBeNull();
   expect(timing?.wasmInit?.apiMs).not.toBeNull();
+  expect(timing?.moduleBeforeInitMs).not.toBeNull();
+  expect(timing?.jaunderCssResponseEndMs).not.toBeNull();
+  expect(timing?.jaunderThemesCssResponseEndMs).not.toBeNull();
 });
 
 test("initializer records buffered when streaming is unavailable and restores APIs", async ({
