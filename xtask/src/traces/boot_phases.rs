@@ -46,6 +46,13 @@ const MOUNT_DONE_SUFFIX: &str = ".boot.mount_done";
 /// (`end2end/tests/fixtures.ts`) emits n-1 intervals over *all* `jaunder.*` marks,
 /// so a new mark must extend the decomposition rather than break its closure.
 const BOOT_INTERVAL_KEY: &str = "boot.";
+/// Shared bridge schema for frame-skew diagnostics recorded on navigations.
+const BRIDGE_SCHEMA: &str = "bridge-v1";
+
+/// Remainder closure tolerance registered by issue #868. Populations that miss
+/// it stay non-decisive.
+const BRIDGE_MEAN_TOLERANCE_MS: f64 = 1.0;
+const BRIDGE_MAX_TOLERANCE_MS: f64 = 2.0;
 
 /// One segment's median across a population.
 ///
@@ -59,7 +66,7 @@ pub struct SegmentMedian {
     pub count: usize,
 }
 
-/// One `(source, project, cacheWarmth)` population.
+/// One `(source, project, cacheWarmth, experiment arm)` population.
 ///
 /// `navigations` is every navigation seen, `decomposed` only those that carried a
 /// full mark set *and* closed. The two differing is the #818 signal itself, so
@@ -75,6 +82,9 @@ pub struct BootPhaseRow {
     pub navigations: usize,
     pub decomposed: usize,
     pub current: usize,
+    pub mounted: usize,
+    pub bridge_complete: usize,
+    pub bridge_decisive: bool,
     pub direct_complete: usize,
     pub direct_missing: usize,
     pub streaming: usize,
@@ -88,6 +98,13 @@ pub struct BootPhaseRow {
     pub wasm_api_se_ms: Option<f64>,
     pub wasm_init_mean_ms: Option<f64>,
     pub wasm_init_se_ms: Option<f64>,
+    pub commit_to_document_start_mean_ms: Option<f64>,
+    pub commit_to_document_start_se_ms: Option<f64>,
+    pub mount_done_to_binding_mean_ms: Option<f64>,
+    pub mount_done_to_binding_se_ms: Option<f64>,
+    pub frame_skew_remainder_mean_ms: Option<f64>,
+    pub frame_skew_remainder_se_ms: Option<f64>,
+    pub frame_skew_remainder_max_abs_ms: Option<f64>,
     pub unique_shapes: usize,
     /// Navigations whose segments missed `mount_done.startTime` by more than
     /// [`CLOSURE_TOLERANCE_MS`]. Excluded from every median and counted here —
@@ -145,8 +162,14 @@ fn mean_and_standard_error(values: &[f64]) -> (Option<f64>, Option<f64>) {
         / (n - 1.0);
     (Some(mean), Some(variance.sqrt() / n.sqrt()))
 }
+#[derive(Debug, Clone)]
+struct BridgeSample {
+    commit_to_document_start_ms: f64,
+    mount_done_to_binding_ms: f64,
+    frame_skew_remainder_ms: f64,
+}
 
-/// One navigation's decomposition: the ordered segments and the two reported
+/// One navigation's decomposition: the ordered segments and the reported
 /// (never decomposed) wall-clock quantities.
 #[derive(Debug, Clone)]
 struct Decomposition {
@@ -173,6 +196,22 @@ fn mark_starts(marks: &[Value]) -> BTreeMap<String, f64> {
             Some((name.to_string(), field_f64(mark, "startTime")?))
         })
         .collect()
+}
+
+/// A complete bridge diagnostic sample from one mounted navigation. Historical
+/// traces simply omit these keys; that is non-decisive, not an error.
+fn bridge_sample(nav: &Value) -> Option<BridgeSample> {
+    if nav.get("frameSkewSchema").and_then(Value::as_str) != Some(BRIDGE_SCHEMA) {
+        return None;
+    }
+    field_f64(nav, "commitToMountMs")?;
+    field_f64(nav, "documentTimeOriginMs")?;
+    field_f64(nav, "documentBootTotalMs")?;
+    Some(BridgeSample {
+        commit_to_document_start_ms: field_f64(nav, "commitToDocumentStartMs")?,
+        mount_done_to_binding_ms: field_f64(nav, "mountDoneToBindingMs")?,
+        frame_skew_remainder_ms: field_f64(nav, "frameSkewRemainderMs")?,
+    })
 }
 
 /// Decompose one current navigation against its own marks (spec D5).
@@ -256,6 +295,8 @@ fn decompose(nav: &Value, marks: &[Value]) -> NavOutcome {
 struct Population {
     navigations: usize,
     current: usize,
+    mounted: usize,
+    bridge: Vec<BridgeSample>,
     direct_complete: usize,
     streaming: usize,
     buffered: usize,
@@ -359,6 +400,12 @@ pub fn boot_phase_rows(spans: &[Span]) -> Result<Vec<BootPhaseRow>> {
                 }
             };
             population.navigations += 1;
+            if field_f64(nav, "commitToMountMs").is_some() {
+                population.mounted += 1;
+            }
+            if let Some(bridge) = bridge_sample(nav) {
+                population.bridge.push(bridge);
+            }
             if nav.get("wasmTimingSchema").and_then(Value::as_str) != Some("direct-init-v1") {
                 population.legacy += 1;
                 continue;
@@ -413,6 +460,40 @@ pub fn boot_phase_rows(spans: &[Span]) -> Result<Vec<BootPhaseRow>> {
                     mean_and_standard_error(&population.wasm_api_ms);
                 let (wasm_init_mean_ms, wasm_init_se_ms) =
                     mean_and_standard_error(&population.wasm_init_ms);
+                let commit_to_document_start_values: Vec<f64> = population
+                    .bridge
+                    .iter()
+                    .map(|bridge| bridge.commit_to_document_start_ms)
+                    .collect();
+                let mount_done_to_binding_values: Vec<f64> = population
+                    .bridge
+                    .iter()
+                    .map(|bridge| bridge.mount_done_to_binding_ms)
+                    .collect();
+                let frame_skew_remainder_values: Vec<f64> = population
+                    .bridge
+                    .iter()
+                    .map(|bridge| bridge.frame_skew_remainder_ms)
+                    .collect();
+                let (commit_to_document_start_mean_ms, commit_to_document_start_se_ms) =
+                    mean_and_standard_error(&commit_to_document_start_values);
+                let (mount_done_to_binding_mean_ms, mount_done_to_binding_se_ms) =
+                    mean_and_standard_error(&mount_done_to_binding_values);
+                let (frame_skew_remainder_mean_ms, frame_skew_remainder_se_ms) =
+                    mean_and_standard_error(&frame_skew_remainder_values);
+                let frame_skew_remainder_max_abs_ms = frame_skew_remainder_values
+                    .iter()
+                    .map(|value| value.abs())
+                    .max_by(|left, right| {
+                        left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                let bridge_complete = population.bridge.len();
+                let bridge_decisive = population.mounted > 0
+                    && bridge_complete == population.mounted
+                    && frame_skew_remainder_mean_ms
+                        .is_some_and(|mean| mean.abs() <= BRIDGE_MEAN_TOLERANCE_MS)
+                    && frame_skew_remainder_max_abs_ms
+                        .is_some_and(|max| max <= BRIDGE_MAX_TOLERANCE_MS);
                 BootPhaseRow {
                     source,
                     project,
@@ -421,6 +502,9 @@ pub fn boot_phase_rows(spans: &[Span]) -> Result<Vec<BootPhaseRow>> {
                     navigations: population.navigations,
                     decomposed: population.decomposed.len(),
                     current: population.current,
+                    mounted: population.mounted,
+                    bridge_complete,
+                    bridge_decisive,
                     direct_complete: population.direct_complete,
                     direct_missing: population.current - population.direct_complete,
                     streaming: population.streaming,
@@ -430,11 +514,18 @@ pub fn boot_phase_rows(spans: &[Span]) -> Result<Vec<BootPhaseRow>> {
                     wasm_init_ms: median(&mut population.wasm_init_ms),
                     shape_complete: population.shape_complete,
                     shape_missing: population.shape_missing,
-                    unique_shapes: population.shapes.len(),
                     wasm_api_mean_ms,
                     wasm_api_se_ms,
                     wasm_init_mean_ms,
                     wasm_init_se_ms,
+                    commit_to_document_start_mean_ms,
+                    commit_to_document_start_se_ms,
+                    mount_done_to_binding_mean_ms,
+                    mount_done_to_binding_se_ms,
+                    frame_skew_remainder_mean_ms,
+                    frame_skew_remainder_se_ms,
+                    frame_skew_remainder_max_abs_ms,
+                    unique_shapes: population.shapes.len(),
                     closure_violations: population.closure_violations,
                     segments: segment_medians(&population.decomposed),
                     boot_total_ms: median(
@@ -522,6 +613,32 @@ struct SegmentDisplay {
     share: String,
     n: usize,
 }
+fn bridge_status(row: &BootPhaseRow) -> String {
+    if row.bridge_decisive {
+        return "decisive".to_string();
+    }
+    let mut reasons = Vec::new();
+    if row.mounted == 0 {
+        reasons.push("no mounted navigations");
+    }
+    if row.bridge_complete != row.mounted {
+        reasons.push("coverage incomplete");
+    } else {
+        if row
+            .frame_skew_remainder_mean_ms
+            .is_none_or(|mean| mean.abs() > BRIDGE_MEAN_TOLERANCE_MS)
+        {
+            reasons.push("mean remainder out of bounds");
+        }
+        if row
+            .frame_skew_remainder_max_abs_ms
+            .is_none_or(|max| max > BRIDGE_MAX_TOLERANCE_MS)
+        {
+            reasons.push("max remainder out of bounds");
+        }
+    }
+    format!("non-decisive ({})", reasons.join(", "))
+}
 
 /// Render the rows as one block per population.
 pub fn render(rows: &[BootPhaseRow]) -> String {
@@ -532,6 +649,7 @@ pub fn render(rows: &[BootPhaseRow]) -> String {
         "Boot-phase decomposition (medians; even counts take the lower middle value).\n\
          Segments are document-relative and close on mount_done.startTime exactly;\n\
          commitToMountMs is Node-side wall clock and is reported, never decomposed.\n\
+         Frame-skew bridge diagnostics stay outside the app boot decomposition table.\n\
          Per-segment medians are marginal, so they need not sum to the median total.\n\n",
     );
     for row in rows {
@@ -544,11 +662,18 @@ pub fn render(rows: &[BootPhaseRow]) -> String {
             row.navigations, row.decomposed, row.closure_violations
         ));
         out.push_str(&format!(
-            "current: {}  direct complete: {}  direct missing: {}  streaming: {}  buffered: {}  legacy: {}\n\
+            "current: {}  mounted: {}  bridge complete: {}  bridge certification: {}\n\
+             direct complete: {}  direct missing: {}  streaming: {}  buffered: {}  legacy: {}\n\
              shape complete: {}  shape missing: {}  unique shapes: {}\n\
              median wasmApiMs (n={}): {}  median wasmInitMs (n={}): {}\n\
-             mean wasmApiMs ± SE: {} ± {}  mean wasmInitMs ± SE: {} ± {}\n",
+             mean wasmApiMs ± SE: {} ± {}  mean wasmInitMs ± SE: {} ± {}\n\
+             mean commitToDocumentStartMs ± SE (n={}): {} ± {}\n\
+             mean mountDoneToBindingMs ± SE (n={}): {} ± {}\n\
+             mean frameSkewRemainderMs ± SE (n={}): {} ± {}  max |remainder|: {}\n",
             row.current,
+            row.mounted,
+            row.bridge_complete,
+            bridge_status(row),
             row.direct_complete,
             row.direct_missing,
             row.streaming,
@@ -565,6 +690,16 @@ pub fn render(rows: &[BootPhaseRow]) -> String {
             optional_ms(row.wasm_api_se_ms),
             optional_ms(row.wasm_init_mean_ms),
             optional_ms(row.wasm_init_se_ms),
+            row.bridge_complete,
+            optional_ms(row.commit_to_document_start_mean_ms),
+            optional_ms(row.commit_to_document_start_se_ms),
+            row.bridge_complete,
+            optional_ms(row.mount_done_to_binding_mean_ms),
+            optional_ms(row.mount_done_to_binding_se_ms),
+            row.bridge_complete,
+            optional_ms(row.frame_skew_remainder_mean_ms),
+            optional_ms(row.frame_skew_remainder_se_ms),
+            optional_ms(row.frame_skew_remainder_max_abs_ms),
         ));
         // Loud, because an empty table and "the instrument was dark" look
         // identical otherwise — and that is the #818 failure mode itself.
@@ -679,6 +814,38 @@ mod tests {
             "bootPhases": boot_phases_object(mount_done_ms),
         })
     }
+
+    fn add_bridge(
+        nav: &mut Value,
+        document_time_origin_ms: f64,
+        document_boot_total_ms: f64,
+        commit_to_document_start_ms: f64,
+        mount_done_to_binding_ms: f64,
+        frame_skew_remainder_ms: f64,
+    ) {
+        let object = nav.as_object_mut().unwrap();
+        object.insert("frameSkewSchema".to_string(), json!(BRIDGE_SCHEMA));
+        object.insert(
+            "documentTimeOriginMs".to_string(),
+            json!(document_time_origin_ms),
+        );
+        object.insert(
+            "documentBootTotalMs".to_string(),
+            json!(document_boot_total_ms),
+        );
+        object.insert(
+            "commitToDocumentStartMs".to_string(),
+            json!(commit_to_document_start_ms),
+        );
+        object.insert(
+            "mountDoneToBindingMs".to_string(),
+            json!(mount_done_to_binding_ms),
+        );
+        object.insert(
+            "frameSkewRemainderMs".to_string(),
+            json!(frame_skew_remainder_ms),
+        );
+    }
     /// An unversioned navigation with no boot marks — retained raw legacy input.
     fn dark_nav(id: i64, warmth: &str) -> Value {
         json!({
@@ -779,6 +946,88 @@ mod tests {
                 .any(|s| s.label.contains("commit") || s.label.contains("skew")),
             "the wall-clock quantities must never appear as segments",
         );
+    }
+
+    #[test]
+    fn boot_phase_bridge_rows_report_complete_decisive_coverage() {
+        let mut first = nav(1, "warm", 105.0, Some(155.0));
+        add_bridge(&mut first, 1_000.0, 105.0, 15.0, 35.0, 0.5);
+        let mut second = nav(2, "warm", 95.0, Some(145.0));
+        add_bridge(&mut second, 1_100.0, 95.0, 18.0, 31.0, -0.5);
+        let rows = boot_phase_rows(&test_span(
+            "sqlite",
+            "chromium",
+            vec![first, second],
+            vec![(1, boot_marks(105.0)), (2, boot_marks(95.0))],
+        ))
+        .unwrap();
+        let row = &rows[0];
+        assert_eq!(row.mounted, 2);
+        assert_eq!(row.bridge_complete, 2);
+        assert!(row.bridge_decisive);
+        assert_eq!(row.commit_to_document_start_mean_ms, Some(16.5));
+        assert_eq!(row.mount_done_to_binding_mean_ms, Some(33.0));
+        assert_eq!(row.frame_skew_remainder_mean_ms, Some(0.0));
+        assert_eq!(row.frame_skew_remainder_max_abs_ms, Some(0.5));
+    }
+
+    #[test]
+    fn boot_phase_bridge_rows_mark_incomplete_coverage_non_decisive() {
+        let mut complete = nav(1, "warm", 105.0, Some(155.0));
+        add_bridge(&mut complete, 1_000.0, 105.0, 15.0, 35.0, 0.0);
+        let missing = nav(2, "warm", 95.0, Some(145.0));
+        let rows = boot_phase_rows(&test_span(
+            "sqlite",
+            "chromium",
+            vec![complete, missing],
+            vec![(1, boot_marks(105.0)), (2, boot_marks(95.0))],
+        ))
+        .unwrap();
+        let row = &rows[0];
+        assert_eq!(row.mounted, 2);
+        assert_eq!(row.bridge_complete, 1);
+        assert!(!row.bridge_decisive);
+        assert!(render(&rows).contains("bridge certification: non-decisive (coverage incomplete"));
+    }
+
+    #[test]
+    fn boot_phase_bridge_rows_mark_closure_failure_non_decisive() {
+        let mut navigation = nav(1, "warm", 105.0, Some(155.0));
+        add_bridge(&mut navigation, 1_000.0, 105.0, 15.0, 35.0, 2.5);
+        let rows = boot_phase_rows(&test_span(
+            "sqlite",
+            "chromium",
+            vec![navigation],
+            vec![(1, boot_marks(105.0))],
+        ))
+        .unwrap();
+        let row = &rows[0];
+        assert_eq!(row.bridge_complete, 1);
+        assert_eq!(row.frame_skew_remainder_mean_ms, Some(2.5));
+        assert_eq!(row.frame_skew_remainder_max_abs_ms, Some(2.5));
+        assert!(!row.bridge_decisive);
+        let out = render(&rows);
+        assert!(out.contains("mean frameSkewRemainderMs ± SE (n=1): 2.500 ± -"));
+        assert!(out.contains("max |remainder|: 2.500"));
+    }
+
+    #[test]
+    fn boot_phase_bridge_rows_treat_historical_missing_fields_as_non_decisive_not_panic() {
+        let historical = nav(1, "warm", 105.0, Some(155.0));
+        let rows = boot_phase_rows(&test_span(
+            "sqlite",
+            "chromium",
+            vec![historical],
+            vec![(1, boot_marks(105.0))],
+        ))
+        .unwrap();
+        let row = &rows[0];
+        assert_eq!(row.mounted, 1);
+        assert_eq!(row.bridge_complete, 0);
+        assert!(!row.bridge_decisive);
+        assert!(row.commit_to_document_start_mean_ms.is_none());
+        assert!(row.mount_done_to_binding_mean_ms.is_none());
+        assert!(row.frame_skew_remainder_mean_ms.is_none());
     }
 
     #[test]
@@ -978,12 +1227,21 @@ mod tests {
 
     #[test]
     fn boot_phase_render_names_every_population_and_its_violations() {
-        let mut spans = one_nav_span("sqlite", "chromium", 105.0);
+        let mut navigation = nav(1, "warm", 105.0, Some(155.0));
+        add_bridge(&mut navigation, 1_000.0, 105.0, 15.0, 35.0, 0.0);
+        let mut spans = test_span(
+            "sqlite",
+            "chromium",
+            vec![navigation],
+            vec![(1, boot_marks(105.0))],
+        );
         spans.extend(one_nav_span("postgres", "firefox", 205.0));
         let out = render(&boot_phase_rows(&spans).unwrap());
         assert!(out.contains("sqlite / chromium / warm"));
         assert!(out.contains("postgres / firefox / warm"));
         assert!(out.contains("closure violations: 0"));
+        assert!(out.contains("bridge certification: decisive"));
+        assert!(out.contains("mean commitToDocumentStartMs ± SE"));
         assert!(out.contains("median frame skew"));
     }
 

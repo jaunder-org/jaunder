@@ -96,9 +96,9 @@ type NavigationSummary = {
   commitToMountMs: number | null;
   domContentLoadedToLoadMs: number | null;
   requestFailed: boolean;
-  /** Decomposition of `commitToMountMs`. All document-relative (see
-   *  `capture-trace.ts`), so comparable to each other but not to the wall-clock
-   *  fields above. `null` where the document did not report the input. */
+  /** Document-frame boot diagnostics, never a decomposition of `commitToMountMs`
+   *  (see `capture-trace.ts` / ADR-0100). `null` where the document did not
+   *  report the input. */
   wasmTimingSchema: "direct-init-v1";
   wasmFetchStartMs: number | null;
   wasmFetchMs: number | null;
@@ -119,6 +119,13 @@ type NavigationSummary = {
   wasmDecodedBytes: number | null;
   wasmEncodedBytes: number | null;
   wasmTransferBytes: number | null;
+  /** Bridge-only diagnostics between the Node and document time frames. */
+  frameSkewSchema: "bridge-v1" | null;
+  documentTimeOriginMs: number | null;
+  documentBootTotalMs: number | null;
+  commitToDocumentStartMs: number | null;
+  mountDoneToBindingMs: number | null;
+  frameSkewRemainderMs: number | null;
   bootPhases: Record<string, number> | null;
   /** Mount-ready → the last mount-path request finishing. Covers what
    *  `commitToMountMs` does NOT: `data-mounted` is set the instant
@@ -201,6 +208,74 @@ function mountToSettledMs(
     >((latest, request) => (latest === null || request.endedMs > latest ? request.endedMs : latest), null);
 
   return settledMs === null ? null : settledMs - mountedMs;
+}
+export type NavigationBridgeFields = {
+  frameSkewSchema: "bridge-v1" | null;
+  documentTimeOriginMs: number | null;
+  documentBootTotalMs: number | null;
+  commitToDocumentStartMs: number | null;
+  mountDoneToBindingMs: number | null;
+  frameSkewRemainderMs: number | null;
+};
+
+export function navigationBridgeFieldsFrom(
+  navigation: Pick<NavigationRecord, "committedMs" | "mountedMs">,
+  timing: DocumentTiming | undefined,
+): NavigationBridgeFields {
+  const committedMs =
+    typeof navigation.committedMs === "number" &&
+    Number.isFinite(navigation.committedMs)
+      ? navigation.committedMs
+      : null;
+  const mountedMs =
+    typeof navigation.mountedMs === "number" &&
+    Number.isFinite(navigation.mountedMs)
+      ? navigation.mountedMs
+      : null;
+  const documentTimeOriginMs =
+    typeof timing?.timeOriginMs === "number" &&
+    Number.isFinite(timing.timeOriginMs)
+      ? timing.timeOriginMs
+      : null;
+  const mountDoneMark = timing?.marks.find(
+    (mark) => mark.name === "jaunder.boot.mount_done",
+  );
+  const documentBootTotalMs =
+    typeof mountDoneMark?.startTime === "number" &&
+    Number.isFinite(mountDoneMark.startTime)
+      ? mountDoneMark.startTime
+      : null;
+  if (
+    committedMs === null ||
+    mountedMs === null ||
+    documentTimeOriginMs === null ||
+    documentBootTotalMs === null
+  ) {
+    return {
+      frameSkewSchema: null,
+      documentTimeOriginMs: null,
+      documentBootTotalMs: null,
+      commitToDocumentStartMs: null,
+      mountDoneToBindingMs: null,
+      frameSkewRemainderMs: null,
+    };
+  }
+  const commitToMountMs = mountedMs - committedMs;
+  const commitToDocumentStartMs = documentTimeOriginMs - committedMs;
+  const mountDoneToBindingMs =
+    mountedMs - (documentTimeOriginMs + documentBootTotalMs);
+  return {
+    frameSkewSchema: "bridge-v1",
+    documentTimeOriginMs,
+    documentBootTotalMs,
+    commitToDocumentStartMs,
+    mountDoneToBindingMs,
+    frameSkewRemainderMs:
+      commitToMountMs -
+      documentBootTotalMs -
+      commitToDocumentStartMs -
+      mountDoneToBindingMs,
+  };
 }
 
 // Per-test budgets scale up for two independent reasons, and a test can hit
@@ -704,6 +779,7 @@ const test = base.extend<{
           const bootEntry = timing?.marks.find(
             (mark) => mark.name === "jaunder.boot.entry",
           );
+          const bridge = navigationBridgeFieldsFrom(navigation, timing);
           const wasmInit = timing?.wasmInit;
           const wasmInitMs =
             wasmInit?.startMs !== null &&
@@ -747,6 +823,12 @@ const test = base.extend<{
             wasmInitPath: wasmInit?.path ?? null,
             wasmExperimentArm: wasmInit?.experimentArm ?? null,
             wasmModuleShape: wasmInit?.moduleShape ?? null,
+            frameSkewSchema: bridge.frameSkewSchema,
+            documentTimeOriginMs: bridge.documentTimeOriginMs,
+            documentBootTotalMs: bridge.documentBootTotalMs,
+            commitToDocumentStartMs: bridge.commitToDocumentStartMs,
+            mountDoneToBindingMs: bridge.mountDoneToBindingMs,
+            frameSkewRemainderMs: bridge.frameSkewRemainderMs,
             bootPhases: bootPhasesFrom(timing?.marks ?? []),
             mountToSettledMs: mountToSettledMs(
               navigation,

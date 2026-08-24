@@ -268,6 +268,7 @@ function mergeWasmInit(
  * worth keeping. The two are reconciled by [`mergeDocumentTiming`].
  */
 export type DocumentTiming = {
+  timeOriginMs: number | null;
   marks: BootMark[];
   wasm: WasmTiming | null;
   /** Completion can arrive after mount/load snapshots; merge independently. */
@@ -299,10 +300,20 @@ export function mergeDocumentTiming(
   } else if (existing.wasm === null && incoming.wasm !== null) {
     selected = incoming;
   }
+  const timeOriginMs =
+    existing.timeOriginMs ??
+    (typeof incoming.timeOriginMs === "number" &&
+    Number.isFinite(incoming.timeOriginMs)
+      ? incoming.timeOriginMs
+      : null);
   const wasmInit = mergeWasmInit(existing.wasmInit, incoming.wasmInit);
-  return wasmInit === undefined || selected.wasmInit === wasmInit
-    ? selected
-    : { ...selected, wasmInit };
+  if (
+    (wasmInit === undefined || selected.wasmInit === wasmInit) &&
+    selected.timeOriginMs === timeOriginMs
+  ) {
+    return selected;
+  }
+  return { ...selected, timeOriginMs, wasmInit };
 }
 
 export type TraceCapture = {
@@ -410,6 +421,7 @@ export async function attachTraceCapture(
           .filter((entry) => entry.name.endsWith(".wasm"))
           .sort((left, right) => left.startTime - right.startTime)[0];
         return {
+          timeOriginMs: performance.timeOrigin,
           marks,
           wasm: wasmEntry
             ? {
@@ -425,6 +437,11 @@ export async function attachTraceCapture(
       }, MARK_PREFIX);
       const harvested: DocumentTiming = {
         ...timing,
+        timeOriginMs:
+          typeof timing.timeOriginMs === "number" &&
+          Number.isFinite(timing.timeOriginMs)
+            ? timing.timeOriginMs
+            : null,
         wasmInit: wasmInitFromMarks(timing.marks),
       };
       documentTimings.set(
