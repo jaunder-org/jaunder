@@ -56,7 +56,14 @@ export default defineConfig({
   // report at the conventional name, inside the default outputDir. The host driver
   // (cargo xtask e2e-local) overrides this with --reporter=html,line for interactive
   // runs (#153).
-  reporter: [["line"], ["json", { outputFile: "test-results/results.json" }]],
+  reporter: [
+    ["line"],
+    ["json", { outputFile: "test-results/results.json" }],
+    [
+      "./durationBudgetManifest.ts",
+      { outputFile: "test-results/duration-budget-manifest.json" },
+    ],
+  ],
   use: {
     actionTimeout: 0,
     // Capture forensics only on failure so a green run writes nothing extra (#123/#49).

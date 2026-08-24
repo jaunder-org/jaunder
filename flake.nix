@@ -772,6 +772,8 @@
 
             machine.execute("test -s /tmp/e2e/test-results/results.json && cp /tmp/e2e/test-results/results.json /tmp/playwright-report-${backend}.json")
             _grab("/tmp/playwright-report-${backend}.json")
+            machine.execute("test -s /tmp/e2e/test-results/duration-budget-manifest.json && cp /tmp/e2e/test-results/duration-budget-manifest.json /tmp/duration-budget-manifest-${backend}.json")
+            _grab("/tmp/duration-budget-manifest-${backend}.json")
 
             machine.execute("tar czf /tmp/playwright-artifacts-${backend}.tar.gz -C /tmp/e2e test-results 2>/dev/null || true")
             _grab("/tmp/playwright-artifacts-${backend}.tar.gz")
@@ -791,7 +793,7 @@
             ${e2ePanicGate backend}
 
             # Fail the check now — after all artifacts are safely copied out.
-            assert pw_status == 0, "e2e Playwright failed (exit %d) for ${backend}/${browser}; see playwright-report-${backend}.json + playwright-artifacts-${backend}.tar.gz + build.log" % pw_status
+            assert pw_status == 0, "e2e Playwright failed (exit %d) for ${backend}/${browser}; see playwright-report-${backend}.json + duration-budget-manifest-${backend}.json + playwright-artifacts-${backend}.tar.gz + build.log" % pw_status
           '';
 
         mkE2eSqliteCheck =

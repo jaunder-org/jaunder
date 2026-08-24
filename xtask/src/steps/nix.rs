@@ -23,6 +23,17 @@ const TEST_CHECKS: [TestCheck; 3] = [TestCheck::Wasm, TestCheck::Coverage, TestC
 const CHECK_SUPPORTING_TEST_CHECKS: [TestCheck; 2] = [TestCheck::Wasm, TestCheck::Doctests];
 const STATIC_CHECK: &str = "static-checks";
 
+/// The browser/backend combinations selected by the flake's `e2eCombos` catalog.
+///
+/// `validate` must address these outputs one by one: `e2e`'s aggregate is a
+/// symlink join, which cannot retain two per-backend files with the same name.
+const E2E_COMBOS: [(&str, &str); 4] = [
+    ("sqlite", "chromium"),
+    ("sqlite", "firefox"),
+    ("postgres", "chromium"),
+    ("postgres", "firefox"),
+];
+
 impl TestCheck {
     const fn name(self) -> &'static str {
         match self {
@@ -248,67 +259,76 @@ fn sentinel_detail(status: &coverage::status::CoverageStatus) -> String {
     }
 }
 
-/// The e2e gate: build the `e2e` aggregate check, which joins all four
-/// {sqlite,postgres}×{chromium,firefox} combo VM checks. They are independent
-/// derivations, so the host realizes them in parallel up to its `max-jobs` —
-/// CI's install-nix-action sets `max-jobs = auto`; a plain dev box defaults to 1
-/// and runs them serially. Since the workers=2 flip (#155) each combo VM is
-/// sized small (cores=2, 3 GB) and runs only 2 Playwright workers, so several
-/// realize concurrently without oversubscribing a typical multi-core host — the
-/// fan-out is left to the host's `max-jobs` rather than pinned here. The intent
-/// is declared in the flake (`e2e-checks` aggregate / `e2eCombos`). This
-/// aggregate path is the full LOCAL `validate` equivalent; CI instead fans the
-/// combos across runners via `cargo xtask e2e` (see `e2e_combo`).
+/// Run every browser/backend E2E combo independently, rather than building the
+/// aggregate symlink join. Each combo has same-named per-backend report inputs,
+/// so only its own GC root can preserve a trustworthy report/manifest pair.
+///
 /// `postgres-integration` is deliberately not dispatched — its tests already run
-/// under the coverage check.
+/// under the coverage check. The separate Elisp integration check remains part
+/// of the full `validate` route.
 pub fn e2e(result: &mut CommandResult) {
-    let step = build_check("nix-e2e", "e2e");
-    // #93: surface the server journals in the one canonical, always-uploaded
-    // diagnostics dir, regardless of cache-hit/pass/fail. The aggregate
-    // symlinkJoin collapses same-named outputs, so this captures one journal per
-    // BACKEND (the two browser combos emit the same `jaunder-journal-<backend>.log`),
-    // not per combo; per-combo fidelity is on the `cargo xtask e2e` path. Best-
-    // effort: a failed e2e derivation produces no out-link, but its panic is
-    // already in build.log (the `-L` stream + the gate's assertion message).
-    copy_e2e_journals();
-    result.push(step);
+    route_e2e_combos(E2E_COMBOS, |backend, browser| {
+        e2e_combo(result, backend, browser);
+    });
+    elisp_integration(result);
 }
 
-/// Build a single e2e {backend}×{browser} combo check via `build_check` (so the
-/// `nix build -L --keep-failed` log + `rescue_diagnostics` failure bundle land in
-/// `.xtask/diagnostics/e2e-<backend>-<browser>/`), then copy that combo's journal
-/// into the canonical diagnostics dir. Used by CI's e2e matrix.
+fn route_e2e_combos(
+    combos: impl IntoIterator<Item = (&'static str, &'static str)>,
+    mut route_combo: impl FnMut(&str, &str),
+) {
+    for (backend, browser) in combos {
+        route_combo(backend, browser);
+    }
+}
+
+/// Build a single E2E {backend}×{browser} combo, lift its diagnostics, then
+/// validate the report and manifest only when the VM itself succeeded. Used by
+/// both CI's `cargo xtask e2e` matrix path and `cargo xtask validate`.
 pub fn e2e_combo(result: &mut CommandResult, backend: &str, browser: &str) {
     let check = format!("e2e-{backend}-{browser}");
     let step_name = format!("nix-{check}");
-    result.push(build_check(&step_name, &check));
-    lift_e2e_diagnostics(
-        std::path::Path::new(&format!(".xtask/gcroots/{check}")),
-        std::path::Path::new(&format!(".xtask/diagnostics/{check}")),
+    let build = build_check(&step_name, &check);
+    finish_e2e_combo(
+        result,
+        build,
+        || {
+            lift_e2e_diagnostics(
+                Path::new(&format!(".xtask/gcroots/{check}")),
+                Path::new(&format!(".xtask/diagnostics/{check}")),
+            );
+        },
+        || crate::steps::duration_budget::validate_lifted_combo(backend, browser),
     );
+}
+
+/// Preserve ADR-0037's diagnostic-before-failure order. A failed VM has already
+/// explained its own failure, so only a successful VM is fail-closed on missing
+/// or inconsistent duration artifacts.
+fn finish_e2e_combo(
+    result: &mut CommandResult,
+    build: StepResult,
+    lift: impl FnOnce(),
+    validate: impl FnOnce() -> StepResult,
+) {
+    let succeeded = build.ok;
+    result.push(build);
+    lift();
+    if succeeded {
+        result.push(validate());
+    }
 }
 
 /// Runs the hermetic elisp live-integration `nixosTest` check (ADR-0035): a NixOS
 /// VM with Emacs + the jaunder binary, where the harness self-boots the server.
-/// The `e2e-elisp-integration` check also joins the `e2e-checks` aggregate, so
-/// local `validate` realizes it in parallel via `e2e`; this dedicated builder is
-/// the per-job CI path (`cargo xtask elisp-integration`), mirroring `e2e_combo`.
+/// `validate` calls this separately after the browser combos; this dedicated
+/// builder is the per-job CI path.
 pub fn elisp_integration(result: &mut CommandResult) {
     let check = "e2e-elisp-integration";
     result.push(build_check("nix-elisp-integration", check));
     lift_e2e_diagnostics(
         std::path::Path::new(&format!(".xtask/gcroots/{check}")),
         std::path::Path::new(&format!(".xtask/diagnostics/{check}")),
-    );
-}
-
-/// Copy the realized e2e check's diagnostic files — server journals, OTEL traces,
-/// and the Playwright report — into the canonical diagnostics dir. Best-effort;
-/// silent on a missing out-link (e.g. a failed build).
-fn copy_e2e_journals() {
-    lift_e2e_diagnostics(
-        std::path::Path::new(".xtask/gcroots/e2e"),
-        std::path::Path::new(".xtask/diagnostics/e2e"),
     );
 }
 
@@ -344,6 +364,7 @@ fn copy_e2e_diagnostics_with_ops(
         (name.starts_with("jaunder-journal-") && name.ends_with(".log"))
             || (name.starts_with("system-journal-") && name.ends_with(".log"))
             || (name.starts_with("playwright-report-") && name.ends_with(".json"))
+            || (name.starts_with("duration-budget-manifest-") && name.ends_with(".json"))
             || (name.starts_with("playwright-artifacts-") && name.ends_with(".tar.gz"))
             || (name.starts_with("capture-") && name.ends_with(".tar.gz"))
     };
@@ -828,11 +849,13 @@ fn rescue_diagnostics(check: &str) -> bool {
 mod tests {
     use std::io::{self, Write};
     use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
 
     use super::{
-        CommandResult, FailedBuildDiagnostics, StepResult, check_supporting_test_check_names,
-        doctest_sentinel_detail, drain_build_stderr, failed_build_after_diagnostics_with,
-        failed_status_step, prepare_build_dirs_with, report_build_diagnostic_failure,
+        CommandResult, E2E_COMBOS, FailedBuildDiagnostics, StepResult,
+        check_supporting_test_check_names, doctest_sentinel_detail, drain_build_stderr,
+        failed_build_after_diagnostics_with, failed_status_step, finish_e2e_combo,
+        prepare_build_dirs_with, report_build_diagnostic_failure, route_e2e_combos,
         sentinel_detail, test_check_names, validate_check_names,
     };
     use coverage::status::{CoverageStatus, StatusCategory};
@@ -1198,15 +1221,43 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         assert!(!body.contains("interleaved noise"));
         std::fs::remove_dir_all(&dir).ok();
     }
+    #[test]
+    fn e2e_vm_captures_report_and_manifest_before_asserting_playwright_status() {
+        let flake = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("flake.nix"),
+        )
+        .expect("flake.nix");
+        let report_copy =
+            "cp /tmp/e2e/test-results/results.json /tmp/playwright-report-${backend}.json";
+        let report_grab = r#"_grab("/tmp/playwright-report-${backend}.json")"#;
+        let manifest_copy = "cp /tmp/e2e/test-results/duration-budget-manifest.json \
+                             /tmp/duration-budget-manifest-${backend}.json";
+        let manifest_grab = r#"_grab("/tmp/duration-budget-manifest-${backend}.json")"#;
+        let assertion = "assert pw_status == 0";
+
+        let report_copy_at = flake.find(report_copy).expect("report is copied");
+        let report_grab_at = flake.find(report_grab).expect("report is lifted");
+        let manifest_copy_at = flake.find(manifest_copy).expect("manifest is copied");
+        let manifest_grab_at = flake.find(manifest_grab).expect("manifest is lifted");
+        let assertion_at = flake
+            .find(assertion)
+            .expect("Playwright status is asserted");
+
+        assert!(report_copy_at < report_grab_at && report_grab_at < assertion_at);
+        assert!(manifest_copy_at < manifest_grab_at && manifest_grab_at < assertion_at);
+    }
 
     #[test]
-    fn copy_e2e_diagnostics_between_copies_journal_capture_and_playwright() {
+    fn copy_e2e_diagnostics_between_copies_journal_capture_playwright_and_manifest() {
         let tmp = std::env::temp_dir().join(format!("xtask-j-{}", std::process::id()));
         let src = tmp.join("src");
         let dest = tmp.join("dest");
         std::fs::create_dir_all(&src).unwrap();
         std::fs::write(src.join("jaunder-journal-sqlite.log"), b"j").unwrap();
         std::fs::write(src.join("playwright-report-sqlite.json"), b"p").unwrap();
+        std::fs::write(src.join("duration-budget-manifest-sqlite.json"), b"m").unwrap();
         // #123/#49 failure-path artifacts: the trace/screenshot tarball and the
         // full system journal, copied out of the VM before the check is failed.
         std::fs::write(src.join("playwright-artifacts-sqlite.tar.gz"), b"a").unwrap();
@@ -1217,16 +1268,21 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         // A bare `capture.tar.gz` (no `-<backend>`) must NOT match — the filter requires
         // the `capture-<backend>` prefix the flake's tar step always produces.
         std::fs::write(src.join("capture.tar.gz"), b"n").unwrap();
+        // The manifest only has meaning when carried under the per-backend basename
+        // the VM capture step emits; the reporter's in-tree name is never lifted.
+        std::fs::write(src.join("duration-budget-manifest.json"), b"n").unwrap();
 
         let outcome = super::copy_e2e_diagnostics_between(&src, &dest);
 
         assert!(outcome.failures.is_empty(), "{:?}", outcome.failures);
         assert_eq!(
-            outcome.copied, 5,
-            "journal + playwright report + artifacts tarball + system journal + capture tarball are copied; unrelated and un-suffixed capture are not"
+            outcome.copied, 6,
+            "journal + report + manifest + artifacts tarball + system journal + capture tarball \
+             are copied; unrelated and in-tree artifact names are not"
         );
         assert!(dest.join("jaunder-journal-sqlite.log").exists());
         assert!(dest.join("playwright-report-sqlite.json").exists());
+        assert!(dest.join("duration-budget-manifest-sqlite.json").exists());
         assert!(dest.join("playwright-artifacts-sqlite.tar.gz").exists());
         assert!(dest.join("system-journal-sqlite.log").exists());
         assert!(dest.join("capture-sqlite.tar.gz").exists());
@@ -1234,6 +1290,10 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
         assert!(
             !dest.join("capture.tar.gz").exists(),
             "un-suffixed capture.tar.gz must not be lifted"
+        );
+        assert!(
+            !dest.join("duration-budget-manifest.json").exists(),
+            "the in-tree manifest name must not be lifted"
         );
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1385,5 +1445,59 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
             assert_eq!(warning.lines().count(), 1);
             assert!(!warning.contains("sensitive"));
         }
+    }
+
+    #[test]
+    fn aggregate_route_addresses_every_named_browser_combo() {
+        let mut routed = Vec::new();
+        route_e2e_combos(E2E_COMBOS, |backend, browser| {
+            routed.push((backend.to_owned(), browser.to_owned()))
+        });
+        assert_eq!(
+            routed,
+            E2E_COMBOS.map(|(backend, browser)| (backend.to_owned(), browser.to_owned()))
+        );
+    }
+
+    #[test]
+    fn successful_combo_lifts_before_dispatching_duration_validator() {
+        let mut result = CommandResult::new("e2e-sqlite-chromium");
+        let events = std::cell::RefCell::new(Vec::new());
+        finish_e2e_combo(
+            &mut result,
+            StepResult::ok("nix-e2e-sqlite-chromium"),
+            || events.borrow_mut().push("lift"),
+            || {
+                events.borrow_mut().push("validate");
+                StepResult::ok("e2e-duration-budget")
+            },
+        );
+
+        assert_eq!(events.into_inner(), ["lift", "validate"]);
+        assert!(result.ok);
+        assert_eq!(
+            result
+                .steps
+                .iter()
+                .map(|step| step.name.as_str())
+                .collect::<Vec<_>>(),
+            ["nix-e2e-sqlite-chromium", "e2e-duration-budget"]
+        );
+    }
+
+    #[test]
+    fn failed_combo_keeps_diagnostics_but_does_not_mask_primary_failure() {
+        let mut result = CommandResult::new("e2e-sqlite-chromium");
+        let lifted = std::cell::Cell::new(false);
+        finish_e2e_combo(
+            &mut result,
+            StepResult::fail("nix-e2e-sqlite-chromium"),
+            || lifted.set(true),
+            || panic!("a failed VM must not dispatch duration validation"),
+        );
+
+        assert!(lifted.get());
+        assert!(!result.ok);
+        assert_eq!(result.steps.len(), 1);
     }
 }
