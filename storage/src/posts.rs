@@ -3508,6 +3508,32 @@ mod tests {
         assert_eq!(post.permalink().as_ref(), "/~author/2026/04/12/hello-world");
     }
 
+    #[test]
+    fn scheduled_cursor_rejects_row_without_publish_time() {
+        let post = PostRecord {
+            post_id: PostId::from(1),
+            user_id: UserId::from(1),
+            author_username: parse_username("author"),
+            title: Some(parse_post_title("My Title")),
+            slug: parse_slug("hello-world"),
+            body: parse_post_body("My body"),
+            format: PostFormat::Markdown,
+            rendered_html: RenderedHtml::from_trusted("<p>My body</p>"),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            published_at: None,
+            deleted_at: None,
+            summary: None,
+            tags: vec![],
+        };
+
+        let err = to_scheduled_post_cursor(&post).unwrap_err();
+        assert_eq!(
+            err.operator_message(),
+            "scheduled listing row missing published_at"
+        );
+    }
+
     #[apply(backends)]
     #[tokio::test]
     async fn create_post_persists_summary(#[case] backend: Backend) {
