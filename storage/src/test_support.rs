@@ -19,7 +19,7 @@ use crate::posts::{
     CreatePostError, CreatePostInput, INSERT_POST_TAG, UPSERT_TAG_RETURNING_ID, UpdatePostInput,
 };
 use crate::sql::quote_identifier;
-use crate::{AppState, DbConnectOptions, PostFormat, PostRecord};
+use crate::{AppState, DbConnectOptions, PostFormat, PostRecord, resolved_postgres_options};
 use chrono::{DateTime, Utc};
 use common::feed::FeedPath;
 use common::ids::{PostId, TagId, UserId};
@@ -40,9 +40,13 @@ use common::visibility::AudienceTarget;
 use host::invite::InviteCode;
 use sqlx::pool::PoolConnection;
 use sqlx::{Connection, PgPool, Postgres, Sqlite, SqlitePool, Transaction};
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
+use std::{
+    fmt::Write as _,
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 use tempfile::TempDir;
 
@@ -84,6 +88,72 @@ macro_rules! with_closeable_pool {
             $crate::test_support::CloseablePool::Postgres($backend_pool) => $body,
         }
     };
+}
+
+/// Rewrites every row in a directory backup's `media.ndjson` to use `filename`.
+///
+/// # Panics
+///
+/// If the backup file cannot be read, parsed, serialized, or written.
+pub fn rewrite_media_filename_in_backup(backup_path: &Path, filename: &str) {
+    let media_ndjson = backup_path.join("db").join("media.ndjson");
+    let mut rows: Vec<serde_json::Map<String, serde_json::Value>> =
+        std::fs::read_to_string(&media_ndjson)
+            .expect("read media backup")
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(serde_json::from_str)
+            .collect::<Result<_, _>>()
+            .expect("parse media backup rows");
+    for row in &mut rows {
+        row.insert("filename".to_owned(), serde_json::json!(filename));
+    }
+
+    let mut rewritten = String::new();
+    for row in rows {
+        writeln!(
+            rewritten,
+            "{}",
+            serde_json::to_string(&row).expect("serialize media row")
+        )
+        .expect("append media row");
+    }
+    std::fs::write(media_ndjson, rewritten).expect("write media backup");
+}
+
+/// Returns whether the live `media` table contains `filename` as its raw stored value.
+///
+/// # Panics
+///
+/// If connecting to the configured test database or querying `media` fails.
+pub async fn raw_media_filename_exists(db: &DbConnectOptions, filename: &str) -> bool {
+    match db {
+        DbConnectOptions::Sqlite(options) => {
+            let pool = SqlitePool::connect_with(options.clone())
+                .await
+                .expect("connect sqlite");
+            let exists: i64 =
+                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM media WHERE filename = $1)")
+                    // sqlx-newtype-bind:allow permanent-primitive — intentionally invalid backup filename fixture may not parse as Filename.
+                    .bind(filename)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("query sqlite media");
+            exists != 0
+        }
+        DbConnectOptions::Postgres { options, .. } => {
+            let options = resolved_postgres_options(options).expect("resolve postgres options");
+            let pool = PgPool::connect_with(options)
+                .await
+                .expect("connect postgres");
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM media WHERE filename = $1)")
+                // sqlx-newtype-bind:allow permanent-primitive — intentionally invalid backup filename fixture may not parse as Filename.
+                .bind(filename)
+                .fetch_one(&pool)
+                .await
+                .expect("query postgres media")
+        }
+    }
 }
 
 impl CloseablePool {

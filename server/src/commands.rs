@@ -35,66 +35,87 @@ use storage::{
 
 const INIT_FIRST_CONTEXT: &str = "database could not be opened; run `jaunder init` first";
 
+pub enum CommandOutput {
+    None,
+    Backup(PathBuf),
+    Restore(BackupRestoreOutcome),
+}
+
 impl Commands {
     /// Dispatch this parsed subcommand to its handler. A flat match-expression:
-    /// each arm evaluates to the command's `Result<()>`, so there is no `?` on the
-    /// dispatch call and no trailing `Ok(())` — keeping any single function's
+    /// each arm evaluates to the command's `Result<CommandOutput>`, so there is no `?` on
+    /// the dispatch call and no trailing `Ok(())` — keeping any single function's
     /// cyclomatic complexity (and thus CRAP) low as subcommands are added (#147).
     ///
     /// # Errors
     ///
     /// Propagates the selected command's failure.
-    pub async fn execute(self) -> anyhow::Result<()> {
+    pub async fn execute(self) -> anyhow::Result<CommandOutput> {
         match self {
             Commands::Init {
                 storage,
                 skip_if_exists,
-            } => cmd_init(&storage, skip_if_exists).await,
+            } => cmd_init(&storage, skip_if_exists)
+                .await
+                .map(|()| CommandOutput::None),
             Commands::CreatePgDb { pg } => {
-                cmd_create_pg_db(&pg.bootstrap_db, &pg.app_db, &pg.app_role_password).await
+                cmd_create_pg_db(&pg.bootstrap_db, &pg.app_db, &pg.app_role_password)
+                    .await
+                    .map(|()| CommandOutput::None)
             }
             Commands::Serve {
                 storage,
                 bind,
                 environment,
                 runtime_file,
-            } => cmd_serve(&storage, bind, environment.is_prod(), runtime_file).await,
+            } => cmd_serve(&storage, bind, environment.is_prod(), runtime_file)
+                .await
+                .map(|()| CommandOutput::None),
             Commands::UserCreate {
                 storage,
                 username,
                 password,
                 display_name,
                 operator,
-            } => {
-                cmd_user_create(
-                    &storage,
-                    &username,
-                    password,
-                    display_name.as_ref(),
-                    operator,
-                )
-                .await
-            }
+            } => cmd_user_create(
+                &storage,
+                &username,
+                password,
+                display_name.as_ref(),
+                operator,
+            )
+            .await
+            .map(|()| CommandOutput::None),
             Commands::AppPasswordCreate {
                 storage,
                 username,
                 label,
-            } => cmd_app_password_create(&storage, &username, &label).await,
+            } => cmd_app_password_create(&storage, &username, &label)
+                .await
+                .map(|()| CommandOutput::None),
             Commands::UserInvite {
                 storage,
                 expires_in,
-            } => cmd_user_invite(&storage, expires_in).await,
-            Commands::SmtpTest { storage, to } => cmd_smtp_test(&storage, &to).await,
+            } => cmd_user_invite(&storage, expires_in)
+                .await
+                .map(|()| CommandOutput::None),
+            Commands::SmtpTest { storage, to } => cmd_smtp_test(&storage, &to)
+                .await
+                .map(|()| CommandOutput::None),
             Commands::Backup {
                 storage,
                 mode,
                 path,
-            } => cmd_backup(&storage, mode.into(), path).await.map(drop),
-            Commands::Restore { storage, path } => cmd_restore(&storage, &path).await.map(drop),
+            } => cmd_backup(&storage, mode.into(), path)
+                .await
+                .map(CommandOutput::Backup),
+            Commands::Restore { storage, path } => cmd_restore(&storage, &path)
+                .await
+                .map(CommandOutput::Restore),
             // First nested subcommand group: the arm stays a thin delegation to
             // SiteConfigAction::execute (a sibling match), preserving the low-CRAP
             // one-arm-per-command dispatch shape. Copy this pattern for future groups.
-            Commands::SiteConfig { action } => action.execute().await,
+            Commands::SiteConfig { action } => action.execute().await.map(|()| CommandOutput::None),
         }
     }
 }

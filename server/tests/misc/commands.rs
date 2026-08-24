@@ -15,9 +15,7 @@ use jaunder::commands::{
     app_password_create, cmd_app_password_create, cmd_backup, cmd_init, cmd_restore, cmd_serve,
     cmd_smtp_test, cmd_user_create, cmd_user_invite, prepare_server,
 };
-use storage::{
-    BackupMode, DbConnectOptions, open_database, open_existing_database, resolved_postgres_options,
-};
+use storage::{BackupMode, open_database, open_existing_database};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -29,7 +27,7 @@ use crate::misc::backup_fixture::{
 };
 use storage::test_support::{
     Backend, PostgresDbGuard, SeedUser, backends, nonexistent_postgres_url, noop_mailer,
-    sqlite_url, unique_postgres_url,
+    raw_media_filename_exists, rewrite_media_filename_in_backup, sqlite_url, unique_postgres_url,
 };
 
 async fn storage_args(backend: Backend, base: &TempDir) -> (StorageArgs, Option<PostgresDbGuard>) {
@@ -42,60 +40,6 @@ async fn storage_args(backend: Backend, base: &TempDir) -> (StorageArgs, Option<
         }
     };
     (StorageArgs { storage_path, db }, guard)
-}
-
-fn rewrite_media_filename(backup_path: &std::path::Path, filename: &str) {
-    let media_ndjson = backup_path.join("db").join("media.ndjson");
-    let mut rows: Vec<serde_json::Map<String, serde_json::Value>> =
-        std::fs::read_to_string(&media_ndjson)
-            .expect("read media backup")
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(serde_json::from_str)
-            .collect::<Result<_, _>>()
-            .expect("parse media backup rows");
-    for row in &mut rows {
-        row.insert("filename".to_owned(), serde_json::json!(filename));
-    }
-
-    let mut rewritten = String::new();
-    for row in rows {
-        writeln!(
-            rewritten,
-            "{}",
-            serde_json::to_string(&row).expect("serialize media row")
-        )
-        .expect("append media row");
-    }
-    std::fs::write(media_ndjson, rewritten).expect("write media backup");
-}
-
-async fn raw_media_filename_exists(args: &StorageArgs, filename: &str) -> bool {
-    match &args.db {
-        DbConnectOptions::Sqlite(options) => {
-            let pool = sqlx::SqlitePool::connect_with(options.clone())
-                .await
-                .expect("connect sqlite");
-            let exists: i64 =
-                sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM media WHERE filename = $1)")
-                    .bind(filename)
-                    .fetch_one(&pool)
-                    .await
-                    .expect("query sqlite media");
-            exists != 0
-        }
-        DbConnectOptions::Postgres { options, .. } => {
-            let options = resolved_postgres_options(options).expect("resolve postgres options");
-            let pool = sqlx::PgPool::connect_with(options)
-                .await
-                .expect("connect postgres");
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM media WHERE filename = $1)")
-                .bind(filename)
-                .fetch_one(&pool)
-                .await
-                .expect("query postgres media")
-        }
-    }
 }
 
 fn uninitialized_storage_args(backend: Backend, base: &TempDir) -> StorageArgs {
@@ -799,7 +743,7 @@ async fn cmd_restore_reports_invalid_media_filename_without_rolling_back(#[case]
     )
     .await
     .expect("backup");
-    rewrite_media_filename(&backup_path, "my photo.jpg");
+    rewrite_media_filename_in_backup(&backup_path, "my photo.jpg");
 
     let target_base = TempDir::new().expect("target temp dir");
     let (target_args, _pg_target) = storage_args(backend, &target_base).await;
@@ -819,7 +763,7 @@ async fn cmd_restore_reports_invalid_media_filename_without_rolling_back(#[case]
         outcome.validation_report.issues()
     );
     assert!(
-        raw_media_filename_exists(&target_args, "my photo.jpg").await,
+        raw_media_filename_exists(&target_args.db, "my photo.jpg").await,
         "invalid backup media row should still be restored"
     );
     assert_eq!(

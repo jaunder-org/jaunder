@@ -45,7 +45,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     } else {
         host::telemetry::init_tracing(cli.verbose)
     };
-    command.execute().await
+    command.execute().await.map(drop)
 }
 
 #[cfg(test)]

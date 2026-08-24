@@ -482,6 +482,7 @@ pub(crate) const RESTORE_COLUMN_COVERAGE: &[RestoreColumnCoverage] = &[
     ),
 ];
 
+// cov:ignore-start - test-only inventory constructors are exercised by their generated entries.
 #[cfg(test)]
 const fn covered(
     table: &'static str,
@@ -507,6 +508,7 @@ const fn primitive(
         mode: RestoreCoverageMode::PrimitiveRestore { rationale },
     }
 }
+// cov:ignore-stop
 
 #[cfg(test)]
 const BACKED_UP_DOMAIN_COLUMNS: &[(&str, &str)] = &[
