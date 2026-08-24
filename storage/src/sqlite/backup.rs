@@ -438,6 +438,38 @@ mod tests {
     }
 
     #[test]
+    fn map_restore_error_preserves_non_database_failures() {
+        assert!(matches!(
+            map_restore_error(sqlx::Error::RowNotFound),
+            BackupError::Sqlx(sqlx::Error::RowNotFound)
+        ));
+    }
+
+    // reason: covers SQLite's native constraint-kind mapper; the portable restore
+    // contract remains in the dual-backend server command suite.
+    #[apply(sqlite_only)]
+    #[tokio::test]
+    async fn map_restore_error_classifies_native_check_violations(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let CloseablePool::Sqlite(pool) = env.base.pool() else {
+            unreachable!("sqlite_only yields a SQLite pool")
+        };
+        sqlx::query("CREATE TABLE restore_check_probe (value TEXT CHECK (value <> ''))")
+            .execute(pool)
+            .await
+            .expect("create check probe");
+        let error = sqlx::query("INSERT INTO restore_check_probe (value) VALUES ('')")
+            .execute(pool)
+            .await
+            .expect_err("the probe check must reject an empty value");
+
+        assert!(matches!(
+            map_restore_error(error),
+            BackupError::ConstraintViolation(_)
+        ));
+    }
+
+    #[test]
     fn continuation_reporting_secondary_failures_preserve_backup_primary_sources_and_report_once() {
         let (export, trace) = crate::helpers::swallowed_test::capture(|| {
             finish_export_rollback(Err(primary_io_error()), Err(sqlx::Error::PoolClosed))
