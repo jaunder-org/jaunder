@@ -15,8 +15,6 @@
 
 use server_fn::ServerFn;
 
-use crate::helpers::REGISTERED_SERVER_FN_COUNT;
-
 /// Declares the expected wire path of each server fn as
 /// `<type> => "<vertical>" / "<ident>"`, and generates the collector that asserts
 /// it.
@@ -113,13 +111,10 @@ wire_contract! {
 #[test]
 fn every_server_fn_path_is_api_vertical_ident() {
     let paths = asserted_paths();
-    // Checked against the registrar list's count, not a second list in this file —
-    // two hand-maintained lists side by side would only prove the author kept them
-    // in sync with each other, not that either is complete.
     assert_eq!(
         paths.len(),
-        REGISTERED_SERVER_FN_COUNT,
-        "every registered server fn must have its wire path asserted here"
+        web::server_fn_registration::registration_count(),
+        "every auto-registered server fn must have its wire path asserted here"
     );
 }
 

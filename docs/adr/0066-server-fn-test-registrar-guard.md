@@ -90,60 +90,50 @@ constraint that must survive any retirement: this gate is also the uniqueness
 guard, so it may be dropped only if the placement rule stays enforced or that
 check is re-homed.
 
+_Amended by #731._ Reopening **B** proved the cross-rlib survival question: the
+`#[macros::server]` expansion now emits a host-only `linkme` registration thunk
+per server fn into a `web`-owned distributed slice, and
+`ensure_server_fns_registered()` iterates that slice. The hand list and
+`server-fn-registrar` xtask gate are retired. The uniqueness constraint survives
+through the #714 placement rule (`web/src/<vertical>/api.rs`) plus the
+enumeration-independent `ServerFn::PATH` pairwise-distinctness test in
+`server/tests/web/server_fn_wire.rs`.
+
 ## Consequences
 
 - A new `#[server]` fn in `web` that is not registered fails `cargo xtask check`
   host-side, naming the fn and its `file:line` — no more silent 404s.
-- The second registrar list and its independent rot risk are gone; there is one
-  place to keep in sync, and the gate keeps it honest.
-- **Two `#[server]` fns with the same ident in one vertical are a hard
-  failure.** They collapse to a single `(vertical, leaf)` key, so one registrar
-  entry would satisfy both and leave the other to 404 silently — exactly the
-  #358 omission this gate exists to catch. Across _different_ verticals the same
-  leaf is not a collision at all.
 
-  The compiler does **not** own this case, which is why the check must stay. An
-  item defined in `api.rs` silently _shadows_ a glob-imported name of the same
-  ident from `pub use listing::*` (verified with `rustc`: exit 0, no error), so
-  the pair compiles cleanly; and each vertical's `mod.rs` re-exports an explicit
-  list from `api` only, so a duplicate added in `<vertical>/server.rs` never
-  reaches a `pub use` conflict either.
+  _Amended by #731._ A new `#[server]` fn in `web` is now registered by the
+  `#[macros::server]` expansion itself. The omission is unrepresentable rather
+  than reported by `cargo xtask check`.
 
-  Such a pair would also collide at the `endpoint` level, and after #714 that
-  collision is a **compile error**: the placement rule puts every `#[server]` fn
-  in `web/src/<vertical>/api.rs` (ADR-0070), so a duplicate `(vertical, leaf)`
-  means two items of one name in one module, and the glob re-export that let one
-  silently shadow the other is itself deleted. This gate's duplicate check —
-  together with the runtime pairwise-distinctness assertion over every generated
-  `ServerFn::PATH` (`server/tests/web/server_fn_wire.rs`, which is independent
-  of xtask's enumeration) — is therefore belt-and-braces rather than the
-  guarantee.
+- The second registrar list and its independent rot risk are gone.
+
+  _Amended by #731._ The remaining hand-maintained registrar list and the
+  `server-fn-registrar` gate are gone too. `#[macros::server]` emits the
+  registration thunk, so there is no registrar list to keep in sync and no
+  PascalCase mapping rule left to police.
+
+- **Two server fns with the same ident in one vertical remain a hard failure,
+  but no longer through this ADR's deleted gate.** After #714, the placement
+  rule puts every server fn in `web/src/<vertical>/api.rs` (ADR-0070), so a
+  duplicate `(vertical, leaf)` means two items of one name in one module. The
+  compiler owns that case. The runtime wire suite also asserts every generated
+  `ServerFn::PATH` is pairwise distinct, independently of xtask enumeration.
 
   _Amended by #714._ This paragraph previously read that the endpoint collision
   was "since #684 … enforced independently by the `server-fn-endpoint` gate" —
   "Two guards, not one; neither is redundant, because a `list_mine`/`listMine`
   pair shares a leaf (`ListMine`) while deriving _distinct_ endpoints, so only
-  this gate catches it." That gate is deleted (ADR-0082), so this is now the
-  only **gate** on the duplicate case; what replaced it is the compiler rather
-  than a second gate.
+  this gate catches it." That gate is deleted (ADR-0082); after #731 the
+  remaining duplicate-name backstop is the compiler plus the runtime
+  `ServerFn::PATH` distinctness assertion.
 
   _Amended by #684._ This bullet previously called leaf collision an "accepted
   limitation … benign", describing it as something that could let an
   unregistered fn **slip through** — a pass. The code hard-**failed** it. The
   prose was wrong, not the code.
-
-- The gate assumes the `#[server(endpoint = "…")]` form (no positional type
-  rename); it treats an unexpected positional-rename form as a hard error so the
-  assumption cannot silently break the PascalCase mapping.
-
-  _Amended by #714._ The source form is now `#[macros::server(…)]`, which takes
-  tracing arguments (`skip_all`, `skip(…)`) alongside the one argument it
-  forwards to `#[server]` (`input = …`). Those are `Meta::Path` and `Meta::List`
-  respectively, so the positional-rename hard error would fire on 16 of the 55
-  sites. The gate therefore considers **only the arguments routed to
-  `#[server]`**. Since `input = …` is the sole routed argument and is a
-  `Meta::NameValue`, the narrowing preserves positional-rename detection rather
-  than defeating it.
 
 - Relocating the router tests to integration keeps `server/src/lib.rs` free of a
   registrar; future router-level assertions belong in the integration suite.

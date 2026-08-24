@@ -5,8 +5,8 @@
 //! with no span at all — a request into `create_post` produced nothing to correlate.
 //! An unenforced convention is what allowed that gap, so the convention is a gate.
 //!
-//! **Enumeration** is shared with [`super::server_fn_registrar_check`] via
-//! [`crate::web_server_fns`]; this module supplies only the tracing rules.
+//! **Enumeration** is shared through [`crate::web_server_fns`]; this module
+//! supplies only the tracing rules.
 //!
 //! The span itself — its presence, its placement, and its `web.<vertical>.<ident>`
 //! name — is no longer anyone's to get wrong: `#[macros::server]` emits the
@@ -597,10 +597,10 @@ mod tests {
     fn a_fn_in_the_retired_spelling_is_not_this_gates_business() {
         // `is_server_attr` matches only `#[macros::server]`, so a fn still wearing
         // leptos's `#[server]` never reaches these rules — its unskipped `RawToken`
-        // reads as no problem at all. That is deliberate and is *not* a hole: what
-        // catches a stray old-spelling fn is
-        // `enumeration_of_web_src_matches_the_registrar` in the registrar gate, which
-        // fails the moment the real enumeration and the registrar disagree.
+        // reads as no problem at all. That is deliberate and is *not* a hole: the
+        // macro spelling is the only supported server-fn surface, and the runtime
+        // wire contract plus coverage snapshot keep the real tree from becoming an
+        // empty silent green.
         let s = src(
             "email",
             &retired_server_fn(

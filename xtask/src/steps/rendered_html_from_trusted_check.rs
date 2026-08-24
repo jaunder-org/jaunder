@@ -81,8 +81,8 @@
 //! classes inherent to the shared scan (the unwalked attribute-macro tokens, the
 //! absent call graph, and that a marker is trusted rather than verified) are also
 //! stated there. A `syn` parse failure is a **hard error** (a file we cannot walk
-//! could hide a spurious door or field — a false pass), matching
-//! [`crate::steps::server_fn_registrar_check`].
+//! could hide a spurious door or field — a false pass), matching the server-fn
+//! gates' fail-loud source enumeration.
 
 use std::collections::BTreeSet;
 

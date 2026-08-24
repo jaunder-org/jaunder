@@ -1087,14 +1087,20 @@ Server fns get their dependencies via per-trait Leptos context, never a bundle �
 ([ADR-0016](adr/0016-dependency-injection-and-appstate.md)), e.g.
 `web/src/audiences/api.rs:66`. The macro also wraps each body in
 `crate::error::server_boundary` (`macros/src/server_fn.rs:166`); there is no
-hand-written `boundary!` call. ADR-0016's SSR-era owner-pinning addenda have
-been retired: the sole server-fn invocation path, `leptos_axum`'s `/api`
-handler, holds the owner strong for the whole call, so no `ScopedFuture` wrapper
-and no sanctioned `Resource` constructor exist — components call `Resource::new`
-directly (13 files across `web/src`), and no clippy `disallowed-methods` entry
-bans it — `clippy.toml` has no `disallowed-methods` entry at all; it only
-_relaxes_ `unwrap`/`expect` for tests, which the workspace otherwise denies
-(`Cargo.toml:141`).
+hand-written `boundary!` call. Server integration/router tests call
+`server/tests/helpers/registrar.rs::ensure_server_fns_registered`, which
+iterates a host-only `linkme` distributed slice owned by `web` and populated by
+`#[macros::server]` registration thunks
+([ADR-0066](adr/0066-server-fn-test-registrar-guard.md)). There is no
+hand-maintained test registrar and no registrar-completeness xtask gate; the
+registration omission is made unrepresentable by macro expansion. ADR-0016's
+SSR-era owner-pinning addenda have been retired: the sole server-fn invocation
+path, `leptos_axum`'s `/api` handler, holds the owner strong for the whole call,
+so no `ScopedFuture` wrapper and no sanctioned `Resource` constructor exist —
+components call `Resource::new` directly (13 files across `web/src`), and no
+clippy `disallowed-methods` entry bans it — `clippy.toml` has no
+`disallowed-methods` entry at all; it only _relaxes_ `unwrap`/`expect` for
+tests, which the workspace otherwise denies (`Cargo.toml:141`).
 
 `web/` is a **thin shell**
 ([ADR-0059](adr/0059-thin-web-shell-error-layering.md)): it keeps only the
@@ -2287,7 +2293,6 @@ native host checks because `xtask/` is excluded from the flake source.
 | `doc-links`                                                | intra-doc link targets                                                                                                                                           |
 | `flow-docs`                                                | typed CSR route/endpoint/matrix declarations in `docs/flows/`; one flow owner per endpoint; checked snapshot status                                              |
 | `test-backend-pattern`                                     | dual-backend storage test shape                                                                                                                                  |
-| `server-fn-registrar`                                      | every `web` `#[server]` fn is in the test registrar                                                                                                              |
 | `server-fn-tracing`                                        | each server fn's instrumentation                                                                                                                                 |
 | `server-fn-coverage`                                       | static lane of the flow-coverage snapshot                                                                                                                        |
 | `traced-context`                                           | context propagation                                                                                                                                              |
@@ -2405,17 +2410,17 @@ instrumentation.
 
 ### Server-fn gates
 
-Two gates guard the `#[server]` surface from opposite ends, both drawing their
-inventory from one `syn` enumerator.
+One host gate directly guards server-fn flow evidence, while macro expansion and
+runtime tests own the guarantees that used to need source-list gates.
 
-`server-fn-registrar` ([ADR-0066](adr/0066-server-fn-test-registrar-guard.md))
-exists because test binaries link `web` as an rlib, and dead-code elimination
-drops each `#[server]` macro's `inventory`-based auto-registration. One
-hand-maintained registrar (`server/tests/helpers/registrar.rs`) is therefore the
-sole list, registration is **mandatory** with no per-fn opt-out, and the gate
-fails on any `web` `#[server]` fn missing from it, matching on
-`(vertical, leaf)`. It checks only the missing direction — a stale entry already
-fails to compile.
+`#[macros::server]` emits a host-only `linkme` registration thunk for every
+server fn into a `web`-owned distributed slice
+([ADR-0066](adr/0066-server-fn-test-registrar-guard.md)). Integration tests keep
+the stable harness call `ensure_server_fns_registered()`, but it now iterates
+the slice instead of maintaining `register_explicit::<web::…>()` calls by hand.
+Server-fn wire uniqueness rests on the placement rule and the generated-type
+wire assertions in `server/tests/web/server_fn_wire.rs`, including pairwise
+`ServerFn::PATH` distinctness.
 
 `server-fn-coverage` ([ADR-0081](adr/0081-empirical-server-fn-flow-coverage.md))
 answers a question line coverage cannot: which server entry points a real
@@ -2429,8 +2434,8 @@ lane in `check`/`validate --no-e2e` that reads only committed files, and an e2e
 lane (`server-fn-coverage-regenerate` / `-verify`) that runs on the per-combo
 `cargo xtask e2e sqlite chromium` path only.
 
-Neither gate carries an **endpoint-drift check**, and that is deliberate
-([ADR-0120](adr/0120-no-endpoint-drift-check.md)). The retired
+No server-fn host gate carries an **endpoint-drift check**, and that is
+deliberate ([ADR-0120](adr/0120-no-endpoint-drift-check.md)). The retired
 `server-fn-endpoint` gate compared a hand-written `endpoint = "…"` literal
 against the derived `/<vertical>/<ident>`; #714 removed the literal, so the
 inventory now computes the endpoint with the very expression such a check would

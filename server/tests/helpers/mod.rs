@@ -33,7 +33,7 @@ pub use http::{
     post_server_fn_request_fixture_with_secure_flag, post_server_fn_with_mailer,
     post_server_fn_with_secure_flag, post_server_fn_with_ua,
 };
-pub use registrar::{REGISTERED_SERVER_FN_COUNT, ensure_server_fns_registered};
+pub use registrar::ensure_server_fns_registered;
 pub use session::{
     SeededSession, assert_no_email, assert_one_absolute_link_email, create_operator_and_session,
     create_session_for, create_user_and_session, session_cookie, setup_with_base_url,

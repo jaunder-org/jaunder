@@ -110,6 +110,7 @@ urlencoding = "2"
 percent-encoding = "2"
 url = "2.5.8"
 uuid = { version = "1", features = ["v4"] }
+linkme = "0.3.35"
 
 # proc-macro toolchain for the `macros` crate (build-time only)
 syn = "2"
