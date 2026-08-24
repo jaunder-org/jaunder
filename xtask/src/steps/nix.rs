@@ -259,27 +259,54 @@ fn sentinel_detail(status: &coverage::status::CoverageStatus) -> String {
     }
 }
 
-/// Run every browser/backend E2E combo independently, rather than building the
-/// aggregate symlink join. Each combo has same-named per-backend report inputs,
-/// so only its own GC root can preserve a trustworthy report/manifest pair.
+/// Realize every browser/backend E2E combo concurrently. Each build retains its
+/// own GC root, because the aggregate symlink join cannot retain the same-named
+/// per-backend report and manifest files from multiple combos.
 ///
 /// `postgres-integration` is deliberately not dispatched — its tests already run
 /// under the coverage check. The separate Elisp integration check remains part
 /// of the full `validate` route.
 pub fn e2e(result: &mut CommandResult) {
-    route_e2e_combos(E2E_COMBOS, |backend, browser| {
-        e2e_combo(result, backend, browser);
+    let builds = build_e2e_combos(E2E_COMBOS, |backend, browser| {
+        let check = format!("e2e-{backend}-{browser}");
+        build_check(&format!("nix-{check}"), &check)
     });
+    for ((backend, browser), build) in builds {
+        let check = format!("e2e-{backend}-{browser}");
+        finish_e2e_combo(
+            result,
+            build,
+            || {
+                lift_e2e_diagnostics(
+                    Path::new(&format!(".xtask/gcroots/{check}")),
+                    Path::new(&format!(".xtask/diagnostics/{check}")),
+                );
+            },
+            || crate::steps::duration_budget::validate_lifted_combo(backend, browser),
+        );
+    }
     elisp_integration(result);
 }
 
-fn route_e2e_combos(
+/// Start all independent E2E realizations before waiting for any of them. The
+/// returned order follows the catalog so command output remains deterministic.
+fn build_e2e_combos(
     combos: impl IntoIterator<Item = (&'static str, &'static str)>,
-    mut route_combo: impl FnMut(&str, &str),
-) {
-    for (backend, browser) in combos {
-        route_combo(backend, browser);
-    }
+    build_combo: impl Fn(&str, &str) -> StepResult + Sync,
+) -> Vec<((&'static str, &'static str), StepResult)> {
+    std::thread::scope(|scope| {
+        let workers = combos
+            .into_iter()
+            .map(|combo| {
+                let build_combo = &build_combo;
+                scope.spawn(move || (combo, build_combo(combo.0, combo.1)))
+            })
+            .collect::<Vec<_>>();
+        workers
+            .into_iter()
+            .map(|worker| worker.join().expect("E2E build worker must not panic"))
+            .collect()
+    })
 }
 
 /// Build a single E2E {backend}×{browser} combo, lift its diagnostics, then
@@ -353,6 +380,60 @@ fn copy_e2e_diagnostics_between(src_dir: &Path, dest_dir: &Path) -> DiagnosticsC
     )
 }
 
+/// The duration validator reads only these lifted files. Remove a previous
+/// attempt's pair before copying so a successful VM cannot validate stale data
+/// when its current attempt fails to provide either input.
+fn is_authoritative_e2e_duration_input(name: &str) -> bool {
+    (name.starts_with("playwright-report-") && name.ends_with(".json"))
+        || (name.starts_with("duration-budget-manifest-") && name.ends_with(".json"))
+}
+
+fn is_e2e_diagnostic_artifact(name: &str) -> bool {
+    (name.starts_with("jaunder-journal-") && name.ends_with(".log"))
+        || (name.starts_with("system-journal-") && name.ends_with(".log"))
+        || is_authoritative_e2e_duration_input(name)
+        || (name.starts_with("playwright-artifacts-") && name.ends_with(".tar.gz"))
+        || (name.starts_with("capture-") && name.ends_with(".tar.gz"))
+}
+
+fn clear_authoritative_e2e_duration_inputs(
+    dest_dir: &Path,
+    remove: &mut impl FnMut(&Path) -> io::Result<()>,
+    failures: &mut Vec<String>,
+) {
+    let entries = match std::fs::read_dir(dest_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+        Err(error) => {
+            failures.push(format!("reading {}: {error}", dest_dir.display()));
+            return;
+        }
+    };
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                failures.push(format!(
+                    "reading entry under {}: {error}",
+                    dest_dir.display()
+                ));
+                continue;
+            }
+        };
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !is_authoritative_e2e_duration_input(name) {
+            continue;
+        }
+        let path = entry.path();
+        match remove(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => failures.push(format!("removing {}: {error}", path.display())),
+        }
+    }
+}
+
 fn copy_e2e_diagnostics_with_ops(
     src_dir: &Path,
     dest_dir: &Path,
@@ -360,31 +441,19 @@ fn copy_e2e_diagnostics_with_ops(
     mut copy: impl FnMut(&Path, &Path) -> io::Result<u64>,
     mut set_permissions: impl FnMut(&Path, std::fs::Permissions) -> io::Result<()>,
 ) -> DiagnosticsCopy {
-    let wanted = |name: &str| {
-        (name.starts_with("jaunder-journal-") && name.ends_with(".log"))
-            || (name.starts_with("system-journal-") && name.ends_with(".log"))
-            || (name.starts_with("playwright-report-") && name.ends_with(".json"))
-            || (name.starts_with("duration-budget-manifest-") && name.ends_with(".json"))
-            || (name.starts_with("playwright-artifacts-") && name.ends_with(".tar.gz"))
-            || (name.starts_with("capture-") && name.ends_with(".tar.gz"))
-    };
+    let mut copied = 0;
+    let mut failures = Vec::new();
+    clear_authoritative_e2e_duration_inputs(dest_dir, &mut remove, &mut failures);
     let entries = match std::fs::read_dir(src_dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return DiagnosticsCopy {
-                copied: 0,
-                failures: Vec::new(),
-            };
+            return DiagnosticsCopy { copied, failures };
         }
         Err(error) => {
-            return DiagnosticsCopy {
-                copied: 0,
-                failures: vec![format!("reading {}: {error}", src_dir.display())],
-            };
+            failures.push(format!("reading {}: {error}", src_dir.display()));
+            return DiagnosticsCopy { copied, failures };
         }
     };
-    let mut copied = 0;
-    let mut failures = Vec::new();
     if let Err(error) = std::fs::create_dir_all(dest_dir) {
         failures.push(format!("creating {}: {error}", dest_dir.display()));
     }
@@ -401,7 +470,7 @@ fn copy_e2e_diagnostics_with_ops(
         };
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
-        if !wanted(name) {
+        if !is_e2e_diagnostic_artifact(name) {
             continue;
         }
         let from = entry.path();
@@ -850,13 +919,16 @@ mod tests {
     use std::io::{self, Write};
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, mpsc};
+    use std::time::Duration;
 
     use super::{
-        CommandResult, E2E_COMBOS, FailedBuildDiagnostics, StepResult,
+        CommandResult, E2E_COMBOS, FailedBuildDiagnostics, StepResult, build_e2e_combos,
         check_supporting_test_check_names, doctest_sentinel_detail, drain_build_stderr,
         failed_build_after_diagnostics_with, failed_status_step, finish_e2e_combo,
-        prepare_build_dirs_with, report_build_diagnostic_failure, route_e2e_combos,
-        sentinel_detail, test_check_names, validate_check_names,
+        prepare_build_dirs_with, report_build_diagnostic_failure, sentinel_detail,
+        test_check_names, validate_check_names,
     };
     use coverage::status::{CoverageStatus, StatusCategory};
     use doctests::check::{Kind, Violation};
@@ -1299,6 +1371,40 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
     }
 
     #[test]
+    fn copy_e2e_diagnostics_removes_stale_duration_inputs_before_lifting() {
+        let tmp = std::env::temp_dir().join(format!("xtask-stale-e2e-{}", std::process::id()));
+        let src = tmp.join("src");
+        let dest = tmp.join("dest");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("playwright-report-sqlite.json"), b"stale report").unwrap();
+        std::fs::write(
+            dest.join("duration-budget-manifest-sqlite.json"),
+            b"stale manifest",
+        )
+        .unwrap();
+        std::fs::write(src.join("capture-sqlite.tar.gz"), b"current diagnostics").unwrap();
+
+        let outcome = super::copy_e2e_diagnostics_between(&src, &dest);
+
+        assert!(outcome.failures.is_empty(), "{:?}", outcome.failures);
+        assert_eq!(outcome.copied, 1);
+        assert!(
+            !dest.join("playwright-report-sqlite.json").exists(),
+            "a missing current report must not leave a prior attempt's input"
+        );
+        assert!(
+            !dest.join("duration-budget-manifest-sqlite.json").exists(),
+            "a missing current manifest must not leave a prior attempt's input"
+        );
+        assert_eq!(
+            std::fs::read(dest.join("capture-sqlite.tar.gz")).unwrap(),
+            b"current diagnostics"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn copy_e2e_diagnostics_overwrites_a_read_only_previous_copy() {
         // Artifacts come from the nix store, so the previous run's copy is on disk
         // read-only and `fs::copy` onto it fails EACCES. That was swallowed, leaving
@@ -1448,14 +1554,35 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
     }
 
     #[test]
-    fn aggregate_route_addresses_every_named_browser_combo() {
-        let mut routed = Vec::new();
-        route_e2e_combos(E2E_COMBOS, |backend, browser| {
-            routed.push((backend.to_owned(), browser.to_owned()))
+    fn aggregate_e2e_builds_dispatch_every_combo_before_waiting_for_one() {
+        let (started_tx, started_rx) = mpsc::channel();
+        let release = Arc::new(AtomicBool::new(false));
+        let worker_release = Arc::clone(&release);
+        let worker = std::thread::spawn(move || {
+            build_e2e_combos(E2E_COMBOS, move |_, _| {
+                started_tx.send(()).unwrap();
+                while !worker_release.load(Ordering::Acquire) {
+                    std::thread::park_timeout(Duration::from_millis(10));
+                }
+                StepResult::ok("test-e2e")
+            })
         });
+
+        let dispatched_concurrently =
+            (0..E2E_COMBOS.len()).all(|_| started_rx.recv_timeout(Duration::from_secs(1)).is_ok());
+        release.store(true, Ordering::Release);
+        let builds = worker.join().expect("E2E dispatch worker must not panic");
+
+        assert!(
+            dispatched_concurrently,
+            "all E2E builds must start before any completed build is awaited"
+        );
         assert_eq!(
-            routed,
-            E2E_COMBOS.map(|(backend, browser)| (backend.to_owned(), browser.to_owned()))
+            builds
+                .into_iter()
+                .map(|(combo, _)| combo)
+                .collect::<Vec<_>>(),
+            E2E_COMBOS.to_vec()
         );
     }
 
