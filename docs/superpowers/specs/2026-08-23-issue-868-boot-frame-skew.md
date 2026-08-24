@@ -1,6 +1,6 @@
 # Issue #868 — attribute the boot frame skew
 
-**Status:** draft, awaiting approval
+**Status:** approved
 
 **Issue:** [#868](https://github.com/jaunder-org/jaunder/issues/868)
 

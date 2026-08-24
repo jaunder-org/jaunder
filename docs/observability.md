@@ -1287,9 +1287,8 @@ claim for.
 61.3 s (chromium) / 38.3 s (firefox) per suite, and **larger on the faster
 engine**. `commitToMountMs` is Node-side wall clock; the six segments are
 document-relative. **ADR-0100 forbids decomposing one into the other** — they
-are different clocks — so this cycle reports the magnitude and does not split
-it. Attribution needs a Node-frame instrument that does not exist. Filed as
-#868.
+are different clocks — so this cycle reported the magnitude and did not split
+it. #868 added a bridge instrument; see the 2026-08-24 finding below.
 
 Whether it is harness overhead that costs real users nothing, or real time the
 document frame cannot see, is unknown. Those two answers point in opposite
@@ -1300,7 +1299,7 @@ directions, which is the argument for measuring rather than guessing.
 | lever                                | worth                         | status                     |
 | ------------------------------------ | ----------------------------- | -------------------------- |
 | firefox `wasm_instantiate`           | 84.2 s — the largest by far   | #864 (~377 ms fixed floor) |
-| frame skew                           | 61.3 / 38.3 s                 | #868                       |
+| frame skew                           | 61.3 / 38.3 s                 | #868 — measured below      |
 | pre-fetch window                     | 44.2 / 54.2 s                 | preload below; #870        |
 | `wasm_fetch`                         | 33.5 / 11.8 s, ~44% are `304` | #869 — caching             |
 | navigation count (211 for 137 tests) | ~190 s firefox                | #867                       |
@@ -1452,6 +1451,59 @@ The pre-fetch window (#870's stylesheet question) remains open and is sharpened:
 166–195 ms of it is genuinely removable, and removing it this way converts
 almost none of it into boot time — because whatever else sits between
 `document_start` and `boot.entry` (the glue, at minimum) is still serial.
+
+## #868 — frame skew bridge (finding, 2026-08-24)
+
+**Verdict up front: the frame skew is mostly a mount-ready bridge term, not an
+application boot phase.** The bridge closes exactly:
+`commitToDocumentStartMs + mountDoneToBindingMs + frameSkewRemainderMs = commitToMountMs - documentBootTotalMs`
+for every mounted navigation in the deciding corpus. The document-frame boot
+decomposition remains the one used for app boot; these Node/document bridge
+terms are reported separately under ADR-0100.
+
+Corpus: `~/measurements/jaunder/issue-868-frame-skew/`, extracted to
+`bridge-q*.jsonl`. The host was quiescent before capture. Runs were SQLite
+single-worker, three runs per engine, with realized order counterbalanced by
+run:
+
+- `bridge-q1`: chromium→firefox
+- `bridge-q2`: firefox→chromium
+- `bridge-q3`: chromium→firefox
+
+Salts were `issue868-bridge-q{1,2,3}`. Commands:
+`nix build --print-out-paths --no-link .#packages.x86_64-linux.e2e-sqlite-{chromium,firefox}-single-worker`,
+then
+`cargo xtask traces boot-phases ~/measurements/jaunder/issue-868-frame-skew/bridge-q*.jsonl`.
+
+Each engine/run produced 196 recorded navigations, 189 mounted navigations, 189
+complete bridge rows, and zero closure violations. This is a decisive bridge
+certification corpus.
+
+Paired per-run means:
+
+| engine   | mounted rows/run | frame skew mean ± SE | `commit→document_start` | `mount_done→binding` | remainder |
+| -------- | ---------------- | -------------------- | ----------------------- | -------------------- | --------- |
+| chromium | 189/189/189      | 317.1 ± 4.7 ms       | -51.0 ± 0.6 ms          | 368.2 ± 5.3 ms       | 0.000 ms  |
+| firefox  | 189/189/189      | 211.9 ± 6.3 ms       | -132.7 ± 3.8 ms         | 344.6 ± 9.4 ms       | 0.000 ms  |
+
+Per-suite contribution over 189 mounted navigations/run:
+
+| engine   | frame skew total | `commit→document_start` | `mount_done→binding` |
+| -------- | ---------------- | ----------------------- | -------------------- |
+| chromium | 59.9 s           | -9.6 s                  | 69.6 s               |
+| firefox  | 40.0 s           | -25.1 s                 | 65.1 s               |
+
+Interpretation: `mount_done→binding` is the dominant bridge term in both
+engines. The negative `commit→document_start` term means the Node-side commit
+timestamp is after the document's `performance.timeOrigin`; it reduces the net
+skew rather than explaining it. The zero remainder proves the bridge terms close
+the prior 38–61 s suite gap without hiding time in arithmetic drift.
+
+This does **not** close #864, #870, #895, #1103, or #1138. The finding says only
+that the old `commitToMountMs - bootTotalMs` skew is primarily e2e harness/frame
+coordination between page mount completion and the Node fixture's binding
+resolution. It is not a Firefox wasm initialization floor, and it should not be
+subtracted from document-frame boot phase findings.
 
 ## #867 — removing navigations (findings, 2026-08-11)
 

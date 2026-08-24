@@ -51,14 +51,14 @@ Out:
   - Verification: Rust analyzer tests for complete rows, incomplete coverage,
     closure failure, and bridge rows outside the boot decomposition table.
 
-- [ ] Task 3: Smoke the capture path
+- [x] Task 3: Smoke the capture path
   - Contract: run the existing focused boot-marks e2e path and inspect one trace
     row for the new fields before any corpus capture.
   - Verification: `devtool run -- cargo xtask e2e-local boot-marks.spec.ts`,
     then `cargo xtask traces boot-phases <extracted trace>` reports bridge
     coverage and closes on the smoke corpus.
 
-- [ ] Task 4: Capture the deciding corpus
+- [x] Task 4: Capture the deciding corpus
   - Contract: preserve tarballs under
     `~/measurements/jaunder/issue-868-frame-skew/` using three valid sqlite
     single-worker runs per engine, distinct `e2eSalt` per run, and order
@@ -69,7 +69,7 @@ Out:
     complete bridge coverage plus closure for decisive rows; otherwise record
     the instrument finding and stop before attribution.
 
-- [ ] Task 5: Publish the finding
+- [x] Task 5: Publish the finding
   - Contract: `docs/observability.md` gets the certified corpus path, run order,
     salt names, bridge coverage, closure status, bridge term table, and the
     dominant/split/non-decisive conclusion using the spec's 2/3-share plus 3×SE
