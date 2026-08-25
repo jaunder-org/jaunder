@@ -2726,7 +2726,7 @@ slug-bearing path; there is no parallel bare draft token. Feature PRs commit the
 draft and its architecture projection but neither promote it nor edit the
 generated index. ADR-0048 historically governed an out-of-git, ship-time form of
 this numberless workflow; the tracked
-[successor decision](adr/drafts/adr-numbering-happens-after-merge.md) proposes
+[successor decision](adr/0152-adr-numbering-happens-after-merge.md) proposes
 superseding those two requirements while preserving path-only identity and late
 allocation.
 
