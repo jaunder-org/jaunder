@@ -57,7 +57,7 @@ Out:
     round-trip, categories, body/media URL, malformed cardinality, and strong
     ETag.
 
-- [ ] **Task 4 — Add the D3-facing no-clobber pull operation.**
+- [x] **Task 4 — Add the D3-facing no-clobber pull operation.**
   - Files: extend loaded `elisp/jaunder-pull.el` and its pure ERT.
   - Contract: `(jaunder--pull-member ROOT MEMBER) -> jaunder-pull-result`, with
     `status` exactly `pulled` or `blocked` and an exact direct-child `path`.

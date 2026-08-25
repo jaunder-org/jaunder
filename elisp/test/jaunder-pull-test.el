@@ -134,5 +134,175 @@
                     "<j:slug>safe</j:slug>"
                     "<content type=\"text/org\">Body</content>")))))
 
+
+(defun jaunder-pull-test--member (&optional id slug)
+  "Return a D1 Member fixture with optional ID and SLUG."
+  (jaunder--make-inventory-member
+   :id (or id "42")
+   :slug (or slug "untitled-note")
+   :edit-uri (format "https://h/atompub/alice/posts/%s" (or id "42"))))
+
+(defun jaunder-pull-test--response-entry (&optional id slug)
+  "Return a valid draft response Entry for optional ID and SLUG."
+  (jaunder-pull-test--entry
+   "<title></title>"
+   (format "<link rel=\"edit\" href=\"https://h/atompub/alice/posts/%s\"/>"
+           (or id "42"))
+   (format "<j:slug>%s</j:slug>" (or slug "untitled-note"))
+   "<content type=\"text/org\">Body</content>"
+   "<app:control><app:draft>yes</app:draft></app:control>"))
+
+(defun jaunder-pull-test--temp-artifacts (root)
+  "Return pull temporary artifacts directly under ROOT."
+  (directory-files root t "\\.jaunder-pull-" t))
+
+(ert-deftest jaunder-pull-member-preflight-blocks-before-network ()
+  ;; A previewed destination that already exists is reported with its exact path;
+  ;; no GET runs and its bytes remain untouched.
+  (let* ((root (make-temp-file "jaunder-pull-" t))
+         (path (expand-file-name "untitled-note.org" root))
+         (calls 0))
+    (unwind-protect
+        (progn
+          (write-region "winner" nil path nil 'silent)
+          (cl-letf (((symbol-function 'jaunder--http-request)
+                     (lambda (&rest _) (setq calls (1+ calls)))))
+                   (let ((result (jaunder--pull-member root
+                                                       (jaunder-pull-test--member))))
+                     (should (eq (jaunder-pull-result-status result) 'blocked))
+                     (should (equal (jaunder-pull-result-path result) path))
+                     (should (= calls 0))
+                     (should (equal (with-temp-buffer
+                                      (insert-file-contents path)
+                                      (buffer-string))
+                                    "winner")))))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-pull-member-gets-d1-uri-and-installs-exact-file ()
+  ;; The D3-facing seam resolves the configured blog, GETs the D1 edit URI, and
+  ;; returns one exact pulled path without leaking its same-directory temp file.
+  (let* ((root (make-temp-file "jaunder-pull-" t))
+         (path (expand-file-name "untitled-note.org" root))
+         (jaunder-blogs
+          (list (cons (file-name-as-directory root)
+                      '(:base-url "https://h" :username "alice"))))
+         requested)
+    (unwind-protect
+        (cl-letf (((symbol-function 'jaunder--http-request)
+                   (lambda (method url &rest _)
+                     (setq requested
+                           (list method url (jaunder--active-base-url)
+                                 (jaunder--active-username)))
+                     (list :status 200
+                           :headers '(("etag" . "\"sha256-test\""))
+                           :body (jaunder-pull-test--response-entry))))
+                  ((symbol-function 'current-time)
+                   (lambda () jaunder-pull-test--captured-at))
+                  ((symbol-function 'jaunder--current-zone-name)
+                   (lambda () "UTC")))
+                 (let ((result (jaunder--pull-member root
+                                                     (jaunder-pull-test--member))))
+                   (should (eq (jaunder-pull-result-status result) 'pulled))
+                   (should (equal (jaunder-pull-result-path result) path))
+                   (should (equal requested
+                                  '("GET" "https://h/atompub/alice/posts/42"
+                                    "https://h" "alice")))
+                   (should (file-exists-p path))
+                   (should (string-suffix-p "\n\nBody"
+                                            (with-temp-buffer
+                                              (insert-file-contents path)
+                                              (buffer-string))))
+                   (should-not (jaunder-pull-test--temp-artifacts root))))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-pull-member-rejects-stale-response-identity ()
+  ;; Collection preview identity is stable for one apply: a changed response ID
+  ;; or slug aborts without claiming either old or new destination.
+  (dolist (response (list (jaunder-pull-test--response-entry "99" nil)
+                          (jaunder-pull-test--response-entry nil "new-slug")))
+    (let* ((root (make-temp-file "jaunder-pull-" t))
+           (jaunder-blogs
+            (list (cons (file-name-as-directory root)
+                        '(:base-url "https://h" :username "alice")))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'jaunder--http-request)
+                     (lambda (&rest _)
+                       (list :status 200
+                             :headers '(("etag" . "\"sha256-test\""))
+                             :body response))))
+                   (should-error (jaunder--pull-member root
+                                                       (jaunder-pull-test--member)))
+                   (should (null (directory-files root nil "\\.org\\'" t)))
+                   (should-not (jaunder-pull-test--temp-artifacts root)))
+        (delete-directory root t)))))
+
+(ert-deftest jaunder-pull-member-failures-leave-root-unchanged ()
+  ;; HTTP, transport, mapping, temp-write, and install failures never expose a
+  ;; destination or retain a temporary artifact.
+  (dolist (failure '(http transport mapping write install))
+    (let* ((root (make-temp-file "jaunder-pull-" t))
+           (jaunder-blogs
+            (list (cons (file-name-as-directory root)
+                        '(:base-url "https://h" :username "alice"))))
+           (real-write (symbol-function 'write-region))
+           (real-link (symbol-function 'add-name-to-file)))
+      (unwind-protect
+          (cl-letf (((symbol-function 'jaunder--http-request)
+                     (lambda (&rest _)
+                       (pcase failure
+                         ('http '(:status 503 :headers nil :body "no"))
+                         ('transport (error "transport"))
+                         ('mapping
+                          (list :status 200 :headers '(("etag" . "W/\"weak\""))
+                                :body (jaunder-pull-test--response-entry)))
+                         (_
+                          (list :status 200
+                                :headers '(("etag" . "\"sha256-test\""))
+                                :body (jaunder-pull-test--response-entry))))))
+                    ((symbol-function 'write-region)
+                     (lambda (&rest args)
+                       (if (eq failure 'write)
+                           (error "write")
+                         (apply real-write args))))
+                    ((symbol-function 'add-name-to-file)
+                     (lambda (&rest args)
+                       (if (eq failure 'install)
+                           (error "install")
+                         (apply real-link args)))))
+                   (should-error (jaunder--pull-member root
+                                                       (jaunder-pull-test--member)))
+                   (should (null (directory-files root nil "\\.org\\'" t)))
+                   (should-not (jaunder-pull-test--temp-artifacts root)))
+        (delete-directory root t)))))
+
+(ert-deftest jaunder-pull-member-race-preserves-winner-and-blocks ()
+  ;; Atomic no-replace installation reports a racing winner as blocked and never
+  ;; replaces the winner's bytes.
+  (let* ((root (make-temp-file "jaunder-pull-" t))
+         (path (expand-file-name "untitled-note.org" root))
+         (jaunder-blogs
+          (list (cons (file-name-as-directory root)
+                      '(:base-url "https://h" :username "alice"))))
+         (real-write (symbol-function 'write-region)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'jaunder--http-request)
+                   (lambda (&rest _)
+                     (list :status 200
+                           :headers '(("etag" . "\"sha256-test\""))
+                           :body (jaunder-pull-test--response-entry))))
+                  ((symbol-function 'add-name-to-file)
+                   (lambda (_temp destination &optional _ok)
+                     (funcall real-write "winner" nil destination nil 'silent)
+                     (signal 'file-already-exists (list destination)))))
+                 (let ((result (jaunder--pull-member root
+                                                     (jaunder-pull-test--member))))
+                   (should (eq (jaunder-pull-result-status result) 'blocked))
+                   (should (equal (jaunder-pull-result-path result) path))
+                   (should (equal (with-temp-buffer
+                                    (insert-file-contents path)
+                                    (buffer-string))
+                                  "winner"))
+                   (should-not (jaunder-pull-test--temp-artifacts root))))
+      (delete-directory root t))))
 (provide 'jaunder-pull-test)
 ;;; jaunder-pull-test.el ends here

@@ -15,6 +15,9 @@
 (require 'xml)
 (require 'jaunder-atom)
 (require 'jaunder-datetime)
+(require 'jaunder-config)
+(require 'jaunder-reconcile)
+(require 'jaunder-transport)
 
 (defun jaunder--pull-error (invariant)
   "Signal a pull mapping error naming broken INVARIANT."
@@ -161,5 +164,89 @@ render the local Org date.  This function performs no network or filesystem I/O.
                                                     captured-at t))))))
       (concat (mapconcat #'identity lines "\n") "\n\n" body))))
 
+
+(cl-defstruct (jaunder-pull-result (:constructor jaunder--make-pull-result))
+              "Outcome of one D3-facing server-only pull."
+              status path)
+
+(defun jaunder--pull-destination (root slug)
+  "Return exact direct-child Org destination under ROOT for SLUG."
+  (unless (jaunder--safe-pull-slug-p slug)
+    (jaunder--pull-error "Member j:slug must name one safe path component"))
+  (let* ((directory (file-name-as-directory (expand-file-name root)))
+         (path (expand-file-name (concat slug ".org") directory)))
+    (unless (equal (file-name-directory path) directory)
+      (jaunder--pull-error "pull destination must be directly under the root"))
+    path))
+
+(defun jaunder--pull-destination-exists-p (path)
+  "Return non-nil when PATH already has any filesystem directory entry."
+  (or (file-exists-p path) (file-symlink-p path)))
+
+(defun jaunder--pull-response-identity (entry-xml)
+  "Return (ID . SLUG) from complete response ENTRY-XML."
+  (let* ((fields (jaunder--harvest-response-fields entry-xml))
+         (edit-uri (jaunder--pull-exactly-one fields 'edit-uris "edit URI"))
+         (slug (jaunder--pull-exactly-one fields 'slugs "j:slug"))
+         (id (jaunder--pull-edit-id edit-uri)))
+    (unless id
+      (jaunder--pull-error "Member edit URI must end in a decimal Post ID"))
+    (cons id slug)))
+
+(defun jaunder--install-pulled-bytes (path bytes)
+  "Install BYTES at PATH without overwrite; return a pull result.
+Writes a complete same-directory temporary file, then claims PATH by hard-link
+creation, which is atomic and fails if another directory entry won the race."
+  (if (jaunder--pull-destination-exists-p path)
+      (jaunder--make-pull-result :status 'blocked :path path)
+    (let ((temporary nil))
+      (unwind-protect
+          (progn
+            (setq temporary
+                  (make-temp-file
+                   (expand-file-name ".jaunder-pull-" (file-name-directory path))))
+            (write-region bytes nil temporary nil 'silent)
+            (condition-case err
+                (progn
+                  (add-name-to-file temporary path)
+                  (jaunder--make-pull-result :status 'pulled :path path))
+              (file-already-exists
+               (jaunder--make-pull-result :status 'blocked :path path))
+              (file-error
+               (if (jaunder--pull-destination-exists-p path)
+                   (jaunder--make-pull-result :status 'blocked :path path)
+                 (signal (car err) (cdr err))))))
+        (when (and temporary (file-exists-p temporary))
+          (delete-file temporary))))))
+
+(defun jaunder--pull-member (root member)
+  "Pull D1 inventory MEMBER into ROOT, returning `jaunder-pull-result'.
+An existing destination blocks before network I/O.  The current Member response
+must retain MEMBER's Post ID and slug.  Every other failure signals without
+changing the destination."
+  (unless (jaunder-inventory-member-p member)
+    (jaunder--pull-error "pull input must be a D1 inventory Member"))
+  (let* ((slug (jaunder-inventory-member-slug member))
+         (path (jaunder--pull-destination root slug)))
+    (if (jaunder--pull-destination-exists-p path)
+        (jaunder--make-pull-result :status 'blocked :path path)
+      (let ((response
+             (jaunder--with-blog root
+                                 (jaunder--http-request
+                                  "GET" (jaunder-inventory-member-edit-uri member)))))
+        (unless (and (integerp (plist-get response :status))
+                     (<= 200 (plist-get response :status) 299))
+          (jaunder--pull-error "Member GET returned non-2xx status"))
+        (let* ((entry-xml (plist-get response :body))
+               (identity (jaunder--pull-response-identity entry-xml)))
+          (unless (and (equal (car identity)
+                              (jaunder-inventory-member-id member))
+                       (equal (cdr identity) slug))
+            (jaunder--pull-error "Member response identity changed since inventory"))
+          (let* ((captured-at (current-time))
+                 (zone (jaunder--current-zone-name))
+                 (etag (jaunder--response-header response "ETag"))
+                 (bytes (jaunder--atom->org entry-xml etag captured-at zone)))
+            (jaunder--install-pulled-bytes path bytes)))))))
 (provide 'jaunder-pull)
 ;;; jaunder-pull.el ends here
