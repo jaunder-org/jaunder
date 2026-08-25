@@ -16,6 +16,24 @@ use crate::helpers::{
 };
 use storage::test_support::{Backend, TestEnv, backends};
 
+fn collection_xml<'a>(body: &'a str, href: &str) -> &'a str {
+    let opening = format!(r#"<app:collection href="{href}">"#);
+    body.split_once(&opening)
+        .unwrap()
+        .1
+        .split_once("</app:collection>")
+        .unwrap()
+        .0
+}
+
+fn accept_values(collection: &str) -> Vec<&str> {
+    collection
+        .split("<app:accept>")
+        .skip(1)
+        .map(|rest| rest.split_once("</app:accept>").unwrap().0)
+        .collect()
+}
+
 fn with_site_config(
     state: &Arc<storage::AppState>,
     site_config: Arc<dyn storage::SiteConfigStorage>,
@@ -77,11 +95,19 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
     );
     let body = body_string(response).await;
     assert!(body.contains("app:service"));
-    assert!(body.contains(&format!("https://example.com/atompub/{name}/posts")));
-    assert!(body.contains(&format!("https://example.com/atompub/{name}/media")));
-    assert!(body.contains("image/webp"));
+    let posts = collection_xml(&body, &format!("https://example.com/atompub/{name}/posts"));
+    let media = collection_xml(&body, &format!("https://example.com/atompub/{name}/media"));
+    assert_eq!(
+        accept_values(posts),
+        vec!["application/atom+xml;type=entry"]
+    );
+    assert_eq!(accept_values(media), vec!["*/*"]);
+    assert!(!media.contains("image/"), "media collection: {media}");
     // The tagged post surfaces as an inline category in the posts collection.
-    assert!(body.contains("term=\"rust\""), "categories missing: {body}");
+    assert!(
+        posts.contains("term=\"rust\""),
+        "categories missing: {posts}"
+    );
     // Capability discovery (ADR-0023): the service document advertises the
     // Jaunder wire extensions this server understands.
     assert!(body.contains("j:extension"), "j:extension missing: {body}");

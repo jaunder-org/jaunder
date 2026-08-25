@@ -27,7 +27,7 @@ pub use entry::{
 };
 
 pub mod service;
-pub use service::{CollectionDecl, ServiceDocument, render_service_document};
+pub use service::{CollectionAccept, CollectionDecl, ServiceDocument, render_service_document};
 
 pub mod categories;
 pub use categories::render_categories_document;

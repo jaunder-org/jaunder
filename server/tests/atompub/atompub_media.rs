@@ -67,6 +67,30 @@ async fn upload_returns_201_and_media_link_entry(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
+async fn upload_accepts_pdf_content_type(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let storage = TempDir::new().unwrap();
+    let app = make_app(&state, &storage);
+
+    let response = app
+        .oneshot(
+            atompub(&session, "POST", "media")
+                .header(header::CONTENT_TYPE, "application/pdf")
+                .header("slug", "document.pdf")
+                .body(Body::from("PDF-BYTES"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let body = body_string(response).await;
+    assert!(body.contains("type=\"application/pdf\""), "body: {body}");
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn upload_without_content_type_defaults_to_octet_stream(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;

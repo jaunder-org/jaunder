@@ -31,7 +31,7 @@ Out:
 
 ## Task outline
 
-- [ ] Task 1: Introduce AtomPub accept-range discovery model.
+- [x] Task 1: Introduce AtomPub accept-range discovery model.
   - Contract: Service-document collection accept values represent AtomPub
     `app:accept` media ranges, not uploaded-media `ContentType` values. Keep
     concrete upload content types on `common::media::ContentType`; introduce or
