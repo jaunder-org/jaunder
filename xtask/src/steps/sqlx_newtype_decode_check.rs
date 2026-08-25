@@ -56,10 +56,14 @@
 //! as a target. That is not a hole: every field and element is **separately policed at the
 //! declaration**, which is where the newtype belongs — a second population, not a promise.
 //!
-//! A hand-written `FromRow` is never approved by structure. Its query targets need exact,
-//! counted [`ALLOWLIST`] entries; its direct typed `get`/`try_get` calls remain normal decode
-//! sites and are policed independently. This is intentionally narrow: a future hand-written
-//! decoder earns no approval until a human adds exact scope and rationale.
+//! A hand-written `sqlx::FromRow` is approved only after a narrow syntactic proof. Its
+//! `from_row` body must be flat `let` statements followed by `Ok(Self { … })`; every use of
+//! its `row` parameter must be the direct receiver of
+//! `row.try_get::<ConcreteType, _>(one_column_index)?`. There are no aliases, shadowing,
+//! UFCS, helper flow, untyped gets, alternate access, delegation, nested scopes/items, or
+//! macros in that grammar. A `let` that never mentions `row` may transform an already-decoded
+//! binding (such as PostRecord's tags JSON). The scanner still polices every direct typed get.
+//! Every other hand-written decoder needs an exact, counted [`ALLOWLIST`] entry.
 //!
 //! Hence the scoping, and note it is *narrower* than the approve-set's. A bridge-carrying
 //! type is approved wherever it is declared, because the bridge is the whole claim. A
@@ -371,9 +375,11 @@ enum Category {
     NotADecodeTarget,
     /// Test scaffolding whose type comes from a generic helper's signature.
     TestScaffolding,
-    /// A query target whose hand-written `FromRow` decoder is intentionally not approved by
-    /// delegation. Each exact target is listed here; the decoder's direct typed column gets
-    /// remain independently policed.
+    /// A query target whose hand-written `FromRow` decoder cannot satisfy the narrow
+    /// direct-column-get proof. Each exact target is listed here.
+    ///
+    /// A decoder that satisfies the proof is approved by delegation, while the scanner
+    /// still polices each direct typed column get in its body.
     HandWrittenFromRow,
     /// **Residue, not a verdict.** This should be a domain type; the fix is a vertical
     /// tracked elsewhere. The reason must name the issue.
@@ -876,142 +882,6 @@ const ALLOWLIST: &[Allowed] = &[
                  channel-scoped opaque subscriber_ref fallback. The branch that produced it is \
                  the domain fact; the final text has no single stricter type",
     },
-    // ---- hand-written post row: every target is exact; typed column gets stay policed ----
-    Allowed {
-        file: "posts.rs",
-        function: "get_post_by_id",
-        target: "PostRecord",
-        what: "&sql",
-        count: 1,
-        category: Category::HandWrittenFromRow,
-        reason: "PostRecord's hand-written decoder uses direct typed column gets, which remain policed (#619)",
-    },
-    Allowed {
-        file: "posts.rs",
-        function: "get_post_by_permalink",
-        target: "PostRecord",
-        what: "&sql",
-        count: 1,
-        category: Category::HandWrittenFromRow,
-        reason: "PostRecord's hand-written decoder uses direct typed column gets, which remain policed (#619)",
-    },
-    Allowed {
-        file: "posts.rs",
-        function: "get_unpublished_post_by_permalink",
-        target: "PostRecord",
-        what: "&sql",
-        count: 1,
-        category: Category::HandWrittenFromRow,
-        reason: "PostRecord's hand-written decoder uses direct typed column gets, which remain policed (#619)",
-    },
-    Allowed {
-        file: "posts.rs",
-        function: "publish_post",
-        target: "PostRecord",
-        what: "&sql",
-        count: 1,
-        category: Category::HandWrittenFromRow,
-        reason: "PostRecord's hand-written decoder uses direct typed column gets, which remain policed (#619)",
-    },
-    Allowed {
-        file: "posts.rs",
-        function: "list_published_by_user",
-        target: "PostRecord",
-        what: "&sql",
-        count: 2,
-        category: Category::HandWrittenFromRow,
-        reason: "PostRecord's cursor and first-page decoders use direct typed column gets, which remain policed (#619)",
-    },
-    Allowed {
-        file: "posts.rs",
-        function: "list_published",
-        target: "PostRecord",
-        what: "&sql",
-        count: 2,
-        category: Category::HandWrittenFromRow,
-        reason: "PostRecord's cursor and first-page decoders use direct typed column gets, which remain policed (#619)",
-    },
-    Allowed {
-        file: "posts.rs",
-        function: "list_drafts_by_user",
-        target: "PostRecord",
-        what: "&sql",
-        count: 2,
-        category: Category::HandWrittenFromRow,
-        reason: "PostRecord's cursor and first-page decoders use direct typed column gets, which remain policed (#619)",
-    },
-    Allowed {
-        file: "posts.rs",
-        function: "list_scheduled_by_user",
-        target: "PostRecord",
-        what: "&sql",
-        count: 2,
-        category: Category::HandWrittenFromRow,
-        reason: "PostRecord's cursor and first-page decoders use direct typed column gets, which remain policed (#619)",
-    },
-    Allowed {
-        file: "posts.rs",
-        function: "list_collection_by_user",
-        target: "PostRecord",
-        what: "&sql",
-        count: 2,
-        category: Category::HandWrittenFromRow,
-        reason: "PostRecord's cursor and first-page decoders use direct typed column gets, which remain policed (#619)",
-    },
-    Allowed {
-        file: "posts.rs",
-        function: "list_posts_by_tag",
-        target: "PostRecord",
-        what: "&sql",
-        count: 2,
-        category: Category::HandWrittenFromRow,
-        reason: "PostRecord's cursor and first-page decoders use direct typed column gets, which remain policed (#619)",
-    },
-    Allowed {
-        file: "posts.rs",
-        function: "list_user_posts_by_tag",
-        target: "PostRecord",
-        what: "&sql",
-        count: 2,
-        category: Category::HandWrittenFromRow,
-        reason: "PostRecord's cursor and first-page decoders use direct typed column gets, which remain policed (#619)",
-    },
-    Allowed {
-        file: "posts.rs",
-        function: "list_posts_gone_live_between",
-        target: "PostRecord",
-        what: "&sql",
-        count: 1,
-        category: Category::HandWrittenFromRow,
-        reason: "PostRecord's hand-written decoder uses direct typed column gets, which remain policed (#619)",
-    },
-    Allowed {
-        file: "posts.rs",
-        function: "list_published_in_window_rows",
-        target: "PostRecord",
-        what: "&sql",
-        count: 4,
-        category: Category::HandWrittenFromRow,
-        reason: "PostRecord's four feed-surface decoders use direct typed column gets, which remain policed (#619)",
-    },
-    Allowed {
-        file: "postgres/posts.rs",
-        function: "update_post",
-        target: "PostRecord",
-        what: "\"UPDATEpostsSETtitle=$1,slug=CASEWHENpublished_atISNULLTHEN$2ELSEslugEND,body=$3,format=$4,rendered_html=$5,published_at=CASEWHEN$6THENNULLWHEN$7ISNOTNULLTHEN$8ELSECOALESCE(published_at,$9)END,updated_at=$10,summary=$11WHEREpost_id=$12RETURNINGpost_id,user_id,(SELECTusernameFROMusersWHEREuser_id=posts.user_id)ASusername,title,slug,body,format,rendered_html,created_at,updated_at,published_at,deleted_at,summary,COALESCE((SELECTjson_agg(json_build_object('tag_id',t.tag_id,'tag_slug',t.tag_slug,'tag_display',pt.tag_display))FROMpost_tagsptJOINtagstONpt.tag_id=t.tag_idWHEREpt.post_id=posts.post_id),'[]'::json)::textAStags\"",
-        count: 1,
-        category: Category::HandWrittenFromRow,
-        reason: "PostRecord's Postgres update readback uses its direct typed decoder calls, which remain policed (#619)",
-    },
-    Allowed {
-        file: "sqlite/posts.rs",
-        function: "update_post",
-        target: "PostRecord",
-        what: "\"UPDATEpostsSETtitle=$1,slug=CASEWHENpublished_atISNULLTHEN$2ELSEslugEND,body=$3,format=$4,rendered_html=$5,published_at=CASEWHEN$6THENNULLWHEN$7ISNOTNULLTHEN$8ELSECOALESCE(published_at,$9)END,updated_at=$10,summary=$11WHEREpost_id=$12RETURNINGpost_id,user_id,(SELECTusernameFROMusersWHEREuser_id=posts.user_id)ASusername,title,slug,body,format,rendered_html,created_at,updated_at,published_at,deleted_at,summary,COALESCE((SELECTjson_group_array(json_object('tag_id',t.tag_id,'tag_slug',t.tag_slug,'tag_display',pt.tag_display))FROMpost_tagsptJOINtagstONpt.tag_id=t.tag_idWHEREpt.post_id=posts.post_id),'[]')AStags\"",
-        count: 1,
-        category: Category::HandWrittenFromRow,
-        reason: "PostRecord's SQLite update readback uses its direct typed decoder calls, which remain policed (#619)",
-    },
     // ---- the claim wrapper ----
     Allowed {
         file: "postgres/feed_events.rs",
@@ -1177,12 +1047,12 @@ const APPROVED_FOREIGN: &[(&str, &str)] = &[(
 pub(crate) struct ApproveSet {
     /// Types declared with a bridge-emitting macro, plus [`APPROVED_FOREIGN`].
     approved: std::collections::HashSet<String>,
-    /// `#[derive(FromRow)]` structs and tuple aliases declared under a scanned root.
+    /// `#[derive(FromRow)]` structs, tuple aliases, and narrowly-proven handwritten
+    /// `sqlx::FromRow` composites declared under a scanned root.
     ///
-    /// Approved **by delegation**: every derived field and tuple element is policed at its
-    /// declaration. Hand-written `FromRow` implementations are never structurally approved:
-    /// each real query target needs its own exact [`ALLOWLIST`] entry, while its direct typed
-    /// decoder calls remain in [`Scanner`]'s population.
+    /// Derived fields and the direct typed gets in a proven handwritten decoder are
+    /// policed independently. Other handwritten implementations require exact
+    /// allowlist entries.
     composites: std::collections::HashSet<String>,
     /// Type aliases, mapping the alias ident to the last path segment of its target
     /// (`HubUrl` → `TaggedUrl`).
@@ -1250,11 +1120,266 @@ fn is_from_row(attrs: &[syn::Attribute]) -> bool {
         .any(|a| a.path().is_ident("derive") && render(&a.meta).contains("FromRow"))
 }
 
+/// Whether `path` is written as the unaliased `sqlx::FromRow` trait.
+fn is_sqlx_from_row(path: &syn::Path) -> bool {
+    path.leading_colon.is_none()
+        && path.segments.len() == 2
+        && path.segments.first().is_some_and(|s| s.ident == "sqlx")
+        && path.segments.last().is_some_and(|s| s.ident == "FromRow")
+}
+
+/// Whether `expr` is exactly the `row` parameter, rather than an alias or a qualified path.
+fn is_row(expr: &syn::Expr) -> bool {
+    matches!(
+        expr,
+        syn::Expr::Path(p) if p.qself.is_none() && p.path.is_ident("row")
+    )
+}
+
+/// Whether `ty` contains an inferred type anywhere within its syntax.
+fn has_inferred_type(ty: &syn::Type) -> bool {
+    struct Finder(bool);
+
+    impl<'ast> syn::visit::Visit<'ast> for Finder {
+        fn visit_type_infer(&mut self, _: &'ast syn::TypeInfer) {
+            self.0 = true;
+        }
+    }
+
+    let mut finder = Finder(false);
+    syn::visit::Visit::visit_type(&mut finder, ty);
+    finder.0
+}
+
+/// Whether `expr` is the sole direct row access that a proven decoder may make.
+fn is_direct_typed_row_get(expr: &syn::Expr) -> bool {
+    let syn::Expr::Try(try_expr) = expr else {
+        return false;
+    };
+    let syn::Expr::MethodCall(call) = &*try_expr.expr else {
+        return false;
+    };
+    if call.method != "try_get" || !is_row(&call.receiver) || call.args.len() != 1 {
+        return false;
+    }
+    let Some(turbofish) = &call.turbofish else {
+        return false;
+    };
+    if turbofish.args.len() != 2 {
+        return false;
+    }
+    let mut args = turbofish.args.iter();
+    matches!(
+        (args.next(), args.next()),
+        (
+            Some(syn::GenericArgument::Type(ty)),
+            Some(syn::GenericArgument::Type(syn::Type::Infer(_)))
+        ) if !has_inferred_type(ty)
+    )
+}
+
+struct FlatFromRowProof {
+    valid: bool,
+    row_uses: usize,
+}
+
+impl FlatFromRowProof {
+    fn new() -> Self {
+        Self {
+            valid: true,
+            row_uses: 0,
+        }
+    }
+}
+
+impl<'ast> syn::visit::Visit<'ast> for FlatFromRowProof {
+    fn visit_expr_path(&mut self, i: &'ast syn::ExprPath) {
+        if i.qself.is_none() && i.path.is_ident("row") {
+            self.row_uses += 1;
+        }
+        syn::visit::visit_expr_path(self, i);
+    }
+
+    fn visit_pat_ident(&mut self, i: &'ast syn::PatIdent) {
+        if i.ident == "row" {
+            self.valid = false;
+        }
+        syn::visit::visit_pat_ident(self, i);
+    }
+
+    fn visit_macro(&mut self, _: &'ast syn::Macro) {
+        self.valid = false;
+    }
+
+    fn visit_item(&mut self, _: &'ast syn::Item) {
+        self.valid = false;
+    }
+
+    fn visit_expr_block(&mut self, _: &'ast syn::ExprBlock) {
+        self.valid = false;
+    }
+
+    fn visit_expr_closure(&mut self, _: &'ast syn::ExprClosure) {
+        self.valid = false;
+    }
+
+    fn visit_expr_async(&mut self, _: &'ast syn::ExprAsync) {
+        self.valid = false;
+    }
+
+    fn visit_expr_const(&mut self, _: &'ast syn::ExprConst) {
+        self.valid = false;
+    }
+
+    fn visit_expr_unsafe(&mut self, _: &'ast syn::ExprUnsafe) {
+        self.valid = false;
+    }
+
+    fn visit_expr_if(&mut self, _: &'ast syn::ExprIf) {
+        self.valid = false;
+    }
+
+    fn visit_expr_match(&mut self, _: &'ast syn::ExprMatch) {
+        self.valid = false;
+    }
+
+    fn visit_expr_loop(&mut self, _: &'ast syn::ExprLoop) {
+        self.valid = false;
+    }
+
+    fn visit_expr_for_loop(&mut self, _: &'ast syn::ExprForLoop) {
+        self.valid = false;
+    }
+
+    fn visit_expr_while(&mut self, _: &'ast syn::ExprWhile) {
+        self.valid = false;
+    }
+
+    fn visit_expr_try_block(&mut self, _: &'ast syn::ExprTryBlock) {
+        self.valid = false;
+    }
+
+    fn visit_expr_method_call(&mut self, i: &'ast syn::ExprMethodCall) {
+        if i.method == "from_row" {
+            self.valid = false;
+        }
+        syn::visit::visit_expr_method_call(self, i);
+    }
+
+    fn visit_expr_call(&mut self, i: &'ast syn::ExprCall) {
+        if matches!(&*i.func, syn::Expr::Path(p) if p.qself.is_none()
+            && p.path.segments.last().is_some_and(|segment| segment.ident == "from_row"))
+        {
+            self.valid = false;
+        }
+        syn::visit::visit_expr_call(self, i);
+    }
+}
+
+/// Whether `expr` is the only terminating expression allowed in a proven decoder.
+fn is_ok_self(expr: &syn::Expr) -> bool {
+    matches!(
+        expr,
+        syn::Expr::Call(call)
+            if matches!(&*call.func, syn::Expr::Path(p) if p.qself.is_none() && p.path.is_ident("Ok"))
+                && call.args.len() == 1
+                && matches!(
+                    call.args.first(),
+                    Some(syn::Expr::Struct(record))
+                        if record.qself.is_none()
+                            && record.path.is_ident("Self")
+                            && record.rest.is_none()
+                )
+    )
+}
+
+/// Proves the narrow handwritten `FromRow` grammar used to delegate a composite target.
+///
+/// The body is a flat sequence of `let` statements followed by `Ok(Self { ... })`. A local
+/// that reads the `row` parameter must be exactly one typed `try_get` with one column index;
+/// other locals may transform prior values, such as PostRecord's tags JSON parser.
+fn from_row_has_flat_direct_gets(method: &syn::ImplItemFn) -> bool {
+    if method.sig.inputs.len() != 1
+        || !matches!(
+            method.sig.inputs.first(),
+            Some(syn::FnArg::Typed(argument))
+                if matches!(&*argument.pat, syn::Pat::Ident(pat) if pat.ident == "row")
+        )
+    {
+        return false;
+    }
+
+    let Some((last, locals)) = method.block.stmts.split_last() else {
+        return false;
+    };
+    if !matches!(last, syn::Stmt::Expr(expr, None) if is_ok_self(expr)) {
+        return false;
+    }
+
+    for stmt in locals {
+        let syn::Stmt::Local(local) = stmt else {
+            return false;
+        };
+        let Some(init) = &local.init else {
+            return false;
+        };
+        if init.diverge.is_some() {
+            return false;
+        }
+        let mut proof = FlatFromRowProof::new();
+        syn::visit::Visit::visit_expr(&mut proof, &init.expr);
+        if !proof.valid
+            || (proof.row_uses == 1 && !is_direct_typed_row_get(&init.expr))
+            || proof.row_uses > 1
+        {
+            return false;
+        }
+        syn::visit::Visit::visit_pat(&mut proof, &local.pat);
+        if !proof.valid {
+            return false;
+        }
+    }
+
+    let syn::Stmt::Expr(result, None) = last else {
+        return false;
+    };
+    let mut proof = FlatFromRowProof::new();
+    syn::visit::Visit::visit_expr(&mut proof, result);
+    proof.valid && proof.row_uses == 0
+}
+
+/// The composite name when `item` carries a narrowly-proven handwritten `sqlx::FromRow`.
+fn proven_handwritten_from_row(item: &syn::ItemImpl) -> Option<String> {
+    let Some((_, trait_path, _)) = &item.trait_ else {
+        return None;
+    };
+    if !is_sqlx_from_row(trait_path) {
+        return None;
+    }
+    let syn::Type::Path(self_type) = &*item.self_ty else {
+        return None;
+    };
+    if self_type.qself.is_some() || self_type.path.segments.len() != 1 {
+        return None;
+    }
+    let name = self_type.path.get_ident()?.to_string();
+    let mut methods = item.items.iter().filter_map(|item| match item {
+        syn::ImplItem::Fn(method) if method.sig.ident == "from_row" => Some(method),
+        _ => None,
+    });
+    let method = methods.next()?;
+    if methods.next().is_some() || !from_row_has_flat_direct_gets(method) {
+        return None;
+    }
+    Some(name)
+}
+
 /// `root` gates composites: bridge-carrying types are approved wherever declared because the
 /// bridge is the whole claim. Derived `FromRow` structs and tuple aliases are approved only
-/// under the policed root, where their fields or elements are checked. Hand-written `FromRow`
-/// implementations are deliberately not collected: query targets for them require exact
-/// allowlist entries, so a new handwritten decoder cannot inherit approval.
+/// under the policed root, where their fields or elements are checked. A hand-written
+/// `sqlx::FromRow` implementation is approved only when its `from_row` method proves the
+/// same direct column boundary syntactically. Every other hand-written implementation needs
+/// an exact allowlist entry.
 ///
 /// Only top-level `file.items` are read: a declaration inside an inline `mod` is not seen.
 /// That direction is safe — an unseen declaration is an unapproved type, so the gate bites
@@ -1272,6 +1397,11 @@ fn collect_declarations(source: &str, root: Root, set: &mut ApproveSet) -> Resul
             }
             syn::Item::Struct(s) if policed && is_from_row(&s.attrs) => {
                 set.composites.insert(s.ident.to_string());
+            }
+            syn::Item::Impl(i) if policed => {
+                if let Some(name) = proven_handwritten_from_row(i) {
+                    set.composites.insert(name);
+                }
             }
             syn::Item::Type(t) if policed && matches!(&*t.ty, syn::Type::Tuple(_)) => {
                 set.composites.insert(t.ident.to_string());
@@ -1958,6 +2088,27 @@ mod tests {
             .collect()
     }
 
+    /// Parses a synthetic handwritten decoder and returns composites approved by delegation.
+    fn handwritten_composites(src: &str) -> std::collections::HashSet<String> {
+        let mut set = ApproveSet::default();
+        collect_declarations(src, Root::Policed, &mut set).expect("parses");
+        set.composites
+    }
+
+    /// A `PostRecord` handwritten decoder with caller-provided locals and final statement.
+    fn post_record_decoder(locals: &str, final_statement: &str) -> String {
+        format!(
+            r#"
+                impl<'r, R> sqlx::FromRow<'r, R> for PostRecord {{
+                    fn from_row(row: &'r R) -> sqlx::Result<Self> {{
+                        {locals}
+                        {final_statement}
+                    }}
+                }}
+            "#
+        )
+    }
+
     /// Line numbers of the turbofish-less struct-literal field decodes in `src`.
     fn field_failures(src: &str) -> Vec<usize> {
         decodes(src, &approve())
@@ -2069,6 +2220,116 @@ mod tests {
             }
         "#;
         assert_eq!(targets(src), vec!["Option<i64>"]);
+    }
+
+    // ---- narrowly-proven handwritten FromRow composites ----
+
+    #[test]
+    fn handwritten_from_row_with_tags_parser_is_approved_and_its_gets_stay_policed() {
+        let src = post_record_decoder(
+            r#"
+                let post_id = row.try_get::<PostId, _>("post_id")?;
+                let tags_json = row.try_get::<String, _>("tags")?;
+                let tags = parse_post_tags_json(&tags_json, post_id)?;
+            "#,
+            "Ok(Self { post_id, tags })",
+        );
+        let mut approved = approve();
+        collect_declarations(&src, Root::Policed, &mut approved).expect("parses");
+        assert!(approved.composites.contains("PostRecord"));
+
+        let query = format!(
+            r#"{src} fn fetch() {{ sqlx::query_as::<_, PostRecord>("SELECT *").fetch_one(p); }}"#
+        );
+        let targets: Vec<String> = decodes(&query, &approved)
+            .expect("parses")
+            .sites
+            .into_iter()
+            .map(|site| site.target)
+            .collect();
+        assert_eq!(
+            targets,
+            vec!["String"],
+            "the PostRecord query target is delegated, but the aggregate payload remains policed"
+        );
+    }
+
+    #[test]
+    fn handwritten_from_row_rejects_a_row_alias() {
+        let src = post_record_decoder(
+            r#"
+                let row_alias = row;
+                let post_id = row_alias.try_get::<PostId, _>("post_id")?;
+            "#,
+            "Ok(Self { post_id })",
+        );
+        assert!(!handwritten_composites(&src).contains("PostRecord"));
+    }
+
+    #[test]
+    fn handwritten_from_row_rejects_shadowing_and_nested_scopes() {
+        let shadowed = post_record_decoder(
+            r#"
+                let row = another_row;
+                let post_id = row.try_get::<PostId, _>("post_id")?;
+            "#,
+            "Ok(Self { post_id })",
+        );
+        assert!(!handwritten_composites(&shadowed).contains("PostRecord"));
+
+        let nested = post_record_decoder(
+            r#"let post_id = { row.try_get::<PostId, _>("post_id")? };"#,
+            "Ok(Self { post_id })",
+        );
+        assert!(!handwritten_composites(&nested).contains("PostRecord"));
+    }
+
+    #[test]
+    fn handwritten_from_row_rejects_ufcs_and_helper_row_flow() {
+        let ufcs = post_record_decoder(
+            r#"let post_id = Row::try_get::<PostId, _>(row, "post_id")?;"#,
+            "Ok(Self { post_id })",
+        );
+        assert!(!handwritten_composites(&ufcs).contains("PostRecord"));
+
+        let helper = post_record_decoder(
+            r#"let post_id = decode_post_id("post_id", row)?;"#,
+            "Ok(Self { post_id })",
+        );
+        assert!(!handwritten_composites(&helper).contains("PostRecord"));
+    }
+
+    #[test]
+    fn handwritten_from_row_rejects_untyped_inferred_and_raw_access() {
+        for locals in [
+            r#"let post_id = row.try_get("post_id")?;"#,
+            r#"let post_id = row.try_get::<_, _>("post_id")?;"#,
+            r#"let post_id = row.get::<PostId, _>("post_id")?;"#,
+        ] {
+            let src = post_record_decoder(locals, "Ok(Self { post_id })");
+            assert!(
+                !handwritten_composites(&src).contains("PostRecord"),
+                "must reject {locals}"
+            );
+        }
+    }
+
+    #[test]
+    fn handwritten_from_row_rejects_from_row_delegation_and_nonflat_bodies() {
+        let delegated = post_record_decoder(
+            r#"let post_id = Other::from_row(&other_row)?;"#,
+            "Ok(Self { post_id })",
+        );
+        assert!(!handwritten_composites(&delegated).contains("PostRecord"));
+
+        let nonflat = post_record_decoder(
+            r#"
+                let post_id = row.try_get::<PostId, _>("post_id")?;
+                if true {}
+            "#,
+            "Ok(Self { post_id })",
+        );
+        assert!(!handwritten_composites(&nonflat).contains("PostRecord"));
     }
 
     // ---- declared decode targets ----
