@@ -71,18 +71,16 @@ pub fn run(out: &str) -> Result<()> {
     //    output for classification + the diagnostics bundle. A non-zero exit is
     //    NOT fatal here: a test failure or infra failure is reported via status.
     let nextest = pg::with_ephemeral(|env| {
-        run_capture(
-            Command::new("cargo")
-                .args([
-                    "llvm-cov",
-                    "--no-report",
-                    "nextest",
-                    "--show-progress",
-                    "none",
-                ])
-                .env("JAUNDER_PG_TEST_URL", &env.test_url)
-                .env("JAUNDER_PG_BOOTSTRAP_TEST_URL", &env.bootstrap_url),
-        )
+        let mut command = Command::new("cargo");
+        command.args([
+            "llvm-cov",
+            "--no-report",
+            "nextest",
+            "--show-progress",
+            "none",
+        ]);
+        env.configure_command(&mut command);
+        run_capture(&mut command)
     })?;
     fs::write(diag.join("nextest.log"), &nextest)?;
     // status.json is best-effort: under TRUE disk-full the write below itself
