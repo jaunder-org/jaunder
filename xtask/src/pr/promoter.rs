@@ -15,8 +15,8 @@ use super::decide;
 use super::gh;
 use super::land::{GhArmer, PrArmer, arm_is_verified};
 use super::snapshot::{
-    COMMIT_CHECKS_QUERY, CheckState, CommitChecks, RequiredChecks, parse_commit_checks,
-    parse_required_checks,
+    COMMIT_CHECKS_QUERY, CheckState, CommitChecks, PR_QUERY, RequiredChecks, parse_commit_checks,
+    parse_required_checks, parse_snapshot,
 };
 use super::{PrNumber, Subject};
 use crate::{StepResult, adr, git};
@@ -271,15 +271,14 @@ impl GhPromoterPr {
             auto_merge_armed: value
                 .get("autoMergeRequest")
                 .is_some_and(|request| !request.is_null()),
-            in_merge_queue: value
-                .get("isInMergeQueue")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
+            // Queue state is not available from `gh pr ... --json`; exact-head
+            // verification enriches a single PR from the shared GraphQL snapshot.
+            in_merge_queue: false,
         })
     }
 
     fn pr_fields() -> &'static str {
-        "number,state,headRepositoryOwner,headRefName,headRefOid,baseRefName,body,autoMergeRequest,isInMergeQueue"
+        "number,state,headRepositoryOwner,headRefName,headRefOid,baseRefName,body,autoMergeRequest"
     }
 
     fn open_pull_requests_with(
@@ -311,6 +310,57 @@ impl GhPromoterPr {
             .map(|pr| self.parse_pull_request(pr))
             .collect()
     }
+
+    fn pull_request_with(
+        &self,
+        number: PrNumber,
+        run_pr: impl FnOnce(&[&str]) -> std::result::Result<Value, gh::ApiError>,
+        run_snapshot: impl FnOnce(&[&str]) -> std::result::Result<Value, gh::ApiError>,
+    ) -> Result<Option<PromoterPullRequest>> {
+        let slug = self.slug();
+        let number_text = number.to_string();
+        let value = match run_pr(&[
+            "pr",
+            "view",
+            &number_text,
+            "--repo",
+            &slug,
+            "--json",
+            Self::pr_fields(),
+        ]) {
+            Ok(value) => value,
+            Err(gh::ApiError::NotFound) => return Ok(None),
+            Err(error) => return Err(github_error(error)),
+        };
+        let mut pr = self.parse_pull_request(&value)?;
+
+        let query = format!("query={PR_QUERY}");
+        let owner = format!("owner={}", self.owner);
+        let name = format!("name={}", self.repo);
+        let number_arg = format!("number={number}");
+        let snapshot = parse_snapshot(
+            &run_snapshot(&[
+                "api",
+                "graphql",
+                "-f",
+                &query,
+                "-f",
+                &owner,
+                "-f",
+                &name,
+                "-F",
+                &number_arg,
+            ])
+            .map_err(github_error)?,
+        )
+        .map_err(github_error)?;
+        if snapshot.head_sha != pr.head_sha {
+            bail!("promoter PR GraphQL snapshot names a different head");
+        }
+        pr.auto_merge_armed = snapshot.auto_merge_armed;
+        pr.in_merge_queue = snapshot.queue.in_queue;
+        Ok(Some(pr))
+    }
 }
 
 impl PromoterPrRead for GhPromoterPr {
@@ -323,21 +373,7 @@ impl PromoterPrRead for GhPromoterPr {
     }
 
     fn pull_request(&self, number: PrNumber) -> Result<Option<PromoterPullRequest>> {
-        let slug = self.slug();
-        let number = number.to_string();
-        match gh::run_gh(&[
-            "pr",
-            "view",
-            &number,
-            "--repo",
-            &slug,
-            "--json",
-            Self::pr_fields(),
-        ]) {
-            Ok(value) => self.parse_pull_request(&value).map(Some),
-            Err(gh::ApiError::NotFound) => Ok(None),
-            Err(error) => Err(github_error(error)),
-        }
+        self.pull_request_with(number, gh::run_gh, gh::run_gh)
     }
 
     fn remote_branch_head(&self) -> Result<Option<String>> {
@@ -919,7 +955,7 @@ mod tests {
     }
 
     #[test]
-    fn open_pr_lookup_passes_branch_only_and_parses_owner_and_queue_state() {
+    fn open_pr_lookup_passes_branch_only_and_parses_owner() {
         let github = GhPromoterPr {
             owner: "jaunder-org".into(),
             repo: "jaunder".into(),
@@ -944,6 +980,7 @@ mod tests {
                         GhPromoterPr::pr_fields(),
                     ]
                 );
+                assert!(!GhPromoterPr::pr_fields().contains("isInMergeQueue"));
                 Ok(json!([{
                     "number": 742,
                     "state": "OPEN",
@@ -952,14 +989,68 @@ mod tests {
                     "headRefOid": "queued-head",
                     "baseRefName": BASE_BRANCH,
                     "body": MARKER,
-                    "autoMergeRequest": null,
-                    "isInMergeQueue": true
+                    "autoMergeRequest": null
                 }]))
             })
             .unwrap();
 
         assert_eq!(pulls[0].head_owner, "jaunder-org");
-        assert!(pulls[0].in_merge_queue);
+        assert!(!pulls[0].in_merge_queue);
+    }
+
+    #[test]
+    fn single_pr_lookup_enriches_queue_state_from_graphql() {
+        let github = GhPromoterPr {
+            owner: "jaunder-org".into(),
+            repo: "jaunder".into(),
+        };
+
+        let pull = github
+            .pull_request_with(
+                PrNumber(742),
+                |args| {
+                    assert_eq!(args[0..2], ["pr", "view"]);
+                    assert!(!GhPromoterPr::pr_fields().contains("isInMergeQueue"));
+                    Ok(json!({
+                        "number": 742,
+                        "state": "OPEN",
+                        "headRepositoryOwner": {"login": "jaunder-org"},
+                        "headRefName": BRANCH,
+                        "headRefOid": "queued-head",
+                        "baseRefName": BASE_BRANCH,
+                        "body": MARKER,
+                        "autoMergeRequest": null
+                    }))
+                },
+                |args| {
+                    assert_eq!(args[0..2], ["api", "graphql"]);
+                    assert!(args.iter().any(|arg| arg.contains(PR_QUERY)));
+                    Ok(json!({
+                        "data": {"repository": {"pullRequest": {
+                            "state": "OPEN",
+                            "mergedAt": null,
+                            "mergeCommit": null,
+                            "mergeable": "MERGEABLE",
+                            "mergeStateStatus": "CLEAN",
+                            "isInMergeQueue": true,
+                            "mergeQueueEntry": {"position": 1},
+                            "autoMergeRequest": null,
+                            "headRefName": BRANCH,
+                            "commits": {"nodes": [{"commit": {
+                                "oid": "queued-head",
+                                "committedDate": "2026-08-25T00:00:00Z"
+                            }}]},
+                            "statusCheckRollup": {"contexts": {"nodes": []}}
+                        }}}
+                    }))
+                },
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(pull.head_sha, "queued-head");
+        assert!(pull.in_merge_queue);
+        assert!(!pull.auto_merge_armed);
     }
 
     #[test]
