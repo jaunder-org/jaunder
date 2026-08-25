@@ -52,11 +52,9 @@ pub trait SiteConfigStorage: Send + Sync {
     /// Reads the whole SMTP block as one typed [`SmtpConfig`], or `None` when
     /// `smtp.host` is unset (which is how an instance says "no outbound mail").
     ///
-    /// A **required** method rather than a `get`-based default, for two reasons. Every
-    /// value decodes through its own validating sqlx bridge, so a garbage stored value is
-    /// rejected as a `ColumnDecode` at the query boundary rather than re-parsed (badly) by
-    /// each caller — and the gate's decode scanner does not read trait *default* bodies
-    /// (#787), so a decode written there would be invisible to it rather than approved.
+    /// A **required** method rather than a `get`-based default: every value decodes through
+    /// its own validating sqlx bridge, so a garbage stored value is rejected as a
+    /// `ColumnDecode` at the query boundary rather than re-parsed (badly) by each caller.
     ///
     /// The optional fields fall back to their types' own defaults
     /// ([`SmtpPort`] 587, [`SmtpTlsMode::StartTls`], [`SmtpSender`]
