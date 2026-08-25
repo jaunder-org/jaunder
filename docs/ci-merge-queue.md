@@ -224,9 +224,12 @@ workflow-run metadata needed by dequeue correlation. It has no Administration,
 Actions-write, ruleset or branch-protection bypass, or authority to write `main`
 directly. The built-in `GITHUB_TOKEN` is not used for promoter GitHub
 operations. Promotion commits use the deterministic `jaunder-adr-promoter[bot]`
-author and committer. The App arms auto-merge with the merge method; the normal
-pull-request and `merge_group` checks run, and the queue remains the only writer
-to `main`.
+author and committer. Their `git commit --no-verify` is deliberate: the
+pre-commit hook's auto-staging reconciliation rejects the generated tracked
+rename as unsafe, while the promoter PR's required checks validate that exact
+commit before the queue can write it to `main`. The App arms auto-merge with the
+merge method; the normal pull-request and `merge_group` checks run, and the
+queue remains the only writer to `main`.
 
 The workflow also receives `pull_request: dequeued` events. Recovery is limited
 to the exact promoter head/base identity: the controller correlates the removed

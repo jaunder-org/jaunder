@@ -26,12 +26,13 @@ pub const TITLE: &str = "docs(adr): promote pending ADR drafts";
 pub const MARKER: &str = "<!-- jaunder-adr-promoter -->";
 pub const BASE_BRANCH: &str = "main";
 const MERGE_GROUP_LIMIT: usize = 100;
-const PROMOTION_COMMIT_ARGS: [&str; 7] = [
+const PROMOTION_COMMIT_ARGS: [&str; 8] = [
     "-c",
     "user.name=jaunder-adr-promoter[bot]",
     "-c",
     "user.email=jaunder-adr-promoter[bot]@users.noreply.github.com",
     "commit",
+    "--no-verify",
     "-m",
     TITLE,
 ];
@@ -177,8 +178,10 @@ impl RealPromoterGit {
     }
 
     fn commit_with(&self, run: impl FnOnce(&std::path::Path, &[&str]) -> Result<()>) -> Result<()> {
-        // Per-invocation config supplies both Git author and committer identity
-        // without leaving workflow-local repository configuration behind.
+        // Per-invocation config supplies both Git identities without persistent
+        // workflow-local configuration. The generated tracked rename is exactly
+        // the delete/rename state that precommit's auto-staging reconciliation
+        // rejects; the promoter PR's required checks gate the commit before main.
         run(&self.repo, &PROMOTION_COMMIT_ARGS)
     }
 }
@@ -945,6 +948,7 @@ mod tests {
                     "-c",
                     "user.email=jaunder-adr-promoter[bot]@users.noreply.github.com",
                     "commit",
+                    "--no-verify",
                     "-m",
                     TITLE,
                 ]
