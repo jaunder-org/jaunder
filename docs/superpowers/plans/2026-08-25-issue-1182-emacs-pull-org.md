@@ -30,7 +30,7 @@ Out:
     `#[apply(backends)]` Member GET tests assert serialized response bodies on
     SQLite and PostgreSQL.
 
-- [ ] **Task 2 — Prepare compatible Atom and Org parsing seams.**
+- [x] **Task 2 — Prepare compatible Atom and Org parsing seams.**
   - Files: `elisp/jaunder-atom.el`, `elisp/jaunder-org.el`, and focused pure
     ERT.
   - Contract: `jaunder--harvest-response-fields` becomes a compatible superset:

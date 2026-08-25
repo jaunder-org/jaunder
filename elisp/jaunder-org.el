@@ -133,7 +133,8 @@ later by the media unit."
   (let* ((kws (org-collect-keywords
                '("TITLE" "DATE" "KEYWORDS" "DESCRIPTION" "PROPERTY")))
          (props (jaunder--collect-properties kws))
-         (raw-title (cadr (assoc "TITLE" kws)))
+         (title-values (cdr (assoc "TITLE" kws)))
+         (raw-title (and title-values (mapconcat #'identity title-values "\n")))
          (title (and raw-title (not (string= (string-trim raw-title) "")) raw-title))
          (categories (jaunder--split-keywords (cdr (assoc "KEYWORDS" kws))))
          (descriptions (cdr (assoc "DESCRIPTION" kws)))
