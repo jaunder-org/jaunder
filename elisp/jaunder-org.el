@@ -44,11 +44,12 @@ out of scope for v1.")
 (defun jaunder--collect-properties (keywords)
   "Return an alist of file-level #+PROPERTY: KEY/VALUE pairs from KEYWORDS.
 KEYWORDS is the result of `org-collect-keywords'; each PROPERTY entry is a
-\"KEY VALUE\" string split on the first run of whitespace."
+\"KEY VALUE\" string split on its first run of whitespace.  A bare KEY is an
+explicit empty value, distinct from an absent property."
   (delq nil
         (mapcar (lambda (line)
-                  (when (string-match "\\`\\([^ \t]+\\)[ \t]+\\(.*\\)\\'" line)
-                    (cons (match-string 1 line) (match-string 2 line))))
+                  (when (string-match "\\`\\([^ \t]+\\)\\(?:[ \t]+\\(.*\\)\\)?\\'" line)
+                    (cons (match-string 1 line) (or (match-string 2 line) ""))))
                 (cdr (assoc "PROPERTY" keywords)))))
 
 (defun jaunder--split-keywords (values)
