@@ -41,7 +41,7 @@ Out:
   - Verification: focused Rust tests for service-document rendering and existing
     AtomPub media upload non-image behavior.
 
-- [ ] Task 2: Broaden Emacs media candidate qualification and preflight.
+- [x] Task 2: Broaden Emacs media candidate qualification and preflight.
   - Contract: `jaunder--media-link-p` or its replacement tests local-path link
     candidacy only; filesystem checks belong to preflight.
     `jaunder--media-preflight` rejects missing, unreadable, and non-regular
@@ -53,7 +53,7 @@ Out:
     and preflight abort before upload for missing/unreadable/non-regular
     targets.
 
-- [ ] Task 3: Align Emacs content-type mapping with shared media table.
+- [x] Task 3: Align Emacs content-type mapping with shared media table.
   - Contract: Emacs owns a deterministic extension table matching
     `common::media::detect_content_type`: `jpg`/`jpeg`, `png`, `gif`, `webp`,
     `svg`, `mp3`, `ogg`/`oga`, `flac`, `wav`, `mp4`, `webm`, `pdf`; fallback is
