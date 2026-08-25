@@ -70,7 +70,7 @@ Out:
     through the real AtomPub Media Collection and publishes a Post whose sent
     body uses the harvested absolute media URL.
 
-- [ ] Task 5: Update architecture and historical contract references.
+- [x] Task 5: Update architecture and historical contract references.
   - Contract: `docs/ARCHITECTURE.md` must replace the image-only Emacs media
     qualification statement with the local-file rule, the explicit deterministic
     content-type table/fallback, and the retained safe-to-resume ordering. Do
