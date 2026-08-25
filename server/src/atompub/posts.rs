@@ -20,7 +20,7 @@ use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::ViewerIdentity;
 use storage::{CollectionCursor, PostRecord, PostStorage, SiteConfigStorage, UserConfigStorage};
-use web::auth::AuthUser;
+use web::auth;
 
 use super::mapping::{entry_to_post_fields, post_to_entry};
 use super::{HandlerError, required_base_url};
@@ -146,7 +146,7 @@ pub struct CollectionPaging {
 #[tracing::instrument(name = "atompub.posts.collection_get", skip_all)]
 pub async fn collection_get(
     services: PostServices,
-    auth_user: AuthUser,
+    auth_user: auth::User,
     Path(username): Path<Username>,
     Query(paging): Query<CollectionPaging>,
 ) -> Result<Response, HandlerError> {
@@ -222,7 +222,7 @@ pub async fn collection_get(
 /// resolve the post as the local viewer for that user — otherwise the resolution
 /// filter would hide the user's own non-Public posts (a `404` before the owner
 /// check ever runs).
-fn owner_viewer(auth_user: &AuthUser) -> ViewerIdentity {
+fn owner_viewer(auth_user: &auth::User) -> ViewerIdentity {
     ViewerIdentity::local(auth_user.user_id)
 }
 
@@ -233,7 +233,7 @@ fn owner_viewer(auth_user: &AuthUser) -> ViewerIdentity {
 /// resolution filter does not hide the owner's own non-Public posts.
 async fn owned_post(
     posts: &dyn PostStorage,
-    auth_user: &AuthUser,
+    auth_user: &auth::User,
     username: &Username,
     post_id: PostId,
 ) -> Result<PostRecord, HandlerError> {
@@ -259,7 +259,7 @@ async fn owned_post(
 #[tracing::instrument(name = "atompub.posts.member_get", skip_all)]
 pub async fn member_get(
     services: PostServices,
-    auth_user: AuthUser,
+    auth_user: auth::User,
     Path((username, post_id)): Path<(Username, PostId)>,
 ) -> Result<Response, HandlerError> {
     let posts = services.posts();
@@ -289,7 +289,7 @@ pub async fn member_get(
 #[tracing::instrument(name = "atompub.posts.member_delete", skip_all)]
 pub async fn member_delete(
     services: PostServices,
-    auth_user: AuthUser,
+    auth_user: auth::User,
     Path((username, post_id)): Path<(Username, PostId)>,
     headers: HeaderMap,
 ) -> Result<Response, HandlerError> {
@@ -315,7 +315,7 @@ pub async fn member_delete(
 #[tracing::instrument(name = "atompub.posts.collection_post", skip_all)]
 pub async fn collection_post(
     services: PostServices,
-    auth_user: AuthUser,
+    auth_user: auth::User,
     Path(username): Path<Username>,
     headers: HeaderMap,
     body: String,
@@ -434,7 +434,7 @@ fn post_entry_response(
 #[tracing::instrument(name = "atompub.posts.member_put", skip_all)]
 pub async fn member_put(
     services: PostServices,
-    auth_user: AuthUser,
+    auth_user: auth::User,
     Path((username, post_id)): Path<(Username, PostId)>,
     headers: HeaderMap,
     body: String,

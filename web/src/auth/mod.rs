@@ -53,8 +53,8 @@ pub use session::{
 // client build.
 #[cfg(feature = "server")]
 pub use server::{
-    AuthRejection, AuthUser, CookieSettings, SessionCookieRetirement, is_operator_soft,
-    require_auth, require_operator,
+    CookieSettings, Rejection, SessionCookieRetirement, User, is_operator_soft, require_auth,
+    require_operator,
 };
 #[cfg(feature = "server")]
 pub(crate) use server::{optional_auth, set_session_cookie};

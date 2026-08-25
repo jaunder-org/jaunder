@@ -1,6 +1,6 @@
 //! Host-side HTTP credential parsing and session-cookie construction.
 //!
-//! The axum request extractor (`AuthUser: FromRequestParts`) and the leptos
+//! The axum request extractor (`auth::User: FromRequestParts`) and the leptos
 //! cookie-setting adapters stay in `web`; this module holds the target-agnostic
 //! cores they delegate to — resolving a session credential out of raw `http`
 //! headers and building the `Set-Cookie` header string. `host` names the raw

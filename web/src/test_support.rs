@@ -24,7 +24,7 @@ pub(crate) fn auth_parts(user_id: UserId, username: &str) -> Parts {
     let username: Username = username.parse().unwrap();
     let mut mock = MockSessionStorage::new();
     // `require_auth` only ever calls `authenticate`, which must resolve to the
-    // fixed user so `AuthUser` extraction succeeds.
+    // fixed user so `auth::User` extraction succeeds.
     mock.expect_authenticate().returning(move |_raw_token| {
         Ok(SessionRecord {
             token_hash: common::token::TokenHash::from_digest("hash"),

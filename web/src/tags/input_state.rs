@@ -21,7 +21,7 @@ use super::input_logic::{next_suggestion, parse_committed_tag, prev_suggestion, 
 /// wasm-only `component` — which never host-compiles — doesn't leave these host-lib
 /// items looking like dead code.
 #[derive(Clone, Copy)]
-pub struct TagInputState {
+pub struct InputState {
     pub tags: RwSignal<Vec<TagSummary>>,
     pub input_text: RwSignal<String>,
     pub error: RwSignal<Option<String>>,
@@ -31,7 +31,7 @@ pub struct TagInputState {
     pub debounce_tick: RwSignal<u64>,
 }
 
-impl TagInputState {
+impl InputState {
     /// Build the transient signals around the caller-owned `tags` signal.
     #[must_use]
     pub fn new(tags: RwSignal<Vec<TagSummary>>) -> Self {
@@ -137,7 +137,7 @@ impl TagInputState {
 
 #[cfg(test)]
 mod tests {
-    use super::TagInputState;
+    use super::InputState;
     use common::seed::TagSummary;
     use leptos::prelude::*;
 
@@ -161,7 +161,7 @@ mod tests {
     #[test]
     fn arrow_keys_move_and_clamp_the_selection() {
         with_owner(|| {
-            let state = TagInputState::new(RwSignal::new(Vec::new()));
+            let state = InputState::new(RwSignal::new(Vec::new()));
             state
                 .suggestions
                 .set(vec![summary("rust"), summary("leptos")]);
@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn enter_commits_the_selected_suggestion_and_clears_the_field() {
         with_owner(|| {
-            let state = TagInputState::new(RwSignal::new(Vec::new()));
+            let state = InputState::new(RwSignal::new(Vec::new()));
             state.suggestions.set(vec![summary("rust")]);
             state.selected_idx.set(Some(0));
             state.input_text.set("ru".to_owned());
@@ -206,7 +206,7 @@ mod tests {
     #[test]
     fn enter_commits_typed_text_preserving_casing() {
         with_owner(|| {
-            let state = TagInputState::new(RwSignal::new(Vec::new()));
+            let state = InputState::new(RwSignal::new(Vec::new()));
             state.input_text.set("Leptos".to_owned());
 
             assert!(state.handle_key("Enter"));
@@ -217,7 +217,7 @@ mod tests {
     #[test]
     fn enter_falls_through_to_typed_text_when_the_selection_is_stale() {
         with_owner(|| {
-            let state = TagInputState::new(RwSignal::new(Vec::new()));
+            let state = InputState::new(RwSignal::new(Vec::new()));
             // The selection index points past the (empty) suggestion list, so the
             // keyboard-commit path falls through to committing the typed text.
             state.selected_idx.set(Some(0));
@@ -231,7 +231,7 @@ mod tests {
     #[test]
     fn enter_on_empty_field_passes_through_without_committing() {
         with_owner(|| {
-            let state = TagInputState::new(RwSignal::new(Vec::new()));
+            let state = InputState::new(RwSignal::new(Vec::new()));
             assert!(!state.handle_key("Tab"), "Tab passes through when empty");
             assert!(state.tags.get().is_empty());
         });
@@ -240,7 +240,7 @@ mod tests {
     #[test]
     fn enter_on_invalid_text_sets_an_error_and_keeps_the_tags() {
         with_owner(|| {
-            let state = TagInputState::new(RwSignal::new(Vec::new()));
+            let state = InputState::new(RwSignal::new(Vec::new()));
             state.input_text.set("bad tag".to_owned());
 
             assert!(state.handle_key("Enter"), "still prevents default");
@@ -252,7 +252,7 @@ mod tests {
     #[test]
     fn backspace_on_empty_field_removes_the_last_chip() {
         with_owner(|| {
-            let state = TagInputState::new(RwSignal::new(vec![summary("a"), summary("b")]));
+            let state = InputState::new(RwSignal::new(vec![summary("a"), summary("b")]));
             assert!(!state.handle_key("Backspace"));
             assert_eq!(state.tags.get(), vec![summary("a")]);
         });
@@ -261,7 +261,7 @@ mod tests {
     #[test]
     fn backspace_with_text_present_is_ignored() {
         with_owner(|| {
-            let state = TagInputState::new(RwSignal::new(vec![summary("a")]));
+            let state = InputState::new(RwSignal::new(vec![summary("a")]));
             state.input_text.set("x".to_owned());
             assert!(!state.handle_key("Backspace"));
             assert_eq!(state.tags.get(), vec![summary("a")], "chip kept");
@@ -271,7 +271,7 @@ mod tests {
     #[test]
     fn escape_closes_the_dropdown() {
         with_owner(|| {
-            let state = TagInputState::new(RwSignal::new(Vec::new()));
+            let state = InputState::new(RwSignal::new(Vec::new()));
             state.suggestions.set(vec![summary("rust")]);
             state.suggestions_open.set(true);
             state.selected_idx.set(Some(0));
@@ -285,7 +285,7 @@ mod tests {
     #[test]
     fn unhandled_key_is_a_no_op() {
         with_owner(|| {
-            let state = TagInputState::new(RwSignal::new(Vec::new()));
+            let state = InputState::new(RwSignal::new(Vec::new()));
             state.input_text.set("x".to_owned());
             assert!(!state.handle_key("z"));
             assert_eq!(state.input_text.get(), "x", "untouched");
@@ -295,7 +295,7 @@ mod tests {
     #[test]
     fn begin_input_schedules_for_a_prefix_and_bumps_the_tick() {
         with_owner(|| {
-            let state = TagInputState::new(RwSignal::new(Vec::new()));
+            let state = InputState::new(RwSignal::new(Vec::new()));
 
             let first = state.begin_input("Ru");
             assert_eq!(
@@ -313,7 +313,7 @@ mod tests {
     #[test]
     fn begin_input_on_empty_clears_suggestions_and_schedules_nothing() {
         with_owner(|| {
-            let state = TagInputState::new(RwSignal::new(Vec::new()));
+            let state = InputState::new(RwSignal::new(Vec::new()));
             state.suggestions.set(vec![summary("rust")]);
             state.suggestions_open.set(true);
 

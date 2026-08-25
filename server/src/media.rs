@@ -19,7 +19,7 @@ use common::media::{
     ContentHash, ContentType, Filename, MediaSource, detect_content_type, media_path, should_inline,
 };
 use storage::{MediaError, MediaStorage};
-use web::auth::AuthUser;
+use web::auth;
 use web::error::InternalError;
 
 /// Builds the media routes (content-addressed serve, remote proxy). Upload lives
@@ -252,7 +252,7 @@ pub struct ProxyParams {
 /// Returns 401 if the authenticated user does not match `user_id`.
 #[tracing::instrument(name = "media.proxy", skip_all)]
 pub async fn proxy_handler(
-    auth_user: AuthUser,
+    auth_user: auth::User,
     Query(params): Query<ProxyParams>,
 ) -> Result<Redirect, StatusCode> {
     if auth_user.user_id != params.user_id {

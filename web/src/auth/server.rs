@@ -37,19 +37,19 @@ impl SessionCookieRetirement {
 }
 
 // ---------------------------------------------------------------------------
-// AuthUser
+// User
 // ---------------------------------------------------------------------------
 
 /// The authenticated user extracted from a valid session cookie or Bearer token.
 #[derive(Debug)]
-pub struct AuthUser {
+pub struct User {
     pub user_id: UserId,
     pub username: Username,
     pub token_hash: TokenHash,
 }
 
 #[derive(Debug)]
-pub enum AuthRejection {
+pub enum Rejection {
     MissingToken,
     InvalidAuthorization,
     MissingSessionStorage,
@@ -60,18 +60,18 @@ pub enum AuthRejection {
     BasicUsernameMismatch,
 }
 
-impl IntoResponse for AuthRejection {
+impl IntoResponse for Rejection {
     fn into_response(self) -> Response {
         match self {
-            AuthRejection::MissingSessionStorage
-            | AuthRejection::Session {
+            Rejection::MissingSessionStorage
+            | Rejection::Session {
                 error: storage::SessionAuthError::Internal(_),
                 ..
             } => StatusCode::INTERNAL_SERVER_ERROR,
-            AuthRejection::MissingToken
-            | AuthRejection::InvalidAuthorization
-            | AuthRejection::BasicUsernameMismatch
-            | AuthRejection::Session {
+            Rejection::MissingToken
+            | Rejection::InvalidAuthorization
+            | Rejection::BasicUsernameMismatch
+            | Rejection::Session {
                 error:
                     storage::SessionAuthError::InvalidToken
                     | storage::SessionAuthError::SessionNotFound,
@@ -82,16 +82,16 @@ impl IntoResponse for AuthRejection {
     }
 }
 
-impl<S> FromRequestParts<S> for AuthUser
+impl<S> FromRequestParts<S> for User
 where
     S: Send + Sync,
 {
-    type Rejection = AuthRejection;
+    type Rejection = Rejection;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         let resolution = resolve_credential(&parts.headers).map_err(|error| match error {
-            CredentialResolutionError::Missing => AuthRejection::MissingToken,
-            CredentialResolutionError::InvalidAuthorization => AuthRejection::InvalidAuthorization,
+            CredentialResolutionError::Missing => Rejection::MissingToken,
+            CredentialResolutionError::InvalidAuthorization => Rejection::InvalidAuthorization,
         })?;
         let session_cookie_present = resolution.session_cookie_present;
         let credential = resolution.credential;
@@ -100,7 +100,7 @@ where
         let sessions = parts
             .extensions
             .get::<Arc<dyn SessionStorage>>()
-            .ok_or(AuthRejection::MissingSessionStorage)?;
+            .ok_or(Rejection::MissingSessionStorage)?;
 
         match sessions.authenticate(&credential.token).await {
             Ok(record) => {
@@ -112,7 +112,7 @@ where
                 {
                     retirement.request();
                 }
-                Ok(AuthUser {
+                Ok(User {
                     user_id: record.user_id,
                     username: record.username,
                     token_hash: record.token_hash,
@@ -120,7 +120,7 @@ where
             }
             Err(error) => {
                 host::metrics::session_validation(storage::session_outcome(&error));
-                Err(AuthRejection::Session { transport, error })
+                Err(Rejection::Session { transport, error })
             }
         }
     }
@@ -133,11 +133,11 @@ where
 ///
 /// Returns `Err` if `parts` is `None` (missing Leptos request context) or if
 /// the session token is absent, invalid, or not found in storage.
-pub async fn require_auth_with_parts(parts: Option<Parts>) -> InternalResult<AuthUser> {
+pub async fn require_auth_with_parts(parts: Option<Parts>) -> InternalResult<User> {
     let mut parts = parts.ok_or_else(|| {
         InternalError::server_message("missing request Parts context in require_auth")
     })?;
-    AuthUser::from_request_parts(&mut parts, &())
+    User::from_request_parts(&mut parts, &())
         .await
         .map_err(auth_rejection_error)
 }
@@ -149,7 +149,7 @@ pub async fn require_auth_with_parts(parts: Option<Parts>) -> InternalResult<Aut
 ///
 /// Returns `Err` if the request is not authenticated (missing or invalid session token).
 #[tracing::instrument(name = "web.auth.require_auth")]
-pub async fn require_auth() -> InternalResult<AuthUser> {
+pub async fn require_auth() -> InternalResult<User> {
     require_auth_with_parts(leptos::context::use_context::<Parts>()).await
 }
 
@@ -162,14 +162,14 @@ pub async fn require_auth() -> InternalResult<AuthUser> {
 ///
 /// Returns an authentication error when a present Authorization credential
 /// cannot be resolved or authenticated, and propagates infrastructure failures.
-pub(crate) async fn optional_auth() -> InternalResult<Option<AuthUser>> {
+pub(crate) async fn optional_auth() -> InternalResult<Option<User>> {
     let mut parts = leptos::context::use_context::<Parts>()
         .ok_or_else(|| InternalError::server_message("missing request Parts context"))?;
-    match AuthUser::from_request_parts(&mut parts, &()).await {
+    match User::from_request_parts(&mut parts, &()).await {
         Ok(auth) => Ok(Some(auth)),
         Err(
-            AuthRejection::MissingToken
-            | AuthRejection::Session {
+            Rejection::MissingToken
+            | Rejection::Session {
                 transport: CredentialTransport::Cookie,
                 error:
                     storage::SessionAuthError::InvalidToken | storage::SessionAuthError::SessionNotFound,
@@ -224,27 +224,27 @@ pub async fn is_operator_soft() -> InternalResult<bool> {
         .is_some_and(|u| u.is_operator))
 }
 
-pub(crate) fn auth_rejection_error(error: AuthRejection) -> InternalError {
+pub(crate) fn auth_rejection_error(error: Rejection) -> InternalError {
     match error {
-        AuthRejection::MissingToken => InternalError::unauthorized("missing session token"),
-        AuthRejection::InvalidAuthorization => {
+        Rejection::MissingToken => InternalError::unauthorized("missing session token"),
+        Rejection::InvalidAuthorization => {
             InternalError::unauthorized("invalid authorization header")
         }
-        AuthRejection::MissingSessionStorage => {
+        Rejection::MissingSessionStorage => {
             InternalError::server_message("missing SessionStorage context")
         }
-        AuthRejection::BasicUsernameMismatch => {
+        Rejection::BasicUsernameMismatch => {
             InternalError::unauthorized("basic auth username mismatch")
         }
-        AuthRejection::Session {
+        Rejection::Session {
             error: storage::SessionAuthError::InvalidToken,
             ..
         } => InternalError::unauthorized("invalid session token"),
-        AuthRejection::Session {
+        Rejection::Session {
             error: storage::SessionAuthError::SessionNotFound,
             ..
         } => InternalError::unauthorized("session not found"),
-        AuthRejection::Session {
+        Rejection::Session {
             error: storage::SessionAuthError::Internal(error),
             ..
         } => InternalError::storage(error),
@@ -252,7 +252,7 @@ pub(crate) fn auth_rejection_error(error: AuthRejection) -> InternalError {
 }
 
 // ---------------------------------------------------------------------------
-// Basic-auth username check (thin AuthRejection wrapper over common's core)
+// Basic-auth username check (thin Rejection wrapper over common's core)
 // ---------------------------------------------------------------------------
 
 /// Verifies that an app-password (Basic auth) request authenticated as the
@@ -264,14 +264,14 @@ pub(crate) fn auth_rejection_error(error: AuthRejection) -> InternalError {
 ///
 /// # Errors
 ///
-/// Returns [`AuthRejection::BasicUsernameMismatch`] when the Basic username
+/// Returns [`Rejection::BasicUsernameMismatch`] when the Basic username
 /// does not match the authenticated session's user.
 fn verify_basic_username(
     authenticated: &Username,
     expected: Option<&Username>,
-) -> Result<(), AuthRejection> {
+) -> Result<(), Rejection> {
     match expected {
-        Some(expected) if authenticated != expected => Err(AuthRejection::BasicUsernameMismatch),
+        Some(expected) if authenticated != expected => Err(Rejection::BasicUsernameMismatch),
         _ => Ok(()),
     }
 }
@@ -365,7 +365,7 @@ mod tests {
         let expected = parse_username("mallory");
         assert!(matches!(
             verify_basic_username(&user, Some(&expected)),
-            Err(AuthRejection::BasicUsernameMismatch)
+            Err(Rejection::BasicUsernameMismatch)
         ));
     }
 
@@ -387,13 +387,13 @@ mod tests {
 
     #[test]
     fn auth_rejection_into_response_renders_500_for_missing_session_storage() {
-        let response = AuthRejection::MissingSessionStorage.into_response();
+        let response = Rejection::MissingSessionStorage.into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[test]
     fn auth_rejection_into_response_renders_500_for_session_internal_error() {
-        let response = AuthRejection::Session {
+        let response = Rejection::Session {
             transport: CredentialTransport::Bearer,
             error: storage::SessionAuthError::Internal(sqlx::Error::PoolClosed),
         }
@@ -404,9 +404,9 @@ mod tests {
     #[test]
     fn auth_rejection_error_maps_each_variant_to_expected_internal_error() {
         for rejection in [
-            AuthRejection::MissingToken,
-            AuthRejection::InvalidAuthorization,
-            AuthRejection::BasicUsernameMismatch,
+            Rejection::MissingToken,
+            Rejection::InvalidAuthorization,
+            Rejection::BasicUsernameMismatch,
         ] {
             let error = auth_rejection_error(rejection);
             assert!(matches!(
@@ -415,7 +415,7 @@ mod tests {
             ));
         }
 
-        let missing_state = auth_rejection_error(AuthRejection::MissingSessionStorage);
+        let missing_state = auth_rejection_error(Rejection::MissingSessionStorage);
         assert!(matches!(
             crate::error::project(missing_state.kind(), missing_state.public_message()),
             crate::error::WebError::Server { .. }
@@ -425,7 +425,7 @@ mod tests {
             storage::SessionAuthError::InvalidToken,
             storage::SessionAuthError::SessionNotFound,
         ] {
-            let rejection = auth_rejection_error(AuthRejection::Session {
+            let rejection = auth_rejection_error(Rejection::Session {
                 transport: CredentialTransport::Bearer,
                 error,
             });
@@ -435,7 +435,7 @@ mod tests {
             ));
         }
 
-        let internal = auth_rejection_error(AuthRejection::Session {
+        let internal = auth_rejection_error(Rejection::Session {
             transport: CredentialTransport::Bearer,
             error: storage::SessionAuthError::Internal(sqlx::Error::PoolClosed),
         });
@@ -466,15 +466,15 @@ mod tests {
             .unwrap();
         let (mut parts, _) = request.into_parts();
 
-        let result = AuthUser::from_request_parts(&mut parts, &()).await;
+        let result = User::from_request_parts(&mut parts, &()).await;
         assert!(matches!(
             result.unwrap_err(),
-            AuthRejection::InvalidAuthorization
+            Rejection::InvalidAuthorization
         ));
     }
 
     // Pure extractor unit test: with a session cookie but no SessionStorage in the
-    // request extensions, `AuthUser` extraction rejects with MissingSessionStorage.
+    // request extensions, `User` extraction rejects with MissingSessionStorage.
     // Touches no router and no database.
     #[tokio::test]
     async fn auth_user_extraction_fails_without_session_storage_extension() {
@@ -487,11 +487,11 @@ mod tests {
             .unwrap();
         let (mut parts, _) = request.into_parts();
 
-        // Attempt to extract AuthUser without the session store in extensions
-        let result = AuthUser::from_request_parts(&mut parts, &()).await;
+        // Attempt to extract User without the session store in extensions
+        let result = User::from_request_parts(&mut parts, &()).await;
         assert!(matches!(
             result.unwrap_err(),
-            AuthRejection::MissingSessionStorage
+            Rejection::MissingSessionStorage
         ));
     }
 }

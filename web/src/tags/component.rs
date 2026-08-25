@@ -11,19 +11,19 @@ use leptos::prelude::*;
 
 use common::seed::TagSummary;
 
-use super::input_state::TagInputState;
+use super::input_state::InputState;
 
 /// Chip-based tag input with debounced autocomplete.
 ///
 /// Renders each tag in `tags` as a removable chip and emits one
 /// `<input type="hidden" name=name value=display>` per chip so an enclosing
-/// form receives a `Vec<String>`. Its behavior lives on [`TagInputState`].
+/// form receives a `Vec<String>`. Its behavior lives on [`InputState`].
 #[component]
 pub fn TagInput(
     tags: RwSignal<Vec<TagSummary>>,
     #[prop(default = "tags")] name: &'static str,
 ) -> impl IntoView {
-    let state = TagInputState::new(tags);
+    let state = InputState::new(tags);
 
     view! {
         <div class="j-tag-input">

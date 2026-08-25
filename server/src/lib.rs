@@ -68,7 +68,7 @@ pub fn create_router(
     let site_config_ext = state.site_config.clone();
     let media_ext = state.media.clone();
     let feed_cache_ext = state.feed_cache.clone();
-    // The `AuthUser` extractor (web crate) authenticates the session cookie /
+    // The `auth::User` extractor (web crate) authenticates the session cookie /
     // bearer token, so the raw HTTP handlers and the Leptos request `Parts`
     // need the session store reachable as a request extension.
     let sessions_ext = state.sessions.clone();

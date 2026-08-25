@@ -1152,7 +1152,7 @@ nix build .#checks.x86_64-linux.e2e-elisp-integration
 - Convert storage errors to `leptos::prelude::ServerFnError` using
   `.map_err(|e| ServerFnError::new(e.to_string()))`.
 - Use `require_auth().await?` at the start of any server function that requires
-  a logged-in user. It returns an `AuthUser` containing `user_id`, `username`,
+  a logged-in user. It returns an `auth::User` containing `user_id`, `username`,
   and `token_hash`.
 - Use `set_session_cookie(raw_token)` and `clear_session_cookie()` from
   `web/src/auth.rs` to manage the `session` cookie in server functions.
