@@ -82,7 +82,8 @@
 //!
 //! 1. a turbofish on the call itself — `query_scalar::<_, i64>(…)`;
 //! 2. else the enclosing `let`'s ascription — `let id: i64 = query_scalar(…)`;
-//! 3. else the enclosing `fn`'s return type — `scalar_i64(…) -> Result<i64, _>`.
+//! 3. else the enclosing function or trait-default-method return type —
+//!    `scalar_i64(…) -> Result<i64, _>`.
 //!
 //! Precedence is load-bearing, not tidiness. `postgres/backup.rs`'s `schema_version`
 //! is a `-> Result<i64, _>` fn whose body is `query_scalar::<_, Option<i64>>(…)?`, so
@@ -820,7 +821,7 @@ const ALLOWLIST: &[Allowed] = &[
     // ---- config values: #687 owns the key half, nothing owns the value half ----
     Allowed {
         file: "site_config.rs",
-        function: "get",
+        function: "get_raw",
         target: "(String,)",
         what: "\"SELECTvalueFROMsite_configWHEREkey=$1\"",
         count: 1,
@@ -1548,9 +1549,9 @@ fn nth_type_arg(args: &syn::PathArguments, n: usize) -> Option<syn::Type> {
     nth_type_of(ab.args.iter(), n)
 }
 
-/// Walks a file collecting [`DecodeSite`]s, carrying the enclosing `fn` name/return type
-/// and the enclosing `let` ascription so each call can take its **nearest** declared
-/// type.
+/// Walks a file collecting [`DecodeSite`]s, carrying the enclosing function or
+/// trait-default-method name/return type and the enclosing `let` ascription so each call
+/// can take its **nearest** declared type.
 struct Scanner<'a> {
     /// The types a decode may legally land in.
     approve: &'a ApproveSet,
@@ -1582,16 +1583,16 @@ impl Scanner<'_> {
         }
     }
 
-    /// Records one decode with the nearest declared target, if that target is in the
-    /// has an unapproved leaf. `turbofish` wins, then the enclosing `let`, then the `fn`
-    /// return.
+    /// Records one decode with the nearest declared target, if that target has an
+    /// unapproved leaf. `turbofish` wins, then the enclosing `let`, then the enclosing
+    /// function or trait-default-method return.
     fn record(&mut self, turbofish: Option<syn::Type>, what: String, span: proc_macro2::Span) {
         let target = turbofish
             .or_else(|| self.let_ty.clone())
             .or_else(|| self.fn_ret.clone());
         let Some(target) = target else {
-            // Unreadable: no turbofish, no ascription, no fn return. Out of population
-            // by construction — see the module doc.
+            // Unreadable: no turbofish, no ascription, no enclosing function or
+            // trait-default-method return. Out of population by construction — see the module doc.
             return;
         };
         let unapproved = unapproved_leaves(&target, self.approve);
@@ -1682,6 +1683,12 @@ impl<'ast> syn::visit::Visit<'ast> for Scanner<'_> {
     fn visit_impl_item_fn(&mut self, i: &'ast syn::ImplItemFn) {
         let ret = return_type(&i.sig);
         self.visit_block_with(&i.sig.ident.to_string(), ret, &i.block);
+    }
+
+    fn visit_trait_item_fn(&mut self, i: &'ast syn::TraitItemFn) {
+        if let Some(block) = &i.default {
+            self.visit_block_with(&i.sig.ident.to_string(), return_type(&i.sig), block);
+        }
     }
 
     fn visit_local(&mut self, i: &'ast syn::Local) {
@@ -2215,6 +2222,53 @@ mod tests {
             }
         "#;
         assert_eq!(targets(src).len(), 2);
+    }
+
+    #[test]
+    fn trait_default_return_type_is_collected() {
+        let src = r#"
+            trait Store {
+                fn load(&self) -> Result<i64, E> {
+                    self.get("id")
+                }
+            }
+        "#;
+        assert_eq!(targets(src), vec!["Result<i64,E>"]);
+    }
+
+    #[test]
+    fn turbofish_wins_over_trait_default_return() {
+        let src = r#"
+            trait Store {
+                fn load(&self) -> Result<i64, E> {
+                    self.get::<Option<i64>, _>("id")
+                }
+            }
+        "#;
+        assert_eq!(targets(src), vec!["Option<i64>"]);
+    }
+
+    #[test]
+    fn ascription_wins_over_trait_default_return() {
+        let src = r#"
+            trait Store {
+                fn load(&self) -> Result<i64, E> {
+                    let id: Option<i64> = self.get("id");
+                    Ok(id.unwrap_or_default())
+                }
+            }
+        "#;
+        assert_eq!(targets(src), vec!["Option<i64>"]);
+    }
+
+    #[test]
+    fn required_trait_method_contributes_no_site() {
+        let src = r#"
+            trait Store {
+                fn load(&self) -> Result<i64, E>;
+            }
+        "#;
+        assert_eq!(targets(src), Vec::<String>::new());
     }
 
     #[test]

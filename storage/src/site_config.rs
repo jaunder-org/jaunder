@@ -30,15 +30,15 @@ use sqlx::{Database, Pool};
 #[cfg_attr(any(test, feature = "test-utils"), mockall::automock)]
 #[async_trait]
 pub trait SiteConfigStorage: Send + Sync {
-    /// Returns the value for a specific configuration key.
-    async fn get(&self, key: SiteConfigKey) -> sqlx::Result<Option<String>>;
+    /// Returns the raw stored text for a specific configuration key.
+    async fn get_raw(&self, key: SiteConfigKey) -> sqlx::Result<Option<String>>;
 
     /// Sets or updates the value for a configuration key.
     async fn set(&self, key: SiteConfigKey, value: &str) -> sqlx::Result<()>;
 
     /// Enumerates every `site_config` entry as `(key, value)`, ordered by key.
     ///
-    /// A third primitive alongside [`get`](Self::get)/[`set`](Self::set) (no
+    /// A third primitive alongside [`get_raw`](Self::get_raw)/[`set`](Self::set) (no
     /// default: a `vec![]` default would silently under-report for any
     /// implementor). Backs `jaunder site-config list`.
     async fn list(&self) -> sqlx::Result<Vec<(String, String)>>;
@@ -52,11 +52,9 @@ pub trait SiteConfigStorage: Send + Sync {
     /// Reads the whole SMTP block as one typed [`SmtpConfig`], or `None` when
     /// `smtp.host` is unset (which is how an instance says "no outbound mail").
     ///
-    /// A **required** method rather than a `get`-based default, for two reasons. Every
-    /// value decodes through its own validating sqlx bridge, so a garbage stored value is
-    /// rejected as a `ColumnDecode` at the query boundary rather than re-parsed (badly) by
-    /// each caller — and the gate's decode scanner does not read trait *default* bodies
-    /// (#787), so a decode written there would be invisible to it rather than approved.
+    /// A **required** method rather than a `get`-based default: every value decodes through
+    /// its own validating sqlx bridge, so a garbage stored value is rejected as a
+    /// `ColumnDecode` at the query boundary rather than re-parsed (badly) by each caller.
     ///
     /// The optional fields fall back to their types' own defaults
     /// ([`SmtpPort`] 587, [`SmtpTlsMode::StartTls`], [`SmtpSender`]
@@ -68,7 +66,7 @@ pub trait SiteConfigStorage: Send + Sync {
     /// `0`/negative, which the positive invariant rejects).
     async fn get_media_max_file_size(&self) -> sqlx::Result<MaxFileSize> {
         Ok(self
-            .get(SiteConfigKey::MediaMaxFileSizeBytes)
+            .get_raw(SiteConfigKey::MediaMaxFileSizeBytes)
             .await?
             .as_deref()
             .and_then(|v| v.parse().ok())
@@ -80,7 +78,7 @@ pub trait SiteConfigStorage: Send + Sync {
     /// `0`/negative, which the positive invariant rejects).
     async fn get_media_user_quota(&self) -> sqlx::Result<UserQuota> {
         Ok(self
-            .get(SiteConfigKey::MediaUserQuotaBytes)
+            .get_raw(SiteConfigKey::MediaUserQuotaBytes)
             .await?
             .as_deref()
             .and_then(|v| v.parse().ok())
@@ -90,24 +88,24 @@ pub trait SiteConfigStorage: Send + Sync {
     /// Returns the backup configuration from stored values, using defaults for missing/invalid fields.
     async fn get_backup_config(&self) -> sqlx::Result<BackupConfig> {
         let destination_path = self
-            .get(SiteConfigKey::BackupDestinationPath)
+            .get_raw(SiteConfigKey::BackupDestinationPath)
             .await?
             .as_deref()
             .and_then(|v| v.parse::<DestinationPath>().ok());
         let schedule = self
-            .get(SiteConfigKey::BackupSchedule)
+            .get_raw(SiteConfigKey::BackupSchedule)
             .await?
             .as_deref()
             .and_then(|s| s.parse::<BackupSchedule>().ok())
             .unwrap_or_default();
         let retention_count = self
-            .get(SiteConfigKey::BackupRetentionCount)
+            .get_raw(SiteConfigKey::BackupRetentionCount)
             .await?
             .as_deref()
             .and_then(|v| v.parse::<RetentionCount>().ok())
             .unwrap_or_default();
         let mode = self
-            .get(SiteConfigKey::BackupMode)
+            .get_raw(SiteConfigKey::BackupMode)
             .await?
             .as_deref()
             .and_then(|v| v.trim().parse::<BackupMode>().ok())
@@ -127,7 +125,7 @@ pub trait SiteConfigStorage: Send + Sync {
     /// genuine DB read error propagates (only the absent/garbage value defaults).
     async fn get_registration_policy(&self) -> sqlx::Result<RegistrationPolicy> {
         Ok(self
-            .get(SiteConfigKey::SiteRegistrationPolicy)
+            .get_raw(SiteConfigKey::SiteRegistrationPolicy)
             .await?
             .as_deref()
             .and_then(|v| v.parse().ok())
@@ -139,7 +137,7 @@ pub trait SiteConfigStorage: Send + Sync {
     /// which the min-1 invariant rejects).
     async fn get_feeds_min_items(&self) -> sqlx::Result<FeedMinItems> {
         Ok(self
-            .get(SiteConfigKey::FeedsMinItems)
+            .get_raw(SiteConfigKey::FeedsMinItems)
             .await?
             .as_deref()
             .and_then(|v| v.parse().ok())
@@ -151,7 +149,7 @@ pub trait SiteConfigStorage: Send + Sync {
     /// which the min-1 invariant rejects).
     async fn get_feeds_min_days(&self) -> sqlx::Result<FeedMinDays> {
         Ok(self
-            .get(SiteConfigKey::FeedsMinDays)
+            .get_raw(SiteConfigKey::FeedsMinDays)
             .await?
             .as_deref()
             .and_then(|v| v.parse().ok())
@@ -165,7 +163,7 @@ pub trait SiteConfigStorage: Send + Sync {
     /// purge, so a bad stored value never hard-fails the read.
     async fn get_feeds_websub_hub_url(&self) -> sqlx::Result<Option<HubUrl>> {
         let Some(raw) = self
-            .get(SiteConfigKey::FeedsWebsubHubUrl)
+            .get_raw(SiteConfigKey::FeedsWebsubHubUrl)
             .await?
             .and_then(common::text::non_empty_owned)
         else {
@@ -195,12 +193,12 @@ pub trait SiteConfigStorage: Send + Sync {
     /// Returns the site identity (title and base URL).
     async fn get_identity(&self) -> sqlx::Result<SiteIdentity> {
         let title = self
-            .get(SiteConfigKey::SiteTitle)
+            .get_raw(SiteConfigKey::SiteTitle)
             .await?
             .and_then(|v| v.parse::<SiteTitle>().ok())
             .unwrap_or_default();
         let base_url = match self
-            .get(SiteConfigKey::SiteBaseUrl)
+            .get_raw(SiteConfigKey::SiteBaseUrl)
             .await?
             .and_then(common::text::non_empty_owned)
         {
@@ -256,7 +254,7 @@ pub trait SiteConfigStorage: Send + Sync {
     /// payload-bearing per-Post `AudienceTarget`.
     async fn get_default_audience(&self) -> sqlx::Result<DefaultAudience> {
         Ok(self
-            .get(SiteConfigKey::PostsDefaultAudience)
+            .get_raw(SiteConfigKey::PostsDefaultAudience)
             .await?
             .as_deref()
             .and_then(|value| value.parse().ok())
@@ -351,7 +349,7 @@ where
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
-    async fn get(&self, key: SiteConfigKey) -> sqlx::Result<Option<String>> {
+    async fn get_raw(&self, key: SiteConfigKey) -> sqlx::Result<Option<String>> {
         let row = sqlx::query_as::<_, (String,)>("SELECT value FROM site_config WHERE key = $1")
             .bind(key)
             .fetch_optional(&self.pool)
@@ -488,7 +486,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            store.get(SiteConfigKey::SiteTitle).await.unwrap(),
+            store.get_raw(SiteConfigKey::SiteTitle).await.unwrap(),
             Some("T".to_string())
         );
         store.set(SiteConfigKey::FeedsMinItems, "9").await.unwrap();
@@ -502,7 +500,7 @@ mod tests {
         );
         assert!(store.delete(SiteConfigKey::SiteTitle).await.unwrap());
         assert!(!store.delete(SiteConfigKey::SiteTitle).await.unwrap());
-        assert_eq!(store.get(SiteConfigKey::SiteTitle).await.unwrap(), None);
+        assert_eq!(store.get_raw(SiteConfigKey::SiteTitle).await.unwrap(), None);
     }
 
     #[apply(backends)]
@@ -772,7 +770,7 @@ mod tests {
             "deleting a present key reports true",
         );
         assert_eq!(
-            storage.get(SiteConfigKey::SiteTitle).await.unwrap(),
+            storage.get_raw(SiteConfigKey::SiteTitle).await.unwrap(),
             None,
             "the row is removed",
         );
@@ -967,7 +965,10 @@ mod tests {
         assert_eq!(storage.get_feeds_websub_hub_url().await.unwrap(), None);
         // The corrupt value was deleted, not merely ignored.
         assert_eq!(
-            storage.get(SiteConfigKey::FeedsWebsubHubUrl).await.unwrap(),
+            storage
+                .get_raw(SiteConfigKey::FeedsWebsubHubUrl)
+                .await
+                .unwrap(),
             None
         );
     }
@@ -1025,7 +1026,10 @@ mod tests {
             .unwrap();
         assert_eq!(storage.get_identity().await.unwrap().base_url, None);
         // The corrupt value was deleted, not merely ignored.
-        assert_eq!(storage.get(SiteConfigKey::SiteBaseUrl).await.unwrap(), None);
+        assert_eq!(
+            storage.get_raw(SiteConfigKey::SiteBaseUrl).await.unwrap(),
+            None
+        );
     }
 
     #[apply(backends)]
@@ -1100,7 +1104,7 @@ mod tests {
         storage.set_default_audience(&audience).await.unwrap();
         assert_eq!(
             storage
-                .get(SiteConfigKey::PostsDefaultAudience)
+                .get_raw(SiteConfigKey::PostsDefaultAudience)
                 .await
                 .unwrap(),
             Some(audience.as_ref().to_owned())

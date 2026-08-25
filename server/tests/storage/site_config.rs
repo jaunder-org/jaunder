@@ -40,7 +40,7 @@ async fn site_config_round_trips_through_typed_keys(#[case] backend: Backend) {
     assert_eq!(
         state
             .site_config
-            .get(SiteConfigKey::SiteTitle)
+            .get_raw(SiteConfigKey::SiteTitle)
             .await
             .unwrap()
             .as_deref(),
@@ -49,7 +49,7 @@ async fn site_config_round_trips_through_typed_keys(#[case] backend: Backend) {
     assert_eq!(
         state
             .site_config
-            .get(SiteConfigKey::FeedsMinDays)
+            .get_raw(SiteConfigKey::FeedsMinDays)
             .await
             .unwrap(),
         None
@@ -64,7 +64,7 @@ async fn site_config_round_trips_through_typed_keys(#[case] backend: Backend) {
     assert_eq!(
         state
             .site_config
-            .get(SiteConfigKey::SiteTitle)
+            .get_raw(SiteConfigKey::SiteTitle)
             .await
             .unwrap(),
         None
@@ -76,7 +76,7 @@ async fn site_config_round_trips_through_typed_keys(#[case] backend: Backend) {
 async fn site_config_operations(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let value = state.site_config.get(SiteConfigKey::SiteBaseUrl).await;
+    let value = state.site_config.get_raw(SiteConfigKey::SiteBaseUrl).await;
     match value {
         Ok(None) => {}
         other => panic!("Expected Ok(None), got {other:?}"),
@@ -87,7 +87,7 @@ async fn site_config_operations(#[case] backend: Backend) {
         .set(SiteConfigKey::SiteTitle, "test.value")
         .await
         .expect("set failed");
-    let value = state.site_config.get(SiteConfigKey::SiteTitle).await;
+    let value = state.site_config.get_raw(SiteConfigKey::SiteTitle).await;
     match value {
         Ok(Some(v)) => assert_eq!(v, "test.value"),
         other => panic!("Expected Ok(Some), got {other:?}"),
@@ -98,7 +98,7 @@ async fn site_config_operations(#[case] backend: Backend) {
         .set(SiteConfigKey::SiteTitle, "updated.value")
         .await
         .expect("set update failed");
-    let value = state.site_config.get(SiteConfigKey::SiteTitle).await;
+    let value = state.site_config.get_raw(SiteConfigKey::SiteTitle).await;
     match value {
         Ok(Some(v)) => assert_eq!(v, "updated.value"),
         other => panic!("Expected updated value, got {other:?}"),
