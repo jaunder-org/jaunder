@@ -61,7 +61,7 @@ Out:
   - Verification: pure ERT table coverage for every mapped extension plus
     unknown and extensionless names.
 
-- [ ] Task 4: Prove live publish/upload behavior.
+- [x] Task 4: Prove live publish/upload behavior.
   - Contract: The publish pipeline order remains ADR-0047: validate → media
     localization/upload → entry send → `JAUNDER_ID`-first write-back → rename.
     Media URL harvesting remains ADR-0045 `<content src>`. The authoring buffer
