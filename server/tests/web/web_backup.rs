@@ -133,7 +133,7 @@ async fn operator_can_update_backup_settings(#[case] backend: Backend) {
     assert_eq!(
         state
             .site_config
-            .get(SiteConfigKey::BackupDestinationPath)
+            .get_raw(SiteConfigKey::BackupDestinationPath)
             .await
             .unwrap()
             .as_deref(),
@@ -142,7 +142,7 @@ async fn operator_can_update_backup_settings(#[case] backend: Backend) {
     assert_eq!(
         state
             .site_config
-            .get(SiteConfigKey::BackupSchedule)
+            .get_raw(SiteConfigKey::BackupSchedule)
             .await
             .unwrap()
             .as_deref(),
@@ -151,7 +151,7 @@ async fn operator_can_update_backup_settings(#[case] backend: Backend) {
     assert_eq!(
         state
             .site_config
-            .get(SiteConfigKey::BackupRetentionCount)
+            .get_raw(SiteConfigKey::BackupRetentionCount)
             .await
             .unwrap()
             .as_deref(),
@@ -160,7 +160,7 @@ async fn operator_can_update_backup_settings(#[case] backend: Backend) {
     assert_eq!(
         state
             .site_config
-            .get(SiteConfigKey::BackupMode)
+            .get_raw(SiteConfigKey::BackupMode)
             .await
             .unwrap()
             .as_deref(),
@@ -186,7 +186,7 @@ async fn operator_can_update_backup_settings_to_archive_mode(#[case] backend: Ba
     assert_eq!(
         state
             .site_config
-            .get(SiteConfigKey::BackupMode)
+            .get_raw(SiteConfigKey::BackupMode)
             .await
             .unwrap()
             .as_deref(),

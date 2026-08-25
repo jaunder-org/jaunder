@@ -945,7 +945,7 @@ async fn cmd_site_config_set(
 /// so a caller can distinguish an unset key from an empty value.
 async fn cmd_site_config_get(storage: &StorageArgs, key: SiteConfigKey) -> anyhow::Result<()> {
     let state = open_existing_database(&storage.db).await?;
-    match state.site_config.get(key).await? {
+    match state.site_config.get_raw(key).await? {
         Some(value) => {
             println!("{value}");
             Ok(())
@@ -1596,7 +1596,7 @@ mod tests {
         assert_eq!(
             state
                 .site_config
-                .get(SiteConfigKey::SiteBaseUrl)
+                .get_raw(SiteConfigKey::SiteBaseUrl)
                 .await
                 .unwrap(),
             Some(String::new()),
@@ -1677,7 +1677,7 @@ mod tests {
         assert_eq!(
             state
                 .site_config
-                .get(SiteConfigKey::FeedsWebsubHubUrl)
+                .get_raw(SiteConfigKey::FeedsWebsubHubUrl)
                 .await
                 .unwrap(),
             Some("https://y/".to_string()),

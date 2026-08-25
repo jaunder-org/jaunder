@@ -214,7 +214,7 @@ mod tests {
         assert!(
             env.state
                 .site_config
-                .get(crate::SiteConfigKey::SiteRegistrationPolicy)
+                .get_raw(crate::SiteConfigKey::SiteRegistrationPolicy)
                 .await
                 .is_err()
         );

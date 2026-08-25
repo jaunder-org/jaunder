@@ -15,7 +15,7 @@ mod tests {
         assert_eq!(
             state
                 .site_config
-                .get(crate::SiteConfigKey::SiteTitle)
+                .get_raw(crate::SiteConfigKey::SiteTitle)
                 .await
                 .unwrap(),
             None
