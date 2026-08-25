@@ -9,18 +9,20 @@
  * ## Usage
  *
  * Snapshot the ping count with `readPingLines().length` *before* triggering the
- * action that should produce a ping, then pass that count to
- * `waitForPingMatching`. This prevents returning a stale ping written by a
- * previous test.
+ * action that should produce pings. Use `waitForPingMatching` when one
+ * predicate match establishes the boundary, or `waitForPingWave` when every
+ * exact requested Syndication Feed URL must appear after the cursor.
  *
  * ```ts
  * const pingsBefore = readPingLines().length;
- * await publishPost(page); // triggers feed regen + hub ping
+ * await publishPost(page); // triggers feed regen + hub pings
  * const ping = await waitForPingMatching(pingsBefore, isUserFeed);
+ * const wave = await waitForPingWave(pingsBefore, userFeedUrls);
  * ```
  *
  * There is deliberately no count-only waiter: one publish enqueues events for
- * several feeds, so every site needs the predicate form (#794).
+ * several Syndication Feeds, so callers must identify the relevant record or
+ * complete wave (#794).
  */
 
 import * as fs from "fs";
@@ -82,6 +84,56 @@ export async function waitForPingMatching(
       intervalMs: 250,
       timeoutMs,
       describe: `a matching WebSub ping at ${file}`,
+    },
+  );
+}
+
+/**
+ * Find the first captured ping for every exact requested Syndication Feed URL
+ * after `previousCount`, returning the records in deduplicated request order.
+ */
+export function findPingWave(
+  lines: readonly string[],
+  previousCount: number,
+  feedUrls: readonly string[],
+): CapturedPing[] | undefined {
+  const expectedUrls = [...new Set(feedUrls)];
+  const expected = new Set(expectedUrls);
+  const firstByUrl = new Map<string, CapturedPing>();
+
+  for (let i = previousCount; i < lines.length; i++) {
+    const ping = JSON.parse(lines[i]) as CapturedPing;
+    if (expected.has(ping.feed_url) && !firstByUrl.has(ping.feed_url)) {
+      firstByUrl.set(ping.feed_url, ping);
+    }
+  }
+
+  if (firstByUrl.size !== expectedUrls.length) return undefined;
+  return expectedUrls.map((feedUrl) => firstByUrl.get(feedUrl)!);
+}
+
+/**
+ * Wait for the first ping for every exact requested Syndication Feed URL after
+ * `previousCount`, returning the captured records in request order.
+ *
+ * Unrelated pings are ignored. Duplicate requested URLs count once, and only
+ * the first captured ping for each URL belongs to the returned wave.
+ */
+export async function waitForPingWave(
+  previousCount: number,
+  feedUrls: readonly string[],
+  timeoutMs = 30_000,
+): Promise<CapturedPing[]> {
+  // Fail before polling when capture is unavailable rather than retrying a
+  // configuration error until the timeout.
+  const file = websubCaptureFile();
+  return pollUntil(
+    "wait.websub_ping",
+    () => findPingWave(readPingLines(), previousCount, feedUrls),
+    {
+      intervalMs: 250,
+      timeoutMs,
+      describe: `a complete WebSub Publish Ping wave at ${file}`,
     },
   );
 }

@@ -3,6 +3,7 @@ use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
+    time::Duration,
 };
 
 use anyhow::Context as _;
@@ -34,6 +35,16 @@ use storage::{
 };
 
 const INIT_FIRST_CONTEXT: &str = "database could not be opened; run `jaunder init` first";
+const CAPTURE_FEED_INTERVAL: Duration = Duration::from_millis(250);
+const PRODUCTION_FEED_INTERVAL: Duration = Duration::from_secs(10);
+
+fn feed_worker_interval(capture_enabled: bool) -> Duration {
+    if capture_enabled {
+        CAPTURE_FEED_INTERVAL
+    } else {
+        PRODUCTION_FEED_INTERVAL
+    }
+}
 
 pub enum CommandOutput {
     None,
@@ -759,8 +770,11 @@ pub async fn prepare_server(
     )
     .await?;
     // The `WebSub` publisher is a service, not storage: it is constructed at the
-    // composition root and injected into the feed worker (ADR-0016).
-    let websub = crate::websub::default_client(capture::file(capture::Stream::WebSub));
+    // composition root and injected into the feed worker (ADR-0016). Capture mode
+    // also selects the shorter e2e cadence without changing the production policy.
+    let websub_capture = capture::file(capture::Stream::WebSub);
+    let feed_interval = feed_worker_interval(websub_capture.is_some());
+    let websub = crate::websub::default_client(websub_capture);
     let feed_scheduler = crate::feed::worker::FeedWorker::new(
         db.site_config.clone(),
         db.posts.clone(),
@@ -768,7 +782,7 @@ pub async fn prepare_server(
         db.feed_events.clone(),
         websub,
     )
-    .start()
+    .start(feed_interval)
     .await?;
     let mailer =
         crate::mailer::build_mailer(db.site_config(), capture::file(capture::Stream::Mail)).await?;
@@ -1018,6 +1032,16 @@ mod tests {
         },
     };
     use tempfile::TempDir;
+
+    #[test]
+    fn feed_worker_interval_is_250_ms_for_capture() {
+        assert_eq!(feed_worker_interval(true), Duration::from_millis(250));
+    }
+
+    #[test]
+    fn feed_worker_interval_is_10_seconds_without_capture() {
+        assert_eq!(feed_worker_interval(false), Duration::from_secs(10));
+    }
 
     /// A `StorageArgs` for `backend` whose database already exists, since the
     /// `site-config` handlers all go through `open_existing_database`.
