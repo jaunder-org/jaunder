@@ -677,6 +677,7 @@ impl Drop for PreparedSaturationMetrics {
 async fn prepare_saturation_metrics(
     db: Arc<storage::AppState>,
     pool_observer: storage::DbPoolObserver,
+    media_root: PathBuf,
 ) -> anyhow::Result<Option<PreparedSaturationMetrics>> {
     if !host::telemetry::otlp_endpoint_configured() {
         return Ok(None);
@@ -692,6 +693,7 @@ async fn prepare_saturation_metrics(
     let sources = crate::metrics::SaturationSources::real(
         db.feed_events.clone(),
         db.media.clone(),
+        media_root,
         backup_destination_root,
         pool_observer,
     );
@@ -743,8 +745,13 @@ pub async fn prepare_server(
         state: db,
         pool_observer,
     } = open_server_database(storage, prod).await?;
-    let saturation_metrics = prepare_saturation_metrics(db.clone(), pool_observer).await?;
 
+    let saturation_metrics = prepare_saturation_metrics(
+        db.clone(),
+        pool_observer,
+        storage.storage_path.join("media"),
+    )
+    .await?;
     let backup_scheduler = crate::backup::start_backup_worker(
         db.site_config.clone(),
         storage.db.clone(),
