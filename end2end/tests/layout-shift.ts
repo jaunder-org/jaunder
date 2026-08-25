@@ -1,15 +1,16 @@
 /**
  * Reusable empirical layout-shift (CLS) probe for the projector-paint → wasm-mount
- * transition (#202). Deterministic by construction: it gates only on the wasm-route
- * release, `body[data-mounted]`, and `document.fonts.ready` — never a timer — so it
- * is safe under `fullyParallel` `workers>1` (#182).
+ * transition (#202). Deterministic by construction: it gates on the wasm-route
+ * release, `body[data-mounted]`, `document.fonts.ready`, and consecutive stable
+ * animation-frame geometry — never a timer — so it is safe under `fullyParallel`
+ * `workers>1` (#182).
  *
  * Page-agnostic: a per-page CLS check supplies a {@link MountShiftProbe} (its `url`,
  * the `targets` to measure, an optional post-mount assertion, and a `tolerancePx`)
  * and calls {@link expectNoShiftAcrossMount}. The first concrete use is the
  * authed-owner own-post action column (`authed-cls.spec.ts`).
  */
-import { expect, type Page, type Locator } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { BASE_URL } from "./helpers";
 import { waitForMount } from "./mount";
 
@@ -25,7 +26,7 @@ export interface MountShiftProbe {
    * element shifted. Use author/content-scoped locators — on a multi-item page the
    * measured element must be the same one before and after mount.
    */
-  targets: (page: Page) => { name: string; locator: Locator }[];
+  targets: (page: Page) => ShiftTarget[];
   /**
    * Optional: assert the mount actually decorated the measured content (so a green
    * result can't be a no-op) — e.g. the owner action column appeared. Runs after
@@ -38,6 +39,84 @@ export interface MountShiftProbe {
    * loosen on evidence"); passing it per-probe keeps other pages strict.
    */
   tolerancePx?: number;
+}
+
+export interface ElementGeometry {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export type TargetGeometry = ElementGeometry | null;
+
+export interface ShiftTarget {
+  name: string;
+  locator: Locator;
+}
+
+const GEOMETRY_STABILITY_TIMEOUT_MS = 10_000;
+
+/**
+ * Sample target geometry on consecutive browser animation frames until two
+ * samples have equal top-left coordinates.
+ */
+export async function waitForStableTargetGeometry(
+  page: Page,
+  targets: readonly ShiftTarget[],
+  timeoutMs = GEOMETRY_STABILITY_TIMEOUT_MS,
+): Promise<TargetGeometry[]> {
+  const elements = await Promise.all(
+    targets.map((target) => target.locator.elementHandle()),
+  );
+  const names = targets.map((target) => target.name).join(", ");
+  try {
+    return await page.evaluate(
+      ({ elements, names, timeoutMs }) =>
+        new Promise<TargetGeometry[]>((resolve, reject) => {
+          const startedAt = performance.now();
+          let previous: TargetGeometry[] | undefined;
+
+          const sampleFrame = () => {
+            const current = elements.map((element) => {
+              if (element === null || !element.isConnected) return null;
+              const rect = element.getBoundingClientRect();
+              return {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
+              };
+            });
+            if (
+              previous?.every((box, index) => {
+                const next = current[index];
+                if (box === null || next === null) return box === next;
+                return box.x === next.x && box.y === next.y;
+              })
+            ) {
+              resolve(current);
+              return;
+            }
+            if (performance.now() - startedAt >= timeoutMs) {
+              reject(
+                new Error(
+                  `${names} geometry did not stabilize within ${timeoutMs}ms`,
+                ),
+              );
+              return;
+            }
+            previous = current;
+            requestAnimationFrame(sampleFrame);
+          };
+
+          requestAnimationFrame(sampleFrame);
+        }),
+      { elements, names, timeoutMs },
+    );
+  } finally {
+    await Promise.all(elements.map((element) => element?.dispose()));
+  }
 }
 
 /**
@@ -75,17 +154,13 @@ export async function expectNoShiftAcrossMount(
     });
 
     const targets = probe.targets(page);
-    const before = await Promise.all(
-      targets.map((t) => t.locator.boundingBox()),
-    );
+    const before = await waitForStableTargetGeometry(page, targets);
 
     releaseWasm();
     await waitForMount(page);
     if (probe.afterMount) await probe.afterMount(page);
 
-    const after = await Promise.all(
-      targets.map((t) => t.locator.boundingBox()),
-    );
+    const after = await waitForStableTargetGeometry(page, targets);
 
     targets.forEach((t, i) => {
       const b = before[i];

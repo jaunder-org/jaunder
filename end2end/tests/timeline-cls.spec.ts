@@ -15,9 +15,9 @@
  * preservation; a test authored afterwards would only document the end state.
  *
  * Deterministic by construction via the shared `expectNoShiftAcrossMount` helper
- * (#202) — it holds the wasm so first paint stays the projector's, and gates on
- * `document.fonts.ready` + `body[data-mounted]`, never a timer, so it is safe under
- * `workers>1` (#182).
+ * (#202) — it holds the wasm so first paint stays the projector's, then gates on
+ * fonts, mount, and consecutive stable post-mount geometry frames, never a timer,
+ * so it is safe under `workers>1` (#182).
  *
  * `/app` is deliberately absent: it is served `no-store` and is never
  * projector-painted, so it has nothing to coincide with.
