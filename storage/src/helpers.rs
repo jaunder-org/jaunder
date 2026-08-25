@@ -6,20 +6,13 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::role_instant::impl_role_instant;
-use crate::{
-    InviteRecord, MediaRecord, PostFormat, PostRecord, PostTag, RenderedHtml, SessionRecord,
-    UserRecord,
-};
+use crate::{InviteRecord, MediaRecord, PostTag, SessionRecord, UserRecord};
 use common::bio::Bio;
 use common::display_name::DisplayName;
 use common::email::Email;
 use common::ids::{PostId, TagId, UserId};
 use common::media::{ByteSize, ContentHash, ContentType, Filename, MediaSource};
-use common::post_body::PostBody;
-use common::post_summary::PostSummary;
-use common::post_title::PostTitle;
 use common::session_label::SessionLabel;
-use common::slug::Slug;
 use common::stored_password_hash::StoredPasswordHash;
 use common::tag::{Tag, TagLabel};
 use common::tagged_url::MediaSourceUrl;
@@ -205,7 +198,7 @@ fn build_invite_record(
 }
 
 // ---------------------------------------------------------------------------
-// PostRecord helpers
+// Post tag JSON helper
 // ---------------------------------------------------------------------------
 
 /// Row shape for the JSON-aggregated tags column. Field names match the SQL
@@ -221,10 +214,9 @@ struct PostTagJson {
     tag_display: TagLabel,
 }
 
-fn parse_post_tags_json(json: &str, post_id: PostId) -> sqlx::Result<Vec<PostTag>> {
-    // `Tag`/`TagLabel` validate on deserialize (the serde bridge), so this is a
-    // straight field-move: an invalid stored slug or label surfaces as a decode
-    // error from `from_str` above.
+pub(crate) fn parse_post_tags_json(json: &str, post_id: PostId) -> sqlx::Result<Vec<PostTag>> {
+    // `Tag`/`TagLabel` validate on deserialize (the serde bridge), so an invalid stored
+    // slug or label surfaces as a decode error from `from_str` above.
     let raw: Vec<PostTagJson> =
         serde_json::from_str(json).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
     Ok(raw
@@ -236,33 +228,6 @@ fn parse_post_tags_json(json: &str, post_id: PostId) -> sqlx::Result<Vec<PostTag
             tag_display: r.tag_display,
         })
         .collect())
-}
-
-pub(crate) fn build_post_record(row: PostRow) -> sqlx::Result<PostRecord> {
-    // Every column except `tags` already arrived as its domain type — the sqlx bridge
-    // decoded each one (the string newtypes via #438, the ids via #686, `format` via its
-    // `PostFormat` text-enum bridge, #572, `rendered_html` via its own `Decode` since
-    // #445), so a corrupt/migrated value is rejected as a column-decode error before we
-    // get here. The JSON `tags` still parse here, so this step stays fallible.
-    let post_id = row.post_id;
-    let tags = parse_post_tags_json(&row.tags, post_id)?;
-
-    Ok(PostRecord {
-        post_id,
-        user_id: row.user_id,
-        author_username: row.username,
-        title: row.title,
-        slug: row.slug,
-        body: row.body,
-        format: row.format,
-        rendered_html: row.rendered_html,
-        created_at: row.created_at,
-        updated_at: row.updated_at,
-        published_at: row.published_at,
-        deleted_at: row.deleted_at,
-        summary: row.summary,
-        tags,
-    })
 }
 
 // ---------------------------------------------------------------------------
@@ -362,40 +327,6 @@ pub(crate) fn invite_record_from_row(row: InviteRow) -> InviteRecord {
         used_at: row.used_at,
         used_by: row.used_by,
     })
-}
-
-/// One row of the post read model, decoded **by column name** from every post SELECT.
-///
-/// Field names are the SELECT *column* names (`username` from `u.username`, `tags` from
-/// the `… AS tags` JSON aggregate), so `#[derive(FromRow)]` binds them by name across
-/// all 21 `query_as::<_, PostRow>` sites without any column aliasing. The `post_id`/
-/// `user_id`/`username`/`title`/`slug`/`body`/`format` columns decode straight into their
-/// domain types via the sqlx bridge (the string newtypes via #438, the ids via #686,
-/// `format` via its text-enum bridge #572, `rendered_html` via #445 — sanitization
-/// lives on the type, so no `from_trusted` rebuild is needed). The **only** column
-/// that is not a decoded domain type is `tags`, the JSON aggregate parsed in
-/// [`build_post_record`].
-#[derive(sqlx::FromRow)]
-pub(crate) struct PostRow {
-    post_id: PostId,
-    user_id: UserId,
-    username: Username,
-    title: Option<PostTitle>,
-    slug: Slug,
-    body: PostBody,
-    format: PostFormat,
-    // rendered-html-from-trusted:allow storage row decodes the reviewed sanitized rendered_html column (#701)
-    rendered_html: RenderedHtml,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-    published_at: Option<DateTime<Utc>>,
-    deleted_at: Option<DateTime<Utc>>,
-    summary: Option<PostSummary>,
-    tags: String,
-}
-
-pub(crate) fn post_record_from_row(row: PostRow) -> sqlx::Result<PostRecord> {
-    build_post_record(row)
 }
 
 pub(crate) type MediaRow = (
@@ -722,8 +653,8 @@ mod tests {
     use chrono::Utc;
     use common::test_support::{
         parse_bio, parse_byte_size, parse_content_hash, parse_content_type, parse_display_name,
-        parse_email, parse_filename, parse_password, parse_post_body, parse_post_title,
-        parse_session_label, parse_slug, parse_token_hash, parse_username,
+        parse_email, parse_filename, parse_password, parse_session_label, parse_token_hash,
+        parse_username,
     };
 
     #[test]
@@ -783,40 +714,35 @@ mod tests {
     }
 
     #[test]
-    fn test_build_post_record() {
-        let now = Utc::now();
-        let record = build_post_record(PostRow {
-            post_id: PostId::from(10),
-            user_id: UserId::from(20),
-            username: parse_username("alice"),
-            title: Some(parse_post_title("Hello")),
-            slug: parse_slug("hello-world"),
-            body: parse_post_body("Body"),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Body</p>"),
-            created_at: now,
-            updated_at: now,
-            published_at: Some(now),
-            deleted_at: None,
-            summary: None,
-            tags: "[]".to_string(),
-        })
-        .unwrap();
-
-        assert_eq!(record.post_id, PostId::from(10));
-        assert_eq!(record.user_id, UserId::from(20));
-        assert_eq!(record.author_username, "alice");
-        assert_eq!(record.slug, "hello-world");
-        assert_eq!(record.format, PostFormat::Markdown);
-        assert_eq!(record.published_at, Some(now));
-        assert_eq!(record.deleted_at, None);
-        assert!(record.tags.is_empty());
+    fn parse_post_tags_json_accepts_empty_tags() {
+        let tags = parse_post_tags_json("[]", PostId::from(10)).unwrap();
+        assert!(tags.is_empty());
     }
 
-    // `build_post_record` parses only the JSON `tags` (those rejections are below);
-    // `username`/`slug`/`format` decode straight into their domain types via the
-    // sqlx bridge (#438, #572), so a malformed stored value is a `ColumnDecode`
-    // error at the query boundary, covered by `posts.rs`'s decode-error tests.
+    #[test]
+    fn parse_post_tags_json_parses_tags() {
+        let tags_json = r#"[{"tag_id": 1, "tag_slug": "rust", "tag_display": "Rust"}]"#;
+        let tags = parse_post_tags_json(tags_json, PostId::from(10)).unwrap();
+
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].post_id, PostId::from(10));
+        assert_eq!(tags[0].tag_id, TagId::from(1));
+        assert_eq!(tags[0].tag_slug, "rust");
+        assert_eq!(tags[0].tag_display, "Rust");
+    }
+
+    #[test]
+    fn parse_post_tags_json_rejects_invalid_json() {
+        let err = parse_post_tags_json("not-json", PostId::from(10)).unwrap_err();
+        assert!(matches!(err, sqlx::Error::Decode(_)));
+    }
+
+    #[test]
+    fn parse_post_tags_json_rejects_invalid_tag_slug() {
+        let tags_json = r#"[{"tag_id": 1, "tag_slug": "Not A Slug", "tag_display": "Bad"}]"#;
+        let err = parse_post_tags_json(tags_json, PostId::from(10)).unwrap_err();
+        assert!(matches!(err, sqlx::Error::Decode(_)));
+    }
 
     // guard:no-backend — password hashing/verification; no database
     #[tokio::test]
@@ -925,81 +851,6 @@ mod tests {
     // a malformed stored value is a `ColumnDecode` error at the query boundary,
     // covered by `users.rs`'s / `sessions.rs`'s decode-error tests.
 
-    #[test]
-    fn build_post_record_with_valid_tags_json_parses_tags() {
-        let now = Utc::now();
-        let tags_json = r#"[{"tag_id": 1, "tag_slug": "rust", "tag_display": "Rust"}]"#;
-        let record = build_post_record(PostRow {
-            post_id: PostId::from(10),
-            user_id: UserId::from(20),
-            username: parse_username("alice"),
-            title: None,
-            slug: parse_slug("hello-world"),
-            body: parse_post_body("Body"),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Body</p>"),
-            created_at: now,
-            updated_at: now,
-            published_at: None,
-            deleted_at: None,
-            summary: None,
-            tags: tags_json.to_string(),
-        })
-        .unwrap();
-        assert_eq!(record.tags.len(), 1);
-        assert_eq!(record.tags[0].tag_id, TagId::from(1));
-        assert_eq!(record.tags[0].tag_slug, "rust");
-        assert_eq!(record.tags[0].tag_display, "Rust");
-    }
-
-    #[test]
-    fn build_post_record_rejects_invalid_tags_json() {
-        let now = Utc::now();
-        let err = build_post_record(PostRow {
-            post_id: PostId::from(10),
-            user_id: UserId::from(20),
-            username: parse_username("alice"),
-            title: None,
-            slug: parse_slug("hello-world"),
-            body: parse_post_body("Body"),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Body</p>"),
-            created_at: now,
-            updated_at: now,
-            published_at: None,
-            deleted_at: None,
-            summary: None,
-            tags: "not-json".to_string(),
-        })
-        .unwrap_err();
-        assert!(matches!(err, sqlx::Error::Decode(_)));
-    }
-
-    #[test]
-    fn build_post_record_rejects_invalid_tag_slug_in_json() {
-        let now = Utc::now();
-        let tags_json =
-            r#"[{"tag_id": 1, "tag_slug": "Not A Slug", "tag_display": "Bad"}]"#.to_string();
-        let err = build_post_record(PostRow {
-            post_id: PostId::from(10),
-            user_id: UserId::from(20),
-            username: parse_username("alice"),
-            title: None,
-            slug: parse_slug("hello-world"),
-            body: parse_post_body("Body"),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Body</p>"),
-            created_at: now,
-            updated_at: now,
-            published_at: None,
-            deleted_at: None,
-            summary: None,
-            tags: tags_json,
-        })
-        .unwrap_err();
-        assert!(matches!(err, sqlx::Error::Decode(_)));
-    }
-
     /// A canonical 64-char lowercase-hex content hash for row fixtures.
     const ROW_HASH: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
@@ -1075,29 +926,6 @@ mod tests {
         );
         let record = user_record_from_row(row);
         assert_eq!(record.user_id, UserId::from(1));
-    }
-
-    #[test]
-    fn post_row_helper_delegates_to_build_post_record() {
-        let now = Utc::now();
-        let row = PostRow {
-            post_id: PostId::from(10),
-            user_id: UserId::from(20),
-            username: parse_username("alice"),
-            title: None,
-            slug: parse_slug("hello-world"),
-            body: parse_post_body("Body"),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>Body</p>"),
-            created_at: now,
-            updated_at: now,
-            published_at: None,
-            deleted_at: None,
-            summary: None,
-            tags: "[]".to_string(),
-        };
-        let record = post_record_from_row(row).unwrap();
-        assert_eq!(record.post_id, PostId::from(10));
     }
 
     #[test]

@@ -1,8 +1,9 @@
 //! The `rendered-html-from-trusted` static check (#398, extended #445, #778,
-//! #701): pins every `from_trusted` in production code — above all
+//! #701, #619): pins every `from_trusted` in production code — above all
 //! `RenderedHtml::from_trusted`, the *inheriting* door of the
-//! `common::render::RenderedHtml` newtype — and every direct production
-//! `RenderedHtml` struct field.
+//! `common::render::RenderedHtml` newtype — every direct production
+//! `RenderedHtml` struct field, and every explicit method or qualified `sqlx::Row` UFCS
+//! `get`/`try_get` decode to `RenderedHtml`.
 //!
 //! `RenderedHtml` marks HTML that is safe to emit **unescaped** into the DOM
 //! (`inner_html`). Two doors carry that invariant, and they mean different things:
@@ -22,9 +23,10 @@
 //! **Population** (read structurally, ADR-0085 principle 1): every `from_trusted`
 //! under [`POLICED_ROOTS`] whose qualifier is **`RenderedHtml`'s**, plus every one
 //! whose qualifier cannot be determined — in ordinary code and inside macro token
-//! streams — and every direct struct field whose type is `RenderedHtml`,
-//! path-qualified `...::RenderedHtml`, a harvested owner alias, or an unresolved
-//! single-ident type that the scanner cannot prove is something else (#701).
+//! streams — every direct struct field whose type is `RenderedHtml`, path-qualified
+//! `...::RenderedHtml`, a harvested owner alias, or an unresolved single-ident type that the
+//! scanner cannot prove is something else (#701), and every explicit `get`/`try_get` decoder —
+//! method syntax or `sqlx::Row` UFCS — with such a target type (#619).
 //!
 //! Deciding *membership* is structural — it identifies the door — and is not the
 //! same act as *exempting* a site from it (ADR-0085 principle 3 governs only the
@@ -52,9 +54,9 @@
 //! Every member fails unless the line **immediately above** it carries a
 //! `// rendered-html-from-trusted:allow <reason>` marker. The marker rule and the
 //! derived census are [`crate::steps::ident_gate`]. This module owns the combined
-//! population because field markers and call-site markers share the same token: the
-//! two populations must be classified together or each population would misread the
-//! other's legitimate markers as stale.
+//! population because field, row-decoder, and call-site markers share the same token:
+//! the populations must be classified together or each would misread the others'
+//! legitimate markers as stale.
 //!
 //! Test/fixture code (anything under a `#[cfg(test)]` module/fn, or a `#[test]`/
 //! `#[rstest]` fn) is exempt — fixtures legitimately mint `RenderedHtml` to stand
@@ -70,19 +72,16 @@
 //! resolution reads names, not types, so it can be misled by a chain of renames. The
 //! three call-site ways, all fail-**open**, are enumerated as class 1 in
 //! [`crate::steps::ident_gate`] — a rename of a rename, a renaming re-export outside
-//! the roots, and a free `fn` nested inside another type's `impl`. None has a live
-//! instance. Field scanning is intentionally direct only: `&RenderedHtml`,
-//! `Option<RenderedHtml>`, `Vec<RenderedHtml>` and `Box<RenderedHtml>` are not in the
-//! population. That is a documented out-of-scope class for #701 rather than implied
-//! coverage. The field scanner can also over-include a direct field inside an inline
-//! module whose non-`RenderedHtml` type is defined only in that same inline module;
-//! that fails closed. Each class is strictly narrower than the blind spot #778
-//! removed, which handed out a tree-wide exemption for one aliased qualifier. The
-//! classes inherent to the shared scan (the unwalked attribute-macro tokens, the
-//! absent call graph, and that a marker is trusted rather than verified) are also
-//! stated there. A `syn` parse failure is a **hard error** (a file we cannot walk
-//! could hide a spurious door or field — a false pass), matching the server-fn
-//! gates' fail-loud source enumeration.
+//! the roots, and a free `fn` nested inside another type's `impl`. Direct field scanning
+//! remains intentionally narrow: `&RenderedHtml`, `Option<RenderedHtml>`,
+//! `Vec<RenderedHtml>`, and `Box<RenderedHtml>` are not in its population. The
+//! row-decoder scanner likewise reads only a written turbofish target; an inferred decoder
+//! remains outside the population, matching `sqlx-newtype-decode`'s documented boundary.
+//! Each class is narrower than #778's tree-wide aliased-qualifier exemption. The classes
+//! inherent to the shared scan (the unwalked attribute-macro tokens, the absent call graph,
+//! and that a marker is trusted rather than verified) are also stated there. A `syn` parse
+//! failure is a **hard error** (a file we cannot walk could hide a spurious door, field, or
+//! decoder — a false pass), matching the server-fn gates' fail-loud source enumeration.
 
 use std::collections::BTreeSet;
 
@@ -218,21 +217,22 @@ pub fn run(result: &mut CommandResult) {
 fn combined_scan(source: &str, owner: Option<(&str, &BTreeSet<String>)>) -> Result<Scan, String> {
     let mut found = ident_gate::scan(source, DOORS, owner)?;
     if let Some((_, owners)) = owner {
-        let fields = field_scan(source, owners)?;
-        found.mentions.extend(fields.mentions);
-        found.test_ranges.extend(fields.test_ranges);
+        let boundaries = boundary_scan(source, owners)?;
+        found.mentions.extend(boundaries.mentions);
+        found.test_ranges.extend(boundaries.test_ranges);
         found.mentions.sort_by_key(|m| m.line);
     }
     Ok(found)
 }
 
-fn field_scan(source: &str, owners: &BTreeSet<String>) -> Result<Scan, String> {
+fn boundary_scan(source: &str, owners: &BTreeSet<String>) -> Result<Scan, String> {
     let file = syn::parse_file(source).map_err(|e| format!("cannot parse as Rust: {e}"))?;
-    let mut scanner = FieldScanner {
+    let mut scanner = TrustBoundaryScanner {
         owners,
         resolver: ident_gate::Resolver::for_file(&file),
         test_depth: 0,
         struct_stack: Vec::new(),
+        function_stack: Vec::new(),
         hits: Vec::new(),
         test_ranges: Vec::new(),
     };
@@ -247,6 +247,7 @@ fn field_scan(source: &str, owners: &BTreeSet<String>) -> Result<Scan, String> {
 fn format_unexempt(path: &str, token: &str, u: &Unexempt) -> String {
     match &u.context {
         MentionContext::Field(context) => format_field_unexempt(path, token, u, context),
+        MentionContext::RowDecode(context) => format_row_decode_unexempt(path, token, u, context),
         MentionContext::Module | MentionContext::Function(_) => {
             format_door_unexempt(path, token, u)
         }
@@ -257,7 +258,9 @@ fn format_door_unexempt(path: &str, token: &str, u: &Unexempt) -> String {
     let where_ = match &u.context {
         MentionContext::Module => "at module scope".to_string(),
         MentionContext::Function(name) => format!("in fn `{name}`"),
-        MentionContext::Field(_) => unreachable!("field mentions use field-specific formatting"),
+        MentionContext::Field(_) | MentionContext::RowDecode(_) => {
+            unreachable!("boundary mentions use boundary-specific formatting")
+        }
     };
     match u.why {
         Why::Unmarked => format!(
@@ -290,6 +293,23 @@ fn format_field_unexempt(path: &str, token: &str, u: &Unexempt, context: &str) -
     }
 }
 
+fn format_row_decode_unexempt(path: &str, token: &str, u: &Unexempt, context: &str) -> String {
+    match u.why {
+        Why::Unmarked => format!(
+            "{path}:{}: a `RenderedHtml` row decoder at `{context}` is not marked — decoding a \
+             storage column into trusted HTML is a review point and must explain why that \
+             column carries rendered, sanitized HTML (#619)",
+            u.line
+        ),
+        Why::NoReason => format!(
+            "{path}:{}: a `RenderedHtml` row decoder at `{context}` carries a bare `{token}` \
+             marker — an exemption with no reason is not an exemption; say why this decoder is safe",
+            u.line
+        ),
+        Why::Shared(n) => format_shared(path, u.line, n),
+    }
+}
+
 fn format_shared(path: &str, line: usize, n: usize) -> String {
     format!(
         "{path}:{line}: {n} `{}` sites share this line, so one marker cannot justify them — split \
@@ -302,16 +322,17 @@ fn format_marked(path: &str, m: &Marked) -> String {
     format!("    - {path}:{} — {}", m.line, m.reason)
 }
 
-struct FieldScanner<'a> {
+struct TrustBoundaryScanner<'a> {
     owners: &'a BTreeSet<String>,
     resolver: ident_gate::Resolver,
     test_depth: usize,
     struct_stack: Vec<String>,
+    function_stack: Vec<String>,
     hits: Vec<Mention>,
     test_ranges: Vec<(usize, usize)>,
 }
 
-impl FieldScanner<'_> {
+impl TrustBoundaryScanner<'_> {
     fn record_test_range<T: Spanned>(&mut self, item: &T) {
         let span = item.span();
         self.test_ranges.push((span.start().line, span.end().line));
@@ -353,9 +374,30 @@ impl FieldScanner<'_> {
             context: MentionContext::Field(format!("{owner}.{field_name}")),
         });
     }
+
+    fn record_row_decode(&mut self, method: &syn::Ident, target: Option<&syn::Type>) {
+        if self.test_depth > 0 || !(method == "get" || method == "try_get") {
+            return;
+        }
+        let Some(target) = target else {
+            return;
+        };
+        match self.resolver.direct_type_membership(target, self.owners) {
+            Membership::Door | Membership::Unknown => {}
+            Membership::OtherType => return,
+        }
+        let function = self
+            .function_stack
+            .last()
+            .map_or("<module>", String::as_str);
+        self.hits.push(Mention {
+            line: method.span().start().line,
+            context: MentionContext::RowDecode(format!("{function}.{method}")),
+        });
+    }
 }
 
-impl<'ast> syn::visit::Visit<'ast> for FieldScanner<'_> {
+impl<'ast> syn::visit::Visit<'ast> for TrustBoundaryScanner<'_> {
     fn visit_item_mod(&mut self, i: &'ast syn::ItemMod) {
         let test = ident_gate::is_test_cfg(&i.attrs);
         self.in_test_scope(i, test, |this| syn::visit::visit_item_mod(this, i));
@@ -372,17 +414,63 @@ impl<'ast> syn::visit::Visit<'ast> for FieldScanner<'_> {
 
     fn visit_item_fn(&mut self, i: &'ast syn::ItemFn) {
         let test = ident_gate::is_test_cfg(&i.attrs) || ident_gate::has_test_attr(&i.attrs);
-        self.in_test_scope(i, test, |this| syn::visit::visit_item_fn(this, i));
+        self.in_test_scope(i, test, |this| {
+            this.function_stack.push(i.sig.ident.to_string());
+            syn::visit::visit_item_fn(this, i);
+            this.function_stack.pop();
+        });
     }
 
     fn visit_impl_item_fn(&mut self, i: &'ast syn::ImplItemFn) {
         let test = ident_gate::is_test_cfg(&i.attrs) || ident_gate::has_test_attr(&i.attrs);
-        self.in_test_scope(i, test, |this| syn::visit::visit_impl_item_fn(this, i));
+        self.in_test_scope(i, test, |this| {
+            this.function_stack.push(i.sig.ident.to_string());
+            syn::visit::visit_impl_item_fn(this, i);
+            this.function_stack.pop();
+        });
     }
 
     fn visit_field(&mut self, i: &'ast syn::Field) {
         let test = ident_gate::is_test_cfg(&i.attrs);
         self.in_test_scope(i, test, |this| this.record_field(i));
+    }
+
+    fn visit_expr_method_call(&mut self, i: &'ast syn::ExprMethodCall) {
+        let target = i.turbofish.as_ref().and_then(|args| {
+            args.args.iter().find_map(|arg| match arg {
+                syn::GenericArgument::Type(ty) => Some(ty),
+                _ => None,
+            })
+        });
+        self.record_row_decode(&i.method, target);
+        syn::visit::visit_expr_method_call(self, i);
+    }
+
+    fn visit_expr_call(&mut self, i: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(path) = &*i.func
+            && path.qself.is_none()
+        {
+            let mut segments = path.path.segments.iter().rev();
+            if let (Some(method), Some(row), Some(sqlx)) =
+                (segments.next(), segments.next(), segments.next())
+                && (method.ident == "get" || method.ident == "try_get")
+                && row.ident == "Row"
+                && sqlx.ident == "sqlx"
+                && segments.next().is_none()
+            {
+                let target = match &method.arguments {
+                    syn::PathArguments::AngleBracketed(args) => {
+                        args.args.iter().find_map(|arg| match arg {
+                            syn::GenericArgument::Type(ty) => Some(ty),
+                            _ => None,
+                        })
+                    }
+                    _ => None,
+                };
+                self.record_row_decode(&method.ident, target);
+            }
+        }
+        syn::visit::visit_expr_call(self, i);
     }
 }
 
@@ -545,6 +633,84 @@ impl RenderedHtml {
     fn an_orphan_marker_fails() {
         let src = "// rendered-html-from-trusted:allow stale\nfn f() { harmless(); }\n";
         assert_eq!(violations(src).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_unmarked_rendered_html_row_decode_is_flagged() {
+        let src = "\
+fn decode(row: &Row) -> Result<(), Error> {
+    let body = row.try_get::<RenderedHtml, _>(\"body\")?;
+    Ok(())
+}
+";
+        assert_eq!(
+            violations(src).unwrap(),
+            vec![(2, "decode.try_get".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_marked_rendered_html_row_decode_passes() {
+        let src = "\
+fn decode(row: &Row) -> Result<(), Error> {
+    // rendered-html-from-trusted:allow post read model decodes render-sanitized HTML (#619)
+    let rendered_html = row.get::<RenderedHtml, _>(\"rendered_html\")?;
+    Ok(())
+}
+";
+        assert_eq!(violations(src).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn an_unmarked_ufcs_rendered_html_row_decode_is_flagged() {
+        let src = "\
+fn decode(row: &Row) -> Result<(), Error> {
+    let body = sqlx::Row::try_get::<RenderedHtml, _>(row, \"body\")?;
+    Ok(())
+}
+";
+        assert_eq!(
+            violations(src).unwrap(),
+            vec![(2, "decode.try_get".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_marked_ufcs_rendered_html_row_decode_passes() {
+        let src = "\
+fn decode(row: &Row) -> Result<(), Error> {
+    // rendered-html-from-trusted:allow post read model decodes render-sanitized HTML (#619)
+    let rendered_html = sqlx::Row::get::<RenderedHtml, _>(row, \"rendered_html\")?;
+    Ok(())
+}
+";
+        assert_eq!(violations(src).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn an_unresolvable_row_decode_target_fails_closed() {
+        let src = "\
+fn decode(row: &Row) -> Result<(), Error> {
+    let html = row.try_get::<MaybeHtml, _>(\"html\")?;
+    Ok(())
+}
+";
+        assert_eq!(
+            violations(src).unwrap(),
+            vec![(2, "decode.try_get".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_resolvable_non_html_row_decode_is_ignored() {
+        let src = "\
+struct Other;
+fn decode(row: &Row) -> Result<(), Error> {
+    let other = row.try_get::<Other, _>(\"other\")?;
+    Ok(())
+}
+";
+        assert_eq!(violations(src).unwrap(), vec![]);
     }
 
     #[test]

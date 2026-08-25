@@ -202,6 +202,8 @@ pub enum MentionContext {
     Function(String),
     /// Direct struct field, rendered as `Struct.field`.
     Field(String),
+    /// Explicit row decoder, rendered as `fn.method`.
+    RowDecode(String),
 }
 
 impl MentionContext {
@@ -209,7 +211,7 @@ impl MentionContext {
     pub fn legacy_label(&self) -> String {
         match self {
             Self::Module => String::new(),
-            Self::Function(name) | Self::Field(name) => name.clone(),
+            Self::Function(name) | Self::Field(name) | Self::RowDecode(name) => name.clone(),
         }
     }
 }
@@ -219,6 +221,7 @@ fn mention_where(context: &MentionContext) -> String {
         MentionContext::Module => "at module scope".to_string(),
         MentionContext::Function(name) => format!("in fn `{name}`"),
         MentionContext::Field(name) => format!("at field `{name}`"),
+        MentionContext::RowDecode(name) => format!("at row decoder `{name}`"),
     }
 }
 
