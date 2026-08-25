@@ -9,8 +9,8 @@ use sha2::{Digest, Sha256};
 use sqlx::{Row, SqliteConnection, SqlitePool};
 
 use crate::backup::{
-    BackupError, BackupManifest, BackupMode, ColumnInfo, backup_table_set, build_manifest,
-    ensure_schema_version, order_by_clause, read_table_rows,
+    BackupError, BackupManifest, BackupMode, ColumnInfo, RestoreValidationReport, backup_table_set,
+    build_manifest, ensure_schema_version, order_by_clause, read_table_rows, validate_restore_row,
 };
 use crate::sql::{quote_identifier, quote_literal};
 
@@ -27,10 +27,10 @@ fn finish_export_rollback(
     )
 }
 
-fn finish_restore_rollback(
-    primary: Result<(), BackupError>,
+fn finish_restore_rollback<T>(
+    primary: Result<T, BackupError>,
     rollback: Result<(), sqlx::Error>,
-) -> Result<(), BackupError> {
+) -> Result<T, BackupError> {
     crate::helpers::preserve_after_secondary(
         primary,
         rollback,
@@ -40,10 +40,10 @@ fn finish_restore_rollback(
     )
 }
 
-fn finish_foreign_key_restore(
-    primary: Result<(), BackupError>,
+fn finish_foreign_key_restore<T>(
+    primary: Result<T, BackupError>,
     foreign_keys: Result<(), sqlx::Error>,
-) -> Result<(), BackupError> {
+) -> Result<T, BackupError> {
     crate::helpers::preserve_after_secondary(
         primary,
         foreign_keys,
@@ -109,7 +109,7 @@ pub(crate) async fn restore_database(
     pool: &SqlitePool,
     source_path: &Path,
     manifest: &BackupManifest,
-) -> Result<(), BackupError> {
+) -> Result<RestoreValidationReport, BackupError> {
     let mut connection = pool.acquire().await?;
     let schema_version = schema_version(&mut connection).await?;
     ensure_schema_version(manifest, schema_version)?;
@@ -126,6 +126,7 @@ pub(crate) async fn restore_database(
         .await?;
 
     let result = async {
+        let mut validation_report = RestoreValidationReport::default();
         // Clear every table before loading any, keeping the two backends' restore
         // shape identical (docs/adr/0115-clear-then-load-restore.md).
         for table in &manifest.tables {
@@ -135,23 +136,31 @@ pub(crate) async fn restore_database(
         }
         for table in &manifest.tables {
             let columns = columns(&mut connection, table).await?;
-            import_table(&mut connection, source_path, table, &columns).await?;
+            import_table(
+                &mut connection,
+                source_path,
+                table,
+                &columns,
+                &mut validation_report,
+            )
+            .await?;
         }
         // Validate FKs *before* committing so a violation rolls the whole restore
         // back rather than leaving invalid data committed. `foreign_key_check`
         // scans for violations and works with `foreign_keys = OFF`, so it runs
         // correctly here inside the transaction.
-        validate_foreign_keys(&mut connection).await
+        validate_foreign_keys(&mut connection).await?;
+        Ok(validation_report)
     }
     .await;
 
     match result {
-        Ok(()) => {
+        Ok(validation_report) => {
             sqlx::query("COMMIT").execute(&mut *connection).await?;
             sqlx::query("PRAGMA foreign_keys = ON")
                 .execute(&mut *connection)
                 .await?;
-            Ok(())
+            Ok(validation_report)
         }
         Err(error) => {
             let primary = finish_restore_rollback(
@@ -190,6 +199,7 @@ async fn import_table(
     source_path: &Path,
     table: &str,
     columns: &[ColumnInfo],
+    validation_report: &mut RestoreValidationReport,
 ) -> Result<(), BackupError> {
     let rows = read_table_rows(source_path, table)?;
     if rows.is_empty() {
@@ -204,6 +214,7 @@ async fn import_table(
     let insert = insert_sql(table, &column_names);
 
     for row in rows {
+        validate_restore_row(table, &row, validation_report);
         let mut query = sqlx::query(&insert);
         for column in &column_names {
             let value = row.get(column).ok_or_else(|| {
@@ -418,7 +429,7 @@ mod tests {
         );
 
         let (restore, trace) = crate::helpers::swallowed_test::capture(|| {
-            finish_restore_rollback(Err(primary_io_error()), Err(sqlx::Error::PoolClosed))
+            finish_restore_rollback::<()>(Err(primary_io_error()), Err(sqlx::Error::PoolClosed))
         });
         assert_primary_io_error(restore);
         crate::helpers::swallowed_test::assert_one_report(

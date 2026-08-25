@@ -16,7 +16,13 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{DbConnectOptions, resolved_postgres_options};
+mod restore_validation;
+
 pub use common::backup::BackupMode;
+pub(crate) use restore_validation::validate_restore_row;
+pub use restore_validation::{
+    BackupRestoreOutcome, RestoreValidationIssue, RestoreValidationReport,
+};
 
 // Tables deliberately excluded from backup: `_sqlx_migrations` is schema state
 // re-applied by migrations on the restore target, and `feed_cache` is a
@@ -121,7 +127,7 @@ pub async fn export_backup(
 /// Returns `Err(BackupError)` if the backup restore fails.
 pub async fn restore_backup(
     options: BackupRestoreOptions<'_>,
-) -> Result<BackupManifest, BackupError> {
+) -> Result<BackupRestoreOutcome, BackupError> {
     let extracted_archive = if options.source_path.is_file() {
         Some(extract_archive_backup(options.source_path)?)
     } else {
@@ -134,7 +140,7 @@ pub async fn restore_backup(
     let manifest = read_manifest(source_path)?;
     validate_manifest(&manifest)?;
 
-    match manifest.mode {
+    let validation_report = match manifest.mode {
         BackupMode::Directory | BackupMode::Archive => {
             restore_directory_backup(
                 BackupRestoreOptions {
@@ -144,12 +150,15 @@ pub async fn restore_backup(
                 },
                 &manifest,
             )
-            .await?;
+            .await?
         }
-    }
+    };
 
     restore_media_directory(&source_path.join("media"), options.media_path)?;
-    Ok(manifest)
+    Ok(BackupRestoreOutcome {
+        manifest,
+        validation_report,
+    })
 }
 
 async fn export_archive_backup(
@@ -205,7 +214,7 @@ async fn export_directory_backup(
 async fn restore_directory_backup(
     options: BackupRestoreOptions<'_>,
     manifest: &BackupManifest,
-) -> Result<(), BackupError> {
+) -> Result<RestoreValidationReport, BackupError> {
     if !options.source_path.join("db").is_dir() {
         return Err(BackupError::InvalidBackup(format!(
             "missing db directory: {}",

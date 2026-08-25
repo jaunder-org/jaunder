@@ -25,73 +25,97 @@ use common::username::Username;
 use host::capture;
 use host::smtp_config::SmtpConfig;
 use storage::load_smtp_config;
-use storage::{BackupExportOptions, BackupRestoreOptions, export_backup, restore_backup};
+use storage::{
+    BackupExportOptions, BackupRestoreOptions, BackupRestoreOutcome, RestoreValidationReport,
+    export_backup, restore_backup,
+};
 use storage::{
     init_storage, open_database, open_existing_database, open_existing_database_with_observer,
 };
 
 const INIT_FIRST_CONTEXT: &str = "database could not be opened; run `jaunder init` first";
 
+pub enum CommandOutput {
+    None,
+    Backup(PathBuf),
+    Restore(BackupRestoreOutcome),
+}
+
 impl Commands {
     /// Dispatch this parsed subcommand to its handler. A flat match-expression:
-    /// each arm evaluates to the command's `Result<()>`, so there is no `?` on the
-    /// dispatch call and no trailing `Ok(())` — keeping any single function's
+    /// each arm evaluates to the command's `Result<CommandOutput>`, so there is no `?` on
+    /// the dispatch call and no trailing `Ok(())` — keeping any single function's
     /// cyclomatic complexity (and thus CRAP) low as subcommands are added (#147).
     ///
     /// # Errors
     ///
     /// Propagates the selected command's failure.
-    pub async fn execute(self) -> anyhow::Result<()> {
+    pub async fn execute(self) -> anyhow::Result<CommandOutput> {
         match self {
             Commands::Init {
                 storage,
                 skip_if_exists,
-            } => cmd_init(&storage, skip_if_exists).await,
+            } => cmd_init(&storage, skip_if_exists)
+                .await
+                .map(|()| CommandOutput::None),
             Commands::CreatePgDb { pg } => {
-                cmd_create_pg_db(&pg.bootstrap_db, &pg.app_db, &pg.app_role_password).await
+                cmd_create_pg_db(&pg.bootstrap_db, &pg.app_db, &pg.app_role_password)
+                    .await
+                    .map(|()| CommandOutput::None)
             }
             Commands::Serve {
                 storage,
                 bind,
                 environment,
                 runtime_file,
-            } => cmd_serve(&storage, bind, environment.is_prod(), runtime_file).await,
+            } => cmd_serve(&storage, bind, environment.is_prod(), runtime_file)
+                .await
+                .map(|()| CommandOutput::None),
             Commands::UserCreate {
                 storage,
                 username,
                 password,
                 display_name,
                 operator,
-            } => {
-                cmd_user_create(
-                    &storage,
-                    &username,
-                    password,
-                    display_name.as_ref(),
-                    operator,
-                )
-                .await
-            }
+            } => cmd_user_create(
+                &storage,
+                &username,
+                password,
+                display_name.as_ref(),
+                operator,
+            )
+            .await
+            .map(|()| CommandOutput::None),
             Commands::AppPasswordCreate {
                 storage,
                 username,
                 label,
-            } => cmd_app_password_create(&storage, &username, &label).await,
+            } => cmd_app_password_create(&storage, &username, &label)
+                .await
+                .map(|()| CommandOutput::None),
             Commands::UserInvite {
                 storage,
                 expires_in,
-            } => cmd_user_invite(&storage, expires_in).await,
-            Commands::SmtpTest { storage, to } => cmd_smtp_test(&storage, &to).await,
+            } => cmd_user_invite(&storage, expires_in)
+                .await
+                .map(|()| CommandOutput::None),
+            Commands::SmtpTest { storage, to } => cmd_smtp_test(&storage, &to)
+                .await
+                .map(|()| CommandOutput::None),
             Commands::Backup {
                 storage,
                 mode,
                 path,
-            } => cmd_backup(&storage, mode.into(), path).await.map(drop),
-            Commands::Restore { storage, path } => cmd_restore(&storage, &path).await,
+            } => cmd_backup(&storage, mode.into(), path)
+                .await
+                .map(CommandOutput::Backup),
+            Commands::Restore { storage, path } => cmd_restore(&storage, &path)
+                .await
+                .map(CommandOutput::Restore),
             // First nested subcommand group: the arm stays a thin delegation to
             // SiteConfigAction::execute (a sibling match), preserving the low-CRAP
             // one-arm-per-command dispatch shape. Copy this pattern for future groups.
-            Commands::SiteConfig { action } => action.execute().await,
+            Commands::SiteConfig { action } => action.execute().await.map(|()| CommandOutput::None),
         }
     }
 }
@@ -408,7 +432,10 @@ pub async fn cmd_backup(
 ///
 /// Returns an error if the backup does not exist, or if the target database or
 /// media directory is not empty.
-pub async fn cmd_restore(storage: &StorageArgs, path: &Path) -> anyhow::Result<()> {
+pub async fn cmd_restore(
+    storage: &StorageArgs,
+    path: &Path,
+) -> anyhow::Result<BackupRestoreOutcome> {
     if !path.exists() {
         return Err(anyhow::anyhow!(
             "backup path does not exist: {}",
@@ -416,7 +443,7 @@ pub async fn cmd_restore(storage: &StorageArgs, path: &Path) -> anyhow::Result<(
         ));
     }
     ensure_restore_target_empty(storage).await?;
-    let manifest = restore_backup(BackupRestoreOptions {
+    let outcome = restore_backup(BackupRestoreOptions {
         database: &storage.db,
         media_path: &storage.storage_path.join("media"),
         source_path: path,
@@ -426,9 +453,24 @@ pub async fn cmd_restore(storage: &StorageArgs, path: &Path) -> anyhow::Result<(
     println!(
         "Restore complete: path={} tables={}",
         path.display(),
-        manifest.tables.len()
+        outcome.manifest.tables.len()
     );
-    Ok(())
+    print_restore_validation_report(&outcome.validation_report);
+    Ok(outcome)
+}
+
+fn print_restore_validation_report(report: &RestoreValidationReport) {
+    if report.is_empty() {
+        return;
+    }
+
+    println!(
+        "Restore validation issues: count={} (data restored; repair may be needed before normal reads)",
+        report.len()
+    );
+    for issue in report.issues() {
+        println!("- {issue}");
+    }
 }
 
 fn default_backup_path(storage: &StorageArgs, mode: BackupMode) -> PathBuf {

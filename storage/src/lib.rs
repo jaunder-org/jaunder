@@ -50,7 +50,8 @@ pub use audiences::*;
 pub use backend::*;
 pub use backup::{
     BackupError, BackupExportOptions, BackupManifest, BackupMode, BackupRestoreOptions,
-    export_backup, restore_backup,
+    BackupRestoreOutcome, RestoreValidationIssue, RestoreValidationReport, export_backup,
+    restore_backup,
 };
 pub use db::*;
 pub use email::*;

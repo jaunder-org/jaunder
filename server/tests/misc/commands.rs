@@ -27,7 +27,7 @@ use crate::misc::backup_fixture::{
 };
 use storage::test_support::{
     Backend, PostgresDbGuard, SeedUser, backends, nonexistent_postgres_url, noop_mailer,
-    sqlite_url, unique_postgres_url,
+    raw_media_filename_exists, rewrite_media_filename_in_backup, sqlite_url, unique_postgres_url,
 };
 
 async fn storage_args(backend: Backend, base: &TempDir) -> (StorageArgs, Option<PostgresDbGuard>) {
@@ -715,11 +715,62 @@ async fn cmd_restore_restores_directory_backup(#[case] backend: Backend) {
     let target_base = TempDir::new().expect("target temp dir");
     let (target_args, _pg_target) = storage_args(backend, &target_base).await;
     cmd_init(&target_args, false).await.expect("init target");
-    cmd_restore(&target_args, &backup_path)
+    let outcome = cmd_restore(&target_args, &backup_path)
         .await
         .expect("restore");
+    assert!(
+        outcome.validation_report.is_empty(),
+        "canonical encoded media.filename should not report validation issues: {:?}",
+        outcome.validation_report.issues()
+    );
 
     assert_backup_fixture_restored(&target_args, &ids).await;
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_reports_invalid_media_filename_without_rolling_back(#[case] backend: Backend) {
+    let base = TempDir::new().expect("temp dir");
+    let (source_args, _pg_source) = storage_args(backend, &base).await;
+    cmd_init(&source_args, false).await.expect("init source");
+    populate_backup_fixture(&source_args).await;
+
+    let backup_path = base.path().join("backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
+    rewrite_media_filename_in_backup(&backup_path, "my photo.jpg");
+
+    let target_base = TempDir::new().expect("target temp dir");
+    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
+    cmd_init(&target_args, false).await.expect("init target");
+
+    let outcome = cmd_restore(&target_args, &backup_path)
+        .await
+        .expect("restore with diagnostics");
+    assert!(
+        outcome.validation_report.issues().iter().any(|issue| {
+            issue.table == "media"
+                && issue.column == "filename"
+                && issue.value_class == "filename"
+                && issue.reason.contains("canonical percent-encoded")
+        }),
+        "restore report should name media.filename canonicity: {:?}",
+        outcome.validation_report.issues()
+    );
+    assert!(
+        raw_media_filename_exists(&target_args.db, "my photo.jpg").await,
+        "invalid backup media row should still be restored"
+    );
+    assert_eq!(
+        std::fs::read_to_string(target_args.storage_path.join("media").join("avatar.txt"))
+            .expect("read restored media"),
+        "media"
+    );
 }
 
 // #136: a backup with a dangling foreign key is rejected uniformly (DEC-C) —
