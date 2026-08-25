@@ -453,7 +453,11 @@ anonymous, `common/src/visibility.rs`) and sees a post iff they are the author
 or any targeted audience admits them — OR semantics, failing closed (`Private`
 is zero rows); subscriptions route through the admission seam
 (`SubscriptionPolicy`, wired to the auto-approving `OpenSubscriptionPolicy`)
-([ADR-0020](adr/0020-content-visibility-and-subscription-model.md)).
+([ADR-0020](adr/0020-content-visibility-and-subscription-model.md)). The
+instance-wide Default Audience is separately the closed
+`DefaultAudience::{Public, Subscribers, Private}` value: it cannot be a
+per-author `Named` target and widens to `AudienceTarget` only at the web and
+AtomPub per-Post boundaries.
 
 **Accepted local lifecycle target.** A local Post is durable canonical identity
 and latest state. Before every meaningful content, tag, audience, media,
@@ -1550,6 +1554,13 @@ every stored row, flagging keys outside the registry as `UNKNOWN KEY` and
 recognised keys holding unparseable values as `INVALID`, so legacy rows stay
 visible.
 
+`posts.default_audience` declares that `DefaultAudience` type directly in the
+same registry. `SiteConfigStorage` exposes the closed type at its getter/setter
+boundary; an absent or unparseable stored row defensively reads as `Private`,
+while database errors propagate. The stored tokens and parser come from the
+closed-enum convention rather than a config-specific matcher
+([ADR-0091](adr/0091-text-enum-closed-string-enum-convention.md)).
+
 Deployment is configured by clap flags with matching `JAUNDER_*` environment
 fallbacks and documented defaults
 ([process configuration](adr/0144-process-configuration-cli-contract.md)). The
@@ -1809,10 +1820,10 @@ parse fn, `Serialize`/`Deserialize`, and — with the opt-in `sqlx` flag
 (`macros/src/text_enum.rs:302`) — the storage bridge. It is an attribute rather
 than a derive because a derive cannot add attributes to its item, and it must be
 the item's first attribute, since an attribute macro sees only what is written
-below it. Twelve enums adopt it, seven of them with `sqlx`: `PostFormat`
-(`common/src/render.rs:26`), `TargetKind` (`common/src/visibility.rs:43`),
-`MediaSource` (`common/src/media.rs:601`), `SmtpTlsMode`
-(`common/src/smtp_tls_mode.rs:18`), the two config-key enums
+below it. Fourteen enums adopt it, eight of them with `sqlx`: `PostFormat`
+(`common/src/render.rs:26`), `TargetKind` and `DefaultAudience`
+(`common/src/visibility.rs:43,180`), `MediaSource` (`common/src/media.rs:601`),
+`SmtpTlsMode` (`common/src/smtp_tls_mode.rs:18`), the two config-key enums
 (`common/src/config_key.rs:103,221`), and `FeedEventStatus`
 (`common/src/feed/event_status.rs:17`).
 

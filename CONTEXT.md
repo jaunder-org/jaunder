@@ -20,6 +20,10 @@ object), note.
 interpretation for AtomPub `type="text"` content. Real HTML
 (`type="html"`/`xhtml"`) always overrides to `Html` regardless of this setting.
 
+**Default Audience**: The instance-wide audience applied when a new Post has no
+explicit audience. It is exactly `Public`, `Subscribers`, or `Private`; a Named
+audience is per-author and cannot be an instance-wide default.
+
 **Deleted Post**: A locally authored Post retained under a deletion tombstone
 but absent from active web, Syndication Feed, and AtomPub Collection surfaces.
 Deletion is not physical erasure. _Avoid_: using Deleted Post for inbound

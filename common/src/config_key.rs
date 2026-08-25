@@ -20,7 +20,7 @@ use crate::smtp_sender::SmtpSender;
 use crate::smtp_tls_mode::SmtpTlsMode;
 use crate::smtp_username::SmtpUsername;
 use crate::tagged_url::{BaseUrl, HubUrl};
-use crate::visibility::parse_default_audience;
+use crate::visibility::DefaultAudience;
 
 /// Error returned when a stored or offered value does not parse as its key's type.
 ///
@@ -54,29 +54,12 @@ where
     Ok(())
 }
 
-/// The validator for `posts.default_audience` — the one key whose value type is not
-/// reached through `FromStr`.
-///
-/// [`crate::visibility::AudienceTarget`] has a `Named(_)` variant that is per-author and
-/// has no site-wide form, so the type as a whole is not the site-wide default's grammar;
-/// [`parse_default_audience`] is.
-fn check_default_audience(key: &'static str, raw: &str) -> Result<(), InvalidSiteConfigValue> {
-    if parse_default_audience(raw).is_some() {
-        return Ok(());
-    }
-    Err(InvalidSiteConfigValue {
-        key,
-        reason: "must be \"public\", \"subscribers\", or \"private\"".to_owned(),
-    })
-}
-
 /// Emits [`SiteConfigKey`] and its per-key validator from one table.
 ///
-/// Each row is `Variant => "dotted.key" : <value> { optional }?, bad: "<example>";`
-/// where `<value>` is either the key's value type (validated through its `FromStr`) or a
-/// parenthesised custom validator fn. The `{ optional }` marker drives **both** the
-/// empty-accepting validator and `is_optional`, so the two cannot disagree — the
-/// empty-means-unset contract (spec D1b) is stated once per key.
+/// Each row is `Variant => "dotted.key" : ValueType { optional }?, bad: "<example>";`.
+/// Every `ValueType` is validated through its `FromStr` implementation. The `{ optional }`
+/// marker drives **both** the empty-accepting validator and `is_optional`, so the two
+/// cannot disagree — the empty-means-unset contract (spec D1b) is stated once per key.
 ///
 /// `bad:` is a value that key must reject. There is no universal junk string — four of
 /// the value types reject only `""` — so the example is per-row and the test reads it
@@ -86,9 +69,7 @@ macro_rules! site_config_keys {
     (@optional) => { false };
     (@optional { optional }) => { true };
 
-    // -- internal: a row's validator. The parenthesised form comes first so a custom
-    //    validator is not mistaken for a type name. --
-    (@validate ($custom:path), $key:expr, $raw:expr) => { $custom($key, $raw) };
+    // -- internal: a row's validator --
     (@validate $ty:ident, $key:expr, $raw:expr) => { check::<$ty>($key, $raw) };
 
     ($(
@@ -162,7 +143,7 @@ site_config_keys! {
     FeedsMinItems          => "feeds.min_items"           : FeedMinItems,                 bad: "0";
     FeedsMinDays           => "feeds.min_days"            : FeedMinDays,                  bad: "0";
     FeedsWebsubHubUrl      => "feeds.websub_hub_url"      : HubUrl { optional },          bad: "nonsense://x";
-    PostsDefaultAudience   => "posts.default_audience"    : (check_default_audience),     bad: "everyone";
+    PostsDefaultAudience   => "posts.default_audience"    : DefaultAudience,              bad: "everyone";
     SiteRegistrationPolicy => "site.registration_policy"  : RegistrationPolicy,           bad: "sideways";
     SiteTitle              => "site.title"                : SiteTitle,                    bad: "";
     SiteBaseUrl            => "site.base_url"             : BaseUrl { optional },         bad: "nonsense://x";
@@ -337,8 +318,8 @@ mod tests {
         }
     }
 
-    /// The accepting half of the validator: the table's rows are wired to parsers that
-    /// say yes as well as no, including the one custom validator.
+    /// The accepting half of the validator: the table's rows are wired to their declared
+    /// value types' parsers that say yes as well as no.
     #[test]
     fn valid_values_are_accepted() {
         for (key, good) in [
@@ -352,6 +333,17 @@ mod tests {
             let dotted = key.as_ref();
             let got = key.validate(good);
             assert!(got.is_ok(), "{dotted} must accept {good:?}: {got:?}");
+        }
+    }
+
+    #[test]
+    fn posts_default_audience_validates_only_exact_tokens() {
+        let key = SiteConfigKey::PostsDefaultAudience;
+        for token in ["public", "subscribers", "private"] {
+            assert!(key.validate(token).is_ok(), "{token:?} must validate");
+        }
+        for token in ["unknown", " public", "public ", "\tpublic"] {
+            assert!(key.validate(token).is_err(), "{token:?} must reject");
         }
     }
 

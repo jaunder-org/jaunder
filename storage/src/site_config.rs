@@ -20,7 +20,7 @@ use common::smtp_sender::SmtpSender;
 use common::smtp_tls_mode::SmtpTlsMode;
 use common::smtp_username::SmtpUsername;
 use common::tagged_url::{BaseUrl, HubUrl};
-use common::visibility::{AudienceTarget, default_audience_str, parse_default_audience};
+use common::visibility::DefaultAudience;
 use sqlx::{Database, Pool};
 
 /// Async operations on the `site_config` key-value table.
@@ -250,27 +250,24 @@ pub trait SiteConfigStorage: Send + Sync {
         Ok(())
     }
 
-    /// Returns the configured site-wide default post audience, falling back to
-    /// [`AudienceTarget::Public`] when unset or unparseable. Only the built-in
-    /// audiences (`public`/`subscribers`/`private`) are valid site-wide
-    /// defaults; a `Named` audience is per-author and never returned here.
-    async fn get_default_audience(&self) -> sqlx::Result<AudienceTarget> {
+    /// Returns the configured site-wide Default Audience, falling back to
+    /// [`DefaultAudience::Private`] when unset or unparseable. A Default
+    /// Audience is a closed instance-wide value, distinct from the
+    /// payload-bearing per-Post `AudienceTarget`.
+    async fn get_default_audience(&self) -> sqlx::Result<DefaultAudience> {
         Ok(self
             .get(SiteConfigKey::PostsDefaultAudience)
             .await?
             .as_deref()
-            .and_then(parse_default_audience)
-            .unwrap_or(AudienceTarget::Public))
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(DefaultAudience::Private))
     }
 
-    /// Stores the site-wide default post audience as its string form. A `Named`
-    /// audience has no site-wide string form and is stored as `public`.
-    async fn set_default_audience(&self, audience: &AudienceTarget) -> sqlx::Result<()> {
-        self.set(
-            SiteConfigKey::PostsDefaultAudience,
-            default_audience_str(audience),
-        )
-        .await
+    /// Stores the closed instance-wide Default Audience using its standard
+    /// string representation.
+    async fn set_default_audience(&self, audience: &DefaultAudience) -> sqlx::Result<()> {
+        self.set(SiteConfigKey::PostsDefaultAudience, audience.as_ref())
+            .await
     }
 
     /// Stores the feed-generation configuration. An absent `websub_hub_url` is
@@ -466,7 +463,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{SiteConfigKey, SmtpTlsMode};
-    use crate::test_support::{Backend, backends};
+    use crate::test_support::{Backend, backends, backends_matrix};
     use common::backup::{BackupConfig, BackupMode, RetentionCount};
     use common::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
     use common::media::{MaxFileSize, UserQuota};
@@ -476,6 +473,7 @@ mod tests {
         parse_destination_path, parse_feed_min_days, parse_feed_min_items, parse_max_file_size,
         parse_retention_count, parse_site_title, parse_smtp_username, parse_url, parse_user_quota,
     };
+    use common::visibility::DefaultAudience;
     use rstest::*;
     use rstest_reuse::*;
 
@@ -1079,92 +1077,64 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn default_audience_returns_public_when_unset(#[case] backend: Backend) {
+    async fn default_audience_returns_private_when_unset(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
         assert_eq!(
             storage.get_default_audience().await.unwrap(),
-            common::visibility::AudienceTarget::Public
+            DefaultAudience::Private
         );
     }
 
-    #[apply(backends)]
+    #[apply(backends_matrix)]
+    #[case(DefaultAudience::Public)]
+    #[case(DefaultAudience::Subscribers)]
+    #[case(DefaultAudience::Private)]
     #[tokio::test]
-    async fn default_audience_returns_private_when_set(#[case] backend: Backend) {
+    async fn default_audience_round_trips_each_value(
+        backend: Backend,
+        #[case] audience: DefaultAudience,
+    ) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        storage
-            .set_default_audience(&common::visibility::AudienceTarget::Private)
-            .await
-            .unwrap();
-        assert_eq!(
-            storage.get_default_audience().await.unwrap(),
-            common::visibility::AudienceTarget::Private
-        );
-    }
-
-    #[apply(backends)]
-    #[tokio::test]
-    async fn default_audience_returns_subscribers_when_set(#[case] backend: Backend) {
-        let env = backend.setup().await;
-        let storage = &*env.state.site_config;
-        storage
-            .set_default_audience(&common::visibility::AudienceTarget::Subscribers)
-            .await
-            .unwrap();
-        assert_eq!(
-            storage.get_default_audience().await.unwrap(),
-            common::visibility::AudienceTarget::Subscribers
-        );
-    }
-
-    #[apply(backends)]
-    #[tokio::test]
-    async fn set_default_audience_collapses_named_to_public(#[case] backend: Backend) {
-        // A `Named` audience has no instance-wide form; the setter stores it as
-        // `public` and the getter reads it back as `Public`.
-        let env = backend.setup().await;
-        let storage = &*env.state.site_config;
-        storage
-            .set_default_audience(&common::visibility::AudienceTarget::Named(
-                common::ids::AudienceId::from(7),
-            ))
-            .await
-            .unwrap();
+        storage.set_default_audience(&audience).await.unwrap();
         assert_eq!(
             storage
                 .get(SiteConfigKey::PostsDefaultAudience)
                 .await
                 .unwrap(),
-            Some("public".to_owned())
+            Some(audience.as_ref().to_owned())
         );
-        assert_eq!(
-            storage.get_default_audience().await.unwrap(),
-            common::visibility::AudienceTarget::Public
-        );
+        assert_eq!(storage.get_default_audience().await.unwrap(), audience);
     }
 
     #[apply(backends)]
     #[tokio::test]
-    async fn default_audience_falls_back_to_public_when_garbage(#[case] backend: Backend) {
+    async fn default_audience_returns_private_for_invalid_stored_values(#[case] backend: Backend) {
         let env = backend.setup().await;
         let storage = &*env.state.site_config;
-        storage
-            .set(SiteConfigKey::PostsDefaultAudience, "named")
-            .await
-            .unwrap();
-        assert_eq!(
-            storage.get_default_audience().await.unwrap(),
-            common::visibility::AudienceTarget::Public
-        );
-        storage
-            .set(SiteConfigKey::PostsDefaultAudience, "not a real value")
-            .await
-            .unwrap();
-        assert_eq!(
-            storage.get_default_audience().await.unwrap(),
-            common::visibility::AudienceTarget::Public
-        );
+        for value in ["named", "not a real value", " private "] {
+            storage
+                .set(SiteConfigKey::PostsDefaultAudience, value)
+                .await
+                .unwrap();
+            assert_eq!(
+                storage.get_default_audience().await.unwrap(),
+                DefaultAudience::Private
+            );
+        }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn default_audience_propagates_database_errors(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.site_config;
+        env.base.pool().close().await;
+        assert!(matches!(
+            storage.get_default_audience().await,
+            Err(sqlx::Error::PoolClosed)
+        ));
     }
 
     // --- get_registration_policy (typed config accessor, #607) ---

@@ -359,7 +359,7 @@ pub async fn collection_post(
             published_at,
             max_attempts: 100,
             summary: fields.summary,
-            audiences: vec![default_audience],
+            audiences: vec![default_audience.into()],
             idempotency_key: idem,
         },
     )

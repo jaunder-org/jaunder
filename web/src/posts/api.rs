@@ -34,7 +34,9 @@ use crate::error::WebResult;
 // calls are server-only (inside the macro-supplied boundary), so the import is
 // gated to match.
 #[cfg(feature = "server")]
-use common::visibility::{audience_targets_or_public, targets_to_audience_selection};
+use common::visibility::{
+    AudienceTarget, audience_targets_or_public, targets_to_audience_selection,
+};
 
 // Server-only imports for the #[server] fn bodies (gated on `feature = "server"`).
 #[cfg(feature = "server")]
@@ -402,7 +404,7 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost> {
 pub async fn get_default_audience_selection() -> WebResult<AudienceSelection> {
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();
     require_auth().await?;
-    let default = site_config.get_default_audience().await?;
+    let default: AudienceTarget = site_config.get_default_audience().await?.into();
     Ok(targets_to_audience_selection(std::slice::from_ref(
         &default,
     )))

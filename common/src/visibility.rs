@@ -177,6 +177,22 @@ pub fn viewer_user_id(viewer: &ViewerIdentity) -> Option<UserId> {
     }
 }
 
+/// The closed instance-wide audience for Posts without an explicit audience.
+///
+/// Unlike [`AudienceTarget`], this cannot name a per-author audience.
+#[macros::text_enum(
+    sqlx,
+    error = InvalidDefaultAudience,
+    message = "default audience must be \"public\", \"subscribers\", or \"private\""
+)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, strum::VariantArray)]
+#[strum(serialize_all = "snake_case")]
+pub enum DefaultAudience {
+    Public,
+    Subscribers,
+    Private,
+}
+
 /// What a post is addressed to, as chosen in the editor / API.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum AudienceTarget {
@@ -186,32 +202,14 @@ pub enum AudienceTarget {
     Named(AudienceId),
 }
 
-/// Parses a stored site-wide default audience. Only the built-ins are valid:
-/// [`AudienceTarget::Named`] is per-author and has no instance-wide form, so it is
-/// rejected here (the caller falls back to `Public`).
-///
-/// It lives beside [`AudienceTarget`] rather than in `storage` because the config-key
-/// registry (`crate::config_key`) needs it as a validator and `storage` is downstream of
-/// `common`, not upstream (#687).
-#[must_use]
-pub fn parse_default_audience(value: &str) -> Option<AudienceTarget> {
-    match value.trim() {
-        "public" => Some(AudienceTarget::Public),
-        "subscribers" => Some(AudienceTarget::Subscribers),
-        "private" => Some(AudienceTarget::Private),
-        _ => None,
-    }
-}
-
-/// String form for a site-wide default audience — the inverse of
-/// [`parse_default_audience`]. [`AudienceTarget::Named`] has no instance-wide form, so it
-/// collapses to `public`.
-#[must_use]
-pub fn default_audience_str(audience: &AudienceTarget) -> &'static str {
-    match audience {
-        AudienceTarget::Public | AudienceTarget::Named(_) => "public",
-        AudienceTarget::Subscribers => "subscribers",
-        AudienceTarget::Private => "private",
+/// Widens an instance-wide default at the per-Post targeting boundary.
+impl From<DefaultAudience> for AudienceTarget {
+    fn from(audience: DefaultAudience) -> Self {
+        match audience {
+            DefaultAudience::Public => Self::Public,
+            DefaultAudience::Subscribers => Self::Subscribers,
+            DefaultAudience::Private => Self::Private,
+        }
     }
 }
 
@@ -323,6 +321,57 @@ mod tests {
             err.to_string(),
             "audience target kind must be \"public\", \"subscribers\", or \"named\""
         );
+    }
+
+    #[test]
+    fn default_audience_round_trips_through_closed_enum_interfaces() {
+        for (audience, token) in [
+            (DefaultAudience::Public, "public"),
+            (DefaultAudience::Subscribers, "subscribers"),
+            (DefaultAudience::Private, "private"),
+        ] {
+            assert_eq!(audience.as_ref(), token);
+            assert_eq!(audience.to_string(), token);
+            assert_eq!(DefaultAudience::try_from(token), Ok(audience));
+
+            let json = serde_json::to_string(&audience).unwrap();
+            assert_eq!(json, format!("\"{token}\""));
+            assert_eq!(
+                serde_json::from_str::<DefaultAudience>(&json).unwrap(),
+                audience
+            );
+        }
+    }
+
+    #[test]
+    fn default_audience_rejects_unknown_and_whitespace_padded_tokens() {
+        for token in ["unknown", " public", "public ", "\tpublic"] {
+            assert!(
+                DefaultAudience::try_from(token).is_err(),
+                "{token:?} must reject"
+            );
+            assert!(
+                serde_json::from_str::<DefaultAudience>(&format!("\"{token}\"")).is_err(),
+                "{token:?} must not deserialize"
+            );
+        }
+
+        let err: InvalidDefaultAudience = "unknown".parse::<DefaultAudience>().unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "default audience must be \"public\", \"subscribers\", or \"private\""
+        );
+    }
+
+    #[test]
+    fn default_audience_widens_to_its_matching_post_target() {
+        for (default, target) in [
+            (DefaultAudience::Public, AudienceTarget::Public),
+            (DefaultAudience::Subscribers, AudienceTarget::Subscribers),
+            (DefaultAudience::Private, AudienceTarget::Private),
+        ] {
+            assert_eq!(AudienceTarget::from(default), target);
+        }
     }
 
     #[test]
