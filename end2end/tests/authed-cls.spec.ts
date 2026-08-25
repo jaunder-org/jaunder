@@ -12,8 +12,9 @@
  * projector-paint → wasm-mount transition.
  *
  * Deterministic by construction via the shared `expectNoShiftAcrossMount` helper
- * (holds the wasm to freeze first paint; gates on `document.fonts.ready` +
- * `body[data-mounted]`, never a timer) — safe under `workers>1` (#182).
+ * (holds the wasm to freeze first paint; gates on fonts, mount, and consecutive
+ * stable post-mount geometry frames, never a timer) — safe under `workers>1`
+ * (#182).
  */
 import { test, expect, slowBrowserTimeoutMs } from "./fixtures";
 import { signInAsNewUser } from "./helpers";

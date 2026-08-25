@@ -1,15 +1,21 @@
 /**
  * Reusable empirical layout-shift (CLS) probe for the projector-paint → wasm-mount
- * transition (#202). Deterministic by construction: it gates only on the wasm-route
- * release, `body[data-mounted]`, and `document.fonts.ready` — never a timer — so it
- * is safe under `fullyParallel` `workers>1` (#182).
+ * transition (#202). Deterministic by construction: it gates on the wasm-route
+ * release, `body[data-mounted]`, `document.fonts.ready`, and consecutive stable
+ * animation-frame geometry — never a timer — so it is safe under `fullyParallel`
+ * `workers>1` (#182).
  *
  * Page-agnostic: a per-page CLS check supplies a {@link MountShiftProbe} (its `url`,
  * the `targets` to measure, an optional post-mount assertion, and a `tolerancePx`)
  * and calls {@link expectNoShiftAcrossMount}. The first concrete use is the
  * authed-owner own-post action column (`authed-cls.spec.ts`).
  */
-import { expect, type Page, type Locator } from "@playwright/test";
+import {
+  expect,
+  type ElementHandle,
+  type Locator,
+  type Page,
+} from "@playwright/test";
 import { BASE_URL } from "./helpers";
 import { waitForMount } from "./mount";
 
@@ -38,6 +44,89 @@ export interface MountShiftProbe {
    * loosen on evidence"); passing it per-probe keeps other pages strict.
    */
   tolerancePx?: number;
+}
+
+export interface ElementGeometry {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export type TargetGeometry = ElementGeometry | null;
+
+export interface ShiftTarget {
+  name: string;
+  locator: Locator;
+}
+
+const GEOMETRY_STABILITY_TIMEOUT_MS = 10_000;
+
+async function sampleTargetGeometry(
+  page: Page,
+  elements: readonly (ElementHandle<HTMLElement | SVGElement> | null)[],
+): Promise<TargetGeometry[]> {
+  return page.evaluate(
+    (targets) =>
+      new Promise<TargetGeometry[]>((resolve) => {
+        requestAnimationFrame(() => {
+          resolve(
+            targets.map((target) => {
+              if (target === null || !target.isConnected) return null;
+              const rect = target.getBoundingClientRect();
+              return {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
+              };
+            }),
+          );
+        });
+      }),
+    elements,
+  );
+}
+
+function hasSameTopLeft(
+  previous: readonly TargetGeometry[],
+  current: readonly TargetGeometry[],
+): boolean {
+  return previous.every((box, index) => {
+    const next = current[index];
+    if (box === null || next === null) return box === next;
+    return box.x === next.x && box.y === next.y;
+  });
+}
+
+/**
+ * Sample target geometry on browser animation frames until two consecutive
+ * samples have equal top-left coordinates.
+ */
+export async function waitForStableTargetGeometry(
+  page: Page,
+  targets: readonly ShiftTarget[],
+  timeoutMs = GEOMETRY_STABILITY_TIMEOUT_MS,
+): Promise<TargetGeometry[]> {
+  const deadline = performance.now() + timeoutMs;
+  const elements = await Promise.all(
+    targets.map((target) => target.locator.elementHandle()),
+  );
+  try {
+    let previous = await sampleTargetGeometry(page, elements);
+
+    while (performance.now() < deadline) {
+      const current = await sampleTargetGeometry(page, elements);
+      if (hasSameTopLeft(previous, current)) return current;
+      previous = current;
+    }
+  } finally {
+    await Promise.all(elements.map((element) => element?.dispose()));
+  }
+
+  throw new Error(
+    `${targets.map((target) => target.name).join(", ")} geometry did not stabilize within ${timeoutMs}ms`,
+  );
 }
 
 /**
@@ -83,9 +172,7 @@ export async function expectNoShiftAcrossMount(
     await waitForMount(page);
     if (probe.afterMount) await probe.afterMount(page);
 
-    const after = await Promise.all(
-      targets.map((t) => t.locator.boundingBox()),
-    );
+    const after = await waitForStableTargetGeometry(page, targets);
 
     targets.forEach((t, i) => {
       const b = before[i];
