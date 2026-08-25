@@ -10,12 +10,7 @@
  * and calls {@link expectNoShiftAcrossMount}. The first concrete use is the
  * authed-owner own-post action column (`authed-cls.spec.ts`).
  */
-import {
-  expect,
-  type ElementHandle,
-  type Locator,
-  type Page,
-} from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { BASE_URL } from "./helpers";
 import { waitForMount } from "./mount";
 
@@ -31,7 +26,7 @@ export interface MountShiftProbe {
    * element shifted. Use author/content-scoped locators — on a multi-item page the
    * measured element must be the same one before and after mount.
    */
-  targets: (page: Page) => { name: string; locator: Locator }[];
+  targets: (page: Page) => ShiftTarget[];
   /**
    * Optional: assert the mount actually decorated the measured content (so a green
    * result can't be a no-op) — e.g. the owner action column appeared. Runs after
@@ -62,45 +57,8 @@ export interface ShiftTarget {
 
 const GEOMETRY_STABILITY_TIMEOUT_MS = 10_000;
 
-async function sampleTargetGeometry(
-  page: Page,
-  elements: readonly (ElementHandle<HTMLElement | SVGElement> | null)[],
-): Promise<TargetGeometry[]> {
-  return page.evaluate(
-    (targets) =>
-      new Promise<TargetGeometry[]>((resolve) => {
-        requestAnimationFrame(() => {
-          resolve(
-            targets.map((target) => {
-              if (target === null || !target.isConnected) return null;
-              const rect = target.getBoundingClientRect();
-              return {
-                x: rect.x,
-                y: rect.y,
-                width: rect.width,
-                height: rect.height,
-              };
-            }),
-          );
-        });
-      }),
-    elements,
-  );
-}
-
-function hasSameTopLeft(
-  previous: readonly TargetGeometry[],
-  current: readonly TargetGeometry[],
-): boolean {
-  return previous.every((box, index) => {
-    const next = current[index];
-    if (box === null || next === null) return box === next;
-    return box.x === next.x && box.y === next.y;
-  });
-}
-
 /**
- * Sample target geometry on browser animation frames until two consecutive
+ * Sample target geometry on consecutive browser animation frames until two
  * samples have equal top-left coordinates.
  */
 export async function waitForStableTargetGeometry(
@@ -108,25 +66,57 @@ export async function waitForStableTargetGeometry(
   targets: readonly ShiftTarget[],
   timeoutMs = GEOMETRY_STABILITY_TIMEOUT_MS,
 ): Promise<TargetGeometry[]> {
-  const deadline = performance.now() + timeoutMs;
   const elements = await Promise.all(
     targets.map((target) => target.locator.elementHandle()),
   );
+  const names = targets.map((target) => target.name).join(", ");
   try {
-    let previous = await sampleTargetGeometry(page, elements);
+    return await page.evaluate(
+      ({ elements, names, timeoutMs }) =>
+        new Promise<TargetGeometry[]>((resolve, reject) => {
+          const startedAt = performance.now();
+          let previous: TargetGeometry[] | undefined;
 
-    while (performance.now() < deadline) {
-      const current = await sampleTargetGeometry(page, elements);
-      if (hasSameTopLeft(previous, current)) return current;
-      previous = current;
-    }
+          const sampleFrame = () => {
+            const current = elements.map((element) => {
+              if (element === null || !element.isConnected) return null;
+              const rect = element.getBoundingClientRect();
+              return {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
+              };
+            });
+            if (
+              previous?.every((box, index) => {
+                const next = current[index];
+                if (box === null || next === null) return box === next;
+                return box.x === next.x && box.y === next.y;
+              })
+            ) {
+              resolve(current);
+              return;
+            }
+            if (performance.now() - startedAt >= timeoutMs) {
+              reject(
+                new Error(
+                  `${names} geometry did not stabilize within ${timeoutMs}ms`,
+                ),
+              );
+              return;
+            }
+            previous = current;
+            requestAnimationFrame(sampleFrame);
+          };
+
+          requestAnimationFrame(sampleFrame);
+        }),
+      { elements, names, timeoutMs },
+    );
   } finally {
     await Promise.all(elements.map((element) => element?.dispose()));
   }
-
-  throw new Error(
-    `${targets.map((target) => target.name).join(", ")} geometry did not stabilize within ${timeoutMs}ms`,
-  );
 }
 
 /**
