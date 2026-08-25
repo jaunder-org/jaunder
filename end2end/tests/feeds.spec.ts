@@ -10,7 +10,7 @@ import {
 // to /api/posts/update below — is attributable to a named test (#681).
 import { test, expect, setTestBudget } from "./fixtures";
 import { allowSecondBoot } from "./bootBudget";
-import { readPingLines, waitForPingMatching } from "./websub";
+import { readPingLines, waitForPingWave } from "./websub";
 // `FEED_POLL_TIMEOUT_MS` is imported, not restated: this spec derives its
 // whole-test budget from it (#270), and `feeds.ts` owns the poll that consumes
 // it. Two copies would let the budget silently drift from the deadline again.
@@ -20,7 +20,6 @@ import {
   readAlternateLinks,
 } from "./feeds";
 import { createPostViaApi } from "./posts";
-import { withTimedAction } from "./actions";
 
 const FORMATS: { ext: string; mime: string }[] = [
   { ext: "rss", mime: "application/rss+xml" },
@@ -37,13 +36,13 @@ const FEED_SETUP_ALLOWANCE_MS = 30_000;
 /** How long the WebSub ping test waits for each hub ping to land. */
 const PING_WAIT_MS = 40_000;
 
-/** Settle window between the publish wave and the edit wave. Always fully
- *  consumed, so it counts toward that test's worst path. */
-const PING_SETTLE_MS = 2_000;
+/** Canonical origin seeded into `site.base_url` by the e2e harness. WebSub
+ *  topics use configured public URLs, not the ephemeral server listener. */
+const SITE_BASE_URL = "https://example.com";
 
 /** Room for registration and the two API writes in the ping test. Deliberately
  *  thinner than `FEED_SETUP_ALLOWANCE_MS`: comfortable once the `workers>=2`
- *  scaler applies (135s total against an 82s worst path), tight at `workers=1`. */
+ *  scaler applies (132s total against an 80s worst path), tight at `workers=1`. */
 const PING_SETUP_ALLOWANCE_MS = 8_000;
 
 test("auto-discovery links are present on site home and user timeline, and resolve", async ({
@@ -216,37 +215,27 @@ test("per-user feeds contain only that user's posts, newest first, in all format
 test("publishing and editing a post each trigger a WebSub hub ping", async ({
   page,
 }) => {
-  // Worst path: two ping waits plus the settle = 82s. The allowance covers
-  // registration and the two API writes.
-  setTestBudget(2 * PING_WAIT_MS + PING_SETTLE_MS + PING_SETUP_ALLOWANCE_MS);
+  // Worst path: two ping waits. The allowance covers registration and the two
+  // API writes.
+  setTestBudget(2 * PING_WAIT_MS + PING_SETUP_ALLOWANCE_MS);
 
   const username = await signInAsNewUser(page);
-  const isUserFeed = (feedUrl: string) =>
-    feedUrl.includes(`/~${username}/feed`);
+  const userFeedUrls = ["rss", "atom", "json"].map(
+    (format) => `${SITE_BASE_URL}/~${username}/feed.${format}`,
+  );
 
   const beforePublish = readPingLines().length;
   const { post_id } = await createPostViaApi(page, {
     body: "# Ping On Publish\n\nBody for Ping On Publish",
   });
-  const firstPing = await waitForPingMatching(
+  const publishWave = await waitForPingWave(
     beforePublish,
-    isUserFeed,
+    userFeedUrls,
     PING_WAIT_MS,
   );
-  expect(firstPing.feed_url).toContain(`/~${username}/feed`);
+  expect(publishWave.map((ping) => ping.feed_url)).toEqual(userFeedUrls);
 
-  // Let the first ping wave fully settle before snapshotting for the edit, so
-  // leftover publish-wave pings are not mistaken for the edit's ping.
-  //
-  // The suite's only `waitForTimeout`, wrapped so the wait is at least
-  // *visible* in the trace (#794); replacing the sleep with a condition is
-  // #793. The duration stays `PING_SETTLE_MS` (#270), which this test's budget
-  // derives from — wrapping changes attribution, not timing.
-  await withTimedAction(page, "wait.settle", () =>
-    page.waitForTimeout(PING_SETTLE_MS),
-  );
   const beforeEdit = readPingLines().length;
-
   const editRes = await page.request.post(`${BASE_URL}/api/posts/update`, {
     data: {
       post_id,
@@ -260,12 +249,12 @@ test("publishing and editing a post each trigger a WebSub hub ping", async ({
   });
   expect(editRes.ok(), "posts::update").toBeTruthy();
 
-  const secondPing = await waitForPingMatching(
+  const editWave = await waitForPingWave(
     beforeEdit,
-    isUserFeed,
+    userFeedUrls,
     PING_WAIT_MS,
   );
-  expect(secondPing.feed_url).toContain(`/~${username}/feed`);
+  expect(editWave.map((ping) => ping.feed_url)).toEqual(userFeedUrls);
 });
 
 // M8.8.3: Conditional GET short-circuit — a feed fetch returns an ETag, and a
