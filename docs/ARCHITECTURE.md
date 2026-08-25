@@ -652,6 +652,13 @@ on every entry — drafts and scheduled included, incoming values ignored
 document (`common/src/atompub/service.rs:68-70`), so clients feature-detect once
 and degrade gracefully.
 
+`CollectionDecl::accept` models Service Document discovery ranges with the
+closed `CollectionAccept` type, separately from concrete uploaded-media
+`common::media::ContentType` values. The Posts Collection advertises exactly
+`application/atom+xml;type=entry`; the Media Collection advertises exactly
+`*/*`. The wildcard therefore exists only at the AtomPub discovery boundary and
+can never enter media request parsing or storage.
+
 Atom document I/O is upstream's, not ours
 ([ADR-0089](adr/0089-upstream-atom-document-io.md)). `atom_syndication` 0.12.10
 made bare-`<entry>` I/O public, so the hand-rolled reader and writers are gone:
@@ -1683,15 +1690,22 @@ carries the `text/org` media type and the server canonicalizes
 owns it).
 
 `jaunder--harvest-response-fields` (`elisp/jaunder-atom.el:69`) is the one
-response reader — a metadata harvest, not a full entry parse — returning
-`content-src`, `content-type`, `slug`, and `published` from a response entry via
+response reader — a metadata harvest, not a full Entry parse — returning
+`content-src`, `content-type`, `slug`, and `published` from a response Entry via
 `libxml-parse-xml-region`. Media URLs come from that harvested `<content src>`
 and are never reconstructed client-side, so the server stays authoritative about
-URL layout ([ADR-0045](adr/0045-emacs-media-content-src.md)). Only local image
-links (`png`/`jpg`/`jpeg`/`gif`/`webp`/`svg`, `file:` or `attachment:`) qualify
-for upload; the extension table is the qualification predicate shared by
-detection and substitution (`jaunder--media-link-p`,
-`elisp/jaunder-media.el:48`, over the extension table at `:31`).
+URL layout ([ADR-0045](adr/0045-emacs-media-content-src.md)).
+
+Media candidates are body-only Org `file:` and `attachment:` links. `file:`
+targets resolve against the live authoring buffer's `default-directory`;
+`attachment:` targets resolve through org-attach. Header properties, fuzzy
+links, HTTP(S) links, and other non-local link types are not candidates. After
+resolution, content type is selected case-insensitively from the deterministic
+map `jpg`/`jpeg` → `image/jpeg`, `png` → `image/png`, `gif` → `image/gif`,
+`webp` → `image/webp`, `svg` → `image/svg+xml`, `mp3` → `audio/mpeg`,
+`ogg`/`oga` → `audio/ogg`, `flac` → `audio/flac`, `wav` → `audio/wav`, `mp4` →
+`video/mp4`, `webm` → `video/webm`, and `pdf` → `application/pdf`; unknown and
+extensionless names use `application/octet-stream`.
 
 The client also probes the AtomPub service document for the
 `<j:extension features="…">` capability list that
@@ -1720,14 +1734,18 @@ The user-facing commands are `jaunder-new-post`, `jaunder-publish`, and
 `jaunder-save-draft` (publish forced to `app:draft`). Publish performs all
 network mutation before any destructive local change
 (`elisp/jaunder-publish.el:178`): map → validate (non-empty body; a `scheduled`
-post needs a future `#+DATE:`) → record the machine zone → media upload
-(sha256-deduped server-side, pre-flighted so a missing file uploads nothing) →
-entry send → write-back → rename to `<slug>.org`. The send is a `POST` create,
-or a `PUT` when `JAUNDER_ID` is present, carrying `If-Match` only when the
-buffer also records a `JAUNDER_SYNCED` ETag. Write-back persists `JAUNDER_ID`
-first, from the `Location` header, before `JAUNDER_SLUG`, `JAUNDER_SYNCED`,
-`JAUNDER_SYNCED_AT`, the resolved publish time, and the rename — so any failure,
-including a `412` stale-ETag, is recoverable by a plain re-publish
+Post needs a future `#+DATE:`) → record the machine zone → media localization →
+Entry send → write-back → rename to `<slug>.org`. Media localization first
+collects candidates, then aggregates every missing, unreadable, or non-regular
+resolved path into one preflight error before warning or uploading; it next
+emits the untracked-media warning, uploads each equal resolved path once, and
+applies right-to-left positional substitution using the response
+`<content src>`. The Entry send is a `POST` create, or a `PUT` when `JAUNDER_ID`
+is present, carrying `If-Match` only when the buffer also records a
+`JAUNDER_SYNCED` ETag. Write-back persists `JAUNDER_ID` first, from the
+`Location` header, before `JAUNDER_SLUG`, `JAUNDER_SYNCED`, `JAUNDER_SYNCED_AT`,
+the resolved publish time, and the rename — so any failure, including a `412`
+stale-ETag, is recoverable by a plain re-publish
 ([ADR-0047](adr/0047-emacs-publish-orchestration.md)). Media substitution
 applies to the sent body only; the authoring buffer is never modified.
 

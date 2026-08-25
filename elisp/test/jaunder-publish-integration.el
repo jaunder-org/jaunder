@@ -44,6 +44,37 @@
       (jaunder-publish)
       (should (equal (jaunder--buffer-property "JAUNDER_ID") id))))))
 
+(ert-deftest jaunder-publish-uploads-pdf-and-sends-harvested-media-url ()
+  (jaunder-test--with-live-server
+   (jaunder-pub-test--in-buffer
+    (concat "#+TITLE: Document\n"
+            "#+PROPERTY: JAUNDER_STATUS published\n\n"
+            "[[file:document.pdf][download]]\n")
+    (let ((pdf (expand-file-name "document.pdf" dir)))
+      (with-temp-file pdf
+        (set-buffer-multibyte nil)
+        (insert "PDF-BYTES"))
+      (jaunder-publish)
+      (let* ((id (jaunder--buffer-property "JAUNDER_ID"))
+             (response
+              (jaunder--http-request
+               "GET"
+               (jaunder--build-url
+                jaunder-test-base-url "atompub" jaunder-test-username "posts" id)))
+             (xml (plist-get response :body))
+             (media-prefix
+              (jaunder--build-url jaunder-test-base-url "media" "upload")))
+        (should id)
+        (should (eq (plist-get response :status) 200))
+        (should (string-match-p "download" xml))
+        (should (string-match-p (regexp-quote media-prefix) xml))
+        (should-not (string-match-p (regexp-quote "file:document.pdf") xml))
+        (should-not (string-match-p (regexp-quote pdf) xml))
+        (should
+         (string-match-p
+          (regexp-quote "[[file:document.pdf][download]]")
+          (buffer-string))))))))
+
 (ert-deftest jaunder-publish-stale-if-match-surfaces-412 ()
   (jaunder-test--with-live-server
    (jaunder-pub-test--in-buffer

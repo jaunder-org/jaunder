@@ -11,9 +11,26 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use super::title::{CollectionTitle, WorkspaceTitle};
 use super::xml::{write_empty_element, write_text_element};
 use super::{APP_NS, ATOM_NS, J_NS};
-use crate::media::ContentType;
 use crate::tag::Tag;
 use crate::tagged_url::CollectionHrefUrl;
+
+/// Media range advertised for an `AtomPub` collection in a Service Document.
+///
+/// These discovery values are distinct from the concrete content types carried
+/// by uploaded media.
+#[macros::text_enum(
+    error = InvalidCollectionAccept,
+    message = "collection accept must be \"application/atom+xml;type=entry\" or \"*/*\""
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CollectionAccept {
+    /// Atom Entry documents.
+    #[strum(serialize = "application/atom+xml;type=entry")]
+    AtomEntry,
+    /// Media resources of any concrete content type.
+    #[strum(serialize = "*/*")]
+    AnyMediaType,
+}
 
 /// Declaration of a single collection (posts or media) in a workspace.
 #[derive(Debug, Clone)]
@@ -22,8 +39,8 @@ pub struct CollectionDecl {
     pub href: CollectionHrefUrl,
     /// User-facing title of the collection.
     pub title: CollectionTitle,
-    /// Media types accepted by the collection (e.g. `application/atom+xml;type=entry`).
-    pub accept: Vec<ContentType>,
+    /// Media ranges accepted by the collection.
+    pub accept: Vec<CollectionAccept>,
     /// Category scheme/terms available for entries in this collection.
     /// When non-empty, an `app:categories` element with `fixed="no"` is emitted.
     pub categories: Vec<Tag>,
@@ -120,32 +137,50 @@ mod tests {
             posts_collection: CollectionDecl {
                 href: parse_url("https://h/atompub/alice/posts"),
                 title: crate::atompub::CollectionTitle::posts(),
-                accept: vec![ContentType::atom_entry()],
+                accept: vec![CollectionAccept::AtomEntry],
                 categories: vec!["rust".parse().unwrap(), "leptos".parse().unwrap()],
             },
             media_collection: CollectionDecl {
                 href: parse_url("https://h/atompub/alice/media"),
                 title: crate::atompub::CollectionTitle::media(),
-                accept: vec![
-                    ContentType::image_png(),
-                    ContentType::image_jpeg(),
-                    ContentType::image_gif(),
-                    ContentType::image_webp(),
-                ],
+                accept: vec![CollectionAccept::AnyMediaType],
                 categories: vec![],
             },
         }
     }
 
+    fn collection_xml<'a>(out: &'a str, href: &str) -> &'a str {
+        let opening = format!(r#"<app:collection href="{href}">"#);
+        out.split_once(&opening)
+            .unwrap()
+            .1
+            .split_once("</app:collection>")
+            .unwrap()
+            .0
+    }
+
+    fn accept_values(collection: &str) -> Vec<&str> {
+        collection
+            .split("<app:accept>")
+            .skip(1)
+            .map(|rest| rest.split_once("</app:accept>").unwrap().0)
+            .collect()
+    }
+
     #[test]
-    fn service_document_lists_two_collections() {
+    fn service_document_lists_each_collection_accept_range() {
         let out = render_service_document(&sample_doc());
-        assert!(out.contains("app:service"));
-        assert!(out.contains("https://h/atompub/alice/posts"));
-        assert!(out.contains("type=entry"));
-        assert!(out.contains("image/webp"));
-        assert!(out.contains("app:categories"));
-        assert!(out.contains("fixed=\"no\""));
+        let posts = collection_xml(&out, "https://h/atompub/alice/posts");
+        let media = collection_xml(&out, "https://h/atompub/alice/media");
+
+        assert_eq!(
+            accept_values(posts),
+            vec!["application/atom+xml;type=entry"]
+        );
+        assert_eq!(accept_values(media), vec!["*/*"]);
+        assert!(!media.contains("image/"), "media collection: {media}");
+        assert!(posts.contains("app:categories"));
+        assert!(posts.contains("fixed=\"no\""));
     }
 
     #[test]

@@ -463,21 +463,25 @@
       (should (null (cdr (assq 'published fields))))
       (should (equal (cdr (assq 'content-type fields)) "text/org")))))
 
-(ert-deftest jaunder-media-content-type-maps-extensions ()
-  (should (equal (jaunder--media-content-type "a.png") "image/png"))
-  (should (equal (jaunder--media-content-type "a.jpg") "image/jpeg"))
-  (should (equal (jaunder--media-content-type "a.jpeg") "image/jpeg"))
-  (should (equal (jaunder--media-content-type "a.gif") "image/gif"))
-  (should (equal (jaunder--media-content-type "a.webp") "image/webp"))
-  (should (equal (jaunder--media-content-type "a.svg") "image/svg+xml")))
-
-(ert-deftest jaunder-media-content-type-is-case-insensitive ()
-  (should (equal (jaunder--media-content-type "IMG.PNG") "image/png"))
-  (should (equal (jaunder--media-content-type "p.JPEG") "image/jpeg")))
-
-(ert-deftest jaunder-media-content-type-non-image-is-nil ()
-  (should (null (jaunder--media-content-type "notes.txt")))
-  (should (null (jaunder--media-content-type "noext"))))
+(ert-deftest jaunder-media-content-type-is-deterministic ()
+  (dolist (case '(("a.jpg" . "image/jpeg")
+                  ("a.jpeg" . "image/jpeg")
+                  ("a.png" . "image/png")
+                  ("a.gif" . "image/gif")
+                  ("a.webp" . "image/webp")
+                  ("a.svg" . "image/svg+xml")
+                  ("a.mp3" . "audio/mpeg")
+                  ("a.ogg" . "audio/ogg")
+                  ("a.oga" . "audio/ogg")
+                  ("a.flac" . "audio/flac")
+                  ("a.wav" . "audio/wav")
+                  ("a.mp4" . "video/mp4")
+                  ("a.webm" . "video/webm")
+                  ("a.pdf" . "application/pdf")
+                  ("A.PDF" . "application/pdf")
+                  ("a.unknown" . "application/octet-stream")
+                  ("extensionless" . "application/octet-stream")))
+    (should (equal (jaunder--media-content-type (car case)) (cdr case)))))
 
 (defun jaunder-test--collect (org dir)
   "Collect media links from ORG with `default-directory' DIR."
@@ -500,9 +504,9 @@
     (should (equal (mapcar (lambda (r) (plist-get r :content-type)) rs)
                    '("image/png" "image/jpeg" "image/gif")))))
 
-(ert-deftest jaunder-media-collect-excludes-nonqualifying ()
-  ;; header-region link (in the stripped #+DESCRIPTION block), absolute http,
-  ;; bare fuzzy link, non-image file link, and links inside src/example blocks.
+(ert-deftest jaunder-media-collects-local-files-and-excludes-non-local-links ()
+  ;; Header-region, absolute HTTP, fuzzy, and block-contained links are excluded;
+  ;; an arbitrary body-local file remains a candidate.
   (let ((rs (jaunder-test--collect
              (concat "#+DESCRIPTION: [[file:cover.png]]\n"
                      "\n"
@@ -512,25 +516,56 @@
                      "#+begin_src org\n[[file:code.png]]\n#+end_src\n"
                      "#+begin_example\n[[file:ex.png]]\n#+end_example\n")
              "/d/")))
-    (should (null rs))))
+    (should (equal rs
+                   '((:raw-link "file:notes.txt"
+                                :content-type "application/octet-stream"
+                                :path "/d/notes.txt"))))))
 
-(ert-deftest jaunder-media-preflight-errors-on-missing-listing-all ()
-  (let* ((d (make-temp-file "jt-preflight-" t))
-         (present (expand-file-name "a.png" d)))
+(ert-deftest jaunder-media-collect-uses-resolved-path-for-content-type ()
+  (cl-letf (((symbol-function 'jaunder--org-body-links)
+             (lambda ()
+               '((:type "file" :path "opaque" :raw-link "file:opaque"
+                        :file "/resolved/document.pdf")))))
+           (should
+            (equal (jaunder--collect-media-links)
+                   '((:raw-link "file:opaque"
+                                :content-type "application/pdf"
+                                :path "/resolved/document.pdf"))))))
+
+(ert-deftest jaunder-localize-media-aggregates-preflight-failures-before-upload ()
+  (let* ((dir (make-temp-file "jt-preflight-" t))
+         (missing (expand-file-name "missing.pdf" dir))
+         (directory (expand-file-name "directory.pdf" dir))
+         (unreadable (expand-file-name "unreadable.pdf" dir))
+         (real-file-readable-p (symbol-function 'file-readable-p))
+         (upload-calls 0))
     (unwind-protect
         (progn
-          (with-temp-file present (insert "x"))
-          (should-not (jaunder--media-preflight (list (list :path present))))
-          (let ((err (should-error
-                      (jaunder--media-preflight
-                       (list (list :path (expand-file-name "m1.png" d))
-                             (list :path present)
-                             (list :path (expand-file-name "m2.png" d))))
-                      :type 'error)))
-            (should (string-match-p "m1.png" (error-message-string err)))
-            (should (string-match-p "m2.png" (error-message-string err)))
-            (should-not (string-match-p "a.png" (error-message-string err)))))
-      (delete-directory d t))))
+          (make-directory directory)
+          (with-temp-file unreadable (insert "PDF"))
+          (cl-letf (((symbol-function 'file-readable-p)
+                     (lambda (path)
+                       (and (not (equal path unreadable))
+                            (funcall real-file-readable-p path))))
+                    ((symbol-function 'jaunder--upload-media)
+                     (lambda (&rest _)
+                       (setq upload-calls (1+ upload-calls)))))
+                   (with-temp-buffer
+                     (insert (format "#+TITLE: T\n\n[[file:%s]] [[file:%s]] [[file:%s]]\n"
+                                     missing directory unreadable))
+                     (org-mode)
+                     (let* ((body (jaunder-entry-body (jaunder--org->atom)))
+                            (err (should-error (jaunder--localize-media body)
+                                               :type 'error))
+                            (message (error-message-string err)))
+                       (should
+                        (string-prefix-p
+                         "jaunder: media file(s) missing, unreadable, or not regular: "
+                         message))
+                       (dolist (path (list missing directory unreadable))
+                         (should (string-match-p (regexp-quote path) message)))
+                       (should (= upload-calls 0))))))
+      (delete-directory dir t))))
 
 (ert-deftest jaunder-media-substitute-single-and-desc ()
   (should (equal (jaunder--substitute-media
@@ -554,8 +589,8 @@
 
 (ert-deftest jaunder-media-substitute-no-links-is-noop ()
   (should (equal (jaunder--substitute-media
-                  "plain [[https://x/y.png]] and [[file:notes.txt]] only" nil)
-                 "plain [[https://x/y.png]] and [[file:notes.txt]] only")))
+                  "plain [[https://x/y.png]] and [[fuzzy-target]] only" nil)
+                 "plain [[https://x/y.png]] and [[fuzzy-target]] only")))
 
 (ert-deftest jaunder-http-request-passes-extra-headers ()
   (let (captured)
@@ -588,17 +623,17 @@
            (let ((jaunder--active-blog '(:base-url "http://x" :username "alice")))
              (should-error (jaunder--upload-media "/tmp/x.png" "image/png") :type 'error))))
 
-(ert-deftest jaunder-media-link-p-qualifies-file-and-attachment ()
-  ;; file:/attachment: with an image extension qualify; http, a non-image file:,
-  ;; and a bare fuzzy link do not.  Operates on neutral link records — no org.
+(ert-deftest jaunder-media-link-p-qualifies-file-and-attachment-types ()
+  ;; Local-path link type is the eligibility boundary; media type and filesystem
+  ;; state are handled after resolution.
   (should (equal
-           (mapcar (lambda (r) (and (jaunder--media-link-p r) t))
-                   '((:type "file" :path "a.png")
-                     (:type "attachment" :path "b.gif")
+           (mapcar #'jaunder--media-link-p
+                   '((:type "file" :path "document.pdf")
+                     (:type "attachment" :path "recording.flac")
                      (:type "https" :path "//x/c.png")
-                     (:type "file" :path "d.txt")
+                     (:type "file" :path "extensionless")
                      (:type "fuzzy" :path "e.png")))
-           '(t t nil nil nil))))
+           '(t t nil t nil))))
 
 ;;; org link primitives (jaunder-org)
 
@@ -638,31 +673,61 @@
             '("http://s/a" "http://s/b"))
            "see [[http://s/a][pic]] and [[https://x/keep]] and [[http://s/b]]")))
 
-(ert-deftest jaunder-localize-media-uploads-each-file-once ()
-  ;; Two links to the same file upload once (dedup cache); both rewrite to the
-  ;; harvested URL; the authoring buffer is never modified.
-  (let* ((d (make-temp-file "jt-localize-" t))
-         (img (expand-file-name "x.png" d))
-         (calls nil))
+(ert-deftest jaunder-localize-media-handles-files-attachments-and-deduplication ()
+  ;; Exercise the complete pure localization boundary: resolved paths determine
+  ;; MIME, repeated files upload once, descriptions survive, and source stays local.
+  (let* ((dir (make-temp-file "jt-localize-" t))
+         (attach-dir (expand-file-name "attachments" dir))
+         (pdf (expand-file-name "document.pdf" dir))
+         (flac (expand-file-name "recording.flac" attach-dir))
+         (jaunder-warn-untracked-media nil)
+         calls)
     (unwind-protect
         (progn
-          (with-temp-file img (insert "x"))
+          (make-directory attach-dir)
+          (with-temp-file pdf (insert "PDF"))
+          (with-temp-file flac (insert "FLAC"))
           (cl-letf (((symbol-function 'jaunder--upload-media)
-                     (lambda (path _ct) (push path calls) "https://h/m/x.png")))
+                     (lambda (path content-type)
+                       (push (list path content-type) calls)
+                       (if (equal path pdf)
+                           "https://h/media/document.pdf"
+                         "https://h/media/recording.flac"))))
                    (with-temp-buffer
-                     (insert (format "#+TITLE: T\n\n[[file:%s]] and [[file:%s]]\n" img img))
+                     (setq default-directory dir)
                      (org-mode)
+                     (insert
+                      (format
+                       (concat "#+TITLE: T\n\n"
+                               "[[file:document.pdf][download]] and "
+                               "[[file:document.pdf][again]]\n"
+                               "* Audio\n:PROPERTIES:\n:DIR: %s\n:END:\n\n"
+                               "[[attachment:recording.flac][listen]]\n")
+                       attach-dir))
                      (let* ((body (jaunder-entry-body (jaunder--org->atom)))
                             (before (buffer-string))
                             (out (jaunder--localize-media body)))
-                       (should (equal calls (list img)))
-                       (should (equal out
-                                      "[[https://h/m/x.png]] and [[https://h/m/x.png]]"))
+                       (should (= (length calls) 2))
+                       (should (member (list pdf "application/pdf") calls))
+                       (should (member (list flac "audio/flac") calls))
+                       (should
+                        (string-match-p
+                         (regexp-quote "[[https://h/media/document.pdf][download]]")
+                         out))
+                       (should
+                        (string-match-p
+                         (regexp-quote "[[https://h/media/document.pdf][again]]")
+                         out))
+                       (should
+                        (string-match-p
+                         (regexp-quote "[[https://h/media/recording.flac][listen]]")
+                         out))
+                       (should-not (string-match-p "file:document\\.pdf" out))
+                       (should-not (string-match-p "attachment:recording\\.flac" out))
                        (should (equal (buffer-string) before))))))
-      (delete-directory d t))))
+      (delete-directory dir t))))
 
-(ert-deftest jaunder-localize-media-no-images-is-noop ()
-  ;; A body with no qualifying local images returns unchanged, uploading nothing.
+(ert-deftest jaunder-localize-media-no-candidates-is-noop ()
   (let (called)
     (cl-letf (((symbol-function 'jaunder--upload-media)
                (lambda (&rest _) (setq called t) "u")))

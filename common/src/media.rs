@@ -804,34 +804,10 @@ impl ContentType {
         Self(content_type.into())
     }
 
-    /// Atom entry payload media type accepted by the `AtomPub` posts collection.
-    #[must_use]
-    pub fn atom_entry() -> Self {
-        Self::from_trusted("application/atom+xml;type=entry")
-    }
-
     /// PNG image media type.
     #[must_use]
     pub fn image_png() -> Self {
         Self::from_trusted("image/png")
-    }
-
-    /// JPEG image media type.
-    #[must_use]
-    pub fn image_jpeg() -> Self {
-        Self::from_trusted("image/jpeg")
-    }
-
-    /// GIF image media type.
-    #[must_use]
-    pub fn image_gif() -> Self {
-        Self::from_trusted("image/gif")
-    }
-
-    /// WebP image media type.
-    #[must_use]
-    pub fn image_webp() -> Self {
-        Self::from_trusted("image/webp")
     }
 }
 
