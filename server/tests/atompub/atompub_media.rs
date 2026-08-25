@@ -75,7 +75,7 @@ async fn upload_accepts_pdf_content_type(#[case] backend: Backend) {
 
     let response = app
         .oneshot(
-            atompub(&session, "POST", "media")
+            atompub(&session, Method::POST, "media")
                 .header(header::CONTENT_TYPE, "application/pdf")
                 .header("slug", "document.pdf")
                 .body(Body::from("PDF-BYTES"))
