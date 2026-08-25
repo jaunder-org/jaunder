@@ -8,8 +8,8 @@ use chrono::{DateTime, Utc};
 use thiserror::Error;
 
 use crate::{
-    CreatePostError, CreatePostInput, PostFormat, PostRecord, PostStorage, UpdatePostError,
-    UpdatePostInput,
+    CreatePostError, CreatePostInput, PostFormat, PostRecord, PostStorage, PublishUpdate,
+    UpdatePostError, UpdatePostInput,
 };
 use common::ids::{PostId, UserId};
 use common::post_body::PostBody;
@@ -172,31 +172,6 @@ impl From<PerformUpdateError> for host::error::InternalError {
     }
 }
 
-/// What an update does to a post's publication state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PublishUpdate {
-    /// Clear `published_at` back to NULL (draft / unschedule).
-    Unpublish,
-    /// Publish. `at = Some(t)` sets `published_at = t` (future = scheduled,
-    /// past = backdated-live). `at = None` keeps an existing timestamp or
-    /// stamps `now` for a previously-unpublished post.
-    Publish { at: Option<DateTime<Utc>> },
-}
-
-impl PublishUpdate {
-    /// Splits the publication verb into the `(unpublish, explicit_published_at)`
-    /// pair the dialect `update_post` SQL binds. `unpublish` clears the
-    /// timestamp; `explicit_published_at` is an exact instant to store; with
-    /// both inert the SQL keeps any existing timestamp (or stamps `now`).
-    #[must_use]
-    fn into_inputs(self) -> (bool, Option<DateTime<Utc>>) {
-        match self {
-            Self::Unpublish => (true, None),
-            Self::Publish { at } => (false, at),
-        }
-    }
-}
-
 /// Raw, front-end-supplied inputs to [`perform_post_update`].
 ///
 pub struct PostUpdate<'a> {
@@ -263,15 +238,13 @@ pub async fn perform_post_update(
     };
 
     let rendered = RenderOutput::render(&body, &format);
-    let (unpublish, explicit_published_at) = publish.into_inputs();
     let input = UpdatePostInput {
         title,
         slug,
         body,
         format,
         rendered,
-        unpublish,
-        explicit_published_at,
+        publish,
         summary,
         audiences,
     };

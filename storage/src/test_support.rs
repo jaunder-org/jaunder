@@ -16,7 +16,8 @@
 
 use crate::media::MediaRecord;
 use crate::posts::{
-    CreatePostError, CreatePostInput, INSERT_POST_TAG, UPSERT_TAG_RETURNING_ID, UpdatePostInput,
+    CreatePostError, CreatePostInput, INSERT_POST_TAG, PublishUpdate, UPSERT_TAG_RETURNING_ID,
+    UpdatePostInput,
 };
 use crate::sql::quote_identifier;
 use crate::{AppState, DbConnectOptions, PostFormat, PostRecord, resolved_postgres_options};
@@ -1311,15 +1312,15 @@ impl SeedRawPost {
 }
 
 /// Builder for an [`UpdatePostInput`] — the edit-side sibling of [`SeedRawPost`], with the
-/// same defaults-plus-overrides shape. `UpdatePostInput` has nine fields and an update test
-/// typically varies one or two; this builder defaults the rest so a test overrides only
-/// what it means.
+/// same defaults-plus-overrides shape. An update test typically varies one or two fields;
+/// this builder defaults the rest so a test overrides only what it means.
 ///
 /// Defaults: title `"Updated Title"`, body `"updated body"`, Markdown, no summary, `[Public]`,
-/// and **no change to publication** (`unpublish: false`, `explicit_published_at: None`) — so
-/// a test that unpublishes says so with [`unpublish`][Self::unpublish]. The slug is the one
-/// required argument because an update's slug is what collides (or does not) with a sibling
-/// post, so no default could be right.
+/// and [`PublishUpdate::Publish`] without an explicit timestamp, which keeps an existing
+/// publication timestamp or stamps `now` for a previously-unpublished Post. A test that
+/// unpublishes says so with [`unpublish`][Self::unpublish]. The slug is the one required
+/// argument because an update's slug is what collides (or does not) with a sibling Post, so
+/// no default could be right.
 ///
 /// `rendered` has no setter: [`build`][Self::build] derives it from `body`/`format` with the
 /// production [`RenderOutput::render`], exactly as `SeedRawPost` does, so no call site
@@ -1334,8 +1335,7 @@ pub struct UpdateRawPost {
     slug: Slug,
     body: PostBody,
     format: PostFormat,
-    unpublish: bool,
-    explicit_published_at: Option<DateTime<Utc>>,
+    publish: PublishUpdate,
     summary: Option<PostSummary>,
     audiences: Vec<AudienceTarget>,
 }
@@ -1349,8 +1349,7 @@ impl UpdateRawPost {
             slug: parse_slug(slug.as_ref()),
             body: parse_post_body("updated body"),
             format: PostFormat::Markdown,
-            unpublish: false,
-            explicit_published_at: None,
+            publish: PublishUpdate::Publish { at: None },
             summary: None,
             audiences: vec![AudienceTarget::Public],
         }
@@ -1380,14 +1379,9 @@ impl UpdateRawPost {
     /// Clear `published_at` back to NULL (draft / unschedule).
     #[must_use]
     pub fn unpublish(mut self) -> Self {
-        self.unpublish = true;
+        self.publish = PublishUpdate::Unpublish;
         self
     }
-
-    // No `published_at` setter: no update test backdates or schedules one, and a builder
-    // method nothing calls is a guess about a future caller. `explicit_published_at` stays
-    // in the built input (the field is part of `UpdatePostInput`), defaulted to `None`;
-    // add the setter alongside the first test that needs it.
 
     /// Set — or, with `None`, clear — the summary/excerpt. Takes `impl Into<Option<_>>` so a
     /// test that only ever sets one reads like [`SeedRawPost::summary`], while the
@@ -1415,8 +1409,7 @@ impl UpdateRawPost {
             body: self.body,
             format: self.format,
             rendered,
-            unpublish: self.unpublish,
-            explicit_published_at: self.explicit_published_at,
+            publish: self.publish,
             summary: self.summary,
             audiences: self.audiences,
         }
