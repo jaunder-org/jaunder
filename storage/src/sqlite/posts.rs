@@ -6,7 +6,10 @@ use crate::posts::{
     DELETE_POST_TAG_BY_SLUG, INSERT_POST_TAG, PostOwnershipRow, PostTagRow, SELECT_POST_TAGS,
     UPSERT_TAG_RETURNING_ID, post_tag_diff, post_tags_from_rows,
 };
-use crate::{PostDialect, PostRecord, PostStore, TaggingError, UpdatePostError, UpdatePostInput};
+use crate::{
+    PostDialect, PostRecord, PostStore, PublishUpdate, TaggingError, UpdatePostError,
+    UpdatePostInput,
+};
 use common::ids::{PostId, TagId, UserId};
 use common::tag::TagLabel;
 
@@ -103,6 +106,10 @@ impl PostDialect for Sqlite {
             .bind(post_id)
             .execute(&mut *conn)
             .await?;
+            let (unpublish, explicit_published_at) = match input.publish {
+                PublishUpdate::Unpublish => (true, None),
+                PublishUpdate::Publish { at } => (false, at),
+            };
 
             let row = sqlx::query_as::<_, PostRecord>(
                 "UPDATE posts
@@ -135,9 +142,9 @@ impl PostDialect for Sqlite {
             // $6 unpublish, $7/$8 explicit_published_at (bound twice: NULL-test
             // then value), $9 now (COALESCE fallback), $10 now (updated_at),
             // $11 summary.
-            .bind(input.unpublish)
-            .bind(input.explicit_published_at)
-            .bind(input.explicit_published_at)
+            .bind(unpublish)
+            .bind(explicit_published_at)
+            .bind(explicit_published_at)
             .bind(now)
             .bind(now)
             // `Option::as_ref` → `Option<&PostSummary>` (a typed newtype bind via the

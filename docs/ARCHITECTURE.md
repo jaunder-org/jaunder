@@ -442,10 +442,10 @@ orthogonal predicates on the same reads.** _Time_: an active Post is draft
 (`published_at` NULL), scheduled (future), or live (past); every public read
 gates `published_at <= now` with `now` an explicit parameter, the feed worker's
 `go_live_pass` (`server/src/feed/worker.rs`) makes future-dated go-live
-restart-durable for cached feeds, and publish is an explicit
-`PublishUpdate { Unpublish, Publish { at } }` so scheduling, backdating, and
-pullback to draft round-trip
-([ADR-0027](adr/0027-scheduled-publishing-time-gated-visibility.md)).
+restart-durable for cached feeds, and the posts storage contract carries publish
+as an explicit `PublishUpdate { Unpublish, Publish { at } }` to each dialect's
+SQL-binding boundary, so scheduling, backdating, and pullback to draft
+round-trip ([ADR-0027](adr/0027-scheduled-publishing-time-gated-visibility.md)).
 _Audience_: posts target audiences
 (`AudienceTarget::{Public, Private, Subscribers, Named}`) stored as
 `post_audiences` rows; a viewer is a `ViewerIdentity` (channel identity or

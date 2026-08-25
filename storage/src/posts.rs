@@ -293,6 +293,17 @@ pub struct CreatePostInput {
     pub idempotency_key: Option<String>,
 }
 
+/// What an update does to a Post's publication state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublishUpdate {
+    /// Clear `published_at` back to NULL (draft / unschedule).
+    Unpublish,
+    /// Publish. `at = Some(t)` sets `published_at = t` (future = scheduled,
+    /// past = backdated-live). `at = None` keeps an existing timestamp or
+    /// stamps `now` for a previously-unpublished Post.
+    Publish { at: Option<DateTime<Utc>> },
+}
+
 /// Input for updating an existing post.
 #[derive(Clone)]
 pub struct UpdatePostInput {
@@ -305,13 +316,8 @@ pub struct UpdatePostInput {
     /// An edit can remove a reference, so the set must always be the one this HTML
     /// implies; deriving it is the only way to build one (#711).
     pub rendered: RenderOutput,
-    /// If `true`, clear `published_at` back to NULL (draft / unschedule). Takes
-    /// precedence over `explicit_published_at`.
-    pub unpublish: bool,
-    /// An exact publication instant to store (future = scheduled, past =
-    /// backdated). `None` keeps any existing timestamp, or stamps `now` for a
-    /// previously-unpublished post. Ignored when `unpublish` is `true`.
-    pub explicit_published_at: Option<DateTime<Utc>>,
+    /// What this update does to the Post's publication state.
+    pub publish: PublishUpdate,
     /// Optional summary/excerpt of the post.
     pub summary: Option<PostSummary>,
     /// Audience targeting for the post. On update the existing

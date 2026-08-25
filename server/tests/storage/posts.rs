@@ -157,9 +157,9 @@ fn update_input<'a>(
     }
 }
 
-// Issue #70: the storage update's publication verb is an explicit
-// `PublishUpdate`, not a bool. One common test, both backends, with an injected
-// `now` pinning the boundary; locks the four publish-timestamp cases.
+// Issue #70/#747: the storage update's publication verb is an explicit
+// `PublishUpdate`, not a bool. One common test across both backends locks the
+// five publish-timestamp cases.
 #[apply(backends)]
 #[tokio::test]
 async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
@@ -197,6 +197,26 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
         "explicit future timestamp is stored"
     );
 
+    // Publish { at: Some(past) } stores the exact backdated instant.
+    let past = now - Duration::days(1);
+    let backdated = perform_post_update(
+        &*state.posts,
+        update_input(
+            draft,
+            alice,
+            &title,
+            &p,
+            PublishUpdate::Publish { at: Some(past) },
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        backdated.published_at,
+        Some(past),
+        "explicit past timestamp is stored"
+    );
+
     // Publish { at: None } on an already-published post keeps the existing timestamp.
     let rec2 = perform_post_update(
         &*state.posts,
@@ -212,7 +232,7 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     .unwrap();
     assert_eq!(
         rec2.published_at,
-        Some(future),
+        Some(past),
         "publish-without-timestamp keeps existing"
     );
 
