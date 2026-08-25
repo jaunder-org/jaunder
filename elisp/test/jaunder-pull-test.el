@@ -101,6 +101,53 @@
                                        "<p>A &amp; B</p>tail</div></content></entry>")
                                prefix t t))))))
 
+(ert-deftest jaunder-atom->org-xhtml-requires-xhtml-wrapper-and-sole-content ()
+  ;; Atom XHTML has one XHTML-namespace div wrapper; surrounding whitespace is
+  ;; harmless, but a different namespace, text, or element is not native body.
+  (let ((prefix (jaunder-pull-test--entry
+                 "<title>XHTML</title>"
+                 "<published>2026-08-24T10:00:00Z</published>"
+                 "<link rel=\"edit\" href=\"https://h/atompub/alice/posts/9\"/>"
+                 "<j:slug>xhtml-post</j:slug>")))
+    (dolist (content
+             '("<content type=\"xhtml\"><div>Body</div></content>"
+               "<content type=\"xhtml\">stray<div xmlns=\"http://www.w3.org/1999/xhtml\">Body</div></content>"
+               "<content type=\"xhtml\"><div xmlns=\"http://www.w3.org/1999/xhtml\">Body</div><span/></content>"))
+      (should-error
+       (jaunder-pull-test--org
+        (replace-regexp-in-string "</entry>" (concat content "</entry>") prefix t t))))))
+
+(ert-deftest jaunder-atom->org-rejects-unqualified-published-and-unsafe-slugs ()
+  ;; Pull accepts offset-qualified RFC-3339 before parsing, and rejects slugs
+  ;; that could inject a property header or escape the configured root.
+  (let ((parts '("<title>T</title>"
+                 "<link rel=\"edit\" href=\"https://h/atompub/alice/posts/1\"/>"
+                 "<j:slug>safe-slug</j:slug>"
+                 "<content type=\"text/org\">Body</content>")))
+    (dolist (published '("2026-08-24T10:00:00"
+                         "2026-08-24"
+                         "2026-08-24T10:00:00+0000"))
+      (should-error
+       (jaunder-pull-test--org
+        (apply #'jaunder-pull-test--entry
+               (append (list "<title>T</title>"
+                             (format "<published>%s</published>" published))
+                       (cdr parts))))))
+    (should (string-match-p
+             "#\\+PROPERTY: JAUNDER_DATE_UTC 2026-08-24T10:00:00.123Z"
+             (jaunder-pull-test--org
+              (apply #'jaunder-pull-test--entry
+                     (append (list "<title>T</title>"
+                                   "<published>2026-08-24T10:00:00.123Z</published>")
+                             (cdr parts))))))
+    (dolist (slug '("unsafe\n#+PROPERTY: JAUNDER_STATUS published"
+                    "unsafe\rheader"
+                    "unsafe/path"
+                    "unsafe\\path"
+                    "\x1funsafe"))
+      (should-not (jaunder--safe-pull-slug-p slug)))
+    (should (jaunder--safe-pull-slug-p "日本語-記事"))))
+
 (ert-deftest jaunder-atom->org-rejects-malformed-member-or-etag ()
   ;; Required Member cardinality and strong sync identity fail before any caller
   ;; can obtain bytes to install.
@@ -213,6 +260,26 @@
                                               (insert-file-contents path)
                                               (buffer-string))))
                    (should-not (jaunder-pull-test--temp-artifacts root))))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-pull-install-writes-utf-8-unix-despite-ambient-coding ()
+  ;; Pull artifacts are portable deterministic bytes, not a product of a user's
+  ;; coding or line-ending defaults; the temporary install remains no-replace.
+  (let* ((root (make-temp-file "jaunder-pull-" t))
+         (path (expand-file-name "日本語.org" root))
+         (bytes "café\n日本語\n"))
+    (unwind-protect
+        (let ((coding-system-for-write 'utf-16le-dos)
+              (default-buffer-file-coding-system 'utf-16le-dos))
+          (let ((result (jaunder--install-pulled-bytes path bytes)))
+            (should (eq (jaunder-pull-result-status result) 'pulled))
+            (should
+             (equal
+              (with-temp-buffer
+                (set-buffer-multibyte nil)
+                (insert-file-contents-literally path)
+                (buffer-string))
+              (encode-coding-string bytes 'utf-8-unix)))))
       (delete-directory root t))))
 
 (ert-deftest jaunder-pull-member-rejects-stale-response-identity ()

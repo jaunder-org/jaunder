@@ -24,6 +24,7 @@
 
 (require 'cl-lib)
 (require 'dom)
+(require 'xml)
 (require 'jaunder-entry)
 
 (defconst jaunder--atom-ns "http://www.w3.org/2005/Atom"
@@ -67,10 +68,17 @@ here."
       (dom-print (append (list 'entry attrs) (nreverse children)))
       (buffer-string))))
 
+(defun jaunder--atom-local-name (tag)
+  "Return TAG's local XML name as a symbol."
+  (intern (car (last (split-string (symbol-name tag) ":")))))
+
 (defun jaunder--atom-direct-elements (node tag)
-  "Return NODE's direct child elements named TAG, in document order."
-  (cl-remove-if-not (lambda (child) (and (listp child) (eq (car child) tag)))
-                    (dom-children node)))
+  "Return NODE's direct child elements with local name TAG, in document order."
+  (cl-remove-if-not
+   (lambda (child)
+     (and (listp child)
+          (eq (jaunder--atom-local-name (car child)) tag)))
+   (dom-children node)))
 
 (defun jaunder--harvest-response-fields (xml)
   "Harvest compatible metadata fields from an AtomPub response entry XML.
@@ -82,12 +90,11 @@ keys retain their first direct-child values.  The ordered plural `titles',
 projection.  `app:draft' values are collected only from direct `app:control'
 children and their direct `app:draft' children; edit URIs come only from direct
 `link rel=\"edit\"' children.  No Member-required cardinality is enforced here,
-so media and publish responses remain valid.
-`libxml-parse-xml-region' folds namespaces to local element symbols, so Atom,
-app, and Jaunder extension elements are selected by their local names."
+so media and publish responses remain valid.  The parser retains namespace
+declarations; local-name matching keeps selection prefix-independent."
   (let* ((dom (with-temp-buffer
                 (insert xml)
-                (libxml-parse-xml-region (point-min) (point-max))))
+                (car (xml-parse-region (point-min) (point-max)))))
          (titles (jaunder--atom-direct-elements dom 'title))
          (categories (jaunder--atom-direct-elements dom 'category))
          (summaries (jaunder--atom-direct-elements dom 'summary))

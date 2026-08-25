@@ -51,13 +51,35 @@
       (when (and (stringp path) (string-match "/\\([0-9]+\\)\\'" path))
         (match-string 1 path)))))
 
+(defconst jaunder--pull-rfc-3339-offset-regexp
+  "\\`[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}T[0-9]\\{2\\}:[0-9]\\{2\\}:[0-9]\\{2\\}\\(?:\\.[0-9]+\\)?\\(?:Z\\|[+-][0-9]\\{2\\}:[0-9]\\{2\\}\\)\\'"
+  "RFC-3339 timestamp shape with an explicit UTC offset.")
+
+(defconst jaunder--pull-xhtml-ns "http://www.w3.org/1999/xhtml"
+  "Namespace required on an Atom XHTML content wrapper.")
+
+(defun jaunder--pull-control-character-p (character)
+  "Return non-nil when CHARACTER is a Unicode control character."
+  (eq (get-char-code-property character 'general-category) 'Cc))
+
+(defun jaunder--pull-rfc-3339-time (published)
+  "Parse offset-qualified RFC-3339 PUBLISHED text or signal a pull error."
+  (unless (and (stringp published)
+               (string-match-p jaunder--pull-rfc-3339-offset-regexp published))
+    (jaunder--pull-error "Member published value must be offset-qualified RFC-3339"))
+  (condition-case nil
+      (date-to-time published)
+    (error (jaunder--pull-error
+            "Member published value must be RFC-3339"))))
+
 (defun jaunder--safe-pull-slug-p (slug)
-  "Return non-nil when SLUG names one direct child path component."
+  "Return non-nil when SLUG names one safe direct-child path component."
   (and (stringp slug)
        (not (string-empty-p slug))
        (not (member slug '("." "..")))
        (equal slug (file-name-nondirectory slug))
-       (not (string-match-p "[\\\\/]" slug))))
+       (not (string-match-p "[\\\\/]" slug))
+       (not (cl-some #'jaunder--pull-control-character-p slug))))
 
 (defun jaunder--pull-content-format (content)
   "Return (FORMAT . KIND) for CONTENT or signal on its wire type.
@@ -79,15 +101,31 @@ KIND is `text' or `xhtml'."
       (dom-print node)
       (buffer-string))))
 
+(defun jaunder--pull-xhtml-wrapper (content)
+  "Return CONTENT's sole XHTML div after validating its direct children."
+  (let* ((children (dom-children content))
+         (divs (jaunder--atom-direct-elements content 'div)))
+    (unless (and (= (length divs) 1)
+                 (cl-every
+                  (lambda (child)
+                    (or (eq child (car divs))
+                        (and (stringp child)
+                             (string-match-p "\\`[ \t\r\n]*\\'" child))))
+                  children))
+      (jaunder--pull-error
+       "xhtml content must contain one div and only surrounding XML whitespace"))
+    (let ((div (car divs)))
+      (unless (equal (dom-attr div 'xmlns) jaunder--pull-xhtml-ns)
+        (jaunder--pull-error "xhtml div wrapper must use the XHTML namespace"))
+      div)))
+
 (defun jaunder--pull-content-body (content kind)
   "Return native source body from CONTENT projected according to KIND."
   (pcase kind
     ('text (or (dom-text content) ""))
     ('xhtml
-     (let ((divs (jaunder--atom-direct-elements content 'div)))
-       (unless (= (length divs) 1)
-         (jaunder--pull-error "xhtml content must have exactly one div wrapper"))
-       (mapconcat #'jaunder--serialize-xhtml-node (dom-children (car divs)) "")))
+     (mapconcat #'jaunder--serialize-xhtml-node
+                (dom-children (jaunder--pull-xhtml-wrapper content)) ""))
     (_ (jaunder--pull-error "unknown content projection"))))
 
 (defun jaunder--pull-header-lines (name value)
@@ -133,10 +171,7 @@ render the local Org date.  This function performs no network or filesystem I/O.
         (setq status "draft")
       (unless published
         (jaunder--pull-error "non-draft Member must have published"))
-      (let ((published-time (condition-case nil
-                                (date-to-time published)
-                              (error (jaunder--pull-error
-                                      "Member published value must be RFC-3339")))))
+      (let ((published-time (jaunder--pull-rfc-3339-time published)))
         (setq status (if (time-less-p captured-at published-time)
                          "scheduled"
                        "published")
@@ -205,7 +240,8 @@ creation, which is atomic and fails if another directory entry won the race."
             (setq temporary
                   (make-temp-file
                    (expand-file-name ".jaunder-pull-" (file-name-directory path))))
-            (write-region bytes nil temporary nil 'silent)
+            (let ((coding-system-for-write 'utf-8-unix))
+              (write-region bytes nil temporary nil 'silent))
             (condition-case err
                 (progn
                   (add-name-to-file temporary path)
