@@ -1,8 +1,9 @@
 use axum::{
     body::Body,
-    http::{Request, StatusCode, header},
+    http::{Method, Request, StatusCode, header},
 };
 use common::tag::TagLabel;
+use common::test_support::{parse_root_relative_url, parse_username};
 use rstest::*;
 use rstest_reuse::*;
 use std::error::Error;
@@ -52,10 +53,11 @@ async fn service_document_returns_200_with_app_password(#[case] backend: Backend
         .await
         .unwrap();
     let app = make_app(&state, &base);
+    let uri = parse_root_relative_url("/atompub/service");
 
     let response = app
         .oneshot(
-            atompub_at(&session, "GET", "/atompub/service")
+            atompub_at(&session, Method::GET, &uri)
                 .body(Body::empty())
                 .expect("failed to build atompub GET request"),
         )
@@ -95,10 +97,11 @@ async fn explicit_basic_identity_wins_and_expires_simultaneous_cookie(#[case] ba
     let alice = create_user_and_session(&state).await;
     let bob = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
+    let uri = parse_root_relative_url("/atompub/service");
 
     let response = app
         .oneshot(
-            atompub_at(&bob, "GET", "/atompub/service")
+            atompub_at(&bob, Method::GET, &uri)
                 .header(header::COOKIE, alice.cookie())
                 .body(Body::empty())
                 .expect("failed to build atompub GET request"),
@@ -132,10 +135,12 @@ async fn explicit_basic_identity_mismatch_does_not_expire_valid_cookie(#[case] b
     let alice = create_user_and_session(&state).await;
     let bob = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
+    let uri = parse_root_relative_url("/atompub/service");
+    let username = parse_username("mallory");
 
     let response = app
         .oneshot(
-            atompub_authed("GET", "/atompub/service", "mallory", &bob.token)
+            atompub_authed(Method::GET, &uri, &username, &bob.token)
                 .header(header::COOKIE, alice.cookie())
                 .body(Body::empty())
                 .expect("failed to build atompub GET request"),
@@ -153,13 +158,15 @@ async fn service_document_rejects_basic_username_mismatch(#[case] backend: Backe
     let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let app = make_app(&state, &base);
+    let uri = parse_root_relative_url("/atompub/service");
+    let username = parse_username("mallory");
 
     // Correct token, but the Basic username does not match the session's user.
     let response = app
         .oneshot(atompub_xml(
-            "GET",
-            "/atompub/service",
-            "mallory",
+            Method::GET,
+            &uri,
+            &username,
             &session.token,
             None,
         ))
@@ -213,9 +220,10 @@ async fn required_base_url_preserves_storage_error_source() {
 async fn service_document_unconfigured_base_url_keeps_documented_500(#[case] backend: Backend) {
     let TestEnv { state, base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
+    let uri = parse_root_relative_url("/atompub/service");
     let response = make_app(&state, &base)
         .oneshot(
-            atompub_at(&session, "GET", "/atompub/service")
+            atompub_at(&session, Method::GET, &uri)
                 .body(Body::empty())
                 .expect("build request"),
         )
@@ -242,10 +250,11 @@ async fn service_document_identity_storage_error_keeps_500_and_is_not_absence(
         .times(1)
         .return_once(|| Err(sqlx::Error::PoolClosed));
     let state = with_site_config(&state, Arc::new(failing));
+    let uri = parse_root_relative_url("/atompub/service");
 
     let response = make_app(&state, &base)
         .oneshot(
-            atompub_at(&session, "GET", "/atompub/service")
+            atompub_at(&session, Method::GET, &uri)
                 .body(Body::empty())
                 .expect("build request"),
         )

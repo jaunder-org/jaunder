@@ -1,34 +1,38 @@
 use axum::{
     body::Body,
-    http::{Request, header},
+    http::{Method, Request, Uri, header},
 };
+use common::root_relative_url::RootRelativeUrl;
+use common::test_support::parse_root_relative_url;
 use common::token::RawToken;
+use common::username::Username;
 
 use super::session::{SeededSession, basic_header};
 
-/// A `Request::builder()` preloaded with `method`, `uri`, and an
-/// `Authorization: Basic <username:token>` header — the base every authenticated
-/// `AtomPub` request shares. Callers add any extra headers (`If-Match`, `slug`,
-/// `Idempotency-Key`, a content type) and finish with `.body(...)`.
+/// A `Request::builder()` preloaded with a typed `method`, root-relative `uri`,
+/// and an `Authorization: Basic <username:token>` header — the base every
+/// authenticated `AtomPub` request shares. Callers add any extra headers
+/// (`If-Match`, `slug`, `Idempotency-Key`, a content type) and finish with
+/// `.body(...)`.
 pub fn atompub_authed(
-    method: &str,
-    uri: &str,
-    username: &str,
+    method: Method,
+    uri: &RootRelativeUrl,
+    username: &Username,
     token: &RawToken,
 ) -> axum::http::request::Builder {
-    Request::builder()
-        .method(method)
-        .uri(uri)
-        .header(header::AUTHORIZATION, basic_header(username, token))
+    Request::builder().method(method).uri(uri.as_ref()).header(
+        header::AUTHORIZATION,
+        basic_header(username.as_ref(), token),
+    )
 }
 
 /// The dominant `AtomPub` request: Basic auth plus an optional
 /// `application/atom+xml` body. `Some(xml)` sends the entry body (POST/PUT);
 /// `None` sends an empty body (GET/DELETE).
 pub fn atompub_xml(
-    method: &str,
-    uri: &str,
-    username: &str,
+    method: Method,
+    uri: &RootRelativeUrl,
+    username: &Username,
     token: &RawToken,
     body: Option<&str>,
 ) -> Request<Body> {
@@ -43,10 +47,10 @@ pub fn atompub_xml(
 }
 
 /// The full `AtomPub` URI `/atompub/{username}/{suffix}` for `session`'s user — the
-/// one place the per-user prefix is written, so a call site passes only the suffix
-/// after it (e.g. `"posts"`, `"posts/{id}"`, `"media"`).
-fn atompub_uri(session: &SeededSession, suffix: &str) -> String {
-    format!("/atompub/{}/{suffix}", session.username)
+/// one place the per-user prefix is written and parsed, so a call site passes only
+/// the suffix after it (e.g. `"posts"`, `"posts/{id}"`, `"media"`).
+fn atompub_uri(session: &SeededSession, suffix: &str) -> RootRelativeUrl {
+    parse_root_relative_url(&format!("/atompub/{}/{suffix}", session.username))
 }
 
 /// A chainable Basic-authed `Request::builder()` against `session`'s own
@@ -57,7 +61,7 @@ fn atompub_uri(session: &SeededSession, suffix: &str) -> String {
 /// `.body(...)`.
 pub fn atompub(
     session: &SeededSession,
-    method: &str,
+    method: Method,
     suffix: &str,
 ) -> axum::http::request::Builder {
     atompub_authed(
@@ -68,21 +72,35 @@ pub fn atompub(
     )
 }
 
-/// Like [`atompub`] but against a **verbatim** `uri` rather than a per-user suffix —
-/// for a follow-up request to a URI captured from a prior response's `Location`
-/// header (an absolute path). Auth still comes from the `session`, so the username is
-/// not doubled; only the URI is passed through unchanged.
+/// Like [`atompub`] but against a caller-held root-relative `uri` rather than a
+/// per-user suffix. Auth still comes from the `session`, so the username is not
+/// doubled and the request target is not parsed again.
 pub fn atompub_at(
     session: &SeededSession,
-    method: &str,
-    uri: &str,
+    method: Method,
+    uri: &RootRelativeUrl,
 ) -> axum::http::request::Builder {
     atompub_authed(method, uri, &session.username, &session.token)
 }
 
+/// Convert an absolute `AtomPub` response `Location` into its root-relative
+/// path-and-query for a follow-up request.
+///
+/// # Panics
+///
+/// Panics if `location` is not an HTTP URI or has no path-and-query.
+#[must_use]
+pub fn atompub_location(location: &str) -> RootRelativeUrl {
+    let uri = location.parse::<Uri>().expect("valid AtomPub Location URI");
+    let path_and_query = uri
+        .path_and_query()
+        .expect("AtomPub Location has a path and query");
+    parse_root_relative_url(path_and_query.as_str())
+}
+
 /// `GET session`'s `suffix` resource with an empty body — the dominant read request.
 pub fn atompub_get(session: &SeededSession, suffix: &str) -> Request<Body> {
-    atompub(session, "GET", suffix)
+    atompub(session, Method::GET, suffix)
         .body(Body::empty())
         .expect("failed to build atompub GET request")
 }
@@ -92,7 +110,7 @@ pub fn atompub_get(session: &SeededSession, suffix: &str) -> Request<Body> {
 /// two verbs call sites actually use. Private: no caller needs an arbitrary method.
 fn atompub_send_xml(
     session: &SeededSession,
-    method: &str,
+    method: Method,
     suffix: &str,
     xml: &str,
 ) -> Request<Body> {
@@ -104,12 +122,12 @@ fn atompub_send_xml(
 
 /// `POST` an `application/atom+xml` entry to `session`'s `suffix` (create).
 pub fn atompub_post_xml(session: &SeededSession, suffix: &str, xml: &str) -> Request<Body> {
-    atompub_send_xml(session, "POST", suffix, xml)
+    atompub_send_xml(session, Method::POST, suffix, xml)
 }
 
 /// `PUT` an `application/atom+xml` entry to `session`'s `suffix` (replace).
 pub fn atompub_put_xml(session: &SeededSession, suffix: &str, xml: &str) -> Request<Body> {
-    atompub_send_xml(session, "PUT", suffix, xml)
+    atompub_send_xml(session, Method::PUT, suffix, xml)
 }
 
 /// A media upload for `session`'s user: `POST /atompub/{username}/media` with an
@@ -117,7 +135,7 @@ pub fn atompub_put_xml(session: &SeededSession, suffix: &str, xml: &str) -> Requ
 /// The odd cases (a non-`image/png` content type, a slug like `".."`, a foreign
 /// username) compose the chainable [`atompub`] / [`atompub_at`] builders directly.
 pub fn atompub_upload(session: &SeededSession, slug: &str, bytes: &'static [u8]) -> Request<Body> {
-    atompub(session, "POST", "media")
+    atompub(session, Method::POST, "media")
         .header(header::CONTENT_TYPE, "image/png")
         .header("slug", slug)
         .body(Body::from(bytes))
