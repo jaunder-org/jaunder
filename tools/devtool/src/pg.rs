@@ -5,6 +5,7 @@
 //! torn down on every exit path — normal return, panic, or SIGINT/SIGTERM.
 
 use std::io::Write;
+use std::marker::PhantomData;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -21,18 +22,87 @@ const START_ATTEMPTS: usize = 8;
 const BOOTSTRAP_SQL: &str =
     "CREATE ROLE jaunder LOGIN CREATEDB;\nCREATE DATABASE jaunder OWNER jaunder;\n";
 
+/// Marker implemented by the zero-sized roles a generated `PostgreSQL` URL may carry.
+pub(crate) trait PgUrlRole {
+    const USER: &'static str;
+    const DATABASE: &'static str;
+}
+
+/// A generated `PostgreSQL` endpoint carrying its database role in the type.
+///
+/// This is structured host/port data rather than a string-backed domain newtype:
+/// the role supplies the fixed user and database when the environment value is
+/// rendered, so no parser or string-newtype trailer is part of its interface.
+pub(crate) struct PgUrl<Role: PgUrlRole> {
+    host: &'static str,
+    port: u16,
+    role: PhantomData<fn() -> Role>,
+}
+
+pub(crate) struct TestDatabase;
+impl PgUrlRole for TestDatabase {
+    const USER: &'static str = "jaunder";
+    const DATABASE: &'static str = "jaunder";
+}
+
+pub(crate) struct BootstrapDatabase;
+impl PgUrlRole for BootstrapDatabase {
+    const USER: &'static str = "postgres";
+    const DATABASE: &'static str = "postgres";
+}
+
+pub(crate) type TestPgUrl = PgUrl<TestDatabase>;
+pub(crate) type BootstrapPgUrl = PgUrl<BootstrapDatabase>;
+
+impl<Role: PgUrlRole> PgUrl<Role> {
+    fn generated(host: &'static str, port: u16) -> Self {
+        Self {
+            host,
+            port,
+            role: PhantomData,
+        }
+    }
+
+    fn env_value(&self) -> String {
+        format!(
+            "postgres://{}@{}:{}/{}",
+            Role::USER,
+            self.host,
+            self.port,
+            Role::DATABASE
+        )
+    }
+}
+
 /// Connection endpoints handed to the wrapped command.
 pub struct PgEnv {
-    pub test_url: String,
-    pub bootstrap_url: String,
+    test_url: TestPgUrl,
+    bootstrap_url: BootstrapPgUrl,
 }
 
-fn app_url(host: &str, port: u16) -> String {
-    format!("postgres://jaunder@{host}:{port}/jaunder")
+impl PgEnv {
+    /// Add both role-specific database URLs to `command` under their matching keys.
+    pub fn configure_command<'a>(&self, command: &'a mut Command) -> &'a mut Command {
+        set_pg_env(command, &self.test_url, &self.bootstrap_url)
+    }
 }
 
-fn bootstrap_url(host: &str, port: u16) -> String {
-    format!("postgres://postgres@{host}:{port}/postgres")
+fn set_pg_env<'a>(
+    command: &'a mut Command,
+    test_url: &TestPgUrl,
+    bootstrap_url: &BootstrapPgUrl,
+) -> &'a mut Command {
+    command
+        .env("JAUNDER_PG_TEST_URL", test_url.env_value())
+        .env("JAUNDER_PG_BOOTSTRAP_TEST_URL", bootstrap_url.env_value())
+}
+
+fn app_url(host: &'static str, port: u16) -> TestPgUrl {
+    PgUrl::generated(host, port)
+}
+
+fn bootstrap_url(host: &'static str, port: u16) -> BootstrapPgUrl {
+    PgUrl::generated(host, port)
 }
 
 fn initdb_args(pgdata: &Path) -> Vec<String> {
@@ -308,10 +378,10 @@ pub fn with_ephemeral<T>(body: impl FnOnce(&PgEnv) -> Result<T>) -> Result<T> {
 /// CLI entry: run `cmd` with the ephemeral cluster's env, propagating its exit code.
 pub fn run_command(cmd: &[String]) -> Result<()> {
     let code = with_ephemeral(|env| {
-        let status = Command::new(&cmd[0])
-            .args(&cmd[1..])
-            .env("JAUNDER_PG_TEST_URL", &env.test_url)
-            .env("JAUNDER_PG_BOOTSTRAP_TEST_URL", &env.bootstrap_url)
+        let mut command = Command::new(&cmd[0]);
+        command.args(&cmd[1..]);
+        env.configure_command(&mut command);
+        let status = command
             .status()
             .with_context(|| format!("spawning {cmd:?}"))?;
         Ok(status.code().unwrap_or(1))
@@ -324,17 +394,45 @@ pub fn run_command(cmd: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
     use std::path::PathBuf;
 
     #[test]
     fn urls_thread_selected_port() {
         assert_eq!(
-            app_url(HOST, 15432),
+            app_url(HOST, 15432).env_value(),
             "postgres://jaunder@127.0.0.1:15432/jaunder"
         );
         assert_eq!(
-            bootstrap_url(HOST, 25432),
+            bootstrap_url(HOST, 25432).env_value(),
             "postgres://postgres@127.0.0.1:25432/postgres"
+        );
+    }
+
+    fn command_env<'a>(command: &'a Command, key: &str) -> Option<&'a OsStr> {
+        command
+            .get_envs()
+            .find(|(candidate, _)| *candidate == key)
+            .and_then(|(_, value)| value)
+    }
+
+    #[test]
+    fn pg_env_configures_role_specific_keys() {
+        let env = PgEnv {
+            test_url: app_url(HOST, 15432),
+            bootstrap_url: bootstrap_url(HOST, 25432),
+        };
+        let mut command = Command::new("true");
+
+        env.configure_command(&mut command);
+
+        assert_eq!(
+            command_env(&command, "JAUNDER_PG_TEST_URL"),
+            Some(OsStr::new("postgres://jaunder@127.0.0.1:15432/jaunder"))
+        );
+        assert_eq!(
+            command_env(&command, "JAUNDER_PG_BOOTSTRAP_TEST_URL"),
+            Some(OsStr::new("postgres://postgres@127.0.0.1:25432/postgres"))
         );
     }
 
