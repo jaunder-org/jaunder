@@ -277,6 +277,20 @@ the Firefox-vs-Chromium analysis in #152). On the
 `.xtask/diagnostics/e2e-<backend>-<browser>/playwright-report-<backend>.json`
 and is uploaded as the `e2e-diagnostics-<backend>-<browser>` CI artifact.
 
+The report is paired per combo with `duration-budget-manifest-sqlite.json` or
+`duration-budget-manifest-postgres.json`; the copied report and manifest are the
+duration-pressure gate's source, not trace spans or suite wall-clock time. For
+an otherwise-successful combo, their selected tests and attempts must reconcile
+exactly; missing, malformed, incomplete, or inconsistent input fails closed
+after diagnostics are captured. The gate evaluates every reported attempt,
+including retries: any attempt at **80% or more** of its effective whole-test
+timeout fails, even if a later retry passes.
+
+This is a per-combo headroom detector, not a timeout-sizing policy or aggregate
+duration history. Whole-test budgets remain ambient except where a budget is
+derived from a polling deadline that exceeds it; observed duration does not
+justify re-sizing that deadline-derived budget.
+
 ## `#[server]` flow coverage (#681)
 
 Which server fns a real browser session actually drives, derived from the traces

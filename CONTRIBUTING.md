@@ -288,6 +288,17 @@ invoke it.
   `{sqlite,postgres}×{chromium,firefox}` combos. Escalate to these when the
   changed behavior depends on backend/browser parity, release-build behavior, or
   branch-boundary confidence. The VM path is what green means before you push.
+- **Duration-pressure gate** — After an otherwise-successful VM combo has
+  captured diagnostics, it reconciles the copied
+  `playwright-report-<backend>.json` and
+  `duration-budget-manifest-<backend>.json` in
+  `.xtask/diagnostics/e2e-<backend>-<browser>/`. Missing, malformed, incomplete,
+  or mismatched inputs fail closed. Every reported attempt is checked, including
+  retries: an attempt using **80% or more** of its effective whole-test timeout
+  fails the combo even when a later retry passes. This detects insufficient
+  headroom; it does not right-size timeout budgets. Keep deriving an exceptional
+  whole-test budget from its polling deadline rather than from observed
+  duration.
 
 #### Visual snapshot workflow
 

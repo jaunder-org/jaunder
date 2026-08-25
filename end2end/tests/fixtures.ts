@@ -58,6 +58,7 @@ import {
   TEST_PASSWORD,
 } from "./helpers";
 import { takeBudgetFailures, trackBoots } from "./bootBudget";
+import { attachEffectiveTimeout } from "../durationBudgetManifest";
 import { readEmailLines, type CapturedEmail } from "./mail";
 import { pollUntil } from "./polling";
 import { applySeededSession, seedUserViaTool } from "./seed";
@@ -621,6 +622,7 @@ export type RegisteredPage = (entry: string) => Promise<Page>;
 const test = base.extend<{
   _lifecycleStart: number;
   _autoTestTimeout: void;
+  _autoDurationBudget: void;
   _autoPerfSpan: void;
   testSpanId: string;
   tracedContext: NewTracedContext;
@@ -758,6 +760,19 @@ const test = base.extend<{
         slowBrowserTimeoutMs(testInfo, DEFAULT_TEST_BUDGET_MS),
       );
       await use();
+    },
+    { auto: true },
+  ],
+
+  // This teardown sees modifiers and explicit budgets made by the test body,
+  // then hands the reporter the worker-local final timeout through an attachment.
+  _autoDurationBudget: [
+    async ({}, use, testInfo) => {
+      try {
+        await use();
+      } finally {
+        await attachEffectiveTimeout(testInfo);
+      }
     },
     { auto: true },
   ],

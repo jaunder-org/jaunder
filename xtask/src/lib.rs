@@ -31,6 +31,7 @@ mod steps {
     pub mod build_csr;
     pub mod doc_links;
     pub mod doctest_fences;
+    pub mod duration_budget;
     pub mod e2e_goto_wrapper_check;
     pub mod e2e_local;
     pub mod e2e_scaffold_check;
@@ -775,9 +776,9 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             HOST_TESTS_STEP.run(&sh, Mode::Check, &mut result);
             steps::nix::test_checks(&mut result, false);
             if !no_e2e {
-                // `e2e` builds the `e2e-checks` aggregate, which now includes the
-                // `e2e-elisp-integration` check — so it runs in parallel with the
-                // browser combos; no separate step needed (ADR-0035).
+                // Each browser/backend combo is realized, lifted, and reconciled
+                // separately; their same-named per-backend inputs cannot safely
+                // survive the aggregate `e2e-checks` symlink join.
                 steps::nix::e2e(&mut result);
             }
             finalize(&mut result, start);
