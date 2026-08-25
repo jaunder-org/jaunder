@@ -584,6 +584,31 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn media_filesystem_measurement_rejects_a_symbolic_link_root() {
+        let temp = tempfile::TempDir::new().expect("tempdir");
+        let target = temp.path().join("target");
+        std::fs::create_dir(&target).expect("target directory");
+        let root = temp.path().join("media");
+        std::os::unix::fs::symlink(&target, &root).expect("symbolic link");
+
+        let error = measure_media_filesystem_bytes(&root).expect_err("symbolic link root");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn media_filesystem_measurement_rejects_a_non_directory_root() {
+        let temp = tempfile::TempDir::new().expect("tempdir");
+        let root = temp.path().join("media");
+        std::fs::write(&root, b"not a directory").expect("root file");
+
+        let error = measure_media_filesystem_bytes(&root).expect_err("non-directory root");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn media_filesystem_measurement_rejects_symlinks_without_a_partial_result() {
         let temp = tempfile::TempDir::new().expect("tempdir");
         let root = temp.path().join("media");
@@ -736,6 +761,18 @@ mod tests {
             releaser.join().expect("releaser thread"),
             "an async worker must progress while filesystem work is blocked"
         );
+
+        let failed_source =
+            MediaFilesystemSource::with_measurement(PathBuf::from("fail"), blocking_measurement);
+        let error = failed_source
+            .sample()
+            .await
+            .expect_err("injected blocking measurement failure");
+        assert!(
+            error
+                .to_string()
+                .contains("injected blocking measurement failure")
+        );
     }
 
     #[tokio::test]
@@ -766,6 +803,7 @@ mod tests {
             .expect_err("media root remains absent")
             .to_string();
         assert!(trace.contains("server.metrics.media_filesystem_bytes"));
+
         assert!(
             trace.contains(&format!(r#""error.source":"{collection_error}""#)),
             "{trace}"
@@ -775,6 +813,18 @@ mod tests {
     #[tokio::test]
     async fn saturation_sampler_never_overlaps_filesystem_measurements() {
         let measurement = &*SLOW_MEASUREMENT;
+
+        let failed_source =
+            MediaFilesystemSource::with_measurement(PathBuf::from("fail"), slow_measurement);
+        let error = failed_source
+            .sample()
+            .await
+            .expect_err("injected slow measurement failure");
+        assert!(
+            error
+                .to_string()
+                .contains("injected slow measurement failure")
+        );
         let sources = SaturationSources::fake_with_media_filesystem(
             sample(),
             MediaFilesystemSource::with_measurement(PathBuf::new(), slow_measurement),
