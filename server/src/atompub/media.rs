@@ -18,7 +18,7 @@ use common::tagged_url::{BaseUrl, EditMediaUriUrl, EditUriUrl, compose};
 use common::time::UtcInstant;
 use common::username::Username;
 use storage::{MediaManager, MediaRecord, MediaStorage, SiteConfigStorage};
-use web::auth::AuthUser;
+use web::auth;
 
 use super::{HandlerError, required_base_url};
 
@@ -78,7 +78,7 @@ pub async fn collection_post(
     Extension(media): Extension<Arc<dyn MediaStorage>>,
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     Extension(storage_path): Extension<Arc<PathBuf>>,
-    auth_user: AuthUser,
+    auth_user: auth::User,
     Path(username): Path<Username>,
     headers: HeaderMap,
     body: Bytes,
@@ -190,7 +190,7 @@ impl<'de> Deserialize<'de> for MediaMemberAddress {
 pub(super) async fn member_get(
     Extension(media): Extension<Arc<dyn MediaStorage>>,
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
-    auth_user: AuthUser,
+    auth_user: auth::User,
     Path(address): Path<MediaMemberAddress>,
 ) -> Result<Response, HandlerError> {
     let MediaMemberAddress {
@@ -221,7 +221,7 @@ pub(super) async fn member_delete(
     Extension(media): Extension<Arc<dyn MediaStorage>>,
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
     Extension(storage_path): Extension<Arc<PathBuf>>,
-    auth_user: AuthUser,
+    auth_user: auth::User,
     Path(address): Path<MediaMemberAddress>,
 ) -> Result<Response, HandlerError> {
     let MediaMemberAddress {

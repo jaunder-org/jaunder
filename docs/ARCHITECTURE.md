@@ -737,7 +737,7 @@ system: **session cookies** for the web frontend and **Bearer tokens** for API
 clients ([ADR-0007](adr/0007-auth-mechanisms.md)), plus **HTTP Basic** carrying
 app-specific passwords for AtomPub clients such as MarsEdit
 ([ADR-0014](adr/0014-atompub-authentication.md)). All three paths converge on
-the `AuthUser` axum extractor (`web/src/auth/server.rs`), which resolves
+the `auth::User` axum extractor (`web/src/auth/server.rs`), which resolves
 identity through the `SessionStorage` trait
 ([ADR-0007](adr/0007-auth-mechanisms.md)). Header parsing itself lives in the
 target-agnostic `host::auth::resolve_credential` (`host/src/auth.rs`), pushed
@@ -757,8 +757,8 @@ anonymous, while explicit-credential failures propagate
 
 Leptos server functions obtain the same identity via `require_auth()`
 (`web/src/auth/server.rs`), which pulls request `Parts` from context and runs
-the `AuthUser` extractor; failures map to unauthorized/internal errors through
-`AuthRejection` ([ADR-0007](adr/0007-auth-mechanisms.md)). The operator-only
+the `auth::User` extractor; failures map to unauthorized/internal errors through
+`auth::Rejection` ([ADR-0007](adr/0007-auth-mechanisms.md)). The operator-only
 variant `require_operator()` layers the `is_operator` check on top.
 
 `viewer_identity()` (`web/src/viewer.rs`) applies the optional-auth half of the
@@ -847,7 +847,7 @@ mitigation ADR-0007 lists among its decision drivers
 [ADR-0107](adr/0107-web-session-establishment-is-cookie-only.md)).
 
 Explicit-auth cookie retirement uses a request-scoped `SessionCookieRetirement`
-marker set by `AuthUser` only after Bearer/Basic token and username checks
+marker set by `auth::User` only after Bearer/Basic token and username checks
 succeed. Outer router middleware appends the expiry header, preserving any
 `Set-Cookie` values already emitted by the handler
 ([explicit Authorization replaces ambient session state](adr/0132-explicit-authorization-replaces-session-cookie.md)).

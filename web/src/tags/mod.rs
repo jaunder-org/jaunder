@@ -20,7 +20,7 @@ pub use api::{List, list};
 // only by the wasm-only `component` (which never host-compiles) don't look like
 // `dead_code` on the host build.
 pub use input_logic::{next_suggestion, parse_committed_tag, prev_suggestion, push_unique};
-pub use input_state::TagInputState;
+pub use input_state::InputState;
 
 #[cfg(target_arch = "wasm32")]
 pub use component::TagInput;

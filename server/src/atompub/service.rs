@@ -13,7 +13,7 @@ use common::atompub::{
 use common::pagination::RowLimit;
 use common::tagged_url::{CollectionHref, compose};
 use storage::{PostStorage, SiteConfigStorage};
-use web::auth::AuthUser;
+use web::auth;
 
 use super::{HandlerError, required_base_url};
 
@@ -26,7 +26,7 @@ use super::{HandlerError, required_base_url};
 pub async fn service_document(
     Extension(posts): Extension<Arc<dyn PostStorage>>,
     Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
-    auth_user: AuthUser,
+    auth_user: auth::User,
 ) -> Result<Response, HandlerError> {
     let base = required_base_url(site_config.as_ref()).await?;
     let username = &auth_user.username;

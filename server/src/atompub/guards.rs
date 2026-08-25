@@ -1,7 +1,7 @@
 use common::tagged_url::BaseUrl;
 use common::username::Username;
 use storage::SiteConfigStorage;
-use web::auth::AuthUser;
+use web::auth;
 
 use super::HandlerError;
 
@@ -11,7 +11,7 @@ use super::HandlerError;
 /// act on their own resources, so a mismatch yields `403 Forbidden`. The member
 /// handlers fold the same check into `owned_post`.
 pub(crate) fn require_user_match(
-    auth_user: &AuthUser,
+    auth_user: &auth::User,
     username: &Username,
 ) -> Result<(), HandlerError> {
     if auth_user.username == *username {

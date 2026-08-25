@@ -1231,7 +1231,7 @@ async fn get_registration_policy_returns_correct_value(#[case] backend: Backend)
     assert_eq!(body.trim(), "\"invite_only\"");
 }
 
-// Shape B — `get_profile()` requires `AuthUser`; both an invalid token and a
+// Shape B — `get_profile()` requires `auth::User`; both an invalid token and a
 // missing token must fail extraction with INTERNAL_SERVER_ERROR. Identical
 // setup + assertion; only the supplied cookie varies.
 #[apply(backends_matrix)]

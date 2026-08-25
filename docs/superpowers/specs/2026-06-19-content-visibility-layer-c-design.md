@@ -180,11 +180,11 @@ additive — register an authenticator, no core changes.
 Resolves every request with precedence:
 
 1. Valid **account session** (ADR-0007) → `Channel{local, user_id}` (and the
-   usual `AuthUser`).
+   usual `auth::User`).
 2. Else valid **viewer session** → `Channel{that channel, ref}`.
 3. Else `Anonymous`.
 
-**Read-only guarantee:** the viewer-session path _never_ yields an `AuthUser`,
+**Read-only guarantee:** the viewer-session path _never_ yields an `auth::User`,
 so no write/account endpoint can be reached with a viewer cookie — it is
 structurally read-only.
 
@@ -309,7 +309,7 @@ admission seam).
 - `ChannelAuthenticator` trait + registry (`MastodonAuthenticator`,
   `EmailAuthenticator`).
 - `ViewerIdentity` extractor (precedence: account session → viewer session →
-  anonymous; viewer path never yields `AuthUser`).
+  anonymous; viewer path never yields `auth::User`).
 - Endpoints: `signin/:channel`, `signin/:channel/callback`, `signout`.
 
 **New config:**
@@ -340,7 +340,7 @@ Per CONTRIBUTING's backend-parity + coverage discipline.
   multi-named / Public+named posts.
 - **Extractor precedence** — account session > viewer session > anonymous; and
   the **read-only guarantee**: a viewer cookie on a write/account endpoint is
-  rejected (no `AuthUser` produced).
+  rejected (no `auth::User` produced).
 - **Admission seam** — `initial_status` returns `Active` (NOOP); resolution
   admits `active` and excludes a synthetic `pending` (fail-closed), proving
   M13-readiness.
