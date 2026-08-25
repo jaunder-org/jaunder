@@ -5,7 +5,8 @@
 //! ordering and retry authorization without a checkout, token, or network.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
@@ -144,6 +145,7 @@ pub trait PromoterGit {
     fn prepare_fresh_main(&self) -> Result<()>;
     fn promote(&self) -> Result<()>;
     fn has_staged_diff(&self) -> Result<bool>;
+    fn format_staged_markdown(&self) -> Result<()>;
     fn commit(&self) -> Result<()>;
     fn head_sha(&self) -> Result<String>;
     fn push(&self) -> Result<()>;
@@ -184,6 +186,41 @@ impl RealPromoterGit {
         // rejects; the promoter PR's required checks gate the commit before main.
         run(&self.repo, &PROMOTION_COMMIT_ARGS)
     }
+
+    fn format_staged_markdown_at(repo: &Path) -> Result<()> {
+        let changed = git::output(
+            repo,
+            &[
+                "diff",
+                "--cached",
+                "--name-only",
+                "--diff-filter=ACMR",
+                "--",
+                "*.md",
+            ],
+        )?;
+        let paths = changed
+            .lines()
+            .filter(|path| !path.is_empty())
+            .collect::<Vec<_>>();
+        if paths.is_empty() {
+            return Ok(());
+        }
+
+        let status = Command::new("prettier")
+            .arg("--write")
+            .args(&paths)
+            .current_dir(repo)
+            .status()
+            .context("running Prettier for promoted Markdown")?;
+        if !status.success() {
+            bail!("Prettier failed for promoted Markdown ({status})");
+        }
+
+        let mut add = vec!["add", "--"];
+        add.extend(paths);
+        git::run(repo, &add)
+    }
 }
 
 impl PromoterGit for RealPromoterGit {
@@ -203,6 +240,10 @@ impl PromoterGit for RealPromoterGit {
 
     fn has_staged_diff(&self) -> Result<bool> {
         Ok(!git::output(&self.repo, &["diff", "--cached", "--name-only"])?.is_empty())
+    }
+
+    fn format_staged_markdown(&self) -> Result<()> {
+        Self::format_staged_markdown_at(&self.repo)
     }
 
     fn commit(&self) -> Result<()> {
@@ -573,6 +614,7 @@ fn generate<G: PromoterGit, R: PromoterPrRead, W: PromoterPrWrite>(
     if !queue.queue_present || queue.contexts.is_empty() {
         bail!("ADR promoter requires a merge queue with required contexts");
     }
+    git.format_staged_markdown()?;
     git.commit()?;
     let armed_sha = git.head_sha()?;
     git.push()?;
@@ -744,6 +786,10 @@ mod tests {
         fn has_staged_diff(&self) -> Result<bool> {
             self.call("diff")?;
             Ok(self.staged_diff)
+        }
+
+        fn format_staged_markdown(&self) -> Result<()> {
+            self.call("format")
         }
 
         fn commit(&self) -> Result<()> {
@@ -1186,7 +1232,7 @@ mod tests {
         assert!(run_with(PromoterEvent::Generate, &git, &github, &github).is_err());
         assert_eq!(
             *git.calls.borrow(),
-            ["prepare", "promote", "diff", "commit"]
+            ["prepare", "promote", "diff", "format", "commit"]
         );
         assert!(github.writes.borrow().is_empty());
     }
@@ -1200,7 +1246,9 @@ mod tests {
         assert!(run_with(PromoterEvent::Generate, &git, &github, &github).is_err());
         assert_eq!(
             *git.calls.borrow(),
-            ["prepare", "promote", "diff", "commit", "head", "push"]
+            [
+                "prepare", "promote", "diff", "format", "commit", "head", "push"
+            ]
         );
         assert!(github.writes.borrow().is_empty());
     }
