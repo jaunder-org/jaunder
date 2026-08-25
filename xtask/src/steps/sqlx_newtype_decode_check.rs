@@ -860,18 +860,6 @@ const ALLOWLIST: &[Allowed] = &[
         category: Category::OpaquePayload,
         reason: "a per-user config value, polymorphic text like its site-config sibling",
     },
-    // ---- subscriptions ----
-    Allowed {
-        file: "subscriptions.rs",
-        function: "",
-        target: "String",
-        what: "SubscriberSummaryRow.1",
-        count: 1,
-        category: Category::OpaquePayload,
-        reason: "label is already a display payload: either a Username joined from users or a \
-                 channel-scoped opaque subscriber_ref fallback. The branch that produced it is \
-                 the domain fact; the final text has no single stricter type",
-    },
     // ---- the claim wrapper ----
     Allowed {
         file: "postgres/feed_events.rs",

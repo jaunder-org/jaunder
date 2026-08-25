@@ -209,34 +209,6 @@ fn secret_serde_debug_still_redacts() {
     assert!(!d.contains("hunter2"));
 }
 
-// --- infallible variant ---------------------------------------------------------------
-// `#[str_newtype(infallible)]` construction never rejects, so `From<String>` replaces
-// `FromStr`. Ordering is emitted here exactly as for the default trailer (#761).
-
-#[derive(Clone, Debug, PartialEq, Eq, StrNewtype)]
-#[str_newtype(infallible)]
-struct Label(String);
-
-impl From<String> for Label {
-    fn from(s: String) -> Self {
-        Label(s)
-    }
-}
-
-#[test]
-fn infallible_trailer_orders() {
-    let a = Label::from("aaa");
-    let b = Label::from("bbb");
-    assert!(a < b);
-
-    let mut v = vec![b.clone(), a.clone()];
-    v.sort();
-    assert_eq!(v[0], a);
-
-    let set: BTreeSet<Label> = v.into_iter().collect();
-    assert_eq!(set.len(), 2);
-}
-
 // --- no_ord opt-out -------------------------------------------------------------------
 // `#[str_newtype(no_ord)]` suppresses only the ordering half, for a type that
 // deliberately derives no `PartialEq`/`Eq` (`RawToken`, the bearer-token profile).
@@ -249,8 +221,8 @@ fn infallible_trailer_orders() {
 #[str_newtype(no_ord)]
 struct Unordered(String);
 
-// A rejecting `FromStr` (not `Infallible`): the derive's `TryFrom<String>` routes through
-// it, and an infallible error type would make that impl trip `clippy::infallible_try_from`.
+// A rejecting `FromStr`: the derive's `TryFrom<String>` routes through it, and an
+// `Infallible` error type would make that impl trip `clippy::infallible_try_from`.
 impl FromStr for Unordered {
     type Err = BadCode;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -268,28 +240,6 @@ fn no_ord_keeps_the_rest_of_the_trailer() {
     let read: &str = &u; // Deref
     assert_eq!(read, "x");
     assert_eq!(u, "x"); // PartialEq<str>
-    assert_eq!(serde_json::to_string(&u).unwrap(), "\"x\"");
-}
-
-// `infallible, no_ord` is a legal pair (unlike `infallible, secret`). This fixture's
-// existence is the proof: a unit test on the token stream shows only that no
-// `compile_error!` was emitted, not that the combination yields usable code.
-#[derive(Clone, Debug, StrNewtype)]
-#[str_newtype(infallible, no_ord)]
-struct UnorderedLabel(String);
-
-impl From<String> for UnorderedLabel {
-    fn from(s: String) -> Self {
-        UnorderedLabel(s)
-    }
-}
-
-#[test]
-fn infallible_no_ord_keeps_the_rest_of_the_trailer() {
-    let u = UnorderedLabel::from("x");
-    assert_eq!(u.to_string(), "x");
-    let read: &str = &u;
-    assert_eq!(read, "x");
     assert_eq!(serde_json::to_string(&u).unwrap(), "\"x\"");
 }
 

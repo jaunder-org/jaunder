@@ -138,7 +138,7 @@ async fn list_subscriber_summaries_resolves_labels_on_both_dialects(#[case] back
         .subscriptions
         .subscribe(
             author,
-            &SubscriberIdentity::new(remote, numeric_remote_ref.clone().into()),
+            &SubscriberIdentity::new(remote, numeric_remote_ref.parse().unwrap()),
         )
         .await
         .unwrap();
@@ -147,7 +147,7 @@ async fn list_subscriber_summaries_resolves_labels_on_both_dialects(#[case] back
         .subscriptions
         .subscribe(
             author,
-            &SubscriberIdentity::new(local, missing_ref.to_owned().into()),
+            &SubscriberIdentity::new(local, missing_ref.parse().unwrap()),
         )
         .await
         .unwrap();
@@ -167,6 +167,57 @@ async fn list_subscriber_summaries_resolves_labels_on_both_dialects(#[case] back
             (remote_numeric, numeric_remote_ref),
             (missing_local, missing_ref.to_string()),
         ]
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn subscriber_bulk_reads_skip_unicode_blank_stored_refs(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let author = SeedUser::new().seed(state).await.user_id;
+    let valid_subscriber = SeedUser::new().seed(state).await;
+    let local = local_channel_id(backend, &env).await;
+    let valid_identity = local_subscriber_identity(local, valid_subscriber.user_id);
+    let valid_subscription_id = state
+        .subscriptions
+        .subscribe(author, &valid_identity)
+        .await
+        .expect("subscribe valid user");
+
+    // Unicode whitespace is deliberately beyond the portable database
+    // constraint, so insert it beneath the Rust write boundary. ADR-0122 says
+    // the bad typed column costs exactly this row rather than the whole scan.
+    let sql = format!(
+        "INSERT INTO subscriptions \
+         (author_user_id, channel_id, subscriber_ref, status_id) \
+         VALUES ({author}, {local}, '\u{2003}', \
+         (SELECT status_id FROM subscription_statuses WHERE name = 'active'))"
+    );
+    raw_exec(backend, &env, &sql).await;
+
+    let listing = state
+        .subscriptions
+        .list_subscribers(author)
+        .await
+        .expect("list subscribers");
+    assert_eq!(listing.len(), 1, "only the valid subscriber is returned");
+    assert_eq!(listing[0].subscription_id, valid_subscription_id);
+    assert_eq!(listing[0].subscriber, valid_identity);
+    assert_eq!(listing[0].status, SubscriptionStatus::Active);
+
+    let summaries = state
+        .subscriptions
+        .list_subscriber_summaries(author)
+        .await
+        .expect("list subscriber summaries");
+    assert_eq!(
+        summaries
+            .into_iter()
+            .map(|summary| (summary.subscription_id, summary.label))
+            .collect::<Vec<_>>(),
+        vec![(valid_subscription_id, valid_subscriber.username.to_string())],
+        "the summary omits only the invalid subscriber"
     );
 }
 
@@ -194,7 +245,7 @@ async fn is_subscriber_resolves_a_remote_viewer_by_its_own_channel(#[case] backe
         .subscriptions
         .subscribe(
             author,
-            &SubscriberIdentity::new(remote, actor.to_owned().into()),
+            &SubscriberIdentity::new(remote, actor.parse().unwrap()),
         )
         .await
         .unwrap();
@@ -206,7 +257,7 @@ async fn is_subscriber_resolves_a_remote_viewer_by_its_own_channel(#[case] backe
                 author,
                 &ViewerIdentity::Remote {
                     channel_id: remote,
-                    subscriber_ref: actor.to_owned().into(),
+                    subscriber_ref: actor.parse().unwrap(),
                 }
             )
             .await
@@ -220,7 +271,7 @@ async fn is_subscriber_resolves_a_remote_viewer_by_its_own_channel(#[case] backe
                 author,
                 &ViewerIdentity::Remote {
                     channel_id: local,
-                    subscriber_ref: actor.to_owned().into(),
+                    subscriber_ref: actor.parse().unwrap(),
                 }
             )
             .await

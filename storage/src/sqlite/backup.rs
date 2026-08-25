@@ -6,7 +6,7 @@ use std::{
 
 use futures_util::TryStreamExt;
 use sha2::{Digest, Sha256};
-use sqlx::{Row, SqliteConnection, SqlitePool};
+use sqlx::{Row, SqliteConnection, SqlitePool, error::ErrorKind};
 
 use crate::backup::{
     BackupError, BackupManifest, BackupMode, ColumnInfo, RestoreValidationReport, backup_table_set,
@@ -51,6 +51,24 @@ fn finish_foreign_key_restore<T>(
         host::error::ErrorClass::Transient,
         "storage.sqlite.backup.restore.foreign_keys_restore",
     )
+}
+/// Keep the public restore error category independent of which live schema
+/// constraint rejected a raw backup value. Non-constraint database failures
+/// remain infrastructure errors.
+fn map_restore_error(error: sqlx::Error) -> BackupError {
+    let constraint_message = error
+        .as_database_error()
+        .filter(|db| {
+            db.is_unique_violation()
+                || db.is_foreign_key_violation()
+                || db.kind() == ErrorKind::NotNullViolation
+                || db.is_check_violation()
+        })
+        .map(|db| db.message().to_owned());
+    match constraint_message {
+        Some(message) => BackupError::ConstraintViolation(message),
+        None => BackupError::Sqlx(error),
+    }
 }
 
 pub(crate) async fn export_database(
@@ -132,7 +150,8 @@ pub(crate) async fn restore_database(
         for table in &manifest.tables {
             sqlx::query(&format!("DELETE FROM {}", quote_identifier(table)))
                 .execute(&mut *connection)
-                .await?;
+                .await
+                .map_err(map_restore_error)?;
         }
         for table in &manifest.tables {
             let columns = columns(&mut connection, table).await?;
@@ -222,7 +241,10 @@ async fn import_table(
             })?;
             query = bind_json_value(query, value);
         }
-        query.execute(&mut *connection).await?;
+        query
+            .execute(&mut *connection)
+            .await
+            .map_err(map_restore_error)?;
     }
 
     Ok(())
@@ -409,6 +431,14 @@ mod tests {
             Err(BackupError::Io(error))
                 if error.kind() == std::io::ErrorKind::PermissionDenied
                     && error.to_string() == "primary backup failure"
+        ));
+    }
+
+    #[test]
+    fn map_restore_error_preserves_non_database_failures() {
+        assert!(matches!(
+            map_restore_error(sqlx::Error::RowNotFound),
+            BackupError::Sqlx(sqlx::Error::RowNotFound)
         ));
     }
 

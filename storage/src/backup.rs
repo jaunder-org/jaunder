@@ -1205,6 +1205,7 @@ mod tests {
         );
         Ok(())
     }
+
     // Both backends' restore path shares the ragged-NDJSON contract: a row that
     // omits a column present in row 0 is rejected as `InvalidBackup`, and the
     // failed import rolls the restore transaction back. One `#[apply(backends)]`

@@ -15,7 +15,7 @@ use jaunder::commands::{
     app_password_create, cmd_app_password_create, cmd_backup, cmd_init, cmd_restore, cmd_serve,
     cmd_smtp_test, cmd_user_create, cmd_user_invite, prepare_server,
 };
-use storage::{BackupMode, open_database, open_existing_database};
+use storage::{BackupError, BackupMode, open_database, open_existing_database};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -771,6 +771,66 @@ async fn cmd_restore_reports_invalid_media_filename_without_rolling_back(#[case]
             .expect("read restored media"),
         "media"
     );
+}
+
+// #857 / ADR-0054: restore re-enters through the live schema, so a zero-length
+// subscriber reference is a uniform constraint violation and the import stays
+// transactional on both backends.
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_rejects_zero_length_subscriber_ref(#[case] backend: Backend) {
+    let base = TempDir::new().expect("temp dir");
+    let (source_args, _pg_source) = storage_args(backend, &base).await;
+    cmd_init(&source_args, false).await.expect("init source");
+    populate_backup_fixture(&source_args).await;
+
+    let backup_path = base.path().join("backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
+
+    let subscriptions = backup_path.join("db").join("subscriptions.ndjson");
+    let mut rows = std::fs::read_to_string(&subscriptions)
+        .expect("read exported subscriptions")
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(line)
+                .expect("parse exported subscription")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(rows.len(), 1, "fixture exports one subscription");
+    rows[0].insert(
+        "subscriber_ref".to_owned(),
+        serde_json::Value::String(String::new()),
+    );
+    let corrupted = rows
+        .iter()
+        .map(|row| serde_json::to_string(row).expect("serialize corrupted subscription"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    std::fs::write(&subscriptions, corrupted).expect("write corrupted subscriptions");
+
+    let target_base = TempDir::new().expect("target temp dir");
+    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
+    cmd_init(&target_args, false).await.expect("init target");
+
+    let error = cmd_restore(&target_args, &backup_path)
+        .await
+        .expect_err("restore rejects a zero-length subscriber reference");
+    assert!(
+        matches!(
+            error.downcast_ref::<BackupError>(),
+            Some(BackupError::ConstraintViolation(_))
+        ),
+        "expected BackupError::ConstraintViolation, got: {error:#}"
+    );
+    assert_target_unmodified(&target_args).await;
 }
 
 // #136: a backup with a dangling foreign key is rejected uniformly (DEC-C) —

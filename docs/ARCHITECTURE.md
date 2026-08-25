@@ -451,9 +451,14 @@ _Audience_: posts target audiences
 `post_audiences` rows; a viewer is a `ViewerIdentity` (channel identity or
 anonymous, `common/src/visibility.rs`) and sees a post iff they are the author
 or any targeted audience admits them — OR semantics, failing closed (`Private`
-is zero rows); subscriptions route through the admission seam
-(`SubscriptionPolicy`, wired to the auto-approving `OpenSubscriptionPolicy`)
-([ADR-0020](adr/0020-content-visibility-and-subscription-model.md)). The
+is zero rows). Subscriptions route through the admission seam
+(`SubscriptionPolicy`, wired to the auto-approving `OpenSubscriptionPolicy`);
+their persisted identity is `SubscriberIdentity { channel_id, subscriber_ref }`.
+The reference is opaque inside its channel namespace, non-blank in Rust, and
+zero-length-rejected by both schemas. Typed reads validate before projecting
+display text; migration aborts rather than inventing or deleting an invalid
+identity (`docs/adr/0151-subscriber-reference-invariant.md`,
+[ADR-0020](adr/0020-content-visibility-and-subscription-model.md)). The
 instance-wide Default Audience is separately the closed
 `DefaultAudience::{Public, Subscribers, Private}` value: it cannot be a
 per-author `Named` target and widens to `AudienceTarget` only at the web and
@@ -1793,16 +1798,16 @@ parameterized `NumNewtype` one, whose bound is declarative and re-run by
 (`macros/src/num_newtype.rs:430`) for a public bound that should coerce rather
 than reject.
 
-There are two kinds of newtype, and the choice is **invariant-first**
-([ADR-0101](adr/0101-infallible-kind-is-invariant-first.md)). The reviewer's
-question is "is there a string this type should refuse?", not "does the
-constructor reject?" — the latter is a property of code already written, and
-reading it as evidence about the value is what mislabelled `PostTitle` and
-`PostBody`. Both now hand-write a validating `FromStr`
-(`common/src/post_title.rs:34`, `common/src/post_body.rs:70`), and no production
-type takes `#[str_newtype(infallible)]` today. The diagnostic ADR-0063 §3 draws
-from this: a type declared infallible that needs a downstream gate to reject
-some of its values was mis-declared — the gate is the invariant, displaced.
+String-backed domain values use one validating generated trailer. The
+invariant-first question remains “is there a string this type should refuse?”,
+not “does the constructor reject?” — the latter is a property of code already
+written, and reading it as evidence about the value mislabelled `PostTitle`,
+`PostBody`, and later `SubscriberRef`. A type for which no input is invalid can
+use `FromStr::Err = Infallible`; it does not need a separate macro mode.
+`#[str_newtype(infallible)]` was removed after its sole production adopter,
+`SubscriberRef`, gained its non-blank invariant
+(`docs/adr/0151-subscriber-reference-invariant.md`,
+[ADR-0101](adr/0101-infallible-kind-is-invariant-first.md)).
 
 ADR-0101 also replaces trusted doors with typed proof wherever a caller can
 supply one. `PostSummary` applies that shape directly in its derived-summary

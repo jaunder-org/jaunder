@@ -11,7 +11,6 @@
 //! | Caller                    | Type     | Encode    | Decode    | `Decode` conversion             | `pg_array` |
 //! | ------------------------- | -------- | --------- | --------- | ------------------------------- | ---------- |
 //! | `StrNewtype` (validating) | `String` | `String`  | `&'r str` | validating `FromStr`            | yes        |
-//! | `StrNewtype` (infallible) | `String` | `String`  | `String`  | `From<String>` (moves)          | yes        |
 //! | `IdNewtype`               | `i64`    | `i64`     | `i64`     | infallible wrap                 | yes        |
 //! | `NumNewtype`              | declared | declared  | declared  | bound-checking `TryFrom<inner>` | **no**     |
 //! | `SqlxBridge`              | field ty | field ty  | field ty  | infallible wrap (moves)         | **no**     |
@@ -23,9 +22,9 @@
 //! impl** — not a deferred bound. Turning `NumNewtype` on stops `common` compiling on
 //! its `u32`/`usize` newtypes (#891).
 //!
-//! The rule is per-conversion, not per-family: a decode that *borrows to parse and
-//! drops* takes `&'r str`; a decode that *moves the decoded value into* the new value
-//! keeps `String`, where borrowing would add an allocation rather than remove one.
+//! The rule is per-conversion: a decode that borrows to parse and drops takes `&'r str`;
+//! a decode that moves the decoded value into a new value keeps the owned inner, where
+//! borrowing would add an allocation rather than remove one.
 //!
 //! All items are wrapped in `#[cfg(feature = "sqlx")]` so the proc-macro crate never
 //! depends on sqlx and the wasm build never sees them.

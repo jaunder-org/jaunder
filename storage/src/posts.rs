@@ -2163,12 +2163,10 @@ enum ResolutionBinds {
 /// `AND`s it into a `WHERE`, where unknown filters the row out exactly as false
 /// would — so NULL kills every non-`public` branch.
 ///
-/// This replaces a sentinel scheme (`author_id = -1`, `channel = -1`,
-/// `subref = ""`) that relied on those values being unstorable: `-1` was
-/// unreachable only because `users`/`channels` hand out positive autoincrement
-/// keys, and `subscriber_ref = ''` is schema-legal (`TEXT NOT NULL` with no
-/// non-empty CHECK) — it was unreachable only because the sole writer binds an
-/// authenticated user id. NULL needs neither argument.
+/// NULL binds make the unreachable branches follow from SQL comparison
+/// semantics rather than from reserving sentinel IDs or subscriber references.
+/// The predicate therefore stays correct independently of which concrete
+/// values the live schema permits.
 ///
 /// `start` is the next free `$n` index, and **the placeholder count is
 /// per-variant**, so callers must thread the returned `next` rather than assume
@@ -2868,7 +2866,7 @@ mod tests {
     #[case::anonymous(ViewerIdentity::Anonymous)]
     #[case::remote(ViewerIdentity::Remote {
         channel_id: ChannelId::from(2),
-        subscriber_ref: "7".to_owned().into(),
+        subscriber_ref: "7".parse().unwrap(),
     })]
     fn resolution_where_binds_the_channel_for_a_non_local_viewer(#[case] viewer: ViewerIdentity) {
         let (sql, _binds, next) = resolution_where(&viewer, 2);

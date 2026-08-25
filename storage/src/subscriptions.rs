@@ -11,12 +11,13 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sqlx::{Database, Pool};
+use sqlx::{Database, Pool, Row};
 
 use common::ids::{ChannelId, SubscriptionId, UserId};
+use common::username::Username;
 use common::visibility::{
-    SubscriberIdentity, SubscriberRef, SubscriptionPolicy, SubscriptionStatus, ViewerIdentity,
-    local_subscriber_ref,
+    InvalidSubscriberRef, SubscriberIdentity, SubscriberRef, SubscriptionPolicy,
+    SubscriptionStatus, ViewerIdentity, local_subscriber_ref,
 };
 use host::error::InternalResult;
 
@@ -35,14 +36,6 @@ pub struct SubscriptionRecord {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(sqlx::FromRow)]
-struct SubscriptionRecordRow {
-    subscription_id: SubscriptionId,
-    channel_id: ChannelId,
-    subscriber_ref: SubscriberRef,
-    created_at: DateTime<Utc>,
-}
-
 /// A subscriber row projected for named-audience presentation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SubscriberSummaryRecord {
@@ -50,7 +43,13 @@ pub struct SubscriberSummaryRecord {
     pub label: String,
 }
 
-type SubscriberSummaryRow = (SubscriptionId, String);
+fn invalid_subscriber_ref_decode(error: &sqlx::Error) -> bool {
+    matches!(
+        error,
+        sqlx::Error::ColumnDecode { source, .. }
+            if source.downcast_ref::<InvalidSubscriberRef>().is_some()
+    )
+}
 
 /// Async operations on the `subscriptions` table.
 #[cfg_attr(feature = "test-utils", mockall::automock)]
@@ -159,10 +158,11 @@ pub trait SubscriptionDialect: Database {
          JOIN subscription_statuses st ON st.status_id = s.status_id \
          WHERE s.author_user_id = $1 AND st.name = 'active' \
          ORDER BY s.subscription_id";
-    /// Lists active subscribers with local-user display labels resolved by SQL.
-    /// Bind order: `author_user_id`.
+    /// Lists active subscribers with local-user display labels resolved after
+    /// both the optional username and raw subscriber reference have crossed
+    /// their typed decode boundaries. Bind order: `author_user_id`.
     const LIST_SUBSCRIBER_SUMMARIES: &'static str = "SELECT \
-           s.subscription_id, COALESCE(u.username, s.subscriber_ref) AS label \
+           s.subscription_id, u.username, s.subscriber_ref \
         FROM subscriptions s \
         JOIN subscription_statuses st ON st.status_id = s.status_id \
         LEFT JOIN users u \
@@ -201,8 +201,12 @@ where
     (i64,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (SubscriptionId,): for<'r> sqlx::FromRow<'r, DB::Row>,
     (ChannelId,): for<'r> sqlx::FromRow<'r, DB::Row>,
-    SubscriptionRecordRow: for<'r> sqlx::FromRow<'r, DB::Row>,
-    SubscriberSummaryRow: for<'r> sqlx::FromRow<'r, DB::Row>,
+    for<'r> SubscriptionId: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> ChannelId: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> SubscriberRef: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> Username: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> DateTime<Utc>: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> &'r str: sqlx::ColumnIndex<DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q SubscriberRef: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -288,45 +292,84 @@ where
         &self,
         author_user_id: UserId,
     ) -> sqlx::Result<Vec<SubscriptionRecord>> {
-        let rows = sqlx::query_as::<_, SubscriptionRecordRow>(DB::LIST_ACTIVE_SUBSCRIBERS)
+        // Decode every unrelated column before the one this bulk-read policy
+        // may skip. That keeps the diversion column-scoped: an invalid
+        // `subscriber_ref` costs only its row, while identity, channel, and
+        // timestamp failures still fail the batch (ADR-0122).
+        let rows = sqlx::query(DB::LIST_ACTIVE_SUBSCRIBERS)
             .bind(author_user_id)
             .fetch_all(&self.pool)
             .await?;
-        // The query filters to `st.name = 'active'`, so every returned row is an
-        // active subscription — no per-row status decoding needed.
-        Ok(rows
-            .into_iter()
-            .map(
-                |SubscriptionRecordRow {
-                     subscription_id,
-                     channel_id,
-                     subscriber_ref,
-                     created_at,
-                 }| SubscriptionRecord {
-                    subscription_id,
-                    subscriber: SubscriberIdentity::new(channel_id, subscriber_ref),
-                    status: SubscriptionStatus::Active,
-                    created_at,
-                },
-            )
-            .collect())
+        let mut records = Vec::with_capacity(rows.len());
+        let mut decode_reported = false;
+        for row in rows {
+            let subscription_id: SubscriptionId = row.try_get("subscription_id")?;
+            let channel_id: ChannelId = row.try_get("channel_id")?;
+            let created_at: DateTime<Utc> = row.try_get("created_at")?;
+            let subscriber_ref = match row.try_get::<SubscriberRef, _>("subscriber_ref") {
+                Ok(subscriber_ref) => subscriber_ref,
+                Err(error) if invalid_subscriber_ref_decode(&error) => {
+                    if !decode_reported {
+                        host::error::report_swallowed(
+                            host::error::ErrorKind::Storage,
+                            host::error::ErrorClass::Bug,
+                            "storage.subscriptions.decode_subscriber_ref",
+                            host::error::SwallowedSource::Error(&error),
+                        );
+                        decode_reported = true;
+                    }
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            records.push(SubscriptionRecord {
+                subscription_id,
+                subscriber: SubscriberIdentity::new(channel_id, subscriber_ref),
+                // The query filters to `st.name = 'active'`.
+                status: SubscriptionStatus::Active,
+                created_at,
+            });
+        }
+        Ok(records)
     }
 
     async fn list_subscriber_summaries(
         &self,
         author_user_id: UserId,
     ) -> sqlx::Result<Vec<SubscriberSummaryRecord>> {
-        let rows = sqlx::query_as::<_, SubscriberSummaryRow>(DB::LIST_SUBSCRIBER_SUMMARIES)
+        // As above, decode every non-divertible column first so only the
+        // validated subscriber reference can make this summary skip a row.
+        let rows = sqlx::query(DB::LIST_SUBSCRIBER_SUMMARIES)
             .bind(author_user_id)
             .fetch_all(&self.pool)
             .await?;
-        Ok(rows
-            .into_iter()
-            .map(|(subscription_id, label)| SubscriberSummaryRecord {
+        let mut summaries = Vec::with_capacity(rows.len());
+        let mut decode_reported = false;
+        for row in rows {
+            let subscription_id: SubscriptionId = row.try_get("subscription_id")?;
+            let username: Option<Username> = row.try_get("username")?;
+            let subscriber_ref = match row.try_get::<SubscriberRef, _>("subscriber_ref") {
+                Ok(subscriber_ref) => subscriber_ref,
+                Err(error) if invalid_subscriber_ref_decode(&error) => {
+                    if !decode_reported {
+                        host::error::report_swallowed(
+                            host::error::ErrorKind::Storage,
+                            host::error::ErrorClass::Bug,
+                            "storage.subscriptions.decode_summary_subscriber_ref",
+                            host::error::SwallowedSource::Error(&error),
+                        );
+                        decode_reported = true;
+                    }
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            summaries.push(SubscriberSummaryRecord {
                 subscription_id,
-                label,
-            })
-            .collect())
+                label: username.map_or_else(|| String::from(subscriber_ref), String::from),
+            });
+        }
+        Ok(summaries)
     }
 
     async fn local_channel_id(&self) -> InternalResult<ChannelId> {
