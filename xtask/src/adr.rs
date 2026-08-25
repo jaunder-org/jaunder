@@ -1,15 +1,14 @@
 //! ADR numbering commands.
 //!
-//! - `cargo xtask adr promote`: number the numberless drafts in
-//!   `docs/adr/drafts/` at ship, graduating each into `docs/adr/NNNN-<slug>.md`.
-//!   The number is assigned as late as possible, so the ADR's first appearance
-//!   in git history is already collision-free (issue #219).
-//! - `cargo xtask adr renumber`: resolve an ADR number collision by bumping the
-//!   branch's newly-added ADR to the next free number and rewriting references.
-//!   The ADR already reachable from `origin/main` is immutable; only branch
-//!   additions move. Path-form references (which carry the slug) are rewritten
-//!   repo-wide; bare `ADR-NNNN` references are rewritten only in branch-touched
-//!   files, so `main`'s references to the other number are never clobbered.
+//! - `cargo xtask adr promote`: number tracked drafts in `docs/adr/drafts/`,
+//!   graduating each into `docs/adr/NNNN-<slug>.md` and staging the complete
+//!   source-to-destination promotion.
+//! - `cargo xtask adr renumber`: deprecated compatibility tooling for legacy
+//!   numbered-ADR collisions. New work commits tracked drafts and lets the
+//!   serialized post-merge promoter allocate numbers. The implementation stays
+//!   available until https://github.com/jaunder-org/jaunder/issues/1169.
+//!   It moves only branch additions and scopes ambiguous bare-reference rewrites
+//!   to branch-touched files.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -24,6 +23,7 @@ use crate::result::StepResult;
 
 const ADR_DIR: &str = "docs/adr";
 const DRAFTS_DIR: &str = "docs/adr/drafts";
+const RENUMBER_DEPRECATION: &str = "DEPRECATED: `cargo xtask adr renumber` is legacy compatibility tooling; new work uses tracked drafts and serialized post-merge promotion. Removal: https://github.com/jaunder-org/jaunder/issues/1169";
 
 /// Four-digit zero-padded number, e.g. `34 -> "0034"`.
 pub fn pad(n: u32) -> String {
@@ -127,12 +127,14 @@ fn stem(filename: &str) -> &str {
     filename.rsplit_once('.').map_or(filename, |(s, _)| s)
 }
 
-/// Entry point for `cargo xtask adr renumber`: operate on the current repo
-/// against `origin/main`.
+/// Deprecated entry point for `cargo xtask adr renumber`: retain the legacy
+/// implementation against `origin/main` until #1169 removes the command.
 pub fn renumber() -> StepResult {
     match run_renumber(Path::new("."), "origin/main") {
-        Ok(summary) => StepResult::ok("adr-renumber").detail(summary),
-        Err(e) => StepResult::fail("adr-renumber").detail(format!("{e:#}")),
+        Ok(summary) => {
+            StepResult::ok("adr-renumber").detail(format!("{RENUMBER_DEPRECATION}\n{summary}"))
+        }
+        Err(e) => StepResult::fail("adr-renumber").detail(format!("{RENUMBER_DEPRECATION}\n{e:#}")),
     }
 }
 
@@ -331,17 +333,15 @@ fn promote_heading(body: &str, number: u32, draft_rel: &str) -> Result<String> {
     Ok(format!("# ADR-{}: {rest}", pad(number)))
 }
 
-/// Number every draft in `docs/adr/drafts`, graduate it into
+/// Number every tracked draft in `docs/adr/drafts`, graduate it into
 /// `docs/adr/NNNN-<slug>.md`, record its acceptance in the status line, rewrite its
-/// path-form references, sync the README table, and stage the result. Numbers are
-/// assigned at ship (post-rebase), so the ADR's first appearance in git history is
-/// already collision-free.
+/// path-form references, sync the README table, and stage the complete result.
 ///
-/// Unlike `renumber`, the source is an *untracked* draft: it is written under its
-/// number, the draft is dropped, and the result is staged with `git add` (no
-/// `git mv`); and there is no bare `ADR-NNNN` form to rewrite, since a draft is
+/// Unlike `renumber`, the source carries no ADR number. Its tracked path is moved
+/// with `git mv`, then the destination content and every projection are rewritten
+/// and staged. There is no bare `ADR-NNNN` form to rewrite, since a draft is
 /// referenced only by its `drafts/<slug>` path.
-fn run_promote(repo: &Path) -> Result<String> {
+pub(crate) fn run_promote(repo: &Path) -> Result<String> {
     let slugs = draft_slugs(repo)?;
     if slugs.is_empty() {
         return Ok("no ADR drafts to promote".to_string());
@@ -373,10 +373,19 @@ fn run_promote(repo: &Path) -> Result<String> {
         promoted_bodies.push((draft_rel, numbered));
     }
 
-    // Pass B — graduate each draft (heading token `ADR-DRAFT` -> `ADR-NNNN`,
-    // status `proposed` -> `accepted`, write it under its number, drop the draft)
-    // and stage it. Staging first makes the path-form rewrite below see
-    // cross-references between graduated drafts (which now live in tracked files).
+    // Feature pull requests commit drafts before promotion. Validate the whole
+    // input set before moving any source so an accidentally untracked draft cannot
+    // leave an earlier draft half-promoted.
+    let tracked = git::ls_files_md(repo)?;
+    for (draft_rel, _) in &promoted_bodies {
+        if !tracked.contains(draft_rel) {
+            bail!("{draft_rel} must be tracked before promotion");
+        }
+    }
+
+    // Pass B — move each tracked draft in the index, then graduate its heading
+    // and status at the destination. Staging the rewritten destination makes the
+    // path-form rewrite below see cross-references between graduated drafts.
     for (p, (draft_rel, numbered)) in assigned.iter_mut().zip(promoted_bodies) {
         let new_rel = format!("{ADR_DIR}/{}", p.new_name);
         // The file moves up one directory here, so its own relative links are
@@ -393,10 +402,9 @@ fn run_promote(repo: &Path) -> Result<String> {
             }
             None => relinked,
         };
+        git::mv(repo, &draft_rel, &new_rel)?;
         std::fs::write(repo.join(&new_rel), graduated)
             .with_context(|| format!("writing {new_rel}"))?;
-        std::fs::remove_file(repo.join(&draft_rel))
-            .with_context(|| format!("removing {draft_rel}"))?;
         git::add(repo, &new_rel)?;
     }
 
@@ -558,7 +566,7 @@ mod tests {
             "docs/adr/drafts/d.md",
             "# ADR-DRAFT: D\n\nSee [foo](../0001-foo.md).\n",
         );
-        run_promote(&tmp).unwrap();
+        promote_tracked(&tmp).unwrap();
         let body = std::fs::read_to_string(tmp.join("docs/adr/0002-d.md")).unwrap();
         assert!(body.contains("](0001-foo.md)"), "body: {body}");
         assert!(!body.contains("](../0001-foo.md)"), "body: {body}");
@@ -573,7 +581,7 @@ mod tests {
             "docs/adr/drafts/d.md",
             "# ADR-DRAFT: D\n\n[t](../template.md) [c](../../CONTRIBUTING.md)\n",
         );
-        run_promote(&tmp).unwrap();
+        promote_tracked(&tmp).unwrap();
         let body = std::fs::read_to_string(tmp.join("docs/adr/0002-d.md")).unwrap();
         assert!(body.contains("](template.md)"), "body: {body}");
         assert!(body.contains("](../CONTRIBUTING.md)"), "body: {body}");
@@ -589,7 +597,7 @@ mod tests {
             "# ADR-DRAFT: D\n\nThe literal `ADR-DRAFT` token is documented here.\n\n```text\nADR-DRAFT\n```\n",
         );
 
-        run_promote(&tmp).unwrap();
+        promote_tracked(&tmp).unwrap();
 
         let body = std::fs::read_to_string(tmp.join("docs/adr/0002-d.md")).unwrap();
         assert!(body.starts_with("# ADR-0002: D\n"), "body: {body}");
@@ -610,7 +618,7 @@ mod tests {
         write(&tmp, "docs/adr/drafts/aaa.md", valid);
         write(&tmp, "docs/adr/drafts/bbb.md", malformed);
 
-        let err = run_promote(&tmp).unwrap_err();
+        let err = promote_tracked(&tmp).unwrap_err();
         let message = format!("{err:#}");
 
         assert!(
@@ -651,7 +659,7 @@ mod tests {
             "docs/adr/drafts/d.md",
             "# ADR-DRAFT: D\n\nSee [gone](nonexistent.md).\n",
         );
-        let summary = run_promote(&tmp).unwrap(); // Ok, not Err — promote still graduates
+        let summary = promote_tracked(&tmp).unwrap(); // Ok, not Err — promote still graduates
         assert!(
             tmp.join("docs/adr/0002-d.md").exists(),
             "file still written"
@@ -671,31 +679,38 @@ mod tests {
             "docs/adr/drafts/d.md",
             "# ADR-DRAFT: D\n\nSee [foo](../0001-foo.md).\n",
         );
-        let summary = run_promote(&tmp).unwrap();
+        let summary = promote_tracked(&tmp).unwrap();
         assert!(!summary.contains("warning"), "summary: {summary}");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
-    fn promote_checks_links_after_pass_c() {
-        // `../drafts/aaa.md` is the cross-draft form that survives promotion: Pass B
-        // strips it to `drafts/aaa.md`, Pass C rewrites that to `0002-aaa.md`, which
-        // resolves from docs/adr/. So a correctly-ordered check finds nothing.
-        //
-        // This is the discriminating shape. Run the check before Pass C and the
-        // target is still `drafts/aaa.md`, pointing at the draft Pass B already
-        // deleted — a premature check warns and this test fails.
-        let tmp = promote_repo("order");
+    fn tracked_draft_links_and_citations_resolve_before_and_after_promotion() {
+        let tmp = promote_repo("tracked-links");
+        write(&tmp, "docs/notes.md", "See [Bbb](adr/drafts/bbb.md).\n");
         write(&tmp, "docs/adr/drafts/aaa.md", "# ADR-DRAFT: Aaa\n");
         write(
             &tmp,
             "docs/adr/drafts/bbb.md",
-            "# ADR-DRAFT: Bbb\n\nBuilds on [aaa](../drafts/aaa.md).\n",
+            "# ADR-DRAFT: Bbb\n\n\
+             Builds on [the numbered ADR](../0001-foo.md) and [aaa](../drafts/aaa.md).\n",
         );
+        git(&tmp, &["add", "docs/notes.md", DRAFTS_DIR]);
+        git(&tmp, &["commit", "-qm", "feature: linked ADR drafts"]);
+
+        let before = crate::doc_links::problems(&tmp).unwrap();
+        assert!(before.is_empty(), "draft links must resolve: {before:?}");
+
         let summary = run_promote(&tmp).unwrap();
-        assert!(!summary.contains("warning"), "premature check: {summary}");
+
+        assert!(!summary.contains("warning"), "summary: {summary}");
         let bbb = std::fs::read_to_string(tmp.join("docs/adr/0003-bbb.md")).unwrap();
+        assert!(bbb.contains("](0001-foo.md)"), "bbb: {bbb}");
         assert!(bbb.contains("](0002-aaa.md)"), "bbb: {bbb}");
+        let notes = std::fs::read_to_string(tmp.join("docs/notes.md")).unwrap();
+        assert_eq!(notes, "See [Bbb](adr/0003-bbb.md).\n");
+        let after = crate::doc_links::problems(&tmp).unwrap();
+        assert!(after.is_empty(), "promoted links must resolve: {after:?}");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -714,7 +729,7 @@ mod tests {
             "docs/adr/drafts/d.md",
             "# ADR-DRAFT: D\n\n- Status: proposed\n- Date: 2026-07-31\n",
         );
-        run_promote(&tmp).unwrap();
+        promote_tracked(&tmp).unwrap();
         let problems = crate::adr_readme::format_problems(&tmp);
         assert!(
             problems.is_empty(),
@@ -731,7 +746,7 @@ mod tests {
             "docs/adr/drafts/d.md",
             "# ADR-DRAFT: D\n\n- Status: proposed\n",
         );
-        run_promote(&tmp).unwrap();
+        promote_tracked(&tmp).unwrap();
         let body = std::fs::read_to_string(tmp.join("docs/adr/0002-d.md")).unwrap();
         assert!(body.contains("- Status: accepted"), "body: {body}");
         assert!(!body.contains("proposed"), "body: {body}");
@@ -751,7 +766,7 @@ mod tests {
             let tmp = promote_repo(tag);
             let draft = format!("# ADR-DRAFT: D\n\n- Status: {token}\n");
             write(&tmp, "docs/adr/drafts/d.md", &draft);
-            run_promote(&tmp).unwrap();
+            promote_tracked(&tmp).unwrap();
             let body = std::fs::read_to_string(tmp.join("docs/adr/0002-d.md")).unwrap();
             assert!(body.contains(&format!("- Status: {token}")), "body: {body}");
             assert!(!body.contains("accepted"), "{token} body: {body}");
@@ -771,7 +786,7 @@ mod tests {
             "docs/adr/drafts/d.md",
             "# ADR-DRAFT: D\n\n  - Status: proposed\n",
         );
-        run_promote(&tmp).unwrap();
+        promote_tracked(&tmp).unwrap();
         let body = std::fs::read_to_string(tmp.join("docs/adr/0002-d.md")).unwrap();
         assert!(body.contains("  - Status: accepted"), "body: {body}");
         let _ = std::fs::remove_dir_all(&tmp);
@@ -787,7 +802,7 @@ mod tests {
             "docs/adr/drafts/d.md",
             "# ADR-DRAFT: D\n\n- Status: proposed\n\nWe proposed X in an earlier cycle.\n",
         );
-        run_promote(&tmp).unwrap();
+        promote_tracked(&tmp).unwrap();
         let body = std::fs::read_to_string(tmp.join("docs/adr/0002-d.md")).unwrap();
         assert!(body.contains("- Status: accepted"), "body: {body}");
         assert!(
@@ -809,7 +824,7 @@ mod tests {
             "docs/adr/drafts/d.md",
             "# ADR-DRAFT: D\n\n- Status: proposed\n",
         );
-        let summary = run_promote(&tmp).unwrap();
+        let summary = promote_tracked(&tmp).unwrap();
         assert!(
             summary.contains("(status: proposed -> accepted)"),
             "summary: {summary}"
@@ -825,7 +840,7 @@ mod tests {
             "docs/adr/drafts/d.md",
             "# ADR-DRAFT: D\n\n- Status: accepted\n",
         );
-        let summary = run_promote(&tmp).unwrap();
+        let summary = promote_tracked(&tmp).unwrap();
         assert!(!summary.contains("status:"), "summary: {summary}");
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -843,6 +858,16 @@ mod tests {
         let out = crate::git::at(dir).args(args).output().unwrap();
         assert!(out.status.success(), "git {args:?} failed");
         String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// Commit every draft before promotion so behavior tests exercise the tracked
+    /// source lifecycle used by feature pull requests.
+    fn promote_tracked(repo: &Path) -> Result<String> {
+        if !draft_slugs(repo)?.is_empty() {
+            git(repo, &["add", DRAFTS_DIR]);
+            git(repo, &["commit", "-qm", "feature: ADR drafts"]);
+        }
+        run_promote(repo)
     }
 
     /// A committed repo with `docs/adr/0001-foo.md` on `main` — the base state the
@@ -1027,14 +1052,14 @@ mod tests {
         git(&tmp, &["add", "docs/README.md"]);
         git(&tmp, &["commit", "-qm", "main: README table"]);
 
-        // An untracked, numberless draft.
+        // A tracked, numberless draft.
         write(
             &tmp,
             "docs/adr/drafts/my-decision.md",
             "# ADR-DRAFT: My Decision\n\n- Status: proposed\n",
         );
 
-        let summary = run_promote(&tmp).unwrap();
+        let summary = promote_tracked(&tmp).unwrap();
         assert!(
             summary.contains("docs/adr/drafts/my-decision.md -> docs/adr/0002-my-decision.md"),
             "summary: {summary}"
@@ -1062,13 +1087,18 @@ mod tests {
             "readme: {readme}"
         );
 
-        // The graduated file and the README are staged, ready to commit.
-        let staged = git_stdout(&tmp, &["diff", "--cached", "--name-only"]);
+        // The complete tracked-source rename and the README rewrite are staged,
+        // ready to commit.
+        let staged = git_stdout(&tmp, &["diff", "--cached", "--name-status", "--no-renames"]);
         assert!(
-            staged.contains("docs/adr/0002-my-decision.md"),
+            staged.contains("D\tdocs/adr/drafts/my-decision.md"),
             "staged: {staged}"
         );
-        assert!(staged.contains("docs/README.md"), "staged: {staged}");
+        assert!(
+            staged.contains("A\tdocs/adr/0002-my-decision.md"),
+            "staged: {staged}"
+        );
+        assert!(staged.contains("M\tdocs/README.md"), "staged: {staged}");
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -1087,7 +1117,7 @@ mod tests {
             "# ADR-DRAFT: Bbb\n\n- Status: proposed\n",
         );
 
-        run_promote(&tmp).unwrap();
+        promote_tracked(&tmp).unwrap();
 
         // Sorted (aaa before bbb) → consecutive numbers; both drafts consumed.
         assert!(tmp.join("docs/adr/0002-aaa.md").exists());
@@ -1117,7 +1147,7 @@ mod tests {
             "# ADR-DRAFT: My Decision\n\n- Status: proposed\n",
         );
 
-        run_promote(&tmp).unwrap();
+        promote_tracked(&tmp).unwrap();
 
         let notes = std::fs::read_to_string(tmp.join("docs/notes.md")).unwrap();
         assert_eq!(notes, "Decided in docs/adr/0002-my-decision.md.\n");
@@ -1141,7 +1171,7 @@ mod tests {
             "# ADR-DRAFT: Bbb\n\nBuilds on docs/adr/drafts/aaa.md.\n",
         );
 
-        run_promote(&tmp).unwrap();
+        promote_tracked(&tmp).unwrap();
 
         let bbb = std::fs::read_to_string(tmp.join("docs/adr/0003-bbb.md")).unwrap();
         assert!(
@@ -1154,15 +1184,54 @@ mod tests {
     }
 
     #[test]
+    fn promote_keeps_the_tracked_drafts_readme() {
+        let tmp = promote_repo("draft-readme");
+        write(&tmp, "docs/adr/drafts/README.md", "# ADR drafts\n");
+        git(&tmp, &["add", "docs/adr/drafts/README.md"]);
+        git(&tmp, &["commit", "-qm", "docs: draft explainer"]);
+
+        let summary = run_promote(&tmp).unwrap();
+
+        assert_eq!(summary, "no ADR drafts to promote");
+        assert!(tmp.join("docs/adr/drafts/README.md").exists());
+        let staged = git_stdout(&tmp, &["diff", "--cached", "--name-only"]);
+        let unstaged = git_stdout(&tmp, &["diff", "--name-only"]);
+        assert!(staged.is_empty(), "staged: {staged}");
+        assert!(unstaged.is_empty(), "unstaged: {unstaged}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn promote_is_noop_without_drafts() {
         let tmp = promote_repo("noop");
         std::fs::create_dir_all(tmp.join(DRAFTS_DIR)).unwrap();
-        let summary = run_promote(&tmp).unwrap();
+        let summary = promote_tracked(&tmp).unwrap();
         assert_eq!(summary, "no ADR drafts to promote");
         // Nothing staged.
         let staged = git_stdout(&tmp, &["diff", "--cached", "--name-only"]);
         assert!(staged.is_empty(), "staged: {staged}");
 
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn promote_rerun_after_committing_is_a_clean_noop() {
+        let tmp = promote_repo("clean-rerun");
+        write(
+            &tmp,
+            "docs/adr/drafts/d.md",
+            "# ADR-DRAFT: D\n\n- Status: proposed\n",
+        );
+        promote_tracked(&tmp).unwrap();
+        git(&tmp, &["commit", "-qm", "promote ADR"]);
+
+        let summary = run_promote(&tmp).unwrap();
+
+        assert_eq!(summary, "no ADR drafts to promote");
+        let staged = git_stdout(&tmp, &["diff", "--cached", "--name-only"]);
+        let unstaged = git_stdout(&tmp, &["diff", "--name-only"]);
+        assert!(staged.is_empty(), "staged: {staged}");
+        assert!(unstaged.is_empty(), "unstaged: {unstaged}");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -1185,7 +1254,7 @@ mod tests {
             "# ADR-DRAFT: Later\n\n- Status: proposed\n",
         );
 
-        run_promote(&tmp).unwrap();
+        promote_tracked(&tmp).unwrap();
 
         assert!(tmp.join("docs/adr/0006-later.md").exists());
         assert!(!tmp.join("docs/adr/drafts/later.md").exists());

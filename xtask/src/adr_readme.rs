@@ -4,9 +4,9 @@
 //! heading when a row is first created). The table lives between HTML-comment
 //! markers so only that block is ever rewritten.
 //!
-//! This core is shared by `adr sync-readme` (the writer, here), `adr renumber`
-//! (which regenerates the table after a collision bump), and the read-only
-//! parity gate. No behavior lives in more than one place.
+//! This core is shared by `adr sync-readme` (the writer, here), automated ADR
+//! promotion, the deprecated `adr renumber` compatibility command, and the
+//! read-only parity gate. No behavior lives in more than one place.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -1136,13 +1136,13 @@ mod tests {
 
     #[test]
     fn gates_ignore_docs_adr_drafts_subdir() {
-        // Drafts live numberless under `docs/adr/drafts/` until `cargo xtask adr
-        // promote` numbers them at ship (#219). The subdirectory is excluded
-        // twice over by the shared enumeration rule (a non-recursive `read_dir`
-        // skips the subdir entry, which is not a file; and there is no leading
-        // number), so a draft — even one that violates every ADR format rule (no
-        // `# ADR-NNNN:` heading, no status line) — must never trip `adr-format`
-        // or `adr-readme-parity`.
+        // Feature PRs track numberless files under `docs/adr/drafts/`; the
+        // serialized promoter numbers them after feature merge. The subdirectory
+        // is excluded twice over by the shared enumeration rule (a non-recursive
+        // `read_dir` skips the subdir entry, which is not a file; and there is no
+        // leading number), so a draft — even one that violates every ADR format
+        // rule (no `# ADR-NNNN:` heading, no status line) — must never trip
+        // `adr-format` or `adr-readme-parity`.
         //
         // Teeth: move the fixture up to `docs/adr/0099-some-decision.md` and this
         // fails — the `# ADR-DRAFT:` heading mismatches 0099 (adr-format) and no

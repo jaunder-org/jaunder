@@ -1,13 +1,15 @@
-//! PR observation: `cargo xtask pr watch` / `pr land` (#729).
+//! PR observation and serialized ADR promoter orchestration.
 //!
-//! Layered boundary → pure → loop (ADR draft `xtask-github-pr-observation`): only
-//! `gh` runs a subprocess, `snapshot` turns its JSON into typed values, `decide` is a
-//! pure state machine over those values, and `watch`/`land` drive the loop. Above
-//! `snapshot` nothing sees JSON, a string status, or an exit code.
+//! Layered boundary → pure → loop (ADR draft `xtask-github-pr-observation`):
+//! [`gh`] is the sole GitHub subprocess boundary, `snapshot` turns its JSON into
+//! typed values, and `decide` holds pure policy. `watch`/`land` drive human PR
+//! observation; `promoter` separately owns bot policy and delegates Git to
+//! [`crate::git`].
 
 pub mod decide;
 pub mod gh;
 pub mod land;
+pub mod promoter;
 pub mod snapshot;
 #[cfg(test)]
 pub(crate) mod test_support;

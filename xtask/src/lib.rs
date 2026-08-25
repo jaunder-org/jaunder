@@ -332,11 +332,13 @@ pub enum ServerFnCoverageCommand {
 /// `adr` subcommands.
 #[derive(Subcommand)]
 pub enum AdrCommand {
-    /// Renumber this branch's colliding ADR to the next free number and rewrite
-    /// references. The ADR already on `origin/main` keeps its number; path-form
-    /// references are rewritten repo-wide and bare `ADR-NNNN` references in
-    /// branch-touched files. Run after rebasing onto the latest `origin/main`.
-    #[command(after_help = "EXAMPLES:\n  cargo xtask adr renumber")]
+    /// DEPRECATED compatibility command for pre-promoter numbered-ADR
+    /// collisions. New feature work commits numberless tracked drafts and lets
+    /// the serialized post-merge promoter allocate numbers. Scheduled for
+    /// removal in https://github.com/jaunder-org/jaunder/issues/1169.
+    #[command(
+        after_help = "DEPRECATED: do not use for new feature recovery; see https://github.com/jaunder-org/jaunder/issues/1169\n\nLEGACY EXAMPLE:\n  cargo xtask adr renumber"
+    )]
     Renumber,
     /// Regenerate the ADR index table in `docs/README.md` from `docs/adr/`: the
     /// number, link target, and status cells. Hand-curated titles are preserved
@@ -344,12 +346,19 @@ pub enum AdrCommand {
     /// the marked table block. The `adr-readme-parity` gate fails on drift.
     #[command(after_help = "EXAMPLES:\n  cargo xtask adr sync-readme")]
     SyncReadme,
-    /// Number the numberless drafts in `docs/adr/drafts/`: assign each the next
-    /// free number, move it to `docs/adr/NNNN-<slug>.md`, rewrite its path-form
-    /// references, sync the README table, and stage the result. Run at ship,
-    /// after the final rebase, so the number is collision-free on first commit.
-    #[command(after_help = "EXAMPLES:\n  cargo xtask adr promote")]
+    /// Deterministic promotion mutation used by the serialized ADR promoter
+    /// after feature merge: number tracked drafts, stage each complete rename,
+    /// rewrite path citations and proposed status, and regenerate the index.
+    /// Feature authors and shipping flows do not invoke this directly.
+    #[command(
+        after_help = "AUTOMATION PRIMITIVE: invoked by `cargo xtask adr promoter` after feature merge.\n\nEXAMPLES:\n  cargo xtask adr promote"
+    )]
     Promote,
+    /// Run the serialized ADR promoter for a GitHub Actions event. Generates from
+    /// fresh `main`, owns the stable promoter PR, and fail-closed re-arms an exact
+    /// dequeued promoter only after both required context sets are green.
+    #[command(after_help = "EXAMPLES:\n  cargo xtask adr promoter")]
+    Promoter,
 }
 
 /// `coverage` subcommands.
@@ -452,6 +461,7 @@ impl Cli {
             Command::Adr(AdrCommand::Renumber) => "adr-renumber",
             Command::Adr(AdrCommand::SyncReadme) => "adr-sync-readme",
             Command::Adr(AdrCommand::Promote) => "adr-promote",
+            Command::Adr(AdrCommand::Promoter) => "adr-promoter",
             Command::Traces(TracesCommand::Analyze { .. }) => "traces-analyze",
             Command::Traces(TracesCommand::Run { .. }) => "traces-run",
             Command::Traces(TracesCommand::BootPhases { .. }) => "traces-boot-phases",
@@ -910,6 +920,14 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             let mut result = CommandResult::new("adr-promote");
             let step_start = std::time::Instant::now();
             result.push(adr::promote().with_duration(step_start.elapsed()));
+            finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::Adr(AdrCommand::Promoter) => {
+            let start = std::time::Instant::now();
+            let mut result = CommandResult::new("adr-promoter");
+            let step_start = std::time::Instant::now();
+            result.push(pr::promoter::execute().with_duration(step_start.elapsed()));
             finalize(&mut result, start);
             Ok(result)
         }
@@ -1568,6 +1586,12 @@ mod cli_tests {
     fn adr_promote_parses() {
         let cli = Cli::try_parse_from(["xtask", "adr", "promote"]).unwrap();
         assert_eq!(cli.command_name(), "adr-promote");
+    }
+
+    #[test]
+    fn adr_promoter_parses() {
+        let cli = Cli::try_parse_from(["xtask", "adr", "promoter"]).unwrap();
+        assert_eq!(cli.command_name(), "adr-promoter");
     }
 
     #[test]

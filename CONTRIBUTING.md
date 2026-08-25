@@ -149,59 +149,58 @@ with `SKIP_PRE_PUSH=1 git push` for WIP.
 ### Adding an ADR
 
 Start from [`docs/adr/template.md`](docs/adr/template.md): copy it to
-`docs/adr/drafts/<slug>.md` — a numberless **draft**, never a hand-picked
-number. The `docs/adr/drafts/` directory is gitignored (except its `README.md`),
-so a draft lives out of git until it ships and cannot be committed with a
-premature number; keep the draft heading `# ADR-DRAFT: <Title>` and cite the
-draft by its `docs/adr/drafts/<slug>.md` path. See
-[`docs/adr/drafts/README.md`](docs/adr/drafts/README.md) for the full flow.
+`docs/adr/drafts/<slug>.md` as a tracked, numberless **draft**, never a
+hand-picked number. Keep the heading `# ADR-DRAFT: <Title>` and cite the draft
+by its sole pre-promotion identity, `docs/adr/drafts/<slug>.md`. Commit the
+draft and its architecture projection with the feature so both are reviewable.
+See [`docs/adr/drafts/README.md`](docs/adr/drafts/README.md) for the link forms
+that resolve both while the draft is tracked and after its one-directory
+promotion.
 
-At ship, after the final rebase onto `main`, run `cargo xtask adr promote` (via
-`devtool run -- …`): for each draft it assigns the next free number, moves it to
-`docs/adr/NNNN-<slug>.md`, rewrites its path-form references, records its
-acceptance in the status line, syncs the README table, and stages the result —
-so the number is assigned as late as possible and the ADR's first appearance in
-git history is already collision-free. If a collision still surfaces between
-that commit and the merge, re-rebase, re-run, and **amend the commit that
-introduced the ADR** — never a fixup commit.
+Feature shipping must not invoke either `cargo xtask adr promote` or the
+deprecated `cargo xtask adr renumber`, and must not edit `docs/README.md`. The
+draft remains `proposed` when the feature reaches `main`. A serialized workflow
+then derives from current `main`, runs the deterministic promotion mutation, and
+opens one stable promoter PR. Promotion assigns each draft the next free number,
+stages the tracked source deletion and `docs/adr/NNNN-<slug>.md` destination,
+rewrites path citations and `proposed` to `accepted`, and regenerates the ADR
+index. The dedicated least-privilege GitHub App arms auto-merge; ordinary
+pull-request and merge-group checks run, and only the merge queue writes the
+result to `main`.
+
+An open promoter's head SHA and generated diff never change. Drafts merged later
+wait for its merge and the next promotion pass. The ordinary promoter CI/queue
+interval is a healthy **proposed-decision lag**, not a violation of the
+acceptance model. A draft that remains proposed because the promoter failed to
+create, check, or merge is failed-automation lag and requires diagnosis; it is
+not a reason to promote from the feature branch.
 
 ADRs are `docs/adr/NNNN-slug.md` with a canonical `# ADR-NNNN: <title>` heading
 and a single-token `- Status: <token>` line. A **numbered** ADR carries one of
-accepted/superseded/deprecated/rejected — never `proposed`, because numbering
-_is_ the acceptance event: a decision still under consideration has no number
-and lives in `docs/adr/drafts/`, and `adr promote` rewrites a draft's `proposed`
-to `accepted` as it assigns the number. They are indexed in the table in
-`docs/README.md`, whose number, link, and status cells are **generated** from
-`docs/adr/`: the `adr-format` and `adr-readme-parity` steps of
-`cargo xtask check`/`validate` fail on a non-canonical heading/status or a table
-that has drifted from the directory (recovery: `cargo xtask adr sync-readme`,
-which is also folded into `adr promote`/`renumber`). Table titles are
-hand-curated — a new row is seeded from the ADR heading, then owned by you
-(ADR-0036 §#196 addendum).
+accepted/superseded/deprecated/rejected — never `proposed`, because promotion
+and numbering are the acceptance event (ADR-0088). The table in `docs/README.md`
+is a **generated** projection whose number, link, and status cells are owned by
+promotion and `cargo xtask adr sync-readme`; only row titles are hand-curated.
+The `adr-format` and `adr-readme-parity` gates reject a non-canonical ADR or
+drifted table (recovery for table-only drift: `cargo xtask adr sync-readme`).
 
-A third step, `adr-view-parity`, requires every `accepted` ADR to be cited in
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the materialized view is where
-current truth lives, so an ADR nothing describes there is a decision with no
-visible consequence. It fails by number and title and has no exemption list:
-describe the ADR in the relevant section and cite it. Project the decision while
-your draft is still numberless and `adr promote` rewrites the citation to the
-assigned number for free.
+The `adr-view-parity` gate requires every `accepted` ADR to be cited in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Update the view in the feature
+PR and cite the numberless draft path; promotion rewrites that citation to the
+numbered path as it accepts the decision. `CONTEXT.md` is a mandatory
+consideration when the decision changes Jaunder's ubiquitous language.
 
-A numberless draft under `docs/adr/drafts/` is invisible to all three ADR gates
-by construction: their shared `is_file` → `.md` → leading-number enumeration is
-non-recursive over `docs/adr/`.
-
-The `identifier-collisions` step fails if two _committed_ ADRs — or two
-migrations, per backend — share a number, or if the sqlite/postgres migration
-sets diverge. Because two differently-named files (`0099-foo.md` /
-`0099-bar.md`) merge with no git conflict, this check is what makes a
-concurrent-branch collision **loud** instead of silent (ADR-0036). An
-already-committed ADR that collides after a rebase is bumped with
-`cargo xtask adr renumber` (it `git mv`s it to the next free number, rewrites
-references, and re-syncs the table — then amend the introducing commit; the ADR
-already on `origin/main` keeps its number). Migrations use the same sequential
-convention and detection check but are renumbered by hand on the rare occasion
-it is needed.
+Numberless files under `docs/adr/drafts/` remain outside the non-recursive
+numbered-ADR enumeration used by `identifier-collisions`, `adr-format`, and
+`adr-readme-parity`; `doc-links` does check them because they are tracked. The
+collision gate still makes duplicate numbered ADR or migration prefixes loud,
+but serialized post-merge allocation removes the feature-branch ADR collision
+class. `cargo xtask adr renumber` remains executable for one compatibility
+release but is **deprecated** and must not be used for new feature recovery;
+removal is tracked by
+[#1169](https://github.com/jaunder-org/jaunder/issues/1169). Migrations keep
+their sequential convention and are renumbered by hand on the rare occasion it
+is needed.
 
 ## Testing
 
