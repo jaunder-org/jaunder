@@ -240,9 +240,6 @@ file pristine."
   (interactive)
   (jaunder-publish t))
 
-(defun jaunder--atom->org (&rest _args)
-  "Atom->Org mapping seam; not yet implemented."
-  (error "jaunder: atom->org mapping not yet implemented"))
 
 (provide 'jaunder-publish)
 ;;; jaunder-publish.el ends here

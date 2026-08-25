@@ -42,7 +42,7 @@ Out:
     direct-child versus nested metadata, duplicate cardinality representation,
     and single/repeated/empty title mapping.
 
-- [ ] **Task 3 — Implement and load pure Member Entry → Org synthesis.**
+- [x] **Task 3 — Implement and load pure Member Entry → Org synthesis.**
   - Files: new `elisp/jaunder-pull.el`, its `jaunder.el` require, pure ERT, and
     removal of the `jaunder--atom->org` stub from publish.
   - Contract:
