@@ -1,15 +1,15 @@
-# ADR-DRAFT: ADR numbering happens after feature merge
+# ADR-0152: ADR numbering happens after feature merge
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-24
 - Issue: [#742](https://github.com/jaunder-org/jaunder/issues/742)
 
 ## Context
 
 ADR numbers and the generated ADR index are shared, ordered resources. Under the
-ship-time flow in [ADR-0048](../0048-adr-out-of-git-draft-workflow.md), two
-feature branches that each carry an ADR allocate the same next number and edit
-the same index region. GitHub's merge queue cannot reconcile either the filename
+ship-time flow in [ADR-0048](0048-adr-out-of-git-draft-workflow.md), two feature
+branches that each carry an ADR allocate the same next number and edit the same
+index region. GitHub's merge queue cannot reconcile either the filename
 collision or the textual table conflict, so otherwise independent changes are
 ejected and rerun the full validation surface.
 
@@ -19,7 +19,7 @@ the first state from which a globally unique next number can be allocated
 without a race.
 
 Promotion is also the acceptance event under
-[ADR-0088](../0088-promotion-is-the-acceptance-event.md). Moving promotion must
+[ADR-0088](0088-promotion-is-the-acceptance-event.md). Moving promotion must
 preserve that transition rather than accepting a decision implicitly in the
 feature PR.
 

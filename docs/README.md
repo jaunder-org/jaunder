@@ -176,6 +176,7 @@ convention). See the Status column below for each ADR's current status.
 | [0146](adr/0146-devtool-owns-compiling-static-check-definitions.md) | devtool owns compiling static-check definitions across host and Nix                                          | accepted   |
 | [0147](adr/0147-decision-path-observability.md)                     | Decision-Path Observability                                                                                  | accepted   |
 | [0151](adr/0151-subscriber-reference-invariant.md)                  | Subscriber references are non-blank validated identities                                                     | accepted   |
+| [0152](adr/0152-adr-numbering-happens-after-merge.md)               | ADR numbering happens after feature merge                                                                    | accepted   |
 
 <!-- adr-table:end -->
 
