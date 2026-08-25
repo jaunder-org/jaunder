@@ -72,7 +72,7 @@ Out:
     and install fault cleanup, race winner preservation, and no leaked temp
     files.
 
-- [ ] **Task 5 — Prove the complete pull against the live server.**
+- [x] **Task 5 — Prove the complete pull against the live server.**
   - Files: focused `*-integration.el` only, after Tasks 1–4.
   - Contract: use the shared live server without assuming an empty Collection;
     create a uniquely identified untitled Org Post, inventory its D1 Member, and
