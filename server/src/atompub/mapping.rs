@@ -176,8 +176,8 @@ pub fn post_to_entry(post: &PostRecord, base_url: &BaseUrl) -> Entry {
         id: edit_uri.to_string(),
         title: Text::plain(
             post.title
-                .clone()
-                .map_or_else(|| post.slug.to_string(), String::from),
+                .as_ref()
+                .map_or_else(String::new, ToString::to_string),
         ),
         content: Some(Content {
             content_type: Some(content_type.to_string()),
@@ -760,7 +760,7 @@ mod tests {
     }
 
     #[test]
-    fn post_to_entry_title_from_post() {
+    fn post_to_entry_preserves_genuine_title() {
         let post = make_post(MakePost {
             post_id: PostId::from(7),
             title: Some(parse_post_title("My Title")),
@@ -778,10 +778,28 @@ mod tests {
     }
 
     #[test]
-    fn post_to_entry_title_falls_back_to_slug() {
+    fn post_to_entry_emits_empty_title_for_untitled_post() {
         let post = make_post(MakePost {
             post_id: PostId::from(7),
-            title: None, // No title
+            title: None,
+            slug: parse_slug("my-slug"),
+            body: parse_post_body("body"),
+            format: PostFormat::Markdown,
+            published_at: Some(Utc::now()),
+            summary: None,
+            tags: vec![],
+        });
+
+        let entry = post_to_entry(&post, &parse_url("https://example.com/"));
+
+        assert_eq!(entry.title().as_str(), "");
+    }
+
+    #[test]
+    fn post_to_entry_preserves_title_equal_to_slug() {
+        let post = make_post(MakePost {
+            post_id: PostId::from(7),
+            title: Some(parse_post_title("my-slug")),
             slug: parse_slug("my-slug"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,

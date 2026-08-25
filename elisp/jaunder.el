@@ -38,6 +38,7 @@
 (require 'jaunder-media)
 (require 'jaunder-publish)
 (require 'jaunder-reconcile)
+(require 'jaunder-pull)
 
 (provide 'jaunder)
 ;;; jaunder.el ends here

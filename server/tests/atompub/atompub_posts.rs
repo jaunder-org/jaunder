@@ -124,6 +124,63 @@ async fn member_returns_native_source_with_etag(#[case] backend: Backend) {
     );
 }
 
+// Member responses are the wire contract consumed by pull clients, not merely mapper data.
+#[apply(backends)]
+#[tokio::test]
+async fn member_get_serializes_empty_and_genuine_titles(#[case] backend: Backend) {
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+
+    let untitled = session
+        .seed_post()
+        .body(parse_post_body("Untitled source"))
+        .seed(&state)
+        .await;
+    let titled = session
+        .seed_post()
+        .title(parse_post_title("Genuine title"))
+        .body(parse_post_body("Titled source"))
+        .seed(&state)
+        .await;
+
+    let app = make_app(&state, &base);
+    let untitled_response = app
+        .clone()
+        .oneshot(atompub_get(
+            &session,
+            &format!("posts/{}", untitled.post_id),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(untitled_response.status(), StatusCode::OK);
+    let untitled_body = body_string(untitled_response).await;
+    assert!(
+        untitled_body.contains("<title/>") || untitled_body.contains("<title></title>"),
+        "untitled Member must serialize a required empty title element: {untitled_body}"
+    );
+    assert!(untitled_body.contains("Untitled source"));
+    let untitled_entry = untitled_body
+        .parse::<common::atompub::Entry>()
+        .expect("untitled Member response is an Atom Entry");
+    assert_eq!(untitled_entry.title().as_str(), "");
+
+    let titled_response = app
+        .oneshot(atompub_get(&session, &format!("posts/{}", titled.post_id)))
+        .await
+        .unwrap();
+    assert_eq!(titled_response.status(), StatusCode::OK);
+    let titled_body = body_string(titled_response).await;
+    assert!(
+        titled_body.contains("<title>Genuine title</title>"),
+        "titled Member must serialize its exact title: {titled_body}"
+    );
+    assert!(titled_body.contains("Titled source"));
+    let titled_entry = titled_body
+        .parse::<common::atompub::Entry>()
+        .expect("titled Member response is an Atom Entry");
+    assert_eq!(titled_entry.title().as_str(), "Genuine title");
+}
+
 #[apply(backends)]
 #[tokio::test]
 async fn member_get_unknown_returns_404(#[case] backend: Backend) {

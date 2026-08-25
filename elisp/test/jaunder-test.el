@@ -89,6 +89,14 @@
   (should (null (jaunder-entry-title
                  (jaunder-test--entry "#+TITLE:\n\nBody\n")))))
 
+(ert-deftest jaunder-org->atom-repeated-titles-join-with-newlines ()
+  ;; Pulled multiline titles become repeated #+TITLE lines and must publish back
+  ;; as the original Atom title, rather than silently retaining only the first.
+  (should (equal (jaunder-entry-title
+                  (jaunder-test--entry
+                   "#+TITLE: First line\n#+TITLE: Second line\n\nBody\n"))
+                 "First line\nSecond line")))
+
 (ert-deftest jaunder-org->atom-keywords-split-multiline-flatten ()
   (should (equal (jaunder-entry-categories
                   (jaunder-test--entry
@@ -482,6 +490,138 @@
                   ("a.unknown" . "application/octet-stream")
                   ("extensionless" . "application/octet-stream")))
     (should (equal (jaunder--media-content-type (car case)) (cdr case)))))
+(ert-deftest jaunder-harvest-response-fields-content-only-keeps-compatible-shape ()
+  ;; Media upload responses are Entries too: adding D2's plural parse must not
+  ;; make their absent Member metadata an error or alter their singular fields.
+  (let* ((xml (concat "<entry xmlns=\"http://www.w3.org/2005/Atom\">"
+                      "<content type=\"image/png\" src=\"https://h/image.png\"/>"
+                      "</entry>"))
+         (fields (jaunder--harvest-response-fields xml)))
+    (should (equal (mapcar #'car fields)
+                   '(content-src content-type slug published
+                                 titles categories summaries content-nodes drafts
+                                 published-values edit-uris slugs)))
+    (should (equal (cdr (assq 'content-src fields)) "https://h/image.png"))
+    (should (equal (cdr (assq 'content-type fields)) "image/png"))
+    (should (null (cdr (assq 'slug fields))))
+    (should (null (cdr (assq 'published fields))))
+    (dolist (key '(titles categories summaries drafts published-values edit-uris slugs))
+      (should (equal (cdr (assq key fields)) nil)))
+    (should (= (length (cdr (assq 'content-nodes fields))) 1))))
+
+(ert-deftest jaunder-harvest-response-fields-uses-only-direct-entry-metadata ()
+  ;; XHTML body markup is content, not Atom metadata: a nested title/category
+  ;; or link must never change the Member fields which D2 and D3 consume.
+  (let* ((xml (concat
+               "<entry xmlns=\"http://www.w3.org/2005/Atom\""
+               " xmlns:app=\"http://www.w3.org/2007/app\""
+               " xmlns:j=\"https://jaunder.org/ns/atompub\">"
+               "<title>Entry title</title><category term=\"entry-category\"/>"
+               "<summary>Entry summary</summary><published>2026-08-25T10:00:00Z</published>"
+               "<link rel=\"edit\" href=\"https://h/posts/7\"/>"
+               "<j:slug>entry-slug</j:slug><app:control><app:draft>yes</app:draft></app:control>"
+               "<content type=\"xhtml\"><div xmlns=\"http://www.w3.org/1999/xhtml\">"
+               "<title>Body title</title><category term=\"body-category\"/>"
+               "<summary>Body summary</summary><published>body-time</published>"
+               "<link rel=\"edit\" href=\"https://h/posts/8\"/><j:slug>body-slug</j:slug>"
+               "<app:control><app:draft>no</app:draft></app:control></div></content>"
+               "</entry>"))
+         (fields (jaunder--harvest-response-fields xml)))
+    (should (equal (cdr (assq 'titles fields)) '("Entry title")))
+    (should (equal (cdr (assq 'categories fields)) '("entry-category")))
+    (should (equal (cdr (assq 'summaries fields)) '("Entry summary")))
+    (should (equal (cdr (assq 'drafts fields)) '("yes")))
+    (should (equal (cdr (assq 'published-values fields)) '("2026-08-25T10:00:00Z")))
+    (should (equal (cdr (assq 'edit-uris fields)) '("https://h/posts/7")))
+    (should (equal (cdr (assq 'slugs fields)) '("entry-slug")))
+    (should (= (length (cdr (assq 'content-nodes fields))) 1))))
+
+(ert-deftest jaunder-harvest-response-fields-ignores-foreign-direct-elements ()
+  ;; Namespace identity, not a familiar local name, makes Member metadata:
+  ;; extension markup must not impersonate Atom, APP, or Jaunder fields.
+  (let* ((xml (concat
+               "<entry xmlns=\"http://www.w3.org/2005/Atom\""
+               " xmlns:app=\"http://www.w3.org/2007/app\""
+               " xmlns:j=\"https://jaunder.org/ns/atompub\""
+               " xmlns:f=\"https://example.invalid/foreign\">"
+               "<f:title>foreign title</f:title><title>Atom title</title>"
+               "<f:category term=\"foreign\"/><category term=\"Atom category\"/>"
+               "<f:summary>foreign summary</f:summary><summary>Atom summary</summary>"
+               "<f:content type=\"text/markdown\">foreign body</f:content>"
+               "<content type=\"text/org\">Atom body</content>"
+               "<f:published>foreign time</f:published><published>Atom time</published>"
+               "<f:link rel=\"edit\" href=\"https://h/foreign\"/>"
+               "<link rel=\"edit\" href=\"https://h/atom\"/>"
+               "<f:control><f:draft>foreign draft</f:draft></f:control>"
+               "<app:control><f:draft>foreign child</f:draft><app:draft>yes</app:draft></app:control>"
+               "<f:slug>foreign slug</f:slug><j:slug>atom-slug</j:slug></entry>"))
+         (fields (jaunder--harvest-response-fields xml)))
+    (should (equal (cdr (assq 'titles fields)) '("Atom title")))
+    (should (equal (cdr (assq 'categories fields)) '("Atom category")))
+    (should (equal (cdr (assq 'summaries fields)) '("Atom summary")))
+    (should (equal (mapcar #'dom-text (cdr (assq 'content-nodes fields)))
+                   '("Atom body")))
+    (should (equal (cdr (assq 'published-values fields)) '("Atom time")))
+    (should (equal (cdr (assq 'edit-uris fields)) '("https://h/atom")))
+    (should (equal (cdr (assq 'drafts fields)) '("yes")))
+    (should (equal (cdr (assq 'slugs fields)) '("atom-slug")))))
+
+(ert-deftest jaunder-harvest-response-fields-resolves-arbitrary-prefixes ()
+  ;; Atom, APP, and Jaunder namespace URIs remain valid when a Member chooses
+  ;; noncanonical prefixes, including declarations on direct children.
+  (let* ((xml (concat
+               "<a:entry xmlns:a=\"http://www.w3.org/2005/Atom\""
+               " xmlns:x=\"https://jaunder.org/ns/atompub\">"
+               "<a:title>title</a:title><a:category term=\"category\"/>"
+               "<a:summary>summary</a:summary><a:content type=\"text/org\">body</a:content>"
+               "<a:published>2026-08-25T10:00:00Z</a:published>"
+               "<a:link rel=\"edit\" href=\"https://h/post/1\"/>"
+               "<p:control xmlns:p=\"http://www.w3.org/2007/app\"><p:draft>yes</p:draft></p:control><x:slug>slug</x:slug>"
+               "</a:entry>"))
+         (fields (jaunder--harvest-response-fields xml)))
+    (should (equal (cdr (assq 'titles fields)) '("title")))
+    (should (equal (cdr (assq 'categories fields)) '("category")))
+    (should (equal (cdr (assq 'summaries fields)) '("summary")))
+    (should (equal (cdr (assq 'published-values fields))
+                   '("2026-08-25T10:00:00Z")))
+    (should (equal (cdr (assq 'edit-uris fields)) '("https://h/post/1")))
+    (should (equal (cdr (assq 'drafts fields)) '("yes")))
+    (should (equal (cdr (assq 'slugs fields)) '("slug")))))
+
+(ert-deftest jaunder-harvest-response-fields-preserves-direct-child-cardinality ()
+  ;; D2 validates Member requirements later; the shared harvester must instead
+  ;; retain every direct wire value so D3 can diagnose duplicates precisely.
+  (let* ((xml (concat
+               "<entry xmlns=\"http://www.w3.org/2005/Atom\""
+               " xmlns:app=\"http://www.w3.org/2007/app\""
+               " xmlns:j=\"https://jaunder.org/ns/atompub\">"
+               "<title>first</title><title>second</title>"
+               "<category term=\"alpha\"/><category term=\"beta\"/>"
+               "<summary>one</summary><summary>two</summary>"
+               "<content type=\"text/org\" src=\"https://h/first\"/>"
+               "<content type=\"text/markdown\" src=\"https://h/second\"/>"
+               "<app:control><app:draft>yes</app:draft><app:draft>no</app:draft></app:control>"
+               "<app:control><app:draft>maybe</app:draft></app:control>"
+               "<published>first-time</published><published>second-time</published>"
+               "<link rel=\"edit\" href=\"https://h/posts/1\"/>"
+               "<link rel=\"alternate\" href=\"https://h/posts/1/view\"/>"
+               "<link rel=\"edit\" href=\"https://h/posts/2\"/>"
+               "<j:slug>first-slug</j:slug><j:slug>second-slug</j:slug></entry>"))
+         (fields (jaunder--harvest-response-fields xml)))
+    (should (equal (cdr (assq 'titles fields)) '("first" "second")))
+    (should (equal (cdr (assq 'categories fields)) '("alpha" "beta")))
+    (should (equal (cdr (assq 'summaries fields)) '("one" "two")))
+    (should (= (length (cdr (assq 'content-nodes fields))) 2))
+    (should (equal (cdr (assq 'drafts fields)) '("yes" "no" "maybe")))
+    (should (equal (cdr (assq 'published-values fields)) '("first-time" "second-time")))
+    (should (equal (cdr (assq 'edit-uris fields))
+                   '("https://h/posts/1" "https://h/posts/2")))
+    (should (equal (cdr (assq 'slugs fields)) '("first-slug" "second-slug")))
+    (should (equal (cdr (assq 'content-src fields)) "https://h/first"))
+    (should (equal (cdr (assq 'content-type fields)) "text/org"))
+    (should (equal (cdr (assq 'slug fields)) "first-slug"))
+    (should (equal (cdr (assq 'published fields)) "first-time"))))
+
 
 (defun jaunder-test--collect (org dir)
   "Collect media links from ORG with `default-directory' DIR."
