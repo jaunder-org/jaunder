@@ -154,9 +154,7 @@ export async function expectNoShiftAcrossMount(
     });
 
     const targets = probe.targets(page);
-    const before = await Promise.all(
-      targets.map((t) => t.locator.boundingBox()),
-    );
+    const before = await waitForStableTargetGeometry(page, targets);
 
     releaseWasm();
     await waitForMount(page);
