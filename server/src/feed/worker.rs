@@ -443,22 +443,19 @@ impl FeedWorker {
         let worker = Arc::new(self);
         let scheduler = tokio_cron_scheduler::JobScheduler::new().await?;
         let job = if interval < Duration::from_secs(1) {
-            tokio_cron_scheduler::Job::new_one_shot_async(
-                Duration::ZERO,
-                // cov:ignore-start -- the closure body fires only when the scheduler
-                // activates it; tick behavior is unit-tested through spawn_tick.
-                move |_uuid, _lock| {
-                    let worker = worker.clone();
-                    Box::pin(async move {
-                        let mut ticker = tokio::time::interval(interval);
-                        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                        loop {
-                            ticker.tick().await;
-                            spawn_tick(worker.clone()).await;
-                        }
-                    })
-                },
-            )?
+            // cov:ignore-start -- the closure body fires only when the scheduler
+            // activates it; tick behavior is unit-tested through spawn_tick.
+            tokio_cron_scheduler::Job::new_one_shot_async(Duration::ZERO, move |_uuid, _lock| {
+                let worker = worker.clone();
+                Box::pin(async move {
+                    let mut ticker = tokio::time::interval(interval);
+                    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                    loop {
+                        ticker.tick().await;
+                        spawn_tick(worker.clone()).await;
+                    }
+                })
+            })?
         } else {
             tokio_cron_scheduler::Job::new_repeated_async(interval, move |_uuid, _lock| {
                 spawn_tick(worker.clone())
