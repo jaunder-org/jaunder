@@ -18,21 +18,18 @@ use crate::tagged_url::CollectionHrefUrl;
 ///
 /// These discovery values are distinct from the concrete content types carried
 /// by uploaded media.
+#[macros::text_enum(
+    error = InvalidCollectionAccept,
+    message = "collection accept must be \"application/atom+xml;type=entry\" or \"*/*\""
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CollectionAccept {
     /// Atom Entry documents.
+    #[strum(serialize = "application/atom+xml;type=entry")]
     AtomEntry,
     /// Media resources of any concrete content type.
+    #[strum(serialize = "*/*")]
     AnyMediaType,
-}
-
-impl AsRef<str> for CollectionAccept {
-    fn as_ref(&self) -> &str {
-        match self {
-            Self::AtomEntry => "application/atom+xml;type=entry",
-            Self::AnyMediaType => "*/*",
-        }
-    }
 }
 
 /// Declaration of a single collection (posts or media) in a workspace.
