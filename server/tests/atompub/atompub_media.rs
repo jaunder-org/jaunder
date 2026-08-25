@@ -1,19 +1,22 @@
 use axum::{
     body::Body,
-    http::{HeaderValue, StatusCode, header},
+    http::{HeaderValue, Method, StatusCode, header},
 };
 use tempfile::TempDir;
 use tower::ServiceExt;
 
-use common::test_support::{parse_content_hash, parse_filename, parse_post_body};
+use common::root_relative_url::RootRelativeUrl;
+use common::test_support::{
+    parse_content_hash, parse_filename, parse_post_body, parse_root_relative_url,
+};
 use rstest::*;
 use rstest_reuse::*;
 
 use storage::test_support::{Backend, SeedRawPost, TestEnv, backends, backends_matrix};
 
 use crate::helpers::{
-    atompub, atompub_at, atompub_get, atompub_upload, body_string, create_user_and_session,
-    make_app, setup_with_base_url,
+    atompub, atompub_at, atompub_get, atompub_location, atompub_upload, body_string,
+    create_user_and_session, make_app, setup_with_base_url,
 };
 
 const PNG: &[u8] = &[
@@ -72,7 +75,7 @@ async fn upload_without_content_type_defaults_to_octet_stream(#[case] backend: B
 
     let response = app
         .oneshot(
-            atompub(&session, "POST", "media")
+            atompub(&session, Method::POST, "media")
                 .header("slug", "upload.bin")
                 .body(Body::from(PNG))
                 .unwrap(),
@@ -98,7 +101,7 @@ async fn upload_rejects_invalid_present_content_type(#[case] backend: Backend) {
 
     let response = app
         .oneshot(
-            atompub(&session, "POST", "media")
+            atompub(&session, Method::POST, "media")
                 .header(header::CONTENT_TYPE, "text")
                 .header("slug", "upload.txt")
                 .body(Body::from(PNG))
@@ -120,7 +123,7 @@ async fn upload_rejects_opaque_present_content_type(#[case] backend: Backend) {
 
     let response = app
         .oneshot(
-            atompub(&session, "POST", "media")
+            atompub(&session, Method::POST, "media")
                 .header(
                     header::CONTENT_TYPE,
                     HeaderValue::from_bytes(&[0xff]).expect("opaque header value"),
@@ -174,17 +177,17 @@ async fn get_media_member_returns_entry(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    let loc = resp
-        .headers()
-        .get(header::LOCATION)
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_string();
+    let loc = atompub_location(
+        resp.headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap(),
+    );
 
     let get_resp = app
         .oneshot(
-            atompub_at(&session, "GET", &loc)
+            atompub_at(&session, Method::GET, &loc)
                 .body(Body::empty())
                 .expect("failed to build atompub GET request"),
         )
@@ -234,18 +237,18 @@ async fn delete_media_member_returns_204_then_404(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    let loc = resp
-        .headers()
-        .get(header::LOCATION)
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_string();
+    let loc = atompub_location(
+        resp.headers()
+            .get(header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap(),
+    );
 
     let del_resp = app
         .clone()
         .oneshot(
-            atompub_at(&session, "DELETE", &loc)
+            atompub_at(&session, Method::DELETE, &loc)
                 .body(Body::empty())
                 .expect("failed to build atompub request"),
         )
@@ -257,7 +260,7 @@ async fn delete_media_member_returns_204_then_404(#[case] backend: Backend) {
     // Second delete (should be 404)
     let del_resp2 = app
         .oneshot(
-            atompub_at(&session, "DELETE", &loc)
+            atompub_at(&session, Method::DELETE, &loc)
                 .body(Body::empty())
                 .expect("failed to build atompub request"),
         )
@@ -277,6 +280,7 @@ async fn delete_media_member_refuses_rowless_referenced_file(#[case] backend: Ba
 
     let loc = upload_and_member_url(&app, &session, "pic.png").await;
     let sha256 = loc
+        .as_ref()
         .rsplit('/')
         .nth(1)
         .map(parse_content_hash)
@@ -291,7 +295,7 @@ async fn delete_media_member_refuses_rowless_referenced_file(#[case] backend: Ba
 
     let del_resp = app
         .oneshot(
-            atompub_at(&session, "DELETE", &loc)
+            atompub_at(&session, Method::DELETE, &loc)
                 .body(Body::empty())
                 .expect("failed to build atompub DELETE request"),
         )
@@ -303,11 +307,12 @@ async fn delete_media_member_refuses_rowless_referenced_file(#[case] backend: Ba
 
 /// Replaces the trailing filename segment of a member URL, keeping everything before it.
 /// Used to aim a request at a name the server never minted.
-fn with_filename_segment(member_url: &str, segment: &str) -> String {
+fn with_filename_segment(member_url: &RootRelativeUrl, segment: &str) -> RootRelativeUrl {
     let (prefix, _old) = member_url
+        .as_ref()
         .rsplit_once('/')
         .expect("a member URL always has a trailing filename segment");
-    format!("{prefix}/{segment}")
+    parse_root_relative_url(&format!("{prefix}/{segment}"))
 }
 
 /// Uploads `slug` and returns the member URL the server minted for it.
@@ -315,19 +320,20 @@ async fn upload_and_member_url(
     app: &axum::Router,
     session: &crate::helpers::SeededSession,
     slug: &str,
-) -> String {
+) -> RootRelativeUrl {
     let resp = app
         .clone()
         .oneshot(atompub_upload(session, slug, PNG))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::CREATED, "uploading {slug:?}");
-    resp.headers()
-        .get(header::LOCATION)
-        .expect("a created media member carries a Location")
-        .to_str()
-        .expect("Location is ASCII")
-        .to_string()
+    atompub_location(
+        resp.headers()
+            .get(header::LOCATION)
+            .expect("a created media member carries a Location")
+            .to_str()
+            .expect("Location is ASCII"),
+    )
 }
 
 #[apply(backends)]
@@ -344,11 +350,14 @@ async fn member_get_resolves_a_filename_needing_encoding(#[case] backend: Backen
     let app = make_app(&state, &storage);
 
     let loc = upload_and_member_url(&app, &session, "my photo.jpg").await;
-    assert!(loc.ends_with("/my%20photo.jpg"), "minted URL: {loc}");
+    assert!(
+        loc.as_ref().ends_with("/my%20photo.jpg"),
+        "minted URL: {loc}"
+    );
 
     let get_resp = app
         .oneshot(
-            atompub_at(&session, "GET", &loc)
+            atompub_at(&session, Method::GET, &loc)
                 .body(Body::empty())
                 .expect("failed to build atompub GET request"),
         )
@@ -378,7 +387,7 @@ async fn member_delete_resolves_a_filename_needing_encoding(#[case] backend: Bac
     let del_resp = app
         .clone()
         .oneshot(
-            atompub_at(&session, "DELETE", &loc)
+            atompub_at(&session, Method::DELETE, &loc)
                 .body(Body::empty())
                 .expect("failed to build atompub request"),
         )
@@ -388,7 +397,7 @@ async fn member_delete_resolves_a_filename_needing_encoding(#[case] backend: Bac
 
     let get_resp = app
         .oneshot(
-            atompub_at(&session, "GET", &loc)
+            atompub_at(&session, Method::GET, &loc)
                 .body(Body::empty())
                 .expect("failed to build atompub GET request"),
         )
@@ -413,14 +422,14 @@ async fn an_over_long_segment_does_not_truncate_onto_a_stored_name(#[case] backe
 
     let at_budget = "a".repeat(common::media::MAX_FILENAME_ENCODED_BYTES);
     let loc = upload_and_member_url(&app, &session, &at_budget).await;
-    assert!(loc.ends_with(&at_budget), "minted URL: {loc}");
+    assert!(loc.as_ref().ends_with(&at_budget), "minted URL: {loc}");
 
     let over_budget = "a".repeat(common::media::MAX_FILENAME_ENCODED_BYTES + 1);
     let aimed = with_filename_segment(&loc, &over_budget);
 
     let resp = app
         .oneshot(
-            atompub_at(&session, "GET", &aimed)
+            atompub_at(&session, Method::GET, &aimed)
                 .body(Body::empty())
                 .expect("failed to build atompub GET request"),
         )
@@ -444,10 +453,11 @@ async fn upload_forbids_other_user(#[case] backend: Backend) {
 
     let storage = TempDir::new().unwrap();
     let app = make_app(&state, &storage);
+    let uri = parse_root_relative_url("/atompub/bob/media");
 
     let response = app
         .oneshot(
-            atompub_at(&session, "POST", "/atompub/bob/media")
+            atompub_at(&session, Method::POST, &uri)
                 .header(header::CONTENT_TYPE, "image/png")
                 .header("slug", "pic.png")
                 .body(Body::from(PNG))
@@ -470,7 +480,7 @@ async fn upload_rejects_empty_slug(#[case] backend: Backend) {
     // ".." sanitizes to an empty filename.
     let response = app
         .oneshot(
-            atompub(&session, "POST", "media")
+            atompub(&session, Method::POST, "media")
                 .header(header::CONTENT_TYPE, "image/png")
                 .header("slug", "..")
                 .body(Body::from(PNG))
@@ -486,23 +496,25 @@ async fn upload_rejects_empty_slug(#[case] backend: Backend) {
 // method. Identical setup (alice authenticated, bob's resource) + assertion;
 // only the HTTP method varies.
 #[apply(backends_matrix)]
-#[case::get("GET")]
-#[case::delete("DELETE")]
+#[case::get(Method::GET)]
+#[case::delete(Method::DELETE)]
 #[tokio::test]
-async fn member_forbids_other_user(backend: Backend, #[case] method: &str) {
+async fn member_forbids_other_user(backend: Backend, #[case] method: Method) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
     let app = make_app(&state, &storage);
+    let uri = parse_root_relative_url(
+        "/atompub/bob/media/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/pic.png",
+    );
 
     let response = app
         .oneshot(
             atompub_at(
-                &session,
-                method,
+                &session, method,
                 // A well-formed hash so the typed extractor passes and the wrong-user
                 // check (alice authenticated, bob's namespace) is what yields 403.
-                "/atompub/bob/media/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/pic.png",
+                &uri,
             )
             .body(Body::empty())
             .expect("failed to build atompub request"),
