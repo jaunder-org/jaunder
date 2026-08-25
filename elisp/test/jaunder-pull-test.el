@@ -148,6 +148,35 @@
       (should-not (jaunder--safe-pull-slug-p slug)))
     (should (jaunder--safe-pull-slug-p "日本語-記事"))))
 
+(ert-deftest jaunder-atom->org-rejects-semantic-rfc-3339-invalidity ()
+  ;; `date-to-time' normalizes several malformed calendar values, so the pull
+  ;; boundary validates each component before parsing while retaining valid wire
+  ;; text with leap days, fractions, and numeric offsets verbatim.
+  (let ((parts '("<title>T</title>"
+                 "<link rel=\"edit\" href=\"https://h/atompub/alice/posts/1\"/>"
+                 "<j:slug>safe-slug</j:slug>"
+                 "<content type=\"text/org\">Body</content>")))
+    (dolist (published '("2026-13-01T00:00:00Z"
+                         "2025-02-29T00:00:00Z"
+                         "2024-02-30T00:00:00Z"
+                         "2026-01-01T24:00:00Z"
+                         "2026-01-01T00:60:00Z"
+                         "2026-01-01T00:00:60Z"
+                         "2026-01-01T00:00:00+24:00"
+                         "2026-01-01T00:00:00+00:60"))
+      (should-error
+       (jaunder-pull-test--org
+        (apply #'jaunder-pull-test--entry
+               (cons (format "<published>%s</published>" published) parts)))))
+    (dolist (published '("2024-02-29T23:59:59.123+14:30"
+                         "2024-02-29T00:00:00Z"))
+      (should
+       (string-match-p
+        (regexp-quote (concat "#+PROPERTY: JAUNDER_DATE_UTC " published))
+        (jaunder-pull-test--org
+         (apply #'jaunder-pull-test--entry
+                (cons (format "<published>%s</published>" published) parts))))))))
+
 (ert-deftest jaunder-atom->org-rejects-malformed-member-or-etag ()
   ;; Required Member cardinality and strong sync identity fail before any caller
   ;; can obtain bytes to install.

@@ -33,6 +33,10 @@
 (defconst jaunder--app-ns "http://www.w3.org/2007/app"
   "The Atom Publishing Protocol namespace URI (`app:control'/`app:draft').")
 
+(defconst jaunder--atompub-ns "https://jaunder.org/ns/atompub"
+  "The Jaunder AtomPub extension namespace URI.")
+
+
 (defun jaunder--atom-entry->xml (entry)
   "Serialize a `jaunder-entry' ENTRY to a standalone AtomPub <entry> XML string.
 Builds a `dom' node and renders it with `dom-print', which escapes text and
@@ -72,13 +76,53 @@ here."
   "Return TAG's local XML name as a symbol."
   (intern (car (last (split-string (symbol-name tag) ":")))))
 
+(defun jaunder--atom-namespace-context (node inherited)
+  "Return NODE's in-scope namespace bindings over INHERITED.
+The result maps prefix symbols (or nil for the default namespace) to namespace
+URI strings.  A declaration on NODE shadows a binding inherited from its
+parent."
+  (let ((bindings (copy-sequence inherited)))
+    (dolist (attribute (cadr node) bindings)
+      (let ((name (symbol-name (car attribute))))
+        (cond
+         ((equal name "xmlns")
+          (setq bindings (assq-delete-all nil bindings))
+          (push (cons nil (cdr attribute)) bindings))
+         ((string-prefix-p "xmlns:" name)
+          (let ((prefix (intern (substring name (length "xmlns:")))))
+            (setq bindings (assq-delete-all prefix bindings))
+            (push (cons prefix (cdr attribute)) bindings))))))))
+
+(defun jaunder--atom-element-namespace (node namespaces)
+  "Return NODE's resolved namespace URI using in-scope NAMESPACES."
+  (let* ((parts (split-string (symbol-name (car node)) ":"))
+         (prefix (and (cdr parts) (intern (car parts)))))
+    (cdr (assq prefix namespaces))))
+
+(defun jaunder--atom-direct-elements-in-namespace (node tag namespace inherited)
+  "Return NODE's direct TAG children resolved to NAMESPACE, in document order.
+INHERITED is the namespace context in scope on NODE.  Each child is resolved
+against that context plus declarations on the child itself, so documents may
+use arbitrary prefixes or redeclare a prefix at any direct-child boundary."
+  (cl-remove-if-not
+   (lambda (child)
+     (and (listp child)
+          (eq (jaunder--atom-local-name (car child)) tag)
+          (equal (jaunder--atom-element-namespace
+                  child (jaunder--atom-namespace-context child inherited))
+                 namespace)))
+   (dom-children node)))
+
 (defun jaunder--atom-direct-elements (node tag)
-  "Return NODE's direct child elements with local name TAG, in document order."
+  "Return NODE's direct child elements with local name TAG, in document order.
+This intentionally ignores namespaces for the XHTML wrapper validator, which
+checks that wrapper's namespace separately."
   (cl-remove-if-not
    (lambda (child)
      (and (listp child)
           (eq (jaunder--atom-local-name (car child)) tag)))
    (dom-children node)))
+
 
 (defun jaunder--harvest-response-fields (xml)
   "Harvest compatible metadata fields from an AtomPub response entry XML.
@@ -87,26 +131,38 @@ keys retain their first direct-child values.  The ordered plural `titles',
 `categories', `summaries', `content-nodes', `drafts', `published-values',
 `edit-uris', and `slugs' keys expose all direct-child values for Member parsing.
 `content-nodes' deliberately retains DOM nodes for the later text/XHTML
-projection.  `app:draft' values are collected only from direct `app:control'
-children and their direct `app:draft' children; edit URIs come only from direct
-`link rel=\"edit\"' children.  No Member-required cardinality is enforced here,
-so media and publish responses remain valid.  The parser retains namespace
-declarations; local-name matching keeps selection prefix-independent."
+projection.  Atom metadata is accepted only from the Atom namespace,
+`app:control'/`app:draft' only from APP, and `slug' only from the Jaunder
+extension namespace.  No Member-required cardinality is enforced here, so media
+and publish responses remain valid."
   (let* ((dom (with-temp-buffer
                 (insert xml)
                 (car (xml-parse-region (point-min) (point-max)))))
-         (titles (jaunder--atom-direct-elements dom 'title))
-         (categories (jaunder--atom-direct-elements dom 'category))
-         (summaries (jaunder--atom-direct-elements dom 'summary))
-         (content-nodes (jaunder--atom-direct-elements dom 'content))
-         (controls (jaunder--atom-direct-elements dom 'control))
-         (published-values (jaunder--atom-direct-elements dom 'published))
-         (links (jaunder--atom-direct-elements dom 'link))
-         (slugs (jaunder--atom-direct-elements dom 'slug))
+         (entry-namespaces (jaunder--atom-namespace-context dom nil))
+         (titles (jaunder--atom-direct-elements-in-namespace
+                  dom 'title jaunder--atom-ns entry-namespaces))
+         (categories (jaunder--atom-direct-elements-in-namespace
+                      dom 'category jaunder--atom-ns entry-namespaces))
+         (summaries (jaunder--atom-direct-elements-in-namespace
+                     dom 'summary jaunder--atom-ns entry-namespaces))
+         (content-nodes (jaunder--atom-direct-elements-in-namespace
+                         dom 'content jaunder--atom-ns entry-namespaces))
+         (controls (jaunder--atom-direct-elements-in-namespace
+                    dom 'control jaunder--app-ns entry-namespaces))
+         (published-values (jaunder--atom-direct-elements-in-namespace
+                            dom 'published jaunder--atom-ns entry-namespaces))
+         (links (jaunder--atom-direct-elements-in-namespace
+                 dom 'link jaunder--atom-ns entry-namespaces))
+         (slugs (jaunder--atom-direct-elements-in-namespace
+                 dom 'slug jaunder--atompub-ns entry-namespaces))
          (drafts (apply #'append
-                        (mapcar (lambda (control)
-                                  (jaunder--atom-direct-elements control 'draft))
-                                controls)))
+                        (mapcar
+                         (lambda (control)
+                           (jaunder--atom-direct-elements-in-namespace
+                            control 'draft jaunder--app-ns
+                            (jaunder--atom-namespace-context
+                             control entry-namespaces)))
+                         controls)))
          (edit-links (cl-remove-if-not
                       (lambda (link) (equal (dom-attr link 'rel) "edit"))
                       links))
