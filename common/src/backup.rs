@@ -4,12 +4,15 @@
 //! types plus their validation and defaults; the actual export, archiving, and
 //! retention-pruning logic lives in the `storage` and `server` crates.
 
+use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
 use croner::Cron;
 use macros::{NumNewtype, StrNewtype};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+use crate::UserFacingMessage;
 
 /// How a backup is written to its destination.
 ///
@@ -66,13 +69,32 @@ pub struct BackupSchedule(String);
 
 /// Error returned when a string is not a valid six-field cron expression.
 ///
-/// Carries the underlying `croner` reason behind a stable label (mirrors
-/// [`common::email::InvalidEmail`](crate::email::InvalidEmail)); the field is private,
-/// so the dependency type does not leak into `common`'s public surface — only its
-/// `Display` string escapes.
-#[derive(Debug, Error)]
-#[error("invalid backup schedule: {0}")]
-pub struct InvalidBackupSchedule(croner::errors::CronError);
+/// Detailed Croner feedback is retained only in the user-facing wrapper. Debug
+/// output is redacted by that wrapper, and telemetry uses the stable code below.
+#[derive(Debug)]
+pub struct InvalidBackupSchedule(UserFacingMessage);
+
+impl InvalidBackupSchedule {
+    /// Detailed validation feedback for the submitting operator.
+    #[must_use]
+    pub fn user_message(&self) -> &str {
+        self.0.as_str()
+    }
+
+    /// Stable bounded classification for telemetry.
+    #[must_use]
+    pub fn telemetry_code(&self) -> &'static str {
+        "invalid_backup_schedule"
+    }
+}
+
+impl Display for InvalidBackupSchedule {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.user_message())
+    }
+}
+
+impl std::error::Error for InvalidBackupSchedule {}
 
 impl FromStr for BackupSchedule {
     type Err = InvalidBackupSchedule;
@@ -84,7 +106,14 @@ impl FromStr for BackupSchedule {
         Cron::new(trimmed)
             .with_seconds_required()
             .parse()
-            .map_err(InvalidBackupSchedule)?;
+            .map_err(|error| {
+                InvalidBackupSchedule(
+                    // server-fn-wire-arg-error:allow Croner detail is useful only to the submitting backup operator
+                    UserFacingMessage::from_external(format_args!(
+                        "invalid backup schedule: {error}"
+                    )),
+                )
+            })?;
         Ok(Self(trimmed.to_owned()))
     }
 }
@@ -287,15 +316,25 @@ mod tests {
     }
 
     #[test]
-    fn backup_schedule_error_carries_the_underlying_reason() {
-        // The error keeps croner's specific diagnostic behind our own label, rather
-        // than collapsing every failure to a constant string.
-        let msg = "not a cron"
-            .parse::<BackupSchedule>()
-            .unwrap_err()
-            .to_string();
-        assert!(msg.starts_with("invalid backup schedule: "), "{msg}");
-        assert!(msg.len() > "invalid backup schedule: ".len(), "{msg}");
+    fn backup_schedule_error_separates_detailed_user_and_redacted_telemetry_surfaces() {
+        let error = "not a cron".parse::<BackupSchedule>().unwrap_err();
+        assert!(
+            error
+                .user_message()
+                .starts_with("invalid backup schedule: "),
+            "{}",
+            error.user_message()
+        );
+        assert!(
+            error.user_message().len() > "invalid backup schedule: ".len(),
+            "{}",
+            error.user_message()
+        );
+        assert_eq!(error.to_string(), error.user_message());
+        assert_eq!(error.telemetry_code(), "invalid_backup_schedule");
+        let debug = format!("{error:?}");
+        assert!(debug.contains("UserFacingMessage([redacted])"), "{debug}");
+        assert!(!debug.contains(error.user_message()), "{debug}");
     }
 
     #[test]

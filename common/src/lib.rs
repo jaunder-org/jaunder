@@ -54,6 +54,8 @@ pub mod text;
 pub mod time;
 pub mod token;
 pub mod trace_field;
+mod user_facing_message;
+pub use user_facing_message::UserFacingMessage;
 pub mod username;
 pub mod visibility;
 

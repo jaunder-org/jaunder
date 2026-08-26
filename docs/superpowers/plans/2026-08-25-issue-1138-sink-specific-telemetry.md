@@ -53,7 +53,7 @@ Out:
     `devtool run -- cargo test --manifest-path xtask/Cargo.toml server_fn_tracing_check`
     proves the reduced static policy remains fail-closed.
 
-- [ ] Task 3: Introduce owned parse-error sink surfaces
+- [x] Task 3: Introduce owned parse-error sink surfaces
   - Contract: export `common::UserFacingMessage` with only `from_external` and
     `as_str`, redacted exact `Debug`, and no `TraceField`. `InvalidEmail`
     discards its foreign source and exposes the exact static user message/code.
@@ -65,7 +65,7 @@ Out:
     `devtool run -- cargo xtask test-local -- -p web forms::field` proves the
     existing client invalid-cron assertion remains green.
 
-- [ ] Task 4: Replace external-display admission with owned-surface enforcement
+- [x] Task 4: Replace external-display admission with owned-surface enforcement
   - Contract: `server-fn-wire-arg-error` recognizes owned
     `user_message`/`telemetry_code` surfaces and derives a census of immediately
     marked `UserFacingMessage::from_external` calls. Delete the external-display
@@ -77,9 +77,9 @@ Out:
     `devtool run -- cargo test --manifest-path xtask/Cargo.toml server_fn_wire_arg_error_check`
     proves marked pass, unmarked failure, and stale/bare/trailing/shared/orphan
     marker failures;
-    `devtool run -- cargo xtask test-local -- -p web error::server` proves the
-    submitted marker cannot enter `Validation`/`Client`, `stage=decode`, public
-    `invalid request arguments` telemetry.
+    `devtool run -- cargo xtask test-local -- -p web --features server arg_decode_failure_emits_a_boundary_event`
+    proves the submitted marker cannot enter `Validation`/`Client`,
+    `stage=decode`, public `invalid request arguments` telemetry.
 
 - [ ] Task 5: Project and certify the policy replacement
   - Contract: add tracked draft
