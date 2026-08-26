@@ -7,7 +7,7 @@ instant, carrying its semantic type through the storage boundary without
 changing stored values, schemas, protocol representations, or time semantics.
 
 This records the implementation contract for
-`docs/adr/drafts/storage-owned-instants.md`. That proposed decision supersedes
+`docs/adr/0153-storage-owned-instants.md`. That proposed decision supersedes
 only ADR-0072's raw-`DateTime<Utc>` storage exception and updates ADR-0027's
 type wording while retaining its explicit-`now` rule.
 
@@ -97,7 +97,7 @@ type wording while retaining its explicit-`now` rule.
   suffixes, and non-storage protocol timestamp representations remain unchanged.
 - The repository validation gate, including its SQLite and PostgreSQL coverage,
   passes with the new architecture citation
-  `docs/adr/drafts/storage-owned-instants.md` and without changing
+  `docs/adr/0153-storage-owned-instants.md` and without changing
   `docs/README.md` or `CONTEXT.md`.
 
 ## Boundaries
