@@ -97,7 +97,7 @@ Out:
     full Org metadata, precedence, audience masking, collision-resolved slug,
     successful canonical native-source reads, 400/412 failures, and no mutation.
 
-- [ ] Task 5: Prove client and browser compatibility; finish projections
+- [x] Task 5: Prove client and browser compatibility; finish projections
   - Depends on: Tasks 3-4.
   - Contract: Emacs pull/publish output remains accepted by the stricter server;
     change Emacs serialization only where the approved grammar requires it. Keep

@@ -693,7 +693,7 @@ fn CompactComposer(
                         placeholder="Optional summary or excerpt"
                     />
                 </div>
-                <TagInput tags=state.tags />
+                <TagInput tags=state.tags on_change=state.tag_input_changed() />
                 <div class="j-composer-toolbar">
                     <FormatToggle format=state.format />
                     <span class="j-spacer"></span>
@@ -1438,7 +1438,7 @@ fn ComposeOptions(
                 />
             </div>
             <div style="margin-top:10px">
-                <TagInput tags=state.tags />
+                <TagInput tags=state.tags on_change=state.tag_input_changed() />
             </div>
             <div style="margin-top:10px">
                 <AudiencePickerWithState selection=state.audience named=named />

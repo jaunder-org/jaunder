@@ -74,11 +74,21 @@
                     "#+PROPERTY: JAUNDER_SYNCED \"sha256-test\"\n"
                     "#+PROPERTY: JAUNDER_SYNCED_AT 2026-08-25T12:00:00Z\n"
                     "\n# Body\nhttps://h/media/y.png")))
+    ;; The complete pull header is consumable by publishing without teaching this
+    ;; test the server's Org grammar: assert only the client's outgoing entry.
     (with-temp-buffer
       (insert org)
       (org-mode)
-      (should (equal (jaunder-entry-title (jaunder--org->atom))
-                     "Line one\nLine two")))))
+      (let ((entry (jaunder--org->atom)))
+        (should (equal (jaunder-entry-title entry) "Line one\nLine two"))
+        (should (equal (jaunder-entry-categories entry) '("alpha" "beta")))
+        (should (equal (jaunder-entry-summary entry) "First\nSecond"))
+        (should-not (jaunder-entry-draft entry))
+        (should (equal (jaunder-entry-content-type entry) "text/org"))
+        (should (equal (jaunder-entry-published entry) "2026-08-26T11:00:00Z"))
+        ;; Republish sends only native content; the locally generated DATE,
+        ;; status, and bookkeeping block stays structured client-side.
+        (should (equal (jaunder-entry-body entry) "# Body\nhttps://h/media/y.png"))))))
 
 (ert-deftest jaunder-atom->org-published-html-and-xhtml-bodies ()
   ;; Escaped HTML remains source text; XHTML drops only its required wrapper and

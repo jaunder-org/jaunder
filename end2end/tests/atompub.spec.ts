@@ -113,7 +113,7 @@ test("an app password can be revoked from the sessions page", async ({
   expect(response.status()).toBe(401);
 });
 
-test("full AtomPub publishing flow over HTTP with an app password", async ({
+test("full AtomPub Org publishing flow over HTTP with an app password", async ({
   page,
   request,
 }) => {
@@ -133,29 +133,50 @@ test("full AtomPub publishing flow over HTTP with an app password", async ({
   expect(service.status()).toBe(200);
   expect(await service.text()).toContain("app:service");
 
-  // 2. Create a post.
+  // 2. Create an Org post. Atom title wins over the header, while omitted
+  // categories and summary are supplied by its Org metadata.
   const created = await request.post(`${BASE_URL}/atompub/${username}/posts`, {
     headers: xml,
     data: `<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom">
-  <title>E2E Post</title>
-  <content type="html">&lt;p&gt;hello from e2e&lt;/p&gt;</content>
-  <category term="e2e"/>
+  <title>Atom title</title>
+  <content type="text/org">#+TITLE: Header title
+#+KEYWORDS: header-category
+#+DESCRIPTION: Header summary
+#+PROPERTY: JAUNDER_STATUS draft
+#+UNKNOWN: preserved
+
+Org body</content>
 </entry>`,
   });
   expect(created.status()).toBe(201);
+  const createdBody = await created.text();
+  const createdEtag = created.headers()["etag"];
   const memberUrl = onServer(created.headers()["location"]);
+  const createdId = memberUrl.match(/\/posts\/(\d+)$/)?.[1];
+  const createdSlug = createdBody.match(/<j:slug>([^<]+)<\/j:slug>/)?.[1];
+  expect(createdEtag).toBeTruthy();
+  expect(createdId).toBeTruthy();
+  expect(createdSlug).toBeTruthy();
   expect(memberUrl).toContain(`/atompub/${username}/posts/`);
 
-  // 3. Fetch the member entry (native-source HTML form, with the category).
+  // 3. Fetch the native Org source. Known metadata is canonicalized away, but
+  // unrecognized Org directives remain source content.
   const member = await request.get(memberUrl, {
     headers: { authorization: auth },
   });
   expect(member.status()).toBe(200);
   const memberBody = await member.text();
-  expect(memberBody).toContain('type="html"');
-  expect(memberBody).toContain("hello from e2e");
-  expect(memberBody).toContain('term="e2e"');
+  expect(memberBody).toContain("<title>Atom title</title>");
+  expect(memberBody).toContain('term="header-category"');
+  expect(memberBody).toContain("<summary>Header summary</summary>");
+  expect(memberBody).toContain('type="text/org"');
+  expect(memberBody).toContain("#+UNKNOWN: preserved");
+  expect(memberBody).toContain("Org body");
+  expect(memberBody).not.toContain("#+TITLE: Header title");
+  expect(memberBody).not.toContain("#+KEYWORDS:");
+  expect(memberBody).not.toContain("#+DESCRIPTION:");
+  expect(memberBody).not.toContain("JAUNDER_STATUS");
 
   // 4. List the collection feed.
   const list = await request.get(`${BASE_URL}/atompub/${username}/posts`, {
@@ -166,17 +187,66 @@ test("full AtomPub publishing flow over HTTP with an app password", async ({
   expect(listBody).toContain("<feed");
   expect(listBody).toContain('rel="edit"');
 
-  // 5. Edit the post.
+  // 5. Update with matching bookkeeping and a separate matching If-Match.
+  const editedSlug = "atom-edited";
+  // Explicit Atom title/category/summary still win over the Org header.
   const edited = await request.put(memberUrl, {
-    headers: xml,
+    headers: { ...xml, "if-match": createdEtag },
     data: `<?xml version="1.0"?>
 <entry xmlns="http://www.w3.org/2005/Atom">
-  <title>E2E Post edited</title>
-  <content type="html">&lt;p&gt;edited body&lt;/p&gt;</content>
+  <title>Atom edited</title>
+  <category term="atom-category"/>
+  <summary>Atom summary</summary>
+  <content type="text/org">#+TITLE: Header edited
+#+KEYWORDS: header-edited
+#+DESCRIPTION: Header edited summary
+#+PROPERTY: JAUNDER_STATUS draft
+#+PROPERTY: JAUNDER_FORMAT org
+#+PROPERTY: JAUNDER_SLUG ${editedSlug}
+#+PROPERTY: JAUNDER_ID ${createdId}
+#+PROPERTY: JAUNDER_SYNCED ${createdEtag}
+#+PROPERTY: JAUNDER_SYNCED_AT 2026-08-26T12:00:00Z
+#+UNKNOWN: preserved
+
+Edited Org body</content>
 </entry>`,
   });
   expect(edited.status()).toBe(200);
-  expect(await edited.text()).toContain("edited body");
+  const editedBody = await edited.text();
+  const editedEtag = edited.headers()["etag"];
+  expect(editedEtag).toBeTruthy();
+  expect(editedBody).toContain("<title>Atom edited</title>");
+  expect(editedBody).toContain(`<j:slug>${editedSlug}</j:slug>`);
+  expect(editedBody).toContain('term="atom-category"');
+  expect(editedBody).toContain("<summary>Atom summary</summary>");
+  expect(editedBody).toContain("#+UNKNOWN: preserved");
+  expect(editedBody).toContain("Edited Org body");
+  expect(editedBody).not.toContain("JAUNDER_SYNCED");
+
+  // The fresh transport precondition isolates the stale in-body sync marker.
+  // A rejected PUT must leave the accepted revision unchanged.
+  const stale = await request.put(memberUrl, {
+    headers: { ...xml, "if-match": editedEtag },
+    data: `<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>Should not persist</title>
+  <content type="text/org">#+PROPERTY: JAUNDER_STATUS draft
+#+PROPERTY: JAUNDER_FORMAT org
+#+PROPERTY: JAUNDER_ID ${createdId}
+#+PROPERTY: JAUNDER_SYNCED "stale"
+#+PROPERTY: JAUNDER_SYNCED_AT 2026-08-26T12:00:00Z
+
+Rejected body</content>
+</entry>`,
+  });
+  expect(stale.status()).toBe(412);
+  const unchanged = await request.get(memberUrl, {
+    headers: { authorization: auth },
+  });
+  expect(unchanged.status()).toBe(200);
+  const unchangedBody = await unchanged.text();
+  expect(unchangedBody).toContain("Edited Org body");
+  expect(unchangedBody).not.toContain("Rejected body");
 
   // 6. Upload media (raw bytes + Slug).
   const media = await request.post(`${BASE_URL}/atompub/${username}/media`, {

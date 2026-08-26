@@ -84,6 +84,28 @@
                                             bytes))
                                    (should (string-suffix-p server-body bytes))
                                    (should (string-match-p (regexp-quote media-url) bytes))
+                                   ;; A pulled file carries the canonical Org metadata
+                                   ;; block.  Re-publishing it exercises the real
+                                   ;; client mapping and strict AtomPub update path.
+                                   (let ((pulled-buffer (find-file-noselect path)))
+                                     (unwind-protect
+                                         (with-current-buffer pulled-buffer
+                                           (jaunder-publish)
+                                           (should (equal
+                                                    (jaunder--buffer-property "JAUNDER_ID")
+                                                    id))
+                                           (should (jaunder--buffer-property
+                                                    "JAUNDER_SYNCED")))
+                                       ;; `jaunder-publish' refreshes local
+                                       ;; sync bookkeeping; the blocked
+                                       ;; re-pull below must preserve those
+                                       ;; post-republish bytes.
+                                       (setq bytes (buffer-string))
+                                       (when (buffer-live-p pulled-buffer)
+                                         (with-current-buffer pulled-buffer
+                                           (set-buffer-modified-p nil)))
+                                       (when (buffer-live-p pulled-buffer)
+                                         (kill-buffer pulled-buffer))))
                                    (let ((blocked (jaunder--pull-member root member)))
                                      (should (eq (jaunder-pull-result-status blocked) 'blocked))
                                      (should (equal (jaunder-pull-result-path blocked) path))

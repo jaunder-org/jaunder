@@ -359,11 +359,16 @@ audience targets; identity and sync bookkeeping is checked against
 derived/current values, never trusted as input. The full policy is
 [server-side Org metadata block canonicalization](adr/drafts/server-side-org-metadata-block.md),
 which evolves [ADR-0024](adr/0024-server-side-org-canonicalization.md). Clients
-synthesize their presentation header block on output. `perform_post_update`
-(`storage/src/post_service.rs:236`, naming block `:251-267`) and
-`perform_post_creation` (`:401`, block `:417-424`) derive naming from the
-original body before canonicalizing because canonicalization removes recognized
-metadata.
+synthesize presentation headers on output.
+
+The deep normalization interface is `common::org::normalize_org`: it owns the
+Org element boundary, typed metadata parsing, field/lifecycle precedence, date
+conversion, and canonical stripping, and returns effective metadata plus
+non-authoritative bookkeeping. Web and AtomPub adapters map their wire presence
+into that interface; `perform_post_creation`/`perform_post_update` then persist
+its canonical result, with SQLite/PostgreSQL checking final slug/format/time and
+the pre-write content `ETag` inside the write transaction before commit or
+revision creation.
 
 **`RenderedHtml` guarantees "contains no active markup", through two named
 doors** ([ADR-0079](adr/0079-rendered-html-sanitization.md)).
