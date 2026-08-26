@@ -352,7 +352,7 @@ impl FeedWorker {
                         let delay = chrono::Duration::seconds(
                             i64::try_from(BACKOFFS_SECS[next_attempt_idx]).unwrap_or(60),
                         );
-                        let next = Utc::now() + delay;
+                        let next = UtcInstant::from(Utc::now() + delay);
                         host::metrics::websub_ping(host::metrics::PingOutcome::Failed);
                         if let Err(error) = self
                             .feed_events()
@@ -407,10 +407,12 @@ impl FeedWorker {
                 );
             }
         } else {
-            let next = Utc::now()
-                + chrono::Duration::seconds(
-                    i64::try_from(BACKOFFS_SECS[next_attempt_idx]).unwrap_or(60),
-                );
+            let next = UtcInstant::from(
+                Utc::now()
+                    + chrono::Duration::seconds(
+                        i64::try_from(BACKOFFS_SECS[next_attempt_idx]).unwrap_or(60),
+                    ),
+            );
             if let Err(error) = self
                 .feed_events()
                 .mark_failed(ids, &e.to_string(), next)
@@ -487,7 +489,7 @@ mod tests {
     use storage::{FeedEventError, FeedEventRecord, FeedEventStatus};
 
     fn event(id: i64, feed_url: &str, attempts: i32) -> FeedEventRecord {
-        let now = Utc::now();
+        let now = UtcInstant::from(Utc::now());
         FeedEventRecord {
             id: FeedEventId::from(id),
             feed_path: feed_url.parse().expect("valid feed path in test"),

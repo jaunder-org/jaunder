@@ -356,7 +356,7 @@ async fn worker_marks_exhausted_after_backoff_attempts_are_used_up(#[case] backe
     // Drive the attempt count up to the backoff-table length by repeatedly
     // claiming and re-queuing with a past retry time (so it stays claimable).
     // The next real ping failure then exceeds the table and exhausts the event.
-    let past = Utc::now() - chrono::Duration::hours(1);
+    let past = UtcInstant::from(Utc::now() - chrono::Duration::hours(1));
     for _ in 0..6 {
         let claimed = state
             .feed_events

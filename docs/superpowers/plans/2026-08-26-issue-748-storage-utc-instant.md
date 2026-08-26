@@ -106,7 +106,7 @@ Out:
     round trips; feed ETag, Last-Modified, RFC 2822, and cache-window behavior
     remain unchanged.
 
-- [ ] Task 9: Migrate feed-event storage instants.
+- [x] Task 9: Migrate feed-event storage instants.
   - Contract: all required/nullable lifecycle fields, dialect arguments,
     fixtures, backend implementations, and callers use `UtcInstant`; lease
     lengths remain durations and claim cutoffs remain explicit instants.

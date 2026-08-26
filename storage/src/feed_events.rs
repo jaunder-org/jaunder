@@ -3,9 +3,10 @@
 //! claims are re-eligible after `lease_timeout` elapses (claim-lease pattern).
 
 use async_trait::async_trait;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{Duration, Utc};
 use common::feed::{FeedEventClaimLimit, FeedPath};
 use common::ids::FeedEventId;
+use common::time::UtcInstant;
 use sqlx::{Database, Pool};
 use thiserror::Error;
 
@@ -25,11 +26,11 @@ pub struct FeedEventRecord {
     pub status: FeedEventStatus,
     pub attempts: i32,
     pub last_error: Option<String>,
-    pub next_attempt_at: DateTime<Utc>,
-    pub claimed_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-    pub regenerated_at: Option<DateTime<Utc>>,
-    pub pinged_at: Option<DateTime<Utc>>,
+    pub next_attempt_at: UtcInstant,
+    pub claimed_at: Option<UtcInstant>,
+    pub created_at: UtcInstant,
+    pub regenerated_at: Option<UtcInstant>,
+    pub pinged_at: Option<UtcInstant>,
 }
 
 #[derive(Debug, Error)]
@@ -166,7 +167,7 @@ pub trait FeedEventStorage: Send + Sync {
         &self,
         ids: &[FeedEventId],
         error: &str,
-        next_attempt_at: DateTime<Utc>,
+        next_attempt_at: UtcInstant,
     ) -> Result<(), FeedEventError>;
 
     /// Terminal failure: status = 'failed', record the final error.
@@ -192,16 +193,16 @@ pub trait FeedEventDialect: Backend {
     /// Atomically claim and return up to `limit` eligible rows.
     async fn claim_pending_batch(
         pool: &Pool<Self>,
-        now: DateTime<Utc>,
-        lease_cutoff: DateTime<Utc>,
+        now: UtcInstant,
+        lease_cutoff: UtcInstant,
         limit: FeedEventClaimLimit,
     ) -> Result<Vec<FeedEventRecord>, FeedEventError>;
 
     /// Count rows eligible under the same predicate as `claim_pending_batch`.
     async fn claimable_count(
         pool: &Pool<Self>,
-        now: DateTime<Utc>,
-        lease_cutoff: DateTime<Utc>,
+        now: UtcInstant,
+        lease_cutoff: UtcInstant,
     ) -> Result<u64, FeedEventError>;
 
     /// Stamp `regenerated_at = now` on all rows whose id is in `ids`.
@@ -216,7 +217,7 @@ pub trait FeedEventDialect: Backend {
         pool: &Pool<Self>,
         ids: &[FeedEventId],
         error: &str,
-        next_attempt_at: DateTime<Utc>,
+        next_attempt_at: UtcInstant,
     ) -> Result<(), FeedEventError>;
 
     /// Terminal failure: set `status = 'failed'` and record the final error.
@@ -315,8 +316,8 @@ where
         limit: usize,
         lease_timeout: Duration,
     ) -> Result<Vec<FeedEventRecord>, FeedEventError> {
-        let now = Utc::now();
-        let lease_cutoff = now - lease_timeout;
+        let now = UtcInstant::from(Utc::now());
+        let lease_cutoff = UtcInstant::from(now.value() - lease_timeout);
         let limit = FeedEventClaimLimit::from_usize(limit);
         DB::claim_pending_batch(&self.pool, now, lease_cutoff, limit).await
     }
@@ -327,8 +328,8 @@ where
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn claimable_count(&self, lease_timeout: Duration) -> Result<u64, FeedEventError> {
-        let now = Utc::now();
-        let lease_cutoff = now - lease_timeout;
+        let now = UtcInstant::from(Utc::now());
+        let lease_cutoff = UtcInstant::from(now.value() - lease_timeout);
         DB::claimable_count(&self.pool, now, lease_cutoff).await
     }
 
@@ -365,7 +366,7 @@ where
         &self,
         ids: &[FeedEventId],
         error: &str,
-        next_attempt_at: DateTime<Utc>,
+        next_attempt_at: UtcInstant,
     ) -> Result<(), FeedEventError> {
         if ids.is_empty() {
             return Ok(());
@@ -388,6 +389,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use chrono::{TimeZone, Timelike};
+
     use super::*;
     use crate::test_support::{Backend, backends, fp};
     use rstest::*;
@@ -501,7 +504,7 @@ mod tests {
             .mark_failed(
                 &[id],
                 "retry later",
-                chrono::Utc::now() + chrono::Duration::hours(1),
+                UtcInstant::from(chrono::Utc::now() + chrono::Duration::hours(1)),
             )
             .await
             .unwrap();
@@ -871,7 +874,7 @@ mod tests {
             .claim_pending_batch(10, chrono::Duration::minutes(5))
             .await
             .unwrap();
-        let future = Utc::now() + chrono::Duration::minutes(1);
+        let future = UtcInstant::from(Utc::now() + chrono::Duration::minutes(1));
         env.state
             .feed_events
             .mark_failed(&[id], "boom", future)
@@ -912,6 +915,179 @@ mod tests {
         assert!(next.is_empty());
     }
 
+    fn fixture_instant(microsecond: u32) -> UtcInstant {
+        UtcInstant::from(
+            Utc.with_ymd_and_hms(2026, 8, 26, 12, 34, 56)
+                .unwrap()
+                .with_nanosecond(microsecond * 1_000)
+                .unwrap(),
+        )
+    }
+    async fn claim_at<DB: FeedEventDialect>(
+        pool: &Pool<DB>,
+        now: UtcInstant,
+        lease_cutoff: UtcInstant,
+    ) -> Vec<FeedEventRecord> {
+        DB::claim_pending_batch(pool, now, lease_cutoff, FeedEventClaimLimit::from_usize(10))
+            .await
+            .unwrap()
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn claim_honors_exact_pending_and_reclaim_boundaries(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let now = fixture_instant(500_000);
+        let cutoff = fixture_instant(400_000);
+        let fixtures = [
+            (
+                fp("/~pending-boundary/feed.rss"),
+                FeedEventStatus::Pending,
+                now,
+                None,
+            ),
+            (
+                fp("/~reclaim-boundary/feed.rss"),
+                FeedEventStatus::Claimed,
+                fixture_instant(300_000),
+                Some(cutoff),
+            ),
+            (
+                fp("/~reclaim-expired/feed.rss"),
+                FeedEventStatus::Claimed,
+                fixture_instant(200_000),
+                Some(fixture_instant(399_999)),
+            ),
+        ];
+
+        let claimed = crate::with_closeable_pool!(env.base.pool(), pool, {
+            for fixture in &fixtures {
+                sqlx::query(
+                    "INSERT INTO feed_events (feed_url, status, next_attempt_at, claimed_at, created_at) \
+                     VALUES ($1, $2, $3, $4, $5)",
+                )
+                .bind(&fixture.0)
+                .bind(fixture.1)
+                .bind(fixture.2)
+                .bind(fixture.3)
+                .bind(fixture_instant(100_000))
+                .execute(pool)
+                .await
+                .unwrap();
+            }
+            claim_at(pool, now, cutoff).await
+        });
+
+        let paths: std::collections::HashSet<_> =
+            claimed.into_iter().map(|record| record.feed_path).collect();
+        assert_eq!(
+            paths,
+            [
+                fp("/~pending-boundary/feed.rss"),
+                fp("/~reclaim-expired/feed.rss")
+            ]
+            .into_iter()
+            .collect()
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn feed_event_rows_decode_every_lifecycle_timestamp_shape(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let fixtures = [
+            (
+                fp("/~pending/feed.rss"),
+                FeedEventStatus::Pending,
+                0,
+                None,
+                fixture_instant(100_001),
+                None,
+                fixture_instant(100_002),
+                None,
+                None,
+            ),
+            (
+                fp("/~claimed/feed.rss"),
+                FeedEventStatus::Claimed,
+                1,
+                Some("claim in progress"),
+                fixture_instant(200_001),
+                Some(fixture_instant(200_002)),
+                fixture_instant(200_003),
+                None,
+                None,
+            ),
+            (
+                fp("/~done/feed.rss"),
+                FeedEventStatus::Done,
+                2,
+                None,
+                fixture_instant(300_001),
+                Some(fixture_instant(300_002)),
+                fixture_instant(300_003),
+                Some(fixture_instant(300_004)),
+                Some(fixture_instant(300_005)),
+            ),
+            (
+                fp("/~failed/feed.rss"),
+                FeedEventStatus::Failed,
+                7,
+                Some("ping exhausted"),
+                fixture_instant(400_001),
+                Some(fixture_instant(400_002)),
+                fixture_instant(400_003),
+                Some(fixture_instant(400_004)),
+                None,
+            ),
+        ];
+
+        let rows = crate::with_closeable_pool!(env.base.pool(), pool, {
+            for fixture in &fixtures {
+                sqlx::query(
+                    "INSERT INTO feed_events \
+                     (feed_url, status, attempts, last_error, next_attempt_at, claimed_at, created_at, regenerated_at, pinged_at) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                )
+                .bind(&fixture.0)
+                .bind(fixture.1)
+                .bind(fixture.2)
+                .bind(fixture.3)
+                .bind(fixture.4)
+                .bind(fixture.5)
+                .bind(fixture.6)
+                .bind(fixture.7)
+                .bind(fixture.8)
+                .execute(pool)
+                .await
+                .unwrap();
+            }
+
+            sqlx::query_as::<_, FeedEventRecord>(
+                "SELECT id, feed_url, status, attempts, last_error, next_attempt_at, claimed_at, \
+                 created_at, regenerated_at, pinged_at FROM feed_events ORDER BY id",
+            )
+            .fetch_all(pool)
+            .await
+            .unwrap()
+        });
+
+        assert_eq!(rows.len(), fixtures.len());
+
+        for (row, fixture) in rows.iter().zip(fixtures.iter()) {
+            assert!(i64::from(row.id) > 0);
+            assert_eq!(row.feed_path, fixture.0);
+            assert_eq!(row.status, fixture.1);
+            assert_eq!(row.attempts, fixture.2);
+            assert_eq!(row.last_error.as_deref(), fixture.3);
+            assert_eq!(row.next_attempt_at, fixture.4);
+            assert_eq!(row.claimed_at, fixture.5);
+            assert_eq!(row.created_at, fixture.6);
+            assert_eq!(row.regenerated_at, fixture.7);
+            assert_eq!(row.pinged_at, fixture.8);
+        }
+    }
+
     #[apply(backends)]
     #[tokio::test]
     async fn empty_id_arrays_are_noops(#[case] backend: Backend) {
@@ -920,7 +1096,7 @@ mod tests {
         env.state.feed_events.mark_pinged(&[]).await.unwrap();
         env.state
             .feed_events
-            .mark_failed(&[], "x", Utc::now())
+            .mark_failed(&[], "x", UtcInstant::from(Utc::now()))
             .await
             .unwrap();
         env.state
