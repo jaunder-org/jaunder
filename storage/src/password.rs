@@ -1,10 +1,11 @@
 //! Password reset token storage.
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use sqlx::{Database, Pool};
 use thiserror::Error;
 
+use common::time::UtcInstant;
 use common::token::RawToken;
 
 use crate::backend::Backend;
@@ -40,7 +41,7 @@ pub trait PasswordResetStorage: Send + Sync {
     async fn create_password_reset(
         &self,
         user_id: UserId,
-        expires_at: DateTime<Utc>,
+        expires_at: UtcInstant,
     ) -> sqlx::Result<RawToken>;
 
     /// Validates a raw reset token and marks it as used.
@@ -82,17 +83,17 @@ where
     // `TokenHash` binds as itself via the ADR-0071 sqlx bridge.
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
-    for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     async fn create_password_reset(
         &self,
         user_id: UserId,
-        expires_at: DateTime<Utc>,
+        expires_at: UtcInstant,
     ) -> sqlx::Result<RawToken> {
         let (raw_token, token_hash) = host::token::generate_hashed();
-        let now = Utc::now();
+        let now = UtcInstant::from(Utc::now());
 
         sqlx::query(
             "INSERT INTO password_resets (token_hash, user_id, created_at, expires_at)
@@ -115,7 +116,7 @@ where
         let token_hash =
             host::token::hash(raw_token).map_err(|_| UsePasswordResetError::NotFound)?;
 
-        let now = Utc::now();
+        let now = UtcInstant::from(Utc::now());
 
         // Atomically claim the token in one statement: the UPDATE succeeds only
         // when it exists, is unused, and is unexpired, so two concurrent requests
@@ -162,7 +163,7 @@ mod tests {
         // (ADR-0053 TempDir hazard).
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
-        let expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
+        let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
 
         // `create_password_reset` binds the `TokenHash`; `use_password_reset`
         // re-binds the hash of the same raw token to atomically claim the stored
@@ -187,7 +188,7 @@ mod tests {
     async fn create_password_reset_with_closed_pool_returns_error(#[case] backend: Backend) {
         let TestEnv { state, base } = backend.setup().await;
         base.close_pool().await;
-        let expires_at = chrono::Utc::now();
+        let expires_at = UtcInstant::from(chrono::Utc::now());
         let result = state
             .password_resets
             .create_password_reset(UserId::from(1), expires_at)

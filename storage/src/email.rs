@@ -1,7 +1,7 @@
 //! Email verification token storage.
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use sqlx::{Database, Pool};
 use thiserror::Error;
 
@@ -9,6 +9,7 @@ use crate::backend::Backend;
 use crate::helpers::TokenStateRow;
 use common::email::Email;
 use common::ids::UserId;
+use common::time::UtcInstant;
 use common::token::RawToken;
 
 /// Errors returned by [`EmailVerificationStorage::use_email_verification`].
@@ -62,7 +63,7 @@ pub trait EmailVerificationStorage: Send + Sync {
         &self,
         user_id: UserId,
         email: &Email,
-        expires_at: DateTime<Utc>,
+        expires_at: UtcInstant,
     ) -> sqlx::Result<RawToken>;
 
     /// Validates a raw verification token and marks it as used.
@@ -106,7 +107,7 @@ where
     // decode).
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
-    for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
@@ -115,10 +116,10 @@ where
         &self,
         user_id: UserId,
         email: &Email,
-        expires_at: DateTime<Utc>,
+        expires_at: UtcInstant,
     ) -> sqlx::Result<RawToken> {
         let (raw_token, token_hash) = host::token::generate_hashed();
-        let now = Utc::now();
+        let now = UtcInstant::from(Utc::now());
 
         let mut tx = self.pool.begin().await?;
 
@@ -159,7 +160,7 @@ where
         let token_hash =
             host::token::hash(raw_token).map_err(|_| UseEmailVerificationError::NotFound)?;
 
-        let now = Utc::now();
+        let now = UtcInstant::from(Utc::now());
 
         // Atomically claim the token: the UPDATE succeeds only when the token
         // exists, has not yet been used, and has not expired. This single
@@ -213,7 +214,7 @@ mod tests {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let email = parse_email("alice@example.com");
-        let expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
+        let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
 
         // `create_email_verification` binds the `TokenHash` and the `Email`;
         // `use_email_verification` re-binds the hash to claim the row and decodes
@@ -243,7 +244,7 @@ mod tests {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let email = parse_email("alice@example.com");
-        let expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
+        let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
         let raw_token = env
             .state
             .email_verifications
@@ -304,7 +305,7 @@ mod tests {
     async fn create_email_verification_with_closed_pool_returns_error(#[case] backend: Backend) {
         let TestEnv { state, base } = backend.setup().await;
         base.close_pool().await;
-        let expires_at = chrono::Utc::now();
+        let expires_at = UtcInstant::from(chrono::Utc::now());
         let email = parse_email("test@example.com");
         let result = state
             .email_verifications
@@ -325,7 +326,7 @@ mod tests {
             .create_email_verification(
                 user_id,
                 &email,
-                chrono::Utc::now() + chrono::Duration::hours(1),
+                "2099-01-02T03:04:05.123456Z".parse::<UtcInstant>().unwrap(),
             )
             .await
             .unwrap();

@@ -1,5 +1,5 @@
-use chrono::Utc;
 use common::test_support::parse_raw_token;
+use common::time::UtcInstant;
 use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, SeedUser, backends};
@@ -14,7 +14,10 @@ async fn confirm_password_reset_hash_failure_returns_internal(#[case] backend: B
     let user_id = SeedUser::new().seed(state).await.user_id;
     let reset_token = state
         .password_resets
-        .create_password_reset(user_id, Utc::now() + chrono::Duration::hours(1))
+        .create_password_reset(
+            user_id,
+            "2099-01-02T03:04:05.123456Z".parse::<UtcInstant>().unwrap(),
+        )
         .await
         .unwrap();
     // Valid token → the claim succeeds, then hashing the new password fails → Internal
@@ -40,7 +43,10 @@ async fn confirm_password_reset_changes_credentials(#[case] backend: Backend) {
     let user = SeedUser::new().seed(state).await;
     let reset_token = state
         .password_resets
-        .create_password_reset(user.user_id, Utc::now() + chrono::Duration::hours(1))
+        .create_password_reset(
+            user.user_id,
+            "2099-01-02T03:04:05.123456Z".parse::<UtcInstant>().unwrap(),
+        )
         .await
         .unwrap();
 
@@ -85,7 +91,7 @@ async fn create_password_reset_and_use_returns_user_id(#[case] backend: Backend)
 
     let user_id = SeedUser::new().seed(state).await.user_id;
 
-    let expires_at = Utc::now() + chrono::Duration::hours(24);
+    let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
     let raw_token = state
         .password_resets
         .create_password_reset(user_id, expires_at)
@@ -108,7 +114,7 @@ async fn use_password_reset_already_used_returns_already_used(#[case] backend: B
 
     let user_id = SeedUser::new().seed(state).await.user_id;
 
-    let expires_at = Utc::now() + chrono::Duration::hours(24);
+    let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
     let raw_token = state
         .password_resets
         .create_password_reset(user_id, expires_at)
@@ -140,7 +146,7 @@ async fn use_password_reset_expired_returns_expired(#[case] backend: Backend) {
 
     let user_id = SeedUser::new().seed(state).await.user_id;
 
-    let expires_at = Utc::now() - chrono::Duration::hours(1);
+    let expires_at: UtcInstant = "2000-01-02T03:04:05.123456Z".parse().unwrap();
     let raw_token = state
         .password_resets
         .create_password_reset(user_id, expires_at)

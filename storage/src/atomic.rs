@@ -304,7 +304,10 @@ mod tests {
         let raw_token = env
             .state
             .password_resets
-            .create_password_reset(user_id, chrono::Utc::now() + chrono::Duration::hours(1))
+            .create_password_reset(
+                user_id,
+                common::time::UtcInstant::from(chrono::Utc::now() + chrono::Duration::hours(1)),
+            )
             .await
             .unwrap();
         let password = parse_password("password123");

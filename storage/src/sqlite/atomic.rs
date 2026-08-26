@@ -65,7 +65,7 @@ impl SqliteAtomicOps {
             host::token::hash(raw_token).map_err(|_| ConfirmPasswordResetError::NotFound)?;
 
         let mut tx = self.pool.begin().await?;
-        let now = Utc::now();
+        let now = UtcInstant::from(Utc::now());
 
         // Claim the token in one atomic UPDATE: it matches only when the token
         // exists, is unused, and is unexpired, so concurrent confirmations cannot

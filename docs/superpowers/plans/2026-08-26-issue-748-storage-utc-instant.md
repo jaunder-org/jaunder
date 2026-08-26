@@ -65,7 +65,7 @@ Out:
   - Verification: `#[apply(backends)]` tests cover role ordering, unused/used,
     exact-expiry, expired, and claimable states; CLI/web behavior is unchanged.
 
-- [ ] Task 5: Migrate email-verification and password-reset storage instants.
+- [x] Task 5: Migrate email-verification and password-reset storage instants.
   - Contract: both credential flows migrate their expiry inputs, shared
     token-state rows/classifiers, SQLx bounds, fixtures, and callers to
     `UtcInstant` together; token use and expiry predicates do not change.
