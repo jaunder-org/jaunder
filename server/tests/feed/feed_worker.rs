@@ -2,9 +2,12 @@ use std::sync::Arc;
 
 use crate::helpers::{CapturingWebSubClient, setup_with_base_url};
 use chrono::Utc;
-use common::feed::FeedPath;
-use common::ids::FeedEventId;
-use common::test_support::{parse_content_type, parse_etag};
+use common::{
+    feed::FeedPath,
+    ids::FeedEventId,
+    test_support::{parse_content_type, parse_etag},
+    time::UtcInstant,
+};
 use jaunder::feed::worker::FeedWorker;
 use storage::FeedCacheRow;
 use storage::test_support::{Backend, SeedRawPost, SeedUser, TestEnv, backends, fp};
@@ -245,8 +248,8 @@ async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend
             body: "stale".to_string(),
             etag: parse_etag("\"etag\""),
             content_type: parse_content_type("application/atom+xml; charset=utf-8"),
-            updated_at: t0,
-            generated_at: t0,
+            updated_at: UtcInstant::from(t0),
+            generated_at: UtcInstant::from(t0),
         })
         .await
         .expect("seed cached feed");

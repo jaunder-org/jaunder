@@ -6,8 +6,11 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use common::feed::{FeedFormat, FeedPath, FeedSurface};
-use common::{tag::Tag, username::Username};
+use common::{
+    feed::{FeedFormat, FeedPath, FeedSurface},
+    tag::Tag,
+    username::Username,
+};
 use storage::{FeedCacheStorage, PostStorage, SiteConfigStorage};
 
 use super::regenerate::regenerate_feed;
@@ -89,7 +92,7 @@ async fn serve(
             .to_str()
             .ok()
             .and_then(|s| chrono::DateTime::parse_from_rfc2822(s).ok())
-        && row.updated_at <= t.with_timezone(&chrono::Utc)
+        && row.updated_at.value() <= t.with_timezone(&chrono::Utc)
     {
         return StatusCode::NOT_MODIFIED.into_response();
     } // cov:ignore fall-through brace; llvm-cov leaves it unmarked though the row-newer (200, not 304) path is tested
@@ -101,7 +104,7 @@ async fn serve(
     if let Ok(etag) = HeaderValue::from_str(&row.etag) {
         resp_headers.insert(header::ETAG, etag);
     }
-    if let Ok(lm) = HeaderValue::from_str(&row.updated_at.to_rfc2822()) {
+    if let Ok(lm) = HeaderValue::from_str(&row.updated_at.value().to_rfc2822()) {
         resp_headers.insert(header::LAST_MODIFIED, lm);
     }
     resp_headers.insert(
@@ -208,10 +211,13 @@ pub async fn feed_user_tag(
 mod tests {
     use super::*;
     use chrono::{Duration, Utc};
-    use common::test_support::{parse_content_type, parse_etag};
+    use common::{
+        test_support::{parse_content_type, parse_etag},
+        time::UtcInstant,
+    };
     use storage::{FeedCacheError, FeedCacheRow};
 
-    fn sample_row(etag: &str, updated_at: chrono::DateTime<chrono::Utc>) -> FeedCacheRow {
+    fn sample_row(etag: &str, updated_at: UtcInstant) -> FeedCacheRow {
         FeedCacheRow {
             feed_path: "/feed.rss".parse().expect("valid feed path"),
             body: "<rss/>".to_owned(),
@@ -279,7 +285,7 @@ mod tests {
         let mut cache = storage::MockFeedCacheStorage::new();
         cache
             .expect_get()
-            .returning(|_| Ok(Some(sample_row("\"etag-1\"", Utc::now()))));
+            .returning(|_| Ok(Some(sample_row("\"etag-1\"", UtcInstant::from(Utc::now())))));
 
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -305,7 +311,7 @@ mod tests {
         let mut cache = storage::MockFeedCacheStorage::new();
         cache
             .expect_get()
-            .returning(|_| Ok(Some(sample_row("\"etag-1\"", Utc::now()))));
+            .returning(|_| Ok(Some(sample_row("\"etag-1\"", UtcInstant::from(Utc::now())))));
 
         // IF_NONE_MATCH present but a different etag: the conditional falls
         // through to a normal 200 rather than returning 304.
@@ -332,7 +338,7 @@ mod tests {
     async fn serve_returns_200_when_modified_since_is_stale() {
         // Row updated *after* the client's If-Modified-Since date: the
         // conditional falls through to a 200 rather than returning 304.
-        let updated_at = Utc::now();
+        let updated_at = UtcInstant::from(Utc::now());
         let mut cache = storage::MockFeedCacheStorage::new();
         cache
             .expect_get()
@@ -360,7 +366,7 @@ mod tests {
     // guard:no-backend — mock store
     #[tokio::test]
     async fn serve_returns_304_on_if_modified_since() {
-        let updated_at = Utc::now() - Duration::days(1);
+        let updated_at = UtcInstant::from(Utc::now() - Duration::days(1));
         let mut cache = storage::MockFeedCacheStorage::new();
         cache
             .expect_get()
@@ -405,7 +411,7 @@ mod tests {
         let mut cache = storage::MockFeedCacheStorage::new();
         cache
             .expect_get()
-            .returning(|_| Ok(Some(sample_row("\"etag-1\"", Utc::now()))));
+            .returning(|_| Ok(Some(sample_row("\"etag-1\"", UtcInstant::from(Utc::now())))));
 
         let resp = feed_site(
             Extension(Arc::new(cache) as Arc<dyn FeedCacheStorage>),
@@ -456,7 +462,7 @@ mod tests {
         let mut cache = storage::MockFeedCacheStorage::new();
         cache
             .expect_get()
-            .returning(|_| Ok(Some(sample_row("\"etag-1\"", Utc::now()))));
+            .returning(|_| Ok(Some(sample_row("\"etag-1\"", UtcInstant::from(Utc::now())))));
 
         let resp = feed_user_tag(
             Extension(Arc::new(cache) as Arc<dyn FeedCacheStorage>),

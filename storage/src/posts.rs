@@ -1,7 +1,7 @@
 //! Content storage for posts, revisions, and tagging.
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use sqlx::{Database, Pool, Row};
 use thiserror::Error;
 
@@ -1125,7 +1125,7 @@ where
     // must not fail the scan), so it needs the column-decode bounds directly rather than
     // a `FromRow` tuple. `FeedPath` decodes as itself via the ADR-0071 bridge.
     for<'r> FeedPath: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
-    for<'r> DateTime<Utc>: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> UtcInstant: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
     for<'r> &'r str: sqlx::ColumnIndex<DB::Row>,
     // Not residue: the ADR-0071 bridge *delegates* to `i64`, so this pair is what
     // makes every id newtype bind on a generic backend.
@@ -2145,7 +2145,7 @@ where
         let mut needing = Vec::new();
         let mut decode_reported = false;
         for row in rows {
-            let generated_at: DateTime<Utc> = row.try_get("generated_at")?;
+            let generated_at: UtcInstant = row.try_get("generated_at")?;
             let feed_path = match row.try_get::<FeedPath, _>("feed_url") {
                 Ok(path) => path,
                 Err(error) => {
@@ -2168,7 +2168,7 @@ where
                 continue;
             };
             if let Some(max) = max_published_at_for_surface::<DB>(&self.pool, &surface, now).await?
-                && max.value() > generated_at
+                && max > generated_at
             {
                 needing.push(feed_path);
             }
@@ -3403,8 +3403,8 @@ mod tests {
                     body: "<rss/>".into(),
                     etag: parse_etag("\"sha256-deadbeef\""),
                     content_type: parse_content_type("application/rss+xml"),
-                    updated_at: stale,
-                    generated_at: stale,
+                    updated_at: UtcInstant::from(stale),
+                    generated_at: UtcInstant::from(stale),
                 })
                 .await
                 .unwrap();

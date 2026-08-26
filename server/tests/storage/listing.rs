@@ -1,11 +1,14 @@
 use chrono::{Datelike, Utc};
-use common::ids::{PostId, UserId};
-use common::tag::{Tag, TagLabel};
-use common::test_support::{
-    parse_content_type, parse_etag, parse_post_body, parse_row_limit, permalink_date,
+use common::{
+    ids::{PostId, UserId},
+    tag::{Tag, TagLabel},
+    test_support::{
+        parse_content_type, parse_etag, parse_post_body, parse_row_limit, permalink_date,
+    },
+    time::UtcInstant,
+    username::Username,
+    visibility::{AudienceTarget, ViewerIdentity},
 };
-use common::username::Username;
-use common::visibility::{AudienceTarget, ViewerIdentity};
 use std::sync::Arc;
 use storage::test_support::{Backend, SeedRawPost, SeedUser, backends, fp};
 use storage::{
@@ -790,7 +793,7 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
         .await
         .unwrap();
 
-    let mk_row = |feed_url: &str, generated_at| FeedCacheRow {
+    let mk_row = |feed_url: &str, generated_at: UtcInstant| FeedCacheRow {
         feed_path: fp(feed_url),
         body: "cached".to_string(),
         etag: parse_etag("\"etag\""),
@@ -814,23 +817,23 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
     // Stale (generated before go-live) => must be returned.
     state
         .feed_cache
-        .upsert(mk_row("/feed.atom", t0))
+        .upsert(mk_row("/feed.atom", UtcInstant::from(t0)))
         .await
         .unwrap();
     state
         .feed_cache
-        .upsert(mk_row(&site_tag_url, t0))
+        .upsert(mk_row(&site_tag_url, UtcInstant::from(t0)))
         .await
         .unwrap();
     state
         .feed_cache
-        .upsert(mk_row(&user_tag_url, t0))
+        .upsert(mk_row(&user_tag_url, UtcInstant::from(t0)))
         .await
         .unwrap();
     // Fresh (generated after the newest live post) => must NOT be returned.
     state
         .feed_cache
-        .upsert(mk_row("/~alice/feed.atom", now))
+        .upsert(mk_row("/~alice/feed.atom", UtcInstant::from(now)))
         .await
         .unwrap();
 

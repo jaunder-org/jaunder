@@ -96,7 +96,7 @@ Out:
   - Verification: `#[apply(backends)]` media create/get/list round trips include
     `created_at`; existing media wire forms remain unchanged.
 
-- [ ] Task 8: Migrate feed-cache storage instants.
+- [x] Task 8: Migrate feed-cache storage instants.
   - Contract: updated/generated role wrappers remain distinct over `UtcInstant`;
     rows, fixtures, and callers use them without changing HTTP validator or
     renderer representations. This task owns the remaining cache-row work in

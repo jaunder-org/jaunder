@@ -3,7 +3,10 @@ use axum::{
     http::{Request, StatusCode, header},
 };
 use chrono::{Timelike, Utc};
-use common::test_support::{parse_content_type, parse_etag};
+use common::{
+    test_support::{parse_content_type, parse_etag},
+    time::UtcInstant,
+};
 use tower::ServiceExt;
 
 use rstest::*;
@@ -154,8 +157,8 @@ async fn handler_cache_hit_serves_stored_body_without_regeneration(#[case] backe
         body: known_body.to_string(),
         etag: parse_etag("\"known-etag\""),
         content_type: parse_content_type("application/rss+xml; charset=utf-8"),
-        updated_at: Utc::now(),
-        generated_at: Utc::now(),
+        updated_at: UtcInstant::from(Utc::now()),
+        generated_at: UtcInstant::from(Utc::now()),
     };
     state.feed_cache.upsert(row).await.expect("upsert cache");
 
@@ -193,8 +196,8 @@ async fn handler_if_none_match_returns_304(#[case] backend: Backend) {
         body: "feed body".to_string(),
         etag: parse_etag(etag),
         content_type: parse_content_type("application/rss+xml; charset=utf-8"),
-        updated_at: Utc::now(),
-        generated_at: Utc::now(),
+        updated_at: UtcInstant::from(Utc::now()),
+        generated_at: UtcInstant::from(Utc::now()),
     };
     state.feed_cache.upsert(row).await.expect("upsert cache");
 
@@ -229,8 +232,8 @@ async fn handler_if_modified_since_returns_304_when_unchanged(#[case] backend: B
         body: "feed body".to_string(),
         etag: parse_etag("\"test-etag\""),
         content_type: parse_content_type("application/rss+xml; charset=utf-8"),
-        updated_at: update_time,
-        generated_at: Utc::now(),
+        updated_at: UtcInstant::from(update_time),
+        generated_at: UtcInstant::from(Utc::now()),
     };
     state.feed_cache.upsert(row).await.expect("upsert cache");
 

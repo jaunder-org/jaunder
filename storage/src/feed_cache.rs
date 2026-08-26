@@ -3,8 +3,7 @@
 //! served by `GET /feed.{rss,atom,json}` and the other feed endpoints.
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use common::{etag::ETag, feed::FeedPath, media::ContentType};
+use common::{etag::ETag, feed::FeedPath, media::ContentType, time::UtcInstant};
 use sqlx::{Database, Pool};
 use thiserror::Error;
 
@@ -14,14 +13,14 @@ use crate::role_instant::impl_role_instant;
 /// The `feed_cache.updated_at` storage timestamp role, distinct from
 /// `generated_at` so mappings cannot transpose silently (#751).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
-struct FeedCacheUpdatedAt(DateTime<Utc>);
-impl_role_instant!(FeedCacheUpdatedAt, DateTime<Utc>);
+struct FeedCacheUpdatedAt(UtcInstant);
+impl_role_instant!(FeedCacheUpdatedAt, UtcInstant);
 
 /// The `feed_cache.generated_at` storage timestamp role, distinct from
 /// `updated_at` so mappings cannot transpose silently (#751).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
-struct FeedCacheGeneratedAt(DateTime<Utc>);
-impl_role_instant!(FeedCacheGeneratedAt, DateTime<Utc>);
+struct FeedCacheGeneratedAt(UtcInstant);
+impl_role_instant!(FeedCacheGeneratedAt, UtcInstant);
 /// A single cached feed body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeedCacheRow {
@@ -31,8 +30,8 @@ pub struct FeedCacheRow {
     /// corrupt/migrated value is rejected as a `ColumnDecode` error on read-back.
     pub etag: ETag,
     pub content_type: ContentType,
-    pub updated_at: DateTime<Utc>,
-    pub generated_at: DateTime<Utc>,
+    pub updated_at: UtcInstant,
+    pub generated_at: UtcInstant,
 }
 
 #[derive(Debug, Error)]
@@ -117,7 +116,7 @@ where
     // `feed_url` column decodes into `FeedPath`, and the binds encode `&FeedPath`).
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
-    for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
@@ -183,26 +182,27 @@ where
 mod tests {
     use super::*;
     use crate::test_support::{Backend, backends, fp};
+    use chrono::Utc;
     use common::test_support::{parse_content_type, parse_etag};
     use rstest::*;
     use rstest_reuse::*;
 
     fn sample(url: &str) -> FeedCacheRow {
-        let updated_at = Utc::now();
+        let updated_at = UtcInstant::from(Utc::now());
         FeedCacheRow {
             feed_path: fp(url),
             body: "<rss/>".into(),
             etag: parse_etag("\"sha256-deadbeef\""),
             content_type: parse_content_type("application/rss+xml"),
             updated_at,
-            generated_at: updated_at + chrono::Duration::seconds(5),
+            generated_at: UtcInstant::from(updated_at.value() + chrono::Duration::seconds(5)),
         }
     }
 
     #[test]
     fn timestamp_role_wrappers_preserve_distinct_instants() {
-        let updated_at = Utc::now();
-        let generated_at = updated_at + chrono::Duration::seconds(5);
+        let updated_at = UtcInstant::from(Utc::now());
+        let generated_at = UtcInstant::from(updated_at.value() + chrono::Duration::seconds(5));
 
         assert_eq!(FeedCacheUpdatedAt::from(updated_at).value(), updated_at);
         assert_eq!(
@@ -213,13 +213,23 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn upsert_then_get_returns_row(#[case] backend: Backend) {
+    async fn upsert_then_get_roundtrips_adjacent_timestamp_roles_at_microsecond_precision(
+        #[case] backend: Backend,
+    ) {
         let env = backend.setup().await;
-        env.state
-            .feed_cache
-            .upsert(sample("/feed.rss"))
-            .await
-            .unwrap();
+        let row = FeedCacheRow {
+            feed_path: fp("/feed.rss"),
+            body: "<rss/>".into(),
+            etag: parse_etag("\"sha256-deadbeef\""),
+            content_type: parse_content_type("application/rss+xml"),
+            updated_at: "2026-08-25T01:02:03.123456Z"
+                .parse()
+                .expect("valid UTC instant"),
+            generated_at: "2026-08-25T01:02:03.123457Z"
+                .parse()
+                .expect("valid UTC instant"),
+        };
+        env.state.feed_cache.upsert(row.clone()).await.unwrap();
         let got = env
             .state
             .feed_cache
@@ -227,10 +237,9 @@ mod tests {
             .await
             .unwrap()
             .expect("present");
-        assert_eq!(
-            got.generated_at,
-            got.updated_at + chrono::Duration::seconds(5)
-        );
+        assert_eq!(got.updated_at, row.updated_at);
+        assert_eq!(got.generated_at, row.generated_at);
+        assert_ne!(got.updated_at, got.generated_at);
         assert_eq!(got.feed_path, "/feed.rss");
         assert_eq!(got.body, "<rss/>");
     }

@@ -116,8 +116,8 @@ pub async fn regenerate_feed(
         body,
         etag,
         content_type: format.content_type(),
-        updated_at,
-        generated_at: now.value(),
+        updated_at: UtcInstant::from(updated_at),
+        generated_at: now,
     };
 
     feed_cache.upsert(row.clone()).await.map_err(storage_err)?;
