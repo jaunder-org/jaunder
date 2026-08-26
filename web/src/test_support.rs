@@ -13,6 +13,7 @@
 
 use axum::http::{Request, header, request::Parts};
 use common::ids::UserId;
+use common::time::UtcInstant;
 use common::username::Username;
 use std::sync::Arc;
 use storage::{MockSessionStorage, SessionRecord, SessionStorage};
@@ -31,8 +32,8 @@ pub(crate) fn auth_parts(user_id: UserId, username: &str) -> Parts {
             user_id,
             username: username.clone(),
             label: "test".parse().expect("valid session label"),
-            created_at: chrono::Utc::now(),
-            last_used_at: chrono::Utc::now(),
+            created_at: UtcInstant::from(chrono::Utc::now()),
+            last_used_at: UtcInstant::from(chrono::Utc::now()),
         })
     });
     let sessions: Arc<dyn SessionStorage> = Arc::new(mock);

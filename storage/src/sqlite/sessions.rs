@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use sqlx::{Pool, Sqlite};
 
+use common::time::UtcInstant;
 use common::token::TokenHash;
 
 use crate::helpers::SessionRow;
@@ -14,8 +15,8 @@ impl SessionDialect for Sqlite {
     async fn touch_and_load(
         pool: &Pool<Sqlite>,
         token_hash: &TokenHash,
-        now: chrono::DateTime<chrono::Utc>,
-        stale_before: chrono::DateTime<chrono::Utc>,
+        now: UtcInstant,
+        stale_before: UtcInstant,
     ) -> sqlx::Result<Option<SessionRow>> {
         let row = sqlx::query_as::<_, SessionRow>(
             "SELECT s.token_hash, s.user_id, u.username, s.label, s.created_at, s.last_used_at

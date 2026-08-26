@@ -15,13 +15,13 @@ use crate::role_instant::impl_role_instant;
 /// `generated_at` so mappings cannot transpose silently (#751).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
 struct FeedCacheUpdatedAt(DateTime<Utc>);
-impl_role_instant!(FeedCacheUpdatedAt);
+impl_role_instant!(FeedCacheUpdatedAt, DateTime<Utc>);
 
 /// The `feed_cache.generated_at` storage timestamp role, distinct from
 /// `updated_at` so mappings cannot transpose silently (#751).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
 struct FeedCacheGeneratedAt(DateTime<Utc>);
-impl_role_instant!(FeedCacheGeneratedAt);
+impl_role_instant!(FeedCacheGeneratedAt, DateTime<Utc>);
 /// A single cached feed body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeedCacheRow {

@@ -1,5 +1,6 @@
-use chrono::{DateTime, Duration, Utc};
+use chrono::{Duration, Utc};
 use common::test_support::{parse_raw_token, parse_session_label};
+use common::time::UtcInstant;
 use common::token::TokenHash;
 use rstest::*;
 use rstest_reuse::*;
@@ -76,12 +77,12 @@ async fn stale_authenticate_refreshes_the_persisted_last_used_at(#[case] backend
         .unwrap();
 
     let token_hash = host::token::hash(&raw_token).unwrap();
-    let stale = Utc::now() - Duration::seconds(120);
+    let stale = UtcInstant::from(Utc::now() - Duration::seconds(120));
     set_last_used_at(base.pool(), &token_hash, stale).await;
 
     let record = state.sessions.authenticate(&raw_token).await.unwrap();
     let persisted_after_auth = load_last_used_at(base.pool(), &token_hash).await;
-    let freshness_cutoff_after_auth = Utc::now() - Duration::seconds(60);
+    let freshness_cutoff_after_auth = UtcInstant::from(Utc::now() - Duration::seconds(60));
 
     assert!(record.last_used_at > stale);
     assert_eq!(record.last_used_at, persisted_after_auth);
@@ -204,11 +205,7 @@ async fn session_list_operations(#[case] backend: Backend) {
     assert_eq!(record.user_id, user);
 }
 
-async fn set_last_used_at(
-    pool: &CloseablePool,
-    token_hash: &TokenHash,
-    last_used_at: DateTime<Utc>,
-) {
+async fn set_last_used_at(pool: &CloseablePool, token_hash: &TokenHash, last_used_at: UtcInstant) {
     storage::with_closeable_pool!(pool, pool, {
         sqlx::query("UPDATE sessions SET last_used_at = $1 WHERE token_hash = $2")
             .bind(last_used_at)
@@ -219,7 +216,7 @@ async fn set_last_used_at(
     });
 }
 
-async fn load_last_used_at(pool: &CloseablePool, token_hash: &TokenHash) -> DateTime<Utc> {
+async fn load_last_used_at(pool: &CloseablePool, token_hash: &TokenHash) -> UtcInstant {
     storage::with_closeable_pool!(pool, pool, {
         sqlx::query_scalar("SELECT last_used_at FROM sessions WHERE token_hash = $1")
             .bind(token_hash)

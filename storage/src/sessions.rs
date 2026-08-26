@@ -1,11 +1,12 @@
 //! Session and device token storage.
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use thiserror::Error;
 
 use common::ids::UserId;
 use common::session_label::SessionLabel;
+use common::time::UtcInstant;
 use common::token::{RawToken, TokenHash};
 use common::username::Username;
 
@@ -22,12 +23,12 @@ pub struct SessionRecord {
     /// macOS", "Sign-up session").
     pub label: SessionLabel,
     /// When the session was first created.
-    pub created_at: DateTime<Utc>,
+    pub created_at: UtcInstant,
     /// When the session was last persisted as used to authenticate a request.
     ///
     /// This is operator-facing metadata with bounded staleness: authentication
     /// may skip updating it for up to 60 seconds while the stored value is fresh.
-    pub last_used_at: DateTime<Utc>,
+    pub last_used_at: UtcInstant,
 }
 
 /// Errors that can occur when authenticating a session token.
@@ -101,8 +102,8 @@ use sqlx::{Database, Pool};
 
 const SESSION_TOUCH_FRESHNESS_SECONDS: i64 = 60;
 
-fn session_touch_cutoff(now: DateTime<Utc>) -> DateTime<Utc> {
-    now - chrono::Duration::seconds(SESSION_TOUCH_FRESHNESS_SECONDS)
+fn session_touch_cutoff(now: UtcInstant) -> UtcInstant {
+    UtcInstant::from(now.value() - chrono::Duration::seconds(SESSION_TOUCH_FRESHNESS_SECONDS))
 }
 
 /// Per-backend divergences of [`SessionStorage`]. The only operation that differs
@@ -116,7 +117,7 @@ where
     // restate them (see ADR-0019).
     for<'q> i64: sqlx::Encode<'q, Self> + sqlx::Type<Self>,
     for<'q> &'q str: sqlx::Encode<'q, Self> + sqlx::Type<Self>,
-    for<'q> DateTime<Utc>: sqlx::Encode<'q, Self> + sqlx::Type<Self>,
+    for<'q> UtcInstant: sqlx::Encode<'q, Self> + sqlx::Type<Self>,
     for<'c> &'c sqlx::Pool<Self>: sqlx::Executor<'c, Database = Self>,
     SessionRow: for<'r> sqlx::FromRow<'r, Self::Row>,
 {
@@ -126,8 +127,8 @@ where
     async fn touch_and_load(
         pool: &Pool<Self>,
         token_hash: &TokenHash,
-        now: DateTime<Utc>,
-        stale_before: DateTime<Utc>,
+        now: UtcInstant,
+        stale_before: UtcInstant,
     ) -> sqlx::Result<Option<SessionRow>>;
 }
 
@@ -154,7 +155,7 @@ where
     // bridge (the `SessionRow: FromRow` bound above threads the decode).
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
-    for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
@@ -169,7 +170,7 @@ where
         label: &SessionLabel,
     ) -> sqlx::Result<RawToken> {
         let (raw_token, token_hash) = host::token::generate_hashed();
-        let now = Utc::now();
+        let now = UtcInstant::from(Utc::now());
 
         sqlx::query(
             "INSERT INTO sessions (token_hash, user_id, label, created_at, last_used_at)
@@ -195,7 +196,7 @@ where
         let token_hash =
             host::token::hash(raw_token).map_err(|_| SessionAuthError::InvalidToken)?;
 
-        let now = Utc::now();
+        let now = UtcInstant::from(Utc::now());
         let stale_before = session_touch_cutoff(now);
 
         let row = DB::touch_and_load(&self.pool, &token_hash, now, stale_before)
@@ -317,6 +318,86 @@ mod tests {
             matches!(err, sqlx::Error::ColumnDecode { .. }),
             "expected a column-decode error, got: {err:?}"
         );
+    }
+    #[apply(backends)]
+    #[tokio::test]
+    async fn session_rows_preserve_created_and_last_used_roles(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let raw_token = env
+            .state
+            .sessions
+            .create_session(user_id, &parse_session_label("Test Device"))
+            .await
+            .unwrap();
+        let token_hash = host::token::hash(&raw_token).unwrap();
+        let created_at = "2026-01-02T03:04:05.123456Z".parse::<UtcInstant>().unwrap();
+        let last_used_at = "2026-03-04T05:06:07.654321Z".parse::<UtcInstant>().unwrap();
+
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query(
+                "UPDATE sessions SET created_at = $1, last_used_at = $2 WHERE token_hash = $3",
+            )
+            .bind(created_at)
+            .bind(last_used_at)
+            .bind(&token_hash)
+            .execute(pool)
+            .await
+            .unwrap();
+        });
+
+        let sessions = env.state.sessions.list_sessions(user_id).await.unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].created_at, created_at);
+        assert_eq!(sessions[0].last_used_at, last_used_at);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn touch_and_load_observes_stale_exact_and_fresh_boundaries(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let now = "2026-04-05T06:07:08.123456Z".parse::<UtcInstant>().unwrap();
+        let stale_before = session_touch_cutoff(now);
+        let cases = [
+            (
+                "stale",
+                UtcInstant::from(stale_before.value() - chrono::Duration::microseconds(1)),
+                now,
+            ),
+            ("exact", stale_before, stale_before),
+            (
+                "fresh",
+                UtcInstant::from(stale_before.value() + chrono::Duration::microseconds(1)),
+                UtcInstant::from(stale_before.value() + chrono::Duration::microseconds(1)),
+            ),
+        ];
+
+        for (label, stored_last_used_at, expected_last_used_at) in cases {
+            let raw_token = env
+                .state
+                .sessions
+                .create_session(user_id, &parse_session_label(label))
+                .await
+                .unwrap();
+            let token_hash = host::token::hash(&raw_token).unwrap();
+            crate::with_closeable_pool!(env.base.pool(), pool, {
+                sqlx::query("UPDATE sessions SET last_used_at = $1 WHERE token_hash = $2")
+                    .bind(stored_last_used_at)
+                    .bind(&token_hash)
+                    .execute(pool)
+                    .await
+                    .unwrap();
+            });
+
+            let row = crate::with_closeable_pool!(env.base.pool(), pool, {
+                SessionDialect::touch_and_load(pool, &token_hash, now, stale_before)
+                    .await
+                    .unwrap()
+                    .unwrap()
+            });
+            assert_eq!(row.last_used_at(), expected_last_used_at, "{label}");
+        }
     }
 
     #[test]

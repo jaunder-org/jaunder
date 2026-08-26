@@ -41,8 +41,8 @@ pub async fn list() -> WebResult<Vec<Info>> {
             is_current: r.token_hash == auth.token_hash,
             token_hash: r.token_hash,
             label: r.label,
-            created_at: UtcInstant::from(r.created_at),
-            last_used_at: UtcInstant::from(r.last_used_at),
+            created_at: r.created_at,
+            last_used_at: r.last_used_at,
         })
         .collect())
 }

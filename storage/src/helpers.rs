@@ -24,26 +24,26 @@ use host::invite::InviteCode;
 /// The `sessions.created_at` storage timestamp role, distinct from
 /// `last_used_at` so mappings cannot transpose silently (#751).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
-struct SessionCreatedAt(DateTime<Utc>);
-impl_role_instant!(SessionCreatedAt);
+struct SessionCreatedAt(UtcInstant);
+impl_role_instant!(SessionCreatedAt, UtcInstant);
 
 /// The `sessions.last_used_at` storage timestamp role, distinct from
 /// `created_at` so mappings cannot transpose silently (#751).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
-struct SessionLastUsedAt(DateTime<Utc>);
-impl_role_instant!(SessionLastUsedAt);
+struct SessionLastUsedAt(UtcInstant);
+impl_role_instant!(SessionLastUsedAt, UtcInstant);
 
 /// The `invites.created_at` storage timestamp role, distinct from `expires_at`
 /// so mappings cannot transpose silently (#751).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
 struct InviteCreatedAt(DateTime<Utc>);
-impl_role_instant!(InviteCreatedAt);
+impl_role_instant!(InviteCreatedAt, DateTime<Utc>);
 
 /// The `invites.expires_at` storage timestamp role, distinct from `created_at`
 /// so mappings cannot transpose silently (#751).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
 struct InviteExpiresAt(DateTime<Utc>);
-impl_role_instant!(InviteExpiresAt);
+impl_role_instant!(InviteExpiresAt, DateTime<Utc>);
 
 /// Preserves an already-selected primary result while reporting a failed
 /// secondary operation exactly once. Owning modules wrap this with private,
@@ -290,7 +290,7 @@ pub struct SessionRow {
 }
 impl SessionRow {
     #[must_use]
-    pub(crate) fn last_used_at(&self) -> DateTime<Utc> {
+    pub(crate) fn last_used_at(&self) -> UtcInstant {
         self.last_used_at.value()
     }
 }
@@ -707,8 +707,8 @@ mod tests {
 
     #[test]
     fn test_build_session_record() {
-        let now = Utc::now();
-        let later = now + chrono::Duration::seconds(5);
+        let now = UtcInstant::from(Utc::now());
+        let later = UtcInstant::from(now.value() + chrono::Duration::seconds(5));
         let record = build_session_record(SessionRecordParts {
             token_hash: parse_token_hash("hash"),
             user_id: UserId::from(1),
@@ -909,8 +909,8 @@ mod tests {
 
     #[test]
     fn session_and_invite_row_helpers_round_trip() {
-        let now = Utc::now();
-        let last_used_at = now + chrono::Duration::seconds(5);
+        let now = UtcInstant::from(Utc::now());
+        let last_used_at = UtcInstant::from(now.value() + chrono::Duration::seconds(5));
         let session = SessionRow {
             token_hash: parse_token_hash("tokenhash"),
             user_id: UserId::from(1),
@@ -924,17 +924,17 @@ mod tests {
         assert_eq!(session_record.created_at, now);
         assert_eq!(session_record.last_used_at, last_used_at);
 
-        let expires_at = now + chrono::Duration::days(7);
+        let expires_at = now.value() + chrono::Duration::days(7);
         let invite = InviteRow {
             code: parse_invite_code("code"),
-            created_at: now.into(),
+            created_at: now.value().into(),
             expires_at: expires_at.into(),
             used_at: None,
             used_by: None,
         };
         let invite_record = invite_record_from_row(invite);
         assert_eq!(invite_record.code.as_ref(), "code");
-        assert_eq!(invite_record.created_at, now);
+        assert_eq!(invite_record.created_at, now.value());
         assert_eq!(invite_record.expires_at, expires_at);
     }
 

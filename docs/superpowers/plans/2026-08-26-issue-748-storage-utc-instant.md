@@ -48,7 +48,7 @@ Out:
   - Verification: `#[apply(backends)]` user round trips cover required and
     nullable instants; existing web/server user representations remain stable.
 
-- [ ] Task 3: Migrate session storage instants.
+- [x] Task 3: Migrate session storage instants.
   - Contract: session records, dialect arguments, row helpers, fixtures, and
     callers use `UtcInstant`; existing created/last-used role wrappers remain
     distinct over `UtcInstant`; explicit clock injection and touch freshness
