@@ -1306,7 +1306,7 @@ permalink, or `Username`—and add no generic string, `Debug`, or `Display`
 fallback. Authors still write `skip(…)` / `skip_all` as explicit opt-outs.
 `server-fn-tracing` now checks source grammar, skip names, pattern-bound
 parameters, and declaration-only fields, but classifies no type names
-([sink-specific telemetry interfaces](adr/drafts/sink-specific-telemetry-interfaces.md)).
+([sink-specific telemetry interfaces](adr/0154-sink-specific-telemetry-interfaces.md)).
 
 Wire parse errors likewise own their sink projections: `user_message` selects
 feedback for the submitter and `telemetry_code` supplies a bounded

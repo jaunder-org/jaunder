@@ -212,7 +212,7 @@ the convention became a gate: `server-fn-tracing`, in `cargo xtask check` and
 > 2026-08-25, `RECORDABLE_TYPES` no longer held the four admission grounds.
 > Type-owned `TraceField` projections and compiler trait resolution held them
 > instead; the grounds and exclusions below were unchanged. The replacement
-> decision is `docs/adr/drafts/sink-specific-telemetry-interfaces.md`.
+> decision is `docs/adr/0154-sink-specific-telemetry-interfaces.md`.
 
 ### The span (as of 2026-07-29)
 
