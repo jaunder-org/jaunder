@@ -788,7 +788,7 @@ mod tests {
             slug: parse_slug("my-slug"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            published_at: Some(Utc::now()),
+            published_at: Some(UtcInstant::from(Utc::now())),
             summary: None,
             tags: vec![],
         });

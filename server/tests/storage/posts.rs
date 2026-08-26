@@ -199,7 +199,7 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     );
 
     // Publish { at: Some(past) } stores the exact backdated instant.
-    let past = now - Duration::days(1);
+    let past = UtcInstant::from(now - Duration::days(1));
     let backdated = perform_post_update(
         &*state.posts,
         update_input(

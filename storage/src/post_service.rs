@@ -172,7 +172,6 @@ impl From<PerformUpdateError> for host::error::InternalError {
     }
 }
 
-
 /// Raw, front-end-supplied inputs to [`perform_post_update`].
 ///
 pub struct PostUpdate<'a> {
