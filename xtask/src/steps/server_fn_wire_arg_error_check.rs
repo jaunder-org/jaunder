@@ -583,7 +583,7 @@ struct ExternalFormatCall {
 enum FlatToken {
     Ident(String, usize),
     Literal,
-    Punct,
+    Punct(char),
     Open(proc_macro2::Delimiter),
     Close,
 }
@@ -598,7 +598,7 @@ fn flatten_tokens(tokens: proc_macro2::TokenStream, out: &mut Vec<FlatToken>) {
                 ));
             }
             proc_macro2::TokenTree::Literal(_) => out.push(FlatToken::Literal),
-            proc_macro2::TokenTree::Punct(_) => out.push(FlatToken::Punct),
+            proc_macro2::TokenTree::Punct(punct) => out.push(FlatToken::Punct(punct.as_char())),
             proc_macro2::TokenTree::Group(group) => {
                 out.push(FlatToken::Open(group.delimiter()));
                 flatten_tokens(group.stream(), out);
@@ -620,11 +620,13 @@ fn external_format_calls(file: &syn::File) -> Vec<ExternalFormatCall> {
         if name != "from_external" {
             continue;
         }
-        let owner = tokens[..index].iter().rev().find_map(|token| match token {
-            FlatToken::Ident(name, _) => Some(name.as_str()),
-            _ => None,
-        });
-        if owner != Some("UserFacingMessage") {
+        if !matches!(
+            (
+                tokens.get(index.wrapping_sub(2)),
+                tokens.get(index.wrapping_sub(1))
+            ),
+            (Some(FlatToken::Punct(':')), Some(FlatToken::Punct(':')))
+        ) {
             continue;
         }
         let mut call_open = index + 1;
@@ -1426,6 +1428,11 @@ mod tests {
             (
                 "unmarked",
                 "let _ = vec![UserFacingMessage::from_external(format_args!(\"{error}\"))];",
+            ),
+            (
+                "unmarked",
+                "type Message = UserFacingMessage;\n\
+                 Message::from_external(format_args!(\"{error}\"));",
             ),
             (
                 "unmarked",
