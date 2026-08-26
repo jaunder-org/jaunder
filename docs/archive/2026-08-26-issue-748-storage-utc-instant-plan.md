@@ -6,7 +6,7 @@
 > database backends and several caller crates.
 
 Authoritative contract:
-`docs/superpowers/specs/2026-08-25-issue-748-storage-utc-instant.md`.
+`docs/archive/2026-08-25-issue-748-storage-utc-instant.md`.
 
 ## Scope
 
