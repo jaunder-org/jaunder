@@ -91,16 +91,12 @@
                                      (unwind-protect
                                          (with-current-buffer pulled-buffer
                                            (jaunder-publish)
+                                           (setq bytes (buffer-string))
                                            (should (equal
                                                     (jaunder--buffer-property "JAUNDER_ID")
                                                     id))
                                            (should (jaunder--buffer-property
                                                     "JAUNDER_SYNCED")))
-                                       ;; `jaunder-publish' refreshes local
-                                       ;; sync bookkeeping; the blocked
-                                       ;; re-pull below must preserve those
-                                       ;; post-republish bytes.
-                                       (setq bytes (buffer-string))
                                        (when (buffer-live-p pulled-buffer)
                                          (with-current-buffer pulled-buffer
                                            (set-buffer-modified-p nil)))

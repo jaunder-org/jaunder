@@ -73,6 +73,16 @@ fn wire_to_format(content_type: Option<&str>, default: PostFormat) -> PostFormat
     }
 }
 
+/// Classifies an Atom publication instant against the single clock captured for
+/// the handler request.
+fn classify_published(published: UtcInstant, request_clock: UtcInstant) -> PublicationState {
+    if published.value() > request_clock.value() {
+        PublicationState::Scheduled(published)
+    } else {
+        PublicationState::Published(published)
+    }
+}
+
 /// Maps an incoming `AtomPub` `Entry` to Jaunder post fields.
 ///
 /// Per ADR-0023, the entry's content `type` carries the storage format as a media
@@ -126,15 +136,17 @@ pub fn entry_to_post_fields(
     let is_draft = is_draft(entry);
     // A declared `app:draft` is an explicit Atom lifecycle source, including
     // `no`; only a genuinely absent marker leaves room for Org metadata.
-    let published = entry.published().map(|d| d.with_timezone(&Utc));
+    let published = entry
+        .published()
+        .map(|published| UtcInstant::from(published.with_timezone(&Utc)));
     let lifecycle = match draft_marker(entry) {
         Some(true) => Presence::Present(PublicationState::Draft),
-        Some(false) => Presence::Present(PublicationState::Published(
-            published.map_or(request_clock, UtcInstant::from),
+        Some(false) => Presence::Present(classify_published(
+            published.unwrap_or(request_clock),
+            request_clock,
         )),
         None => published
-            .map(UtcInstant::from)
-            .map(PublicationState::Published)
+            .map(|published| classify_published(published, request_clock))
             .map_or(Presence::Absent, Presence::Present),
     };
     // Any incoming `j:slug` is deliberately ignored (ADR-0023): the slug is a
@@ -614,6 +626,50 @@ mod tests {
         assert_eq!(
             fields.lifecycle,
             Presence::Present(PublicationState::Published(published))
+        );
+    }
+
+    #[test]
+    fn entry_to_post_fields_future_published_without_draft_marker_is_scheduled() {
+        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom"><title>Test</title><id>id</id><updated>2026-05-31T00:00:00Z</updated><published>2026-06-02T09:15:00Z</published><content>body</content></entry>"#;
+        let clock: UtcInstant = "2026-06-01T12:00:00Z".parse().expect("valid clock");
+        let published: UtcInstant = "2026-06-02T09:15:00Z".parse().expect("valid timestamp");
+        let entry = xml.parse::<Entry>().expect("parse entry");
+
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown, clock).expect("valid body");
+
+        assert_eq!(
+            fields.lifecycle,
+            Presence::Present(PublicationState::Scheduled(published))
+        );
+    }
+
+    #[test]
+    fn entry_to_post_fields_published_at_request_clock_is_published() {
+        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom"><title>Test</title><id>id</id><updated>2026-05-31T00:00:00Z</updated><published>2026-06-01T12:00:00Z</published><content>body</content></entry>"#;
+        let clock: UtcInstant = "2026-06-01T12:00:00Z".parse().expect("valid clock");
+        let entry = xml.parse::<Entry>().expect("parse entry");
+
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown, clock).expect("valid body");
+
+        assert_eq!(
+            fields.lifecycle,
+            Presence::Present(PublicationState::Published(clock))
+        );
+    }
+
+    #[test]
+    fn entry_to_post_fields_explicit_non_draft_with_future_published_is_scheduled() {
+        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom" xmlns:app="http://www.w3.org/2007/app"><title>Test</title><id>id</id><updated>2026-05-31T00:00:00Z</updated><published>2026-06-02T09:15:00Z</published><content>body</content><app:control><app:draft>no</app:draft></app:control></entry>"#;
+        let clock: UtcInstant = "2026-06-01T12:00:00Z".parse().expect("valid clock");
+        let published: UtcInstant = "2026-06-02T09:15:00Z".parse().expect("valid timestamp");
+        let entry = xml.parse::<Entry>().expect("parse entry");
+
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown, clock).expect("valid body");
+
+        assert_eq!(
+            fields.lifecycle,
+            Presence::Present(PublicationState::Scheduled(published))
         );
     }
 
