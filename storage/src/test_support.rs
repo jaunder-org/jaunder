@@ -1503,7 +1503,7 @@ impl UpdateRawPost {
             publish: self.publish,
             summary: self.summary,
             audiences: self.audiences,
-            request_clock: Utc::now(),
+            request_clock: UtcInstant::now(),
             expectations: PostBookkeepingExpectation::default(),
         }
     }
@@ -1699,7 +1699,7 @@ pub async fn update_post_body_via_service(
             slug_override: None,
             publish: crate::PublishUpdate::Publish { at: None },
             summary: None,
-            request_clock: Utc::now(),
+            request_clock: UtcInstant::now(),
             expectations: PostBookkeepingExpectation::default(),
             audiences: vec![AudienceTarget::Public],
         },

@@ -209,7 +209,7 @@ pub struct PostUpdate<'a> {
     /// vec (or `[Private]`) makes the post author-only.
     pub audiences: Vec<AudienceTarget>,
     /// The request clock reused if this update publishes a draft without a date.
-    pub request_clock: DateTime<Utc>,
+    pub request_clock: UtcInstant,
     /// Non-authoritative Org bookkeeping expected to match the locked row.
     pub expectations: PostBookkeepingExpectation,
 }
@@ -1004,7 +1004,7 @@ mod tests {
                 create(
                     publication_user,
                     PostBookkeepingExpectation {
-                        published_at: Some(Some(UtcInstant::from(Utc::now()))),
+                        published_at: Some(Some(UtcInstant::now())),
                         ..Default::default()
                     },
                 ),
@@ -1045,7 +1045,7 @@ mod tests {
             publish: PublishUpdate::Publish { at: None },
             summary: None,
             audiences: vec![AudienceTarget::Public],
-            request_clock: Utc::now(),
+            request_clock: UtcInstant::now(),
             expectations: PostBookkeepingExpectation {
                 slug: Some(expected_slug),
                 ..Default::default()
@@ -1070,8 +1070,6 @@ mod tests {
     async fn bookkeeping_update_publishes_now_at_the_supplied_request_clock(
         #[case] backend: Backend,
     ) {
-        use chrono::TimeZone;
-
         let env = backend.setup().await;
         let storage = &*env.state.posts;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
@@ -1079,7 +1077,7 @@ mod tests {
             .draft()
             .seed(&env.state)
             .await;
-        let clock = Utc.with_ymd_and_hms(2042, 7, 1, 12, 0, 0).unwrap();
+        let clock: UtcInstant = "2042-07-01T12:00:00Z".parse().unwrap();
         let record = perform_post_update(
             storage,
             PostUpdate {
@@ -1137,7 +1135,7 @@ mod tests {
             publish: PublishUpdate::Unpublish,
             summary: None,
             audiences: vec![AudienceTarget::Public],
-            request_clock: Utc::now(),
+            request_clock: UtcInstant::now(),
             expectations,
         };
 
@@ -1346,7 +1344,7 @@ mod tests {
                 publish: PublishUpdate::Publish { at: None },
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
-                request_clock: Utc::now(),
+                request_clock: UtcInstant::now(),
                 expectations: PostBookkeepingExpectation::default(),
             },
         )
@@ -1442,7 +1440,7 @@ mod tests {
                 publish: PublishUpdate::Publish { at: None },
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
-                request_clock: Utc::now(),
+                request_clock: UtcInstant::now(),
                 expectations: PostBookkeepingExpectation::default(),
             },
         )

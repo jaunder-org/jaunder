@@ -168,7 +168,7 @@ struct NormalizedAtomInput {
 async fn normalize_atom_input(
     fields: PostFields,
     operation: OrgOperation,
-    request_clock: chrono::DateTime<chrono::Utc>,
+    request_clock: UtcInstant,
     audiences: &dyn AudienceStorage,
     author_user_id: common::ids::UserId,
 ) -> Result<NormalizedAtomInput, HandlerError> {
@@ -198,7 +198,7 @@ async fn normalize_atom_input(
             lifecycle: fields.lifecycle,
         },
         operation,
-        request_clock.into(),
+        request_clock,
     )?;
     let audiences =
         authorize_audiences(audiences, author_user_id, normalized.metadata.audiences).await?;
@@ -226,12 +226,12 @@ async fn normalize_atom_input(
 fn create_published_at(
     lifecycle: &Presence<PublicationState>,
     is_draft: bool,
-    request_clock: chrono::DateTime<chrono::Utc>,
-) -> Option<chrono::DateTime<chrono::Utc>> {
+    request_clock: UtcInstant,
+) -> Option<UtcInstant> {
     match lifecycle {
         Presence::Present(PublicationState::Draft) => None,
         Presence::Present(PublicationState::Scheduled(at) | PublicationState::Published(at)) => {
-            Some((*at).into())
+            Some(*at)
         }
         Presence::Absent if is_draft => None,
         Presence::Absent => Some(request_clock),
@@ -245,9 +245,7 @@ fn update_publish(
     match lifecycle {
         Presence::Present(PublicationState::Draft) => storage::PublishUpdate::Unpublish,
         Presence::Present(PublicationState::Scheduled(at) | PublicationState::Published(at)) => {
-            storage::PublishUpdate::Publish {
-                at: Some((*at).into()),
-            }
+            storage::PublishUpdate::Publish { at: Some(*at) }
         }
         Presence::Absent if is_draft => storage::PublishUpdate::Unpublish,
         Presence::Absent => storage::PublishUpdate::Publish { at: None },
@@ -454,9 +452,9 @@ pub async fn collection_post(
     let site_config = services.site_config();
     super::require_user_match(&auth_user, &username)?;
     let entry: Entry = body.parse()?;
-    let request_clock = chrono::Utc::now();
+    let request_clock = UtcInstant::now();
     let default_format = storage::get_default_post_format(user_config, auth_user.user_id).await?;
-    let fields = entry_to_post_fields(&entry, default_format, request_clock.into())?;
+    let fields = entry_to_post_fields(&entry, default_format, request_clock)?;
     let format = fields.format;
     let is_draft = fields.is_draft;
     let NormalizedAtomInput {
@@ -591,9 +589,9 @@ pub async fn member_put(
     }
 
     let entry: Entry = body.parse()?;
-    let request_clock = chrono::Utc::now();
+    let request_clock = UtcInstant::now();
     let default_format = storage::get_default_post_format(user_config, auth_user.user_id).await?;
-    let fields = entry_to_post_fields(&entry, default_format, request_clock.into())?;
+    let fields = entry_to_post_fields(&entry, default_format, request_clock)?;
     let format = fields.format;
     let is_draft = fields.is_draft;
     let NormalizedAtomInput {
@@ -813,7 +811,7 @@ mod etag_tests {
         let normalized = normalize_atom_input(
             org_fields("Body"),
             OrgOperation::Create,
-            parse_utc_instant("2026-08-26T12:00:00Z").value(),
+            parse_utc_instant("2026-08-26T12:00:00Z"),
             &MockAudienceStorage::new(),
             UserId::from(1),
         )
@@ -833,7 +831,7 @@ mod etag_tests {
         let Err(error) = normalize_atom_input(
             org_fields("#+PROPERTY: JAUNDER_AUDIENCE named:42\nBody"),
             OrgOperation::Create,
-            parse_utc_instant("2026-08-26T12:00:00Z").value(),
+            parse_utc_instant("2026-08-26T12:00:00Z"),
             &audiences,
             UserId::from(1),
         )
@@ -847,7 +845,7 @@ mod etag_tests {
 
     #[test]
     fn legacy_draft_lifecycle_fallbacks_remain_unpublished() {
-        let clock = parse_utc_instant("2026-08-26T12:00:00Z").value();
+        let clock = parse_utc_instant("2026-08-26T12:00:00Z");
         assert_eq!(
             create_published_at(&Presence::Absent, true, clock),
             None,

@@ -155,7 +155,7 @@ fn update_input<'a>(
         publish,
         summary: None,
         audiences: vec![AudienceTarget::Public],
-        request_clock: Utc::now(),
+        request_clock: common::time::UtcInstant::now(),
         expectations: PostBookkeepingExpectation::default(),
     }
 }
@@ -859,7 +859,7 @@ async fn perform_post_update_markdown_renders_and_updates(#[case] backend: Backe
             publish: PublishUpdate::Unpublish,
             summary: None,
             audiences: vec![AudienceTarget::Public],
-            request_clock: Utc::now(),
+            request_clock: common::time::UtcInstant::now(),
             expectations: PostBookkeepingExpectation::default(),
         },
     )
@@ -901,7 +901,7 @@ async fn perform_post_update_org_renders_and_updates(#[case] backend: Backend) {
             publish: PublishUpdate::Unpublish,
             summary: None,
             audiences: vec![AudienceTarget::Public],
-            request_clock: Utc::now(),
+            request_clock: common::time::UtcInstant::now(),
             expectations: PostBookkeepingExpectation::default(),
         },
     )

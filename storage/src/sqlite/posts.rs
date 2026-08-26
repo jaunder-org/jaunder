@@ -14,7 +14,6 @@ use crate::{
 };
 use common::ids::{PostId, TagId, UserId};
 use common::tag::TagLabel;
-use common::time::UtcInstant;
 
 pub(crate) fn finish_post_update(
     primary: Result<PostRecord, UpdatePostError>,

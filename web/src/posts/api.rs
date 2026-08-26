@@ -46,7 +46,6 @@ use {
     crate::error::InternalError,
     crate::feed_events::enqueue_feed_events,
     crate::viewer::viewer_identity,
-    chrono::Utc,
     common::{
         org::{
             OrgNormalization, OrgOperation, OrgStructuredMetadata, Presence, PublicationState,
@@ -71,17 +70,17 @@ use {
 fn structured_lifecycle(
     publish: Option<bool>,
     publish_at: Option<UtcInstant>,
-    request_clock: chrono::DateTime<Utc>,
+    request_clock: UtcInstant,
 ) -> Presence<PublicationState> {
     match publish {
         None => Presence::Absent,
         Some(false) => Presence::Present(PublicationState::Draft),
         Some(true) => match publish_at {
-            Some(at) if at.value() > request_clock => {
+            Some(at) if at.value() > request_clock.value() => {
                 Presence::Present(PublicationState::Scheduled(at))
             }
             Some(at) => Presence::Present(PublicationState::Published(at)),
-            None => Presence::Present(PublicationState::Published(request_clock.into())),
+            None => Presence::Present(PublicationState::Published(request_clock)),
         },
     }
 }
@@ -93,15 +92,10 @@ fn normalize_web_org(
     body: &PostBody,
     structured: OrgStructuredMetadata,
     operation: OrgOperation,
-    request_clock: chrono::DateTime<Utc>,
+    request_clock: UtcInstant,
 ) -> Result<OrgNormalization, InternalError> {
-    normalize_org(
-        body.as_ref(),
-        structured,
-        operation,
-        UtcInstant::from(request_clock),
-    )
-    .map_err(|error| InternalError::validation(error.to_string()))
+    normalize_org(body.as_ref(), structured, operation, request_clock)
+        .map_err(|error| InternalError::validation(error.to_string()))
 }
 
 #[cfg(feature = "server")]
@@ -218,7 +212,7 @@ pub struct PostInputs {
 /// `datetime-local` value to UTC before sending.
 #[macros::server(input = Json, skip_all)]
 pub async fn create(post: PostInputs) -> WebResult<SavedPost> {
-    let request_clock = Utc::now();
+    let request_clock = UtcInstant::now();
     let PostInputs {
         body,
         format,
@@ -265,7 +259,7 @@ pub async fn create(post: PostInputs) -> WebResult<SavedPost> {
             Presence::Present(PublicationState::Draft) | Presence::Absent => None,
             Presence::Present(
                 PublicationState::Scheduled(at) | PublicationState::Published(at),
-            ) => Some(at.value()),
+            ) => Some(at),
         };
         let tags = match metadata.tags {
             Presence::Present(tags) => tags,
@@ -292,7 +286,7 @@ pub async fn create(post: PostInputs) -> WebResult<SavedPost> {
         let publish = publish
             .ok_or_else(|| InternalError::validation("missing required structured lifecycle"))?;
         let published_at = if publish {
-            Some(publish_at.map_or(request_clock, UtcInstant::value))
+            Some(publish_at.unwrap_or(request_clock))
         } else {
             None
         };
@@ -420,7 +414,7 @@ pub async fn get_preview(post_id: PostId) -> WebResult<EditPostPreview> {
 /// See `create` for why it crosses the boundary as a [`UtcInstant`].
 #[macros::server(input = Json, skip_all)]
 pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost> {
-    let request_clock = Utc::now();
+    let request_clock = UtcInstant::now();
     let PostInputs {
         body,
         format,
@@ -476,9 +470,7 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost> {
             }
             Presence::Present(
                 PublicationState::Scheduled(at) | PublicationState::Published(at),
-            ) => PublishUpdate::Publish {
-                at: Some(at.value()),
-            },
+            ) => PublishUpdate::Publish { at: Some(at) },
         };
         (
             normalized.body,
@@ -507,9 +499,7 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost> {
             summary,
             structured_audiences.unwrap_or_else(|| audience_targets_or_public(None)),
             if publish {
-                PublishUpdate::Publish {
-                    at: publish_at.map(UtcInstant::value),
-                }
+                PublishUpdate::Publish { at: publish_at }
             } else {
                 PublishUpdate::Unpublish
             },
@@ -1036,7 +1026,6 @@ mod server_tests {
     use super::{PostInputs, create, list_drafts, publish, update};
     use crate::error::WebError;
     use crate::test_support::auth_parts;
-    use chrono::Utc;
     use common::ids::{PostId, UserId};
     use common::pagination::PageSize;
     use common::slug::Slug;
@@ -1052,7 +1041,7 @@ mod server_tests {
     };
 
     fn owned_post(user_id: UserId) -> PostRecord {
-        let now = Utc::now();
+        let now = UtcInstant::now();
         PostRecord {
             post_id: PostId::from(1),
             user_id,
@@ -1062,8 +1051,8 @@ mod server_tests {
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
-            created_at: UtcInstant::from(now),
-            updated_at: UtcInstant::from(now),
+            created_at: now,
+            updated_at: now,
             published_at: None,
             deleted_at: None,
             summary: None,
@@ -1095,10 +1084,9 @@ mod server_tests {
 
     #[test]
     fn structured_lifecycle_preserves_transport_presence() {
-        use chrono::TimeZone;
         use common::org::{Presence, PublicationState};
 
-        let clock = Utc.with_ymd_and_hms(2026, 8, 26, 12, 0, 0).unwrap();
+        let clock: UtcInstant = "2026-08-26T12:00:00Z".parse().unwrap();
         assert!(matches!(
             super::structured_lifecycle(None, None, clock),
             Presence::Absent
@@ -1109,7 +1097,7 @@ mod server_tests {
         ));
         assert!(matches!(
             super::structured_lifecycle(Some(true), None, clock),
-            Presence::Present(PublicationState::Published(at)) if at.value() == clock
+            Presence::Present(PublicationState::Published(at)) if at == clock
         ));
         let future = common::test_support::parse_utc_instant("2026-08-26T12:01:00Z");
         assert!(matches!(

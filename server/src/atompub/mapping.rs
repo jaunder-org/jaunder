@@ -40,7 +40,6 @@ pub struct PostFields {
     /// Legacy Atom lifecycle fallback used after Org normalization when neither
     /// wire nor header metadata supplied a lifecycle.
     pub is_draft: bool,
-
 }
 
 /// The wire `atom:content` `type` for a post format (ADR-0023). `Html` uses the

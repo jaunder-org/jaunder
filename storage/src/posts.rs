@@ -381,7 +381,7 @@ pub struct UpdatePostInput {
     /// empty vec produce no rows (the post is private).
     pub audiences: Vec<AudienceTarget>,
     /// The single request clock used when publishing a previously-draft post now.
-    pub request_clock: DateTime<Utc>,
+    pub request_clock: UtcInstant,
     /// Non-authoritative Org bookkeeping to compare under the owner lock.
     pub expectations: PostBookkeepingExpectation,
 }
@@ -463,18 +463,17 @@ pub(crate) const INSERT_POST_TAG: &str = "INSERT INTO post_tags
 pub(crate) const DELETE_POST_TAG_BY_SLUG: &str = "DELETE FROM post_tags
      WHERE post_id = $1 AND tag_id = (SELECT tag_id FROM tags WHERE tag_slug = $2)";
 
-pub(crate) type PostOwnershipRow = (UserId, Option<UtcInstant>);
 /// The locked pre-write columns needed for final-state and content expectations.
 #[derive(sqlx::FromRow)]
 pub(crate) struct PostBookkeepingRow {
     pub user_id: UserId,
-    pub deleted_at: Option<DateTime<Utc>>,
+    pub deleted_at: Option<UtcInstant>,
     pub title: Option<PostTitle>,
     pub slug: Slug,
     pub body: PostBody,
     pub format: PostFormat,
     pub summary: Option<PostSummary>,
-    pub published_at: Option<DateTime<Utc>>,
+    pub published_at: Option<UtcInstant>,
 }
 pub(crate) type TagListRow = (TagId, Tag);
 pub(crate) type PostTagRow = (PostId, TagId, Tag, TagLabel);
@@ -2827,7 +2826,7 @@ fn create_expectations_match(input: &CreatePostInput) -> bool {
         && expected.format.is_none_or(|format| format == input.format)
         && expected
             .published_at
-            .is_none_or(|published_at| published_at.map(UtcInstant::value) == input.published_at)
+            .is_none_or(|published_at| published_at == input.published_at)
 }
 
 /// Maps an error from the idempotency-key `INSERT`. A `(user_id, key)` unique
@@ -2910,7 +2909,7 @@ pub(crate) fn update_expectation_error(
         || expected.format.is_some_and(|format| format != input.format)
         || expected
             .published_at
-            .is_some_and(|published_at| published_at.map(UtcInstant::value) != final_published_at)
+            .is_some_and(|published_at| published_at != final_published_at)
     {
         return Some(UpdatePostError::BookkeepingMismatch);
     }

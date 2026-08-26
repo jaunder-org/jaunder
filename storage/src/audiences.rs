@@ -14,8 +14,8 @@ use async_trait::async_trait;
 use common::audience::AudienceName;
 use common::ids::{AudienceId, SubscriptionId, UserId};
 use common::time::UtcInstant;
-use std::collections::BTreeSet;
 use sqlx::{Database, Pool};
+use std::collections::BTreeSet;
 
 use crate::backend::Backend;
 

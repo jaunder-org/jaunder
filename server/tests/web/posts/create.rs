@@ -617,7 +617,7 @@ async fn create_org_header_named_audience_is_author_scoped_and_opaque(#[case] ba
             author.user_id,
             None,
             parse_row_limit("10"),
-            chrono::Utc::now(),
+            common::time::UtcInstant::now(),
         )
         .await
         .unwrap();
@@ -713,7 +713,7 @@ async fn create_org_metadata_failures_do_not_create_rows(#[case] backend: Backen
             session.user_id,
             None,
             parse_row_limit("10"),
-            chrono::Utc::now(),
+            common::time::UtcInstant::now(),
         )
         .await
         .unwrap();
