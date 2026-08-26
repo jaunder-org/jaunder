@@ -105,9 +105,9 @@ impl ComposeState {
         slug_override: Option<Slug>,
     ) -> PostInputs {
         let (publish, publish_at) = match publication {
-            PublicationIntent::Draft => (false, None),
-            PublicationIntent::PublishNow => (true, None),
-            PublicationIntent::PublishAt(at) => (true, Some(at)),
+            PublicationIntent::Draft => (Some(false), None),
+            PublicationIntent::PublishNow => (Some(true), None),
+            PublicationIntent::PublishAt(at) => (Some(true), Some(at)),
         };
         PostInputs {
             body,
@@ -231,17 +231,17 @@ mod tests {
 
             let draft = state.inputs(body.clone(), PublicationIntent::Draft, None);
             assert_eq!(draft.body.as_ref(), "hello");
-            assert!(!draft.publish);
+            assert_eq!(draft.publish, Some(false));
             assert_eq!(draft.publish_at, None);
             assert_eq!(draft.format, PostFormat::Markdown);
             assert!(draft.slug_override.is_none());
 
             let now = state.inputs(body.clone(), PublicationIntent::PublishNow, None);
-            assert!(now.publish);
+            assert_eq!(now.publish, Some(true));
             assert_eq!(now.publish_at, None);
 
             let scheduled = state.inputs(body, PublicationIntent::PublishAt(scheduled_at), None);
-            assert!(scheduled.publish);
+            assert_eq!(scheduled.publish, Some(true));
             assert_eq!(scheduled.publish_at, Some(scheduled_at));
         });
     }

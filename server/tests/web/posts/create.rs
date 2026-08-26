@@ -485,6 +485,53 @@ async fn create_org_header_merges_structured_metadata_and_stores_canonical_body(
 
 #[apply(backends)]
 #[tokio::test]
+async fn create_org_uses_header_lifecycle_when_publish_is_omitted(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_user_and_session(&state).await.cookie();
+    let payload = serde_json::json!({
+        "post": {
+            "body": "#+TITLE: Header lifecycle\n#+PROPERTY: JAUNDER_STATUS published\n\nBody",
+            "format": "org",
+        }
+    });
+    let (status, body) = post_json(
+        &state,
+        <web::posts::Create as ServerFn>::PATH,
+        payload,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    assert!(
+        created.published_at.is_some(),
+        "an omitted transport lifecycle must leave the valid Org header effective"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn create_non_org_requires_publish_presence(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_user_and_session(&state).await.cookie();
+    let payload = serde_json::json!({
+        "post": {
+            "body": "No lifecycle",
+            "format": "markdown",
+        }
+    });
+    let (status, body) = post_json(
+        &state,
+        <web::posts::Create as ServerFn>::PATH,
+        payload,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn create_org_header_named_audience_is_author_scoped_and_opaque(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let author = create_user_and_session(&state).await;

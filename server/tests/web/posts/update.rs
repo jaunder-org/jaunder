@@ -934,6 +934,63 @@ async fn update_org_header_applies_tags_and_rejects_mismatched_bookkeeping(
 
 #[apply(backends)]
 #[tokio::test]
+async fn update_org_uses_header_lifecycle_when_publish_is_omitted(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_user_and_session(&state).await.cookie();
+    let (status, body) =
+        create_post_json(&state, "original", "org", None, false, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let payload = serde_json::json!({
+        "post_id": created.post_id,
+        "post": {
+            "body": "#+TITLE: Header lifecycle\n#+PROPERTY: JAUNDER_STATUS published\n\nUpdated body",
+            "format": "org",
+        }
+    });
+    let (status, body) = post_json(
+        &state,
+        <web::posts::Update as ServerFn>::PATH,
+        payload,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "update body: {body}");
+    let updated: SavedPost = serde_json::from_str(&body).unwrap();
+    assert!(
+        updated.published_at.is_some(),
+        "an omitted transport lifecycle must leave the valid Org header effective"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn update_non_org_requires_publish_presence(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_user_and_session(&state).await.cookie();
+    let (status, body) =
+        create_post_json(&state, "original", "markdown", None, false, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let payload = serde_json::json!({
+        "post_id": created.post_id,
+        "post": {
+            "body": "No lifecycle",
+            "format": "markdown",
+        }
+    });
+    let (status, body) = post_json(
+        &state,
+        <web::posts::Update as ServerFn>::PATH,
+        payload,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn update_org_current_sync_succeeds_and_stale_sync_preserves_post(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;

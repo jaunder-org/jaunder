@@ -400,6 +400,20 @@ fn entry_xml_with_published(title: &str, content: &str, published: Option<&str>)
     )
 }
 
+/// A non-draft text entry whose explicit Atom lifecycle marker preserves its
+/// supplied `<published>` instant.
+fn entry_xml_with_draft_no_and_published(title: &str, content: &str, published: &str) -> String {
+    format!(
+        r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom" xmlns:app="http://www.w3.org/2007/app">
+  <title>{title}</title>
+  <content type="text">{content}</content>
+  <published>{published}</published>
+  <app:control><app:draft>no</app:draft></app:control>
+</entry>"#
+    )
+}
+
 /// Which cross-user request a `*_forbids_other_user` case issues. Each variant
 /// builds a request that `alice` (authenticated) directs at `bob`'s resource.
 enum ForbiddenRequest {
@@ -2127,6 +2141,34 @@ async fn create_with_past_published_is_live_backdated(#[case] backend: Backend) 
 
 #[apply(backends)]
 #[tokio::test]
+async fn create_with_explicit_draft_no_preserves_published_instant(#[case] backend: Backend) {
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let app = make_app(&state, &base);
+    let xml = entry_xml_with_draft_no_and_published("Old post", "body", "2000-01-01T00:00:00Z");
+
+    let response = app
+        .oneshot(atompub_post_xml(&session, "posts", &xml))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let post_id = location_post_id(&response);
+    let owner = common::visibility::ViewerIdentity::local(session.user_id);
+    let rec = state
+        .posts
+        .get_post_by_id(PostId::from(post_id), &owner)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rec.published_at.unwrap().to_rfc3339(),
+        "2000-01-01T00:00:00+00:00"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn update_with_future_published_schedules_post(#[case] backend: Backend) {
     let TestEnv { state, base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
@@ -2160,6 +2202,39 @@ async fn update_with_future_published_schedules_post(#[case] backend: Backend) {
         rec.published_at.unwrap().value().to_rfc3339(),
         "2099-06-01T00:00:00+00:00",
         "update must honor the wire <published> timestamp"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn update_with_explicit_draft_no_preserves_published_instant(#[case] backend: Backend) {
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let post = session.seed_post().seed(&state).await;
+    let app = make_app(&state, &base);
+    let xml =
+        entry_xml_with_draft_no_and_published("Backdated", "new body", "2000-01-01T00:00:00Z");
+
+    let response = app
+        .oneshot(atompub_put_xml(
+            &session,
+            &format!("posts/{}", post.post_id),
+            &xml,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let viewer = common::visibility::ViewerIdentity::Anonymous;
+    let rec = state
+        .posts
+        .get_post_by_id(post.post_id, &viewer)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rec.published_at.unwrap().to_rfc3339(),
+        "2000-01-01T00:00:00+00:00"
     );
 }
 

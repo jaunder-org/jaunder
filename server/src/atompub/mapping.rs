@@ -129,7 +129,9 @@ pub fn entry_to_post_fields(
     let published = entry.published().map(|d| d.with_timezone(&Utc));
     let lifecycle = match draft_marker(entry) {
         Some(true) => Presence::Present(PublicationState::Draft),
-        Some(false) => Presence::Present(PublicationState::Published(request_clock)),
+        Some(false) => Presence::Present(PublicationState::Published(
+            published.map_or(request_clock, UtcInstant::from),
+        )),
         None => published
             .map(UtcInstant::from)
             .map(PublicationState::Published)
@@ -553,7 +555,22 @@ mod tests {
     }
 
     #[test]
-    fn entry_to_post_fields_explicit_non_draft_is_published_at_request_clock() {
+    fn entry_to_post_fields_explicit_non_draft_preserves_published_instant() {
+        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom" xmlns:app="http://www.w3.org/2007/app"><title>Test</title><id>id</id><updated>2026-05-31T00:00:00Z</updated><published>2026-05-30T09:15:00Z</published><content>body</content><app:control><app:draft>no</app:draft></app:control></entry>"#;
+        let clock: UtcInstant = "2026-06-01T12:00:00Z".parse().expect("valid clock");
+        let published: UtcInstant = "2026-05-30T09:15:00Z".parse().expect("valid timestamp");
+        let entry = xml.parse::<Entry>().expect("parse entry");
+
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown, clock).expect("valid body");
+
+        assert_eq!(
+            fields.lifecycle,
+            Presence::Present(PublicationState::Published(published))
+        );
+    }
+
+    #[test]
+    fn entry_to_post_fields_explicit_non_draft_without_published_uses_request_clock() {
         let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom" xmlns:app="http://www.w3.org/2007/app"><title>Test</title><id>id</id><updated>2026-05-31T00:00:00Z</updated><content>body</content><app:control><app:draft>no</app:draft></app:control></entry>"#;
         let clock: UtcInstant = "2026-06-01T12:00:00Z".parse().expect("valid clock");
         let entry = xml.parse::<Entry>().expect("parse entry");
@@ -583,6 +600,21 @@ mod tests {
 
         assert!(!fields.is_draft);
         assert_eq!(fields.lifecycle, Presence::Absent);
+    }
+
+    #[test]
+    fn entry_to_post_fields_published_without_draft_marker_uses_its_instant() {
+        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom"><title>Test</title><id>id</id><updated>2026-05-31T00:00:00Z</updated><published>2026-05-30T09:15:00Z</published><content>body</content></entry>"#;
+        let clock: UtcInstant = "2026-06-01T12:00:00Z".parse().expect("valid clock");
+        let published: UtcInstant = "2026-05-30T09:15:00Z".parse().expect("valid timestamp");
+        let entry = xml.parse::<Entry>().expect("parse entry");
+
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown, clock).expect("valid body");
+
+        assert_eq!(
+            fields.lifecycle,
+            Presence::Present(PublicationState::Published(published))
+        );
     }
 
     #[test]

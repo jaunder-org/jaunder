@@ -65,24 +65,24 @@ use {
     },
 };
 
-/// Builds structured lifecycle only from an explicit publication instant. The
-/// boolean's no-date value is the web transport's existing default behavior,
-/// not metadata that may suppress an Org header lifecycle.
+/// Builds structured lifecycle only when the transport explicitly supplied a
+/// publication control. Omission lets an Org header lifecycle take effect.
 #[cfg(feature = "server")]
 fn structured_lifecycle(
-    publish: bool,
+    publish: Option<bool>,
     publish_at: Option<UtcInstant>,
     request_clock: chrono::DateTime<Utc>,
 ) -> Presence<PublicationState> {
-    if !publish {
-        return Presence::Present(PublicationState::Draft);
-    }
-    match publish_at {
-        Some(at) if at.value() > request_clock => {
-            Presence::Present(PublicationState::Scheduled(at))
-        }
-        Some(at) => Presence::Present(PublicationState::Published(at)),
-        None => Presence::Present(PublicationState::Published(request_clock.into())),
+    match publish {
+        None => Presence::Absent,
+        Some(false) => Presence::Present(PublicationState::Draft),
+        Some(true) => match publish_at {
+            Some(at) if at.value() > request_clock => {
+                Presence::Present(PublicationState::Scheduled(at))
+            }
+            Some(at) => Presence::Present(PublicationState::Published(at)),
+            None => Presence::Present(PublicationState::Published(request_clock.into())),
+        },
     }
 }
 
@@ -104,37 +104,15 @@ fn normalize_web_org(
     .map_err(|error| InternalError::validation(error.to_string()))
 }
 
-/// Refuses unknown and foreign named audiences with the same opaque validation
-/// response. The storage query is author-scoped, so this reveals neither fact.
 #[cfg(feature = "server")]
-async fn authorize_org_audiences(
+async fn validate_org_audiences(
     targets: &[AudienceTarget],
     author_user_id: common::ids::UserId,
 ) -> Result<(), InternalError> {
-    let named: BTreeSet<_> = targets
-        .iter()
-        .filter_map(|target| match target {
-            AudienceTarget::Named(id) => Some(*id),
-            AudienceTarget::Public | AudienceTarget::Private | AudienceTarget::Subscribers => None,
-        })
-        .collect();
-    if named.is_empty() {
-        return Ok(());
-    }
-
     let audiences = expect_context::<Arc<dyn AudienceStorage>>();
-    let allowed: BTreeSet<_> = audiences
-        .list_audiences(author_user_id)
+    storage::validate_named_audience_targets(audiences.as_ref(), author_user_id, targets)
         .await
-        .map_err(InternalError::storage)?
-        .into_iter()
-        .map(|audience| audience.audience_id)
-        .collect();
-    if named.is_subset(&allowed) {
-        Ok(())
-    } else {
-        Err(InternalError::validation("invalid audience"))
-    }
+        .map_err(InternalError::from)
 }
 #[cfg(feature = "server")]
 fn unpublished_post_from_record(post: PostRecord) -> UnpublishedPost {
@@ -224,7 +202,7 @@ pub struct PostInputs {
     pub body: PostBody,
     pub format: PostFormat,
     pub slug_override: Option<Slug>,
-    pub publish: bool,
+    pub publish: Option<bool>,
     pub publish_at: Option<UtcInstant>,
     pub tags: Option<Vec<TagLabel>>,
     pub summary: Option<PostSummary>,
@@ -262,69 +240,72 @@ pub async fn create(post: PostInputs) -> WebResult<SavedPost> {
         .as_ref()
         .map(|selection| audience_targets_or_public(Some(selection)));
 
-    let (body, title, summary, audiences, published_at, expectations, validated_tags) =
-        if format == PostFormat::Org {
-            let normalized = normalize_web_org(
-                &body,
-                OrgStructuredMetadata {
-                    title: Presence::Absent,
-                    summary: summary.map_or(Presence::Absent, Presence::Present),
-                    tags: structured_tags.map_or(Presence::Absent, Presence::Present),
-                    audiences: structured_audiences.map_or(Presence::Absent, Presence::Present),
-                    lifecycle: structured_lifecycle(publish, publish_at, request_clock),
-                },
-                OrgOperation::Create,
-                request_clock,
-            )?;
-            let metadata = normalized.metadata;
-            let audiences = match metadata.audiences {
-                Presence::Present(audiences) => audiences,
-                Presence::Absent => audience_targets_or_public(None),
-            };
-            authorize_org_audiences(&audiences, auth.user_id).await?;
-            let published_at = match metadata.lifecycle {
-                Presence::Present(PublicationState::Draft) | Presence::Absent => None,
-                Presence::Present(
-                    PublicationState::Scheduled(at) | PublicationState::Published(at),
-                ) => Some(at.value()),
-            };
-            let tags = match metadata.tags {
-                Presence::Present(tags) => tags,
-                Presence::Absent => Vec::new(),
-            };
-            (
-                normalized.body,
-                match metadata.title {
-                    Presence::Present(title) => Some(title),
-                    Presence::Absent => None,
-                },
-                match metadata.summary {
-                    Presence::Present(summary) => Some(summary),
-                    Presence::Absent => None,
-                },
-                audiences,
-                published_at,
-                normalized.bookkeeping.into(),
-                tags,
-            )
-        } else {
-            // Publish + a supplied time = scheduled (future) or backdated (past);
-            // publish + no time = live now; not publishing = draft (NULL).
-            let published_at = if publish {
-                Some(publish_at.map_or(request_clock, UtcInstant::value))
-            } else {
-                None
-            };
-            (
-                body,
-                None,
-                summary,
-                structured_audiences.unwrap_or_else(|| audience_targets_or_public(None)),
-                published_at,
-                PostBookkeepingExpectation::default(),
-                structured_tags.unwrap_or_default(),
-            )
+    let (body, title, summary, audiences, published_at, expectations, validated_tags) = if format
+        == PostFormat::Org
+    {
+        let normalized = normalize_web_org(
+            &body,
+            OrgStructuredMetadata {
+                title: Presence::Absent,
+                summary: summary.map_or(Presence::Absent, Presence::Present),
+                tags: structured_tags.map_or(Presence::Absent, Presence::Present),
+                audiences: structured_audiences.map_or(Presence::Absent, Presence::Present),
+                lifecycle: structured_lifecycle(publish, publish_at, request_clock),
+            },
+            OrgOperation::Create,
+            request_clock,
+        )?;
+        let metadata = normalized.metadata;
+        let audiences = match metadata.audiences {
+            Presence::Present(audiences) => audiences,
+            Presence::Absent => audience_targets_or_public(None),
         };
+        validate_org_audiences(&audiences, auth.user_id).await?;
+        let published_at = match metadata.lifecycle {
+            Presence::Present(PublicationState::Draft) | Presence::Absent => None,
+            Presence::Present(
+                PublicationState::Scheduled(at) | PublicationState::Published(at),
+            ) => Some(at.value()),
+        };
+        let tags = match metadata.tags {
+            Presence::Present(tags) => tags,
+            Presence::Absent => Vec::new(),
+        };
+        (
+            normalized.body,
+            match metadata.title {
+                Presence::Present(title) => Some(title),
+                Presence::Absent => None,
+            },
+            match metadata.summary {
+                Presence::Present(summary) => Some(summary),
+                Presence::Absent => None,
+            },
+            audiences,
+            published_at,
+            normalized.bookkeeping.into(),
+            tags,
+        )
+    } else {
+        // Non-Org writes require explicit lifecycle control; unlike Org,
+        // they have no header metadata from which to derive it.
+        let publish = publish
+            .ok_or_else(|| InternalError::validation("missing required structured lifecycle"))?;
+        let published_at = if publish {
+            Some(publish_at.map_or(request_clock, UtcInstant::value))
+        } else {
+            None
+        };
+        (
+            body,
+            None,
+            summary,
+            structured_audiences.unwrap_or_else(|| audience_targets_or_public(None)),
+            published_at,
+            PostBookkeepingExpectation::default(),
+            structured_tags.unwrap_or_default(),
+        )
+    };
 
     let record = perform_post_creation(
         posts.as_ref(),
@@ -468,71 +449,74 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost> {
         .as_ref()
         .map(|selection| audience_targets_or_public(Some(selection)));
 
-    let (body, title, summary, audiences, publish, expectations, new_tags) =
-        if format == PostFormat::Org {
-            let normalized = normalize_web_org(
-                &body,
-                OrgStructuredMetadata {
-                    title: Presence::Absent,
-                    summary: summary.map_or(Presence::Absent, Presence::Present),
-                    tags: structured_tags.map_or(Presence::Absent, Presence::Present),
-                    audiences: structured_audiences.map_or(Presence::Absent, Presence::Present),
-                    lifecycle: structured_lifecycle(publish, publish_at, request_clock),
-                },
-                OrgOperation::Update { post_id },
-                request_clock,
-            )?;
-            let metadata = normalized.metadata;
-            let audiences = match metadata.audiences {
-                Presence::Present(audiences) => audiences,
-                Presence::Absent => audience_targets_or_public(None),
-            };
-            authorize_org_audiences(&audiences, auth.user_id).await?;
-            let publish = match metadata.lifecycle {
-                Presence::Present(PublicationState::Draft) | Presence::Absent => {
-                    PublishUpdate::Unpublish
-                }
-                Presence::Present(
-                    PublicationState::Scheduled(at) | PublicationState::Published(at),
-                ) => PublishUpdate::Publish {
-                    at: Some(at.value()),
-                },
-            };
-            (
-                normalized.body,
-                match metadata.title {
-                    Presence::Present(title) => Some(title),
-                    Presence::Absent => None,
-                },
-                match metadata.summary {
-                    Presence::Present(summary) => Some(summary),
-                    Presence::Absent => None,
-                },
-                audiences,
-                publish,
-                normalized.bookkeeping.into(),
-                match metadata.tags {
-                    Presence::Present(tags) => Some(tags),
-                    Presence::Absent => None,
-                },
-            )
-        } else {
-            (
-                body,
-                None,
-                summary,
-                structured_audiences.unwrap_or_else(|| audience_targets_or_public(None)),
-                if publish {
-                    PublishUpdate::Publish {
-                        at: publish_at.map(UtcInstant::value),
-                    }
-                } else {
-                    PublishUpdate::Unpublish
-                },
-                PostBookkeepingExpectation::default(),
-                structured_tags,
-            )
+    let (body, title, summary, audiences, publish, expectations, new_tags) = if format
+        == PostFormat::Org
+    {
+        let normalized = normalize_web_org(
+            &body,
+            OrgStructuredMetadata {
+                title: Presence::Absent,
+                summary: summary.map_or(Presence::Absent, Presence::Present),
+                tags: structured_tags.map_or(Presence::Absent, Presence::Present),
+                audiences: structured_audiences.map_or(Presence::Absent, Presence::Present),
+                lifecycle: structured_lifecycle(publish, publish_at, request_clock),
+            },
+            OrgOperation::Update { post_id },
+            request_clock,
+        )?;
+        let metadata = normalized.metadata;
+        let audiences = match metadata.audiences {
+            Presence::Present(audiences) => audiences,
+            Presence::Absent => audience_targets_or_public(None),
         };
+        validate_org_audiences(&audiences, auth.user_id).await?;
+        let publish = match metadata.lifecycle {
+            Presence::Present(PublicationState::Draft) | Presence::Absent => {
+                PublishUpdate::Unpublish
+            }
+            Presence::Present(
+                PublicationState::Scheduled(at) | PublicationState::Published(at),
+            ) => PublishUpdate::Publish {
+                at: Some(at.value()),
+            },
+        };
+        (
+            normalized.body,
+            match metadata.title {
+                Presence::Present(title) => Some(title),
+                Presence::Absent => None,
+            },
+            match metadata.summary {
+                Presence::Present(summary) => Some(summary),
+                Presence::Absent => None,
+            },
+            audiences,
+            publish,
+            normalized.bookkeeping.into(),
+            match metadata.tags {
+                Presence::Present(tags) => Some(tags),
+                Presence::Absent => None,
+            },
+        )
+    } else {
+        let publish = publish
+            .ok_or_else(|| InternalError::validation("missing required structured lifecycle"))?;
+        (
+            body,
+            None,
+            summary,
+            structured_audiences.unwrap_or_else(|| audience_targets_or_public(None)),
+            if publish {
+                PublishUpdate::Publish {
+                    at: publish_at.map(UtcInstant::value),
+                }
+            } else {
+                PublishUpdate::Unpublish
+            },
+            PostBookkeepingExpectation::default(),
+            structured_tags,
+        )
+    };
 
     let record = perform_post_update(
         posts.as_ref(),
@@ -926,7 +910,7 @@ mod tests {
             body: parse_post_body("hi"),
             format: PostFormat::Markdown,
             slug_override: None,
-            publish: false,
+            publish: Some(false),
             publish_at: None,
             tags: None,
             summary: None,
@@ -1110,17 +1094,21 @@ mod server_tests {
     }
 
     #[test]
-    fn structured_lifecycle_always_supplies_web_draft_and_publish_now() {
+    fn structured_lifecycle_preserves_transport_presence() {
         use chrono::TimeZone;
         use common::org::{Presence, PublicationState};
 
         let clock = Utc.with_ymd_and_hms(2026, 8, 26, 12, 0, 0).unwrap();
         assert!(matches!(
-            super::structured_lifecycle(false, None, clock),
+            super::structured_lifecycle(None, None, clock),
+            Presence::Absent
+        ));
+        assert!(matches!(
+            super::structured_lifecycle(Some(false), None, clock),
             Presence::Present(PublicationState::Draft)
         ));
         assert!(matches!(
-            super::structured_lifecycle(true, None, clock),
+            super::structured_lifecycle(Some(true), None, clock),
             Presence::Present(PublicationState::Published(at)) if at.value() == clock
         ));
     }
@@ -1221,7 +1209,7 @@ mod server_tests {
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
             slug_override: None,
-            publish: false,
+            publish: Some(false),
             publish_at: None,
             tags,
             summary: None,
@@ -1320,7 +1308,7 @@ mod server_tests {
                 ),
                 format: PostFormat::Org,
                 slug_override: None,
-                publish: false,
+                publish: Some(false),
                 publish_at: None,
                 tags: None,
                 summary: None,

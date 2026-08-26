@@ -24,8 +24,8 @@ use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::{AudienceTarget, ViewerIdentity};
 use storage::{
-    AudienceStorage, CollectionCursor, PostRecord, PostStorage, SiteConfigStorage,
-    UserConfigStorage,
+    AudienceStorage, CollectionCursor, InvalidAudienceTargets, PostRecord, PostStorage,
+    SiteConfigStorage, UserConfigStorage, validate_named_audience_targets,
 };
 use web::auth;
 
@@ -143,18 +143,12 @@ async fn authorize_audiences(
     let Presence::Present(targets) = targets else {
         return Ok(Presence::Absent);
     };
-    if !targets
-        .iter()
-        .any(|target| matches!(target, AudienceTarget::Named(_)))
-    {
-        return Ok(Presence::Present(targets));
-    }
-    let owned = audiences.list_audiences(author_user_id).await?;
-    if targets.iter().any(|target| {
-        matches!(target, AudienceTarget::Named(id) if !owned.iter().any(|audience| audience.audience_id == *id))
-    }) {
-        return Err(HandlerError::BadRequest);
-    }
+    validate_named_audience_targets(audiences, author_user_id, &targets)
+        .await
+        .map_err(|error| match error {
+            InvalidAudienceTargets::Invalid => HandlerError::BadRequest,
+            InvalidAudienceTargets::Storage(error) => HandlerError::from(error),
+        })?;
     Ok(Presence::Present(targets))
 }
 

@@ -36,8 +36,8 @@ Recognized mutable metadata is `#+TITLE`, repeated or comma-separated
 list values compose by field; date, lifecycle, timezone, and bookkeeping values
 are singletons. Values pass through the existing typed title, summary, tag,
 slug, ID, and timestamp boundaries. Blank recognized values reject except that
-the keywords comma parser drops empty terms and then requires at least one tag.
-Audience values are exactly `public`, `subscribers`, `private`, or
+each `KEYWORDS` occurrence drops empty comma terms and must retain at least one
+valid term. Audience values are exactly `public`, `subscribers`, `private`, or
 `named:<numeric-id>`; `private` cannot combine, and named IDs must belong to the
 author.
 

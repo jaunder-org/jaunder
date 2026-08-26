@@ -24,10 +24,11 @@ content.
   `#+DESCRIPTION`; `#+DATE`; and repeated `#+PROPERTY` values for
   `JAUNDER_AUDIENCE`, plus singleton `JAUNDER_STATUS` and `JAUNDER_DATE_TZ`.
 - `TITLE` lines join with newlines then use `PostTitle` validation;
-  `DESCRIPTION` lines join with newlines then use `PostSummary` validation.
-  `KEYWORDS` flattens comma-separated occurrences, drops empty comma terms, and
-  uses existing `TagLabel` validation, slug deduplication, order, and tag cap;
-  no remaining value is invalid. Other blank recognized values are invalid.
+- `DESCRIPTION` lines join with newlines then use `PostSummary` validation.
+- Each `KEYWORDS` occurrence flattens its comma-separated terms, drops empty
+- comma terms, and must retain at least one valid term; the resulting terms use
+- existing `TagLabel` validation, slug deduplication, order, and tag cap. Other
+- blank recognized values are invalid.
 - Audience values are exactly `public`, `subscribers`, `private`, or
   `named:<numeric-id>`. `private` cannot combine with another target; named IDs
   must exist and belong to the author.
