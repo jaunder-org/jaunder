@@ -6,6 +6,7 @@ use common::tag::{Tag, TagLabel};
 use common::test_support::{
     parse_audience_name, parse_post_body, parse_post_title, parse_row_limit, parse_slug,
 };
+use common::time::UtcInstant;
 use common::visibility::{AudienceTarget, ViewerIdentity};
 use rstest::*;
 use rstest_reuse::*;
@@ -178,7 +179,7 @@ async fn update_publish_timestamp_semantics(#[case] backend: Backend) {
     let title = parse_post_title("Updated Title");
 
     // Publish { at: Some(future) } on a draft => scheduled at that instant.
-    let future = now + Duration::days(1);
+    let future = UtcInstant::from(now + Duration::days(1));
     let rec = perform_post_update(
         &*state.posts,
         update_input(
@@ -704,7 +705,7 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
 
     let user_id = SeedUser::new().seed(state).await.user_id;
 
-    let now = Utc::now();
+    let now = UtcInstant::from(Utc::now());
 
     let occ = SeedRawPost::new(user_id)
         .published_at(now)

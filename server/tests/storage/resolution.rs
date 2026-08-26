@@ -139,7 +139,12 @@ async fn resolution_matrix(#[case] backend: Backend) {
     for (vi, (vlabel, viewer)) in viewers.iter().enumerate() {
         let listed: std::collections::HashSet<PostId> = state
             .posts
-            .list_published(None, parse_row_limit("100"), viewer, Utc::now())
+            .list_published(
+                None,
+                parse_row_limit("100"),
+                viewer,
+                common::time::UtcInstant::from(Utc::now()),
+            )
             .await
             .unwrap()
             .into_iter()

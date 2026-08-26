@@ -9,7 +9,7 @@ use common::pagination::PageSize;
 use common::seed::PageSeed;
 use common::slug::Slug;
 use common::tag::Tag;
-use common::time::PermalinkDate;
+use common::time::{PermalinkDate, UtcInstant};
 use common::username::Username;
 use common::visibility::ViewerIdentity;
 
@@ -85,7 +85,7 @@ async fn permalink(
         &username,
         date,
         &slug,
-        chrono::Utc::now(),
+        UtcInstant::from(chrono::Utc::now()),
     )
     .await;
     permalink_response(result, &headers, &shell)

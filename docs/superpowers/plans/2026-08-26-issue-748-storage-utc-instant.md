@@ -74,7 +74,7 @@ Out:
   - Verification: `#[apply(backends)]` tests cover both flows' claimable,
     expired, used, and nullable states plus unchanged web response behavior.
 
-- [ ] Task 6: Migrate post and publication storage instants.
+- [x] Task 6: Migrate post and publication storage instants.
   - Contract: post records/revisions, every post cursor and mutation input,
     `PublishUpdate::Publish`, ownership/query rows, fixtures, and all
     server/web/AtomPub callers use `UtcInstant` at the storage seam. ADR-0027's

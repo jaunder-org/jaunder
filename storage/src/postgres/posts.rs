@@ -12,6 +12,7 @@ use crate::{
 };
 use common::ids::{PostId, TagId, UserId};
 use common::tag::TagLabel;
+use common::time::UtcInstant;
 
 pub(crate) fn finish_post_update_rejection(
     primary: Result<PostRecord, UpdatePostError>,
@@ -74,7 +75,7 @@ impl PostDialect for Postgres {
         input: &UpdatePostInput,
     ) -> Result<PostRecord, UpdatePostError> {
         let mut tx = pool.begin().await?;
-        let now = Utc::now();
+        let now = UtcInstant::from(Utc::now());
 
         // FOR UPDATE locks the row for the read-then-write: it stops a concurrent
         // edit from slipping between this ownership/liveness check and the UPDATE

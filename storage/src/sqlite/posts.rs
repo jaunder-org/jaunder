@@ -12,6 +12,7 @@ use crate::{
 };
 use common::ids::{PostId, TagId, UserId};
 use common::tag::TagLabel;
+use common::time::UtcInstant;
 
 pub(crate) fn finish_post_update(
     primary: Result<PostRecord, UpdatePostError>,
@@ -79,7 +80,7 @@ impl PostDialect for Sqlite {
         // mirroring create_user_with_invite / sqlite/backup.rs.
         let mut conn = pool.acquire().await?;
         sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
-        let now = Utc::now();
+        let now = UtcInstant::from(Utc::now());
 
         let result: Result<PostRecord, UpdatePostError> = async {
             let existing = sqlx::query_as::<_, PostOwnershipRow>(

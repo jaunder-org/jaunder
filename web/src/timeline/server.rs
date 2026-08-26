@@ -14,6 +14,7 @@ use common::ids::UserId;
 use common::pagination::PageSize;
 use common::seed::TimelinePage;
 use common::tag::Tag;
+use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::{ViewerIdentity, viewer_user_id};
 use storage::{
@@ -69,7 +70,7 @@ pub async fn fetch_user_posts(
             cursor.as_ref(),
             page_size.fetch_limit(),
             viewer,
-            chrono::Utc::now(),
+            UtcInstant::from(chrono::Utc::now()),
         )
         .await?;
     Ok(page_from_rows(rows, page_size, viewer_user_id(viewer)))
@@ -93,7 +94,7 @@ pub async fn fetch_local_timeline(
             cursor.as_ref(),
             page_size.fetch_limit(),
             viewer,
-            chrono::Utc::now(),
+            UtcInstant::from(chrono::Utc::now()),
         )
         .await?;
     Ok(page_from_rows(rows, page_size, viewer_user_id(viewer)))
@@ -120,7 +121,7 @@ pub async fn fetch_posts_by_tag(
                 cursor.as_ref(),
                 page_size.fetch_limit(),
                 viewer,
-                chrono::Utc::now(),
+                UtcInstant::from(chrono::Utc::now()),
             )
             .await,
     )?;
@@ -155,7 +156,7 @@ pub async fn fetch_user_posts_by_tag(
                 cursor.as_ref(),
                 page_size.fetch_limit(),
                 viewer,
-                chrono::Utc::now(),
+                UtcInstant::from(chrono::Utc::now()),
             )
             .await,
     )?;
@@ -189,9 +190,9 @@ mod tests {
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
-            created_at: now,
-            updated_at: now,
-            published_at: Some(now),
+            created_at: UtcInstant::from(now),
+            updated_at: UtcInstant::from(now),
+            published_at: Some(UtcInstant::from(now)),
             deleted_at: None,
             summary: None,
             tags: vec![],

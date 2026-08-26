@@ -289,7 +289,7 @@ mod seed_tests {
                 None,
                 common::test_support::parse_row_limit("10"),
                 &common::visibility::ViewerIdentity::Anonymous,
-                chrono::Utc::now(),
+                common::time::UtcInstant::from(chrono::Utc::now()),
             )
             .await
             .expect("list ok");

@@ -158,7 +158,7 @@ pub async fn collection_get(
 
     let cursor = match (paging.updated_before, paging.id_before) {
         (Some(updated_before), Some(post_id)) => Some(CollectionCursor {
-            updated_at: updated_before.into(),
+            updated_at: updated_before,
             post_id,
         }),
         _ => None,
@@ -182,7 +182,7 @@ pub async fn collection_get(
     let next: Option<PaginationUrl> = if has_more {
         records.last().map(|last| {
             // Build the cursor query via `url`'s encoder (#560, D5), not `format!`.
-            let updated_before = UtcInstant::from(last.updated_at).to_string();
+            let updated_before = last.updated_at.to_string();
             let id_before = last.post_id.to_string();
             collection_url.with_query_pairs(&[
                 ("updated_before", updated_before.as_str()),
@@ -195,10 +195,9 @@ pub async fn collection_get(
 
     let entries: Vec<_> = records.iter().map(|p| post_to_entry(p, &base)).collect();
 
-    let updated = records.first().map_or_else(
-        || UtcInstant::from(chrono::Utc::now()),
-        |p| p.updated_at.into(),
-    );
+    let updated = records
+        .first()
+        .map_or_else(|| UtcInstant::from(chrono::Utc::now()), |p| p.updated_at);
 
     let meta = FeedMeta {
         // The collection URL *is* the feed's atom:id.
@@ -335,7 +334,11 @@ pub async fn collection_post(
     let published_at = if fields.is_draft {
         None
     } else {
-        Some(fields.published.unwrap_or_else(chrono::Utc::now))
+        Some(
+            fields
+                .published
+                .unwrap_or_else(|| UtcInstant::from(chrono::Utc::now())),
+        )
     };
 
     // AtomPub has no audience picker; new posts adopt the instance default.
@@ -539,9 +542,9 @@ mod etag_tests {
             body: parse_post_body("Body text."),
             format: PostFormat::Org,
             rendered_html: RenderedHtml::from_trusted("<p>Body text.</p>"),
-            created_at: t,
-            updated_at: t,
-            published_at: Some(t),
+            created_at: UtcInstant::from(t),
+            updated_at: UtcInstant::from(t),
+            published_at: Some(UtcInstant::from(t)),
             deleted_at: None,
             summary: Some(parse_post_summary("Summary")),
             tags: vec![
@@ -593,9 +596,9 @@ mod etag_tests {
         p.post_id = PostId::from(999);
         p.user_id = UserId::from(42);
         p.slug = "other-slug".parse().expect("parse slug");
-        p.created_at = later;
-        p.updated_at = later;
-        p.published_at = Some(later);
+        p.created_at = UtcInstant::from(later);
+        p.updated_at = UtcInstant::from(later);
+        p.published_at = Some(UtcInstant::from(later));
         p.rendered_html = RenderedHtml::from_trusted("<p>totally different</p>");
         p.tags = vec![
             mk_tag(

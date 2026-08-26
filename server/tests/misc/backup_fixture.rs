@@ -66,7 +66,7 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
         .await
         .expect("create user");
     let public = SeedRawPost::new(author)
-        .published_at(fixture_published_at())
+        .published_at(common::time::UtcInstant::from(fixture_published_at()))
         .tags(["Backup-Test"])
         .seed(&state)
         .await;
@@ -127,7 +127,7 @@ async fn seed_named_audience_post(
         .await
         .expect("add audience member");
     let named_post = SeedRawPost::new(author)
-        .published_at(fixture_published_at())
+        .published_at(common::time::UtcInstant::from(fixture_published_at()))
         .audiences(vec![AudienceTarget::Named(audience)])
         .seed(state)
         .await
@@ -188,7 +188,10 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
     assert_eq!(post.title.as_ref(), Some(&ids.public_post_title));
     assert_eq!(post.slug, ids.public_post_slug);
     // Value interop (DEC-D): the timestamp survives with its value.
-    assert_eq!(post.published_at, Some(fixture_published_at()));
+    assert_eq!(
+        post.published_at,
+        Some(common::time::UtcInstant::from(fixture_published_at()))
+    );
 
     // Tags ride along on the post record already read above (#771).
     let tags = &post.tags;

@@ -1683,7 +1683,7 @@ async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
         .unwrap()
         .unwrap();
     assert_eq!(
-        rec.published_at.unwrap().to_rfc3339(),
+        rec.published_at.unwrap().value().to_rfc3339(),
         "2099-01-01T00:00:00+00:00"
     );
 
@@ -1697,7 +1697,7 @@ async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
             permalink_date(2099, 1, 1),
             &rec.slug,
             &viewer,
-            chrono::Utc::now(),
+            common::time::UtcInstant::from(chrono::Utc::now()),
         )
         .await
         .unwrap();
@@ -1732,7 +1732,7 @@ async fn create_with_past_published_is_live_backdated(#[case] backend: Backend) 
         .unwrap()
         .unwrap();
     assert_eq!(
-        rec.published_at.unwrap().to_rfc3339(),
+        rec.published_at.unwrap().value().to_rfc3339(),
         "2000-01-01T00:00:00+00:00"
     );
 }
@@ -1769,7 +1769,7 @@ async fn update_with_future_published_schedules_post(#[case] backend: Backend) {
         .unwrap()
         .unwrap();
     assert_eq!(
-        rec.published_at.unwrap().to_rfc3339(),
+        rec.published_at.unwrap().value().to_rfc3339(),
         "2099-06-01T00:00:00+00:00",
         "update must honor the wire <published> timestamp"
     );

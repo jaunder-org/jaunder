@@ -63,9 +63,9 @@ async fn create_post_persists_rendered_published_post(#[case] backend: Backend) 
     let expected_permalink = format!(
         "/~{}/{:04}/{:02}/{:02}/{}",
         session.username,
-        published_at.year(),
-        published_at.month(),
-        published_at.day(),
+        published_at.value().year(),
+        published_at.value().month(),
+        published_at.value().day(),
         record.slug.as_ref()
     );
     assert_eq!(created.permalink, *expected_permalink);
@@ -311,7 +311,10 @@ async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backen
         .await
         .unwrap()
         .expect("post should exist");
-    assert_eq!(record.published_at, Some(future));
+    assert_eq!(
+        record.published_at,
+        Some(common::time::UtcInstant::from(future))
+    );
 
     // The scheduled post is invisible on the public timeline at "now".
     let published = state
@@ -320,7 +323,7 @@ async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backen
             None,
             parse_row_limit("50"),
             &common::visibility::ViewerIdentity::Anonymous,
-            chrono::Utc::now(),
+            common::time::UtcInstant::from(chrono::Utc::now()),
         )
         .await
         .unwrap();
@@ -364,7 +367,7 @@ async fn create_post_publish_without_publish_at_is_live_now(#[case] backend: Bac
         .expect("published post has published_at");
     let now = chrono::Utc::now();
     assert!(
-        (now - published_at).num_seconds().abs() < 60,
+        (now - published_at.value()).num_seconds().abs() < 60,
         "publish-now should stamp ~now, got {published_at}"
     );
 
@@ -374,7 +377,7 @@ async fn create_post_publish_without_publish_at_is_live_now(#[case] backend: Bac
             None,
             parse_row_limit("50"),
             &common::visibility::ViewerIdentity::Anonymous,
-            now,
+            common::time::UtcInstant::from(now),
         )
         .await
         .unwrap();

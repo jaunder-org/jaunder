@@ -254,13 +254,16 @@ async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend
     // A post that went live at t1 > t0 while the worker was "down".
     let t1 = t0 + Duration::hours(1);
     SeedRawPost::new(user.user_id)
-        .published_at(t1)
+        .published_at(common::time::UtcInstant::from(t1))
         .seed(&state)
         .await;
 
     // Restart: first go-live pass at t2 > t1 (last_tick == None => catch-up).
     let t2 = t1 + Duration::hours(1);
-    worker.go_live_pass(t2).await.expect("go-live pass");
+    worker
+        .go_live_pass(common::time::UtcInstant::from(t2))
+        .await
+        .expect("go-live pass");
 
     let pending = state
         .feed_events
@@ -287,17 +290,23 @@ async fn steady_state_window_enqueues_newly_live_posts(#[case] backend: Backend)
 
     // First pass seeds last_tick = t0 (startup branch; nothing cached/live).
     let t0 = Utc.with_ymd_and_hms(2026, 6, 26, 10, 0, 0).unwrap();
-    worker.go_live_pass(t0).await.expect("seed last_tick");
+    worker
+        .go_live_pass(common::time::UtcInstant::from(t0))
+        .await
+        .expect("seed last_tick");
 
     // A post that goes live between t0 and t1.
     let go_live = t0 + Duration::minutes(30);
     SeedRawPost::new(user.user_id)
-        .published_at(go_live)
+        .published_at(common::time::UtcInstant::from(go_live))
         .seed(&state)
         .await;
 
     let t1 = t0 + Duration::hours(1);
-    worker.go_live_pass(t1).await.expect("window pass");
+    worker
+        .go_live_pass(common::time::UtcInstant::from(t1))
+        .await
+        .expect("window pass");
 
     let pending = state
         .feed_events

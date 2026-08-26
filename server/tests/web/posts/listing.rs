@@ -144,12 +144,16 @@ async fn list_drafts_surfaces_scheduled_with_marker_excludes_live(#[case] backen
     // directly via storage — the web compose datetime control is Task 6.
     let now = chrono::Utc::now();
     let sched_id = SeedRawPost::new(author.user_id)
-        .published_at(now + chrono::Duration::days(3))
+        .published_at(common::time::UtcInstant::from(
+            now + chrono::Duration::days(3),
+        ))
         .seed(&state)
         .await
         .post_id;
     let live_id = SeedRawPost::new(author.user_id)
-        .published_at(now - chrono::Duration::days(1))
+        .published_at(common::time::UtcInstant::from(
+            now - chrono::Duration::days(1),
+        ))
         .seed(&state)
         .await
         .post_id;
@@ -192,39 +196,49 @@ async fn list_scheduled_returns_current_user_future_posts_ordered_by_schedule(
         .await
         .post_id;
     let live_id = SeedRawPost::new(author.user_id)
-        .published_at(now - chrono::Duration::days(1))
+        .published_at(common::time::UtcInstant::from(
+            now - chrono::Duration::days(1),
+        ))
         .seed(&state)
         .await
         .post_id;
     let deleted_id = SeedRawPost::new(author.user_id)
-        .published_at(now + chrono::Duration::days(2))
+        .published_at(common::time::UtcInstant::from(
+            now + chrono::Duration::days(2),
+        ))
         .seed(&state)
         .await
         .post_id;
     state.posts.soft_delete_post(deleted_id).await.unwrap();
     let other_id = SeedRawPost::new(stranger.user_id)
-        .published_at(now + chrono::Duration::days(1))
+        .published_at(common::time::UtcInstant::from(
+            now + chrono::Duration::days(1),
+        ))
         .seed(&state)
         .await
         .post_id;
 
     let earlier_id = SeedRawPost::new(author.user_id)
-        .published_at(now + chrono::Duration::days(1))
+        .published_at(common::time::UtcInstant::from(
+            now + chrono::Duration::days(1),
+        ))
         .seed(&state)
         .await
         .post_id;
     let same_a_id = SeedRawPost::new(author.user_id)
-        .published_at(same_time)
+        .published_at(common::time::UtcInstant::from(same_time))
         .seed(&state)
         .await
         .post_id;
     let same_b_id = SeedRawPost::new(author.user_id)
-        .published_at(same_time)
+        .published_at(common::time::UtcInstant::from(same_time))
         .seed(&state)
         .await
         .post_id;
     let later_id = SeedRawPost::new(author.user_id)
-        .published_at(now + chrono::Duration::days(5))
+        .published_at(common::time::UtcInstant::from(
+            now + chrono::Duration::days(5),
+        ))
         .seed(&state)
         .await
         .post_id;

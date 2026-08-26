@@ -34,7 +34,7 @@ pub(super) async fn anon_by_tag(
             None,
             parse_row_limit(limit),
             &ViewerIdentity::Anonymous,
-            Utc::now(),
+            common::time::UtcInstant::from(Utc::now()),
         )
         .await
         .expect("list_posts_by_tag failed")
@@ -47,7 +47,7 @@ pub(super) async fn anon_published(state: &AppState, limit: &str) -> Vec<storage
             None,
             parse_row_limit(limit),
             &ViewerIdentity::Anonymous,
-            Utc::now(),
+            common::time::UtcInstant::from(Utc::now()),
         )
         .await
         .expect("list_published failed")

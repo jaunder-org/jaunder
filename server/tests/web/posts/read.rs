@@ -48,9 +48,9 @@ async fn get_post_returns_published_post(#[case] backend: Backend) {
     let (status, body) = get_post_form(
         &state,
         &session.username,
-        published_at.year(),
-        published_at.month(),
-        published_at.day(),
+        published_at.value().year(),
+        published_at.value().month(),
+        published_at.value().day(),
         &created.slug,
         None,
     )
@@ -139,9 +139,9 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
     let (status, body) = get_post_form(
         &state,
         &session.username,
-        published_at.year(),
-        published_at.month(),
-        published_at.day(),
+        published_at.value().year(),
+        published_at.value().month(),
+        published_at.value().day(),
         &created.slug,
         Some(&cookie),
     )

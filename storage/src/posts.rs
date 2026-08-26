@@ -60,13 +60,13 @@ pub struct PostRecord {
     // rendered-html-from-trusted:allow post read model carries render-sanitized HTML from storage (#701)
     pub rendered_html: RenderedHtml,
     /// When the post was first created.
-    pub created_at: DateTime<Utc>,
+    pub created_at: UtcInstant,
     /// When the post was last updated.
-    pub updated_at: DateTime<Utc>,
+    pub updated_at: UtcInstant,
     /// When the post was published (None if it is a draft).
-    pub published_at: Option<DateTime<Utc>>,
+    pub published_at: Option<UtcInstant>,
     /// When the post was soft-deleted (None if active).
-    pub deleted_at: Option<DateTime<Utc>>,
+    pub deleted_at: Option<UtcInstant>,
     /// Optional summary/excerpt of the post.
     pub summary: Option<PostSummary>,
     /// The post's tags, ordered by `tag_slug` ascending (byte order).
@@ -84,7 +84,7 @@ impl PostRecord {
     #[must_use]
     pub fn permalink(&self) -> RootRelativeUrl {
         use chrono::Datelike;
-        let timestamp = self.published_at.unwrap_or(self.created_at);
+        let timestamp = self.published_at.unwrap_or(self.created_at).value();
         let Ok(url) = format!(
             "/~{}/{:04}/{:02}/{:02}/{}",
             self.author_username,
@@ -132,7 +132,7 @@ where
     PostBody: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
     PostFormat: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
     RenderedHtml: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
-    DateTime<Utc>: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+    UtcInstant: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
     PostSummary: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
     String: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
 {
@@ -146,10 +146,10 @@ where
         let format = row.try_get::<PostFormat, _>("format")?;
         // rendered-html-from-trusted:allow post row decodes render-sanitized HTML from rendered_html (#619)
         let rendered_html = row.try_get::<RenderedHtml, _>("rendered_html")?;
-        let created_at = row.try_get::<DateTime<Utc>, _>("created_at")?;
-        let updated_at = row.try_get::<DateTime<Utc>, _>("updated_at")?;
-        let published_at = row.try_get::<Option<DateTime<Utc>>, _>("published_at")?;
-        let deleted_at = row.try_get::<Option<DateTime<Utc>>, _>("deleted_at")?;
+        let created_at = row.try_get::<UtcInstant, _>("created_at")?;
+        let updated_at = row.try_get::<UtcInstant, _>("updated_at")?;
+        let published_at = row.try_get::<Option<UtcInstant>, _>("published_at")?;
+        let deleted_at = row.try_get::<Option<UtcInstant>, _>("deleted_at")?;
         let summary = row.try_get::<Option<PostSummary>, _>("summary")?;
         let tags_json = row.try_get::<String, _>("tags")?;
         let tags = parse_post_tags_json(&tags_json, post_id)?;
@@ -197,7 +197,7 @@ pub struct PostRevisionRecord {
     // rendered-html-from-trusted:allow revision read model carries render-sanitized HTML from storage (#701)
     pub rendered_html: RenderedHtml,
     /// When this revision was created.
-    pub edited_at: DateTime<Utc>,
+    pub edited_at: UtcInstant,
 }
 
 /// Errors that can occur when creating a post.
@@ -248,7 +248,7 @@ impl From<UpdatePostError> for host::error::InternalError {
 #[derive(Debug)]
 pub struct PostCursor {
     /// Creation timestamp of the last item in the previous page.
-    pub created_at: DateTime<Utc>,
+    pub created_at: UtcInstant,
     /// ID of the last item in the previous page (used for stable ordering).
     pub post_id: PostId,
 }
@@ -258,7 +258,7 @@ pub struct PostCursor {
 #[derive(Debug)]
 pub struct ScheduledPostCursor {
     /// Publication timestamp of the last item in the previous page.
-    pub published_at: DateTime<Utc>,
+    pub published_at: UtcInstant,
     /// ID of the last item in the previous page (used for stable ordering).
     pub post_id: PostId,
 }
@@ -268,7 +268,7 @@ pub struct ScheduledPostCursor {
 #[derive(Clone, Copy, Debug)]
 pub struct CollectionCursor {
     /// Update timestamp of the last item in the previous page.
-    pub updated_at: DateTime<Utc>,
+    pub updated_at: UtcInstant,
     /// ID of the last item in the previous page (used for stable ordering).
     pub post_id: PostId,
 }
@@ -286,7 +286,7 @@ pub struct CreatePostInput {
     /// that disagrees with its HTML (#711).
     pub rendered: RenderOutput,
     /// If Some, the post is created in a published state.
-    pub published_at: Option<DateTime<Utc>>,
+    pub published_at: Option<UtcInstant>,
     /// Optional summary/excerpt of the post.
     pub summary: Option<PostSummary>,
     /// Audience targeting for the post. Each entry becomes a `post_audiences`
@@ -306,7 +306,7 @@ pub enum PublishUpdate {
     /// Publish. `at = Some(t)` sets `published_at = t` (future = scheduled,
     /// past = backdated-live). `at = None` keeps an existing timestamp or
     /// stamps `now` for a previously-unpublished Post.
-    Publish { at: Option<DateTime<Utc>> },
+    Publish { at: Option<UtcInstant> },
 }
 
 /// Input for updating an existing post.
@@ -408,7 +408,7 @@ pub(crate) const INSERT_POST_TAG: &str = "INSERT INTO post_tags
 pub(crate) const DELETE_POST_TAG_BY_SLUG: &str = "DELETE FROM post_tags
      WHERE post_id = $1 AND tag_id = (SELECT tag_id FROM tags WHERE tag_slug = $2)";
 
-pub(crate) type PostOwnershipRow = (UserId, Option<DateTime<Utc>>);
+pub(crate) type PostOwnershipRow = (UserId, Option<UtcInstant>);
 pub(crate) type TagListRow = (TagId, Tag);
 pub(crate) type PostTagRow = (PostId, TagId, Tag, TagLabel);
 
@@ -549,7 +549,7 @@ pub fn to_post_cursor(post: &PostRecord) -> PostCursor {
 ///
 /// Returns a validation error if only one component is present.
 pub fn parse_post_cursor(
-    cursor_created_at: Option<DateTime<Utc>>,
+    cursor_created_at: Option<UtcInstant>,
     cursor_post_id: Option<PostId>,
 ) -> InternalResult<Option<PostCursor>> {
     match (cursor_created_at, cursor_post_id) {
@@ -574,7 +574,7 @@ pub fn parse_post_cursor(
 #[must_use]
 pub fn keyset_cursor(cursor: Option<PageCursor>) -> Option<PostCursor> {
     cursor.map(|c| PostCursor {
-        created_at: c.created_at.value(),
+        created_at: c.created_at,
         post_id: c.post_id,
     })
 }
@@ -585,7 +585,7 @@ pub fn keyset_cursor(cursor: Option<PageCursor>) -> Option<PostCursor> {
 #[must_use]
 pub fn wire_cursor(cursor: &PostCursor) -> PageCursor {
     PageCursor {
-        created_at: UtcInstant::from(cursor.created_at),
+        created_at: cursor.created_at,
         post_id: cursor.post_id,
     }
 }
@@ -598,7 +598,7 @@ pub fn wire_cursor(cursor: &PostCursor) -> PageCursor {
 #[must_use]
 pub fn scheduled_keyset_cursor(cursor: Option<PageCursor>) -> Option<ScheduledPostCursor> {
     cursor.map(|c| ScheduledPostCursor {
-        published_at: c.created_at.value(),
+        published_at: c.created_at,
         post_id: c.post_id,
     })
 }
@@ -629,7 +629,7 @@ pub fn to_scheduled_post_cursor(post: &PostRecord) -> InternalResult<ScheduledPo
 #[must_use]
 pub fn wire_scheduled_cursor(cursor: &ScheduledPostCursor) -> PageCursor {
     PageCursor {
-        created_at: UtcInstant::from(cursor.published_at),
+        created_at: cursor.published_at,
         post_id: cursor.post_id,
     }
 }
@@ -654,7 +654,7 @@ pub async fn fetch_post_record(
     username: &Username,
     date: PermalinkDate,
     slug: &Slug,
-    now: DateTime<Utc>,
+    now: UtcInstant,
 ) -> InternalResult<Option<PostRecord>> {
     posts
         .get_post_by_permalink(username, date, slug, viewer, now)
@@ -728,7 +728,7 @@ pub trait PostStorage: Send + Sync {
         date: PermalinkDate,
         slug: &Slug,
         viewer: &ViewerIdentity,
-        now: DateTime<Utc>,
+        now: UtcInstant,
     ) -> sqlx::Result<Option<PostRecord>>;
 
     /// Fetches an author's own not-yet-live post by its canonical permalink.
@@ -741,7 +741,7 @@ pub trait PostStorage: Send + Sync {
         user_id: UserId,
         date: PermalinkDate,
         slug: &Slug,
-        now: DateTime<Utc>,
+        now: UtcInstant,
     ) -> sqlx::Result<Option<PostRecord>>;
 
     /// Updates a post and creates a new revision.
@@ -798,7 +798,7 @@ pub trait PostStorage: Send + Sync {
         cursor: Option<&'a PostCursor>,
         limit: RowLimit,
         viewer: &ViewerIdentity,
-        now: DateTime<Utc>,
+        now: UtcInstant,
     ) -> sqlx::Result<Vec<PostRecord>>;
 
     /// Lists all published posts across the entire site, applying the
@@ -812,7 +812,7 @@ pub trait PostStorage: Send + Sync {
         cursor: Option<&'a PostCursor>,
         limit: RowLimit,
         viewer: &ViewerIdentity,
-        now: DateTime<Utc>,
+        now: UtcInstant,
     ) -> sqlx::Result<Vec<PostRecord>>;
 
     /// Lists draft posts for a specific user.
@@ -828,7 +828,7 @@ pub trait PostStorage: Send + Sync {
         user_id: UserId,
         cursor: Option<&'a PostCursor>,
         limit: RowLimit,
-        now: DateTime<Utc>,
+        now: UtcInstant,
     ) -> sqlx::Result<Vec<PostRecord>>;
 
     /// Lists the authenticated author's scheduled posts only.
@@ -843,7 +843,7 @@ pub trait PostStorage: Send + Sync {
         user_id: UserId,
         cursor: Option<&'a ScheduledPostCursor>,
         limit: RowLimit,
-        now: DateTime<Utc>,
+        now: UtcInstant,
     ) -> sqlx::Result<Vec<PostRecord>>;
 
     /// Lists all of a user's non-soft-deleted posts (drafts + published)
@@ -897,7 +897,7 @@ pub trait PostStorage: Send + Sync {
         cursor: Option<&'a PostCursor>,
         limit: RowLimit,
         viewer: &ViewerIdentity,
-        now: DateTime<Utc>,
+        now: UtcInstant,
     ) -> Result<Vec<PostRecord>, ListByTagError>;
 
     /// Lists published posts for a specific user that carry a specific tag,
@@ -913,7 +913,7 @@ pub trait PostStorage: Send + Sync {
         cursor: Option<&'a PostCursor>,
         limit: RowLimit,
         viewer: &ViewerIdentity,
-        now: DateTime<Utc>,
+        now: UtcInstant,
     ) -> Result<Vec<PostRecord>, ListByTagError>;
 
     /// Returns tag records whose slug begins with `prefix` (case-insensitive
@@ -937,7 +937,7 @@ pub trait PostStorage: Send + Sync {
         &self,
         surface: &common::feed::FeedSurface,
         window: &common::feed::HybridWindow,
-        now: DateTime<Utc>,
+        now: UtcInstant,
         viewer: &ViewerIdentity,
     ) -> sqlx::Result<Vec<PostRecord>>;
 
@@ -948,15 +948,15 @@ pub trait PostStorage: Send + Sync {
     /// affected feed surfaces. Drives the steady-state go-live pass.
     async fn list_posts_gone_live_between(
         &self,
-        after: DateTime<Utc>,
-        upto: DateTime<Utc>,
+        after: UtcInstant,
+        upto: UtcInstant,
     ) -> sqlx::Result<Vec<GoLivePost>>;
 
     /// Returns the URLs of cached feeds whose surface has a live post
     /// (`published_at <= now`, not deleted) strictly newer than the feed's own
     /// `generated_at` — i.e. cached feeds that missed a go-live while the worker
     /// was down. Drives the feed-relative startup catch-up.
-    async fn feed_urls_needing_catchup(&self, now: DateTime<Utc>) -> sqlx::Result<Vec<FeedPath>>;
+    async fn feed_urls_needing_catchup(&self, now: UtcInstant) -> sqlx::Result<Vec<FeedPath>>;
 
     /// Reads a post's audience targeting as a [`Vec<AudienceTarget>`], for
     /// pre-selecting the editor's audience picker.
@@ -1120,7 +1120,7 @@ where
     PostTagRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     TagListRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     (TargetKind, Option<AudienceId>): for<'r> sqlx::FromRow<'r, DB::Row>,
-    (DateTime<Utc>,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (UtcInstant,): for<'r> sqlx::FromRow<'r, DB::Row>,
     // `feed_urls_needing_catchup` reads `feed_cache` a row at a time (a bad `feed_url`
     // must not fail the scan), so it needs the column-decode bounds directly rather than
     // a `FromRow` tuple. `FeedPath` decodes as itself via the ADR-0071 bridge.
@@ -1151,8 +1151,8 @@ where
     // `RowLimit` binds as itself via the ADR-0071 sqlx bridge (delegates to `i64`) —
     // every listing's `LIMIT` placeholder (#696).
     for<'q> RowLimit: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Option<DateTime<Utc>>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<UtcInstant>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
@@ -1302,7 +1302,7 @@ where
         date: PermalinkDate,
         slug: &Slug,
         viewer: &ViewerIdentity,
-        now: DateTime<Utc>,
+        now: UtcInstant,
     ) -> sqlx::Result<Option<PostRecord>> {
         // `PermalinkDate`'s Display is ISO `YYYY-MM-DD` — the exact string the
         // `PERMALINK_DATE_CLAUSE` binds.
@@ -1344,7 +1344,7 @@ where
         user_id: UserId,
         date: PermalinkDate,
         slug: &Slug,
-        now: DateTime<Utc>,
+        now: UtcInstant,
     ) -> sqlx::Result<Option<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let date_clause = DB::PERMALINK_DATE_CLAUSE;
@@ -1407,7 +1407,7 @@ where
               WHERE post_id = $2 AND user_id = $3 AND deleted_at IS NULL
           RETURNING post_id",
         )
-        .bind(Utc::now())
+        .bind(UtcInstant::from(Utc::now()))
         .bind(post_id)
         .bind(user_id)
         .fetch_optional(&self.pool)
@@ -1457,7 +1457,7 @@ where
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn soft_delete_post(&self, post_id: PostId) -> sqlx::Result<()> {
-        let now = Utc::now();
+        let now = UtcInstant::from(Utc::now());
         sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
             .bind(now)
             .bind(post_id)
@@ -1490,7 +1490,7 @@ where
         cursor: Option<&'a PostCursor>,
         limit: RowLimit,
         viewer: &ViewerIdentity,
-        now: DateTime<Utc>,
+        now: UtcInstant,
     ) -> sqlx::Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
@@ -1566,7 +1566,7 @@ where
         cursor: Option<&'a PostCursor>,
         limit: RowLimit,
         viewer: &ViewerIdentity,
-        now: DateTime<Utc>,
+        now: UtcInstant,
     ) -> sqlx::Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
@@ -1636,7 +1636,7 @@ where
         user_id: UserId,
         cursor: Option<&'a PostCursor>,
         limit: RowLimit,
-        now: DateTime<Utc>,
+        now: UtcInstant,
     ) -> sqlx::Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
@@ -1699,7 +1699,7 @@ where
         user_id: UserId,
         cursor: Option<&'a ScheduledPostCursor>,
         limit: RowLimit,
-        now: DateTime<Utc>,
+        now: UtcInstant,
     ) -> sqlx::Result<Vec<PostRecord>> {
         let tags = DB::TAGS_SUBQUERY;
         let rows = if let Some(cursor) = cursor {
@@ -1827,7 +1827,7 @@ where
         cursor: Option<&'a PostCursor>,
         limit: RowLimit,
         viewer: &ViewerIdentity,
-        now: DateTime<Utc>,
+        now: UtcInstant,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
         let tag_exists: bool =
             sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1")
@@ -1920,7 +1920,7 @@ where
         cursor: Option<&'a PostCursor>,
         limit: RowLimit,
         viewer: &ViewerIdentity,
-        now: DateTime<Utc>,
+        now: UtcInstant,
     ) -> Result<Vec<PostRecord>, ListByTagError> {
         let tag_exists: bool =
             sqlx::query_scalar("SELECT COUNT(*) > 0 FROM tags WHERE tag_slug = $1")
@@ -2064,14 +2064,14 @@ where
         &self,
         surface: &common::feed::FeedSurface,
         window: &common::feed::HybridWindow,
-        now: DateTime<Utc>,
+        now: UtcInstant,
         viewer: &ViewerIdentity,
     ) -> sqlx::Result<Vec<PostRecord>> {
         // ROW_NUMBER() identifies the top `min_items` posts; OR-combining with
         // `published_at >= cutoff` produces the hybrid-window union in a single
         // query. Only the JSON tag aggregation differs per backend, so the SQL
         // is shared via `DB::TAGS_SUBQUERY`.
-        let cutoff = window.cutoff_date(now);
+        let cutoff = UtcInstant::from(window.cutoff_date(now.value()));
         let rows = list_published_in_window_rows::<DB>(
             &self.pool,
             surface,
@@ -2091,8 +2091,8 @@ where
     )]
     async fn list_posts_gone_live_between(
         &self,
-        after: DateTime<Utc>,
-        upto: DateTime<Utc>,
+        after: UtcInstant,
+        upto: UtcInstant,
     ) -> sqlx::Result<Vec<GoLivePost>> {
         // `published_at > $1 AND published_at <= $2` selects exactly the posts
         // that crossed into "live" within the half-open window `(after, upto]`.
@@ -2131,7 +2131,7 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn feed_urls_needing_catchup(&self, now: DateTime<Utc>) -> sqlx::Result<Vec<FeedPath>> {
+    async fn feed_urls_needing_catchup(&self, now: UtcInstant) -> sqlx::Result<Vec<FeedPath>> {
         // Cached feeds live in the same database, so they are enumerated here
         // and, for each, the newest live post on that surface is compared
         // against the feed's own `generated_at`. Feed count is small, so a
@@ -2168,7 +2168,7 @@ where
                 continue;
             };
             if let Some(max) = max_published_at_for_surface::<DB>(&self.pool, &surface, now).await?
-                && max > generated_at
+                && max.value() > generated_at
             {
                 needing.push(feed_path);
             }
@@ -2428,8 +2428,8 @@ where
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<String>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> Option<DateTime<Utc>>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Option<UtcInstant>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `Slug`/`PostBody` bind as themselves and `PostTitle` as `Option<&PostTitle>`
     // via the ADR-0071 sqlx bridge (the `Option<&…>` pair covers the nullable
     // `title` bind).
@@ -2443,7 +2443,7 @@ where
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
-    let now = Utc::now();
+    let now = UtcInstant::from(Utc::now());
 
     let post_id = sqlx::query_scalar::<_, PostId>(
         "INSERT INTO posts (user_id, title, slug, body, format, rendered_html, created_at, updated_at, published_at, summary)
@@ -2586,8 +2586,8 @@ where
 async fn list_published_in_window_rows<DB>(
     pool: &Pool<DB>,
     surface: &common::feed::FeedSurface,
-    now: DateTime<Utc>,
-    cutoff: DateTime<Utc>,
+    now: UtcInstant,
+    cutoff: UtcInstant,
     min_items: common::feed::FeedMinItems,
     viewer: &ViewerIdentity,
 ) -> sqlx::Result<Vec<PostRecord>>
@@ -2597,7 +2597,7 @@ where
     for<'q> common::feed::FeedMinItems: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // The viewer-resolution binds are NULL-able (`ResolutionBinds::bind_onto`).
     for<'q> Option<UserId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<ChannelId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -2775,13 +2775,13 @@ fn window_sql(surface: &common::feed::FeedSurface, tags: &str, resolution: &str)
 async fn max_published_at_for_surface<DB>(
     pool: &Pool<DB>,
     surface: &common::feed::FeedSurface,
-    now: DateTime<Utc>,
-) -> sqlx::Result<Option<DateTime<Utc>>>
+    now: UtcInstant,
+) -> sqlx::Result<Option<UtcInstant>>
 where
     DB: PostDialect,
-    (DateTime<Utc>,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (UtcInstant,): for<'r> sqlx::FromRow<'r, DB::Row>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `Username`/`Tag` bind as themselves via the ADR-0071 sqlx bridge, for the
     // surface `username`/`tag` binds.
     String: sqlx::Type<DB>,
@@ -2790,7 +2790,7 @@ where
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
     use common::feed::FeedSurface;
-    let row: Option<(DateTime<Utc>,)> = match surface {
+    let row: Option<(UtcInstant,)> = match surface {
         FeedSurface::Site => {
             sqlx::query_as(
                 "SELECT p.published_at FROM posts p
@@ -2861,8 +2861,9 @@ mod tests {
     };
     use common::test_support::{
         parse_content_type, parse_etag, parse_post_body, parse_post_summary, parse_post_title,
-        parse_row_limit, parse_slug, parse_tag, parse_tag_label, parse_username,
+        parse_row_limit, parse_slug, parse_tag, parse_tag_label, parse_username, parse_utc_instant,
     };
+    use common::time::UtcInstant;
     use rstest::*;
     use rstest_reuse::*;
     use std::sync::Arc;
@@ -2889,6 +2890,81 @@ mod tests {
             postgres.contains("ORDER BY t.tag_slug COLLATE \"C\""),
             "postgres TAGS_SUBQUERY must order by slug under C collation: {postgres}"
         );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn post_record_decodes_required_and_nullable_instants_at_microsecond_precision(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user = SeedUser::new().seed(&env.state).await;
+        let post_id = SeedRawPost::new(user.user_id)
+            .published_at(parse_utc_instant("2026-04-12T08:30:00.123456Z"))
+            .seed(&env.state)
+            .await
+            .post_id;
+
+        env.base
+            .pool()
+            .execute(
+                "UPDATE posts SET
+                   created_at = '2026-04-10T01:02:03.123456Z',
+                   updated_at = '2026-04-11T04:05:06.654321Z',
+                   deleted_at = '2026-04-13T07:08:09.999999Z'",
+            )
+            .await
+            .unwrap();
+
+        let record = env
+            .state
+            .posts
+            .get_post_by_id(
+                post_id,
+                &ViewerIdentity::Local {
+                    user_id: user.user_id,
+                },
+            )
+            .await
+            .unwrap()
+            .expect("owner can decode a post record");
+
+        assert_eq!(
+            record.created_at,
+            parse_utc_instant("2026-04-10T01:02:03.123456Z")
+        );
+        assert_eq!(
+            record.updated_at,
+            parse_utc_instant("2026-04-11T04:05:06.654321Z")
+        );
+        assert_eq!(
+            record.published_at,
+            Some(parse_utc_instant("2026-04-12T08:30:00.123456Z"))
+        );
+        assert_eq!(
+            record.deleted_at,
+            Some(parse_utc_instant("2026-04-13T07:08:09.999999Z"))
+        );
+
+        let draft_id = SeedRawPost::new(user.user_id)
+            .draft()
+            .seed(&env.state)
+            .await
+            .post_id;
+        let draft = env
+            .state
+            .posts
+            .get_post_by_id(
+                draft_id,
+                &ViewerIdentity::Local {
+                    user_id: user.user_id,
+                },
+            )
+            .await
+            .unwrap()
+            .expect("owner can decode a draft record");
+        assert_eq!(draft.published_at, None);
+        assert_eq!(draft.deleted_at, None);
     }
 
     /// A local viewer's channel is not a bind: both subscription branches resolve
@@ -3311,7 +3387,10 @@ mod tests {
         let state = &env.state;
         let author = SeedUser::new().seed(state).await.user_id;
         let now = Utc::now();
-        SeedRawPost::new(author).published_at(now).seed(state).await;
+        SeedRawPost::new(author)
+            .published_at(UtcInstant::from(now))
+            .seed(state)
+            .await;
 
         // Two stale cached feeds, both older than the post above, so both would need
         // catch-up if they were readable.
@@ -3351,7 +3430,7 @@ mod tests {
             .unwrap();
 
         let (needing, trace) = crate::helpers::swallowed_test::capture_async(
-            state.posts.feed_urls_needing_catchup(now),
+            state.posts.feed_urls_needing_catchup(UtcInstant::from(now)),
         )
         .await;
         let needing = needing.unwrap();
@@ -3527,8 +3606,8 @@ mod tests {
             rendered_html: RenderedHtml::from_trusted(
                 "<p>The first non-empty line of the body is here.</p>",
             ),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
+            created_at: UtcInstant::from(Utc::now()),
+            updated_at: UtcInstant::from(Utc::now()),
             published_at: None,
             deleted_at: None,
             summary: None,
@@ -3557,9 +3636,11 @@ mod tests {
             body: parse_post_body("My body"),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>My body</p>"),
-            created_at: Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
-            updated_at: Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
-            published_at: Some(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
+            created_at: UtcInstant::from(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
+            updated_at: UtcInstant::from(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
+            published_at: Some(UtcInstant::from(
+                Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
+            )),
             deleted_at: None,
             summary: None,
             tags: vec![],
@@ -3579,8 +3660,8 @@ mod tests {
             body: parse_post_body("My body"),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>My body</p>"),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
+            created_at: UtcInstant::from(Utc::now()),
+            updated_at: UtcInstant::from(Utc::now()),
             published_at: None,
             deleted_at: None,
             summary: None,
@@ -4171,7 +4252,7 @@ mod tests {
                 None,
                 parse_row_limit("10"),
                 &ViewerIdentity::Anonymous,
-                Utc::now(),
+                UtcInstant::from(Utc::now()),
             )
             .await;
         assert!(result.is_err());
@@ -4214,7 +4295,7 @@ mod tests {
         let mk = |slug: &str, published: bool| {
             let builder = SeedRawPost::new(uid).slug(slug);
             if published {
-                builder.published_at(now - chrono::Duration::minutes(30))
+                builder.published_at(UtcInstant::from(now - chrono::Duration::minutes(30)))
             } else {
                 builder.draft()
             }
@@ -4323,8 +4404,8 @@ mod tests {
             body: parse_post_body("hello world"),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>hello world</p>"),
-            created_at: Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
-            updated_at: Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
+            created_at: UtcInstant::from(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
+            updated_at: UtcInstant::from(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
             published_at: None,
             deleted_at: None,
             summary: None,
@@ -4340,6 +4421,36 @@ mod tests {
     }
 
     #[test]
+    fn post_cursor_round_trips_through_wire_cursor() {
+        let cursor = PostCursor {
+            created_at: "2026-04-12T08:30:00.123456Z".parse().unwrap(),
+            post_id: PostId::from(42),
+        };
+
+        assert_eq!(
+            keyset_cursor(Some(wire_cursor(&cursor)))
+                .unwrap()
+                .created_at,
+            cursor.created_at
+        );
+    }
+
+    #[test]
+    fn scheduled_cursor_round_trips_through_wire_cursor() {
+        let cursor = ScheduledPostCursor {
+            published_at: "2026-04-12T08:30:00.123456Z".parse().unwrap(),
+            post_id: PostId::from(42),
+        };
+
+        assert_eq!(
+            scheduled_keyset_cursor(Some(wire_scheduled_cursor(&cursor)))
+                .unwrap()
+                .published_at,
+            cursor.published_at
+        );
+    }
+
+    #[test]
     fn parse_post_cursor_accepts_empty_cursor() {
         assert!(parse_post_cursor(None, None).unwrap().is_none());
     }
@@ -4349,7 +4460,9 @@ mod tests {
         use chrono::TimeZone;
         assert!(
             parse_post_cursor(
-                Some(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
+                Some(UtcInstant::from(
+                    Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
+                )),
                 None
             )
             .is_err()
@@ -4379,7 +4492,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let date = PermalinkDate::from(record.created_at.date_naive());
+        let date = PermalinkDate::from(record.created_at.value().date_naive());
 
         // A published, public post is visible to an anonymous viewer at its permalink.
         let found = fetch_post_record(
@@ -4388,7 +4501,7 @@ mod tests {
             &record.author_username,
             date,
             &record.slug,
-            Utc::now(),
+            UtcInstant::from(Utc::now()),
         )
         .await
         .unwrap();
@@ -4401,7 +4514,7 @@ mod tests {
             &record.author_username,
             date,
             &parse_slug("no-such-slug"),
-            Utc::now(),
+            UtcInstant::from(Utc::now()),
         )
         .await
         .unwrap();
@@ -4659,15 +4772,15 @@ mod tests {
 
         let draft = SeedRawPost::new(author).draft().seed(&env.state).await;
         let scheduled = SeedRawPost::new(author)
-            .published_at(scheduled_at)
+            .published_at(UtcInstant::from(scheduled_at))
             .seed(&env.state)
             .await;
         let live_at_boundary = SeedRawPost::new(author)
-            .published_at(now)
+            .published_at(UtcInstant::from(now))
             .seed(&env.state)
             .await;
         let deleted = SeedRawPost::new(author)
-            .published_at(scheduled_at)
+            .published_at(UtcInstant::from(scheduled_at))
             .seed(&env.state)
             .await;
         posts
@@ -4680,17 +4793,27 @@ mod tests {
             .await
             .unwrap()
             .expect("author can read seeded draft");
-        let draft_date = PermalinkDate::from(draft_record.created_at.date_naive());
+        let draft_date = PermalinkDate::from(draft_record.created_at.value().date_naive());
         let scheduled_date = PermalinkDate::from(scheduled_at.date_naive());
 
         let found_draft = posts
-            .get_unpublished_post_by_permalink(author, draft_date, &draft.slug, now)
+            .get_unpublished_post_by_permalink(
+                author,
+                draft_date,
+                &draft.slug,
+                UtcInstant::from(now),
+            )
             .await
             .unwrap();
         assert_eq!(found_draft.map(|post| post.post_id), Some(draft.post_id));
 
         let found_scheduled = posts
-            .get_unpublished_post_by_permalink(author, scheduled_date, &scheduled.slug, now)
+            .get_unpublished_post_by_permalink(
+                author,
+                scheduled_date,
+                &scheduled.slug,
+                UtcInstant::from(now),
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -4711,7 +4834,7 @@ mod tests {
         ] {
             assert!(
                 posts
-                    .get_unpublished_post_by_permalink(user_id, date, slug, now)
+                    .get_unpublished_post_by_permalink(user_id, date, slug, UtcInstant::from(now))
                     .await
                     .unwrap()
                     .is_none()

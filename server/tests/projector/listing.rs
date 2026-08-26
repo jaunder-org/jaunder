@@ -3,7 +3,7 @@ use tower::ServiceExt;
 
 use chrono::Utc;
 use common::seed::{PageSeed, TimelinePage};
-use common::time::PermalinkDate;
+use common::time::{PermalinkDate, UtcInstant};
 use common::visibility::ViewerIdentity;
 use rstest::*;
 use rstest_reuse::*;
@@ -180,7 +180,7 @@ async fn every_page_seed_variant_serializes_without_null_fallback(#[case] backen
         &username,
         date,
         &slug,
-        Utc::now(),
+        UtcInstant::from(Utc::now()),
     )
     .await
     .expect("permalink lookup")

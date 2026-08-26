@@ -5,13 +5,14 @@
 //! and the `Entry` type for both incoming (create/update) and outgoing
 //! (collection member) operations.
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use common::atompub::{Category, Content, Entry, Link, Text, is_draft, set_draft, set_j_slug};
 use common::post_body::{InvalidPostBody, PostBody};
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
 use common::tag::TagLabel;
 use common::tagged_url::{BaseUrl, EditUriUrl, Permalink, compose};
+use common::time::UtcInstant;
 use storage::{PostFormat, PostRecord};
 
 /// The post-shaped data carried by an incoming `AtomPub` `Entry`.
@@ -33,7 +34,7 @@ pub struct PostFields {
     /// Explicit publication time from the entry's `<published>` element
     /// (`None` when absent). A future time schedules the post; a past time
     /// backdates it. The inverse of [`post_to_entry`]'s `published` mapping.
-    pub published: Option<DateTime<Utc>>,
+    pub published: Option<UtcInstant>,
 }
 
 /// The wire `atom:content` `type` for a post format (ADR-0023). `Html` uses the
@@ -124,7 +125,9 @@ pub fn entry_to_post_fields(
     // read-only server property, derived here from the title/body, never the wire.
     // Inverse of `post_to_entry`'s `published: post.published_at.map(fixed_offset)`:
     // read the entry's `<published>` (a fixed-offset datetime) back to UTC.
-    let published = entry.published().map(|d| d.with_timezone(&Utc));
+    let published = entry
+        .published()
+        .map(|d| UtcInstant::from(d.with_timezone(&Utc)));
 
     Ok(PostFields {
         title,
@@ -197,8 +200,8 @@ pub fn post_to_entry(post: &PostRecord, base_url: &BaseUrl) -> Entry {
             })
             .collect(),
         links,
-        published: post.published_at.map(|d| d.fixed_offset()),
-        updated: post.updated_at.fixed_offset(),
+        published: post.published_at.map(|d| d.value().fixed_offset()),
+        updated: post.updated_at.value().fixed_offset(),
         ..Default::default()
     };
 
@@ -214,7 +217,7 @@ pub fn post_to_entry(post: &PostRecord, base_url: &BaseUrl) -> Entry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{DateTime, Utc};
+    use chrono::Utc;
     use common::ids::{PostId, TagId, UserId};
     use common::slug::Slug;
     use common::tag::{Tag, TagLabel};
@@ -560,7 +563,7 @@ mod tests {
         slug: Slug,
         body: PostBody,
         format: PostFormat,
-        published_at: Option<DateTime<Utc>>,
+        published_at: Option<UtcInstant>,
         summary: Option<common::post_summary::PostSummary>,
         tags: Vec<(Tag, TagLabel)>,
     }
@@ -596,8 +599,8 @@ mod tests {
             body,
             format,
             rendered_html: storage::RenderedHtml::from_trusted("<p>html</p>"),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
+            created_at: UtcInstant::from(Utc::now()),
+            updated_at: UtcInstant::from(Utc::now()),
             published_at,
             deleted_at: None,
             summary,
@@ -613,7 +616,7 @@ mod tests {
             slug: parse_slug("slug"),
             body: parse_post_body("# Markdown Body"),
             format: PostFormat::Markdown,
-            published_at: Some(Utc::now()),
+            published_at: Some(UtcInstant::from(Utc::now())),
             summary: None,
             tags: vec![],
         });
@@ -635,7 +638,7 @@ mod tests {
             slug: parse_slug("slug"),
             body: parse_post_body("* Org Body"),
             format: PostFormat::Org,
-            published_at: Some(Utc::now()),
+            published_at: Some(UtcInstant::from(Utc::now())),
             summary: None,
             tags: vec![],
         });
@@ -654,7 +657,7 @@ mod tests {
             slug: parse_slug("slug"),
             body: parse_post_body("<p>HTML</p>"),
             format: PostFormat::Html,
-            published_at: Some(Utc::now()),
+            published_at: Some(UtcInstant::from(Utc::now())),
             summary: None,
             tags: vec![],
         });
@@ -673,7 +676,7 @@ mod tests {
             slug: parse_slug("slug"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            published_at: Some(Utc::now()),
+            published_at: Some(UtcInstant::from(Utc::now())),
             summary: None,
             tags: vec![],
         });
@@ -691,7 +694,7 @@ mod tests {
             slug: parse_slug("slug"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            published_at: Some(Utc::now()),
+            published_at: Some(UtcInstant::from(Utc::now())),
             summary: None,
             tags: vec![],
         });
@@ -715,7 +718,7 @@ mod tests {
             slug: parse_slug("slug"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            published_at: Some(now),
+            published_at: Some(UtcInstant::from(now)),
             summary: None,
             tags: vec![],
         });
@@ -767,7 +770,7 @@ mod tests {
             slug: parse_slug("slug"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            published_at: Some(Utc::now()),
+            published_at: Some(UtcInstant::from(Utc::now())),
             summary: None,
             tags: vec![],
         });
@@ -803,7 +806,7 @@ mod tests {
             slug: parse_slug("my-slug"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            published_at: Some(Utc::now()),
+            published_at: Some(UtcInstant::from(Utc::now())),
             summary: None,
             tags: vec![],
         });
@@ -821,7 +824,7 @@ mod tests {
             slug: parse_slug("slug"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            published_at: Some(Utc::now()),
+            published_at: Some(UtcInstant::from(Utc::now())),
             summary: Some(parse_post_summary("This is a summary")),
             tags: vec![],
         });
@@ -839,7 +842,7 @@ mod tests {
             slug: parse_slug("slug"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            published_at: Some(Utc::now()),
+            published_at: Some(UtcInstant::from(Utc::now())),
             summary: None,
             tags: vec![],
         });
@@ -857,7 +860,7 @@ mod tests {
             slug: parse_slug("slug"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            published_at: Some(Utc::now()),
+            published_at: Some(UtcInstant::from(Utc::now())),
             summary: None,
             tags: vec![
                 ("rust".parse().unwrap(), "Rust".parse().unwrap()),
@@ -882,7 +885,7 @@ mod tests {
             slug: parse_slug("slug"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            published_at: Some(Utc::now()),
+            published_at: Some(UtcInstant::from(Utc::now())),
             summary: None,
             tags: vec![],
         });
@@ -900,7 +903,7 @@ mod tests {
             slug: parse_slug("slug"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            published_at: Some(Utc::now()),
+            published_at: Some(UtcInstant::from(Utc::now())),
             summary: None,
             tags: vec![],
         });
@@ -937,16 +940,15 @@ mod tests {
             slug: parse_slug("slug"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            published_at: Some(now),
+            published_at: Some(UtcInstant::from(now)),
             summary: None,
             tags: vec![],
         });
-        post.updated_at = now;
-
+        post.updated_at = UtcInstant::from(now);
         let entry = post_to_entry(&post, &parse_url("https://example.com/"));
 
         assert_eq!(
-            entry.published().map(DateTime::timestamp),
+            entry.published().map(chrono::DateTime::timestamp),
             Some(now.timestamp())
         );
         assert_eq!(entry.updated().timestamp(), now.timestamp());

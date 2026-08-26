@@ -133,9 +133,9 @@ draft",
     let (status, body) = get_post_form(
         &state,
         &author.username,
-        record.created_at.year(),
-        record.created_at.month(),
-        record.created_at.day(),
+        record.created_at.value().year(),
+        record.created_at.value().month(),
+        record.created_at.value().day(),
         &created.slug,
         None,
     )
@@ -146,9 +146,9 @@ draft",
     let (status, body) = get_post_form(
         &state,
         &author.username,
-        record.created_at.year(),
-        record.created_at.month(),
-        record.created_at.day(),
+        record.created_at.value().year(),
+        record.created_at.value().month(),
+        record.created_at.value().day(),
         &created.slug,
         Some(&stranger_cookie),
     )
@@ -159,9 +159,9 @@ draft",
     let (status, body) = get_post_form(
         &state,
         &author.username,
-        record.created_at.year(),
-        record.created_at.month(),
-        record.created_at.day(),
+        record.created_at.value().year(),
+        record.created_at.value().month(),
+        record.created_at.value().day(),
         &created.slug,
         Some(&author_cookie),
     )
@@ -253,9 +253,9 @@ async fn get_post_hides_drafts_from_guests(#[case] backend: Backend) {
     let (status, body) = get_post_form(
         &state,
         &author.username,
-        record.created_at.year(),
-        record.created_at.month(),
-        record.created_at.day(),
+        record.created_at.value().year(),
+        record.created_at.value().month(),
+        record.created_at.value().day(),
         &created.slug,
         None,
     )
@@ -274,7 +274,7 @@ async fn get_post_returns_scheduled_post_at_canonical_permalink_to_author(
     let cookie = author.cookie();
     let scheduled_at = chrono::Utc::now() + chrono::Duration::days(30);
     let scheduled = SeedRawPost::new(author.user_id)
-        .published_at(scheduled_at)
+        .published_at(common::time::UtcInstant::from(scheduled_at))
         .seed(&state)
         .await;
 
@@ -500,7 +500,11 @@ async fn single_post_permalink_hides_subscribers_post_from_anonymous(#[case] bac
         .unwrap()
         .unwrap();
     let published = post.published_at.unwrap();
-    let (y, m, d) = (published.year(), published.month(), published.day());
+    let (y, m, d) = (
+        published.value().year(),
+        published.value().month(),
+        published.value().day(),
+    );
 
     // Anonymous → 404 (the resolution filter hides the subscribers-only post).
     let (status, _body) = get_post_form(
