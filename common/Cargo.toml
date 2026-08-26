@@ -11,10 +11,11 @@ async-trait.workspace = true
 base64.workspace = true
 email_address.workspace = true
 chrono = { workspace = true, features = ["serde"] }
+chrono-tz.workspace = true
 croner.workspace = true
 html5ever = { workspace = true, optional = true }
 macros = { path = "../macros" }
-orgize = { workspace = true, optional = true }
+orgize.workspace = true
 percent-encoding.workspace = true
 pulldown-cmark = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
@@ -49,13 +50,11 @@ sqlx = ["dep:sqlx"]
 # `html5ever` rides the same flag: `extract_media_refs` re-parses the sanitized output
 # (#711), so it is meaningless without the sanitizer and must stay out of the wasm graph
 # for the same reason `ammonia` does.
-#
-# `orgize` and `pulldown-cmark` ride it too (#836): the only code that calls them is
-# `render_markdown`/`render_org` inside the `sanitize`-gated `sanitized` module, so
-# declaring them non-optionally made them permanent members of every graph that never
-# uses them. LTO already kept their code out of the wasm *binary* — this is manifest
-# hygiene, so the dependency list stops claiming a coupling that does not exist.
-sanitize = ["dep:ammonia", "dep:html5ever", "dep:orgize", "dep:pulldown-cmark"]
+# `pulldown-cmark` rides this flag (#836): the only code that calls it is
+# `render_markdown` inside the `sanitize`-gated `sanitized` module, so declaring it
+# non-optionally made it a permanent member of every graph that never uses it. Org
+# normalization uses `orgize` independently, so it remains a direct dependency.
+sanitize = ["dep:ammonia", "dep:html5ever", "dep:pulldown-cmark"]
 test-utils = ["cheap-kdf"]
 cheap-kdf = []
 # Compiles `common::test_support` (shared test fixtures) for downstream test crates;

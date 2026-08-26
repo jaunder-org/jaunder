@@ -24,6 +24,7 @@ pub mod local_storage_key;
 pub mod mailbox;
 pub mod mailer;
 pub mod media;
+pub mod org;
 pub mod pagination;
 pub mod password;
 pub mod pg_identifier;

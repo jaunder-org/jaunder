@@ -342,16 +342,28 @@ passthrough), `Markdown` and `Org` drop leading all-whitespace lines,
 `trim_end()`, then re-append one newline. Interior blank lines and leading
 horizontal whitespace are never touched — both are significant to CommonMark.
 
-Every write path converges on **one canonical stored body**
-([ADR-0024](adr/0024-server-side-org-canonicalization.md)): `canonicalize_body`
-additionally strips the Org title source, so headers the server stores
-structurally (today `#+TITLE:`) do not survive in the body while unrecognized
-`#+FOO:` lines round-trip verbatim; clients synthesize their own header block on
-the way out. `perform_post_update` (`storage/src/post_service.rs:236`, naming
-block `:251-267`) and `perform_post_creation` (`:401`, block `:417-424`) derive
-naming from the _original_ body via `derive_post_naming`
-(`common/src/render.rs:618`) before canonicalizing, because canonicalization
-removes the Org title line.
+Every write path converges on **one canonical stored body**. For Org, every
+create and update parses the complete leading, case-insensitive Org/Jaunder
+metadata block through its first non-keyword top-level element and merges
+recognized metadata with structured input. After the whole write is accepted,
+every recognized header is removed, including valid mutable metadata displaced
+by structured input. Structured presence resolves per field, with lifecycle as
+one indivisible merge unit; transport defaults do not manufacture presence.
+Structured values win, headers fill only absence, and omission retains the
+surface's existing update/default semantics. Unknown Org directives remain body
+content. Parsing, precedence, audience authorization, lifecycle and bookkeeping
+validation, and stripping are one atomic decision: malformed, conflicting,
+foreign-audience, stale, or metadata-only input saves nothing. Recognized
+mutable metadata covers title, tags, summary, lifecycle/date-zone data, and
+audience targets; identity and sync bookkeeping is checked against
+derived/current values, never trusted as input. The full policy is
+[server-side Org metadata block canonicalization](adr/drafts/server-side-org-metadata-block.md),
+which evolves [ADR-0024](adr/0024-server-side-org-canonicalization.md). Clients
+synthesize their presentation header block on output. `perform_post_update`
+(`storage/src/post_service.rs:236`, naming block `:251-267`) and
+`perform_post_creation` (`:401`, block `:417-424`) derive naming from the
+original body before canonicalizing because canonicalization removes recognized
+metadata.
 
 **`RenderedHtml` guarantees "contains no active markup", through two named
 doors** ([ADR-0079](adr/0079-rendered-html-sanitization.md)).
@@ -662,6 +674,13 @@ whole policy is the `format_wire` seam: the two private pure functions
 (`mapping.rs:51`), revertible in one line. The seam has always lived in the
 server crate; only the namespace and `j:slug` definitions it works against live
 in `common/src/atompub`.
+
+For `text/org` entries, AtomPub create and update use that same full-block
+metadata interpretation and canonical metadata-free body as every other Org
+ingress; Atom elements remain structured input, not a competing canonical
+representation. In particular, explicit Atom metadata wins over a header and the
+header can supply only its absence. The authoritative invariant is
+[server-side Org metadata block canonicalization](adr/drafts/server-side-org-metadata-block.md).
 
 Two Jaunder wire extensions ride the namespace `https://jaunder.org/ns/atompub`
 (`J_NS`, `common/src/atompub/ns.rs:6`;

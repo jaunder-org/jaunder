@@ -8,12 +8,13 @@ use axum::extract::{FromRequestParts, Path, Query};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use common::atompub::{CollectionFeedTitle, Entry, FeedMeta, entry_to_xml, render_feed};
-use common::etag::ETag;
+use common::etag::{ETag, post_content_etag};
 use common::ids::PostId;
 use common::pagination::PageSize;
+#[cfg(test)]
 use common::tag::TagLabel;
 use common::tagged_url::{BaseUrl, EditUriUrl, FeedUrl, PaginationUrl, compose};
 use common::time::UtcInstant;
@@ -79,39 +80,18 @@ impl PostServices {
     }
 }
 
-/// A strong, content-hash `ETag` for a post: `"sha256-<hex>"` over the post's
-/// content fields (title, stored body, format, summary, tag display names, and
-/// the draft flag) — never a timestamp. So identical content yields an identical
-/// `ETag` and an idempotent re-publish does not change it, removing the time-based
-/// divergence false-positive (#78).
+/// A strong, content-hash `ETag` for a post's mutable representation. The
+/// transport-neutral projection is owned by `common`; this storage adapter only
+/// projects ordered post-tag labels into it.
 pub(crate) fn etag_for(post: &PostRecord) -> ETag {
-    /// The content projection that the `ETag` hashes. Newtype fields stay typed
-    /// through this seam and serialize through their ADR-0063 string bridges;
-    /// `PostFormat` and `draft` are reduced to their stable wire values. `PostTag`
-    /// itself is never hashed because it carries DB-assigned ids that would differ
-    /// between identical-content posts.
-    #[derive(Serialize)]
-    struct EtagContent<'a> {
-        title: Option<&'a common::post_title::PostTitle>,
-        body: &'a common::post_body::PostBody,
-        format: String,
-        summary: Option<&'a common::post_summary::PostSummary>,
-        tags: Vec<&'a TagLabel>,
-        draft: bool,
-    }
-    let content = EtagContent {
-        title: post.title.as_ref(),
-        body: &post.body,
-        format: post.format.to_string(),
-        summary: post.summary.as_ref(),
-        // Tags are folded in iteration order, which `TAGS_SUBQUERY`'s `ORDER BY`
-        // makes deterministic across query plans and backends (#772). An ETag change
-        // costs a re-fetch, never staleness.
-        tags: post.tags.iter().map(|t| &t.tag_display).collect(),
-        draft: post.published_at.is_none(),
-    };
-    let bytes = serde_json::to_vec(&content).unwrap_or_else(|_| Vec::new());
-    ETag::sha256_of(&bytes)
+    post_content_etag(
+        post.title.as_ref(),
+        &post.body,
+        &post.format,
+        post.summary.as_ref(),
+        post.tags.iter().map(|tag| &tag.tag_display),
+        post.published_at.is_none(),
+    )
 }
 
 /// Whether a request's `If-Match` precondition is satisfied for a post with ETAG.
