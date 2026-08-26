@@ -851,7 +851,7 @@ mod tests {
         invalid("#+TITLE:   \nBody");
         invalid("#+DESCRIPTION:   \nBody");
 
-        let tags = (0..26)
+        let tags = (0..=crate::tag::MAX_TAGS_PER_POST)
             .map(|index| format!("tag{index}"))
             .collect::<Vec<_>>()
             .join(", ");
