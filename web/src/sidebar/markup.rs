@@ -1,40 +1,150 @@
+use std::sync::LazyLock;
+
+use common::root_relative_url::RootRelativeUrl;
 use maud::html;
 
 use crate::html::Markup;
 use crate::icon::{self, Icons};
 
-/// Sidebar nav items: `(key, label, icon_path, href, auth_required)`. Shared by
-/// [`render_sidebar`] (anonymous → the `href.is_some() && !auth_required` subset)
-/// and the reactive authed sidebar in [`crate::sidebar::Sidebar`].
-pub(crate) const NAV_ITEMS: &[(&str, &str, &str, Option<&'static str>, bool)] = &[
-    ("home", "Home", Icons::HOME, Some("/"), false),
-    // The authed-only cockpit (#181, ADR-0044 D6): the owner's personalized feed at
-    // /app. `auth_required = true` keeps it out of the cacheable anonymous sidebar
-    // (`render_sidebar` filters `href.is_some() && !auth_required`) — it appears
-    // only in the authed sidebar, so the projector's anonymous paint is unchanged.
-    ("app", "Feed", Icons::HOME, Some("/app"), true),
-    ("local", "Local", Icons::LOCAL, None, true),
-    ("federated", "Federated", Icons::FED, None, true),
-    ("replies", "Replies", Icons::REPLY, None, true),
-    ("bookmarks", "Bookmarks", Icons::BOOKMARK, None, true),
-    ("drafts", "Drafts", Icons::EDIT, Some("/drafts"), true),
-    (
-        "scheduled",
-        "Scheduled",
-        Icons::EDIT,
-        Some("/scheduled"),
-        true,
-    ),
-    ("media", "Media", Icons::MEDIA, Some("/media"), true),
-    (
-        "audiences",
-        "Audiences",
-        Icons::BOOKMARK,
-        Some("/audiences"),
-        true,
-    ),
-    ("settings", "Settings", Icons::COG, None, true),
-];
+/// A sidebar destination and its visibility policy. Shared by [`render_sidebar`]
+/// and the reactive authenticated sidebar.
+pub(super) struct NavItem {
+    pub(super) key: &'static str,
+    pub(super) label: &'static str,
+    pub(super) icon_path: &'static str,
+    pub(super) href: Option<RootRelativeUrl>,
+    pub(super) requires_auth: bool,
+    pub(super) requires_operator: bool,
+}
+
+pub(super) static NAV_ITEMS: LazyLock<[NavItem; 13]> = LazyLock::new(|| {
+    [
+        NavItem {
+            key: "home",
+            label: "Home",
+            icon_path: Icons::HOME,
+            href: Some(root_relative_url("/")),
+            requires_auth: false,
+            requires_operator: false,
+        },
+        // The authed-only cockpit (#181, ADR-0044 D6): the owner's personalized feed at
+        // /app. `requires_auth` keeps it out of the cacheable anonymous sidebar
+        // (`render_sidebar` filters `href.is_some() && !requires_auth`) — it appears
+        // only in the authed sidebar, so the projector's anonymous paint is unchanged.
+        NavItem {
+            key: "app",
+            label: "Feed",
+            icon_path: Icons::HOME,
+            href: Some(root_relative_url("/app")),
+            requires_auth: true,
+            requires_operator: false,
+        },
+        NavItem {
+            key: "local",
+            label: "Local",
+            icon_path: Icons::LOCAL,
+            href: None,
+            requires_auth: true,
+            requires_operator: false,
+        },
+        NavItem {
+            key: "federated",
+            label: "Federated",
+            icon_path: Icons::FED,
+            href: None,
+            requires_auth: true,
+            requires_operator: false,
+        },
+        NavItem {
+            key: "replies",
+            label: "Replies",
+            icon_path: Icons::REPLY,
+            href: None,
+            requires_auth: true,
+            requires_operator: false,
+        },
+        NavItem {
+            key: "bookmarks",
+            label: "Bookmarks",
+            icon_path: Icons::BOOKMARK,
+            href: None,
+            requires_auth: true,
+            requires_operator: false,
+        },
+        NavItem {
+            key: "drafts",
+            label: "Drafts",
+            icon_path: Icons::EDIT,
+            href: Some(root_relative_url("/drafts")),
+            requires_auth: true,
+            requires_operator: false,
+        },
+        NavItem {
+            key: "scheduled",
+            label: "Scheduled",
+            icon_path: Icons::EDIT,
+            href: Some(root_relative_url("/scheduled")),
+            requires_auth: true,
+            requires_operator: false,
+        },
+        NavItem {
+            key: "media",
+            label: "Media",
+            icon_path: Icons::MEDIA,
+            href: Some(root_relative_url("/media")),
+            requires_auth: true,
+            requires_operator: false,
+        },
+        NavItem {
+            key: "audiences",
+            label: "Audiences",
+            icon_path: Icons::BOOKMARK,
+            href: Some(root_relative_url("/audiences")),
+            requires_auth: true,
+            requires_operator: false,
+        },
+        NavItem {
+            key: "settings",
+            label: "Settings",
+            icon_path: Icons::COG,
+            href: None,
+            requires_auth: true,
+            requires_operator: false,
+        },
+        NavItem {
+            key: "admin-backups",
+            label: "Configure Backups",
+            icon_path: Icons::SHIELD,
+            href: Some(root_relative_url("/admin/backups")),
+            requires_auth: true,
+            requires_operator: true,
+        },
+        NavItem {
+            key: "admin-site",
+            label: "Site Settings",
+            icon_path: Icons::SHIELD,
+            href: Some(root_relative_url("/admin/site")),
+            requires_auth: true,
+            requires_operator: true,
+        },
+    ]
+});
+
+/// Parses a catalog literal at initialization; a failed parse would make this source
+/// invalid rather than represent a runtime route condition.
+fn root_relative_url(path: &'static str) -> RootRelativeUrl {
+    let Ok(url) = path.parse() else {
+        unreachable!("sidebar catalog contains only valid root-relative paths");
+    };
+    url
+}
+
+/// Returns linked items visible to an authenticated viewer at the requested privilege.
+pub(super) fn nav_items(is_operator: bool) -> impl Iterator<Item = &'static NavItem> {
+    NAV_ITEMS
+        .iter()
+        .filter(move |item| item.href.is_some() && (!item.requires_operator || is_operator))
+}
 
 /// The static demo "Sources" rows in the sidebar: `(proto, name, sub)`.
 pub(crate) const SIDEBAR_SOURCES: &[(&str, &str, &str)] = &[
@@ -63,14 +173,14 @@ pub(crate) fn render_sidebar(active_key: &str) -> Markup {
             span class="j-kbd" { "\u{2318}K" }
         }
         nav class="j-nav" {
-            @for &(key, label, icon_path, href, auth_required) in NAV_ITEMS {
-                @if let Some(href) = href {
-                    @if !auth_required {
-                        a class={ "j-nav-item" @if key == active_key { " is-active" } }
+            @for item in nav_items(false) {
+                @if let Some(href) = &item.href {
+                    @if !item.requires_auth {
+                        a class={ "j-nav-item" @if item.key == active_key { " is-active" } }
                             href=(href)
                         {
-                            (icon::render(icon_path, 16))
-                            span { (label) }
+                            (icon::render(item.icon_path, 16))
+                            span { (item.label) }
                         }
                     }
                 }
@@ -116,10 +226,14 @@ mod tests {
             "{html}"
         );
         assert!(html.contains("<span>Home</span>"), "{html}");
-        // Auth-required items must NOT appear for the anonymous sidebar.
+        // Auth-required items and non-link placeholders must NOT appear for the
+        // anonymous sidebar.
+        assert!(!html.contains(">Feed<"), "{html}");
         assert!(!html.contains(">Drafts<"), "{html}");
         assert!(!html.contains(">Scheduled<"), "{html}");
         assert!(!html.contains(">Settings<"), "{html}");
+        assert!(!html.contains(">Configure Backups<"), "{html}");
+        assert!(!html.contains(">Site Settings<"), "{html}");
         // Sources section + empty footer.
         assert!(
             html.contains("<div class=\"j-source-name\">Bluesky</div>"),
@@ -135,6 +249,61 @@ mod tests {
         assert!(
             html.contains("<a class=\"j-nav-item\" href=\"/\">"),
             "{html}"
+        );
+    }
+
+    #[test]
+    fn nav_catalog_preserves_destinations_and_non_link_placeholders() {
+        let destinations = NAV_ITEMS
+            .iter()
+            .filter_map(|item| item.href.as_deref().map(|href| (item.key, href)))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            destinations,
+            [
+                ("home", "/"),
+                ("app", "/app"),
+                ("drafts", "/drafts"),
+                ("scheduled", "/scheduled"),
+                ("media", "/media"),
+                ("audiences", "/audiences"),
+                ("admin-backups", "/admin/backups"),
+                ("admin-site", "/admin/site"),
+            ]
+        );
+
+        let placeholders = NAV_ITEMS
+            .iter()
+            .filter_map(|item| item.href.is_none().then_some(item.key))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            placeholders,
+            ["local", "federated", "replies", "bookmarks", "settings"]
+        );
+    }
+
+    #[test]
+    fn operator_destinations_are_visible_only_to_operators() {
+        let viewer_items = nav_items(false).map(|item| item.key).collect::<Vec<_>>();
+        assert!(!viewer_items.contains(&"admin-backups"));
+        assert!(!viewer_items.contains(&"admin-site"));
+
+        let operator_items = nav_items(true)
+            .map(|item| {
+                let Some(href) = item.href.as_ref() else {
+                    unreachable!("nav_items returns linked items");
+                };
+                let href: &str = href;
+                (item.key, href)
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            operator_items.contains(&("admin-backups", "/admin/backups")),
+            "{operator_items:?}"
+        );
+        assert!(
+            operator_items.contains(&("admin-site", "/admin/site")),
+            "{operator_items:?}"
         );
     }
 }

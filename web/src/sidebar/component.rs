@@ -1,6 +1,7 @@
-use super::markup::{NAV_ITEMS, SIDEBAR_SOURCES, render_sidebar};
+use super::markup::{SIDEBAR_SOURCES, nav_items, render_sidebar};
 use crate::avatar::Avatar;
 use crate::icon::{Icon, Icons};
+use common::root_relative_url::RootRelativeUrl;
 use common::username::Username;
 use leptos::prelude::*;
 
@@ -10,7 +11,7 @@ fn SidebarNavItem(
     label: &'static str,
     icon_path: &'static str,
     active: bool,
-    href: Option<&'static str>,
+    href: Option<&'static RootRelativeUrl>,
 ) -> impl IntoView {
     let class = if active {
         "j-nav-item is-active"
@@ -23,7 +24,7 @@ fn SidebarNavItem(
     };
     match href {
         Some(href) => view! {
-            <a class=class href=href>
+            <a class=class href=href.to_string()>
                 {inner}
             </a>
         }
@@ -97,40 +98,19 @@ fn authed_sidebar(active_key: &str, username: &Username, is_operator: bool) -> i
                 <span class="j-kbd">"⌘K"</span>
             </div>
             <nav class="j-nav">
-                {NAV_ITEMS
-                    .iter()
-                    .filter(|&&(_, _, _, href, _)| href.is_some())
-                    .map(|&(key, label, icon_path, href, _)| {
-                        let is_active = key == active_key.as_str();
+                {nav_items(is_operator)
+                    .map(|item| {
+                        let is_active = item.key == active_key.as_str();
                         view! {
                             <SidebarNavItem
-                                label=label
-                                icon_path=icon_path
+                                label=item.label
+                                icon_path=item.icon_path
                                 active=is_active
-                                href=href
+                                href=item.href.as_ref()
                             />
                         }
                     })
                     .collect::<Vec<_>>()}
-                {if is_operator {
-                    view! {
-                        <SidebarNavItem
-                            label="Configure Backups"
-                            icon_path=Icons::SHIELD
-                            active=active_key == "admin-backups"
-                            href=Some("/admin/backups")
-                        />
-                        <SidebarNavItem
-                            label="Site Settings"
-                            icon_path=Icons::SHIELD
-                            active=active_key == "admin-site"
-                            href=Some("/admin/site")
-                        />
-                    }
-                        .into_any()
-                } else {
-                    ().into_any()
-                }}
             </nav>
             <div>
                 <div class="j-sb-head">

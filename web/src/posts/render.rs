@@ -18,9 +18,11 @@ use crate::html::Markup;
 use crate::taglist::TagCtx;
 use crate::timeline::render::render_load_more;
 use crate::{avatar, taglist, topbar};
+use common::ids::PostId;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
 use common::render::RenderedHtml;
+use common::root_relative_url::RootRelativeUrl;
 use common::seed::{PageSeed, RenderedPost, TagSummary};
 use common::time::UtcInstant;
 use common::username::Username;
@@ -32,6 +34,18 @@ use maud::html;
 #[must_use]
 pub(crate) fn format_post_time(ts: UtcInstant) -> String {
     ts.value().format("%Y-%m-%d %H:%M").to_string()
+}
+
+/// Builds the known-valid edit route for a typed post identifier.
+///
+/// The literal route shape begins at the site root and `PostId`'s display form
+/// is a path-safe integer, so validation cannot fail.
+#[must_use]
+pub(crate) fn edit_post_url(post_id: PostId) -> RootRelativeUrl {
+    let Ok(url) = RootRelativeUrl::try_from(format!("/posts/{post_id}/edit")) else {
+        unreachable!("post edit route is root-relative by construction");
+    };
+    url
 }
 
 /// The `<main class="j-main">` inner content for a route — mirrors each reactive
@@ -109,7 +123,7 @@ pub(crate) fn permalink_article(post: &RenderedPost) -> Markup {
         summary: post.summary.as_ref(),
         rendered_html: &post.rendered_html,
         time: &format_post_time(post.display_time()),
-        permalink: post.permalink.as_deref().unwrap_or_default(),
+        permalink: post.permalink.as_ref(),
         tags: &post.tags,
         tag_ctx: &ctx,
     })
@@ -129,7 +143,7 @@ fn render_posts(posts: &[RenderedPost], tag_ctx: &TagCtx) -> Markup {
                 summary: post.summary.as_ref(),
                 rendered_html: &post.rendered_html,
                 time: &time,
-                permalink: post.permalink.as_deref().unwrap_or_default(),
+                permalink: post.permalink.as_ref(),
                 tags: &post.tags,
                 tag_ctx,
             }))
@@ -146,7 +160,7 @@ pub(crate) struct PostView<'a> {
     pub summary: Option<&'a PostSummary>,
     pub rendered_html: &'a RenderedHtml,
     pub time: &'a str,
-    pub permalink: &'a str,
+    pub permalink: Option<&'a RootRelativeUrl>,
     pub tags: &'a [TagSummary],
     pub tag_ctx: &'a TagCtx,
 }
@@ -194,10 +208,10 @@ pub(crate) fn render_post_content(view: &PostView) -> Markup {
         }
         @if let Some(title) = view.title {
             div class="j-post-title" {
-                @if view.permalink.is_empty() {
-                    (title)
+                @if let Some(permalink) = view.permalink {
+                    a href=(&**permalink) { (title) }
                 } @else {
-                    a href=(view.permalink) { (title) }
+                    (title)
                 }
             }
         }
@@ -316,13 +330,21 @@ mod tests {
     use super::*;
     use common::seed::TimelinePage;
     use common::test_support::{
-        parse_post_summary, parse_post_title, parse_username, parse_utc_instant,
+        parse_post_summary, parse_post_title, parse_root_relative_url, parse_username,
+        parse_utc_instant,
     };
 
     #[test]
     fn format_post_time_includes_time_portion() {
         let ts = parse_utc_instant("2026-04-23T10:30:00+00:00");
         assert_eq!(format_post_time(ts), "2026-04-23 10:30");
+    }
+
+    #[test]
+    fn edit_post_url_composes_known_route() {
+        let edit_url = edit_post_url(PostId::from(7));
+        let edit_url: &str = &edit_url;
+        assert_eq!(edit_url, "/posts/7/edit");
     }
 
     #[test]
@@ -356,7 +378,7 @@ mod tests {
             summary: None,
             rendered_html: &body,
             time: "2026-01-01 00:00",
-            permalink: "/~alice/x",
+            permalink: Some(&parse_root_relative_url("/~alice/x")),
             tags: &[],
             tag_ctx: &ctx,
         };
@@ -546,7 +568,7 @@ mod tests {
             summary: None,
             rendered_html: &body,
             time: "2026-01-01 00:00",
-            permalink: "",
+            permalink: None,
             tags: &[],
             tag_ctx: &ctx,
         };
@@ -555,6 +577,31 @@ mod tests {
                 .as_str()
                 .contains("<span class=\"j-post-time\">2026-01-01 00:00</span>")
         );
+    }
+
+    #[test]
+    fn post_content_keeps_title_as_text_without_permalink() {
+        let ctx = TagCtx::SiteWide;
+        let author = parse_username("bob");
+        let body = RenderedHtml::from_trusted("<p>b</p>");
+        let title = parse_post_title("Draft title");
+        let view = PostView {
+            username: &author,
+            title: Some(&title),
+            banner: None,
+            summary: None,
+            rendered_html: &body,
+            time: "2026-01-01 00:00",
+            permalink: None,
+            tags: &[],
+            tag_ctx: &ctx,
+        };
+        let html = render_post_content(&view).into_string();
+        assert!(
+            html.contains("<div class=\"j-post-title\">Draft title</div>"),
+            "{html}"
+        );
+        assert!(!html.contains("<div class=\"j-post-title\"><a "), "{html}");
     }
 
     #[test]
@@ -570,7 +617,7 @@ mod tests {
             summary: Some(&summary),
             rendered_html: &body,
             time: "2026-01-01 00:00",
-            permalink: "",
+            permalink: None,
             tags: &[],
             tag_ctx: &ctx,
         };
@@ -598,7 +645,7 @@ mod tests {
             summary: None,
             rendered_html: &body,
             time: "2026-01-01 00:00",
-            permalink: "/~bob/x",
+            permalink: Some(&parse_root_relative_url("/~bob/x")),
             tags: &[],
             tag_ctx: &ctx,
         };
@@ -608,6 +655,10 @@ mod tests {
         // Title links to the permalink, mirroring `PostDisplay`.
         assert!(
             html.contains("<div class=\"j-post-title\"><a href=\"/~bob/x\">T</a></div>"),
+            "{html}"
+        );
+        assert!(
+            html.contains("<span class=\"j-post-time\">2026-01-01 00:00</span>"),
             "{html}"
         );
     }
