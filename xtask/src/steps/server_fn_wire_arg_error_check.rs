@@ -27,6 +27,7 @@ pub(crate) struct TypeIndex {
     errors: BTreeMap<String, ErrorType>,
     from_str_errors: BTreeMap<String, String>,
     reachable_variants: BTreeMap<(String, String), BTreeSet<String>>,
+    owned_error_surfaces: BTreeSet<String>,
 }
 
 #[derive(Clone)]
@@ -204,6 +205,83 @@ fn record_from_str_impl(index: &mut TypeIndex, item: &syn::ItemImpl) {
     index.from_str_errors.insert(self_type_name, error_name);
 }
 
+fn returns_str_reference(output: &syn::ReturnType, require_static: bool) -> bool {
+    let syn::ReturnType::Type(_, ty) = output else {
+        return false;
+    };
+    let syn::Type::Reference(reference) = ty.as_ref() else {
+        return false;
+    };
+    if require_static
+        && reference
+            .lifetime
+            .as_ref()
+            .is_none_or(|lifetime| lifetime.ident != "static")
+    {
+        return false;
+    }
+    reference.mutability.is_none()
+        && matches!(
+            reference.elem.as_ref(),
+            syn::Type::Path(path) if path.path.is_ident("str")
+        )
+}
+
+fn has_immutable_self_receiver(signature: &syn::Signature) -> bool {
+    signature.inputs.len() == 1
+        && matches!(
+            signature.inputs.first(),
+            Some(syn::FnArg::Receiver(receiver))
+                if receiver
+                    .reference
+                    .as_ref()
+                    .is_some_and(|(_, lifetime)| lifetime.is_none())
+                    && receiver.mutability.is_none()
+                    && receiver.colon_token.is_none()
+        )
+}
+
+fn has_conditional_compilation(attrs: &[syn::Attribute]) -> bool {
+    attrs
+        .iter()
+        .any(|attr| attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr"))
+}
+
+fn is_plain_safe_method(signature: &syn::Signature) -> bool {
+    signature.constness.is_none()
+        && signature.asyncness.is_none()
+        && signature.unsafety.is_none()
+        && signature.abi.is_none()
+        && signature.variadic.is_none()
+        && signature.generics.params.is_empty()
+        && signature.generics.where_clause.is_none()
+}
+
+fn record_owned_error_surface(index: &mut TypeIndex, item: &syn::ItemImpl) {
+    if item.trait_.is_some() || has_conditional_compilation(&item.attrs) {
+        return;
+    }
+    let Some(error_name) = type_name(&item.self_ty) else {
+        return;
+    };
+    let public_method = |name: &str, require_static: bool| {
+        item.items.iter().any(|item| {
+            let syn::ImplItem::Fn(item) = item else {
+                return false;
+            };
+            matches!(item.vis, syn::Visibility::Public(_))
+                && item.sig.ident == name
+                && has_immutable_self_receiver(&item.sig)
+                && is_plain_safe_method(&item.sig)
+                && !has_conditional_compilation(&item.attrs)
+                && returns_str_reference(&item.sig.output, require_static)
+        })
+    };
+    if public_method("user_message", false) && public_method("telemetry_code", true) {
+        index.owned_error_surfaces.insert(error_name);
+    }
+}
+
 fn reachable_variants(self_type_name: &str, error_name: &str, body: &str) -> BTreeSet<String> {
     if matches!(self_type_name, "Password" | "ProfferedPassword") && error_name == "PasswordError" {
         return ["PasswordTooShort", "PasswordTooLong"]
@@ -239,6 +317,7 @@ fn variants_named_in_body(body: &str, error_name: &str) -> BTreeSet<String> {
     variants
 }
 
+#[cfg(test)]
 fn from_str_error_for(type_name: &str, index: &TypeIndex) -> Option<ErrorType> {
     let error_name = index.from_str_errors.get(type_name)?;
     index.errors.get(error_name).cloned()
@@ -351,7 +430,10 @@ fn index_sources(sources: &[(String, String)]) -> Result<TypeIndex, String> {
                     }
                 }
                 syn::Item::Enum(item) => record_error_enum(&mut index, &item),
-                syn::Item::Impl(item) => record_from_str_impl(&mut index, &item),
+                syn::Item::Impl(item) => {
+                    record_owned_error_surface(&mut index, &item);
+                    record_from_str_impl(&mut index, &item);
+                }
                 _ => {}
             }
         }
@@ -497,67 +579,213 @@ fn wire_inputs(
     Ok(out)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ExternalDisplayCategory {
-    TelemetrySafe,
-    UserFacingOnly,
+const EXTERNAL_FORMAT_MARKER: &str = "// server-fn-wire-arg-error:allow";
+#[derive(Debug, Clone, Copy)]
+struct ExternalFormatCall {
+    line: usize,
+    literal_argument: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct AllowedExternalDisplay {
-    wire_type: &'static str,
-    error_type: &'static str,
-    wrapped_type: &'static str,
-    crate_name: &'static str,
-    crate_version: &'static str,
-    category: ExternalDisplayCategory,
-    reason: &'static str,
+#[derive(Default)]
+struct ExternalFormatScan {
+    calls: Vec<ExternalFormatCall>,
+    indirect_references: Vec<usize>,
 }
 
-const ALLOWED_EXTERNAL_DISPLAYS: &[AllowedExternalDisplay] = &[
-    AllowedExternalDisplay {
-        wire_type: "Email",
-        error_type: "InvalidEmail",
-        wrapped_type: "email_address::Error",
-        crate_name: "email_address",
-        crate_version: "0.2.9",
-        category: ExternalDisplayCategory::TelemetrySafe,
-        reason: "email_address 0.2.9 Error is a unit-variant enum whose Display emits literals and constants only; re-review on version change (#846)",
-    },
-    AllowedExternalDisplay {
-        wire_type: "BackupSchedule",
-        error_type: "InvalidBackupSchedule",
-        wrapped_type: "croner::errors::CronError",
-        crate_name: "croner",
-        crate_version: "2.2.0",
-        category: ExternalDisplayCategory::UserFacingOnly,
-        reason: "croner's detailed schedule parse message is useful user feedback, but decode telemetry is source-sanitized; re-review on croner version change (#846)",
-    },
-];
+#[derive(Debug, Clone)]
+enum FlatToken {
+    Ident(String, usize),
+    Literal,
+    Punct(char),
+    Open(proc_macro2::Delimiter),
+    Close,
+}
 
-fn cargo_lock_version(lockfile: &str, crate_name: &str) -> Option<String> {
-    let mut in_package = false;
-    let mut current_name = None;
-    for line in lockfile.lines().map(str::trim) {
-        if line == "[[package]]" {
-            in_package = true;
-            current_name = None;
-            continue;
-        }
-        if !in_package {
-            continue;
-        }
-        if let Some(value) = line.strip_prefix("name = ") {
-            current_name = Some(value.trim_matches('"').to_string());
-            continue;
-        }
-        if current_name.as_deref() == Some(crate_name)
-            && let Some(value) = line.strip_prefix("version = ")
-        {
-            return Some(value.trim_matches('"').to_string());
+fn flatten_tokens(tokens: proc_macro2::TokenStream, out: &mut Vec<FlatToken>) {
+    for token in tokens {
+        match token {
+            proc_macro2::TokenTree::Ident(ident) => {
+                out.push(FlatToken::Ident(
+                    ident.to_string(),
+                    ident.span().start().line,
+                ));
+            }
+            proc_macro2::TokenTree::Literal(_) => out.push(FlatToken::Literal),
+            proc_macro2::TokenTree::Punct(punct) => out.push(FlatToken::Punct(punct.as_char())),
+            proc_macro2::TokenTree::Group(group) => {
+                out.push(FlatToken::Open(group.delimiter()));
+                flatten_tokens(group.stream(), out);
+                out.push(FlatToken::Close);
+            }
         }
     }
-    None
+}
+
+fn external_format_calls(file: &syn::File) -> ExternalFormatScan {
+    let mut tokens = Vec::new();
+    flatten_tokens(file.to_token_stream(), &mut tokens);
+    let mut scan = ExternalFormatScan::default();
+
+    for (index, token) in tokens.iter().enumerate() {
+        let FlatToken::Ident(name, line) = token else {
+            continue;
+        };
+        if name != "from_external" {
+            continue;
+        }
+        if !matches!(
+            (
+                tokens.get(index.wrapping_sub(2)),
+                tokens.get(index.wrapping_sub(1))
+            ),
+            (Some(FlatToken::Punct(':')), Some(FlatToken::Punct(':')))
+        ) {
+            continue;
+        }
+        let mut call_open = index + 1;
+        while matches!(tokens.get(call_open), Some(FlatToken::Close)) {
+            call_open += 1;
+        }
+        if !matches!(
+            tokens.get(call_open),
+            Some(FlatToken::Open(proc_macro2::Delimiter::Parenthesis))
+        ) {
+            scan.indirect_references.push(*line);
+            continue;
+        }
+        let mut argument = call_open + 1;
+        while matches!(
+            tokens.get(argument),
+            Some(FlatToken::Open(proc_macro2::Delimiter::Parenthesis))
+        ) {
+            argument += 1;
+        }
+        scan.calls.push(ExternalFormatCall {
+            line: *line,
+            literal_argument: matches!(tokens.get(argument), Some(FlatToken::Literal)),
+        });
+    }
+    scan
+}
+
+fn external_format_marker_reason(line: &str) -> Option<&str> {
+    let rest = line.trim().strip_prefix(EXTERNAL_FORMAT_MARKER)?;
+    if rest.is_empty() {
+        return Some("");
+    }
+    rest.chars()
+        .next()
+        .is_some_and(char::is_whitespace)
+        .then(|| rest.trim())
+}
+
+/// Census the reviewed doors that turn foreign `Display` into a user-only
+/// message. Calls are found structurally; marker adjacency remains deliberately
+/// line-local: one non-empty reason immediately before one non-literal call.
+fn external_format_doors(sources: &[(String, String)]) -> Result<Vec<String>, Vec<String>> {
+    let mut doors = Vec::new();
+    let mut problems = Vec::new();
+
+    for (path, source) in sources {
+        let lines = source.lines().collect::<Vec<_>>();
+        let file = match syn::parse_file(source) {
+            Ok(file) => file,
+            Err(error) => {
+                problems.push(format!(
+                    "{path}: cannot parse external formatter census: {error}"
+                ));
+                continue;
+            }
+        };
+        let scan = external_format_calls(&file);
+        for line in scan.indirect_references {
+            problems.push(format!(
+                "{path}:{line}: indirect reference to external formatter is forbidden; call it directly behind one marker"
+            ));
+        }
+        let mut calls = BTreeMap::<usize, Vec<bool>>::new();
+        for call in scan.calls {
+            calls
+                .entry(call.line)
+                .or_default()
+                .push(call.literal_argument);
+        }
+
+        for (line, literal_arguments) in &calls {
+            let marker = line
+                .checked_sub(2)
+                .and_then(|index| lines.get(index))
+                .and_then(|line| external_format_marker_reason(line));
+            let Some(reason) = marker else {
+                let shared = *line >= 3
+                    && calls.contains_key(&(line - 1))
+                    && lines[*line - 3].trim().starts_with(EXTERNAL_FORMAT_MARKER);
+                problems.push(format!(
+                    "{path}:{line}: {} external formatter call",
+                    if shared {
+                        "shared marker cannot cover"
+                    } else {
+                        "unmarked"
+                    }
+                ));
+                continue;
+            };
+            if reason.trim().is_empty() {
+                problems.push(format!(
+                    "{path}:{}: bare external formatter marker",
+                    line - 1
+                ));
+                continue;
+            }
+            if literal_arguments.len() != 1 {
+                problems.push(format!(
+                    "{path}:{line}: shared marker cannot cover multiple external formatter calls"
+                ));
+                continue;
+            }
+            if literal_arguments[0] {
+                problems.push(format!(
+                    "{path}:{}: stale external formatter marker wraps an owned literal",
+                    line - 1
+                ));
+                continue;
+            }
+            doors.push(format!("{path}:{line}"));
+        }
+
+        for (index, line) in lines.iter().enumerate() {
+            let Some(reason) = external_format_marker_reason(line) else {
+                continue;
+            };
+            if reason.trim().is_empty() {
+                continue;
+            }
+            let marker_line = index + 1;
+            let next_call_count = calls.get(&(marker_line + 1)).map_or(0, Vec::len);
+            if next_call_count == 0 {
+                let kind = if calls.contains_key(&marker_line.saturating_sub(1)) {
+                    "trailing"
+                } else {
+                    "orphan"
+                };
+                problems.push(format!(
+                    "{path}:{marker_line}: {kind} external formatter marker"
+                ));
+            } else if next_call_count > 1 {
+                problems.push(format!(
+                    "{path}:{marker_line}: shared external formatter marker"
+                ));
+            }
+        }
+    }
+
+    doors.sort();
+    problems.sort();
+    if problems.is_empty() {
+        Ok(doors)
+    } else {
+        Err(problems)
+    }
 }
 
 fn decode_telemetry_is_sanitized(server_error_src: &str) -> bool {
@@ -580,18 +808,6 @@ fn decode_telemetry_is_sanitized(server_error_src: &str) -> bool {
         && !body.contains("anyhow :: Error :: new")
 }
 
-fn field_type_path(ty: &str) -> String {
-    ty.replace(' ', "")
-}
-
-fn variant_wraps_external(variant: &ErrorVariant, wrapped_type: &str) -> bool {
-    let wrapped_type = field_type_path(wrapped_type);
-    variant
-        .fields
-        .values()
-        .any(|ty| field_type_path(ty) == wrapped_type)
-}
-
 fn reachable_error_variants<'a>(
     wire_type: &str,
     error: &'a ErrorType,
@@ -612,135 +828,70 @@ fn reachable_error_variants<'a>(
     }
 }
 
-fn strictly_reachable_error_variants<'a>(
-    wire_type: &str,
-    error: &'a ErrorType,
-    index: &TypeIndex,
-) -> Vec<&'a ErrorVariant> {
-    let reachable_key = (wire_type.to_string(), error.name.clone());
-    let Some(reachable) = index
-        .reachable_variants
-        .get(&reachable_key)
-        .filter(|variants| !variants.is_empty())
-    else {
-        return Vec::new();
-    };
-    error
-        .variants
-        .iter()
-        .filter(|variant| reachable.contains(&variant.name))
-        .collect()
-}
-
-fn allowlist_entry_is_live(
-    entry: &AllowedExternalDisplay,
+fn validate_owned_surfaces(
     inputs: &[WireInput],
     index: &TypeIndex,
-) -> bool {
-    inputs.iter().any(|input| {
-        if input.ty != entry.wire_type {
-            return false;
-        }
-        let Some(error) = from_str_error_for(&input.ty, index) else {
-            return false;
-        };
-        error.name == entry.error_type
-            && strictly_reachable_error_variants(&input.ty, &error, index)
-                .iter()
-                .any(|variant| variant_wraps_external(variant, entry.wrapped_type))
-    })
-}
-
-fn variant_is_allowlisted_external(
-    wire_type: &str,
-    error_name: &str,
-    variant: &ErrorVariant,
-    allowlist: &[AllowedExternalDisplay],
-) -> bool {
-    allowlist.iter().any(|entry| {
-        entry.wire_type == wire_type
-            && entry.error_type == error_name
-            && variant_wraps_external(variant, entry.wrapped_type)
-    })
-}
-
-fn validate_allowlist(
-    inputs: &[WireInput],
-    index: &TypeIndex,
-    lockfile: &str,
     server_error_src: &str,
-    allowlist: &[AllowedExternalDisplay],
+    sources: &[(String, String)],
 ) -> Result<(), Vec<String>> {
-    let mut problems = Vec::new();
-    let reachable_wire_types = inputs
-        .iter()
-        .map(|input| input.ty.as_str())
-        .collect::<BTreeSet<_>>();
-    let mut seen = BTreeSet::new();
-    for entry in allowlist {
-        let key = (entry.wire_type, entry.error_type, entry.wrapped_type);
-        if !seen.insert(key) {
-            problems.push(format!(
-                "duplicate allowlist entry for {} -> {}",
-                entry.wire_type, entry.error_type
-            ));
-        }
-        if entry.reason.trim().is_empty() {
-            problems.push(format!(
-                "blank allowlist reason for {} -> {}",
-                entry.wire_type, entry.error_type
-            ));
-        }
-        if !reachable_wire_types.contains(entry.wire_type)
-            || !allowlist_entry_is_live(entry, inputs, index)
-        {
-            problems.push(format!(
-                "stale allowlist entry for unreachable external display {} -> {}({})",
-                entry.wire_type, entry.error_type, entry.wrapped_type
-            ));
-        }
-        match cargo_lock_version(lockfile, entry.crate_name) {
-            Some(version) if version == entry.crate_version => {}
-            Some(version) => problems.push(format!(
-                "{} version drift: allowlist has {}, lockfile has {}",
-                entry.crate_name, entry.crate_version, version
-            )),
-            None => problems.push(format!("{} is missing from Cargo.lock", entry.crate_name)),
-        }
-        if entry.category == ExternalDisplayCategory::UserFacingOnly
-            && !decode_telemetry_is_sanitized(server_error_src)
-        {
-            problems.push(format!(
-                "{} -> {} is user-facing-only but decode telemetry preserves source",
-                entry.wire_type, entry.error_type
-            ));
-        }
+    let mut problems = external_format_doors(sources).err().unwrap_or_default();
+    if !decode_telemetry_is_sanitized(server_error_src) {
+        problems.push(
+            "web/src/error/server.rs emit_arg_decode_failure must keep decode telemetry source-free"
+                .to_string(),
+        );
     }
 
     for input in inputs {
-        let Some(error) = from_str_error_for(&input.ty, index) else {
+        let Some(error_name) = index.from_str_errors.get(&input.ty) else {
             continue;
         };
-        for variant in reachable_error_variants(&input.ty, &error, index) {
-            let mut singleton = BTreeSet::new();
-            singleton.insert(variant.name.clone());
-            let class = display_classification_for_variants(&error, Some(&singleton));
-            if matches!(class, DisplayClass::TelemetrySafe) {
-                continue;
-            }
-            if !variant_is_allowlisted_external(&input.ty, &error.name, variant, allowlist) {
-                let field_path = if input.field_path.is_empty() {
+        if index.owned_error_surfaces.contains(error_name) {
+            continue;
+        }
+        let Some(error) = index.errors.get(error_name) else {
+            problems.push(format!(
+                "server_fn={} root={} field_path={} type={} parse error {} has no owned \
+                 user_message/telemetry_code surfaces",
+                input.server_fn,
+                input.root,
+                if input.field_path.is_empty() {
                     "<root>".to_string()
                 } else {
                     input.field_path.join(".")
-                };
-                problems.push(format!(
-                    "server_fn={} root={} field_path={} type={} uses unsafe display {}::{} without a matching external allowlist entry",
-                    input.server_fn, input.root, field_path, input.ty, error.name, variant.name
-                ));
+                },
+                input.ty,
+                error_name
+            ));
+            continue;
+        };
+        for variant in reachable_error_variants(&input.ty, error, index) {
+            let mut singleton = BTreeSet::new();
+            singleton.insert(variant.name.clone());
+            if matches!(
+                display_classification_for_variants(error, Some(&singleton)),
+                DisplayClass::TelemetrySafe
+            ) {
+                continue;
             }
+            problems.push(format!(
+                "server_fn={} root={} field_path={} type={} uses unsafe display {}::{} \
+                 without owned user_message/telemetry_code surfaces",
+                input.server_fn,
+                input.root,
+                if input.field_path.is_empty() {
+                    "<root>".to_string()
+                } else {
+                    input.field_path.join(".")
+                },
+                input.ty,
+                error.name,
+                variant.name
+            ));
         }
     }
+
+    problems.sort();
 
     if problems.is_empty() {
         Ok(())
@@ -763,6 +914,26 @@ fn read_sources(root: &str) -> Result<Vec<(String, String)>, String> {
         .collect()
 }
 
+const WORKSPACE_SOURCE_ROOTS: &[&str] = &[
+    "client/src",
+    "common/src",
+    "csr/src",
+    "host/src",
+    "macros/src",
+    "server/src",
+    "storage/src",
+    "test-support/src",
+    "web/src",
+];
+
+fn read_workspace_sources() -> Result<Vec<(String, String)>, String> {
+    let mut sources = Vec::new();
+    for root in WORKSPACE_SOURCE_ROOTS {
+        sources.extend(read_sources(root)?);
+    }
+    Ok(sources)
+}
+
 pub fn run(result: &mut CommandResult) {
     let web_sources = match read_sources(web_server_fns::WEB_SRC) {
         Ok(sources) => sources,
@@ -772,6 +943,13 @@ pub fn run(result: &mut CommandResult) {
         }
     };
     let common_sources = match read_sources("common/src") {
+        Ok(sources) => sources,
+        Err(e) => {
+            result.push(StepResult::fail("server-fn-wire-arg-error").detail(e));
+            return;
+        }
+    };
+    let workspace_sources = match read_workspace_sources() {
         Ok(sources) => sources,
         Err(e) => {
             result.push(StepResult::fail("server-fn-wire-arg-error").detail(e));
@@ -794,16 +972,6 @@ pub fn run(result: &mut CommandResult) {
             return;
         }
     };
-    let lockfile = match std::fs::read_to_string("Cargo.lock") {
-        Ok(lockfile) => lockfile,
-        Err(e) => {
-            result.push(
-                StepResult::fail("server-fn-wire-arg-error")
-                    .detail(format!("cannot read Cargo.lock: {e}")),
-            );
-            return;
-        }
-    };
     let server_error_src = match std::fs::read_to_string("web/src/error/server.rs") {
         Ok(src) => src,
         Err(e) => {
@@ -814,13 +982,7 @@ pub fn run(result: &mut CommandResult) {
             return;
         }
     };
-    match validate_allowlist(
-        &inputs,
-        &index,
-        &lockfile,
-        &server_error_src,
-        ALLOWED_EXTERNAL_DISPLAYS,
-    ) {
+    match validate_owned_surfaces(&inputs, &index, &server_error_src, &workspace_sources) {
         Ok(()) => result.push(StepResult::ok("server-fn-wire-arg-error")),
         Err(problems) => {
             result.push(StepResult::fail("server-fn-wire-arg-error").detail(problems.join("\n")));
@@ -1118,36 +1280,32 @@ mod tests {
            }"#
     }
 
-    fn lock_with(name: &str, version: &str) -> String {
-        format!("[[package]]\nname = \"{name}\"\nversion = \"{version}\"\n")
-    }
-
-    fn external_wrapper_sources() -> Vec<(String, String)> {
+    fn unsafe_error_sources() -> Vec<(String, String)> {
         common(
             r#"#[derive(thiserror::Error, Debug)]
-               pub enum InvalidEmail {
-                   #[error(transparent)]
-                   Address(email_address::Error),
-               }
-               pub struct Email(String);
-               impl std::str::FromStr for Email {
-                   type Err = InvalidEmail;
-                   fn from_str(_: &str) -> Result<Self, Self::Err> { Err(InvalidEmail::Address(todo!())) }
+               #[error("invalid value: {value}")]
+               pub struct InvalidThing { value: String }
+               pub struct Thing(String);
+               impl std::str::FromStr for Thing {
+                   type Err = InvalidThing;
+                   fn from_str(_: &str) -> Result<Self, Self::Err> {
+                       Err(InvalidThing { value: String::new() })
+                   }
                }"#,
         )
     }
 
-    fn backup_wrapper_sources() -> Vec<(String, String)> {
+    fn owned_surface_sources() -> Vec<(String, String)> {
         common(
-            r#"#[derive(thiserror::Error, Debug)]
-               pub enum InvalidBackupSchedule {
-                   #[error(transparent)]
-                   Cron(croner::errors::CronError),
+            r#"pub struct InvalidBackupSchedule(UserFacingMessage);
+               impl InvalidBackupSchedule {
+                   pub fn user_message(&self) -> &str { self.0.as_str() }
+                   pub fn telemetry_code(&self) -> &'static str { "invalid_backup_schedule" }
                }
                pub struct BackupSchedule(String);
                impl std::str::FromStr for BackupSchedule {
                    type Err = InvalidBackupSchedule;
-                   fn from_str(_: &str) -> Result<Self, Self::Err> { Err(InvalidBackupSchedule::Cron(todo!())) }
+                   fn from_str(_: &str) -> Result<Self, Self::Err> { todo!() }
                }"#,
         )
     }
@@ -1171,247 +1329,224 @@ mod tests {
     }
 
     #[test]
-    fn external_wrapper_fails_without_allowlist_entry() {
-        let sources = external_wrapper_sources();
+    fn unsafe_display_without_owned_surfaces_names_the_wire_path() {
+        let sources = unsafe_error_sources();
         let index = index_sources(&sources).expect("index");
-        let err = validate_allowlist(
-            &one_input("Email"),
+        let error = validate_owned_surfaces(
+            &nested_input("Thing"),
             &index,
-            &lock_with("email_address", "0.2.9"),
             sanitized_server_error(),
-            &[],
-        )
-        .unwrap_err();
-
-        assert!(
-            err.join("\n")
-                .contains("without a matching external allowlist entry"),
-            "{err:?}"
-        );
-    }
-
-    #[test]
-    fn unsafe_display_failure_names_server_root_and_field_path() {
-        let sources = external_wrapper_sources();
-        let index = index_sources(&sources).expect("index");
-        let err = validate_allowlist(
-            &nested_input("Email"),
-            &index,
-            &lock_with("email_address", "0.2.9"),
-            sanitized_server_error(),
-            &[],
+            &sources,
         )
         .unwrap_err()
         .join("\n");
 
-        assert!(err.contains("server_fn=save_settings"), "{err}");
-        assert!(err.contains("root=config"), "{err}");
-        assert!(err.contains("field_path=backup.schedule"), "{err}");
+        assert!(error.contains("server_fn=save_settings"), "{error}");
+        assert!(error.contains("root=config"), "{error}");
+        assert!(error.contains("field_path=backup.schedule"), "{error}");
+        assert!(error.contains("without owned user_message"), "{error}");
     }
 
     #[test]
-    fn telemetry_safe_allowlist_passes_with_matching_lockfile() {
-        let sources = external_wrapper_sources();
+    fn owned_user_and_telemetry_surfaces_replace_external_allowlists() {
+        let sources = owned_surface_sources();
         let index = index_sources(&sources).expect("index");
-        let allowlist = [ALLOWED_EXTERNAL_DISPLAYS[0].clone()];
-
-        validate_allowlist(
-            &one_input("Email"),
-            &index,
-            &lock_with("email_address", "0.2.9"),
-            sanitized_server_error(),
-            &allowlist,
-        )
-        .expect("allowlist valid");
-    }
-
-    #[test]
-    fn allowlist_does_not_match_same_last_segment_from_wrong_crate() {
-        let sources = common(
-            r#"#[derive(thiserror::Error, Debug)]
-               pub enum InvalidEmail {
-                   #[error(transparent)]
-                   Address(other_crate::Error),
-               }
-               pub struct Email(String);
-               impl std::str::FromStr for Email {
-                   type Err = InvalidEmail;
-                   fn from_str(_: &str) -> Result<Self, Self::Err> { todo!() }
-               }"#,
-        );
-        let index = index_sources(&sources).expect("index");
-        let allowlist = [ALLOWED_EXTERNAL_DISPLAYS[0].clone()];
-        let err = validate_allowlist(
-            &one_input("Email"),
-            &index,
-            &lock_with("email_address", "0.2.9"),
-            sanitized_server_error(),
-            &allowlist,
-        )
-        .unwrap_err()
-        .join("\n");
-
-        assert!(
-            err.contains("without a matching external allowlist entry"),
-            "{err}"
-        );
-    }
-
-    #[test]
-    fn allowlist_does_not_cover_unrelated_unsafe_variant_in_same_error_enum() {
-        let sources = common(
-            r#"#[derive(thiserror::Error, Debug)]
-               pub enum InvalidEmail {
-                   #[error(transparent)]
-                   Address(email_address::Error),
-                   #[error("bad {value}")]
-                   BadValue { value: String },
-               }
-               pub struct Email(String);
-               impl std::str::FromStr for Email {
-                   type Err = InvalidEmail;
-                   fn from_str(_: &str) -> Result<Self, Self::Err> {
-                       Err(InvalidEmail::BadValue { value: String::new() })
-                   }
-               }"#,
-        );
-        let index = index_sources(&sources).expect("index");
-        let allowlist = [ALLOWED_EXTERNAL_DISPLAYS[0].clone()];
-        let err = validate_allowlist(
-            &one_input("Email"),
-            &index,
-            &lock_with("email_address", "0.2.9"),
-            sanitized_server_error(),
-            &allowlist,
-        )
-        .unwrap_err()
-        .join("\n");
-
-        assert!(err.contains("InvalidEmail::BadValue"), "{err}");
-    }
-
-    #[test]
-    fn allowlist_is_stale_when_wire_type_uses_different_wrapper() {
-        let sources = common(
-            r#"#[derive(thiserror::Error, Debug)]
-               pub enum InvalidEmail {
-                   #[error(transparent)]
-                   Address(other_crate::Error),
-               }
-               pub struct Email(String);
-               impl std::str::FromStr for Email {
-                   type Err = InvalidEmail;
-                   fn from_str(_: &str) -> Result<Self, Self::Err> { todo!() }
-               }"#,
-        );
-        let index = index_sources(&sources).expect("index");
-        let allowlist = [ALLOWED_EXTERNAL_DISPLAYS[0].clone()];
-        let err = validate_allowlist(
-            &one_input("Email"),
-            &index,
-            &lock_with("email_address", "0.2.9"),
-            sanitized_server_error(),
-            &allowlist,
-        )
-        .unwrap_err()
-        .join("\n");
-
-        assert!(err.contains("stale allowlist entry"), "{err}");
-    }
-
-    #[test]
-    fn user_facing_only_allowlist_requires_sanitized_decode_telemetry() {
-        let sources = backup_wrapper_sources();
-        let index = index_sources(&sources).expect("index");
-        let allowlist = [ALLOWED_EXTERNAL_DISPLAYS[1].clone()];
-
-        validate_allowlist(
+        assert!(index.owned_error_surfaces.contains("InvalidBackupSchedule"));
+        validate_owned_surfaces(
             &one_input("BackupSchedule"),
             &index,
-            &lock_with("croner", "2.2.0"),
             sanitized_server_error(),
-            &allowlist,
+            &sources,
         )
-        .expect("sanitized telemetry permits user-facing-only allowlist");
+        .expect("owned sink surfaces are sufficient");
+    }
 
-        let err = validate_allowlist(
-            &one_input("BackupSchedule"),
-            &index,
-            &lock_with("croner", "2.2.0"),
+    #[test]
+    fn non_exact_methods_do_not_count_as_owned_error_surfaces() {
+        let original = owned_surface_sources();
+        let variants = [
+            original
+                .iter()
+                .map(|(path, source)| (path.clone(), source.replace("(&self)", "()")))
+                .collect::<Vec<_>>(),
+            original
+                .iter()
+                .map(|(path, source)| {
+                    (
+                        path.clone(),
+                        source.replace("pub fn user_message", "pub async fn user_message"),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            original
+                .iter()
+                .map(|(path, source)| {
+                    (
+                        path.clone(),
+                        source.replace("pub fn telemetry_code", "pub unsafe fn telemetry_code"),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            original
+                .iter()
+                .map(|(path, source)| {
+                    (
+                        path.clone(),
+                        source.replace(
+                            "pub fn telemetry_code(&self) -> &'static str",
+                            "pub fn telemetry_code(&self) -> &'static mut str",
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            original
+                .iter()
+                .map(|(path, source)| {
+                    (
+                        path.clone(),
+                        source.replace("user_message(&self)", "user_message<T>(&self)"),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            original
+                .iter()
+                .map(|(path, source)| {
+                    (
+                        path.clone(),
+                        source.replace(
+                            "impl InvalidBackupSchedule",
+                            "#[cfg(test)]\nimpl InvalidBackupSchedule",
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            original
+                .iter()
+                .map(|(path, source)| {
+                    (
+                        path.clone(),
+                        source.replace(
+                            "pub fn user_message",
+                            "#[cfg_attr(feature = \"hidden\", cfg(test))]\npub fn user_message",
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        ];
+        for sources in variants {
+            let index = index_sources(&sources).expect("index");
+            assert!(!index.owned_error_surfaces.contains("InvalidBackupSchedule"));
+        }
+    }
+
+    #[test]
+    fn owned_surfaces_still_require_source_free_decode_telemetry() {
+        let sources = owned_surface_sources();
+        let index = index_sources(&sources).expect("index");
+        for server_error in [
             preserving_server_error(),
-            &allowlist,
-        )
-        .unwrap_err();
-
-        assert!(err.join("\n").contains("preserves source"), "{err:?}");
-
-        let err = validate_allowlist(
-            &one_input("BackupSchedule"),
-            &index,
-            &lock_with("croner", "2.2.0"),
             masked_server_error(),
-            &allowlist,
-        )
-        .unwrap_err();
-
-        assert!(err.join("\n").contains("preserves source"), "{err:?}");
-
-        let err = validate_allowlist(
-            &one_input("BackupSchedule"),
-            &index,
-            &lock_with("croner", "2.2.0"),
             server_constructor_error(),
-            &allowlist,
-        )
-        .unwrap_err();
-
-        assert!(err.join("\n").contains("preserves source"), "{err:?}");
-    }
-    #[test]
-    fn allowlist_blank_reason_duplicate_version_drift_and_stale_entries_fail() {
-        let sources = external_wrapper_sources();
-        let index = index_sources(&sources).expect("index");
-        let entry = AllowedExternalDisplay {
-            reason: "",
-            crate_version: "9.9.9",
-            ..ALLOWED_EXTERNAL_DISPLAYS[0].clone()
-        };
-        let stale = AllowedExternalDisplay {
-            wire_type: "Unreachable",
-            ..ALLOWED_EXTERNAL_DISPLAYS[0].clone()
-        };
-        let err = validate_allowlist(
-            &one_input("Email"),
-            &index,
-            &lock_with("email_address", "0.2.9"),
-            sanitized_server_error(),
-            &[entry.clone(), entry, stale],
-        )
-        .unwrap_err()
-        .join("\n");
-
-        assert!(err.contains("blank allowlist reason"), "{err}");
-        assert!(err.contains("duplicate allowlist entry"), "{err}");
-        assert!(err.contains("version drift"), "{err}");
-        assert!(err.contains("stale allowlist entry"), "{err}");
+        ] {
+            let error = validate_owned_surfaces(
+                &one_input("BackupSchedule"),
+                &index,
+                server_error,
+                &sources,
+            )
+            .unwrap_err()
+            .join("\n");
+            assert!(error.contains("source-free"), "{error}");
+        }
     }
 
+    fn marker_errors(source: &str) -> String {
+        let wrapped = format!("fn check() {{\n{source}\n}}");
+        external_format_doors(&[("common/src/example.rs".to_string(), wrapped)])
+            .unwrap_err()
+            .join("\n")
+    }
     #[test]
-    fn backup_schedule_allowlist_fails_on_croner_version_drift() {
-        let sources = backup_wrapper_sources();
-        let index = index_sources(&sources).expect("index");
-        let allowlist = [ALLOWED_EXTERNAL_DISPLAYS[1].clone()];
-        let err = validate_allowlist(
-            &one_input("BackupSchedule"),
-            &index,
-            &lock_with("croner", "2.3.0"),
-            sanitized_server_error(),
-            &allowlist,
-        )
-        .unwrap_err()
-        .join("\n");
+    fn marked_external_user_message_conversion_enters_the_census() {
+        let sources = vec![(
+            "common/src/backup.rs".to_string(),
+            "fn check() {\n\
+             // server-fn-wire-arg-error:allow detailed operator feedback\n\
+             UserFacingMessage::from_external(format_args!(\"detail: {error}\"));\n\
+             }"
+            .to_string(),
+        )];
+        assert_eq!(
+            external_format_doors(&sources).unwrap(),
+            ["common/src/backup.rs:3"]
+        );
+    }
 
-        assert!(err.contains("croner version drift"), "{err}");
+    #[test]
+    fn external_user_message_markers_fail_closed() {
+        let cases = [
+            (
+                "unmarked",
+                "UserFacingMessage::from_external(format_args!(\"{error}\"));",
+            ),
+            (
+                "unmarked",
+                "<UserFacingMessage>::from_external(format_args!(\"{error}\"));",
+            ),
+            (
+                "unmarked",
+                "(UserFacingMessage::from_external)(format_args!(\"{error}\"));",
+            ),
+            (
+                "unmarked",
+                "let _ = vec![UserFacingMessage::from_external(format_args!(\"{error}\"))];",
+            ),
+            (
+                "unmarked",
+                "type Message = UserFacingMessage;\n\
+                 Message::from_external(format_args!(\"{error}\"));",
+            ),
+            (
+                "unmarked",
+                "// server-fn-wire-arg-error:allowance typo\n\
+                 UserFacingMessage::from_external(format_args!(\"{error}\"));",
+            ),
+            (
+                "indirect",
+                "let capture = UserFacingMessage::from_external;\n\
+                 capture(format_args!(\"{error}\"));",
+            ),
+            (
+                "bare",
+                "// server-fn-wire-arg-error:allow\n\
+                 UserFacingMessage::from_external(format_args!(\"{error}\"));",
+            ),
+            (
+                "trailing",
+                "UserFacingMessage::from_external(format_args!(\"{error}\"));\n\
+                 // server-fn-wire-arg-error:allow too late",
+            ),
+            (
+                "shared",
+                "// server-fn-wire-arg-error:allow one call only\n\
+                 UserFacingMessage::from_external(format_args!(\"{first}\"));\n\
+                 UserFacingMessage::from_external(format_args!(\"{second}\"));",
+            ),
+            (
+                "orphan",
+                "// server-fn-wire-arg-error:allow no call follows\n\
+                 let value = 1;",
+            ),
+            (
+                "stale",
+                "// server-fn-wire-arg-error:allow literals are already owned\n\
+                 UserFacingMessage::from_external(\"fixed literal\");",
+            ),
+        ];
+        for (expected, source) in cases {
+            let errors = marker_errors(source);
+            assert!(errors.contains(expected), "{expected}: {errors}");
+        }
     }
 
     #[test]

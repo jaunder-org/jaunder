@@ -1,8 +1,8 @@
+use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
 use email_address::{EmailAddress, Options};
 use macros::StrNewtype;
-use thiserror::Error;
 
 /// A validated, domain-normalized email address (RFC 5321/6531 addr-spec).
 ///
@@ -21,13 +21,33 @@ pub struct Email(String);
 
 /// Error returned when a string cannot be parsed as an [`Email`].
 ///
-/// Carries the underlying `email_address` reason (e.g. a missing `@`) so a caller
-/// keeps the specific diagnostic the crate produces. The field is private, so the
-/// dependency type does not leak into `common`'s public surface — only its
-/// `Display` string escapes.
-#[derive(Debug, Error)]
-#[error("invalid email address: {0}")]
-pub struct InvalidEmail(email_address::Error);
+/// The foreign parser detail is discarded at this boundary. User responses and
+/// telemetry choose separate stable surfaces, and neither can recover rejected
+/// raw input from this value.
+#[derive(Debug)]
+pub struct InvalidEmail;
+
+impl InvalidEmail {
+    /// Stable validation feedback for the submitting user.
+    #[must_use]
+    pub fn user_message(&self) -> &'static str {
+        "invalid email address"
+    }
+
+    /// Stable bounded classification for telemetry.
+    #[must_use]
+    pub fn telemetry_code(&self) -> &'static str {
+        "invalid_email"
+    }
+}
+
+impl Display for InvalidEmail {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.user_message())
+    }
+}
+
+impl std::error::Error for InvalidEmail {}
 
 impl FromStr for Email {
     type Err = InvalidEmail;
@@ -36,7 +56,7 @@ impl FromStr for Email {
         // Reject the display-name form that `email_address` accepts by default —
         // for a bare-address primitive it is a typo, not input to silently strip.
         let addr = EmailAddress::parse_with_options(s, Options::default().without_display_text())
-            .map_err(InvalidEmail)?;
+            .map_err(|_| InvalidEmail)?;
         // `email_address` is case-preserving. Canonicalize the DNS domain's ASCII
         // case only: `to_ascii_lowercase` is exactly what RFC-5321 case-insensitivity
         // covers, and — unlike `to_lowercase` — it can never change a non-ASCII
@@ -91,12 +111,12 @@ mod tests {
     }
 
     #[test]
-    fn email_error_carries_the_underlying_reason() {
-        // The error keeps the specific `email_address` diagnostic behind our own
-        // label, rather than collapsing every failure to a constant string.
-        let msg = "not-an-email".parse::<Email>().unwrap_err().to_string();
-        assert!(msg.starts_with("invalid email address: "), "{msg}");
-        assert!(msg.len() > "invalid email address: ".len(), "{msg}");
+    fn email_error_exposes_only_stable_sink_surfaces() {
+        let error = "not-an-email".parse::<Email>().unwrap_err();
+        assert_eq!(error.user_message(), "invalid email address");
+        assert_eq!(error.telemetry_code(), "invalid_email");
+        assert_eq!(error.to_string(), error.user_message());
+        assert!(!format!("{error:?}").contains("not-an-email"));
     }
 
     #[test]

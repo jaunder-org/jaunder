@@ -1287,20 +1287,37 @@ arbitrary source text, or whole-struct dumps.
 Every `#[server]` fn in `web/src` is written as `#[macros::server]`, which emits
 the `#[tracing::instrument]` attribute itself with the name
 `web.<vertical>.<ident>` computed from the file path and identifier
-(`macros/src/server_fn.rs`) — so no `#[server]` fn's span name is written in the
-source, and none can drift ([ADR-0011](adr/0011-unified-observability.md),
-amended 2026-07-30). Hand-written `instrument` names do still exist outside that
-set — `require_auth` carries one (`web/src/auth/server.rs:112`) — because they
-are not server fns. The macro rejects `level`, `err`, `ret`, and any unmodeled
-key outright. It accepts `fields(…)` only as empty declarations such as
+(`macros/src/server_fn.rs`) — so no server-fn span name is written in source and
+none can drift ([ADR-0011](adr/0011-unified-observability.md), amended
+2026-07-30). Hand-written `instrument` names still exist outside that set —
+`require_auth` carries one (`web/src/auth/server.rs`) — because they are not
+server fns. The macro rejects `level`, `err`, `ret`, and any unmodeled key. It
+accepts `fields(…)` only as empty declarations such as
 `registration.policy = tracing::field::Empty`; server-function bodies may later
-record bounded determinant values into those declared fields. What the author
-still writes is `skip(…)` / `skip_all`, and the `server-fn-tracing` gate holds a
-default-deny `RECORDABLE_TYPES` allowlist over every unskipped parameter type:
-an unlisted type fails the gate until someone classifies it. A type is
-admissible only if it is bounded by its own type, is operator configuration, is
-already published in a permalink, or is `Username`
-([docs/adr/0147-decision-path-observability.md](adr/0147-decision-path-observability.md)).
+record bounded determinant values into those declared fields.
+
+The macro always hides original parameters with generated `skip_all`, then
+records each named, non-skipped parameter only through
+`common::trace_field::TraceField::trace_value`. The associated projection type
+makes the exact `Debug` representation reviewable; compiler trait resolution is
+the default-deny admission check. Implementations retain ADR-0011's four
+grounds—intrinsically bounded, operator configuration, already public in a
+permalink, or `Username`—and add no generic string, `Debug`, or `Display`
+fallback. Authors still write `skip(…)` / `skip_all` as explicit opt-outs.
+`server-fn-tracing` now checks source grammar, skip names, pattern-bound
+parameters, and declaration-only fields, but classifies no type names
+([sink-specific telemetry interfaces](adr/drafts/sink-specific-telemetry-interfaces.md)).
+
+Wire parse errors likewise own their sink projections: `user_message` selects
+feedback for the submitter and `telemetry_code` supplies a bounded
+classification. Intentionally retained third-party detail crosses only through
+`common::UserFacingMessage`, whose `Debug` is redacted and which implements
+neither `Display` nor `TraceField`. Each `UserFacingMessage::from_external` call
+requires an immediately preceding, reasoned `server-fn-wire-arg-error:allow`
+marker; the static gate derives the census and rejects stale, shared, unmarked,
+or orphan doors. Decode telemetry remains fixed and source-free: public
+`invalid request arguments`, `stage = "decode"`, and no submitted value or
+detailed user message.
 
 The earlier arrangement — the gate writing the `name = "…"` literal into
 `web/src`, and a `server_fn` field on the boundary log event — was retired with
