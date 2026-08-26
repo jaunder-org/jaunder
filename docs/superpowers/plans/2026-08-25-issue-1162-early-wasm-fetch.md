@@ -45,7 +45,7 @@ Out:
     `devtool run -- cargo xtask precommit` proves no salt or formatter mutation
     remains.
 
-- [ ] Task 2: Pin the initializer prerequisite
+- [x] Task 2: Pin the initializer prerequisite
   - Contract: generator coverage proves pinned wasm-bindgen accepts an awaited
     `Promise<Response>` and carries the resolved response through its existing
     streaming and buffered paths. `initMeasured` remains a transparent

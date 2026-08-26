@@ -71,6 +71,50 @@ fn rewrite_wasm_ref(js: &str) -> String {
     js.replace(IN_WASM, OUT_WASM)
 }
 
+/// Refuse generated glue that can no longer consume a pre-started
+/// `Promise<Response>` through wasm-bindgen's existing streaming/buffered path.
+///
+/// The early-fetch shell contract depends on these generated semantics. Pinning
+/// them here turns a wasm-bindgen upgrade into a build failure instead of a
+/// silent second request or a response-body delivery change.
+fn ensure_promise_response_input_contract(js: &str) -> anyhow::Result<()> {
+    for (behavior, fragment) in [
+        (
+            "recognize a resolved Response",
+            "typeof Response === 'function' && module instanceof Response",
+        ),
+        (
+            "stream the resolved Response",
+            "WebAssembly.instantiateStreaming(module, imports)",
+        ),
+        (
+            "buffer only the streaming fallback",
+            "const bytes = await module.arrayBuffer()",
+        ),
+        (
+            "instantiate buffered fallback bytes",
+            "WebAssembly.instantiate(bytes, imports)",
+        ),
+        (
+            "fetch only string, Request, or URL initializer inputs",
+            "if (typeof module_or_path === 'string' || (typeof Request === 'function' && module_or_path instanceof Request) || (typeof URL === 'function' && module_or_path instanceof URL))",
+        ),
+        (
+            "start the URL-like input fetch",
+            "module_or_path = fetch(module_or_path)",
+        ),
+        (
+            "await a Promise<Response> before delivery",
+            "__wbg_load(await module_or_path, imports)",
+        ),
+    ] {
+        if !js.contains(fragment) {
+            bail!("wasm-bindgen glue no longer {behavior}; missing {fragment:?}");
+        }
+    }
+    Ok(())
+}
+
 /// Append the Jaunder-owned initializer without changing wasm-bindgen's default
 /// export. The wrapper surrounds the real delivery path, so its timings retain
 /// streaming versus buffered fallback behavior instead of introducing a second
@@ -293,6 +337,8 @@ pub fn run(
     let js_path = out.join(OUT_JS);
     let js = std::fs::read_to_string(&js_path)
         .with_context(|| format!("reading {}", js_path.display()))?;
+    ensure_promise_response_input_contract(&js)
+        .context("checking wasm-bindgen Promise<Response> initializer contract")?;
     std::fs::write(
         &js_path,
         append_measured_initializer(&rewrite_wasm_ref(&js), experiment_arm),
@@ -318,6 +364,24 @@ pub fn run(
 mod tests {
     use super::*;
 
+    const WASM_BINDGEN_PROMISE_RESPONSE_GLUE: &str = r#"
+async function __wbg_load(module, imports) {
+    if (typeof Response === 'function' && module instanceof Response) {
+        if (typeof WebAssembly.instantiateStreaming === 'function') {
+            return await WebAssembly.instantiateStreaming(module, imports);
+        }
+        const bytes = await module.arrayBuffer();
+        return await WebAssembly.instantiate(bytes, imports);
+    }
+}
+async function __wbg_init(module_or_path) {
+    if (typeof module_or_path === 'string' || (typeof Request === 'function' && module_or_path instanceof Request) || (typeof URL === 'function' && module_or_path instanceof URL)) {
+        module_or_path = fetch(module_or_path);
+    }
+    const { instance, module } = await __wbg_load(await module_or_path, imports);
+}
+"#;
+
     #[test]
     fn rewrites_wasm_reference_but_not_bare_identifier() {
         let js = r#"const p = new URL('csr_bg.wasm', import.meta.url); export {csr_bg};"#;
@@ -337,6 +401,25 @@ mod tests {
     fn already_renamed_is_unchanged() {
         let js = "init('jaunder.wasm')";
         assert_eq!(rewrite_wasm_ref(js), js);
+    }
+
+    #[test]
+    fn accepts_wasm_bindgen_promise_response_delivery_contract() {
+        assert!(ensure_promise_response_input_contract(WASM_BINDGEN_PROMISE_RESPONSE_GLUE).is_ok());
+    }
+
+    #[test]
+    fn rejects_wasm_bindgen_glue_that_stops_awaiting_the_input_promise() {
+        let drifted = WASM_BINDGEN_PROMISE_RESPONSE_GLUE.replace(
+            "__wbg_load(await module_or_path, imports)",
+            "__wbg_load(module_or_path, imports)",
+        );
+
+        let error = ensure_promise_response_input_contract(&drifted).unwrap_err();
+        assert!(
+            error.to_string().contains("await a Promise<Response>"),
+            "{error:#}"
+        );
     }
 
     #[test]
