@@ -115,7 +115,7 @@ Out:
     pending/claimed/done/failed transitions, exact claim/reclaim boundaries,
     retry scheduling, and restart catch-up.
 
-- [ ] Task 10: Migrate subscription storage instants.
+- [x] Task 10: Migrate subscription storage instants.
   - Contract: subscription records, dynamic row decoding, fixtures, and callers
     use `UtcInstant`; relationship behavior is unchanged.
   - Dependency: Task 1.

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use common::ids::UserId;
+use common::time::UtcInstant;
 use common::visibility::{
     SubscriberIdentity, SubscriptionPolicy, SubscriptionStatus, ViewerIdentity,
     local_subscriber_identity,
@@ -10,7 +11,9 @@ use rstest_reuse::*;
 use storage::test_support::{Backend, SeedUser, backends, seed_users};
 use storage::{PostgresSubscriptionStorage, SqliteSubscriptionStorage, SubscriptionStorage};
 
-use super::fixtures::{channel_id_by_name, local_channel_id, open_pool, raw_exec};
+use super::fixtures::{
+    channel_id_by_name, local_channel_id, open_pool, raw_exec, update_subscription_created_at,
+};
 
 // The production `SubscriptionStorage::local_channel_id()` accessor must return
 // the same id as the seeded `'local'` channel row (read here via the raw test
@@ -48,23 +51,62 @@ async fn local_channel_id_names_the_row_when_the_seed_is_missing(#[case] backend
 
 #[apply(backends)]
 #[tokio::test]
-async fn subscribe_is_idempotent_and_active(#[case] backend: Backend) {
+async fn subscribe_round_trips_fixed_created_at_and_preserves_order(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let [author, bob] = seed_users(state).await;
+    let author = SeedUser::new().seed(state).await.user_id;
+    let bob = SeedUser::new().seed(state).await.user_id;
+    let carol = SeedUser::new().seed(state).await.user_id;
     let local = local_channel_id(backend, &env).await;
-    let subscriber = local_subscriber_identity(local, bob);
-    let id1 = state
+    let bob_subscriber = local_subscriber_identity(local, bob);
+    let carol_subscriber = local_subscriber_identity(local, carol);
+    let bob_id = state
         .subscriptions
-        .subscribe(author, &subscriber)
+        .subscribe(author, &bob_subscriber)
         .await
         .unwrap();
-    let id2 = state
+    let repeated_bob_id = state
         .subscriptions
-        .subscribe(author, &subscriber)
+        .subscribe(author, &bob_subscriber)
         .await
         .unwrap();
-    assert_eq!(id1, id2, "subscribe is idempotent");
+    let carol_id = state
+        .subscriptions
+        .subscribe(author, &carol_subscriber)
+        .await
+        .unwrap();
+    assert_eq!(bob_id, repeated_bob_id, "subscribe is idempotent");
+
+    let bob_created_at: UtcInstant = "2026-01-02T03:04:05.123457Z".parse().unwrap();
+    let carol_created_at: UtcInstant = "2026-01-02T03:04:05.123456Z".parse().unwrap();
+    update_subscription_created_at(backend, &env, bob_id, bob_created_at).await;
+    update_subscription_created_at(backend, &env, carol_id, carol_created_at).await;
+
+    // The real list seam decodes the typed instant and retains its established
+    // subscription-id order rather than reordering adjacent creation timestamps.
+    let subs = state.subscriptions.list_subscribers(author).await.unwrap();
+    assert_eq!(subs.len(), 2);
+    assert_eq!(
+        subs.iter()
+            .map(|subscription| subscription.subscription_id)
+            .collect::<Vec<_>>(),
+        vec![bob_id, carol_id]
+    );
+    assert_eq!(
+        subs.iter()
+            .map(|subscription| subscription.created_at)
+            .collect::<Vec<_>>(),
+        vec![bob_created_at, carol_created_at]
+    );
+    assert_eq!(subs[0].subscriber.channel_id, local);
+    assert_eq!(subs[0].subscriber.subscriber_ref.as_ref(), bob.to_string());
+    assert_eq!(subs[0].status, SubscriptionStatus::Active);
+    assert_eq!(subs[1].subscriber.channel_id, local);
+    assert_eq!(
+        subs[1].subscriber.subscriber_ref.as_ref(),
+        carol.to_string()
+    );
+    assert_eq!(subs[1].status, SubscriptionStatus::Active);
     assert!(
         state
             .subscriptions
@@ -79,17 +121,11 @@ async fn subscribe_is_idempotent_and_active(#[case] backend: Backend) {
             .await
             .unwrap()
     );
-    // Active subscriber appears in the listing.
-    let subs = state.subscriptions.list_subscribers(author).await.unwrap();
-    assert_eq!(subs.len(), 1);
-    assert_eq!(subs[0].subscription_id, id1);
-    assert_eq!(subs[0].subscriber.channel_id, local);
-    assert_eq!(subs[0].subscriber.subscriber_ref.as_ref(), bob.to_string());
-    assert_eq!(subs[0].status, SubscriptionStatus::Active);
-    // Unsubscribe round-trips: no longer a subscriber, listing empties.
+
+    // Unsubscribe round-trips: no longer a subscriber, remaining listing retains Carol.
     state
         .subscriptions
-        .unsubscribe(author, &subscriber)
+        .unsubscribe(author, &bob_subscriber)
         .await
         .unwrap();
     assert!(
@@ -99,14 +135,10 @@ async fn subscribe_is_idempotent_and_active(#[case] backend: Backend) {
             .await
             .unwrap()
     );
-    assert!(
-        state
-            .subscriptions
-            .list_subscribers(author)
-            .await
-            .unwrap()
-            .is_empty()
-    );
+    let remaining = state.subscriptions.list_subscribers(author).await.unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].subscription_id, carol_id);
+    assert_eq!(remaining[0].created_at, carol_created_at);
 }
 
 #[apply(backends)]
