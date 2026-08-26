@@ -80,7 +80,7 @@ async fn seed_post_published_at(
     state: &Arc<AppState>,
     user_id: UserId,
     slug: &str,
-    published_at: chrono::DateTime<Utc>,
+    published_at: common::time::UtcInstant,
 ) -> PostId {
     create_rendered_post(
         &*state.posts,
@@ -90,7 +90,7 @@ async fn seed_post_published_at(
             slug: slug.parse().expect("valid slug"),
             body: parse_post_body(&format!("# {slug}\n\nbody")),
             format: PostFormat::Markdown,
-            published_at: Some(common::time::UtcInstant::from(published_at)),
+            published_at: Some(published_at),
             summary: None,
             audiences: vec![AudienceTarget::Public],
             idempotency_key: None,
@@ -113,8 +113,20 @@ async fn permalink_hides_scheduled_until_due(#[case] backend: Backend) {
     let state = &env.state;
     let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
     let user = SeedUser::new().seed(state).await;
-    seed_post_published_at(state, user.user_id, "live-one", now - Duration::hours(1)).await;
-    seed_post_published_at(state, user.user_id, "sched-one", now + Duration::hours(1)).await;
+    seed_post_published_at(
+        state,
+        user.user_id,
+        "live-one",
+        common::time::UtcInstant::from(now - Duration::hours(1)),
+    )
+    .await;
+    seed_post_published_at(
+        state,
+        user.user_id,
+        "sched-one",
+        common::time::UtcInstant::from(now + Duration::hours(1)),
+    )
+    .await;
 
     // At `now`: the live post is visible, the scheduled one is not.
     let got_live = state
@@ -173,10 +185,20 @@ async fn list_published_by_user_hides_scheduled_until_due(#[case] backend: Backe
     let state = &env.state;
     let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
     let user = SeedUser::new().seed(state).await;
-    let live =
-        seed_post_published_at(state, user.user_id, "live-one", now - Duration::hours(1)).await;
-    let sched =
-        seed_post_published_at(state, user.user_id, "sched-one", now + Duration::hours(1)).await;
+    let live = seed_post_published_at(
+        state,
+        user.user_id,
+        "live-one",
+        common::time::UtcInstant::from(now - Duration::hours(1)),
+    )
+    .await;
+    let sched = seed_post_published_at(
+        state,
+        user.user_id,
+        "sched-one",
+        common::time::UtcInstant::from(now + Duration::hours(1)),
+    )
+    .await;
 
     let at_now = state
         .posts
@@ -222,8 +244,20 @@ async fn list_published_hides_scheduled_until_due(#[case] backend: Backend) {
     let state = &env.state;
     let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
     let user_id = SeedUser::new().seed(state).await.user_id;
-    let live = seed_post_published_at(state, user_id, "live-one", now - Duration::hours(1)).await;
-    let sched = seed_post_published_at(state, user_id, "sched-one", now + Duration::hours(1)).await;
+    let live = seed_post_published_at(
+        state,
+        user_id,
+        "live-one",
+        common::time::UtcInstant::from(now - Duration::hours(1)),
+    )
+    .await;
+    let sched = seed_post_published_at(
+        state,
+        user_id,
+        "sched-one",
+        common::time::UtcInstant::from(now + Duration::hours(1)),
+    )
+    .await;
 
     let at_now = state
         .posts
@@ -267,8 +301,20 @@ async fn list_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backend) {
     let state = &env.state;
     let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
     let user_id = SeedUser::new().seed(state).await.user_id;
-    let live = seed_post_published_at(state, user_id, "live-one", now - Duration::hours(1)).await;
-    let sched = seed_post_published_at(state, user_id, "sched-one", now + Duration::hours(1)).await;
+    let live = seed_post_published_at(
+        state,
+        user_id,
+        "live-one",
+        common::time::UtcInstant::from(now - Duration::hours(1)),
+    )
+    .await;
+    let sched = seed_post_published_at(
+        state,
+        user_id,
+        "sched-one",
+        common::time::UtcInstant::from(now + Duration::hours(1)),
+    )
+    .await;
     state
         .posts
         .set_post_tags(live, &["scheduling".parse::<TagLabel>().unwrap()])
@@ -325,8 +371,20 @@ async fn list_user_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backe
     let state = &env.state;
     let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
     let user_id = SeedUser::new().seed(state).await.user_id;
-    let live = seed_post_published_at(state, user_id, "live-one", now - Duration::hours(1)).await;
-    let sched = seed_post_published_at(state, user_id, "sched-one", now + Duration::hours(1)).await;
+    let live = seed_post_published_at(
+        state,
+        user_id,
+        "live-one",
+        common::time::UtcInstant::from(now - Duration::hours(1)),
+    )
+    .await;
+    let sched = seed_post_published_at(
+        state,
+        user_id,
+        "sched-one",
+        common::time::UtcInstant::from(now + Duration::hours(1)),
+    )
+    .await;
     state
         .posts
         .set_post_tags(live, &["scheduling".parse::<TagLabel>().unwrap()])
@@ -666,9 +724,21 @@ async fn drafts_list_includes_scheduled_excludes_live(#[case] backend: Backend) 
         .seed(state)
         .await;
     // Scheduled post (published_at in the future).
-    seed_post_published_at(state, user_id, "a-sched", now + Duration::hours(2)).await;
+    seed_post_published_at(
+        state,
+        user_id,
+        "a-sched",
+        common::time::UtcInstant::from(now + Duration::hours(2)),
+    )
+    .await;
     // Live post (published_at in the past).
-    seed_post_published_at(state, user_id, "a-live", now - Duration::hours(2)).await;
+    seed_post_published_at(
+        state,
+        user_id,
+        "a-live",
+        common::time::UtcInstant::from(now - Duration::hours(2)),
+    )
+    .await;
 
     let rows = state
         .posts
@@ -716,7 +786,7 @@ async fn list_posts_gone_live_between_returns_only_window_with_tags(#[case] back
         state,
         alice.user_id,
         "in-window",
-        after + Duration::minutes(30),
+        common::time::UtcInstant::from(after + Duration::minutes(30)),
     )
     .await;
     state
@@ -725,15 +795,27 @@ async fn list_posts_gone_live_between_returns_only_window_with_tags(#[case] back
         .await
         .unwrap();
     // Exactly at the inclusive upper bound: must be returned (untagged).
-    seed_post_published_at(state, bob.user_id, "at-upto", upto).await;
+    seed_post_published_at(
+        state,
+        bob.user_id,
+        "at-upto",
+        common::time::UtcInstant::from(upto),
+    )
+    .await;
     // Exactly at the exclusive lower bound: must be excluded.
-    seed_post_published_at(state, alice.user_id, "at-after", after).await;
+    seed_post_published_at(
+        state,
+        alice.user_id,
+        "at-after",
+        common::time::UtcInstant::from(after),
+    )
+    .await;
     // Past the window: must be excluded.
     seed_post_published_at(
         state,
         alice.user_id,
         "out-window",
-        upto + Duration::hours(1),
+        common::time::UtcInstant::from(upto + Duration::hours(1)),
     )
     .await;
 
@@ -785,8 +867,13 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
 
     // A live post, newer than t0, on the site/user feeds and — once tagged —
     // on the site-tag and user-tag feeds too.
-    let post =
-        seed_post_published_at(state, alice.user_id, "live-one", now - Duration::hours(1)).await;
+    let post = seed_post_published_at(
+        state,
+        alice.user_id,
+        "live-one",
+        common::time::UtcInstant::from(now - Duration::hours(1)),
+    )
+    .await;
     state
         .posts
         .set_post_tags(post, &["rust".parse::<TagLabel>().unwrap()])
