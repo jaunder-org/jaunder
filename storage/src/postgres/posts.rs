@@ -3,9 +3,9 @@ use sqlx::{Pool, Postgres, QueryBuilder};
 
 use crate::posts::{
     DELETE_POST_TAG_BY_SLUG, INSERT_POST_TAG, MediaReferenceEvidence, PostBookkeepingRow,
-    PostMediaReferenceBackfill, PostOwnershipRow, PostTagRow, SELECT_POST_TAGS,
-    UPSERT_TAG_RETURNING_ID, media_advisory_lock_keys, media_lock_set, post_tag_diff,
-    post_tags_from_rows, push_live_media_reference_predicate, push_media_reference_evidence_cte,
+    PostMediaReferenceBackfill, PostTagRow, SELECT_POST_TAGS, UPSERT_TAG_RETURNING_ID,
+    media_advisory_lock_keys, media_lock_set, post_tag_diff, post_tags_from_rows,
+    push_live_media_reference_predicate, push_media_reference_evidence_cte,
     push_owner_media_reference_from_where, replace_legacy_post_media, update_expectation_error,
 };
 use crate::{
@@ -14,6 +14,12 @@ use crate::{
 };
 use common::ids::{PostId, TagId, UserId};
 use common::tag::TagLabel;
+
+type MediaRefRow = (
+    common::media::MediaSource,
+    common::media::ContentHash,
+    common::media::Filename,
+);
 
 pub(crate) fn finish_post_update_rejection(
     primary: Result<PostRecord, UpdatePostError>,
@@ -26,6 +32,23 @@ pub(crate) fn finish_post_update_rejection(
         host::error::ErrorClass::Transient,
         "storage.postgres.post_update.rollback_domain_rejection",
     )
+}
+
+async fn locked_update_expectation_error(
+    tx: &mut sqlx::Transaction<'_, Postgres>,
+    post_id: PostId,
+    existing: &PostBookkeepingRow,
+    input: &UpdatePostInput,
+) -> Result<Option<UpdatePostError>, sqlx::Error> {
+    let tags = sqlx::query_scalar::<_, TagLabel>(
+        "SELECT pt.tag_display FROM post_tags pt \
+         JOIN tags t ON t.tag_id = pt.tag_id \
+         WHERE pt.post_id = $1 ORDER BY t.tag_slug COLLATE \"C\"",
+    )
+    .bind(post_id)
+    .fetch_all(&mut **tx)
+    .await?;
+    Ok(update_expectation_error(post_id, existing, &tags, input))
 }
 
 pub(crate) fn finish_post_tags_not_found(
@@ -98,7 +121,7 @@ impl PostDialect for Postgres {
         .fetch_optional(&mut *tx)
         .await?;
 
-        let existing = match existing {
+        match existing {
             None => {
                 return finish_post_update_rejection(
                     Err(UpdatePostError::NotFound),
@@ -114,27 +137,18 @@ impl PostDialect for Postgres {
                 );
             }
             Some(existing) => {
-                let tags = sqlx::query_scalar::<_, TagLabel>(
-                    "SELECT pt.tag_display FROM post_tags pt
-                     JOIN tags t ON t.tag_id = pt.tag_id
-                     WHERE pt.post_id = $1 ORDER BY t.tag_slug COLLATE \"C\"",
-                )
-                .bind(post_id)
-                .fetch_all(&mut *tx)
-                .await?;
-                if let Some(error) = update_expectation_error(post_id, &existing, &tags, input) {
+                if let Some(error) =
+                    locked_update_expectation_error(&mut tx, post_id, &existing, input).await?
+                {
                     return finish_post_update_rejection(Err(error), tx.rollback().await);
                 }
             }
         }
-        let old_media: Vec<(
-            common::media::MediaSource,
-            common::media::ContentHash,
-            common::media::Filename,
-        )> = sqlx::query_as("SELECT source, sha256, filename FROM post_media WHERE post_id = $1")
-            .bind(post_id)
-            .fetch_all(&mut *tx)
-            .await?;
+        let old_media: Vec<MediaRefRow> =
+            sqlx::query_as("SELECT source, sha256, filename FROM post_media WHERE post_id = $1")
+                .bind(post_id)
+                .fetch_all(&mut *tx)
+                .await?;
         let mut locked_media = media_lock_set(input.rendered.media());
         locked_media.extend(old_media.into_iter().map(|(source, sha256, filename)| {
             common::media::MediaRef {
