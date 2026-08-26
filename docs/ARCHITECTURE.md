@@ -1952,7 +1952,7 @@ instant-backed newtype: transparent serde retains its RFC 3339 wire form,
 `now()` centralizes wall-clock construction, and its existing `value()`/`From`
 conversions remain available
 ([ADR-0072](adr/0072-timestamps-cross-boundary-as-utcinstant.md);
-[storage-owned instants use UtcInstant](adr/drafts/storage-owned-instants.md)).
+[storage-owned instants use UtcInstant](adr/0153-storage-owned-instants.md)).
 Storage records and traits, private rows/cursors/inputs/dialects,
 `BackupManifest`, and storage fixtures carry `UtcInstant`; existing
 role-specific wrappers over it remain intact. Its plain SQLx bridge and

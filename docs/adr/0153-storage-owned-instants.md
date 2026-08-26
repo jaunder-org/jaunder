@@ -1,6 +1,6 @@
-# ADR-DRAFT: Storage-owned instants use UtcInstant
+# ADR-0153: Storage-owned instants use UtcInstant
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-25
 - Issue: [#748](https://github.com/jaunder-org/jaunder/issues/748)
 
@@ -9,8 +9,8 @@
 `common::time::UtcInstant` is the domain type for an absolute UTC instant. Its
 serde-transparent RFC 3339 representation and `FromStr` normalization already
 make it the type for instants that cross the web boundary, while
-[`ADR-0072`](../0072-timestamps-cross-boundary-as-utcinstant.md) deliberately
-left storage and other internals as raw `chrono::DateTime<Utc>`.
+[`ADR-0072`](0072-timestamps-cross-boundary-as-utcinstant.md) deliberately left
+storage and other internals as raw `chrono::DateTime<Utc>`.
 
 That exception makes the storage boundary the conspicuous hole in the typed
 path: records, storage traits, SQL row shapes, cursors, inputs, dialect
