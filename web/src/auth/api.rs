@@ -26,19 +26,6 @@ use {
     tracing::Instrument,
 };
 
-/// `login`'s success payload: the viewer's operator flag, so the client writes a
-/// complete marker immediately (flash-free first login, #591).
-///
-/// It carries **no session token**. The session travels only in the `HttpOnly`
-/// `session` cookie (#533), so an XSS at login time cannot read a credential that
-/// was never handed to JS — see
-/// `docs/adr/0107-web-session-establishment-is-cookie-only.md`. Web-only wire
-/// type — the elisp frontend uses HTTP Basic auth, not this endpoint.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub struct LoginResponse {
-    pub is_operator: bool,
-}
-
 /// Caller-supplied credentials and optional device label for one login attempt.
 ///
 /// Keeping the cohesive request together makes username/password transposition a
@@ -50,9 +37,9 @@ pub struct LoginRequest {
     pub label: Option<SessionLabel>,
 }
 
-/// Authenticates a user.  Sets the `HttpOnly` `session` cookie and returns a
-/// [`LoginResponse`] carrying the viewer's operator flag — deliberately not the
-/// session token (#533).
+/// Authenticates a user. Sets the `HttpOnly` `session` cookie and returns the
+/// authenticated viewer's [`super::SessionUser`] — deliberately not the session token
+/// (#533).
 ///
 /// `label` is a typed wire arg (ADR-0065): the [`SessionLabel`] serde bridge trims it
 /// and rejects whitespace-only or over-long values at decode. It has **no client-side
@@ -64,7 +51,7 @@ pub struct LoginRequest {
 /// `label` decodes to `None`: the `Option` form layer absorbs a present-but-empty
 /// field before `SessionLabel`'s deserializer runs.
 #[macros::server(skip_all)]
-pub async fn login(request: LoginRequest) -> WebResult<LoginResponse> {
+pub async fn login(request: LoginRequest) -> WebResult<super::SessionUser> {
     let LoginRequest {
         username,
         password,
@@ -123,9 +110,10 @@ pub async fn login(request: LoginRequest) -> WebResult<LoginResponse> {
     set_session_cookie(&raw_token);
     leptos_axum::redirect("/");
     // The session travels only in the HttpOnly cookie set above (#533) — `raw_token`
-    // is never returned, so the body carries just the marker seed. `record` is the
-    // authenticated `UserRecord`, which already has `is_operator` — no extra query.
-    Ok(LoginResponse {
+    // is never returned. The authenticated `UserRecord` supplies the complete marker
+    // seed without another query.
+    Ok(super::SessionUser {
+        username: record.username,
         is_operator: record.is_operator,
     })
 }

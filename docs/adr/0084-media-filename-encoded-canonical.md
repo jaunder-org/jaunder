@@ -179,7 +179,7 @@ canonical-filename decision above are unchanged.
   relying on. `MediaLinkEntry.title` stays typed `Filename` and the Atom
   renderer decodes at the single render site.
 
-- **`UploadResponse.filename` stays canonical.** It is a lookup key, passed to
+- **`UploadedMedia.filename` stays canonical.** It is a lookup key, passed to
   `get_media` by the AtomPub collection handler, not a display value.
 
 - **Legibility regresses slightly.** Backup NDJSON and direct database

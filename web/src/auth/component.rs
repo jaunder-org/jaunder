@@ -3,7 +3,7 @@
 //! [`marker_storage`](super::marker_storage) binding) directly, no `cfg` gates
 //! inside this file.
 
-use super::{Login, LoginRequest, LoginResponse, Logout, SessionUser, clear_session, set_session};
+use super::{Login, LoginRequest, Logout, SessionUser, clear_session, set_session};
 use crate::error::WebError;
 use crate::forms::{Field, ValidatedInput, server_action_submit};
 use crate::topbar::Topbar;
@@ -16,20 +16,12 @@ use leptos::prelude::*;
 pub fn LoginPage() -> impl IntoView {
     let login_action = ServerAction::<Login>::new();
 
-    // On a successful login, set the shared session (#591): updates the reactive
-    // signal so the chrome flips without a document reload, and mirrors it into the
-    // advisory marker (#181, ADR-0044) for the next pre-paint boot. Read the
-    // *submitted* username from the action input, not the live `username` field,
-    // which the user could have edited between submit and response. `is_operator`
-    // comes from the login response, so operator chrome is flash-free on first login.
+    // On a successful login, store the returned session directly: this updates the
+    // reactive signal so the chrome flips without a document reload, and mirrors it
+    // into the advisory marker (#181, ADR-0044) for the next pre-paint boot.
     Effect::new(move |_| {
-        if let Some(Ok(resp)) = login_action.value().get()
-            && let Some(input) = login_action.input().get()
-        {
-            set_session(SessionUser {
-                username: input.request.username.clone(),
-                is_operator: resp.is_operator,
-            });
+        if let Some(Ok(session)) = login_action.value().get() {
+            set_session(session);
         }
     });
 
@@ -42,7 +34,7 @@ pub fn LoginPage() -> impl IntoView {
                     login_action
                         .value()
                         .get()
-                        .map(|r: Result<LoginResponse, WebError>| match r {
+                        .map(|r: Result<SessionUser, WebError>| match r {
                             Ok(_) => {
                                 view! { <p class="j-loading">"Logging in\u{2026}"</p> }.into_any()
                             }

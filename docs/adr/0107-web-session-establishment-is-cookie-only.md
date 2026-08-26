@@ -27,10 +27,10 @@ instead. The leak was inertia, not a feature.
 the auth path sets the `HttpOnly` `session` cookie and returns **no
 session-token material** in its response body.
 
-Concretely: `register` returns `()`, and `login` returns a `LoginResponse`
-carrying only `is_operator` — the marker seed added by #591 so operator chrome
-is flash-free on first login. `LoginResponse` survives because of that field,
-not because of the token it used to hold.
+Concretely: `register` returns `()`, and `login` returns the complete advisory
+`SessionUser` identity: the authenticated record's canonical `username` and
+`is_operator`. It contains no credential; the `HttpOnly` cookie remains the
+session credential.
 
 ### The deliberate exception
 

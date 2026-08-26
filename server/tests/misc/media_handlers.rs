@@ -151,7 +151,7 @@ async fn serve_returns_200_with_cache_headers(#[case] backend: Backend) {
     let storage = TempDir::new().unwrap();
 
     // Upload via the `upload_media` server fn so a file lands on `storage`'s disk;
-    // the fn returns 200 with the bare `UploadResponse` JSON.
+    // the fn returns 200 with the bare `UploadedMedia` JSON.
     let (status, body) = post_multipart(
         &state,
         &storage,

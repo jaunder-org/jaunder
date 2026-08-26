@@ -18,7 +18,7 @@ use tokio::io::AsyncWriteExt;
 use common::ids::UserId;
 use common::media::{
     ByteSize, ContentHash, ContentType, Filename, MaxFileSize, MediaRef, MediaSource,
-    UploadResponse, UserQuota, detect_content_type, media_path, media_url,
+    UploadedMedia, UserQuota, detect_content_type, media_path, media_url,
 };
 
 use crate::{CreateMediaError, MediaRecord, MediaStorage, SiteConfigStorage, TryDeleteOutcome};
@@ -38,7 +38,7 @@ pub enum MediaError {
     Internal(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
-// `UploadResponse` is defined in `common::media`, not here — it is the `#[server]` fn's
+// `UploadedMedia` is defined in `common::media`, not here — it is the `#[server]` fn's
 // return type, which must be nameable on the wasm client build where `storage` is not
 // compiled (`storage` is a `server`-gated `web` dep). `common` is ungated and reachable
 // by storage + web (both targets) + server, so the manager returns it directly with no
@@ -88,7 +88,7 @@ impl MediaManager {
         filename: &Filename,
         content_type: Option<ContentType>,
         stream: S,
-    ) -> anyhow::Result<UploadResponse>
+    ) -> anyhow::Result<UploadedMedia>
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin,
         E: std::error::Error + Send + Sync + 'static,
@@ -106,7 +106,7 @@ impl MediaManager {
         filename: &Filename,
         content_type: Option<ContentType>,
         stream: S,
-    ) -> anyhow::Result<UploadResponse>
+    ) -> anyhow::Result<UploadedMedia>
     where
         S: Stream<Item = Result<Bytes, E>> + Unpin,
         E: std::error::Error + Send + Sync + 'static,
@@ -149,7 +149,7 @@ impl MediaManager {
     /// Emits the single `media_upload` failure metric for a completed upload attempt.
     /// The success metrics are emitted in `finalize_upload`, so this fires only on
     /// the `Err` path — keeping emission to exactly once per upload.
-    fn emit_failure_metric(result: &anyhow::Result<UploadResponse>) {
+    fn emit_failure_metric(result: &anyhow::Result<UploadedMedia>) {
         if let Err(err) = result {
             host::metrics::media_upload(Self::upload_outcome(err.downcast_ref::<MediaError>()));
         }
@@ -297,7 +297,7 @@ impl MediaManager {
         metadata: UploadMetadata,
         tmp_path: &Path,
         user_quota: UserQuota,
-    ) -> anyhow::Result<UploadResponse> {
+    ) -> anyhow::Result<UploadedMedia> {
         if let Err(e) = self
             .check_quota(user_id, metadata.size_bytes, user_quota)
             .await
@@ -348,7 +348,7 @@ impl MediaManager {
             &metadata.sha256_hex,
             &metadata.filename,
         );
-        Ok(UploadResponse {
+        Ok(UploadedMedia {
             sha256: metadata.sha256_hex,
             filename: metadata.filename,
             content_type: metadata.content_type,
@@ -370,7 +370,7 @@ impl MediaManager {
         filename: &Filename,
         content_type: ContentType,
         bytes: &[u8],
-    ) -> anyhow::Result<UploadResponse> {
+    ) -> anyhow::Result<UploadedMedia> {
         let result = self
             .upload_bytes_inner(user_id, filename, content_type, bytes)
             .await;
@@ -384,7 +384,7 @@ impl MediaManager {
         filename: &Filename,
         content_type: ContentType,
         bytes: &[u8],
-    ) -> anyhow::Result<UploadResponse> {
+    ) -> anyhow::Result<UploadedMedia> {
         let (max_file_size, user_quota) = self.get_limits().await?;
         // `filename` and `content_type` were validated at their respective inbound
         // boundaries, so neither needs revalidation in the persistence seam.
@@ -549,7 +549,7 @@ mod tests {
         )
     }
 
-    fn upload_ref(response: &UploadResponse) -> MediaRef {
+    fn upload_ref(response: &UploadedMedia) -> MediaRef {
         MediaRef {
             source: MediaSource::Upload,
             sha256: response.sha256.clone(),
@@ -671,7 +671,7 @@ mod tests {
         let quota = anyhow::anyhow!(MediaError::InsufficientStorage);
         let (result, trace) = crate::helpers::swallowed_test::capture(|| {
             MediaManager::finish_temp_cleanup(
-                Err::<UploadResponse, _>(quota),
+                Err::<UploadedMedia, _>(quota),
                 cleanup_error(),
                 "storage.media.quota_temp_cleanup",
             )
