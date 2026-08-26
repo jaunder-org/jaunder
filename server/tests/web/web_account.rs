@@ -254,7 +254,7 @@ async fn create_invite_nested_request_maps_fields(#[case] backend: Backend) {
     );
     let invites = state.invites.list_invites().await.unwrap();
     assert_eq!(invites.len(), 1, "expected one stored invite");
-    let stored_ttl = invites[0].expires_at - invites[0].created_at;
+    let stored_ttl = invites[0].expires_at.value() - invites[0].created_at.value();
     assert!(
         stored_ttl <= chrono::Duration::hours(37)
             && stored_ttl >= chrono::Duration::hours(37) - chrono::Duration::seconds(1),

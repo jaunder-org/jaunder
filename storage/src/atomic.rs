@@ -159,7 +159,9 @@ mod tests {
     async fn seed_invite(state: &std::sync::Arc<crate::AppState>) -> InviteCode {
         state
             .invites
-            .create_invite(chrono::Utc::now() + chrono::Duration::hours(1))
+            .create_invite(common::time::UtcInstant::from(
+                chrono::Utc::now() + chrono::Duration::hours(1),
+            ))
             .await
             .unwrap()
     }

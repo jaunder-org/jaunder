@@ -346,8 +346,9 @@ pub async fn cmd_user_invite(
 
     // The 1..=336 bound lives in `InviteTtlHours` (clap rejects an out-of-range `--expires-in`
     // at parse), so no in-body overflow check is needed.
-    let expires_at =
-        chrono::Utc::now() + chrono::Duration::hours(expires_in.unwrap_or_default().value());
+    let expires_at = common::time::UtcInstant::from(
+        chrono::Utc::now() + chrono::Duration::hours(expires_in.unwrap_or_default().value()),
+    );
 
     let code = state.invites().create_invite(expires_at).await?;
     host::metrics::invite(host::metrics::InviteEvent::Created);
@@ -1730,7 +1731,7 @@ mod tests {
             .await
             .expect("open db");
 
-        let before = chrono::Utc::now();
+        let before = common::time::UtcInstant::from(chrono::Utc::now());
         cmd_user_invite(&storage_args, Some(parse_invite_ttl_hours("24")))
             .await
             .expect("create invite");

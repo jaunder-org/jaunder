@@ -3,6 +3,7 @@ use chrono::Utc;
 use common::config_key::SiteConfigKey;
 use common::password::Password;
 use common::session_label::MAX_SESSION_LABEL_CHARS;
+use common::time::UtcInstant;
 use common::token::RawToken;
 use common::username::Username;
 use server_fn::ServerFn;
@@ -192,7 +193,7 @@ async fn register_records_decision_determinants_on_the_server_fn_span() {
         .unwrap();
     let ignored_open_code = state
         .invites
-        .create_invite(Utc::now() + chrono::Duration::hours(24))
+        .create_invite(UtcInstant::from(Utc::now() + chrono::Duration::hours(24)))
         .await
         .unwrap();
     assert_eq!(
@@ -207,7 +208,7 @@ async fn register_records_decision_determinants_on_the_server_fn_span() {
         .unwrap();
     let code = state
         .invites
-        .create_invite(Utc::now() + chrono::Duration::hours(24))
+        .create_invite(UtcInstant::from(Utc::now() + chrono::Duration::hours(24)))
         .await
         .unwrap();
     assert_eq!(
@@ -364,7 +365,7 @@ async fn register_nested_request_maps_invite_code(#[case] backend: Backend) {
         .set(SiteConfigKey::SiteRegistrationPolicy, "invite_only")
         .await
         .unwrap();
-    let expires_at = Utc::now() + chrono::Duration::hours(24);
+    let expires_at = UtcInstant::from(Utc::now() + chrono::Duration::hours(24));
     let code = state.invites.create_invite(expires_at).await.unwrap();
 
     let (status, set_cookie, _body) = post_server_fn_with_secure_flag(
@@ -469,7 +470,7 @@ async fn register_invite_only_expired_code_returns_error(#[case] backend: Backen
         .unwrap();
 
     // Create an already-expired invite.
-    let expires_at = Utc::now() - chrono::Duration::hours(1);
+    let expires_at = UtcInstant::from(Utc::now() - chrono::Duration::hours(1));
     let code = state.invites.create_invite(expires_at).await.unwrap();
 
     let (status, _, _) = post_server_fn_with_secure_flag(

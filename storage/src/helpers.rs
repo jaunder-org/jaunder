@@ -36,14 +36,14 @@ impl_role_instant!(SessionLastUsedAt, UtcInstant);
 /// The `invites.created_at` storage timestamp role, distinct from `expires_at`
 /// so mappings cannot transpose silently (#751).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
-struct InviteCreatedAt(DateTime<Utc>);
-impl_role_instant!(InviteCreatedAt, DateTime<Utc>);
+struct InviteCreatedAt(UtcInstant);
+impl_role_instant!(InviteCreatedAt, UtcInstant);
 
 /// The `invites.expires_at` storage timestamp role, distinct from `created_at`
 /// so mappings cannot transpose silently (#751).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
-struct InviteExpiresAt(DateTime<Utc>);
-impl_role_instant!(InviteExpiresAt, DateTime<Utc>);
+struct InviteExpiresAt(UtcInstant);
+impl_role_instant!(InviteExpiresAt, UtcInstant);
 
 /// Preserves an already-selected primary result while reporting a failed
 /// secondary operation exactly once. Owning modules wrap this with private,
@@ -172,7 +172,7 @@ struct InviteRecordParts {
     code: InviteCode,
     created_at: InviteCreatedAt,
     expires_at: InviteExpiresAt,
-    used_at: Option<DateTime<Utc>>,
+    used_at: Option<UtcInstant>,
     used_by: Option<UserId>,
 }
 
@@ -186,9 +186,9 @@ fn build_invite_record(
     }: InviteRecordParts,
 ) -> InviteRecord {
     // The `code` column decodes straight into `InviteCode` via the sqlx bridge (#438),
-    // `used_by` through the id bridge (#686), and the adjacent created/expires pair
-    // through distinct role wrappers (#751), so corrupt/migrated values are rejected
-    // before we ever get here and adjacent timestamp swaps fail at the row-to-parts seam.
+    // `used_by` through the id bridge (#686), and the created/expires pair through
+    // distinct role wrappers (#751), so corrupt/migrated values are rejected before
+    // we ever get here and timestamp swaps fail at the row-to-parts seam.
     InviteRecord {
         code,
         created_at: created_at.value(),
@@ -316,7 +316,7 @@ pub(crate) struct InviteRow {
     code: InviteCode,
     created_at: InviteCreatedAt,
     expires_at: InviteExpiresAt,
-    used_at: Option<DateTime<Utc>>,
+    used_at: Option<UtcInstant>,
     used_by: Option<UserId>,
 }
 
@@ -328,6 +328,20 @@ pub(crate) fn invite_record_from_row(row: InviteRow) -> InviteRecord {
         used_at: row.used_at,
         used_by: row.used_by,
     })
+}
+
+pub(crate) type InviteTokenStateRow = (Option<UtcInstant>, UtcInstant);
+
+pub(crate) fn classify_invite_token_state(
+    row: Option<InviteTokenStateRow>,
+    now: UtcInstant,
+) -> TokenState {
+    match row {
+        None => TokenState::Missing,
+        Some((Some(_), _)) => TokenState::AlreadyUsed,
+        Some((None, expires_at)) if expires_at <= now => TokenState::Expired,
+        Some((None, _)) => TokenState::Claimable,
+    }
 }
 
 pub(crate) type MediaRow = (
@@ -723,9 +737,9 @@ mod tests {
 
     #[test]
     fn test_build_invite_record() {
-        let created_at = Utc::now();
-        let expires_at = created_at + chrono::Duration::days(7);
-        let used_at = created_at + chrono::Duration::hours(1);
+        let created_at = UtcInstant::from(Utc::now());
+        let expires_at = UtcInstant::from(created_at.value() + chrono::Duration::days(7));
+        let used_at = UtcInstant::from(created_at.value() + chrono::Duration::hours(1));
         let record = build_invite_record(InviteRecordParts {
             code: parse_invite_code("invite-code"),
             created_at: created_at.into(),
@@ -924,17 +938,17 @@ mod tests {
         assert_eq!(session_record.created_at, now);
         assert_eq!(session_record.last_used_at, last_used_at);
 
-        let expires_at = now.value() + chrono::Duration::days(7);
+        let expires_at = UtcInstant::from(now.value() + chrono::Duration::days(7));
         let invite = InviteRow {
             code: parse_invite_code("code"),
-            created_at: now.value().into(),
+            created_at: now.into(),
             expires_at: expires_at.into(),
             used_at: None,
             used_by: None,
         };
         let invite_record = invite_record_from_row(invite);
         assert_eq!(invite_record.code.as_ref(), "code");
-        assert_eq!(invite_record.created_at, now.value());
+        assert_eq!(invite_record.created_at, now);
         assert_eq!(invite_record.expires_at, expires_at);
     }
 
@@ -976,6 +990,43 @@ mod tests {
             classify_token_state(Some((None, now + chrono::Duration::seconds(1))), now),
             TokenState::Claimable
         );
+    }
+
+    #[test]
+    fn invite_token_state_classifier_preserves_roles_and_exact_expiry() {
+        let now: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
+        let created_at: UtcInstant = "2099-01-01T03:04:05.123456Z".parse().unwrap();
+        let expired_at: UtcInstant = "2099-01-02T03:04:05.123455Z".parse().unwrap();
+        let claimable_at: UtcInstant = "2099-01-02T03:04:05.123457Z".parse().unwrap();
+        let used_at: UtcInstant = "2099-01-02T03:04:05.123454Z".parse().unwrap();
+
+        assert_eq!(classify_invite_token_state(None, now), TokenState::Missing);
+        assert_eq!(
+            classify_invite_token_state(Some((Some(used_at), claimable_at)), now),
+            TokenState::AlreadyUsed
+        );
+        assert_eq!(
+            classify_invite_token_state(Some((None, now)), now),
+            TokenState::Expired
+        );
+        assert_eq!(
+            classify_invite_token_state(Some((None, expired_at)), now),
+            TokenState::Expired
+        );
+        assert_eq!(
+            classify_invite_token_state(Some((None, claimable_at)), now),
+            TokenState::Claimable
+        );
+        let parts = InviteRecordParts {
+            code: parse_invite_code("role-ordering"),
+            created_at: InviteCreatedAt::from(created_at),
+            expires_at: InviteExpiresAt::from(claimable_at),
+            used_at: None,
+            used_by: None,
+        };
+        let record = build_invite_record(parts);
+        assert_eq!(record.created_at, created_at);
+        assert_eq!(record.expires_at, claimable_at);
     }
 
     #[test]
@@ -1093,9 +1144,9 @@ mod tests {
 
     #[test]
     fn invite_record_from_row_maps_some_fields() {
-        let now = Utc::now();
-        let expires_at = now + chrono::Duration::days(7);
-        let used_at = now + chrono::Duration::hours(1);
+        let now = UtcInstant::from(Utc::now());
+        let expires_at = UtcInstant::from(now.value() + chrono::Duration::days(7));
+        let used_at = UtcInstant::from(now.value() + chrono::Duration::hours(1));
         let row = InviteRow {
             code: parse_invite_code("code"),
             created_at: now.into(),

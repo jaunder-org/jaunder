@@ -1,12 +1,13 @@
 //! Invite code storage.
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use host::invite::InviteCode;
 use sqlx::{Database, Pool};
 
 use crate::backend::Backend;
 use common::ids::UserId;
+use common::time::UtcInstant;
 
 /// An invite code record returned by [`InviteStorage`] queries.
 #[derive(Clone, Debug)]
@@ -14,11 +15,11 @@ pub struct InviteRecord {
     /// The invite code.
     pub code: InviteCode,
     /// When the code was generated.
-    pub created_at: DateTime<Utc>,
+    pub created_at: UtcInstant,
     /// When the code will expire.
-    pub expires_at: DateTime<Utc>,
+    pub expires_at: UtcInstant,
     /// When the code was consumed (None if still active).
-    pub used_at: Option<DateTime<Utc>>,
+    pub used_at: Option<UtcInstant>,
     /// ID of the user who was created using this code.
     pub used_by: Option<UserId>,
 }
@@ -31,7 +32,7 @@ pub trait InviteStorage: Send + Sync {
     /// Generates and stores a new invite code.
     ///
     /// Returns the generated [`InviteCode`].
-    async fn create_invite(&self, expires_at: DateTime<Utc>) -> sqlx::Result<InviteCode>;
+    async fn create_invite(&self, expires_at: UtcInstant) -> sqlx::Result<InviteCode>;
 
     /// Returns a list of all invite codes in the system.
     async fn list_invites(&self) -> sqlx::Result<Vec<InviteRecord>>;
@@ -61,17 +62,17 @@ where
     // `InviteCode` binds/decodes as itself via the ADR-0071 sqlx bridge.
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
-    for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
-    async fn create_invite(&self, expires_at: DateTime<Utc>) -> sqlx::Result<InviteCode> {
+    async fn create_invite(&self, expires_at: UtcInstant) -> sqlx::Result<InviteCode> {
         // Mint a typed `InviteCode` up front (infallible trusted door) and bind it
         // directly, so the code is a domain value end-to-end with no raw-`String` bind
         // and no fallible re-parse on the return (#438).
         let code = host::invite::generate();
-        let now = Utc::now();
+        let now = UtcInstant::from(Utc::now());
 
         sqlx::query("INSERT INTO invites (code, created_at, expires_at) VALUES ($1, $2, $3)")
             .bind(&code)
@@ -113,7 +114,7 @@ mod tests {
         // Keep the whole `TestEnv` bound: dropping `base` unlinks the SQLite file
         // (ADR-0053 TempDir hazard).
         let env = backend.setup().await;
-        let expires_at = Utc::now() + chrono::Duration::days(7);
+        let expires_at = UtcInstant::from(Utc::now() + chrono::Duration::days(7));
 
         // `create_invite` binds a typed `InviteCode`; `list_invites` decodes the
         // `code` column straight back into `InviteCode` — exercising both bridge
@@ -129,8 +130,8 @@ mod tests {
     #[tokio::test]
     async fn list_invites_rejects_a_malformed_code_column(#[case] backend: Backend) {
         let TestEnv { state, base } = backend.setup().await;
-        let now = Utc::now();
-        let expires_at = now + chrono::Duration::days(7);
+        let now = UtcInstant::from(Utc::now());
+        let expires_at = UtcInstant::from(now.value() + chrono::Duration::days(7));
 
         // Seed a row whose `code` column holds a value `InviteCode::from_str`
         // rejects (a space is not a base64url character), binding it as a raw `&str`
@@ -162,7 +163,7 @@ mod tests {
     async fn create_invite_with_closed_pool_returns_error(#[case] backend: Backend) {
         let TestEnv { state, base } = backend.setup().await;
         base.close_pool().await;
-        let expires_at = chrono::Utc::now();
+        let expires_at = UtcInstant::from(chrono::Utc::now());
         let result = state.invites.create_invite(expires_at).await;
         assert!(result.is_err());
     }

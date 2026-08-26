@@ -2,11 +2,15 @@ use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::SqlitePool;
 
-use crate::helpers::{TokenState, TokenStateRow, classify_token_state};
+use crate::helpers::{
+    InviteTokenStateRow, TokenState, TokenStateRow, classify_invite_token_state,
+    classify_token_state,
+};
 use crate::{AtomicOps, ConfirmPasswordResetError, RegisterWithInviteError};
 use common::display_name::DisplayName;
 use common::ids::UserId;
 use common::password::Password;
+use common::time::UtcInstant;
 use common::token::RawToken;
 use common::username::Username;
 use host::invite::InviteCode;
@@ -156,15 +160,15 @@ impl AtomicOps for SqliteAtomicOps {
             // specific error the caller needs. Reporting them distinctly is what keeps this a
             // read-then-write transaction (hence BEGIN IMMEDIATE above), not a single-statement
             // claim.
-            let row = sqlx::query_as::<_, TokenStateRow>(
+            let row = sqlx::query_as::<_, InviteTokenStateRow>(
                 "SELECT used_at, expires_at FROM invites WHERE code = $1",
             )
             .bind(invite_code)
             .fetch_optional(&mut *conn)
             .await?;
 
-            let now = Utc::now();
-            match classify_token_state(row, now) {
+            let now = UtcInstant::from(Utc::now());
+            match classify_invite_token_state(row, now) {
                 TokenState::Missing => return Err(RegisterWithInviteError::InviteNotFound),
                 TokenState::AlreadyUsed => return Err(RegisterWithInviteError::InviteAlreadyUsed),
                 TokenState::Expired => return Err(RegisterWithInviteError::InviteExpired),

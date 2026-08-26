@@ -57,7 +57,7 @@ Out:
   - Verification: `#[apply(backends)]` tests cover both roles, direct
     bind/decode, and stale/exact/fresh touch boundaries without new clock reads.
 
-- [ ] Task 4: Migrate invite storage instants.
+- [x] Task 4: Migrate invite storage instants.
   - Contract: invite records, create inputs, row helpers, fixtures, and callers
     use `UtcInstant`; created/expires role wrappers remain distinct and nullable
     `used_at` retains its meaning.
