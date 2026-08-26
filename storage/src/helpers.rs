@@ -2,7 +2,6 @@
 
 use std::io;
 
-use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::role_instant::impl_role_instant;
@@ -352,7 +351,7 @@ pub(crate) type MediaRow = (
     ContentType,
     ByteSize,
     Option<MediaSourceUrl>,
-    DateTime<Utc>,
+    UtcInstant,
 );
 
 pub(crate) fn media_record_from_row(row: MediaRow) -> MediaRecord {
@@ -912,7 +911,7 @@ mod tests {
             parse_content_type("image/png"),
             parse_byte_size("42"),
             None,
-            Utc::now(),
+            UtcInstant::from(Utc::now()),
         );
         let record = media_record_from_row(row);
         assert_eq!(record.user_id, UserId::from(1));

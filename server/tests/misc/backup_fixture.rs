@@ -1,4 +1,3 @@
-use chrono::{DateTime, Utc};
 use common::ids::{PostId, UserId};
 use common::media::MediaSource;
 use common::password::Password;
@@ -8,6 +7,7 @@ use common::test_support::{
     parse_audience_name, parse_byte_size, parse_content_hash, parse_content_type,
     parse_display_name, parse_filename,
 };
+use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::{AudienceTarget, ViewerIdentity, local_subscriber_identity};
 use jaunder::cli::StorageArgs;
@@ -43,7 +43,7 @@ pub struct BackupFixtureIds {
 
 /// Fixed microsecond-precision publish time: deterministic and safe from
 /// Postgres's µs quantization, so a restored value can be asserted exactly (DEC-D).
-pub fn fixture_published_at() -> DateTime<Utc> {
+pub fn fixture_published_at() -> UtcInstant {
     "2026-04-29T12:34:56.789012Z"
         .parse()
         .expect("valid fixture timestamp")
@@ -66,7 +66,7 @@ pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
         .await
         .expect("create user");
     let public = SeedRawPost::new(author)
-        .published_at(common::time::UtcInstant::from(fixture_published_at()))
+        .published_at(fixture_published_at())
         .tags(["Backup-Test"])
         .seed(&state)
         .await;
@@ -127,7 +127,7 @@ async fn seed_named_audience_post(
         .await
         .expect("add audience member");
     let named_post = SeedRawPost::new(author)
-        .published_at(common::time::UtcInstant::from(fixture_published_at()))
+        .published_at(fixture_published_at())
         .audiences(vec![AudienceTarget::Named(audience)])
         .seed(state)
         .await
@@ -188,10 +188,7 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
     assert_eq!(post.title.as_ref(), Some(&ids.public_post_title));
     assert_eq!(post.slug, ids.public_post_slug);
     // Value interop (DEC-D): the timestamp survives with its value.
-    assert_eq!(
-        post.published_at,
-        Some(common::time::UtcInstant::from(fixture_published_at()))
-    );
+    assert_eq!(post.published_at, Some(fixture_published_at()));
 
     // Tags ride along on the post record already read above (#771).
     let tags = &post.tags;

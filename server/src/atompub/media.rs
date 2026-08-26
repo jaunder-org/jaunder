@@ -15,7 +15,6 @@ use common::atompub::{MediaLinkEntry, render_media_link_entry};
 use common::media::{ContentHash, Filename, MediaRef, MediaSource, media_url};
 use common::root_relative_url::RootRelativeUrl;
 use common::tagged_url::{BaseUrl, EditMediaUriUrl, EditUriUrl, compose};
-use common::time::UtcInstant;
 use common::username::Username;
 use storage::{MediaManager, MediaRecord, MediaStorage, SiteConfigStorage};
 use web::auth;
@@ -50,7 +49,6 @@ fn media_link_entry(record: &MediaRecord, base: &BaseUrl, username: &Username) -
         url
     };
     let edit: EditUriUrl = compose(base, &edit_path);
-    let timestamp = UtcInstant::from(record.created_at);
     MediaLinkEntry {
         // The member URL *is* the entry's atom:id — the edit URI is the canonical
         // identifier in the AtomPub member representation.
@@ -61,8 +59,8 @@ fn media_link_entry(record: &MediaRecord, base: &BaseUrl, username: &Username) -
         // The content source *is* the media binary; one resource, two link rels.
         content_src: binary.retag(),
         content_type: record.content_type.clone(),
-        published: timestamp,
-        updated: timestamp,
+        published: record.created_at,
+        updated: record.created_at,
     }
 }
 

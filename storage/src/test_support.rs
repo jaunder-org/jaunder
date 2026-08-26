@@ -1471,7 +1471,7 @@ pub async fn seed_media(state: &Arc<AppState>, user_id: UserId, name: &str) -> M
             content_type: detect_content_type(&media.filename),
             size_bytes: parse_byte_size("1"),
             source_url: None,
-            created_at: Utc::now(),
+            created_at: UtcInstant::from(Utc::now()),
         })
         .await
         .expect("seed media should be created");

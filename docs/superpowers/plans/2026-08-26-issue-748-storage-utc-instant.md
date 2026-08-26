@@ -88,7 +88,7 @@ Out:
     explicit `now`; AtomPub/web RFC 3339 forms, offset normalization, and
     browser local-wall-clock conversion remain unchanged.
 
-- [ ] Task 7: Migrate media storage instants.
+- [x] Task 7: Migrate media storage instants.
   - Contract: media records, private helper rows, fixtures, and
     server/web/AtomPub callers use `UtcInstant`; content and creation semantics
     remain unchanged.

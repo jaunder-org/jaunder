@@ -106,7 +106,7 @@ pub async fn list_mine(
                 content_type: r.content_type,
                 size_bytes: r.size_bytes,
                 url,
-                created_at: UtcInstant::from(r.created_at),
+                created_at: r.created_at,
             }
         })
         .collect())
