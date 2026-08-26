@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use bytes::Bytes;
-use chrono::Utc;
 use futures_util::{Stream, StreamExt, TryStreamExt, stream};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -20,6 +19,7 @@ use common::media::{
     ByteSize, ContentHash, ContentType, Filename, MaxFileSize, MediaRef, MediaSource,
     UploadedMedia, UserQuota, detect_content_type, media_path, media_url,
 };
+use common::time::UtcInstant;
 
 use crate::{CreateMediaError, MediaRecord, MediaStorage, SiteConfigStorage, TryDeleteOutcome};
 
@@ -275,7 +275,7 @@ impl MediaManager {
             content_type: content_type.clone(),
             size_bytes,
             source_url: None,
-            created_at: Utc::now(),
+            created_at: UtcInstant::now(),
         };
         match self.media.create_media(&record).await {
             Ok(()) | Err(CreateMediaError::AlreadyExists) => Ok(()),

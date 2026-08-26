@@ -4,6 +4,7 @@ use common::test_support::{
     parse_byte_size, parse_content_hash, parse_content_type, parse_filename, parse_page_offset,
     parse_row_limit, parse_url,
 };
+use common::time::UtcInstant;
 use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, SeedUser, backends, seed_users};
@@ -25,7 +26,7 @@ fn make_media_record(
         content_type: parse_content_type("image/jpeg"),
         size_bytes: parse_byte_size("12345"),
         source_url: None,
-        created_at: chrono::Utc::now(),
+        created_at: UtcInstant::now(),
     }
 }
 
@@ -35,10 +36,13 @@ async fn create_and_get_media(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
     let user_id = SeedUser::new().seed(state).await.user_id;
-
     let sha256 =
         parse_content_hash("abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234");
-    let record = make_media_record(user_id, &sha256, "test.jpg", MediaSource::Upload);
+    let created_at = "2026-08-26T12:34:56.789012Z"
+        .parse::<UtcInstant>()
+        .expect("valid microsecond instant");
+    let mut record = make_media_record(user_id, &sha256, "test.jpg", MediaSource::Upload);
+    record.created_at = created_at;
     state.media.create_media(&record).await.unwrap();
 
     let fetched = state
@@ -50,14 +54,23 @@ async fn create_and_get_media(#[case] backend: Backend) {
             &MediaSource::Upload,
         )
         .await
-        .unwrap();
-    let fetched = fetched.expect("record should exist");
+        .unwrap()
+        .expect("record should exist");
     assert_eq!(fetched.user_id, user_id);
     assert_eq!(fetched.sha256, sha256);
     assert_eq!(fetched.filename, "test.jpg");
     assert_eq!(fetched.source, MediaSource::Upload);
     assert_eq!(fetched.content_type, "image/jpeg");
     assert_eq!(fetched.size_bytes, parse_byte_size("12345"));
+    assert_eq!(fetched.created_at, created_at);
+
+    let listed = state
+        .media
+        .list_media(user_id, None, parse_row_limit("10"), parse_page_offset("0"))
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].created_at, created_at);
 }
 
 #[apply(backends)]

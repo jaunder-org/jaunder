@@ -159,7 +159,9 @@ mod tests {
     async fn seed_invite(state: &std::sync::Arc<crate::AppState>) -> InviteCode {
         state
             .invites
-            .create_invite(chrono::Utc::now() + chrono::Duration::hours(1))
+            .create_invite(common::time::UtcInstant::from(
+                chrono::Utc::now() + chrono::Duration::hours(1),
+            ))
             .await
             .unwrap()
     }
@@ -302,7 +304,10 @@ mod tests {
         let raw_token = env
             .state
             .password_resets
-            .create_password_reset(user_id, chrono::Utc::now() + chrono::Duration::hours(1))
+            .create_password_reset(
+                user_id,
+                common::time::UtcInstant::from(chrono::Utc::now() + chrono::Duration::hours(1)),
+            )
             .await
             .unwrap();
         let password = parse_password("password123");

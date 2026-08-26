@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use sqlx::{Pool, Postgres};
 
+use common::time::UtcInstant;
 use common::token::TokenHash;
 
 use crate::helpers::SessionRow;
@@ -14,8 +15,8 @@ impl SessionDialect for Postgres {
     async fn touch_and_load(
         pool: &Pool<Postgres>,
         token_hash: &TokenHash,
-        now: chrono::DateTime<chrono::Utc>,
-        stale_before: chrono::DateTime<chrono::Utc>,
+        now: UtcInstant,
+        stale_before: UtcInstant,
     ) -> sqlx::Result<Option<SessionRow>> {
         let updated = sqlx::query_as::<_, SessionRow>(
             "WITH updated AS (

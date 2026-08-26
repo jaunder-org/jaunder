@@ -8,6 +8,7 @@ use {
     common::mailer::{EmailMessage, MailSender},
     common::password::Password,
     common::tagged_url::{MailConfirmUrl, compose},
+    common::time::UtcInstant,
     leptos::prelude::*,
     std::sync::Arc,
     storage::{AtomicOps, PasswordResetStorage, SiteConfigStorage, UserStorage},
@@ -54,7 +55,7 @@ pub async fn request(username: Username) -> WebResult<()> {
     // orphan reset token behind.
     let base_url = crate::mail::require_base_url(&*site_config).await?;
 
-    let expires_at = chrono::Utc::now() + Duration::hours(1);
+    let expires_at = UtcInstant::from(chrono::Utc::now() + Duration::hours(1));
     let raw_token = password_resets
         .create_password_reset(user_id, expires_at)
         .await?;

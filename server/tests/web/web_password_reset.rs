@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use chrono::Utc;
 use common::mailer::test_utils::CapturingMailSender;
 use common::test_support::parse_email;
+use common::time::UtcInstant;
 use server_fn::ServerFn;
 use storage::AppState;
 
@@ -154,7 +154,7 @@ async fn confirm_nested_request_maps_token_and_password(#[case] backend: Backend
     // Create a second session to ensure all are revoked
     create_session_for(&state, user_id).await;
 
-    let expires_at = Utc::now() + chrono::Duration::hours(1);
+    let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
     let raw_token = state
         .password_resets
         .create_password_reset(user_id, expires_at)
@@ -206,7 +206,7 @@ async fn confirm_password_reset_with_expired_token_returns_error(#[case] backend
         .await
         .user_id;
 
-    let expires_at = Utc::now() - chrono::Duration::hours(1);
+    let expires_at: UtcInstant = "2000-01-02T03:04:05.123456Z".parse().unwrap();
     let raw_token = state
         .password_resets
         .create_password_reset(user_id, expires_at)
@@ -309,7 +309,7 @@ async fn confirm_password_reset_with_used_token_returns_error(#[case] backend: B
         .await
         .user_id;
 
-    let expires_at = Utc::now() + chrono::Duration::hours(1);
+    let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
     let raw_token = state
         .password_resets
         .create_password_reset(user_id, expires_at)
@@ -342,7 +342,7 @@ async fn confirm_nested_request_rejects_short_password_before_handler(#[case] ba
 
     let session = create_user_with_verified_email(&state, "frank@example.com").await;
 
-    let expires_at = Utc::now() + chrono::Duration::hours(1);
+    let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
     let raw_token = state
         .password_resets
         .create_password_reset(session.user_id, expires_at)

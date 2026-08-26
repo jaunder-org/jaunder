@@ -11,9 +11,9 @@
 //! cross-author pairing (ADR-0019, same-owner invariant).
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use common::audience::AudienceName;
 use common::ids::{AudienceId, SubscriptionId, UserId};
+use common::time::UtcInstant;
 use sqlx::{Database, Pool};
 
 use crate::backend::Backend;
@@ -26,10 +26,10 @@ pub struct AudienceRecord {
     /// Author-unique display name.
     pub name: AudienceName,
     /// When the audience row was created.
-    pub created_at: DateTime<Utc>,
+    pub created_at: UtcInstant,
 }
 
-type AudienceSummaryRow = (AudienceId, AudienceName, DateTime<Utc>);
+type AudienceSummaryRow = (AudienceId, AudienceName, UtcInstant);
 
 /// Failure modes for the mutating audience operations.
 #[derive(Debug)]
@@ -166,6 +166,7 @@ where
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    for<'r> UtcInstant: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
 {
     #[tracing::instrument(
         name = "storage.audiences.create",
@@ -347,26 +348,53 @@ mod tests {
     use super::AudienceError;
     use crate::test_support::{Backend, SeedUser, backends};
     use common::test_support::parse_audience_name;
+    use common::time::UtcInstant;
     use host::error::{ErrorKind, InternalError};
     use rstest::*;
     use rstest_reuse::*;
 
     #[apply(backends)]
     #[tokio::test]
-    async fn audience_name_round_trips_through_create_and_list(#[case] backend: Backend) {
+    async fn audience_created_at_round_trips_and_list_preserves_id_order(#[case] backend: Backend) {
         let env = backend.setup().await;
         let author = SeedUser::new().seed(&env.state).await.user_id;
-        let id = env
+        let first_id = env
             .state
             .audiences
             .create_audience(author, &parse_audience_name("Close Friends"))
             .await
             .unwrap();
+        let second_id = env
+            .state
+            .audiences
+            .create_audience(author, &parse_audience_name("Family"))
+            .await
+            .unwrap();
+        let first_created_at = "2026-01-02T03:04:05.654321Z".parse::<UtcInstant>().unwrap();
+        let second_created_at = "2026-01-02T03:04:05.123456Z".parse::<UtcInstant>().unwrap();
+
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query("UPDATE audiences SET created_at = $1 WHERE audience_id = $2")
+                .bind(first_created_at)
+                .bind(first_id)
+                .execute(pool)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE audiences SET created_at = $1 WHERE audience_id = $2")
+                .bind(second_created_at)
+                .bind(second_id)
+                .execute(pool)
+                .await
+                .unwrap();
+        });
+
         let listed = env.state.audiences.list_audiences(author).await.unwrap();
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].audience_id, id);
-        // `name` decodes straight into `AudienceName` via the sqlx bridge (#438).
-        assert_eq!(listed[0].name, "Close Friends");
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].audience_id, first_id);
+        assert_eq!(listed[0].created_at, first_created_at);
+        assert_eq!(listed[1].audience_id, second_id);
+        assert_eq!(listed[1].created_at, second_created_at);
+        assert!(listed[0].created_at > listed[1].created_at);
     }
 
     #[apply(backends)]

@@ -7,6 +7,7 @@ use {
     crate::error::InternalError,
     common::mailer::{EmailMessage, MailSender},
     common::tagged_url::{MailConfirmUrl, compose},
+    common::time::UtcInstant,
     leptos::prelude::*,
     std::sync::Arc,
     storage::{EmailVerificationStorage, SiteConfigStorage, UserStorage},
@@ -37,7 +38,7 @@ pub async fn request_verification(email: Email) -> WebResult<()> {
     // misconfigured site fails rather than mailing a dead relative link.
     let base_url = crate::mail::require_base_url(&*site_config).await?;
 
-    let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
+    let expires_at = UtcInstant::from(chrono::Utc::now() + chrono::Duration::hours(24));
     let raw_token = email_verifications
         .create_email_verification(auth.user_id, &email, expires_at)
         .await?;

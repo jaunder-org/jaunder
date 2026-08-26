@@ -1,5 +1,5 @@
-use chrono::Utc;
 use common::test_support::parse_raw_token;
+use common::time::UtcInstant;
 use rstest::*;
 use rstest_reuse::*;
 use storage::UseEmailVerificationError;
@@ -14,7 +14,7 @@ async fn create_email_verification_and_use_returns_user_id_and_email(#[case] bac
 
     let user_id = SeedUser::new().seed(state).await.user_id;
 
-    let expires_at = Utc::now() + chrono::Duration::hours(24);
+    let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
     let raw_token = state
         .email_verifications
         .create_email_verification(user_id, &"alice@example.com".parse().unwrap(), expires_at)
@@ -39,7 +39,7 @@ async fn use_email_verification_already_used_returns_already_used(#[case] backen
 
     let user_id = SeedUser::new().seed(state).await.user_id;
 
-    let expires_at = Utc::now() + chrono::Duration::hours(24);
+    let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
     let raw_token = state
         .email_verifications
         .create_email_verification(user_id, &"alice@example.com".parse().unwrap(), expires_at)
@@ -71,7 +71,7 @@ async fn use_email_verification_expired_returns_expired(#[case] backend: Backend
 
     let user_id = SeedUser::new().seed(state).await.user_id;
 
-    let expires_at = Utc::now() - chrono::Duration::hours(1);
+    let expires_at: UtcInstant = "2000-01-02T03:04:05.123456Z".parse().unwrap();
     let raw_token = state
         .email_verifications
         .create_email_verification(user_id, &"alice@example.com".parse().unwrap(), expires_at)
@@ -114,7 +114,7 @@ async fn second_email_verification_supersedes_first(#[case] backend: Backend) {
 
     let user_id = SeedUser::new().seed(state).await.user_id;
 
-    let expires_at = Utc::now() + chrono::Duration::hours(24);
+    let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
     let first_token = state
         .email_verifications
         .create_email_verification(user_id, &"alice@example.com".parse().unwrap(), expires_at)
@@ -162,7 +162,7 @@ async fn use_email_verification_with_corrupt_stored_email_returns_internal(
 
     let user_id = SeedUser::new().seed(state).await.user_id;
 
-    let expires_at = Utc::now() + chrono::Duration::hours(24);
+    let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
     let raw_token = state
         .email_verifications
         .create_email_verification(user_id, &"alice@example.com".parse().unwrap(), expires_at)

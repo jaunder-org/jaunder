@@ -1,4 +1,3 @@
-use chrono::{DateTime, Utc};
 use common::ids::{PostId, UserId};
 use common::media::MediaSource;
 use common::password::Password;
@@ -8,6 +7,7 @@ use common::test_support::{
     parse_audience_name, parse_byte_size, parse_content_hash, parse_content_type,
     parse_display_name, parse_filename,
 };
+use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::{AudienceTarget, ViewerIdentity, local_subscriber_identity};
 use jaunder::cli::StorageArgs;
@@ -43,7 +43,7 @@ pub struct BackupFixtureIds {
 
 /// Fixed microsecond-precision publish time: deterministic and safe from
 /// Postgres's µs quantization, so a restored value can be asserted exactly (DEC-D).
-pub fn fixture_published_at() -> DateTime<Utc> {
+pub fn fixture_published_at() -> UtcInstant {
     "2026-04-29T12:34:56.789012Z"
         .parse()
         .expect("valid fixture timestamp")

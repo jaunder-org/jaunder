@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use chrono::Utc;
 use common::mailer::test_utils::CapturingMailSender;
 use common::test_support::parse_email;
+use common::time::UtcInstant;
 use server_fn::ServerFn;
 
 use crate::helpers::{
@@ -72,7 +72,7 @@ async fn verify_email_with_valid_token_sets_email_verified(#[case] backend: Back
     let user_id = SeedUser::new().seed(&state).await.user_id;
 
     let email = parse_email("bob@example.com");
-    let expires_at = Utc::now() + chrono::Duration::hours(24);
+    let expires_at: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
     let raw_token = state
         .email_verifications
         .create_email_verification(user_id, &email, expires_at)
@@ -104,7 +104,7 @@ async fn verify_email_with_expired_token_returns_error(#[case] backend: Backend)
 
     let user_id = SeedUser::new().seed(&state).await.user_id;
 
-    let expires_at = Utc::now() - chrono::Duration::hours(1);
+    let expires_at: UtcInstant = "2000-01-02T03:04:05.123456Z".parse().unwrap();
     let raw_token = state
         .email_verifications
         .create_email_verification(user_id, &"carol@example.com".parse().unwrap(), expires_at)

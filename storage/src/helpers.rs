@@ -2,7 +2,6 @@
 
 use std::io;
 
-use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::role_instant::impl_role_instant;
@@ -16,6 +15,7 @@ use common::session_label::SessionLabel;
 use common::stored_password_hash::StoredPasswordHash;
 use common::tag::{Tag, TagLabel};
 use common::tagged_url::MediaSourceUrl;
+use common::time::UtcInstant;
 use common::token::TokenHash;
 use common::username::Username;
 use host::invite::InviteCode;
@@ -23,26 +23,26 @@ use host::invite::InviteCode;
 /// The `sessions.created_at` storage timestamp role, distinct from
 /// `last_used_at` so mappings cannot transpose silently (#751).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
-struct SessionCreatedAt(DateTime<Utc>);
-impl_role_instant!(SessionCreatedAt);
+struct SessionCreatedAt(UtcInstant);
+impl_role_instant!(SessionCreatedAt, UtcInstant);
 
 /// The `sessions.last_used_at` storage timestamp role, distinct from
 /// `created_at` so mappings cannot transpose silently (#751).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
-struct SessionLastUsedAt(DateTime<Utc>);
-impl_role_instant!(SessionLastUsedAt);
+struct SessionLastUsedAt(UtcInstant);
+impl_role_instant!(SessionLastUsedAt, UtcInstant);
 
 /// The `invites.created_at` storage timestamp role, distinct from `expires_at`
 /// so mappings cannot transpose silently (#751).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
-struct InviteCreatedAt(DateTime<Utc>);
-impl_role_instant!(InviteCreatedAt);
+struct InviteCreatedAt(UtcInstant);
+impl_role_instant!(InviteCreatedAt, UtcInstant);
 
 /// The `invites.expires_at` storage timestamp role, distinct from `created_at`
 /// so mappings cannot transpose silently (#751).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
-struct InviteExpiresAt(DateTime<Utc>);
-impl_role_instant!(InviteExpiresAt);
+struct InviteExpiresAt(UtcInstant);
+impl_role_instant!(InviteExpiresAt, UtcInstant);
 
 /// Preserves an already-selected primary result while reporting a failed
 /// secondary operation exactly once. Owning modules wrap this with private,
@@ -88,8 +88,8 @@ pub(crate) struct UserRecordParts {
     pub(crate) username: Username,
     pub(crate) display_name: Option<DisplayName>,
     pub(crate) bio: Option<Bio>,
-    pub(crate) created_at: DateTime<Utc>,
-    pub(crate) last_authenticated_at: Option<DateTime<Utc>>,
+    pub(crate) created_at: UtcInstant,
+    pub(crate) last_authenticated_at: Option<UtcInstant>,
     pub(crate) email: Option<Email>,
     pub(crate) email_verified: bool,
     pub(crate) is_operator: bool,
@@ -171,7 +171,7 @@ struct InviteRecordParts {
     code: InviteCode,
     created_at: InviteCreatedAt,
     expires_at: InviteExpiresAt,
-    used_at: Option<DateTime<Utc>>,
+    used_at: Option<UtcInstant>,
     used_by: Option<UserId>,
 }
 
@@ -185,9 +185,9 @@ fn build_invite_record(
     }: InviteRecordParts,
 ) -> InviteRecord {
     // The `code` column decodes straight into `InviteCode` via the sqlx bridge (#438),
-    // `used_by` through the id bridge (#686), and the adjacent created/expires pair
-    // through distinct role wrappers (#751), so corrupt/migrated values are rejected
-    // before we ever get here and adjacent timestamp swaps fail at the row-to-parts seam.
+    // `used_by` through the id bridge (#686), and the created/expires pair through
+    // distinct role wrappers (#751), so corrupt/migrated values are rejected before
+    // we ever get here and timestamp swaps fail at the row-to-parts seam.
     InviteRecord {
         code,
         created_at: created_at.value(),
@@ -239,8 +239,8 @@ pub(crate) type UserRow = (
     Username,
     Option<DisplayName>,
     Option<Bio>,
-    DateTime<Utc>,
-    Option<DateTime<Utc>>,
+    UtcInstant,
+    Option<UtcInstant>,
     Option<Email>,
     bool,
     bool,
@@ -289,7 +289,7 @@ pub struct SessionRow {
 }
 impl SessionRow {
     #[must_use]
-    pub(crate) fn last_used_at(&self) -> DateTime<Utc> {
+    pub(crate) fn last_used_at(&self) -> UtcInstant {
         self.last_used_at.value()
     }
 }
@@ -315,7 +315,7 @@ pub(crate) struct InviteRow {
     code: InviteCode,
     created_at: InviteCreatedAt,
     expires_at: InviteExpiresAt,
-    used_at: Option<DateTime<Utc>>,
+    used_at: Option<UtcInstant>,
     used_by: Option<UserId>,
 }
 
@@ -329,6 +329,20 @@ pub(crate) fn invite_record_from_row(row: InviteRow) -> InviteRecord {
     })
 }
 
+pub(crate) type InviteTokenStateRow = (Option<UtcInstant>, UtcInstant);
+
+pub(crate) fn classify_invite_token_state(
+    row: Option<InviteTokenStateRow>,
+    now: UtcInstant,
+) -> TokenState {
+    match row {
+        None => TokenState::Missing,
+        Some((Some(_), _)) => TokenState::AlreadyUsed,
+        Some((None, expires_at)) if expires_at <= now => TokenState::Expired,
+        Some((None, _)) => TokenState::Claimable,
+    }
+}
+
 pub(crate) type MediaRow = (
     UserId,
     ContentHash,
@@ -337,7 +351,7 @@ pub(crate) type MediaRow = (
     ContentType,
     ByteSize,
     Option<MediaSourceUrl>,
-    DateTime<Utc>,
+    UtcInstant,
 );
 
 pub(crate) fn media_record_from_row(row: MediaRow) -> MediaRecord {
@@ -364,7 +378,7 @@ pub(crate) fn media_record_from_row(row: MediaRow) -> MediaRecord {
 // Claim verification error helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) type TokenStateRow = (Option<DateTime<Utc>>, DateTime<Utc>);
+pub(crate) type TokenStateRow = (Option<UtcInstant>, UtcInstant);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TokenState {
@@ -374,7 +388,7 @@ pub(crate) enum TokenState {
     Claimable,
 }
 
-pub(crate) fn classify_token_state(row: Option<TokenStateRow>, now: DateTime<Utc>) -> TokenState {
+pub(crate) fn classify_token_state(row: Option<TokenStateRow>, now: UtcInstant) -> TokenState {
     match row {
         None => TokenState::Missing,
         Some((Some(_), _)) => TokenState::AlreadyUsed,
@@ -385,7 +399,7 @@ pub(crate) fn classify_token_state(row: Option<TokenStateRow>, now: DateTime<Utc
 
 pub(crate) fn email_verification_claim_error(
     row: Option<TokenStateRow>,
-    now: DateTime<Utc>,
+    now: UtcInstant,
 ) -> crate::UseEmailVerificationError {
     match classify_token_state(row, now) {
         TokenState::Missing => crate::UseEmailVerificationError::NotFound,
@@ -396,7 +410,7 @@ pub(crate) fn email_verification_claim_error(
 
 pub(crate) fn password_reset_claim_error(
     row: Option<TokenStateRow>,
-    now: DateTime<Utc>,
+    now: UtcInstant,
 ) -> crate::UsePasswordResetError {
     match classify_token_state(row, now) {
         TokenState::Missing => crate::UsePasswordResetError::NotFound,
@@ -649,17 +663,44 @@ pub(crate) mod swallowed_test {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::parse_invite_code;
-    use chrono::Utc;
+    use crate::test_support::{Backend, backends, parse_invite_code};
+
     use common::test_support::{
         parse_bio, parse_byte_size, parse_content_hash, parse_content_type, parse_display_name,
         parse_email, parse_filename, parse_password, parse_session_label, parse_token_hash,
         parse_username,
     };
+    use common::time::UtcInstant;
+    use rstest::*;
+    use rstest_reuse::*;
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn utc_instant_round_trips_directly_through_sqlx(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let expected = "2026-08-26T12:34:56.123456Z".parse::<UtcInstant>().unwrap();
+        let actual = crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query_scalar::<_, UtcInstant>("SELECT $1")
+                .bind(expected)
+                .fetch_one(pool)
+                .await
+                .unwrap()
+        });
+        assert_eq!(actual, expected);
+
+        let absent = crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query_scalar::<_, Option<UtcInstant>>("SELECT $1")
+                .bind(None::<UtcInstant>)
+                .fetch_one(pool)
+                .await
+                .unwrap()
+        });
+        assert_eq!(absent, None);
+    }
 
     #[test]
     fn test_build_user_record() {
-        let now = Utc::now();
+        let now = UtcInstant::now();
         let parts = UserRecordParts {
             user_id: UserId::from(1),
             username: parse_username("alice"),
@@ -679,8 +720,8 @@ mod tests {
 
     #[test]
     fn test_build_session_record() {
-        let now = Utc::now();
-        let later = now + chrono::Duration::seconds(5);
+        let now = UtcInstant::now();
+        let later = UtcInstant::from(now.value() + chrono::Duration::seconds(5));
         let record = build_session_record(SessionRecordParts {
             token_hash: parse_token_hash("hash"),
             user_id: UserId::from(1),
@@ -695,9 +736,9 @@ mod tests {
 
     #[test]
     fn test_build_invite_record() {
-        let created_at = Utc::now();
-        let expires_at = created_at + chrono::Duration::days(7);
-        let used_at = created_at + chrono::Duration::hours(1);
+        let created_at = UtcInstant::now();
+        let expires_at = UtcInstant::from(created_at.value() + chrono::Duration::days(7));
+        let used_at = UtcInstant::from(created_at.value() + chrono::Duration::hours(1));
         let record = build_invite_record(InviteRecordParts {
             code: parse_invite_code("invite-code"),
             created_at: created_at.into(),
@@ -870,7 +911,7 @@ mod tests {
             parse_content_type("image/png"),
             parse_byte_size("42"),
             None,
-            Utc::now(),
+            UtcInstant::now(),
         );
         let record = media_record_from_row(row);
         assert_eq!(record.user_id, UserId::from(1));
@@ -881,8 +922,8 @@ mod tests {
 
     #[test]
     fn session_and_invite_row_helpers_round_trip() {
-        let now = Utc::now();
-        let last_used_at = now + chrono::Duration::seconds(5);
+        let now = UtcInstant::now();
+        let last_used_at = UtcInstant::from(now.value() + chrono::Duration::seconds(5));
         let session = SessionRow {
             token_hash: parse_token_hash("tokenhash"),
             user_id: UserId::from(1),
@@ -896,7 +937,7 @@ mod tests {
         assert_eq!(session_record.created_at, now);
         assert_eq!(session_record.last_used_at, last_used_at);
 
-        let expires_at = now + chrono::Duration::days(7);
+        let expires_at = UtcInstant::from(now.value() + chrono::Duration::days(7));
         let invite = InviteRow {
             code: parse_invite_code("code"),
             created_at: now.into(),
@@ -912,7 +953,7 @@ mod tests {
 
     #[test]
     fn user_row_helper_delegates_to_build_user_record() {
-        let now = Utc::now();
+        let now = UtcInstant::now();
         let row: UserRow = (
             UserId::from(1),
             parse_username("alice"),
@@ -930,10 +971,14 @@ mod tests {
 
     #[test]
     fn token_state_classifier_distinguishes_all_arms() {
-        let now = Utc::now();
+        let now: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
+        let expired_at: UtcInstant = "2099-01-02T03:04:05.123455Z".parse().unwrap();
+        let claimable_at: UtcInstant = "2099-01-02T03:04:05.123457Z".parse().unwrap();
+        let used_at: UtcInstant = "2099-01-02T03:04:05.123454Z".parse().unwrap();
+
         assert_eq!(classify_token_state(None, now), TokenState::Missing);
         assert_eq!(
-            classify_token_state(Some((Some(now), now + chrono::Duration::hours(1))), now),
+            classify_token_state(Some((Some(used_at), claimable_at)), now),
             TokenState::AlreadyUsed
         );
         assert_eq!(
@@ -941,24 +986,62 @@ mod tests {
             TokenState::Expired
         );
         assert_eq!(
-            classify_token_state(Some((None, now - chrono::Duration::seconds(1))), now),
+            classify_token_state(Some((None, expired_at)), now),
             TokenState::Expired
         );
         assert_eq!(
-            classify_token_state(Some((None, now + chrono::Duration::seconds(1))), now),
+            classify_token_state(Some((None, claimable_at)), now),
             TokenState::Claimable
         );
     }
 
     #[test]
+    fn invite_token_state_classifier_preserves_roles_and_exact_expiry() {
+        let now: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
+        let created_at: UtcInstant = "2099-01-01T03:04:05.123456Z".parse().unwrap();
+        let expired_at: UtcInstant = "2099-01-02T03:04:05.123455Z".parse().unwrap();
+        let claimable_at: UtcInstant = "2099-01-02T03:04:05.123457Z".parse().unwrap();
+        let used_at: UtcInstant = "2099-01-02T03:04:05.123454Z".parse().unwrap();
+
+        assert_eq!(classify_invite_token_state(None, now), TokenState::Missing);
+        assert_eq!(
+            classify_invite_token_state(Some((Some(used_at), claimable_at)), now),
+            TokenState::AlreadyUsed
+        );
+        assert_eq!(
+            classify_invite_token_state(Some((None, now)), now),
+            TokenState::Expired
+        );
+        assert_eq!(
+            classify_invite_token_state(Some((None, expired_at)), now),
+            TokenState::Expired
+        );
+        assert_eq!(
+            classify_invite_token_state(Some((None, claimable_at)), now),
+            TokenState::Claimable
+        );
+        let parts = InviteRecordParts {
+            code: parse_invite_code("role-ordering"),
+            created_at: InviteCreatedAt::from(created_at),
+            expires_at: InviteExpiresAt::from(claimable_at),
+            used_at: None,
+            used_by: None,
+        };
+        let record = build_invite_record(parts);
+        assert_eq!(record.created_at, created_at);
+        assert_eq!(record.expires_at, claimable_at);
+    }
+
+    #[test]
     fn email_verification_claim_error_distinguishes_all_arms() {
-        let now = Utc::now();
+        let now: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
+        let used_at: UtcInstant = "2099-01-02T03:04:05.123455Z".parse().unwrap();
         assert!(matches!(
             email_verification_claim_error(None, now),
             crate::UseEmailVerificationError::NotFound
         ));
         assert!(matches!(
-            email_verification_claim_error(Some((Some(now), now)), now),
+            email_verification_claim_error(Some((Some(used_at), now)), now),
             crate::UseEmailVerificationError::AlreadyUsed
         ));
         assert!(matches!(
@@ -969,13 +1052,14 @@ mod tests {
 
     #[test]
     fn password_reset_claim_error_distinguishes_all_arms() {
-        let now = Utc::now();
+        let now: UtcInstant = "2099-01-02T03:04:05.123456Z".parse().unwrap();
+        let used_at: UtcInstant = "2099-01-02T03:04:05.123455Z".parse().unwrap();
         assert!(matches!(
             password_reset_claim_error(None, now),
             crate::UsePasswordResetError::NotFound
         ));
         assert!(matches!(
-            password_reset_claim_error(Some((Some(now), now)), now),
+            password_reset_claim_error(Some((Some(used_at), now)), now),
             crate::UsePasswordResetError::AlreadyUsed
         ));
         assert!(matches!(
@@ -1040,7 +1124,7 @@ mod tests {
 
     #[test]
     fn user_record_from_row_maps_some_fields() {
-        let now = Utc::now();
+        let now = UtcInstant::now();
         let row: UserRow = (
             UserId::from(1),
             parse_username("alice"),
@@ -1065,9 +1149,9 @@ mod tests {
 
     #[test]
     fn invite_record_from_row_maps_some_fields() {
-        let now = Utc::now();
-        let expires_at = now + chrono::Duration::days(7);
-        let used_at = now + chrono::Duration::hours(1);
+        let now = UtcInstant::now();
+        let expires_at = UtcInstant::from(now.value() + chrono::Duration::days(7));
+        let used_at = UtcInstant::from(now.value() + chrono::Duration::hours(1));
         let row = InviteRow {
             code: parse_invite_code("code"),
             created_at: now.into(),

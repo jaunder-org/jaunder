@@ -1,9 +1,9 @@
-use chrono::Utc;
 use common::feed::{
     FeedFormat, FeedItem, FeedMetadata, FeedPath, FeedSurface, FeedTitle, HybridWindow, feed_etag,
     parse,
 };
 use common::tagged_url::{BaseUrl, CanonicalUrl, FeedUrl, Permalink, compose};
+use common::time::UtcInstant;
 use storage::{FeedCacheRow, FeedCacheStorage, PostRecord, PostStorage, SiteConfigStorage};
 use thiserror::Error;
 
@@ -51,7 +51,7 @@ pub async fn regenerate_feed(
         min_items: feeds.min_items,
         min_days: feeds.min_days,
     };
-    let now = Utc::now();
+    let now = UtcInstant::now();
     let published = posts
         // Published feeds are public-only (M8 / ADR-0020): regeneration resolves
         // posts as an anonymous viewer, so the resolution filter reduces to the
@@ -87,7 +87,11 @@ pub async fn regenerate_feed(
     };
     let canonical_url: CanonicalUrl = compose(base, &canonical_path);
 
-    let updated_at = items.iter().map(|i| i.updated_at).max().unwrap_or(now);
+    let updated_at = items
+        .iter()
+        .map(|i| i.updated_at)
+        .max()
+        .unwrap_or_else(|| now.value());
     let title = FeedTitle::for_surface(&identity.title, &surface);
 
     let meta = FeedMetadata {
@@ -104,14 +108,14 @@ pub async fn regenerate_feed(
         FeedFormat::Atom => common::feed::render_atom(&meta, &items),
         FeedFormat::Json => common::feed::render_json(&meta, &items),
     };
-    let etag = feed_etag(&items, now);
+    let etag = feed_etag(&items, now.value());
 
     let row = FeedCacheRow {
         feed_path: feed_path.clone(),
         body,
         etag,
         content_type: format.content_type(),
-        updated_at,
+        updated_at: UtcInstant::from(updated_at),
         generated_at: now,
     };
 
@@ -154,8 +158,8 @@ fn build_feed_items(base: &BaseUrl, records: &[PostRecord]) -> Vec<FeedItem> {
                 // FeedItem carries the post's RenderedHtml unflattened (#470); the value
                 // is already rendered — no from_trusted rebuild, just propagate it.
                 content_html: p.rendered_html.clone(),
-                published_at,
-                updated_at: p.updated_at,
+                published_at: published_at.value(),
+                updated_at: p.updated_at.value(),
                 tags: p.tags.iter().map(|t| t.tag_display.clone()).collect(),
             }
         })

@@ -22,7 +22,9 @@ use thiserror::Error;
 /// an offset-bearing input compares equal to its `Z`-form equivalent. `chrono` is
 /// already compiled into the CSR/wasm bundle via `common`, so this type is expressible
 /// in a `#[server]` signature on both the server and the wasm client.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, macros::SqlxBridge,
+)]
 pub struct UtcInstant(DateTime<Utc>);
 
 /// Error returned when a string cannot be parsed as a [`UtcInstant`].
@@ -31,6 +33,12 @@ pub struct UtcInstant(DateTime<Utc>);
 pub struct InvalidInstant;
 
 impl UtcInstant {
+    /// The current wall-clock instant in UTC.
+    #[must_use]
+    pub fn now() -> Self {
+        Self(Utc::now())
+    }
+
     /// The inner `DateTime<Utc>` — the ADR-0063 `value()` accessor convention (by
     /// value; `UtcInstant` is `Copy`). Use `DateTime::from(x)` / `x.into()` where that
     /// reads better than `x.value()`.
@@ -309,6 +317,22 @@ mod tests {
     fn into_inner_datetime_via_from() {
         let dt = Utc.with_ymd_and_hms(2026, 7, 19, 10, 30, 0).unwrap();
         assert_eq!(DateTime::<Utc>::from(UtcInstant::from(dt)), dt);
+    }
+
+    #[test]
+    fn instants_order_chronologically() {
+        let earlier = "2026-07-19T10:30:00Z".parse::<UtcInstant>().unwrap();
+        let later = "2026-07-19T10:30:01Z".parse::<UtcInstant>().unwrap();
+        assert!(earlier < later);
+    }
+
+    #[test]
+    fn now_returns_the_current_utc_instant() {
+        let before = Utc::now();
+        let instant = UtcInstant::now().value();
+        let after = Utc::now();
+        assert!(instant >= before);
+        assert!(instant <= after);
     }
 
     #[test]

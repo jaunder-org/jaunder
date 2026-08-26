@@ -2,9 +2,12 @@ use std::sync::Arc;
 
 use crate::helpers::{CapturingWebSubClient, setup_with_base_url};
 use chrono::Utc;
-use common::feed::FeedPath;
-use common::ids::FeedEventId;
-use common::test_support::{parse_content_type, parse_etag};
+use common::{
+    feed::FeedPath,
+    ids::FeedEventId,
+    test_support::{parse_content_type, parse_etag},
+    time::UtcInstant,
+};
 use jaunder::feed::worker::FeedWorker;
 use storage::FeedCacheRow;
 use storage::test_support::{Backend, SeedRawPost, SeedUser, TestEnv, backends, fp};
@@ -245,8 +248,8 @@ async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend
             body: "stale".to_string(),
             etag: parse_etag("\"etag\""),
             content_type: parse_content_type("application/atom+xml; charset=utf-8"),
-            updated_at: t0,
-            generated_at: t0,
+            updated_at: UtcInstant::from(t0),
+            generated_at: UtcInstant::from(t0),
         })
         .await
         .expect("seed cached feed");
@@ -254,13 +257,16 @@ async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend
     // A post that went live at t1 > t0 while the worker was "down".
     let t1 = t0 + Duration::hours(1);
     SeedRawPost::new(user.user_id)
-        .published_at(t1)
+        .published_at(common::time::UtcInstant::from(t1))
         .seed(&state)
         .await;
 
     // Restart: first go-live pass at t2 > t1 (last_tick == None => catch-up).
     let t2 = t1 + Duration::hours(1);
-    worker.go_live_pass(t2).await.expect("go-live pass");
+    worker
+        .go_live_pass(common::time::UtcInstant::from(t2))
+        .await
+        .expect("go-live pass");
 
     let pending = state
         .feed_events
@@ -287,17 +293,23 @@ async fn steady_state_window_enqueues_newly_live_posts(#[case] backend: Backend)
 
     // First pass seeds last_tick = t0 (startup branch; nothing cached/live).
     let t0 = Utc.with_ymd_and_hms(2026, 6, 26, 10, 0, 0).unwrap();
-    worker.go_live_pass(t0).await.expect("seed last_tick");
+    worker
+        .go_live_pass(common::time::UtcInstant::from(t0))
+        .await
+        .expect("seed last_tick");
 
     // A post that goes live between t0 and t1.
     let go_live = t0 + Duration::minutes(30);
     SeedRawPost::new(user.user_id)
-        .published_at(go_live)
+        .published_at(common::time::UtcInstant::from(go_live))
         .seed(&state)
         .await;
 
     let t1 = t0 + Duration::hours(1);
-    worker.go_live_pass(t1).await.expect("window pass");
+    worker
+        .go_live_pass(common::time::UtcInstant::from(t1))
+        .await
+        .expect("window pass");
 
     let pending = state
         .feed_events
@@ -344,7 +356,7 @@ async fn worker_marks_exhausted_after_backoff_attempts_are_used_up(#[case] backe
     // Drive the attempt count up to the backoff-table length by repeatedly
     // claiming and re-queuing with a past retry time (so it stays claimable).
     // The next real ping failure then exceeds the table and exhausts the event.
-    let past = Utc::now() - chrono::Duration::hours(1);
+    let past = UtcInstant::from(Utc::now() - chrono::Duration::hours(1));
     for _ in 0..6 {
         let claimed = state
             .feed_events

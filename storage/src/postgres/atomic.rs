@@ -1,12 +1,16 @@
 use async_trait::async_trait;
-use chrono::Utc;
+
 use sqlx::PgPool;
 
-use crate::helpers::{TokenState, TokenStateRow, classify_token_state};
+use crate::helpers::{
+    InviteTokenStateRow, TokenState, TokenStateRow, classify_invite_token_state,
+    classify_token_state,
+};
 use crate::{AtomicOps, ConfirmPasswordResetError, RegisterWithInviteError};
 use common::display_name::DisplayName;
 use common::ids::UserId;
 use common::password::Password;
+use common::time::UtcInstant;
 use common::token::RawToken;
 use common::username::Username;
 use host::invite::InviteCode;
@@ -44,7 +48,7 @@ impl PostgresAtomicOps {
             host::token::hash(raw_token).map_err(|_| ConfirmPasswordResetError::NotFound)?;
 
         let mut tx = self.pool.begin().await?;
-        let now = Utc::now();
+        let now = UtcInstant::now();
         // Claim the token in one atomic UPDATE: it matches only when the token
         // exists, is unused, and is unexpired, so concurrent confirmations cannot
         // both win (ADR-0021). On a miss we re-read to classify the failure into a
@@ -118,15 +122,15 @@ impl AtomicOps for PostgresAtomicOps {
         invite_code: &InviteCode,
     ) -> Result<UserId, RegisterWithInviteError> {
         let mut tx = self.pool.begin().await?;
-        let row = sqlx::query_as::<_, TokenStateRow>(
+        let row = sqlx::query_as::<_, InviteTokenStateRow>(
             "SELECT used_at, expires_at FROM invites WHERE code = $1",
         )
         .bind(invite_code)
         .fetch_optional(&mut *tx)
         .await?;
 
-        let now = Utc::now();
-        match classify_token_state(row, now) {
+        let now = UtcInstant::now();
+        match classify_invite_token_state(row, now) {
             TokenState::Missing => return Err(RegisterWithInviteError::InviteNotFound),
             TokenState::AlreadyUsed => return Err(RegisterWithInviteError::InviteAlreadyUsed),
             TokenState::Expired => return Err(RegisterWithInviteError::InviteExpired),

@@ -1,8 +1,8 @@
-use chrono::Utc;
-use common::ids::ChannelId;
+use common::ids::{ChannelId, SubscriptionId};
 use common::password::Password;
 use common::tag::Tag;
 use common::test_support::parse_row_limit;
+use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::ViewerIdentity;
 use sqlx::SqlitePool;
@@ -34,7 +34,7 @@ pub(super) async fn anon_by_tag(
             None,
             parse_row_limit(limit),
             &ViewerIdentity::Anonymous,
-            Utc::now(),
+            common::time::UtcInstant::now(),
         )
         .await
         .expect("list_posts_by_tag failed")
@@ -47,7 +47,7 @@ pub(super) async fn anon_published(state: &AppState, limit: &str) -> Vec<storage
             None,
             parse_row_limit(limit),
             &ViewerIdentity::Anonymous,
-            Utc::now(),
+            common::time::UtcInstant::now(),
         )
         .await
         .expect("list_published failed")
@@ -120,4 +120,31 @@ pub(super) async fn raw_exec(backend: Backend, env: &TestEnv, sql: &str) {
             .map(|_| ()),
     };
     result.unwrap_or_else(|e| panic!("raw exec failed: {e}\nSQL: {sql}"));
+}
+
+pub(super) async fn update_subscription_created_at(
+    backend: Backend,
+    env: &TestEnv,
+    subscription_id: SubscriptionId,
+    created_at: UtcInstant,
+) {
+    let result = match backend {
+        Backend::Sqlite => {
+            sqlx::query("UPDATE subscriptions SET created_at = $1 WHERE subscription_id = $2")
+                .bind(created_at)
+                .bind(subscription_id)
+                .execute(&open_pool(&env.base).await)
+                .await
+                .map(|_| ())
+        }
+        Backend::Postgres => {
+            sqlx::query("UPDATE subscriptions SET created_at = $1 WHERE subscription_id = $2")
+                .bind(created_at)
+                .bind(subscription_id)
+                .execute(env.base.pool().postgres())
+                .await
+                .map(|_| ())
+        }
+    };
+    result.unwrap_or_else(|e| panic!("subscription created_at update failed: {e}"));
 }

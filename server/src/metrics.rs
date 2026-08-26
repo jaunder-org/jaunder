@@ -206,7 +206,7 @@ impl SaturationSources {
                     return Ok(None);
                 };
                 latest_successful_backup_timestamp(root)
-                    .map(|timestamp| timestamp.map(|timestamp| timestamp.timestamp()))
+                    .map(|timestamp| timestamp.map(|timestamp| timestamp.value().timestamp()))
             }
             #[cfg(test)]
             SaturationSourcesInner::Fake(fake) => fake.read_backup_last_success_timestamp(),
@@ -1005,9 +1005,7 @@ mod tests {
             version: "0.1.0".to_owned(),
             schema_version: 1,
             schema_checksum: "test-checksum".to_owned(),
-            timestamp: chrono::DateTime::parse_from_rfc3339("2026-01-02T00:00:00Z")
-                .expect("timestamp")
-                .to_utc(),
+            timestamp: "2026-01-02T00:00:00Z".parse().expect("timestamp"),
             mode: storage::BackupMode::Directory,
             tables: Vec::new(),
         };
@@ -1031,7 +1029,7 @@ mod tests {
         assert_eq!(snapshot.feed_queue_depth, Some(1));
         assert_eq!(
             snapshot.backup_last_success_timestamp,
-            Some(manifest.timestamp.timestamp())
+            Some(manifest.timestamp.value().timestamp())
         );
         assert_eq!(snapshot.media_storage_bytes, Some(0));
         assert_eq!(snapshot.media_filesystem_bytes, Some(6));

@@ -1,9 +1,9 @@
 //! Media file metadata storage.
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use common::media::{ByteSize, ContentHash, ContentType, Filename, MediaRef, MediaSource};
 use common::tagged_url::MediaSourceUrl;
+use common::time::UtcInstant;
 use sqlx::{Database, FromRow, Pool};
 use thiserror::Error;
 
@@ -38,7 +38,7 @@ pub struct MediaRecord {
     /// something no code can act on (#675).
     pub source_url: Option<MediaSourceUrl>,
     /// When the record was created.
-    pub created_at: DateTime<Utc>,
+    pub created_at: UtcInstant,
 }
 
 /// Errors that can occur when creating a media record.
@@ -203,7 +203,7 @@ where
     // delegate to `i64`) — the listing's `LIMIT`/`OFFSET` placeholders (#696).
     for<'q> RowLimit: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> PageOffset: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `try_delete_media` binds `force` into the guard's boolean expressions.
     for<'q> bool: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
@@ -523,7 +523,7 @@ mod tests {
             content_type: parse_content_type("image/jpeg"),
             size_bytes: parse_byte_size("2048"),
             source_url: None,
-            created_at: chrono::Utc::now(),
+            created_at: UtcInstant::now(),
         };
         env.state.media.create_media(&record).await.unwrap();
         let got = env
@@ -659,7 +659,7 @@ mod tests {
             content_type: parse_content_type("image/jpeg"),
             size_bytes: parse_byte_size("1"),
             source_url: None,
-            created_at: chrono::Utc::now(),
+            created_at: UtcInstant::now(),
         };
         env.state.media.create_media(&good).await.unwrap();
         // A second row's `sha256` is tampered to a non-hex value — only reachable via
@@ -704,7 +704,7 @@ mod tests {
             content_type: parse_content_type("image/jpeg"),
             size_bytes: parse_byte_size("1024"),
             source_url: None,
-            created_at: chrono::Utc::now(),
+            created_at: UtcInstant::now(),
         };
         let result = state.media.create_media(&record).await;
         assert!(result.is_err());

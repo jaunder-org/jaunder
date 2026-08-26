@@ -81,6 +81,7 @@ fn subscriber_from_record(row: SubscriberSummaryRecord) -> SubscriberSummary {
 mod tests {
     use super::*;
     use common::test_support::parse_audience_name;
+    use common::time::UtcInstant;
     use storage::{MockAudienceStorage, MockSubscriptionStorage};
 
     #[tokio::test]
@@ -92,12 +93,12 @@ mod tests {
                 AudienceRecord {
                     audience_id: AudienceId::from(3),
                     name: parse_audience_name("Friends"),
-                    created_at: chrono::Utc::now(),
+                    created_at: "2026-01-02T03:04:05.123456Z".parse::<UtcInstant>().unwrap(),
                 },
                 AudienceRecord {
                     audience_id: AudienceId::from(5),
                     name: parse_audience_name("Family"),
-                    created_at: chrono::Utc::now(),
+                    created_at: "2026-01-02T03:04:06.654321Z".parse::<UtcInstant>().unwrap(),
                 },
             ])
         });

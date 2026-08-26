@@ -64,7 +64,7 @@ pub async fn create(request: CreateInviteRequest) -> WebResult<()> {
     // out-of-range value at decode, so no in-body overflow check is needed. `hours` is
     // reused in the email body below.
     let hours = expires_in_hours.unwrap_or_default().value();
-    let expires_at = Utc::now() + chrono::Duration::hours(hours);
+    let expires_at = UtcInstant::from(Utc::now() + chrono::Duration::hours(hours));
 
     let code = invites
         .create_invite(expires_at)
@@ -105,9 +105,9 @@ pub async fn list() -> WebResult<Vec<Info>> {
     Ok(records
         .into_iter()
         .map(|r| Info {
-            created_at: UtcInstant::from(r.created_at),
-            expires_at: UtcInstant::from(r.expires_at),
-            used_at: r.used_at.map(UtcInstant::from),
+            created_at: r.created_at,
+            expires_at: r.expires_at,
+            used_at: r.used_at,
             used_by: r.used_by,
         })
         .collect())

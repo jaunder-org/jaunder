@@ -5,10 +5,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::websub::WebSubClient;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use common::feed::{FeedPath, affected_feed_urls};
 use common::ids::FeedEventId;
 use common::tagged_url::{FeedUrl, HubUrl, compose};
+use common::time::UtcInstant;
 use storage::{
     FeedCacheStorage, FeedEventRecord, FeedEventStorage, PostStorage, SiteConfigStorage,
 };
@@ -52,7 +53,7 @@ pub struct FeedWorker {
     /// The instant of the previous [`go_live_pass`](Self::go_live_pass), or
     /// `None` before the first pass. `None` triggers the feed-relative startup
     /// catch-up; a `Some(last)` runs the steady-state `(last, now]` window.
-    last_tick: Mutex<Option<DateTime<Utc>>>,
+    last_tick: Mutex<Option<UtcInstant>>,
 }
 
 impl FeedWorker {
@@ -119,7 +120,7 @@ impl FeedWorker {
     /// # Errors
     ///
     /// Returns an error if a storage read or feed-event enqueue fails.
-    pub async fn go_live_pass(&self, now: DateTime<Utc>) -> anyhow::Result<()> {
+    pub async fn go_live_pass(&self, now: UtcInstant) -> anyhow::Result<()> {
         let mut last_tick = self.last_tick.lock().await;
         let urls = match *last_tick {
             None => self.posts().feed_urls_needing_catchup(now).await?,
@@ -156,7 +157,7 @@ impl FeedWorker {
         // Enqueue go-live regeneration first so the same tick drains what it
         // just enqueued. A failure here must not abort the independent queue
         // drain, but it remains operationally visible.
-        if let Err(e) = self.go_live_pass(Utc::now()).await {
+        if let Err(e) = self.go_live_pass(UtcInstant::now()).await {
             report_continuation(
                 host::error::ErrorKind::Storage,
                 host::error::ErrorClass::Transient,
@@ -351,7 +352,7 @@ impl FeedWorker {
                         let delay = chrono::Duration::seconds(
                             i64::try_from(BACKOFFS_SECS[next_attempt_idx]).unwrap_or(60),
                         );
-                        let next = Utc::now() + delay;
+                        let next = UtcInstant::from(Utc::now() + delay);
                         host::metrics::websub_ping(host::metrics::PingOutcome::Failed);
                         if let Err(error) = self
                             .feed_events()
@@ -406,10 +407,12 @@ impl FeedWorker {
                 );
             }
         } else {
-            let next = Utc::now()
-                + chrono::Duration::seconds(
-                    i64::try_from(BACKOFFS_SECS[next_attempt_idx]).unwrap_or(60),
-                );
+            let next = UtcInstant::from(
+                Utc::now()
+                    + chrono::Duration::seconds(
+                        i64::try_from(BACKOFFS_SECS[next_attempt_idx]).unwrap_or(60),
+                    ),
+            );
             if let Err(error) = self
                 .feed_events()
                 .mark_failed(ids, &e.to_string(), next)
@@ -486,7 +489,7 @@ mod tests {
     use storage::{FeedEventError, FeedEventRecord, FeedEventStatus};
 
     fn event(id: i64, feed_url: &str, attempts: i32) -> FeedEventRecord {
-        let now = Utc::now();
+        let now = UtcInstant::now();
         FeedEventRecord {
             id: FeedEventId::from(id),
             feed_path: feed_url.parse().expect("valid feed path in test"),
@@ -1051,7 +1054,9 @@ mod tests {
             storage::MockFeedCacheStorage::new(),
             events,
         );
-        w.go_live_pass(Utc::now()).await.expect("catch-up pass");
+        w.go_live_pass(UtcInstant::now())
+            .await
+            .expect("catch-up pass");
     }
 
     // guard:no-backend — mock store
@@ -1095,8 +1100,12 @@ mod tests {
             storage::MockFeedCacheStorage::new(),
             events,
         );
-        w.go_live_pass(Utc::now()).await.expect("priming pass");
-        w.go_live_pass(Utc::now()).await.expect("windowed pass");
+        w.go_live_pass(UtcInstant::now())
+            .await
+            .expect("priming pass");
+        w.go_live_pass(UtcInstant::now())
+            .await
+            .expect("windowed pass");
     }
 
     // guard:no-backend — mock store

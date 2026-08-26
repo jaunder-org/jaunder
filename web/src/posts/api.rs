@@ -46,7 +46,6 @@ use {
     crate::error::InternalError,
     crate::feed_events::enqueue_feed_events,
     crate::viewer::viewer_identity,
-    chrono::Utc,
     common::tag::Tag,
     leptos::prelude::*,
     std::{collections::BTreeSet, sync::Arc},
@@ -66,7 +65,7 @@ fn unpublished_post_from_record(post: PostRecord) -> UnpublishedPost {
         post: SavedPost {
             post_id: post.post_id,
             slug: post.slug,
-            published_at: post.published_at.map(UtcInstant::from),
+            published_at: post.published_at,
             permalink,
         },
         title: post.title,
@@ -182,11 +181,7 @@ pub async fn create(post: PostInputs) -> WebResult<SavedPost> {
 
     // Publish + a supplied time = scheduled (future) or backdated (past);
     // publish + no time = live now; not publishing = draft (NULL).
-    let published_at = if publish {
-        Some(publish_at.map_or_else(Utc::now, UtcInstant::value))
-    } else {
-        None
-    };
+    let published_at = publish.then(|| publish_at.unwrap_or_else(UtcInstant::now));
     // `PostSummary`'s `FromStr` already trims and rejects empty at arg-decode
     // (ADR-0065), so the value is passed through typed — no `non_empty_owned`
     // normalization needed.
@@ -209,7 +204,7 @@ pub async fn create(post: PostInputs) -> WebResult<SavedPost> {
     )
     .await?;
 
-    let published_at = record.published_at.map(UtcInstant::from);
+    let published_at = record.published_at;
     // The canonical permalink is always available — for a draft it is the
     // created_at-based URL the permalink view renders for the author.
     let permalink = record.permalink();
@@ -241,7 +236,7 @@ pub async fn create(post: PostInputs) -> WebResult<SavedPost> {
 #[macros::server]
 pub async fn get(username: Username, date: PermalinkDate, slug: Slug) -> WebResult<AuthoredPost> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
-    let now = Utc::now();
+    let now = UtcInstant::now();
 
     let viewer = viewer_identity().await?;
     if let Some(post) =
@@ -291,7 +286,7 @@ pub async fn get_preview(post_id: PostId) -> WebResult<EditPostPreview> {
         return Err(not_found_error());
     }
 
-    let fetched_at = UtcInstant::from(Utc::now());
+    let fetched_at = UtcInstant::now();
     Ok(EditPostPreview {
         post: authored_post(post, true),
         fetched_at,
@@ -337,7 +332,6 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost> {
 
     // A supplied time schedules/backdates; `None` lets storage keep an
     // existing timestamp or stamp `now` for a not-yet-published post.
-    let publish_at = publish_at.map(UtcInstant::value);
 
     let record = perform_post_update(
         posts.as_ref(),
@@ -373,7 +367,7 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost> {
         .await
         .map_err(InternalError::storage)?;
 
-    let published_at = record.published_at.map(UtcInstant::from);
+    let published_at = record.published_at;
     // The canonical permalink is always available (created_at-based for a draft).
     let permalink = record.permalink();
 
@@ -439,7 +433,7 @@ pub async fn list_drafts(
             auth.user_id,
             parsed_cursor.as_ref(),
             page_size.fetch_limit(),
-            chrono::Utc::now(),
+            UtcInstant::now(),
         )
         .await?;
 
@@ -483,7 +477,7 @@ pub async fn list_scheduled(
             auth.user_id,
             parsed_cursor.as_ref(),
             page_size.fetch_limit(),
-            chrono::Utc::now(),
+            UtcInstant::now(),
         )
         .await?;
 
@@ -533,7 +527,7 @@ pub async fn publish(post_id: PostId) -> WebResult<SavedPost> {
     Ok(SavedPost {
         post_id: updated.post_id,
         slug: updated.slug.clone(),
-        published_at: Some(UtcInstant::from(published_at)),
+        published_at: Some(published_at),
         permalink: updated.permalink(),
     })
 }
@@ -607,6 +601,7 @@ pub async fn unpublish(post_id: PostId) -> WebResult<SavedPost> {
 mod tests {
     use common::slug::Slug;
     use common::test_support::{parse_post_body, parse_username};
+    use common::time::UtcInstant;
     use storage::candidate_slug;
 
     // A wire DTO's `rendered_html` survives a serde round-trip: `Serialize` writes
@@ -765,9 +760,9 @@ mod tests {
                 body: parse_post_body("Titleless note"),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>Titleless note</p>"),
-                created_at: base_time,
-                updated_at: base_time,
-                published_at: Some(base_time),
+                created_at: UtcInstant::from(base_time),
+                updated_at: UtcInstant::from(base_time),
+                published_at: Some(UtcInstant::from(base_time)),
                 deleted_at: None,
                 summary: None,
                 tags: vec![],
@@ -809,8 +804,8 @@ mod tests {
                 body: parse_post_body("body"),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
-                created_at: base_time,
-                updated_at: base_time,
+                created_at: UtcInstant::from(base_time),
+                updated_at: UtcInstant::from(base_time),
                 published_at: None,
                 deleted_at: None,
                 summary: None,
@@ -832,9 +827,9 @@ mod tests {
                 body: parse_post_body("body"),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
-                created_at: base_time,
-                updated_at: base_time,
-                published_at: Some(base_time),
+                created_at: UtcInstant::from(base_time),
+                updated_at: UtcInstant::from(base_time),
+                published_at: Some(UtcInstant::from(base_time)),
                 deleted_at: None,
                 summary: None,
                 tags: vec![],
@@ -861,6 +856,7 @@ mod server_tests {
     use common::slug::Slug;
     use common::tag::TagLabel;
     use common::test_support::{parse_post_body, parse_tag_label, parse_username};
+    use common::time::UtcInstant;
     use leptos::prelude::provide_context;
     use leptos::reactive::owner::Owner;
     use std::sync::Arc;
@@ -880,8 +876,8 @@ mod server_tests {
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
-            created_at: now,
-            updated_at: now,
+            created_at: UtcInstant::from(now),
+            updated_at: UtcInstant::from(now),
             published_at: None,
             deleted_at: None,
             summary: None,

@@ -1,7 +1,6 @@
 use crate::error::{ErrorClass, ErrorKind, InternalError, WebError};
 use common::ids::UserId;
 use common::seed::{AuthoredPost, RenderedPost, TagSummary};
-use common::time::UtcInstant;
 use leptos::context::use_context;
 use leptos_axum::ResponseOptions;
 use storage::{PostRecord, PostTag};
@@ -32,8 +31,8 @@ pub fn rendered_post(post: PostRecord, viewer_user_id: Option<UserId>) -> Option
         summary,
         slug,
         rendered_html,
-        created_at: UtcInstant::from(created_at),
-        published_at: Some(UtcInstant::from(published_at)),
+        created_at,
+        published_at: Some(published_at),
         permalink: Some(permalink),
         is_author: viewer_user_id == Some(user_id),
         // Only ever built from a published post (the `?` above bails on a draft).
@@ -86,9 +85,9 @@ pub fn authored_post(post: PostRecord, is_author: bool) -> AuthoredPost {
             summary,
             slug,
             rendered_html,
-            created_at: UtcInstant::from(created_at),
+            created_at,
             is_draft: published_at.is_none(),
-            published_at: published_at.map(UtcInstant::from),
+            published_at,
             permalink,
             is_author,
             tags: post_tags_to_summaries(tags),
@@ -137,6 +136,7 @@ mod tests {
         use common::{
             ids::{PostId, UserId},
             slug::Slug,
+            time::UtcInstant,
         };
         use storage::{PostFormat, PostRecord, RenderedHtml};
 
@@ -154,9 +154,9 @@ mod tests {
                 body: parse_post_body("body"),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
-                created_at: base_time,
-                updated_at: base_time,
-                published_at: Some(base_time),
+                created_at: UtcInstant::from(base_time),
+                updated_at: UtcInstant::from(base_time),
+                published_at: Some(UtcInstant::from(base_time)),
                 deleted_at: None,
                 summary: Some(parse_post_summary("the summary")),
                 tags: vec![],
@@ -188,6 +188,7 @@ mod tests {
         use common::{
             ids::{PostId, UserId},
             slug::Slug,
+            time::UtcInstant,
         };
         use storage::{PostFormat, PostRecord, RenderedHtml};
 
@@ -205,8 +206,8 @@ mod tests {
                 body: parse_post_body("body"),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
-                created_at: base_time,
-                updated_at: base_time,
+                created_at: UtcInstant::from(base_time),
+                updated_at: UtcInstant::from(base_time),
                 published_at: None,
                 deleted_at: None,
                 summary: None,
@@ -242,6 +243,7 @@ mod tests {
         use common::{
             ids::{PostId, UserId},
             slug::Slug,
+            time::UtcInstant,
         };
         use storage::{PostFormat, PostRecord, RenderedHtml};
 
@@ -259,8 +261,8 @@ mod tests {
                 body: parse_post_body("body"),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
-                created_at: base_time,
-                updated_at: base_time,
+                created_at: UtcInstant::from(base_time),
+                updated_at: UtcInstant::from(base_time),
                 published_at: None,
                 deleted_at: None,
                 summary: None,

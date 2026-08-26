@@ -1,4 +1,5 @@
 use common::ids::FeedEventId;
+use common::time::UtcInstant;
 use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, backends, fp};
@@ -26,7 +27,7 @@ async fn feed_events_marks_run(#[case] backend: Backend) {
     fe.mark_failed(
         &ids,
         "boom",
-        chrono::Utc::now() + chrono::Duration::minutes(1),
+        UtcInstant::from(chrono::Utc::now() + chrono::Duration::minutes(1)),
     )
     .await
     .unwrap();

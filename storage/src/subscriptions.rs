@@ -10,16 +10,15 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use sqlx::{Database, Pool, Row};
-
 use common::ids::{ChannelId, SubscriptionId, UserId};
+use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::{
     InvalidSubscriberRef, SubscriberIdentity, SubscriberRef, SubscriptionPolicy,
     SubscriptionStatus, ViewerIdentity, local_subscriber_ref,
 };
 use host::error::InternalResult;
+use sqlx::{Database, Pool, Row};
 
 use crate::error::RequireRow;
 
@@ -33,7 +32,7 @@ pub struct SubscriptionRecord {
     /// Current admission status.
     pub status: SubscriptionStatus,
     /// When the subscription row was created.
-    pub created_at: DateTime<Utc>,
+    pub created_at: UtcInstant,
 }
 
 /// A subscriber row projected for named-audience presentation.
@@ -205,7 +204,7 @@ where
     for<'r> ChannelId: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
     for<'r> SubscriberRef: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
     for<'r> Username: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
-    for<'r> DateTime<Utc>: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> UtcInstant: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
     for<'r> &'r str: sqlx::ColumnIndex<DB::Row>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q SubscriberRef: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -305,7 +304,7 @@ where
         for row in rows {
             let subscription_id: SubscriptionId = row.try_get("subscription_id")?;
             let channel_id: ChannelId = row.try_get("channel_id")?;
-            let created_at: DateTime<Utc> = row.try_get("created_at")?;
+            let created_at: UtcInstant = row.try_get("created_at")?;
             let subscriber_ref = match row.try_get::<SubscriberRef, _>("subscriber_ref") {
                 Ok(subscriber_ref) => subscriber_ref,
                 Err(error) if invalid_subscriber_ref_decode(&error) => {

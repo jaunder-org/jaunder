@@ -21,7 +21,7 @@ use crate::posts::{
 };
 use crate::sql::quote_identifier;
 use crate::{AppState, DbConnectOptions, PostFormat, PostRecord, resolved_postgres_options};
-use chrono::{DateTime, Utc};
+
 use common::feed::FeedPath;
 use common::ids::{PostId, TagId, UserId};
 use common::mailer::{MailSender, NoopMailSender};
@@ -36,6 +36,7 @@ use common::test_support::{
     parse_byte_size, parse_content_hash, parse_display_name, parse_filename, parse_password,
     parse_post_body, parse_post_title, parse_slug, parse_tag_label, parse_username,
 };
+use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::AudienceTarget;
 use host::invite::InviteCode;
@@ -1086,7 +1087,7 @@ impl SeedPost {
                 title: self.title.as_ref(),
                 format: PostFormat::Markdown,
                 slug_override: None,
-                published_at: Some(Utc::now()),
+                published_at: Some(UtcInstant::now()),
                 max_attempts: 100,
                 summary: None,
                 audiences: self.audiences,
@@ -1107,7 +1108,7 @@ pub struct SeededPost {
     pub post_id: PostId,
     pub slug: Slug,
     pub title: PostTitle,
-    pub published_at: Option<DateTime<Utc>>,
+    pub published_at: Option<UtcInstant>,
     // rendered-html-from-trusted:allow over-included test-support seed carries render(body) output for assertions (#701)
     pub rendered_html: RenderedHtml,
 }
@@ -1137,7 +1138,7 @@ pub struct SeedRawPost {
     slug: Option<Slug>,
     body: PostBody,
     format: PostFormat,
-    published_at: Option<DateTime<Utc>>,
+    published_at: Option<UtcInstant>,
     summary: Option<PostSummary>,
     audiences: Vec<AudienceTarget>,
     tags: Vec<TagLabel>,
@@ -1153,7 +1154,7 @@ impl SeedRawPost {
             slug: None,
             body: parse_post_body("seed body"),
             format: PostFormat::Markdown,
-            published_at: Some(Utc::now()),
+            published_at: Some(UtcInstant::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
             tags: Vec::new(),
@@ -1205,7 +1206,7 @@ impl SeedRawPost {
 
     /// Seed with an exact publication instant (scheduled / backdated / go-live-window).
     #[must_use]
-    pub fn published_at(mut self, at: DateTime<Utc>) -> Self {
+    pub fn published_at(mut self, at: UtcInstant) -> Self {
         self.published_at = Some(at);
         self
     }
@@ -1470,7 +1471,7 @@ pub async fn seed_media(state: &Arc<AppState>, user_id: UserId, name: &str) -> M
             content_type: detect_content_type(&media.filename),
             size_bytes: parse_byte_size("1"),
             source_url: None,
-            created_at: Utc::now(),
+            created_at: UtcInstant::now(),
         })
         .await
         .expect("seed media should be created");
@@ -1532,7 +1533,7 @@ pub async fn create_post_via_service(
     user_id: UserId,
     body: PostBody,
 ) -> PostId {
-    create_via_service(state, user_id, body, Some(Utc::now())).await
+    create_via_service(state, user_id, body, Some(UtcInstant::now())).await
 }
 
 /// The unpublished twin of [`create_post_via_service`] — the draft a publication test
@@ -1556,7 +1557,7 @@ async fn create_via_service(
     state: &Arc<AppState>,
     user_id: UserId,
     body: PostBody,
-    published_at: Option<DateTime<Utc>>,
+    published_at: Option<UtcInstant>,
 ) -> PostId {
     crate::perform_post_creation(
         state.posts.as_ref(),
@@ -1614,10 +1615,10 @@ pub async fn update_post_body_via_service(
 mod tests {
     use super::{
         AudienceTarget, Backend, CreatePostError, PostFormat, PostSummary, SeedPost, SeedRawPost,
-        SeedUser, backends, bootstrap_url, parse_password, parse_post_title, report_drop_outcome,
-        splice_db_name,
+        SeedUser, UtcInstant, backends, bootstrap_url, parse_password, parse_post_title,
+        report_drop_outcome, splice_db_name,
     };
-    use chrono::Utc;
+
     // The free renderer, to pin that the builder's HTML is exactly `render(body)` — the
     // half of `RenderOutput` the seeded record carries.
     use common::render::render;
@@ -1950,7 +1951,7 @@ mod tests {
                 None,
                 parse_row_limit("50"),
                 &ViewerIdentity::Anonymous,
-                Utc::now(),
+                UtcInstant::now(),
             )
             .await
             .unwrap();

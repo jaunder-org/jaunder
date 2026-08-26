@@ -297,7 +297,7 @@ mod tests {
                 None,
                 common::test_support::parse_row_limit("10"),
                 &common::visibility::ViewerIdentity::Anonymous,
-                chrono::Utc::now(),
+                common::time::UtcInstant::now(),
             )
             .await
             .expect("list ok");

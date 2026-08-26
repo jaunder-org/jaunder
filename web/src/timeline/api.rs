@@ -29,6 +29,7 @@ use {
     },
     crate::auth::require_auth,
     crate::viewer::viewer_identity,
+    common::time::UtcInstant,
     leptos::prelude::*,
     std::sync::Arc,
     storage::{PostStorage, UserStorage, keyset_cursor},
@@ -83,7 +84,7 @@ pub async fn list_home_feed(
             cursor.as_ref(),
             page_size.fetch_limit(),
             &viewer,
-            chrono::Utc::now(),
+            UtcInstant::now(),
         )
         .await?;
 

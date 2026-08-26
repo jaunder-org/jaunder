@@ -1,11 +1,14 @@
 use chrono::{Datelike, Utc};
-use common::ids::{PostId, UserId};
-use common::tag::{Tag, TagLabel};
-use common::test_support::{
-    parse_content_type, parse_etag, parse_post_body, parse_row_limit, permalink_date,
+use common::{
+    ids::{PostId, UserId},
+    tag::{Tag, TagLabel},
+    test_support::{
+        parse_content_type, parse_etag, parse_post_body, parse_row_limit, permalink_date,
+    },
+    time::UtcInstant,
+    username::Username,
+    visibility::{AudienceTarget, ViewerIdentity},
 };
-use common::username::Username;
-use common::visibility::{AudienceTarget, ViewerIdentity};
 use std::sync::Arc;
 use storage::test_support::{Backend, SeedRawPost, SeedUser, backends, fp};
 use storage::{
@@ -32,7 +35,7 @@ async fn anon_user_by_tag(
             None,
             parse_row_limit(limit),
             &ViewerIdentity::Anonymous,
-            Utc::now(),
+            common::time::UtcInstant::now(),
         )
         .await
         .expect("list_user_posts_by_tag failed")
@@ -50,7 +53,7 @@ async fn anon_published_by_user(
             None,
             parse_row_limit(limit),
             &ViewerIdentity::Anonymous,
-            Utc::now(),
+            common::time::UtcInstant::now(),
         )
         .await
         .expect("list_published_by_user failed")
@@ -59,7 +62,12 @@ async fn anon_published_by_user(
 async fn drafts_of(state: &AppState, user_id: UserId, limit: &str) -> Vec<PostRecord> {
     state
         .posts
-        .list_drafts_by_user(user_id, None, parse_row_limit(limit), Utc::now())
+        .list_drafts_by_user(
+            user_id,
+            None,
+            parse_row_limit(limit),
+            common::time::UtcInstant::now(),
+        )
         .await
         .expect("list_drafts_by_user failed")
 }
@@ -72,7 +80,7 @@ async fn seed_post_published_at(
     state: &Arc<AppState>,
     user_id: UserId,
     slug: &str,
-    published_at: chrono::DateTime<Utc>,
+    published_at: common::time::UtcInstant,
 ) -> PostId {
     create_rendered_post(
         &*state.posts,
@@ -105,8 +113,20 @@ async fn permalink_hides_scheduled_until_due(#[case] backend: Backend) {
     let state = &env.state;
     let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
     let user = SeedUser::new().seed(state).await;
-    seed_post_published_at(state, user.user_id, "live-one", now - Duration::hours(1)).await;
-    seed_post_published_at(state, user.user_id, "sched-one", now + Duration::hours(1)).await;
+    seed_post_published_at(
+        state,
+        user.user_id,
+        "live-one",
+        common::time::UtcInstant::from(now - Duration::hours(1)),
+    )
+    .await;
+    seed_post_published_at(
+        state,
+        user.user_id,
+        "sched-one",
+        common::time::UtcInstant::from(now + Duration::hours(1)),
+    )
+    .await;
 
     // At `now`: the live post is visible, the scheduled one is not.
     let got_live = state
@@ -116,7 +136,7 @@ async fn permalink_hides_scheduled_until_due(#[case] backend: Backend) {
             permalink_date(2026, 6, 26),
             &"live-one".parse().unwrap(),
             &ViewerIdentity::Anonymous,
-            now,
+            common::time::UtcInstant::from(now),
         )
         .await
         .unwrap();
@@ -128,7 +148,7 @@ async fn permalink_hides_scheduled_until_due(#[case] backend: Backend) {
             permalink_date(2026, 6, 26),
             &"sched-one".parse().unwrap(),
             &ViewerIdentity::Anonymous,
-            now,
+            common::time::UtcInstant::from(now),
         )
         .await
         .unwrap();
@@ -147,7 +167,7 @@ async fn permalink_hides_scheduled_until_due(#[case] backend: Backend) {
             permalink_date(2026, 6, 26),
             &"sched-one".parse().unwrap(),
             &ViewerIdentity::Anonymous,
-            due,
+            common::time::UtcInstant::from(due),
         )
         .await
         .unwrap();
@@ -165,10 +185,20 @@ async fn list_published_by_user_hides_scheduled_until_due(#[case] backend: Backe
     let state = &env.state;
     let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
     let user = SeedUser::new().seed(state).await;
-    let live =
-        seed_post_published_at(state, user.user_id, "live-one", now - Duration::hours(1)).await;
-    let sched =
-        seed_post_published_at(state, user.user_id, "sched-one", now + Duration::hours(1)).await;
+    let live = seed_post_published_at(
+        state,
+        user.user_id,
+        "live-one",
+        common::time::UtcInstant::from(now - Duration::hours(1)),
+    )
+    .await;
+    let sched = seed_post_published_at(
+        state,
+        user.user_id,
+        "sched-one",
+        common::time::UtcInstant::from(now + Duration::hours(1)),
+    )
+    .await;
 
     let at_now = state
         .posts
@@ -177,7 +207,7 @@ async fn list_published_by_user_hides_scheduled_until_due(#[case] backend: Backe
             None,
             parse_row_limit("50"),
             &ViewerIdentity::Anonymous,
-            now,
+            common::time::UtcInstant::from(now),
         )
         .await
         .unwrap();
@@ -196,7 +226,7 @@ async fn list_published_by_user_hides_scheduled_until_due(#[case] backend: Backe
             None,
             parse_row_limit("50"),
             &ViewerIdentity::Anonymous,
-            after,
+            common::time::UtcInstant::from(after),
         )
         .await
         .unwrap();
@@ -214,12 +244,29 @@ async fn list_published_hides_scheduled_until_due(#[case] backend: Backend) {
     let state = &env.state;
     let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
     let user_id = SeedUser::new().seed(state).await.user_id;
-    let live = seed_post_published_at(state, user_id, "live-one", now - Duration::hours(1)).await;
-    let sched = seed_post_published_at(state, user_id, "sched-one", now + Duration::hours(1)).await;
+    let live = seed_post_published_at(
+        state,
+        user_id,
+        "live-one",
+        common::time::UtcInstant::from(now - Duration::hours(1)),
+    )
+    .await;
+    let sched = seed_post_published_at(
+        state,
+        user_id,
+        "sched-one",
+        common::time::UtcInstant::from(now + Duration::hours(1)),
+    )
+    .await;
 
     let at_now = state
         .posts
-        .list_published(None, parse_row_limit("50"), &ViewerIdentity::Anonymous, now)
+        .list_published(
+            None,
+            parse_row_limit("50"),
+            &ViewerIdentity::Anonymous,
+            common::time::UtcInstant::from(now),
+        )
         .await
         .unwrap();
     let ids_now: Vec<PostId> = at_now.iter().map(|p| p.post_id).collect();
@@ -236,7 +283,7 @@ async fn list_published_hides_scheduled_until_due(#[case] backend: Backend) {
             None,
             parse_row_limit("50"),
             &ViewerIdentity::Anonymous,
-            after,
+            common::time::UtcInstant::from(after),
         )
         .await
         .unwrap();
@@ -254,8 +301,20 @@ async fn list_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backend) {
     let state = &env.state;
     let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
     let user_id = SeedUser::new().seed(state).await.user_id;
-    let live = seed_post_published_at(state, user_id, "live-one", now - Duration::hours(1)).await;
-    let sched = seed_post_published_at(state, user_id, "sched-one", now + Duration::hours(1)).await;
+    let live = seed_post_published_at(
+        state,
+        user_id,
+        "live-one",
+        common::time::UtcInstant::from(now - Duration::hours(1)),
+    )
+    .await;
+    let sched = seed_post_published_at(
+        state,
+        user_id,
+        "sched-one",
+        common::time::UtcInstant::from(now + Duration::hours(1)),
+    )
+    .await;
     state
         .posts
         .set_post_tags(live, &["scheduling".parse::<TagLabel>().unwrap()])
@@ -275,7 +334,7 @@ async fn list_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backend) {
             None,
             parse_row_limit("50"),
             &ViewerIdentity::Anonymous,
-            now,
+            common::time::UtcInstant::from(now),
         )
         .await
         .unwrap();
@@ -294,7 +353,7 @@ async fn list_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backend) {
             None,
             parse_row_limit("50"),
             &ViewerIdentity::Anonymous,
-            after,
+            common::time::UtcInstant::from(after),
         )
         .await
         .unwrap();
@@ -312,8 +371,20 @@ async fn list_user_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backe
     let state = &env.state;
     let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
     let user_id = SeedUser::new().seed(state).await.user_id;
-    let live = seed_post_published_at(state, user_id, "live-one", now - Duration::hours(1)).await;
-    let sched = seed_post_published_at(state, user_id, "sched-one", now + Duration::hours(1)).await;
+    let live = seed_post_published_at(
+        state,
+        user_id,
+        "live-one",
+        common::time::UtcInstant::from(now - Duration::hours(1)),
+    )
+    .await;
+    let sched = seed_post_published_at(
+        state,
+        user_id,
+        "sched-one",
+        common::time::UtcInstant::from(now + Duration::hours(1)),
+    )
+    .await;
     state
         .posts
         .set_post_tags(live, &["scheduling".parse::<TagLabel>().unwrap()])
@@ -334,7 +405,7 @@ async fn list_user_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backe
             None,
             parse_row_limit("50"),
             &ViewerIdentity::Anonymous,
-            now,
+            common::time::UtcInstant::from(now),
         )
         .await
         .unwrap();
@@ -354,7 +425,7 @@ async fn list_user_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backe
             None,
             parse_row_limit("50"),
             &ViewerIdentity::Anonymous,
-            after,
+            common::time::UtcInstant::from(after),
         )
         .await
         .unwrap();
@@ -407,7 +478,9 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
 
     let now = Utc::now();
     let make_post = |user_id: UserId, days_ago: i64| {
-        SeedRawPost::new(user_id).published_at(now - Duration::days(days_ago))
+        SeedRawPost::new(user_id).published_at(common::time::UtcInstant::from(
+            now - Duration::days(days_ago),
+        ))
     };
 
     // Alice: 4 posts published 1, 2, 100, 200 days ago.
@@ -432,13 +505,18 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
     };
     let site = state
         .posts
-        .list_published_in_window(&FeedSurface::Site, &window, now, &ViewerIdentity::Anonymous)
+        .list_published_in_window(
+            &FeedSurface::Site,
+            &window,
+            common::time::UtcInstant::from(now),
+            &ViewerIdentity::Anonymous,
+        )
         .await
         .unwrap();
     assert_eq!(site.len(), 3, "site feed in {{3 items, 30 days}}");
     assert!(
         site.iter()
-            .all(|p| p.published_at.unwrap() >= now - Duration::days(30))
+            .all(|p| p.published_at.unwrap().value() >= now - Duration::days(30))
     );
 
     // Site feed with min_items=5: top 5 includes all four real posts plus
@@ -449,7 +527,12 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
     };
     let site_big = state
         .posts
-        .list_published_in_window(&FeedSurface::Site, &big, now, &ViewerIdentity::Anonymous)
+        .list_published_in_window(
+            &FeedSurface::Site,
+            &big,
+            common::time::UtcInstant::from(now),
+            &ViewerIdentity::Anonymous,
+        )
         .await
         .unwrap();
     assert_eq!(site_big.len(), 5, "min_items=5 pulls in older posts");
@@ -468,7 +551,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
                 username: alice.username.clone(),
             },
             &alice_window,
-            now,
+            common::time::UtcInstant::from(now),
             &ViewerIdentity::Anonymous,
         )
         .await
@@ -487,7 +570,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
                 min_items: parse_feed_min_items("10"),
                 min_days: parse_feed_min_days("1"),
             },
-            now,
+            common::time::UtcInstant::from(now),
             &ViewerIdentity::Anonymous,
         )
         .await
@@ -515,7 +598,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
                 min_items: parse_feed_min_items("20"),
                 min_days: parse_feed_min_days("30"),
             },
-            now,
+            common::time::UtcInstant::from(now),
             &ViewerIdentity::Anonymous,
         )
         .await
@@ -534,7 +617,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
                 min_items: parse_feed_min_items("20"),
                 min_days: parse_feed_min_days("30"),
             },
-            now,
+            common::time::UtcInstant::from(now),
             &ViewerIdentity::Anonymous,
         )
         .await
@@ -553,7 +636,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
                 min_items: parse_feed_min_items("20"),
                 min_days: parse_feed_min_days("30"),
             },
-            now,
+            common::time::UtcInstant::from(now),
             &ViewerIdentity::Anonymous,
         )
         .await
@@ -641,13 +724,30 @@ async fn drafts_list_includes_scheduled_excludes_live(#[case] backend: Backend) 
         .seed(state)
         .await;
     // Scheduled post (published_at in the future).
-    seed_post_published_at(state, user_id, "a-sched", now + Duration::hours(2)).await;
+    seed_post_published_at(
+        state,
+        user_id,
+        "a-sched",
+        common::time::UtcInstant::from(now + Duration::hours(2)),
+    )
+    .await;
     // Live post (published_at in the past).
-    seed_post_published_at(state, user_id, "a-live", now - Duration::hours(2)).await;
+    seed_post_published_at(
+        state,
+        user_id,
+        "a-live",
+        common::time::UtcInstant::from(now - Duration::hours(2)),
+    )
+    .await;
 
     let rows = state
         .posts
-        .list_drafts_by_user(user_id, None, parse_row_limit("50"), now)
+        .list_drafts_by_user(
+            user_id,
+            None,
+            parse_row_limit("50"),
+            common::time::UtcInstant::from(now),
+        )
         .await
         .unwrap();
     let slugs: Vec<String> = rows.iter().map(|p| p.slug.to_string()).collect();
@@ -686,7 +786,7 @@ async fn list_posts_gone_live_between_returns_only_window_with_tags(#[case] back
         state,
         alice.user_id,
         "in-window",
-        after + Duration::minutes(30),
+        common::time::UtcInstant::from(after + Duration::minutes(30)),
     )
     .await;
     state
@@ -695,21 +795,36 @@ async fn list_posts_gone_live_between_returns_only_window_with_tags(#[case] back
         .await
         .unwrap();
     // Exactly at the inclusive upper bound: must be returned (untagged).
-    seed_post_published_at(state, bob.user_id, "at-upto", upto).await;
+    seed_post_published_at(
+        state,
+        bob.user_id,
+        "at-upto",
+        common::time::UtcInstant::from(upto),
+    )
+    .await;
     // Exactly at the exclusive lower bound: must be excluded.
-    seed_post_published_at(state, alice.user_id, "at-after", after).await;
+    seed_post_published_at(
+        state,
+        alice.user_id,
+        "at-after",
+        common::time::UtcInstant::from(after),
+    )
+    .await;
     // Past the window: must be excluded.
     seed_post_published_at(
         state,
         alice.user_id,
         "out-window",
-        upto + Duration::hours(1),
+        common::time::UtcInstant::from(upto + Duration::hours(1)),
     )
     .await;
 
     let live: Vec<GoLivePost> = state
         .posts
-        .list_posts_gone_live_between(after, upto)
+        .list_posts_gone_live_between(
+            common::time::UtcInstant::from(after),
+            common::time::UtcInstant::from(upto),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -752,15 +867,20 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
 
     // A live post, newer than t0, on the site/user feeds and — once tagged —
     // on the site-tag and user-tag feeds too.
-    let post =
-        seed_post_published_at(state, alice.user_id, "live-one", now - Duration::hours(1)).await;
+    let post = seed_post_published_at(
+        state,
+        alice.user_id,
+        "live-one",
+        common::time::UtcInstant::from(now - Duration::hours(1)),
+    )
+    .await;
     state
         .posts
         .set_post_tags(post, &["rust".parse::<TagLabel>().unwrap()])
         .await
         .unwrap();
 
-    let mk_row = |feed_url: &str, generated_at| FeedCacheRow {
+    let mk_row = |feed_url: &str, generated_at: UtcInstant| FeedCacheRow {
         feed_path: fp(feed_url),
         body: "cached".to_string(),
         etag: parse_etag("\"etag\""),
@@ -784,27 +904,31 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
     // Stale (generated before go-live) => must be returned.
     state
         .feed_cache
-        .upsert(mk_row("/feed.atom", t0))
+        .upsert(mk_row("/feed.atom", UtcInstant::from(t0)))
         .await
         .unwrap();
     state
         .feed_cache
-        .upsert(mk_row(&site_tag_url, t0))
+        .upsert(mk_row(&site_tag_url, UtcInstant::from(t0)))
         .await
         .unwrap();
     state
         .feed_cache
-        .upsert(mk_row(&user_tag_url, t0))
+        .upsert(mk_row(&user_tag_url, UtcInstant::from(t0)))
         .await
         .unwrap();
     // Fresh (generated after the newest live post) => must NOT be returned.
     state
         .feed_cache
-        .upsert(mk_row("/~alice/feed.atom", now))
+        .upsert(mk_row("/~alice/feed.atom", UtcInstant::from(now)))
         .await
         .unwrap();
 
-    let stale = state.posts.feed_urls_needing_catchup(now).await.unwrap();
+    let stale = state
+        .posts
+        .feed_urls_needing_catchup(common::time::UtcInstant::from(now))
+        .await
+        .unwrap();
     assert!(
         stale.iter().any(|u| u.as_ref() == "/feed.atom"),
         "a stale site feed is returned: {stale:?}"
@@ -911,7 +1035,7 @@ async fn list_posts_by_nonexistent_tag(#[case] backend: Backend) {
             None,
             parse_row_limit("50"),
             &ViewerIdentity::Anonymous,
-            Utc::now(),
+            common::time::UtcInstant::now(),
         )
         .await;
 
@@ -938,7 +1062,7 @@ async fn list_user_posts_by_nonexistent_tag(#[case] backend: Backend) {
             None,
             parse_row_limit("50"),
             &ViewerIdentity::Anonymous,
-            Utc::now(),
+            common::time::UtcInstant::now(),
         )
         .await;
 
@@ -1048,7 +1172,7 @@ async fn tag_not_found_error(#[case] backend: Backend) {
             None,
             parse_row_limit("50"),
             &ViewerIdentity::Anonymous,
-            Utc::now(),
+            common::time::UtcInstant::now(),
         )
         .await;
 
@@ -1164,7 +1288,7 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
                 Some(&cursor),
                 parse_row_limit("2"),
                 &ViewerIdentity::Anonymous,
-                Utc::now(),
+                common::time::UtcInstant::now(),
             )
             .await
             .expect("list_published with cursor failed");
@@ -1198,7 +1322,12 @@ async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
         };
         let next = state
             .posts
-            .list_drafts_by_user(user, Some(&cursor), parse_row_limit("2"), Utc::now())
+            .list_drafts_by_user(
+                user,
+                Some(&cursor),
+                parse_row_limit("2"),
+                common::time::UtcInstant::now(),
+            )
             .await
             .expect("list_drafts_by_user with cursor failed");
         assert!(next.len() <= 2);
@@ -1243,7 +1372,7 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
                 Some(&cursor),
                 parse_row_limit("2"),
                 &ViewerIdentity::Anonymous,
-                Utc::now(),
+                common::time::UtcInstant::now(),
             )
             .await
             .expect("list_user_posts_by_tag with cursor failed");
@@ -1288,7 +1417,7 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
                 Some(&cursor),
                 parse_row_limit("2"),
                 &ViewerIdentity::Anonymous,
-                Utc::now(),
+                common::time::UtcInstant::now(),
             )
             .await
             .expect("list_posts_by_tag with cursor failed");
@@ -1309,7 +1438,7 @@ async fn list_published_by_user_no_posts(#[case] backend: Backend) {
     assert!(posts.is_empty());
 
     let cursor = PostCursor {
-        created_at: Utc::now(),
+        created_at: common::time::UtcInstant::now(),
         post_id: PostId::from(999),
     };
     let posts = state
@@ -1319,7 +1448,7 @@ async fn list_published_by_user_no_posts(#[case] backend: Backend) {
             Some(&cursor),
             parse_row_limit("10"),
             &ViewerIdentity::Anonymous,
-            Utc::now(),
+            common::time::UtcInstant::now(),
         )
         .await
         .expect("list_published_by_user with cursor failed");
@@ -1336,7 +1465,7 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
     let created_at = Utc::now();
 
     let seeded = SeedRawPost::new(user.user_id)
-        .published_at(created_at)
+        .published_at(common::time::UtcInstant::from(created_at))
         .seed(state)
         .await;
 
@@ -1347,7 +1476,7 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
             permalink_date(created_at.year(), created_at.month(), created_at.day()),
             &seeded.slug,
             &ViewerIdentity::Anonymous,
-            Utc::now(),
+            common::time::UtcInstant::now(),
         )
         .await
         .expect("get_post_by_permalink failed");
@@ -1366,7 +1495,7 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
             permalink_date(created_at.year(), created_at.month(), created_at.day()),
             &seeded.slug,
             &ViewerIdentity::Anonymous,
-            Utc::now(),
+            common::time::UtcInstant::now(),
         )
         .await
         .expect("get_post_by_permalink after delete failed");
@@ -1404,7 +1533,7 @@ async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
                 Some(&cursor),
                 parse_row_limit("2"),
                 &ViewerIdentity::Anonymous,
-                Utc::now(),
+                common::time::UtcInstant::now(),
             )
             .await
             .expect("list_published with cursor failed");

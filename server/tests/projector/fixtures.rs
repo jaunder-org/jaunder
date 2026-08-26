@@ -45,9 +45,9 @@ pub(super) async fn seed_published_post(
     let published_at = post.published_at.expect("seeded post is published");
     (
         user.username.to_string(),
-        published_at.year(),
-        published_at.month(),
-        published_at.day(),
+        published_at.value().year(),
+        published_at.value().month(),
+        published_at.value().day(),
         post.slug.to_string(),
         post.title,
         post.rendered_html,

@@ -1,7 +1,7 @@
 //! User account and profile storage.
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+
 use sqlx::{Database, Pool};
 use thiserror::Error;
 use tracing::Instrument;
@@ -13,6 +13,7 @@ use common::email::Email;
 use common::ids::UserId;
 use common::password::Password;
 use common::stored_password_hash::StoredPasswordHash;
+use common::time::UtcInstant;
 use common::username::Username;
 
 use crate::helpers::{UserRow, user_record_from_row};
@@ -33,9 +34,9 @@ pub struct UserRecord {
     /// Optional short biography.
     pub bio: Option<Bio>,
     /// When the account was created.
-    pub created_at: DateTime<Utc>,
+    pub created_at: UtcInstant,
     /// When the user last successfully authenticated.
-    pub last_authenticated_at: Option<DateTime<Utc>>,
+    pub last_authenticated_at: Option<UtcInstant>,
     /// User's verified or pending email address.
     pub email: Option<Email>,
     /// Whether the email address has been verified.
@@ -220,8 +221,8 @@ impl<DB: Database> UserStore<DB> {
             Username,
             Option<DisplayName>,
             Option<Bio>,
-            DateTime<Utc>,
-            Option<DateTime<Utc>>,
+            UtcInstant,
+            Option<UtcInstant>,
             StoredPasswordHash,
             Option<Email>,
             bool,
@@ -232,7 +233,7 @@ impl<DB: Database> UserStore<DB> {
         for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
         String: sqlx::Type<DB>,
         for<'q> String: sqlx::Encode<'q, DB>,
-        for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+        for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
         for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
         for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
     {
@@ -243,8 +244,8 @@ impl<DB: Database> UserStore<DB> {
                 Username,
                 Option<DisplayName>,
                 Option<Bio>,
-                DateTime<Utc>,
-                Option<DateTime<Utc>>,
+                UtcInstant,
+                Option<UtcInstant>,
                 StoredPasswordHash,
                 Option<Email>,
                 bool,
@@ -309,7 +310,7 @@ impl<DB: Database> UserStore<DB> {
             return Err(UserAuthError::InvalidCredentials);
         }
 
-        let now = Utc::now();
+        let now = UtcInstant::now();
 
         sqlx::query("UPDATE users SET last_authenticated_at = $1 WHERE user_id = $2")
             .bind(now)
@@ -348,8 +349,8 @@ where
         Username,
         Option<DisplayName>,
         Option<Bio>,
-        DateTime<Utc>,
-        Option<DateTime<Utc>>,
+        UtcInstant,
+        Option<UtcInstant>,
         StoredPasswordHash,
         Option<Email>,
         bool,
@@ -372,7 +373,7 @@ where
     for<'q> Option<&'q Bio>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<&'q Email>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> bool: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    for<'q> DateTime<Utc>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
@@ -396,7 +397,7 @@ where
             .await
             .map_err(|e| CreateUserError::Internal(sqlx::Error::Io(e)))?;
 
-        let now = Utc::now();
+        let now = UtcInstant::now();
 
         let result = sqlx::query_scalar::<_, UserId>(
             "INSERT INTO users (username, password_hash, display_name, created_at, is_operator)
@@ -582,6 +583,43 @@ mod tests {
         assert_eq!(record.username, username);
         assert_eq!(record.display_name, None);
         assert_eq!(record.email, None);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn user_created_and_authenticated_instants_round_trip(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let username = parse_username("authenticated");
+        let password = parse_password("password123");
+        let user_id = env
+            .state
+            .users
+            .create_user(&username, &password, None, false)
+            .await
+            .unwrap();
+
+        let created = env.state.users.get_user(user_id).await.unwrap().unwrap();
+        assert!(created.created_at <= UtcInstant::now());
+        assert_eq!(created.last_authenticated_at, None);
+
+        let authenticated = env
+            .state
+            .users
+            .authenticate(&username, &password)
+            .await
+            .unwrap();
+        assert_eq!(authenticated.created_at, created.created_at);
+        assert!(authenticated.last_authenticated_at.is_some());
+
+        let reread = env.state.users.get_user(user_id).await.unwrap().unwrap();
+        assert_eq!(
+            reread
+                .last_authenticated_at
+                .map(|instant| instant.value().timestamp_micros()),
+            authenticated
+                .last_authenticated_at
+                .map(|instant| instant.value().timestamp_micros())
+        );
     }
 
     #[apply(backends)]

@@ -4,7 +4,6 @@
 //! body, and performs the storage write with slug-collision retry. Shared by
 //! the `web` and `server` `AtomPub` front-ends.
 
-use chrono::{DateTime, Utc};
 use thiserror::Error;
 
 use crate::{
@@ -17,6 +16,7 @@ use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
 use common::render::{RenderOutput, derive_post_naming};
 use common::slug::{InvalidSlug, Slug};
+use common::time::UtcInstant;
 use common::visibility::AudienceTarget;
 
 // ---------------------------------------------------------------------------
@@ -38,7 +38,7 @@ pub struct RenderedPostContent {
     /// Markup format of `body`.
     pub format: PostFormat,
     /// Publication timestamp, or `None` for a draft.
-    pub published_at: Option<DateTime<Utc>>,
+    pub published_at: Option<UtcInstant>,
     /// Optional summary/excerpt.
     pub summary: Option<PostSummary>,
     /// Audience targeting for the new post.
@@ -115,7 +115,7 @@ pub fn seed_post_input(
         slug,
         body,
         format: PostFormat::Markdown,
-        published_at: published.then(Utc::now),
+        published_at: published.then(UtcInstant::now),
         summary: None,
         audiences: vec![AudienceTarget::Public],
         idempotency_key: None,
@@ -347,7 +347,7 @@ pub struct PostCreation<'a> {
     /// derive one from the title/body.
     pub slug_override: Option<&'a Slug>,
     /// Publication timestamp, or `None` to create as a draft.
-    pub published_at: Option<DateTime<Utc>>,
+    pub published_at: Option<UtcInstant>,
     /// Maximum slug-collision retries before giving up.
     pub max_attempts: usize,
     /// Optional summary/excerpt.
@@ -1105,7 +1105,7 @@ mod tests {
             title: None,
             format: PostFormat::Markdown,
             slug_override: None,
-            published_at: Some(Utc::now()),
+            published_at: Some(UtcInstant::now()),
             max_attempts: 100,
             summary: None,
             audiences: vec![AudienceTarget::Public],

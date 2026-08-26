@@ -9,7 +9,7 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 use web::media::{Item, MediaDeletion, UsageData};
 
-use chrono::Utc;
+use common::time::UtcInstant;
 use storage::{CreateMediaError, MediaRecord};
 
 use rstest::*;
@@ -171,7 +171,7 @@ async fn list_my_media_returns_inserted_item(#[case] backend: Backend) {
         content_type: parse_content_type("image/jpeg"),
         size_bytes: parse_byte_size("1024"),
         source_url: None,
-        created_at: Utc::now(),
+        created_at: UtcInstant::now(),
     };
     match state.media.create_media(&record).await {
         Ok(()) | Err(CreateMediaError::AlreadyExists) => {}
@@ -215,7 +215,7 @@ async fn list_my_media_with_source_filter(#[case] backend: Backend) {
         content_type: parse_content_type("video/mp4"),
         size_bytes: parse_byte_size("512"),
         source_url: None,
-        created_at: Utc::now(),
+        created_at: UtcInstant::now(),
     };
     match state.media.create_media(&record).await {
         Ok(()) | Err(CreateMediaError::AlreadyExists) => {}
@@ -257,7 +257,7 @@ async fn delete_nested_request_maps_identity_without_force(#[case] backend: Back
         content_type: parse_content_type("image/png"),
         size_bytes: parse_byte_size("42"),
         source_url: None,
-        created_at: Utc::now(),
+        created_at: UtcInstant::now(),
     };
     match state.media.create_media(&record).await {
         Ok(()) | Err(CreateMediaError::AlreadyExists) => {}
@@ -316,7 +316,7 @@ async fn delete_nested_request_refuses_referenced_without_force(#[case] backend:
         content_type: parse_content_type("image/png"),
         size_bytes: parse_byte_size("42"),
         source_url: None,
-        created_at: Utc::now(),
+        created_at: UtcInstant::now(),
     };
     match state.media.create_media(&record).await {
         Ok(()) | Err(CreateMediaError::AlreadyExists) => {}
@@ -378,7 +378,7 @@ async fn delete_nested_request_refuses_force_that_would_leave_rowless_reference(
         content_type: parse_content_type("image/png"),
         size_bytes: parse_byte_size("43"),
         source_url: None,
-        created_at: Utc::now(),
+        created_at: UtcInstant::now(),
     };
     state.media.create_media(&record).await.unwrap();
     SeedRawPost::new(user_id)
