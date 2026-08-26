@@ -31,6 +31,7 @@ mod tests {
     use crate::test_support::auth_parts;
     use common::ids::UserId;
     use common::test_support::parse_username;
+    use common::time::UtcInstant;
     use leptos::prelude::provide_context;
     use leptos::reactive::owner::Owner;
     use std::sync::Arc;
@@ -44,7 +45,7 @@ mod tests {
             username: parse_username(username),
             display_name: None,
             bio: None,
-            created_at: chrono::Utc::now(),
+            created_at: UtcInstant::from(chrono::Utc::now()),
             last_authenticated_at: None,
             email: None,
             email_verified: false,

@@ -501,7 +501,7 @@ pub(super) const ALLOWLIST: &[Allowed] = &[
     Allowed {
         file: "users.rs",
         function: "authenticate_with",
-        target: "(UserId,Username,Option<DisplayName>,Option<Bio>,DateTime<Utc>,Option<DateTime<Utc>>,StoredPasswordHash,Option<Email>,bool,bool,)",
+        target: "(UserId,Username,Option<DisplayName>,Option<Bio>,UtcInstant,Option<UtcInstant>,StoredPasswordHash,Option<Email>,bool,bool,)",
         count: 1,
         what: "\"SELECTuser_id,username,display_name,bio,created_at,last_authenticated_at,password_hash,email,email_verified,is_operatorFROMusersWHEREusername=$1\"",
         category: Category::FlagOrCounter,

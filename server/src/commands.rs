@@ -1478,7 +1478,7 @@ mod tests {
                 username: returned_username,
                 display_name: None,
                 bio: None,
-                created_at: chrono::Utc::now(),
+                created_at: common::time::UtcInstant::from(chrono::Utc::now()),
                 last_authenticated_at: None,
                 email: None,
                 email_verified: false,

@@ -171,6 +171,7 @@ mod tests {
     use common::pagination::PageSize;
     use common::tag::Tag;
     use common::test_support::{parse_post_body, parse_slug, parse_username};
+    use common::time::UtcInstant;
     use common::visibility::ViewerIdentity;
     use storage::{
         ListByTagError, MockPostStorage, MockUserStorage, PostFormat, PostRecord, RenderedHtml,
@@ -203,7 +204,7 @@ mod tests {
             username: parse_username(username),
             display_name: None,
             bio: None,
-            created_at: chrono::Utc::now(),
+            created_at: UtcInstant::from(chrono::Utc::now()),
             last_authenticated_at: None,
             email: None,
             email_verified: false,

@@ -39,7 +39,7 @@ Out:
     tests prove ordering, direct bind/decode, and nullable decode on SQLite and
     PostgreSQL.
 
-- [ ] Task 2: Migrate user storage instants.
+- [x] Task 2: Migrate user storage instants.
   - Contract: `UserRecord`, private row parts/tuples, SQLx bounds, fixtures, and
     all callers use `UtcInstant`; nullable last-authentication meaning and wire
     serialization remain unchanged.

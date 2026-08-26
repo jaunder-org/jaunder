@@ -16,6 +16,7 @@ use common::session_label::SessionLabel;
 use common::stored_password_hash::StoredPasswordHash;
 use common::tag::{Tag, TagLabel};
 use common::tagged_url::MediaSourceUrl;
+use common::time::UtcInstant;
 use common::token::TokenHash;
 use common::username::Username;
 use host::invite::InviteCode;
@@ -88,8 +89,8 @@ pub(crate) struct UserRecordParts {
     pub(crate) username: Username,
     pub(crate) display_name: Option<DisplayName>,
     pub(crate) bio: Option<Bio>,
-    pub(crate) created_at: DateTime<Utc>,
-    pub(crate) last_authenticated_at: Option<DateTime<Utc>>,
+    pub(crate) created_at: UtcInstant,
+    pub(crate) last_authenticated_at: Option<UtcInstant>,
     pub(crate) email: Option<Email>,
     pub(crate) email_verified: bool,
     pub(crate) is_operator: bool,
@@ -239,8 +240,8 @@ pub(crate) type UserRow = (
     Username,
     Option<DisplayName>,
     Option<Bio>,
-    DateTime<Utc>,
-    Option<DateTime<Utc>>,
+    UtcInstant,
+    Option<UtcInstant>,
     Option<Email>,
     bool,
     bool,
@@ -686,7 +687,7 @@ mod tests {
 
     #[test]
     fn test_build_user_record() {
-        let now = Utc::now();
+        let now = UtcInstant::from(Utc::now());
         let parts = UserRecordParts {
             user_id: UserId::from(1),
             username: parse_username("alice"),
@@ -939,7 +940,7 @@ mod tests {
 
     #[test]
     fn user_row_helper_delegates_to_build_user_record() {
-        let now = Utc::now();
+        let now = UtcInstant::from(Utc::now());
         let row: UserRow = (
             UserId::from(1),
             parse_username("alice"),
@@ -1067,7 +1068,7 @@ mod tests {
 
     #[test]
     fn user_record_from_row_maps_some_fields() {
-        let now = Utc::now();
+        let now = UtcInstant::from(Utc::now());
         let row: UserRow = (
             UserId::from(1),
             parse_username("alice"),
