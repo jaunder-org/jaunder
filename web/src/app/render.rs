@@ -61,9 +61,9 @@ macro_rules! wasm_url {
 /// artifacts' paths (#866).
 ///
 /// Every consumer — both shells, the projector's boot script, and two xtask
-/// checks — reads these constants, and the shell's `initMeasured()` target, its
-/// glue `import`, and the projector's boot script are asserted against them by the
-/// drift guards in this module's tests. Hand-written copies with nothing tying
+/// checks — reads these constants. The starter URL, measured initializer
+/// fallback, glue `import`, and projector boot script are asserted against them
+/// by this module's drift guards. Hand-written copies with nothing tying
 /// them together are the hazard (see
 /// docs/adr/0121-no-wasm-preload.md for the double-download failure a
 /// drifted copy causes).
@@ -79,8 +79,9 @@ pub const EARLY_WASM_FETCH_SCRIPT: &str = concat!(
 );
 /// The wasm-bindgen JS glue's URL. See [`WASM_URL`].
 pub const GLUE_URL: &str = "/pkg/jaunder.js";
-/// The document-frame mark emitted immediately before `initMeasured()` starts the
-/// wasm fetch. Shared with both shell surfaces and drift-guarded in tests (#870).
+/// The document-frame mark emitted immediately before `initMeasured()` consumes
+/// the early response (or starts the explicit fallback). Shared with both shell
+/// surfaces and drift-guarded in tests (#870).
 pub const MODULE_BEFORE_INIT_MARK: &str = "jaunder.module.before_init";
 
 /// The document `<head>` inner HTML: per-page title + description + Open Graph.
@@ -351,18 +352,16 @@ mod tests {
     }
 
     #[test]
-    fn csr_index_html_boots_wasm_with_an_explicit_url() {
-        // Fast unit smoke (#234): the SPA shell must pass an explicit wasm URL to
-        // initMeasured(), not the arg-less wasm-bindgen default initializer that
-        // falls back to `jaunder_bg.wasm`. This runs in `check`; `cargo xtask
-        // audit-wasm` is what ties this URL to the file the build actually emits.
-        //
-        // Derived from WASM_URL rather than a literal (#866), so the shell and every
-        // other consumer of the boot URLs share one definition.
+    fn csr_index_html_consumes_the_early_request_with_an_explicit_url_fallback() {
+        // The promise is the delivery path; the explicit URL preserves boot when
+        // the static starter is absent and remains tied to the artifact audit.
+        let init = format!(r#"initMeasured(window.__jaunderWasmFetch ?? "{WASM_URL}")"#);
         assert!(
-            SPA_SHELL.contains(&format!(r#"initMeasured("{WASM_URL}")"#)),
-            "csr/index.html must boot via initMeasured(\"{WASM_URL}\") (drift guard #234)"
+            SPA_SHELL.contains(&init),
+            "csr/index.html must consume the early request with {WASM_URL} fallback: {SPA_SHELL}"
         );
+        assert!(!SPA_SHELL.contains("modulepreload"), "{SPA_SHELL}");
+        assert!(!SPA_SHELL.contains(r#"rel="preload""#), "{SPA_SHELL}");
     }
 
     /// The glue's URL has the same drift exposure as the wasm's: the shell imports
@@ -382,15 +381,18 @@ mod tests {
             r#"performance.mark("{}");"#,
             crate::app::MODULE_BEFORE_INIT_MARK
         );
-        let init = format!(r#"initMeasured("{WASM_URL}")"#);
+        let init = format!(r#"initMeasured(window.__jaunderWasmFetch ?? "{WASM_URL}")"#);
+        let stylesheet = SPA_SHELL
+            .find(r#"<link rel="stylesheet" href="/style/jaunder-themes.css" />"#)
+            .expect("CSR theme stylesheet");
         let import_index = SPA_SHELL.find(&import).expect("csr shell imports glue");
         let mark_index = SPA_SHELL
             .find(&mark)
             .expect("csr shell marks immediately before init");
         let init_index = SPA_SHELL.find(&init).expect("csr shell calls initMeasured");
         assert!(
-            import_index < mark_index && mark_index < init_index,
-            "csr/index.html must keep import → mark → init order: {SPA_SHELL}"
+            stylesheet < import_index && import_index < mark_index && mark_index < init_index,
+            "csr/index.html must keep stylesheets → import → mark → init order: {SPA_SHELL}"
         );
     }
 

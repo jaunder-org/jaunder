@@ -29,7 +29,7 @@ pub fn document(seed: &PageSeed) -> String {
             "<!DOCTYPE html><html lang=\"en\"><head>{prepaint}{head}</head><body>",
             "<div id=\"app\">{body}</div>",
             "<script type=\"application/json\" id=\"jaunder-seed\">{blob}</script>",
-            "<script type=\"module\">import {{initMeasured}} from \"{glue_url}\"; performance.mark(\"{module_before_init_mark}\"); initMeasured(\"{wasm_url}\");</script>",
+            "<script type=\"module\">import {{initMeasured}} from \"{glue_url}\"; performance.mark(\"{module_before_init_mark}\"); initMeasured(window.__jaunderWasmFetch ?? \"{wasm_url}\");</script>",
             "</body></html>",
         ),
         prepaint = PREPAINT_SCRIPT,
@@ -247,14 +247,14 @@ mod tests {
         // two (rather than asserting a literal against itself) means neither can
         // silently drift; `cargo xtask audit-wasm` ties that shared URL to the file
         // the build actually emits.
-        fn boot_wasm_url(html: &str) -> &str {
-            let marker = "initMeasured(\"";
+        fn boot_wasm_fallback_url(html: &str) -> &str {
+            let marker = "initMeasured(window.__jaunderWasmFetch ?? \"";
             let start = html
                 .find(marker)
-                .expect("boot script calls initMeasured(\"…\")")
+                .expect("boot script consumes early request with explicit fallback")
                 + marker.len();
             let rest = &html[start..];
-            &rest[..rest.find('"').expect("initMeasured(\"…\") closing quote")]
+            &rest[..rest.find('"').expect("explicit fallback closing quote")]
         }
         let doc = document(&PageSeed::SiteTimeline(TimelinePage {
             posts: vec![],
@@ -263,14 +263,14 @@ mod tests {
         }));
         let spa_shell = include_str!("../../../csr/index.html");
         assert_eq!(
-            boot_wasm_url(&doc),
-            boot_wasm_url(spa_shell),
-            "projector and csr/index.html must boot the same wasm URL (drift guard #234)"
+            boot_wasm_fallback_url(&doc),
+            boot_wasm_fallback_url(spa_shell),
+            "projector and csr/index.html must share the wasm fallback URL (drift guard #234)"
         );
         assert_eq!(
-            boot_wasm_url(&doc),
+            boot_wasm_fallback_url(&doc),
             web::app::WASM_URL,
-            "the boot URL must be web::app::WASM_URL, the single definition every \
+            "the fallback URL must be web::app::WASM_URL, the single definition every \
              copy of this path is checked against (#866)"
         );
     }
@@ -288,15 +288,21 @@ mod tests {
             r#"performance.mark("{}");"#,
             web::app::MODULE_BEFORE_INIT_MARK
         );
-        let init = format!(r#"initMeasured("{}")"#, web::app::WASM_URL);
+        let init = format!(
+            r#"initMeasured(window.__jaunderWasmFetch ?? "{}")"#,
+            web::app::WASM_URL
+        );
+        let stylesheet = doc
+            .find(r#"<link rel="stylesheet" href="/style/jaunder-themes.css">"#)
+            .expect("projector theme stylesheet");
         let import_index = doc.find(&import).expect("projector shell imports glue");
         let mark_index = doc
             .find(&mark)
             .expect("projector shell marks immediately before init");
         let init_index = doc.find(&init).expect("projector shell calls initMeasured");
         assert!(
-            import_index < mark_index && mark_index < init_index,
-            "projector document must keep import → mark → init order: {doc}"
+            stylesheet < import_index && import_index < mark_index && mark_index < init_index,
+            "projector document must keep stylesheets → import → mark → init order: {doc}"
         );
     }
 }

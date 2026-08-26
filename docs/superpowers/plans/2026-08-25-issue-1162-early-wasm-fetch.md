@@ -69,7 +69,7 @@ Out:
     prove shared bytes, ordering, cacheability, and absence of both preload
     forms.
 
-- [ ] Task 4: Consume the response promise through the existing initializer
+- [x] Task 4: Consume the response promise through the existing initializer
   - Contract: both module scripts call exactly
     `initMeasured(window.__jaunderWasmFetch ?? "/pkg/jaunder.wasm")` immediately
     after the existing `jaunder.module.before_init` mark. Migrate every active

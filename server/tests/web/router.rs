@@ -65,10 +65,29 @@ async fn spa_fallback_serves_embedded_shell_without_disk_index_html(#[case] back
         .await
         .unwrap();
     let body = String::from_utf8(body.to_vec()).unwrap();
-    assert!(
-        body.contains(r#"initMeasured("/pkg/jaunder.wasm")"#),
-        "SPA fallback serves the embedded shell that measures wasm initialization: {body}"
+    let init = format!(
+        r#"initMeasured(window.__jaunderWasmFetch ?? "{}")"#,
+        web::app::WASM_URL
     );
+    assert!(
+        body.contains(&init),
+        "SPA fallback consumes the early request with an explicit wasm fallback: {body}"
+    );
+    let prepaint = body
+        .find(web::app::PREPAINT_SCRIPT)
+        .expect("SPA fallback pre-paint script");
+    let starter = body
+        .find(web::app::EARLY_WASM_FETCH_SCRIPT)
+        .expect("SPA fallback early wasm starter");
+    let stylesheet = body
+        .find(r#"<link rel="stylesheet" href="/style/jaunder.css" />"#)
+        .expect("SPA fallback stylesheet");
+    assert!(
+        prepaint < starter && starter < stylesheet,
+        "SPA fallback must keep prepaint → starter → stylesheet order: {body}"
+    );
+    assert!(!body.contains("modulepreload"), "{body}");
+    assert!(!body.contains(r#"rel="preload""#), "{body}");
 }
 
 #[apply(backends)]

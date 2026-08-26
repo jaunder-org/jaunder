@@ -436,6 +436,7 @@ async function __wbg_init(module_or_path) {
             "WebAssembly.Module.imports(module)",
             "WebAssembly.Module.exports(module)",
             "performance.mark(\"jaunder.wasm.init_start\")",
+            "const exports = await __wbg_init(moduleOrPath)",
             "performance.mark(\"jaunder.wasm.init_done\", { detail: { path, apiMs, experimentArm: __jaunderWasmExperimentArm, moduleShape } })",
             "WebAssembly.Module.customSections(module, \"jaunder.shape\")",
             "WebAssembly.instantiateStreaming",
