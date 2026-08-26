@@ -32,8 +32,12 @@ pub(crate) struct Derived {
     pub span_name: String,
     /// Arguments forwarded verbatim to `#[server]` (only `input = …`).
     pub server_args: Vec<syn::Meta>,
-    /// Arguments forwarded verbatim to `#[tracing::instrument]` (`skip`/`skip_all`).
+    /// Declaration-only `fields(...)` arguments forwarded to the generated span.
     pub instrument_args: Vec<syn::Meta>,
+    /// Parameters explicitly omitted by source `skip(...)`.
+    pub skipped: Vec<syn::Ident>,
+    /// Whether source `skip_all` suppresses every generated parameter field.
+    pub skip_all: bool,
 }
 
 /// The vertical owning `file`, or an error naming the placement rule.
@@ -83,8 +87,7 @@ fn vertical_of(file: &str, ident: &syn::Ident) -> Result<String, syn::Error> {
 /// accepting them would reintroduce exactly the drift #714 removes. `fields(…)`
 /// is accepted only for empty declarations (`field = tracing::field::Empty`):
 /// values recorded later still go through the span owner's code, and the macro
-/// never accepts value expressions that could smuggle PII past the recordable
-/// type gate.
+/// never accepts expressions that bypass the type-owned `TraceField` projection.
 struct EmptyFieldDeclaration;
 
 impl Parse for EmptyFieldDeclaration {
@@ -176,8 +179,32 @@ fn route(arg: &syn::Meta, derived: &mut Derived) -> Result<(), syn::Error> {
         derived.server_args.push(arg.clone());
         return Ok(());
     }
-    if named("skip") || named("skip_all") {
-        derived.instrument_args.push(arg.clone());
+    if named("skip") {
+        let syn::Meta::List(list) = arg else {
+            return Err(syn::Error::new_spanned(
+                arg,
+                "`skip` requires `skip(name, …)`",
+            ));
+        };
+        let skip_idents = syn::punctuated::Punctuated::<syn::Ident, Token![,]>::parse_terminated
+            .parse2(list.tokens.clone())?;
+        if skip_idents.is_empty() {
+            return Err(syn::Error::new_spanned(
+                arg,
+                "`skip` requires at least one name",
+            ));
+        }
+        derived.skipped.extend(skip_idents);
+        return Ok(());
+    }
+    if named("skip_all") {
+        if !matches!(arg, syn::Meta::Path(_)) {
+            return Err(syn::Error::new_spanned(
+                arg,
+                "`skip_all` takes no arguments",
+            ));
+        }
+        derived.skip_all = true;
         return Ok(());
     }
     Err(syn::Error::new_spanned(
@@ -200,6 +227,8 @@ pub(crate) fn derive(
         span_name: format!("web.{vertical}.{ident}"),
         server_args: Vec::new(),
         instrument_args: Vec::new(),
+        skipped: Vec::new(),
+        skip_all: false,
     };
     for arg in args {
         route(arg, &mut derived)?;
@@ -242,7 +271,49 @@ pub(crate) fn expand(
         span_name,
         server_args,
         instrument_args,
+        skipped,
+        skip_all,
     } = derive(file, &f.sig.ident, args)?;
+
+    let projected_fields: Vec<_> = if skip_all {
+        Vec::new()
+    } else {
+        f.sig
+            .inputs
+            .iter()
+            .filter_map(|arg| {
+                let syn::FnArg::Typed(arg) = arg else {
+                    return None;
+                };
+                let syn::Pat::Ident(pattern) = arg.pat.as_ref() else {
+                    return None;
+                };
+                let ident = &pattern.ident;
+                if skipped.iter().any(|skipped| skipped == ident) {
+                    return None;
+                }
+                Some(quote! {
+                    #ident = ?::common::trace_field::TraceField::trace_value(&#ident)
+                })
+            })
+            .collect()
+    };
+    let declared_fields: Vec<_> = instrument_args
+        .iter()
+        .filter_map(|arg| {
+            let syn::Meta::List(list) = arg else {
+                return None;
+            };
+            Some(&list.tokens)
+        })
+        .collect();
+    let fields_arg = if projected_fields.is_empty() && declared_fields.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            , fields(#(#projected_fields,)* #(#declared_fields),*)
+        }
+    };
 
     let type_ident = server_fn_type_ident(&f.sig.ident);
     let register_ident = format_ident!(
@@ -264,7 +335,7 @@ pub(crate) fn expand(
     Ok(quote! {
         #(#attrs)*
         #[::leptos::server(endpoint = #endpoint #(, #server_args)*)]
-        #[::tracing::instrument(name = #span_name #(, #instrument_args)*)]
+        #[::tracing::instrument(name = #span_name, skip_all #fields_arg)]
         #vis #sig #block
 
         #[cfg(feature = "server")]
@@ -318,14 +389,15 @@ mod tests {
     }
 
     #[test]
-    fn forwards_input_to_server_and_skip_all_to_instrument() {
+    fn routes_input_and_remembers_source_skip_all() {
         let args: Vec<syn::Meta> = vec![
             parse_quote!(input = MultipartFormData),
             parse_quote!(skip_all),
         ];
         let d = derive("web/src/media/api.rs", &ident("upload"), &args).expect("derives");
         assert_eq!(d.server_args.len(), 1);
-        assert_eq!(d.instrument_args.len(), 1);
+        assert!(d.instrument_args.is_empty());
+        assert!(d.skip_all);
     }
 
     #[test]
@@ -339,7 +411,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_fields_with_values_because_the_pii_allowlist_does_not_check_them() {
+    fn rejects_fields_with_values_because_only_declarations_are_supported() {
         let args: Vec<syn::Meta> = vec![parse_quote!(fields(who = "x"))];
         let e = expect_err(derive("web/src/audiences/api.rs", &ident("rename"), &args));
         assert!(e.to_string().contains("tracing::field::Empty"), "{e}");
@@ -371,10 +443,17 @@ mod tests {
     }
 
     #[test]
-    fn forwards_a_skip_list_to_instrument() {
+    fn remembers_a_source_skip_list() {
         let args: Vec<syn::Meta> = vec![parse_quote!(skip(name))];
         let d = derive("web/src/audiences/api.rs", &ident("rename"), &args).expect("derives");
-        assert_eq!(d.instrument_args.len(), 1);
+        assert_eq!(
+            d.skipped
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["name"]
+        );
+        assert!(d.instrument_args.is_empty());
         assert!(d.server_args.is_empty());
     }
 
@@ -439,6 +518,82 @@ mod tests {
     }
 
     #[test]
+    fn expansion_skips_original_arguments_and_records_only_trace_projections() {
+        let f: syn::ItemFn = parse_quote! {
+            pub async fn list(enabled: bool, offset: Option<PageOffset>) -> WebResult<()> {
+                do_it().await
+            }
+        };
+        let out = expand("web/src/posts/api.rs", &[], f)
+            .expect("expands")
+            .to_string();
+
+        assert!(out.contains("skip_all"), "{out}");
+        for field in ["enabled", "offset"] {
+            assert!(
+                out.contains(&format!(
+                    "{field} = ? :: common :: trace_field :: TraceField :: trace_value (& {field})"
+                )),
+                "missing projected field {field}: {out}"
+            );
+        }
+    }
+
+    #[test]
+    fn expansion_omits_a_source_skipped_nonimplementer() {
+        let f: syn::ItemFn = parse_quote! {
+            pub async fn rename(name: AudienceName) -> WebResult<()> { do_it().await }
+        };
+        let out = expand("web/src/audiences/api.rs", &[parse_quote!(skip(name))], f)
+            .expect("expands")
+            .to_string();
+
+        assert!(out.contains("skip_all"), "{out}");
+        assert!(!out.contains("name = ?"), "{out}");
+    }
+
+    #[test]
+    fn source_skip_all_preserves_manual_empty_fields_without_parameter_fields() {
+        let f: syn::ItemFn = parse_quote! {
+            pub async fn register(request: RegistrationRequest) -> WebResult<()> {
+                do_it().await
+            }
+        };
+        let args = [
+            parse_quote!(skip_all),
+            parse_quote!(fields(registration.outcome = tracing::field::Empty)),
+        ];
+        let out = expand("web/src/registration/api.rs", &args, f)
+            .expect("expands")
+            .to_string();
+
+        assert!(out.contains("skip_all"), "{out}");
+        assert!(
+            out.contains("registration . outcome = tracing :: field :: Empty"),
+            "{out}"
+        );
+        assert!(!out.contains("request = ?"), "{out}");
+    }
+
+    #[test]
+    fn source_skip_all_safely_omits_pattern_bound_parameters() {
+        let f: syn::ItemFn = parse_quote! {
+            pub async fn pair((left, right): (u32, u32)) -> WebResult<()> {
+                do_it().await
+            }
+        };
+        let out = expand("web/src/posts/api.rs", &[parse_quote!(skip_all)], f)
+            .expect("expands")
+            .to_string();
+
+        assert!(out.contains("skip_all"), "{out}");
+        assert!(
+            !out.contains("left = ?") && !out.contains("right = ?"),
+            "{out}"
+        );
+    }
+
+    #[test]
     fn expands_to_absolute_attribute_paths_in_order_with_a_wrapped_body() {
         let f: syn::ItemFn = parse_quote! {
             pub async fn rename(name: AudienceName) -> WebResult<()> { do_it().await }
@@ -463,7 +618,7 @@ mod tests {
 
         assert!(out.contains(r#"endpoint = "/audiences/rename""#), "{out}");
         assert!(out.contains(r#"name = "web.audiences.rename""#), "{out}");
-        assert!(out.contains("skip (name)"), "{out}");
+        assert!(out.contains("skip_all"), "{out}");
         assert!(out.contains("crate :: error :: server_boundary"), "{out}");
         assert!(out.contains("async move"), "{out}");
         assert!(

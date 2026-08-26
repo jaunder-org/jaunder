@@ -36,7 +36,7 @@ Out:
     content, and excluded policy boundaries where compile-time coverage
     conventions permit.
 
-- [ ] Task 2: Generate projected server-fn fields and remove name admission
+- [x] Task 2: Generate projected server-fn fields and remove name admission
   - Contract: `macros::server` always instruments original parameters with
     generated `skip_all`, then emits
     `field = ?::common::trace_field::TraceField::trace_value(&field)` for every

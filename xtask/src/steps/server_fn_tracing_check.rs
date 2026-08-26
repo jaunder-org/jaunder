@@ -12,26 +12,24 @@
 //! name — is no longer anyone's to get wrong: `#[macros::server]` emits the
 //! `#[tracing::instrument]` and derives the name (#714), so the rules that policed a
 //! hand-written attribute went with the hand-written attribute. What is left is the
-//! judgment the macro cannot make for an author:
+//! source-shape judgments that remain outside type resolution:
 //!
-//! 1. **PII discipline is a default-deny type allowlist** — every parameter is
-//!    either named in the attribute's `skip(...)` / covered by `skip_all`, or has a
-//!    type on [`RECORDABLE_TYPES`]. An unlisted type is not recordable, so a
-//!    newly-introduced argument type fails this gate until someone classifies it:
-//!    the PII decision is forced when it arises rather than left to a reviewer
-//!    noticing.
-//! 2. **A parameter bound by a pattern cannot be skipped by name** — a destructured
-//!    argument has no single identifier to write in `skip(...)`, so it is refused
-//!    unless `skip_all` covers it. Otherwise it would be recorded by a span nobody
-//!    could opt it out of.
-//! 3. **Declared span fields must stay declaration-only** — `fields(...)` is allowed
-//!    only as `field = tracing::field::Empty`. Values must be recorded later in the
-//!    function body where the author has context, and a value expression in the macro
-//!    argument is refused because the type allowlist never inspected it.
-//! 4. **An unmodelled attribute argument is refused** — the macro forwards only
-//!    `skip(...)`/`skip_all` and empty `fields(...)` declarations to the span, and
-//!    `input = …` to `#[server]`. Anything else could record a value this allowlist
-//!    never inspected, so it fails here until modelled.
+//! 1. **Trace admission is compiler-owned** — `#[macros::server]` hides every
+//!    original parameter with generated `skip_all` and records named,
+//!    non-skipped parameters only through `common::trace_field::TraceField`.
+//!    Missing implementations fail compilation; this source gate never
+//!    classifies a type name.
+//! 2. **A parameter bound by a pattern cannot be projected by name** — a
+//!    destructured argument has no single field identifier, so it is refused
+//!    unless source `skip_all` explicitly covers it.
+//! 3. **Source skip names must name real plain parameters** — stale or misspelled
+//!    opt-outs fail rather than silently changing author intent.
+//! 4. **Declared span fields stay declaration-only** — `fields(...)` is allowed
+//!    only as `field = tracing::field::Empty`. Values are recorded later in the
+//!    function body where the author has context.
+//! 5. **An unmodelled attribute argument is refused** — the macro accepts only
+//!    `skip(...)`/`skip_all`, empty `fields(...)`, and `input = …`. Anything else
+//!    fails until both macro and gate model it deliberately.
 //!
 //! Like the registrar guard this is **mandatory with no per-fn opt-out**, and
 //! **fail-loud**: an unparseable or unreadable file is reported, never skipped,
@@ -46,90 +44,6 @@ use syn::{Expr, Meta, Token};
 
 use crate::result::{CommandResult, StepResult};
 use crate::web_server_fns::{self, WEB_SRC, WebServerFn, vertical_of};
-
-/// Argument types whose values may be recorded on a span, each with the ground
-/// that admits it (ADR-0011's addendum for #511).
-///
-/// The criterion is **"is this value already visible to the trace's reader, or
-/// bounded by its own type?"** — not "did a user type it". Anything absent is
-/// skipped, so adding an entry is a deliberate, reviewable change.
-///
-/// Note this is a list of *type names*, not a property the compiler can derive:
-/// `Filename` and `AudienceName` are newtypes that validate a value's *shape*
-/// while carrying arbitrary user text, whereas `u32` is a primitive that bounds
-/// its contents completely. Newtype-ness is not the test.
-const RECORDABLE_TYPES: &[(&str, &str)] = &[
-    // Bounded by the type itself — admits no free text.
-    ("PostId", "opaque row id"),
-    ("AudienceId", "opaque row id"),
-    ("SubscriptionId", "opaque row id"),
-    ("ContentHash", "sha256 digest"),
-    ("PageSize", "bounded page count"),
-    ("PageOffset", "bounded page offset"),
-    ("RetentionCount", "bounded count, min 1"),
-    ("InviteTtlHours", "bounded hour count"),
-    ("UtcInstant", "pagination cursor timestamp"),
-    (
-        "PageCursor",
-        "keyset paging token: exactly the UtcInstant + PostId pair above",
-    ),
-    ("PostFormat", "bounded enum"),
-    ("MediaSource", "bounded enum"),
-    ("BackupMode", "bounded enum"),
-    ("u32", "bounded integer"),
-    ("bool", "two-valued flag"),
-    // Operator configuration — set by the operator, who reads the traces.
-    // ADR-0011 prohibits *user* PII and secrets; an operator's own settings are
-    // neither, and they are the informative content of these write-path spans.
-    ("DestinationPath", "operator-configured backup path"),
-    ("SiteTitle", "operator-configured site title"),
-    ("BaseUrl", "operator-configured site base URL"),
-    ("BackupSchedule", "operator-configured cron expression"),
-    // Already published — a component of a public permalink, so already in any
-    // reverse-proxy access log.
-    ("Slug", "public post permalink component"),
-    ("PermalinkDate", "public post permalink component"),
-    ("Tag", "public tag-listing URL component"),
-    // Permitted outright by ADR-0011: "usernames are public identifiers and
-    // acceptable".
-    (
-        "Username",
-        "ADR-0011 carve-out: usernames are public identifiers",
-    ),
-];
-
-/// Whether a type may be recorded, by its reduced name.
-fn is_recordable(reduced: Option<&str>) -> bool {
-    reduced.is_some_and(|name| RECORDABLE_TYPES.iter().any(|(t, _)| *t == name))
-}
-
-/// The comparable name of a parameter type: unwrap `&` and `Option<…>`, then take
-/// the last path segment, so `common::media::Filename` and `Option<PostId>` reduce
-/// to `Filename` and `PostId`.
-///
-/// Any shape this cannot reduce (a tuple, a slice, an `impl Trait`) yields `None`,
-/// which is **not recordable** — default-deny, so an unrecognized type must be
-/// skipped rather than silently recorded.
-fn reduce_type(ty: &syn::Type) -> Option<String> {
-    match ty {
-        syn::Type::Reference(r) => reduce_type(&r.elem),
-        syn::Type::Paren(p) => reduce_type(&p.elem),
-        syn::Type::Path(tp) => {
-            let seg = tp.path.segments.last()?;
-            if seg.ident == "Option" {
-                let syn::PathArguments::AngleBracketed(ab) = &seg.arguments else {
-                    return None;
-                };
-                let syn::GenericArgument::Type(inner) = ab.args.first()? else {
-                    return None;
-                };
-                return reduce_type(inner);
-            }
-            Some(seg.ident.to_string())
-        }
-        _ => None,
-    }
-}
 
 /// What a `#[macros::server]` attribute declares about its span.
 #[derive(Default)]
@@ -222,20 +136,16 @@ fn validate_empty_fields(list: &syn::MetaList) -> Result<(), String> {
     Ok(())
 }
 
-/// What a `#[macros::server]` attribute declares about its span.
+/// What a `#[macros::server]` attribute declares about source skip intent.
 ///
-/// The macro forwards `skip(...)` / `skip_all` plus empty `fields(...)`
-/// declarations to `#[tracing::instrument]`, forwards `input = …` to `#[server]`,
-/// and rejects everything else. `endpoint` and `name` are still derived, and
-/// `fields(...)` is accepted only as declaration-only
-/// `field = tracing::field::Empty` entries. This mirrors that **default-deny**:
-/// an argument the macro might one day forward but this gate does not model could
-/// record a value the allowlist never inspected, so it fails here until modelled.
+/// The macro consumes `skip(...)` / `skip_all`, combines generated TraceField
+/// projections with declaration-only `fields(...)`, and forwards `input = …` to
+/// `#[server]`. `endpoint` and `name` remain derived. Default-deny grammar keeps
+/// an argument neither macro nor gate models from silently changing the span.
 fn span_args(attr: &syn::Attribute) -> Result<SpanArgs, String> {
     let mut out = SpanArgs::default();
     let Some(args) = web_server_fns::server_attr_args(attr)? else {
-        // The bare `#[macros::server]`: nothing skipped, so every parameter must be
-        // recordable on its own.
+        // A bare attribute carries no explicit source skip intent.
         return Ok(out);
     };
     for arg in args {
@@ -265,10 +175,8 @@ fn span_args(attr: &syn::Attribute) -> Result<SpanArgs, String> {
             "input" => {}
             other => {
                 return Err(format!(
-                    "unrecognized #[macros::server] argument `{other}` — the macro forwards only \
-                     `skip(...)`/`skip_all` and empty `fields(...)` declarations to the span, \
-                     forwards `input = …` to #[server], and an unmodelled argument could record a \
-                     value the allowlist never inspected"
+                    "unrecognized #[macros::server] argument `{other}` — accepted arguments are \
+                     `skip(...)`/`skip_all`, empty `fields(...)` declarations, and `input = …`"
                 ));
             }
         }
@@ -285,30 +193,25 @@ fn problems_with(f: &WebServerFn) -> Vec<String> {
         Err(e) => return vec![format!("{at}: {e}")],
     };
     let mut lines = Vec::new();
-
-    for p in &f.params {
-        let reduced = reduce_type(&p.ty);
-        let shown = reduced.as_deref().unwrap_or("<unrecognized type>");
-        // A destructured parameter has no single name to put in `skip(...)`, so it
-        // can be neither skipped nor reasoned about. `skip_all` still covers it.
-        let Some(param) = p.name.as_deref() else {
-            if !parsed.skip_all {
-                lines.push(format!(
-                    "{at}: a parameter of type `{shown}` is bound by a pattern rather than a \
-                     plain identifier, so it cannot be named in skip(...) — bind it to an \
-                     identifier, or use skip_all"
-                ));
-            }
-            continue;
-        };
-        let recordable = is_recordable(reduced.as_deref());
-        let skipped = parsed.skip_all || parsed.skipped.contains(param);
-        if !recordable && !skipped {
+    let plain_params: BTreeSet<&str> = f
+        .params
+        .iter()
+        .filter_map(|param| param.name.as_deref())
+        .collect();
+    for skipped in &parsed.skipped {
+        if !plain_params.contains(skipped.as_str()) {
             lines.push(format!(
-                "{at}: argument `{param}: {shown}` is neither skipped nor recordable — add it to \
-                 skip(...) (or use skip_all), or, if the value carries no user data, add \
-                 \"{shown}\" to RECORDABLE_TYPES in \
-                 xtask/src/steps/server_fn_tracing_check.rs with its justification"
+                "{at}: skip name `{skipped}` does not name a plain parameter"
+            ));
+        }
+    }
+
+    for param in &f.params {
+        if param.name.is_none() && !parsed.skip_all {
+            lines.push(format!(
+                "{at}: a parameter is bound by a pattern rather than a plain identifier, so it \
+                 cannot become a projected field or be named in skip(...) — bind it to an \
+                 identifier, or use skip_all"
             ));
         }
     }
@@ -349,8 +252,8 @@ fn problems(web_sources: &[(String, String)]) -> Option<String> {
     }
     lines.sort();
     lines.push(
-        "  recovery: every web #[macros::server] fn has every argument skipped — named in \
-         skip(...) or covered by skip_all — or its type on RECORDABLE_TYPES (#511; ADR-0011)"
+        "  recovery: every skip name must name a plain parameter; every pattern-bound parameter \
+         requires skip_all; fields(...) values must remain tracing::field::Empty declarations"
             .to_string(),
     );
     Some(lines.join("\n"))
@@ -390,24 +293,33 @@ mod tests {
         vec![(format!("web/src/{vertical}/api.rs"), body.to_string())]
     }
 
-    // --- the PII allowlist (AC 4/10) ---
+    // --- type admission is compiler-owned; source skip intent stays checked ---
 
     #[test]
-    fn flags_an_argument_that_is_neither_skipped_nor_recordable() {
-        // The substantive guarantee: an unskipped non-recordable argument fails, and
-        // the same argument named in `skip(...)` passes.
-        let s = src(
-            "email",
+    fn named_arguments_are_not_classified_by_type() {
+        for body in [
             "#[macros::server]\npub async fn verify_email(token: RawToken) -> R {}\n",
+            "#[macros::server]\npub async fn delete_media(filename: Filename) -> R {}\n",
+            "#[macros::server(input = Json)]\n\
+             pub async fn get_post_preview(a: Option<PostId>, b: common::ids::PostId) -> R {}\n",
+        ] {
+            assert_eq!(
+                problems(&src("posts", body)),
+                None,
+                "TraceField trait resolution, not this source gate, owns type admission"
+            );
+        }
+    }
+
+    #[test]
+    fn skip_names_must_name_plain_parameters() {
+        let unknown = src(
+            "email",
+            "#[macros::server(skip(missing))]\npub async fn verify_email(token: RawToken) -> R {}\n",
         );
-        let detail = problems(&s).expect("an unclassified arg is a problem");
-        assert!(detail.contains("token"), "{detail}");
-        assert!(detail.contains("RawToken"), "{detail}");
-        assert!(detail.contains("skip"), "names the skip remedy: {detail}");
-        assert!(
-            detail.contains("RECORDABLE_TYPES"),
-            "names the allowlist remedy: {detail}"
-        );
+        let detail = problems(&unknown).expect("unknown skip name is a problem");
+        assert!(detail.contains("missing"), "{detail}");
+        assert!(detail.contains("parameter"), "{detail}");
 
         let skipped = src(
             "email",
@@ -417,37 +329,12 @@ mod tests {
     }
 
     #[test]
-    fn accepts_a_recordable_arg_unskipped_and_reduces_option_and_path() {
-        let s = src(
-            "posts",
-            "#[macros::server(input = Json)]\n\
-             pub async fn get_post_preview(a: Option<PostId>, b: common::ids::PostId) -> R {}\n",
-        );
-        assert_eq!(problems(&s), None);
-    }
-
-    #[test]
     fn skip_all_covers_every_argument() {
         let s = src(
             "posts",
             "#[macros::server(skip_all)]\npub async fn create_post(args: CreatePostArgs) -> R {}\n",
         );
         assert_eq!(problems(&s), None);
-    }
-
-    #[test]
-    fn filename_is_not_recordable() {
-        // A media URL is only discoverable once a published post references it, and
-        // a Filename is arbitrary user text — it fails the same test that skips Bio.
-        let s = src(
-            "media",
-            "#[macros::server]\npub async fn delete_media(filename: Filename) -> R {}\n",
-        );
-        assert!(
-            problems(&s)
-                .expect("Filename must be skipped")
-                .contains("Filename")
-        );
     }
 
     #[test]
@@ -502,10 +389,9 @@ mod tests {
     }
 
     #[test]
-    fn a_nameless_parameter_of_a_recordable_type_is_still_refused() {
-        // Recordability is not the question — `PostId` is on the allowlist, but the
-        // parameter still cannot be opted out of the span by name, so the rule bites
-        // independently of the type allowlist.
+    fn every_pattern_bound_parameter_requires_skip_all() {
+        // The type is not the question: a pattern has no single parameter
+        // identifier from which the macro can generate a projected field.
         let s = src(
             "posts",
             "#[macros::server]\npub async fn x(Wrapper(id): Wrapper<PostId>) -> R {}\n",
@@ -548,8 +434,8 @@ mod tests {
 
     #[test]
     fn an_unmodelled_attribute_argument_is_rejected() {
-        // Default-deny, mirroring the macro's own `route`: an argument this gate
-        // does not model could record a value the allowlist never inspected.
+        // Default-deny mirrors the macro's own `route`: an argument neither side
+        // models cannot silently change the generated span.
         let s = src(
             "posts",
             "#[macros::server(unknown(flag))]\npub async fn x() -> R {}\n",
@@ -596,25 +482,25 @@ mod tests {
     #[test]
     fn a_fn_in_the_retired_spelling_is_not_this_gates_business() {
         // `is_server_attr` matches only `#[macros::server]`, so a fn still wearing
-        // leptos's `#[server]` never reaches these rules — its unskipped `RawToken`
-        // reads as no problem at all. That is deliberate and is *not* a hole: the
-        // macro spelling is the only supported server-fn surface, and the runtime
-        // wire contract plus coverage snapshot keep the real tree from becoming an
-        // empty silent green.
+        // leptos's `#[server]` never reaches these source-shape rules. That is
+        // deliberate and is not a hole: the macro spelling is the only supported
+        // server-fn surface, and the runtime wire contract plus coverage snapshot
+        // keep the real tree from becoming an empty silent green.
         let s = src(
             "email",
             &retired_server_fn(
                 "(endpoint = \"/email/verify\")",
-                "pub async fn verify_email(token: RawToken) -> R {}",
+                "pub async fn verify_email((token,): (RawToken,)) -> R {}",
             ),
         );
         assert_eq!(problems(&s), None);
 
-        // The same fn in the current spelling is a problem, which is what makes the
-        // assertion above about *enumeration* rather than about the PII rule.
+        // The same pattern-bound fn in the current spelling is a problem. This
+        // makes the assertion above about enumeration rather than type admission.
         let converted = src(
             "email",
-            "#[macros::server]\npub async fn verify_email(token: RawToken) -> R {}\n",
+            "#[macros::server]\n\
+             pub async fn verify_email((token,): (RawToken,)) -> R {}\n",
         );
         assert!(problems(&converted).is_some());
     }
