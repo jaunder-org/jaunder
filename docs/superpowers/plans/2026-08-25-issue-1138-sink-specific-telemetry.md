@@ -81,7 +81,7 @@ Out:
     proves the submitted marker cannot enter `Validation`/`Client`,
     `stage=decode`, public `invalid request arguments` telemetry.
 
-- [ ] Task 5: Project and certify the policy replacement
+- [x] Task 5: Project and certify the policy replacement
   - Contract: add tracked draft
     `docs/adr/drafts/sink-specific-telemetry-interfaces.md` with the canonical
     `# ADR-DRAFT` heading and `Status: proposed`. It supersedes ADR-0011's
