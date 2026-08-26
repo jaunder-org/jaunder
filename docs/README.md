@@ -177,7 +177,8 @@ convention). See the Status column below for each ADR's current status.
 | [0147](adr/0147-decision-path-observability.md)                     | Decision-Path Observability                                                                                  | accepted   |
 | [0151](adr/0151-subscriber-reference-invariant.md)                  | Subscriber references are non-blank validated identities                                                     | accepted   |
 | [0152](adr/0152-adr-numbering-happens-after-merge.md)               | ADR numbering happens after feature merge                                                                    | accepted   |
-| [0153](adr/0153-storage-owned-instants.md)                          | Storage-owned instants use UtcInstant                                                                        | accepted   |
+| [0153](adr/0153-storage-owned-instants.md)                          | Media references retain URL origin                                                                           | accepted   |
+| [0154](adr/0154-media-reference-live-ownership.md)                  | Verify media-reference ownership through instance identity                                                   | accepted   |
 
 <!-- adr-table:end -->
 

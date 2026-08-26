@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use axum::{
     body::Body,
     http::{Request, StatusCode, header},
@@ -10,15 +11,19 @@ use tower::ServiceExt;
 use web::media::{Item, MediaDeletion, UsageData};
 
 use common::time::UtcInstant;
-use storage::{CreateMediaError, MediaRecord};
-
 use rstest::*;
 use rstest_reuse::*;
+use storage::{
+    CreateMediaError, ForeignEvidenceSink, InstanceId, MediaRecord, MediaReferenceEvidence,
+    MediaReferenceOwnershipResolver, PersistedMediaReference,
+};
 
 use crate::helpers::{
-    MultipartFile, create_user_and_session, make_app, post_form, post_multipart, post_server_fn,
+    ForeignReferenceResolver, MultipartFile, create_user_and_session, make_app, post_form,
+    post_multipart, post_server_fn, post_server_fn_with_media_ownership_resolver,
+    setup_with_base_url,
 };
-use common::media::{MaxFileSize, MediaSource, UploadedMedia, UserQuota};
+use common::media::{MaxFileSize, MediaReferenceForm, MediaSource, UploadedMedia, UserQuota};
 use common::test_support::{
     parse_byte_size, parse_content_hash, parse_content_type, parse_filename, parse_post_body,
 };
@@ -37,6 +42,34 @@ fn assert_json_object_keys(body: &str, expected: &[&str]) {
     assert_eq!(actual, expected, "unexpected response keys: {body}");
 }
 
+struct BlockingOwnershipResolver {
+    started: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+impl BlockingOwnershipResolver {
+    fn new() -> Self {
+        Self {
+            started: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl MediaReferenceOwnershipResolver for BlockingOwnershipResolver {
+    async fn resolve(
+        &self,
+        _: &[PersistedMediaReference],
+        _: &InstanceId,
+        _: Option<&common::tagged_url::BaseUrl>,
+        foreign: ForeignEvidenceSink,
+    ) -> MediaReferenceEvidence {
+        self.started.notify_one();
+        self.release.notified().await;
+        foreign.finish()
+    }
+}
 // ─── media_usage ──────────────────────────────────────────────
 
 #[apply(backends)]
@@ -356,6 +389,166 @@ async fn delete_nested_request_refuses_referenced_without_force(#[case] backend:
         vec![post.post_id],
         "referenced_in_posts should list the referencing post"
     );
+}
+#[apply(backends)]
+#[tokio::test]
+async fn delete_uses_one_global_live_ownership_snapshot(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let owner = create_user_and_session(&state).await;
+    let stranger = create_user_and_session(&state).await;
+    let sha256 =
+        parse_content_hash("deadbeef99999998000000000000000000000000000000000000000000000000");
+    let filename = parse_filename("live-evidence.png");
+    let media = MediaRecord {
+        user_id: owner.user_id,
+        sha256: sha256.clone(),
+        filename: filename.clone(),
+        source: MediaSource::Upload,
+        content_type: parse_content_type("image/png"),
+        size_bytes: parse_byte_size("42"),
+        source_url: None,
+        created_at: UtcInstant::now(),
+    };
+    state.media.create_media(&media).await.unwrap();
+    let media_url = common::media::media_url(&media.source, &sha256, &filename);
+    let foreign_form: MediaReferenceForm = format!("https://foreign.example{media_url}")
+        .parse()
+        .expect("valid media reference form");
+    let resolver = Arc::new(ForeignReferenceResolver::new([foreign_form.clone()]));
+
+    let owned = SeedRawPost::new(owner.user_id)
+        .body(parse_post_body(&format!(
+            "<img src=\"https://owned.example{media_url}\">"
+        )))
+        .seed(&state)
+        .await;
+    let (status, body) = post_server_fn_with_media_ownership_resolver(
+        &state,
+        resolver.clone(),
+        &web::media::Delete {
+            request: web::media::DeleteMediaRequest {
+                sha256: sha256.clone(),
+                filename: filename.clone(),
+                source: MediaSource::Upload,
+                force: None,
+            },
+        },
+        Some(&owner.cookie()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let refused: MediaDeletion = serde_json::from_str(&body).expect("valid JSON response");
+    assert!(!refused.deleted);
+    assert_eq!(refused.referenced_in_posts, vec![owned.post_id]);
+    assert_eq!(
+        resolver.calls().len(),
+        1,
+        "one resolution feeds report and guard"
+    );
+
+    let _foreign = SeedRawPost::new(owner.user_id)
+        .body(parse_post_body(&format!("<img src=\"{foreign_form}\">")))
+        .seed(&state)
+        .await;
+    let _unknown = SeedRawPost::new(stranger.user_id)
+        .body(parse_post_body(&format!(
+            "<img src=\"https://unknown.example{media_url}\">"
+        )))
+        .seed(&state)
+        .await;
+    let (status, body) = post_server_fn_with_media_ownership_resolver(
+        &state,
+        resolver.clone(),
+        &web::media::Delete {
+            request: web::media::DeleteMediaRequest {
+                sha256,
+                filename,
+                source: MediaSource::Upload,
+                force: Some(true),
+            },
+        },
+        Some(&owner.cookie()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let refused: MediaDeletion = serde_json::from_str(&body).expect("valid JSON response");
+    assert!(!refused.deleted, "unknown foreign ownership fails closed");
+    assert_eq!(refused.referenced_in_posts, vec![owned.post_id]);
+    let calls = resolver.calls();
+    assert_eq!(
+        calls.len(),
+        2,
+        "force resolves once before its storage guard"
+    );
+    assert_eq!(
+        calls[1].len(),
+        3,
+        "resolver receives global cross-user rows"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn delete_refusal_reports_the_reference_snapshot_despite_a_concurrent_post(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let sha256 =
+        parse_content_hash("deadbeef99999997000000000000000000000000000000000000000000000000");
+    let filename = parse_filename("snapshot.png");
+    let media = MediaRecord {
+        user_id: session.user_id,
+        sha256: sha256.clone(),
+        filename: filename.clone(),
+        source: MediaSource::Upload,
+        content_type: parse_content_type("image/png"),
+        size_bytes: parse_byte_size("42"),
+        source_url: None,
+        created_at: UtcInstant::now(),
+    };
+    state.media.create_media(&media).await.unwrap();
+    let media_url = common::media::media_url(&media.source, &sha256, &filename);
+    let original = SeedRawPost::new(session.user_id)
+        .body(parse_post_body(&format!("<img src=\"{media_url}\">")))
+        .seed(&state)
+        .await;
+    let resolver = Arc::new(BlockingOwnershipResolver::new());
+    let started = resolver.started.notified();
+    let request = web::media::Delete {
+        request: web::media::DeleteMediaRequest {
+            sha256,
+            filename,
+            source: MediaSource::Upload,
+            force: None,
+        },
+    };
+    let deleting = tokio::spawn({
+        let state = Arc::clone(&state);
+        let resolver = Arc::clone(&resolver);
+        let cookie = session.cookie();
+        async move {
+            post_server_fn_with_media_ownership_resolver(&state, resolver, &request, Some(&cookie))
+                .await
+        }
+    });
+    started.await;
+
+    let later = SeedRawPost::new(session.user_id)
+        .body(parse_post_body(&format!("<img src=\"{media_url}\">")))
+        .seed(&state)
+        .await;
+    resolver.release.notify_one();
+    let (status, body) = deleting.await.expect("delete task does not panic");
+    assert_eq!(status, StatusCode::OK, "body: {body}");
+    let result: MediaDeletion = serde_json::from_str(&body).expect("valid JSON response");
+    assert!(!result.deleted);
+    assert_eq!(
+        result.referenced_in_posts,
+        vec![original.post_id],
+        "the refusal explains the pre-lock reference snapshot, not a later query"
+    );
+    assert_ne!(original.post_id, later.post_id);
 }
 
 #[apply(backends)]
@@ -785,10 +978,12 @@ async fn media_serve_get(state: &Arc<storage::AppState>, uri: &str) -> StatusCod
 
     let app = jaunder::create_router(
         Arc::clone(state),
+        storage::InstanceId::new(),
         noop_mailer(),
         true,
         crate::helpers::tmp_storage_path(),
-    );
+    )
+    .expect("canonical instance identity is an HTTP header");
     app.oneshot(request)
         .await
         .expect("router oneshot failed")

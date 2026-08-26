@@ -8,6 +8,7 @@ pub mod context;
 pub mod feed;
 pub mod mailer;
 pub mod media;
+pub mod media_ownership;
 pub mod metrics;
 pub mod observability;
 pub mod projector;
@@ -21,12 +22,15 @@ mod test_support;
 
 use std::{path::PathBuf, sync::Arc};
 
-use axum::Router;
+use axum::{
+    Router,
+    http::{HeaderName, HeaderValue},
+};
 use axum_embed::ServeEmbed;
 use leptos::prelude::*;
 
-use crate::assets::StaticAssets;
-use ::storage::AppState;
+use crate::{assets::StaticAssets, media_ownership::LiveMediaReferenceOwnershipResolver};
+use ::storage::{AppState, InstanceId, MediaReferenceOwnershipResolver};
 
 async fn retire_session_cookie(
     axum::extract::State(secure): axum::extract::State<bool>,
@@ -49,12 +53,56 @@ async fn retire_session_cookie(
     response
 }
 
+const INSTANCE_HEADER: HeaderName = HeaderName::from_static("x-jaunder-instance");
+
+async fn set_instance_header(
+    axum::extract::State(instance_id): axum::extract::State<HeaderValue>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut response = next.run(request).await;
+    response.headers_mut().insert(INSTANCE_HEADER, instance_id);
+    response
+}
+
+/// Builds the production router with the live foreign-reference ownership resolver.
+///
+/// # Errors
+///
+/// Returns an error when the persisted instance identity cannot form an HTTP header.
 pub fn create_router(
     state: Arc<AppState>,
+    instance_id: InstanceId,
     mailer: Arc<dyn common::mailer::MailSender>,
     secure_cookies: bool,
     storage_path: PathBuf,
-) -> Router {
+) -> Result<Router, axum::http::header::InvalidHeaderValue> {
+    create_router_with_media_reference_ownership_resolver(
+        state,
+        instance_id,
+        mailer,
+        secure_cookies,
+        storage_path,
+        Arc::new(LiveMediaReferenceOwnershipResolver::new()),
+    )
+}
+
+/// Builds a router with an injected foreign-reference ownership resolver.
+///
+/// This is the narrow test composition seam; production callers use
+/// [`create_router`], which installs the live resolver.
+///
+/// # Errors
+///
+/// Returns an error when the persisted instance identity cannot form an HTTP header.
+pub fn create_router_with_media_reference_ownership_resolver(
+    state: Arc<AppState>,
+    instance_id: InstanceId,
+    mailer: Arc<dyn common::mailer::MailSender>,
+    secure_cookies: bool,
+    storage_path: PathBuf,
+    media_ownership_resolver: Arc<dyn MediaReferenceOwnershipResolver>,
+) -> Result<Router, axum::http::header::InvalidHeaderValue> {
     // Per-trait extensions for the raw axum HTTP handlers (feed, atompub,
     // media). The whole `AppState` is never layered as an `Extension`; each
     // handler receives only the storage traits it declares (ADR-0016). The
@@ -72,6 +120,9 @@ pub fn create_router(
     // bearer token, so the raw HTTP handlers and the Leptos request `Parts`
     // need the session store reachable as a request extension.
     let sessions_ext = state.sessions.clone();
+    let instance_header = instance_id.to_string().parse::<HeaderValue>()?;
+    let server_fn_instance_id = instance_id.clone();
+    let server_fn_media_ownership_resolver = media_ownership_resolver.clone();
     let server_fn_state = state;
     let server_fn_mailer = mailer;
     let serve_assets = ServeEmbed::<StaticAssets>::new();
@@ -88,12 +139,15 @@ pub fn create_router(
         .route(
             "/api/{*fn_name}",
             axum::routing::post(move |req: axum::extract::Request| {
+                let instance_id = server_fn_instance_id.clone();
+                let resolver = server_fn_media_ownership_resolver.clone();
                 let state = server_fn_state.clone();
                 let mailer = server_fn_mailer.clone();
                 leptos_axum::handle_server_fns_with_context(
                     move || {
                         crate::context::provide_app_state_contexts(&state);
                         crate::context::provide_mailer_context(&mailer);
+                        crate::context::provide_media_ownership_context(&resolver, &instance_id);
                         provide_context(web::auth::CookieSettings {
                             secure: secure_cookies,
                         });
@@ -140,6 +194,8 @@ pub fn create_router(
     };
 
     let app = app
+        .layer(axum::Extension(media_ownership_resolver))
+        .layer(axum::Extension(instance_id))
         .layer(axum::Extension(storage_path_ext))
         .layer(axum::Extension(posts_ext))
         .layer(axum::Extension(users_ext))
@@ -152,5 +208,60 @@ pub fn create_router(
             secure_cookies,
             retire_session_cookie,
         ));
-    crate::observability::with_http_observability(app)
+    Ok(crate::observability::with_http_observability(app).layer(
+        axum::middleware::from_fn_with_state(instance_header, set_instance_header),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{
+        Router,
+        http::{HeaderValue, header},
+        response::IntoResponse,
+        routing::get,
+    };
+    use tower::ServiceExt;
+
+    use super::{INSTANCE_HEADER, set_instance_header};
+
+    async fn conflicting_instance_header() -> axum::response::Response {
+        let mut response = ().into_response();
+        response
+            .headers_mut()
+            .append(INSTANCE_HEADER, HeaderValue::from_static("foreign"));
+        response
+            .headers_mut()
+            .append(INSTANCE_HEADER, HeaderValue::from_static("duplicate"));
+        response
+    }
+
+    #[tokio::test]
+    async fn instance_header_replaces_inner_duplicate_values() {
+        let app = Router::new()
+            .route("/conflict", get(conflicting_instance_header))
+            .layer(axum::middleware::from_fn_with_state(
+                HeaderValue::from_static("canonical"),
+                set_instance_header,
+            ));
+
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/conflict")
+                    .body(axum::body::Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("router response");
+
+        let values = response
+            .headers()
+            .get_all(header::HeaderName::from_static("x-jaunder-instance"));
+        assert_eq!(values.iter().count(), 1);
+        assert_eq!(
+            values.iter().next(),
+            Some(&HeaderValue::from_static("canonical"))
+        );
+    }
 }

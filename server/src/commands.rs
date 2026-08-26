@@ -543,6 +543,7 @@ struct RealStartupDatabaseOperations;
 
 struct StartupDatabase {
     state: Arc<storage::AppState>,
+    instance_id: storage::InstanceId,
     pool_observer: storage::DbPoolObserver,
 }
 
@@ -555,6 +556,7 @@ impl StartupDatabaseOperations for RealStartupDatabaseOperations {
         let opened = open_existing_database_with_observer(options).await?;
         Ok(StartupDatabase {
             state: opened.state,
+            instance_id: opened.instance_id,
             pool_observer: opened.pool_observer,
         })
     }
@@ -755,6 +757,7 @@ pub async fn prepare_server(
 
     let StartupDatabase {
         state: db,
+        instance_id,
         pool_observer,
     } = open_server_database(storage, prod).await?;
 
@@ -787,7 +790,7 @@ pub async fn prepare_server(
     .await?;
     let mailer =
         crate::mailer::build_mailer(db.site_config(), capture::file(capture::Stream::Mail)).await?;
-    let router = crate::create_router(db, mailer, prod, storage.storage_path.clone());
+    let router = crate::create_router(db, instance_id, mailer, prod, storage.storage_path.clone())?;
     let listener = tokio::net::TcpListener::bind(bind).await?;
     // `local_addr` cannot fail on a just-bound listener; fall back to the
     // requested `bind` rather than add a never-taken error branch.

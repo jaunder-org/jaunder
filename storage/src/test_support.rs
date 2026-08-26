@@ -25,7 +25,10 @@ use crate::{AppState, DbConnectOptions, PostFormat, PostRecord, resolved_postgre
 use common::feed::FeedPath;
 use common::ids::{PostId, TagId, UserId};
 use common::mailer::{MailSender, NoopMailSender};
-use common::media::{Filename, MediaRef, MediaSource, detect_content_type, media_url};
+use common::media::{
+    Filename, MediaRef, MediaReferenceForm, MediaReferenceKind, MediaSource, detect_content_type,
+    media_url,
+};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
@@ -33,8 +36,8 @@ use common::render::{RenderOutput, RenderedHtml};
 use common::slug::Slug;
 use common::tag::TagLabel;
 use common::test_support::{
-    parse_byte_size, parse_content_hash, parse_display_name, parse_filename, parse_password,
-    parse_post_body, parse_post_title, parse_slug, parse_tag_label, parse_username,
+    parse_byte_size, parse_content_hash, parse_display_name, parse_password, parse_post_body,
+    parse_post_title, parse_slug, parse_tag_label, parse_username,
 };
 use common::time::UtcInstant;
 use common::username::Username;
@@ -195,17 +198,15 @@ impl CloseablePool {
         })
     }
 
-    /// Fetches every row of a three-`TEXT`-column query — the multi-row sibling of
-    /// [`scalar_i64`](CloseablePool::scalar_i64), for inspecting a child table whose
-    /// identity is a string triple (`post_media`).
+    /// Fetches every row of a five-`TEXT`-column query.
     ///
     /// # Errors
     ///
     /// Returns the `sqlx::Error` if the query fails.
-    pub async fn string_triples(
+    pub async fn string_quintuples(
         &self,
         sql: &str,
-    ) -> Result<Vec<(String, String, String)>, sqlx::Error> {
+    ) -> Result<Vec<(String, String, String, String, String)>, sqlx::Error> {
         crate::with_closeable_pool!(self, pool, { sqlx::query_as(sql).fetch_all(pool).await })
     }
 
@@ -270,6 +271,80 @@ impl CloseablePool {
             CloseablePool::Postgres(pool) => pool,
             CloseablePool::Sqlite(_) => panic!("postgres() on a SQLite CloseablePool"),
         }
+    }
+    /// Acquires the same transaction-scoped media-reference lock that Post writes,
+    /// guarded deletes, and reclamation use.
+    ///
+    /// `PostgreSQL` takes the target's advisory lock; `SQLite` takes its sole writer lock
+    /// up front. The returned guard must be explicitly committed or rolled back.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if acquiring the database connection, beginning the transaction, or
+    /// taking its media-reference lock fails.
+    pub async fn lock_media_reference_for_write(
+        &self,
+        media: &MediaRef,
+    ) -> Result<MediaReferenceWriteLock<'_>, sqlx::Error> {
+        let held = match self {
+            CloseablePool::Sqlite(pool) => {
+                let mut conn = pool.acquire().await?;
+                sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+                HeldMediaReferenceWrite::Sqlite(conn)
+            }
+            CloseablePool::Postgres(pool) => {
+                let mut tx = pool.begin().await?;
+                let key = crate::posts::media_advisory_lock_key(media);
+                sqlx::query("SELECT pg_advisory_xact_lock($1)")
+                    .bind(key)
+                    .execute(&mut *tx)
+                    .await?;
+                HeldMediaReferenceWrite::Postgres(tx)
+            }
+        };
+        Ok(MediaReferenceWriteLock { held })
+    }
+}
+
+/// A test-held media-reference write lock, using the production lock namespace.
+pub struct MediaReferenceWriteLock<'a> {
+    held: HeldMediaReferenceWrite<'a>,
+}
+
+enum HeldMediaReferenceWrite<'a> {
+    Sqlite(PoolConnection<Sqlite>),
+    Postgres(Transaction<'a, Postgres>),
+}
+
+impl MediaReferenceWriteLock<'_> {
+    /// Commits the held transaction and releases its media-reference lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if committing the held transaction fails.
+    pub async fn commit(self) -> Result<(), sqlx::Error> {
+        match self.held {
+            HeldMediaReferenceWrite::Sqlite(mut conn) => {
+                sqlx::query("COMMIT").execute(&mut *conn).await?;
+            }
+            HeldMediaReferenceWrite::Postgres(tx) => tx.commit().await?,
+        }
+        Ok(())
+    }
+
+    /// Rolls back the held transaction and releases its media-reference lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if rolling back the held transaction fails.
+    pub async fn rollback(self) -> Result<(), sqlx::Error> {
+        match self.held {
+            HeldMediaReferenceWrite::Sqlite(mut conn) => {
+                sqlx::query("ROLLBACK").execute(&mut *conn).await?;
+            }
+            HeldMediaReferenceWrite::Postgres(tx) => tx.rollback().await?,
+        }
+        Ok(())
     }
 }
 
@@ -374,31 +449,36 @@ pub struct TestEnv {
 /// unchanged.
 pub struct TestBase {
     dir: TempDir,
+    /// The persistent identity returned by the opening path that built this harness.
+    instance_id: crate::InstanceId,
     /// A clone of the pool behind [`TestEnv::state`], so tests can fault it
     /// ([`close_pool`](TestBase::close_pool)) or run raw SQL through it
-    /// ([`pool`](TestBase::pool)). Held here (a private field) rather than on
-    /// `TestEnv` so the many `let TestEnv { state, base } = …` destructures keep
-    /// compiling. A live clone when the guard below drops is safe because
-    /// [`drop_test_database`] issues `DROP DATABASE … WITH (FORCE)`.
+    /// ([`pool`](TestBase::pool)).
     pool: CloseablePool,
     /// `Some` on Postgres (drops the per-test database on teardown); `None` on
-    /// `SQLite`. Declared after `pool` so the pool drops first (fields drop in
-    /// declaration order); with `WITH (FORCE)` the order is not critical.
+    /// `SQLite`. Declared after `pool` so the pool drops first.
     _pg: Option<PostgresDbGuard>,
 }
 
 impl TestBase {
-    fn sqlite(dir: TempDir, pool: SqlitePool) -> Self {
+    fn sqlite(dir: TempDir, pool: SqlitePool, instance_id: crate::InstanceId) -> Self {
         Self {
             dir,
+            instance_id,
             pool: CloseablePool::Sqlite(pool),
             _pg: None,
         }
     }
 
-    fn postgres(dir: TempDir, pg: PostgresDbGuard, pool: PgPool) -> Self {
+    fn postgres(
+        dir: TempDir,
+        pg: PostgresDbGuard,
+        pool: PgPool,
+        instance_id: crate::InstanceId,
+    ) -> Self {
         Self {
             dir,
+            instance_id,
             pool: CloseablePool::Postgres(pool),
             _pg: Some(pg),
         }
@@ -414,6 +494,12 @@ impl TestBase {
     #[must_use]
     pub fn pool(&self) -> &CloseablePool {
         &self.pool
+    }
+
+    /// The immutable identity created by the production opening path.
+    #[must_use]
+    pub fn instance_id(&self) -> &crate::InstanceId {
+        &self.instance_id
     }
 }
 
@@ -463,10 +549,11 @@ impl Backend {
                 let DbConnectOptions::Sqlite(options) = sqlite_url(&dir) else {
                     unreachable!("sqlite_url always yields Sqlite")
                 };
-                let (state, pool) = crate::sqlite::open_sqlite_database_with_pool(&options, true)
-                    .await
-                    .unwrap();
-                (state, TestBase::sqlite(dir, pool))
+                let (state, pool, instance_id) =
+                    crate::sqlite::open_sqlite_database_with_pool(&options, true)
+                        .await
+                        .unwrap();
+                (state, TestBase::sqlite(dir, pool, instance_id))
             }
             Backend::Postgres => {
                 let (url, guard) = template_postgres_url().await;
@@ -474,9 +561,10 @@ impl Backend {
                 let DbConnectOptions::Postgres { options, .. } = &url else {
                     unreachable!("template_postgres_url always yields Postgres")
                 };
-                let (state, pool) = crate::postgres::open_postgres_database_with_pool(options)
-                    .await
-                    .unwrap();
+                let (state, pool, instance_id) =
+                    crate::postgres::open_postgres_database_with_pool(options)
+                        .await
+                        .unwrap();
                 // Record the per-test DB URL so raw-SQL helpers reuse this exact
                 // database rather than minting a fresh (empty) template clone.
                 // `expose_url`, not `to_string`: this URL is read back by
@@ -484,7 +572,7 @@ impl Backend {
                 // password. `Display` redacts.
                 std::fs::write(dir.path().join(PG_URL_FILE), url.expose_url())
                     .expect("write recorded Postgres URL");
-                (state, TestBase::postgres(dir, guard, pool))
+                (state, TestBase::postgres(dir, guard, pool, instance_id))
             }
         };
         TestEnv { state, base }
@@ -1492,31 +1580,33 @@ pub async fn media_row_exists(state: &Arc<AppState>, user_id: UserId, media: &Me
         .expect("media lookup should succeed")
         .is_some()
 }
-
-/// A post's `post_media` rows, ascending by `(source, sha256, filename)` — the
-/// persisted form of what its rendered HTML points a reader at.
-///
-/// Each row *is* a [`MediaRef`]: the triple the columns store is exactly what that type
-/// bundles, so callers compare against [`media_ref_for`] rather than against three
-/// re-stringified fields. Parsing here also asserts, on every read, that the stored
-/// columns still satisfy their newtypes' invariants.
+/// A post's `post_media` rows, ascending by media identity then origin.
 ///
 /// # Panics
 ///
-/// If the query fails, or a stored column is not a valid `source`/`sha256`/`filename`.
-pub async fn fetch_post_media(base: &TestBase, post_id: PostId) -> Vec<MediaRef> {
+/// If the query fails, or a stored column is not a valid media identity or reference.
+pub async fn fetch_post_media(
+    base: &TestBase,
+    post_id: PostId,
+) -> Vec<(MediaRef, MediaReferenceKind, MediaReferenceForm)> {
     base.pool()
-        .string_triples(&format!(
-            "SELECT source, sha256, filename FROM post_media \
-             WHERE post_id = {post_id} ORDER BY source, sha256, filename"
+        .string_quintuples(&format!(
+            "SELECT source, sha256, filename, reference_kind, reference_form FROM post_media \
+             WHERE post_id = {post_id} ORDER BY source, sha256, filename, reference_kind, reference_form"
         ))
         .await
         .expect("post_media query should succeed")
         .into_iter()
-        .map(|(source, sha256, filename)| MediaRef {
-            source: source.parse().expect("stored post_media source is valid"),
-            sha256: parse_content_hash(&sha256),
-            filename: parse_filename(&filename),
+        .map(|(source, sha256, filename, kind, form)| {
+            (
+                MediaRef {
+                    source: source.parse().expect("valid media source"),
+                    sha256: sha256.parse().expect("valid content hash"),
+                    filename: filename.parse().expect("valid filename"),
+                },
+                kind.parse().expect("valid media reference kind"),
+                form.parse().expect("valid media reference form"),
+            )
         })
         .collect()
 }

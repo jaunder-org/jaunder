@@ -65,6 +65,7 @@ mime_guess = "2"
 urlencoding.workspace = true
 percent-encoding.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+url = { workspace = true }
 
 [dev-dependencies]
 axum = { workspace = true }
@@ -81,8 +82,8 @@ rstest_reuse = { workspace = true }
 server_fn = { version = "0.8", features = ["axum-no-default"] }
 serde_qs = "0.15"
 tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 tower = { workspace = true }
-url = { workspace = true }
 
 [lints]
 workspace = true

@@ -293,6 +293,7 @@ pub struct DbPoolSnapshot {
 
 pub struct OpenedDatabase {
     pub state: Arc<AppState>,
+    pub instance_id: crate::InstanceId,
     pub pool_observer: DbPoolObserver,
 }
 
@@ -337,18 +338,20 @@ pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState
 pub async fn open_database_with_observer(opts: &DbConnectOptions) -> sqlx::Result<OpenedDatabase> {
     match opts {
         DbConnectOptions::Sqlite(options) => {
-            let (state, pool) = open_sqlite_database_with_pool(options, true).await?;
+            let (state, pool, instance_id) = open_sqlite_database_with_pool(options, true).await?;
             Ok(OpenedDatabase {
                 state,
+                instance_id,
                 pool_observer: DbPoolObserver {
                     inner: DbPoolObserverInner::Sqlite(pool),
                 },
             })
         }
         DbConnectOptions::Postgres { options, .. } => {
-            let (state, pool) = open_postgres_database_with_pool(options).await?;
+            let (state, pool, instance_id) = open_postgres_database_with_pool(options).await?;
             Ok(OpenedDatabase {
                 state,
+                instance_id,
                 pool_observer: DbPoolObserver {
                     inner: DbPoolObserverInner::Postgres(pool),
                 },
@@ -380,18 +383,20 @@ pub async fn open_existing_database_with_observer(
 ) -> sqlx::Result<OpenedDatabase> {
     match opts {
         DbConnectOptions::Sqlite(options) => {
-            let (state, pool) = open_sqlite_database_with_pool(options, false).await?;
+            let (state, pool, instance_id) = open_sqlite_database_with_pool(options, false).await?;
             Ok(OpenedDatabase {
                 state,
+                instance_id,
                 pool_observer: DbPoolObserver {
                     inner: DbPoolObserverInner::Sqlite(pool),
                 },
             })
         }
         DbConnectOptions::Postgres { options, .. } => {
-            let (state, pool) = open_postgres_database_with_pool(options).await?;
+            let (state, pool, instance_id) = open_postgres_database_with_pool(options).await?;
             Ok(OpenedDatabase {
                 state,
+                instance_id,
                 pool_observer: DbPoolObserver {
                     inner: DbPoolObserverInner::Postgres(pool),
                 },
@@ -400,13 +405,17 @@ pub async fn open_existing_database_with_observer(
     }
 }
 
-/// Tables that migrations seed with constant lookup rows; they are non-empty
+/// Tables initialized by migrations or identity bootstrap hold no user data,
 /// even in a pristine database, so an emptiness check must ignore them.
-pub(crate) const MIGRATION_SEEDED_TABLES: &[&str] =
-    &["channels", "subscription_statuses", "target_kinds"];
+pub(crate) const MIGRATION_SEEDED_TABLES: &[&str] = &[
+    "channels",
+    "subscription_statuses",
+    "target_kinds",
+    "instance_identity",
+];
 
 /// Returns `true` if the database holds no user data — every table except the
-/// migration-seeded lookups ([`MIGRATION_SEEDED_TABLES`]) is empty.
+/// migration/identity bootstrap tables ([`MIGRATION_SEEDED_TABLES`]) is empty.
 ///
 /// Used as a restore preflight: refusing to overwrite a database that is already
 /// in use. This is stricter than checking for users alone — it also catches data
@@ -429,7 +438,9 @@ pub async fn database_is_empty(options: &DbConnectOptions) -> sqlx::Result<bool>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{Backend, backends, recorded_postgres_url, sqlite_url};
+    use crate::test_support::{
+        Backend, backends, recorded_postgres_url, sqlite_url, template_postgres_url,
+    };
     use common::test_support::with_env;
     use rstest::*;
     use rstest_reuse::*;
@@ -742,6 +753,31 @@ mod tests {
             .unwrap();
         let _ =
             tokio::time::timeout(std::time::Duration::from_millis(50), open_database(&opts)).await;
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn concurrent_opens_converge_on_one_instance_identity(#[case] backend: Backend) {
+        let temp = TempDir::new().unwrap();
+        let (options, _guard) = match backend {
+            Backend::Sqlite => (sqlite_url(&temp), None),
+            Backend::Postgres => {
+                let (options, guard) = template_postgres_url().await;
+                (options, Some(guard))
+            }
+        };
+        let initial = open_database_with_observer(&options)
+            .await
+            .expect("initial open migrates the database");
+        let expected = initial.instance_id;
+        let (first, second) = tokio::join!(
+            open_database_with_observer(&options),
+            open_database_with_observer(&options)
+        );
+        let first = first.expect("first concurrent open succeeds");
+        let second = second.expect("second concurrent open succeeds");
+        assert_eq!(first.instance_id, expected);
+        assert_eq!(second.instance_id, expected);
     }
 
     // guard:no-backend — asserts DbConnectOptions→backend routing; connects lazily, no live pool

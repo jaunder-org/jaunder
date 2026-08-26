@@ -1,14 +1,15 @@
 use async_trait::async_trait;
-
-use sqlx::{Pool, Sqlite};
+use sqlx::{Pool, QueryBuilder, Sqlite, SqliteConnection};
 
 use crate::posts::{
-    DELETE_POST_TAG_BY_SLUG, INSERT_POST_TAG, PostOwnershipRow, PostTagRow, SELECT_POST_TAGS,
-    UPSERT_TAG_RETURNING_ID, post_tag_diff, post_tags_from_rows,
+    DELETE_POST_TAG_BY_SLUG, INSERT_POST_TAG, MediaReferenceEvidence, PostMediaReferenceBackfill,
+    PostOwnershipRow, PostTagRow, SELECT_POST_TAGS, UPSERT_TAG_RETURNING_ID, post_tag_diff,
+    post_tags_from_rows, push_live_media_reference_predicate, push_media_reference_evidence_cte,
+    push_owner_media_reference_from_where, replace_legacy_post_media,
 };
 use crate::{
-    PostDialect, PostRecord, PostStore, PublishUpdate, TaggingError, UpdatePostError,
-    UpdatePostInput,
+    InstanceId, PostDialect, PostRecord, PostStore, PublishUpdate, RenderedHtml, TaggingError,
+    UpdatePostError, UpdatePostInput,
 };
 use common::ids::{PostId, TagId, UserId};
 use common::tag::TagLabel;
@@ -39,6 +40,29 @@ pub(crate) fn finish_post_tags(
         "storage.sqlite.post_tags.rollback",
     )
 }
+async fn lock_updated_media(
+    conn: &mut SqliteConnection,
+    post_id: PostId,
+    input: &UpdatePostInput,
+) -> sqlx::Result<()> {
+    let old_media: Vec<(
+        common::media::MediaSource,
+        common::media::ContentHash,
+        common::media::Filename,
+    )> = sqlx::query_as("SELECT source, sha256, filename FROM post_media WHERE post_id = $1")
+        .bind(post_id)
+        .fetch_all(&mut *conn)
+        .await?;
+    let mut locked_media = crate::posts::media_lock_set(input.rendered.media());
+    locked_media.extend(old_media.into_iter().map(|(source, sha256, filename)| {
+        common::media::MediaRef {
+            source,
+            sha256,
+            filename,
+        }
+    }));
+    <Sqlite as PostDialect>::lock_media_references(conn, &locked_media).await
+}
 
 /// SQLite-backed post storage.
 pub type SqlitePostStorage = PostStore<Sqlite>;
@@ -60,12 +84,14 @@ impl PostDialect for Sqlite {
          (post_id, audience_id, target_kind_id) \
          VALUES (?, ?, (SELECT kind_id FROM target_kinds WHERE name = ?))";
 
-    const DELETE_POST_MEDIA: &'static str = "DELETE FROM post_media WHERE post_id = ?";
+    async fn lock_media_references(
+        _conn: &mut <Self as sqlx::Database>::Connection,
+        _media: &std::collections::BTreeSet<common::media::MediaRef>,
+    ) -> sqlx::Result<()> {
+        Ok(())
+    }
 
-    // Bind order: post_id, source, sha256, filename (matches `replace_post_media`).
-    const INSERT_POST_MEDIA: &'static str = "INSERT INTO post_media \
-         (post_id, source, sha256, filename) \
-         VALUES (?, ?, ?, ?)";
+    const DELETE_POST_MEDIA: &'static str = "DELETE FROM post_media WHERE post_id = ?";
 
     async fn update_post(
         pool: &Pool<Sqlite>,
@@ -97,7 +123,7 @@ impl PostDialect for Sqlite {
                 }
                 Some(_) => {}
             }
-
+            lock_updated_media(&mut conn, post_id, input).await?;
             sqlx::query(
                 "INSERT INTO post_revisions (post_id, user_id, title, slug, body, format, rendered_html, edited_at)
                  SELECT post_id, user_id, title, slug, body, format, rendered_html, $1
@@ -258,11 +284,112 @@ impl PostDialect for Sqlite {
             ),
         }
     }
+
+    async fn apply_post_media_reference_backfill(
+        pool: &Pool<Self>,
+        candidates: &[PostMediaReferenceBackfill],
+    ) -> sqlx::Result<()> {
+        let mut conn = pool.acquire().await?;
+        sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+        let result: sqlx::Result<()> = async {
+            let current: Vec<(PostId, RenderedHtml)> = sqlx::query_as(
+                "SELECT p.post_id, p.rendered_html
+                 FROM posts p
+                 WHERE EXISTS (
+                     SELECT 1 FROM post_media pm
+                     WHERE pm.post_id = p.post_id AND pm.reference_kind = 'legacy'
+                 )
+                 ORDER BY p.post_id",
+            )
+            .fetch_all(&mut *conn)
+            .await?;
+            let unchanged = current.len() == candidates.len()
+                && current
+                    .iter()
+                    .zip(candidates)
+                    .all(|((post_id, html), candidate)| {
+                        *post_id == candidate.post_id
+                            && html.as_ref() == candidate.rendered_html.as_str()
+                    });
+            if !unchanged {
+                return Err(sqlx::Error::Protocol(
+                    "post rendered HTML changed during media-reference backfill".to_owned(),
+                ));
+            }
+            replace_legacy_post_media::<Sqlite>(&mut conn, candidates).await
+        }
+        .await;
+
+        match result {
+            Ok(()) => {
+                sqlx::query("COMMIT").execute(&mut *conn).await?;
+                Ok(())
+            }
+            Err(error) => crate::helpers::preserve_after_secondary(
+                Err(error),
+                sqlx::query("ROLLBACK")
+                    .execute(&mut *conn)
+                    .await
+                    .map(|_| ()),
+                host::error::ErrorKind::Storage,
+                host::error::ErrorClass::Transient,
+                "storage.sqlite.post_media_reference_backfill.rollback",
+            ),
+        }
+    }
+
+    async fn insert_post_media_rows(
+        conn: &mut Self::Connection,
+        rows: std::collections::BTreeSet<(
+            PostId,
+            common::media::MediaRef,
+            common::media::MediaReferenceKind,
+            common::media::MediaReferenceForm,
+        )>,
+    ) -> sqlx::Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut query = QueryBuilder::<Sqlite>::new(
+            "INSERT INTO post_media (post_id, source, sha256, filename, reference_kind, reference_form) ",
+        );
+        query.push_values(rows, |mut values, (post_id, media, kind, form)| {
+            values
+                .push_bind(post_id)
+                .push_bind(media.source)
+                .push_bind(media.sha256)
+                .push_bind(media.filename)
+                .push_bind(kind.to_string())
+                .push_bind(form);
+        });
+        query.build().execute(&mut *conn).await?;
+        Ok(())
+    }
+
+    async fn list_posts_referencing_media(
+        pool: &Pool<Self>,
+        user_id: UserId,
+        media: &common::media::MediaRef,
+        current_instance_id: &InstanceId,
+        evidence: &MediaReferenceEvidence,
+    ) -> sqlx::Result<Vec<PostId>> {
+        let mut query = QueryBuilder::<Sqlite>::new(String::new());
+        push_media_reference_evidence_cte(&mut query, evidence);
+        query.push("SELECT DISTINCT pm.post_id");
+        push_owner_media_reference_from_where(&mut query, user_id, media);
+        push_live_media_reference_predicate(&mut query, current_instance_id);
+        query.push(" ORDER BY pm.post_id");
+        query.build_query_scalar::<PostId>().fetch_all(pool).await
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::posts::PostMediaReferenceBackfill;
+    use crate::test_support::{Backend, CloseablePool, SeedRawPost, SeedUser, sqlite_only};
+    use rstest::*;
+    use rstest_reuse::*;
 
     #[test]
     fn continuation_reporting_rollback_failures_preserve_post_domain_errors_and_report_once() {
@@ -289,5 +416,40 @@ mod tests {
             &trace,
             "storage.sqlite.post_tags.rollback",
         );
+    }
+
+    // reason: SQLite's immediate writer transaction is the dialect-specific snapshot guard.
+    #[apply(sqlite_only)]
+    #[tokio::test]
+    async fn media_backfill_rejects_a_stale_rendered_html_snapshot(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let user = SeedUser::new().seed(&env.state).await.user_id;
+        let post_id = SeedRawPost::new(user).seed(&env.state).await.post_id;
+        env.base
+            .pool()
+            .execute(&format!(
+                "INSERT INTO post_media \
+                 (post_id, source, sha256, filename, reference_kind, reference_form) \
+                 VALUES ({post_id}, 'upload', \
+                 '0000000000000000000000000000000000000000000000000000000000000000', \
+                 'snapshot.jpg', 'legacy', 'legacy')"
+            ))
+            .await
+            .expect("seed legacy reference row");
+        let CloseablePool::Sqlite(pool) = env.base.pool() else {
+            unreachable!("SQLite setup yields a SQLite pool")
+        };
+        let error = <Sqlite as PostDialect>::apply_post_media_reference_backfill(
+            pool,
+            &[PostMediaReferenceBackfill {
+                post_id,
+                rendered_html: "stale HTML".to_owned(),
+                references: Vec::new(),
+            }],
+        )
+        .await
+        .expect_err("a changed snapshot must not rewrite derived references");
+
+        assert!(matches!(error, sqlx::Error::Protocol(_)));
     }
 }

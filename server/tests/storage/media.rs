@@ -8,7 +8,9 @@ use common::time::UtcInstant;
 use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, SeedUser, backends, seed_users};
-use storage::{CreateMediaError, DeleteMediaError, MediaRecord, TryDeleteOutcome};
+use storage::{
+    CreateMediaError, DeleteMediaError, MediaRecord, MediaReferenceEvidence, TryDeleteOutcome,
+};
 
 // ── MediaStorage tests ────────────────────────────────────────────────────────
 
@@ -231,6 +233,7 @@ async fn delete_media_removes_record(#[case] backend: Backend) {
         parse_content_hash("cccc1234cccc1234cccc1234cccc1234cccc1234cccc1234cccc1234cccc1234");
     let record = make_media_record(user_id, &sha256, "del.jpg", MediaSource::Upload);
     state.media.create_media(&record).await.unwrap();
+    let evidence = MediaReferenceEvidence::new(env.base.instance_id().clone());
     let outcome = state
         .media
         .try_delete_media(
@@ -240,6 +243,8 @@ async fn delete_media_removes_record(#[case] backend: Backend) {
                 sha256: sha256.clone(),
                 filename: parse_filename("del.jpg"),
             },
+            env.base.instance_id(),
+            &evidence,
             false,
         )
         .await
@@ -268,6 +273,7 @@ async fn delete_nonexistent_returns_not_found(#[case] backend: Backend) {
 
     let sha256 =
         parse_content_hash("dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234dddd1234");
+    let evidence = MediaReferenceEvidence::new(env.base.instance_id().clone());
     let err = state
         .media
         .try_delete_media(
@@ -277,6 +283,8 @@ async fn delete_nonexistent_returns_not_found(#[case] backend: Backend) {
                 sha256: sha256.clone(),
                 filename: parse_filename("ghost.jpg"),
             },
+            env.base.instance_id(),
+            &evidence,
             false,
         )
         .await

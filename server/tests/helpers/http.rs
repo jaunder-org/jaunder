@@ -1,13 +1,23 @@
+use std::{
+    collections::BTreeSet,
+    sync::{Arc, Mutex},
+};
+
+use async_trait::async_trait;
 use axum::{
     body::Body,
     http::{Request, StatusCode, header},
 };
 use common::mailer::MailSender;
-use std::sync::Arc;
+use common::media::MediaReferenceForm;
+use common::tagged_url::BaseUrl;
+use storage::test_support::{Backend, TestEnv, noop_mailer};
+use storage::{
+    ForeignEvidenceSink, InstanceId, MediaReferenceEvidence, MediaReferenceOwnershipResolver,
+    PersistedMediaReference,
+};
 use tempfile::TempDir;
 use tower::ServiceExt;
-
-use storage::test_support::{Backend, TestEnv, noop_mailer};
 
 use super::registrar::ensure_server_fns_registered;
 use super::session::tmp_storage_path;
@@ -30,7 +40,93 @@ pub fn make_app(state: &Arc<storage::AppState>, storage: &TempDir) -> axum::Rout
     std::fs::create_dir_all(storage_path.join("media").join("upload")).unwrap();
     std::fs::create_dir_all(storage_path.join("media").join("cached")).unwrap();
     std::fs::create_dir_all(storage_path.join("media").join("tmp")).unwrap();
-    jaunder::create_router(Arc::clone(state), noop_mailer(), false, storage_path)
+    jaunder::create_router(
+        Arc::clone(state),
+        storage::InstanceId::new(),
+        noop_mailer(),
+        false,
+        storage_path,
+    )
+    .expect("canonical instance identity is an HTTP header")
+}
+
+/// Build a router with a deterministic ownership resolver for media-deletion
+/// integration tests. The production helper above deliberately keeps the live
+/// resolver so ordinary route tests exercise normal composition.
+pub fn make_app_with_media_ownership_resolver(
+    state: &Arc<storage::AppState>,
+    storage: &TempDir,
+    resolver: Arc<dyn storage::MediaReferenceOwnershipResolver>,
+) -> axum::Router {
+    ensure_server_fns_registered();
+    let storage_path = storage.path().to_path_buf();
+    std::fs::create_dir_all(storage_path.join("media").join("upload")).unwrap();
+    std::fs::create_dir_all(storage_path.join("media").join("cached")).unwrap();
+    std::fs::create_dir_all(storage_path.join("media").join("tmp")).unwrap();
+    jaunder::create_router_with_media_reference_ownership_resolver(
+        Arc::clone(state),
+        storage::InstanceId::new(),
+        noop_mailer(),
+        false,
+        storage_path,
+        resolver,
+    )
+    .expect("canonical instance identity is an HTTP header")
+}
+
+/// Deterministic resolver that proves only configured exact persisted URL forms
+/// foreign. It records each input batch so endpoint tests can assert one global
+/// resolution before deletion takes locks.
+pub struct ForeignReferenceResolver {
+    foreign_forms: Mutex<BTreeSet<MediaReferenceForm>>,
+    calls: Mutex<Vec<Vec<PersistedMediaReference>>>,
+}
+
+impl ForeignReferenceResolver {
+    pub fn new(foreign_forms: impl IntoIterator<Item = MediaReferenceForm>) -> Self {
+        Self {
+            foreign_forms: Mutex::new(foreign_forms.into_iter().collect()),
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn insert_foreign_form(&self, reference_form: MediaReferenceForm) {
+        self.foreign_forms
+            .lock()
+            .expect("foreign forms lock")
+            .insert(reference_form);
+    }
+
+    pub fn calls(&self) -> Vec<Vec<PersistedMediaReference>> {
+        self.calls.lock().expect("resolver calls lock").clone()
+    }
+}
+
+#[async_trait]
+impl MediaReferenceOwnershipResolver for ForeignReferenceResolver {
+    async fn resolve(
+        &self,
+        references: &[PersistedMediaReference],
+        _instance_id: &InstanceId,
+        _base_url: Option<&BaseUrl>,
+        mut foreign: ForeignEvidenceSink,
+    ) -> MediaReferenceEvidence {
+        self.calls
+            .lock()
+            .expect("resolver calls lock")
+            .push(references.to_vec());
+        for reference in references {
+            if self
+                .foreign_forms
+                .lock()
+                .expect("foreign forms lock")
+                .contains(reference.reference_form())
+            {
+                foreign.prove_foreign(reference.clone());
+            }
+        }
+        foreign.finish()
+    }
 }
 
 struct RequestCredentials<'a> {
@@ -118,10 +214,12 @@ async fn post_inner(
 
     let app = jaunder::create_router(
         Arc::clone(state),
+        storage::InstanceId::new(),
         mailer,
         secure_cookies,
         tmp_storage_path(),
-    );
+    )
+    .expect("canonical instance identity is an HTTP header");
     let response = app.oneshot(request).await.expect("router oneshot failed");
 
     let status = response.status();
@@ -213,6 +311,37 @@ where
 {
     let (status, _set_cookie, body) =
         post_server_fn_inner::<F, F>(state, noop_mailer(), input, cookie, None, true).await;
+    (status, body)
+}
+
+/// Posts a typed server function through a router with deterministic ownership
+/// evidence, keeping media-deletion integration tests off the network.
+pub async fn post_server_fn_with_media_ownership_resolver<F>(
+    state: &Arc<storage::AppState>,
+    resolver: Arc<dyn storage::MediaReferenceOwnershipResolver>,
+    input: &F,
+    cookie: Option<&str>,
+) -> (StatusCode, String)
+where
+    F: serde::Serialize + server_fn::ServerFn,
+{
+    let storage = TempDir::new().unwrap();
+    let app = make_app_with_media_ownership_resolver(state, &storage, resolver);
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri(F::PATH)
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
+    if let Some(cookie) = cookie {
+        builder = builder.header(header::COOKIE, cookie);
+    }
+    let request = builder
+        .body(Body::from(
+            serde_qs::to_string(input).expect("server function input encodes"),
+        ))
+        .expect("server function request builds");
+    let response = app.oneshot(request).await.expect("router request succeeds");
+    let status = response.status();
+    let body = body_string(response).await;
     (status, body)
 }
 
@@ -516,7 +645,7 @@ pub async fn post_multipart(
 /// GET a static asset and return `(status, Content-Type)`. Pins the Sqlite backend
 /// — static-asset serving never touches storage, so it need not run on both.
 pub async fn get_asset(uri: &str) -> (StatusCode, Option<String>) {
-    let TestEnv { state, base: _base } = Backend::Sqlite.setup().await;
+    let TestEnv { state, base } = Backend::Sqlite.setup().await;
 
     let request = Request::builder()
         .method("GET")
@@ -524,7 +653,14 @@ pub async fn get_asset(uri: &str) -> (StatusCode, Option<String>) {
         .body(Body::empty())
         .unwrap();
 
-    let app = jaunder::create_router(state, noop_mailer(), false, tmp_storage_path());
+    let app = jaunder::create_router(
+        state,
+        base.instance_id().clone(),
+        noop_mailer(),
+        false,
+        tmp_storage_path(),
+    )
+    .expect("canonical instance identity is an HTTP header");
     let response = app.oneshot(request).await.unwrap();
 
     let status = response.status();

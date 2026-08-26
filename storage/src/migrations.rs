@@ -82,6 +82,93 @@ mod tests {
                 }
             }
         }
+        async fn migrate_current(&self) -> Result<(), MigrateError> {
+            match &self.pool {
+                CloseablePool::Sqlite(pool) => SQLITE_MIGRATOR.run(pool).await,
+                CloseablePool::Postgres(pool) => POSTGRES_MIGRATOR.run(pool).await,
+            }
+        }
+
+        async fn backfill_post_media_references(&self) {
+            match &self.pool {
+                CloseablePool::Sqlite(pool) => crate::posts::backfill_post_media_references(pool)
+                    .await
+                    .expect("startup backfill succeeds"),
+                CloseablePool::Postgres(pool) => crate::posts::backfill_post_media_references(pool)
+                    .await
+                    .expect("startup backfill succeeds"),
+            }
+        }
+
+        async fn seed_legacy_post_media(&self) {
+            let insert_user = match &self.pool {
+                CloseablePool::Sqlite(_) => {
+                    "INSERT INTO users \
+                     (user_id, username, password_hash, created_at) \
+                     VALUES (404, 'migration-media-author', 'hash', CURRENT_TIMESTAMP)"
+                }
+                CloseablePool::Postgres(_) => {
+                    "INSERT INTO users \
+                     (user_id, username, password_hash, created_at) \
+                     OVERRIDING SYSTEM VALUE \
+                     VALUES (404, 'migration-media-author', 'hash', CURRENT_TIMESTAMP)"
+                }
+            };
+            let insert_post = match &self.pool {
+                CloseablePool::Sqlite(_) => {
+                    r#"
+                    INSERT INTO posts
+                    (post_id, user_id, title, slug, body, format, rendered_html, created_at, updated_at)
+                    VALUES (505, 404, NULL, 'migration-media', 'body', 'html',
+                    '<img src="/media/upload/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/relative.jpg">
+                     <img src="https://example.com/media/upload/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/same.jpg">
+                     <img src="https://foreign.example/media/upload/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/foreign.jpg">
+                     <img src="//example.com/media/upload/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/scheme.jpg">
+                     <img src="http://example.com/media/upload/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/overlap.jpg">
+                     <img src="//example.com/media/upload/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/overlap.jpg">',
+                     CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                "#
+                }
+                CloseablePool::Postgres(_) => {
+                    r#"
+                    INSERT INTO posts
+                    (post_id, user_id, title, slug, body, format, rendered_html, created_at, updated_at)
+                    OVERRIDING SYSTEM VALUE
+                    VALUES (505, 404, NULL, 'migration-media', 'body', 'html',
+                    '<img src="/media/upload/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/relative.jpg">
+                     <img src="https://example.com/media/upload/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/same.jpg">
+                     <img src="https://foreign.example/media/upload/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/foreign.jpg">
+                     <img src="//example.com/media/upload/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/scheme.jpg">
+                     <img src="http://example.com/media/upload/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/overlap.jpg">
+                     <img src="//example.com/media/upload/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/overlap.jpg">',
+                     CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                "#
+                }
+            };
+            self.pool.execute(insert_user).await.unwrap();
+            self.pool.execute(insert_post).await.unwrap();
+            self.pool
+                .execute(
+                    "INSERT INTO post_media (post_id, source, sha256, filename) VALUES \
+                     (505, 'upload', 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 'relative.jpg'), \
+                     (505, 'upload', 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 'same.jpg'), \
+                     (505, 'upload', 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 'foreign.jpg'), \
+                     (505, 'upload', 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 'scheme.jpg'), \
+                     (505, 'upload', 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 'overlap.jpg')",
+                )
+                .await
+                .unwrap();
+        }
+
+        async fn post_media_references(&self) -> Vec<(String, String, String, String, String)> {
+            self.pool
+                .string_quintuples(
+                    "SELECT source, sha256, filename, reference_kind, reference_form FROM post_media \
+                     ORDER BY source, sha256, filename, reference_kind, reference_form",
+                )
+                .await
+                .expect("post media rows query succeeds")
+        }
 
         async fn seed_subscription_graph(&self, subscriber_ref: &str) {
             let insert_user = match &self.pool {
@@ -124,6 +211,56 @@ mod tests {
                 .await
                 .unwrap();
         }
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn migration_0027_backfills_legacy_post_media_origins_from_rendered_html(
+        #[case] backend: Backend,
+    ) {
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_to(26).await.unwrap();
+        db.seed_legacy_post_media().await;
+
+        db.migrate_current().await.unwrap();
+        db.backfill_post_media_references().await;
+
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
+                .await
+                .unwrap(),
+            27
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM post_media WHERE reference_kind = 'legacy'")
+                .await
+                .unwrap(),
+            0,
+            "startup backfill must replace every pre-provenance row"
+        );
+        let references = db.post_media_references().await;
+        assert_eq!(references.len(), 6);
+        assert!(references.iter().any(|(_, _, filename, kind, form)| {
+            filename == "relative.jpg" && kind == "local" && form.ends_with("/relative.jpg")
+        }));
+        assert!(references.iter().any(|(_, _, filename, kind, form)| {
+            filename == "same.jpg" && kind == "absolute" && form.starts_with("https://example.com/")
+        }));
+        assert!(references.iter().any(|(_, _, filename, kind, form)| {
+            filename == "scheme.jpg"
+                && kind == "scheme_relative"
+                && form.starts_with("//example.com/")
+        }));
+        assert_eq!(
+            references
+                .iter()
+                .filter(|(_, _, filename, _, _)| filename == "overlap.jpg")
+                .count(),
+            2,
+            "absolute and scheme-relative spellings remain distinct exact rows"
+        );
     }
 
     #[apply(backends)]

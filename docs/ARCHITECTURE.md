@@ -383,19 +383,32 @@ itself does not _exist_ without it (`common/src/render.rs:241,605`) — absence
 rather than a weaker guarantee. The allowlist is ammonia's audited default
 widened only to keep a `language-*` `class` on `<pre>`/`<code>`.
 
-**A post's media references are derived from that sanitized HTML, never
+**A Post's media references are derived from that sanitized HTML, never
 supplied** ([ADR-0090](adr/0090-media-references-extracted-at-render.md)).
-`RenderOutput` (`common/src/render.rs:554`) holds the HTML and a `Vec<MediaRef>`
-with **both fields private** and `RenderOutput::render` as its only constructor,
-so a value whose reference set disagrees with its HTML is unrepresentable;
-`into_html` consumes the pair. `CreatePostInput`/`UpdatePostInput` carry that
-type in place of a bare HTML field (`storage/src/posts.rs:212-215`), and the
-rows land in the post's own transaction (`post_media`, migration
-`0025_create_post_media.sql` — keyed `(post_id, source, sha256, filename)`, no
-FK to `media`). Publication therefore gets its **own** storage operation,
-`publish_post` (`storage/src/posts.rs:1241`, called from
-`web/src/posts/api.rs:463`), which sets the publication timestamp and touches
-nothing else — that is what lets rendering stay the sole constructor.
+`RenderOutput` holds the HTML and a `Vec<MediaReference>` with both fields
+private and `RenderOutput::render` as its only constructor, so a value whose
+reference set disagrees with its HTML is unrepresentable; `into_html` consumes
+the pair. Each reference retains its canonical stored-media identity plus its
+complete local, absolute HTTP(S), or scheme-relative URL form while rendering
+and extraction remain configuration-free
+([the live media-reference ownership decision](adr/0154-media-reference-live-ownership.md)).
+Relative references are intrinsically local. Immediately before deletion,
+absolute references are probed with bounded ordinary reqwest HEAD requests;
+scheme-relative forms first inherit the current canonical `site.base_url`
+scheme. Reqwest owns DNS, configured proxies, redirects, TLS, and pooling; the
+trusted-author model deliberately leaves no Jaunder address policy, DNS
+resolution, socket pinning, or redirect implementation. Every response
+identifies its persistent database instance through `X-Jaunder-Instance`; a
+matching identity is owned, a completed response with a different or absent
+identity is foreign, and request failure or an ambiguous header is unknown and
+fails closed. A future disallowed-address product rule belongs at authoring
+validation, not this deletion-time check. Exact proven-foreign row evidence
+feeds reporting, reclamation, and one atomic conditional delete, so concurrent
+or unprobed rows still refuse. `CreatePostInput`/`UpdatePostInput` carry the
+render output in place of bare HTML, and the rows land in the Post's own
+transaction. Publication has its own storage operation that sets the publication
+timestamp and touches nothing else, which lets rendering stay the sole
+constructor.
 
 **Media is content-addressed, and the layout is spelled once.** `media_path`
 (`common/src/media.rs:671`) is the single definition of

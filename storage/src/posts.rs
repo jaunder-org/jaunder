@@ -1,13 +1,16 @@
 //! Content storage for posts, revisions, and tagging.
 
-use async_trait::async_trait;
+use std::collections::BTreeSet;
 
-use sqlx::{Database, Pool, Row};
+use async_trait::async_trait;
+use sha2::{Digest, Sha256};
+use sqlx::{Database, Pool, QueryBuilder, Row};
 use thiserror::Error;
 
+use crate::InstanceId;
 use common::feed::FeedPath;
 use common::ids::{AudienceId, ChannelId, PostId, RevisionId, TagId, UserId};
-use common::media::MediaRef;
+use common::media::{MediaRef, MediaReference, MediaReferenceForm, MediaReferenceKind};
 use common::pagination::RowLimit;
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
@@ -684,6 +687,175 @@ pub fn list_by_tag_rows(
 ///
 /// This trait manages the lifecycle of posts, including versioned edits,
 /// draft/publish status, soft-deletion, and tagging.
+/// The exact persisted spelling of one media reference in one post.
+///
+/// This is deliberately the database key, rather than a lossy media identity:
+/// foreign ownership evidence must not authorize a similarly named row.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PersistedMediaReference {
+    post_id: PostId,
+    owner_id: Option<UserId>,
+    media: MediaRef,
+    kind: MediaReferenceKind,
+    reference_form: MediaReferenceForm,
+}
+
+impl PersistedMediaReference {
+    #[must_use]
+    pub fn new(
+        post_id: PostId,
+        media: MediaRef,
+        kind: MediaReferenceKind,
+        reference_form: MediaReferenceForm,
+    ) -> Self {
+        Self {
+            post_id,
+            owner_id: None,
+            media,
+            kind,
+            reference_form,
+        }
+    }
+
+    #[must_use]
+    pub fn post_id(&self) -> PostId {
+        self.post_id
+    }
+
+    #[must_use]
+    pub fn owner_id(&self) -> Option<UserId> {
+        self.owner_id
+    }
+
+    pub(crate) fn with_owner(mut self, owner_id: UserId) -> Self {
+        self.owner_id = Some(owner_id);
+        self
+    }
+
+    #[must_use]
+    pub fn media(&self) -> &MediaRef {
+        &self.media
+    }
+
+    #[must_use]
+    pub fn kind(&self) -> MediaReferenceKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub fn reference_form(&self) -> &MediaReferenceForm {
+        &self.reference_form
+    }
+}
+
+/// Maximum exact-reference rows examined for one live ownership decision.
+///
+/// The sentinel-bearing snapshot prevents a media deletion from materializing
+/// unbounded author-controlled rows. Rows beyond this limit receive no foreign
+/// evidence and therefore remain conservatively live.
+pub const MAX_MEDIA_REFERENCE_SNAPSHOT: usize = 128;
+const MEDIA_REFERENCE_SNAPSHOT_QUERY_LIMIT: i64 = 129;
+
+/// A bounded exact-reference snapshot for one media identity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MediaReferenceSnapshot {
+    references: Vec<PersistedMediaReference>,
+    has_unexamined_references: bool,
+}
+
+impl MediaReferenceSnapshot {
+    #[must_use]
+    pub fn new(references: Vec<PersistedMediaReference>, has_unexamined_references: bool) -> Self {
+        debug_assert!(references.len() <= MAX_MEDIA_REFERENCE_SNAPSHOT);
+        Self {
+            references,
+            has_unexamined_references,
+        }
+    }
+
+    #[must_use]
+    pub fn references(&self) -> &[PersistedMediaReference] {
+        &self.references
+    }
+
+    #[must_use]
+    pub fn has_unexamined_references(&self) -> bool {
+        self.has_unexamined_references
+    }
+}
+
+/// A foreign instance's signed/verified ownership assertion for one exact row.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ProvenForeignReference {
+    reference: PersistedMediaReference,
+    expected_instance_id: InstanceId,
+}
+
+impl ProvenForeignReference {
+    #[must_use]
+    pub(crate) fn new(
+        reference: PersistedMediaReference,
+        expected_instance_id: InstanceId,
+    ) -> Self {
+        Self {
+            reference,
+            expected_instance_id,
+        }
+    }
+
+    #[must_use]
+    pub fn reference(&self) -> &PersistedMediaReference {
+        &self.reference
+    }
+
+    #[must_use]
+    pub fn expected_instance_id(&self) -> &InstanceId {
+        &self.expected_instance_id
+    }
+}
+
+/// Completed, network-free foreign ownership evidence for one storage decision.
+#[derive(Clone, Debug)]
+pub struct MediaReferenceEvidence {
+    expected_instance_id: InstanceId,
+    references: BTreeSet<ProvenForeignReference>,
+}
+
+impl MediaReferenceEvidence {
+    #[must_use]
+    pub fn new(expected_instance_id: InstanceId) -> Self {
+        Self {
+            expected_instance_id,
+            references: BTreeSet::new(),
+        }
+    }
+
+    /// Adds a proof only when it is for this snapshot's expected instance.
+    pub fn insert(&mut self, proof: ProvenForeignReference) -> bool {
+        if proof.expected_instance_id != self.expected_instance_id {
+            return false;
+        }
+        self.references.insert(proof)
+    }
+
+    #[must_use]
+    pub fn expected_instance_id(&self) -> &InstanceId {
+        &self.expected_instance_id
+    }
+
+    #[must_use]
+    pub fn references(&self) -> &BTreeSet<ProvenForeignReference> {
+        &self.references
+    }
+
+    #[must_use]
+    pub fn proves_foreign(&self, reference: &PersistedMediaReference) -> bool {
+        self.references
+            .iter()
+            .any(|proof| proof.reference() == reference)
+    }
+}
+
 #[cfg_attr(feature = "test-utils", mockall::automock)]
 #[async_trait]
 pub trait PostStorage: Send + Sync {
@@ -969,24 +1141,19 @@ pub trait PostStorage: Send + Sync {
     /// (equivalent to [`AudienceTarget::Private`]). See ADR-0020.
     async fn get_post_audiences(&self, post_id: PostId) -> sqlx::Result<Vec<AudienceTarget>>;
 
-    /// The ids of `user_id`'s non-soft-deleted posts whose rendered HTML points at
-    /// `media`, ascending. An unreferenced item yields an empty vec.
+    /// Loads a bounded exact-reference snapshot for a media identity.
     ///
-    /// The read half of `post_media`'s lifecycle, kept in the same trait and module
-    /// as [`replace_post_media`], which writes those rows (#711).
-    ///
-    /// **Deliberately unlimited.** The join answers the question exactly; any cap
-    /// would let a reference in an old post past the window leave its media
-    /// silently deletable.
-    ///
-    /// **Deliberately scoped to `user_id`'s own posts.** `media` is keyed per-user,
-    /// so another user may hold a row for the same on-disk entry; their posts do not
-    /// block this user's delete, and — since the caller shows this list to the
-    /// deleting user — must not be disclosed to them (spec D9).
+    /// `has_unexamined_references` reports the sentinel row, which remains live
+    /// because it receives no foreign evidence.
+    async fn list_media_references(&self, media: &MediaRef)
+    -> sqlx::Result<MediaReferenceSnapshot>;
+
     async fn list_posts_referencing_media(
         &self,
         user_id: UserId,
         media: &MediaRef,
+        current_instance_id: &InstanceId,
+        evidence: &MediaReferenceEvidence,
     ) -> sqlx::Result<Vec<PostId>>;
 }
 
@@ -1032,11 +1199,15 @@ pub trait PostDialect: Backend {
     /// `kind_id` via a subquery. Bind order: `post_id, audience_id, kind_name`.
     const INSERT_POST_AUDIENCE: &'static str;
 
+    /// Acquires the backend's transaction-scoped media locks in the stable order
+    /// represented by `media`. `SQLite` already holds its single writer lock.
+    async fn lock_media_references(
+        conn: &mut Self::Connection,
+        media: &BTreeSet<MediaRef>,
+    ) -> sqlx::Result<()>;
+
     /// Deletes every `post_media` row for a post. Bind order: `post_id`.
     const DELETE_POST_MEDIA: &'static str;
-    /// Inserts one `post_media` row. Bind order:
-    /// `post_id, source, sha256, filename`.
-    const INSERT_POST_MEDIA: &'static str;
 
     /// Update a post and record a revision, returning the updated record.
     async fn update_post(
@@ -1055,43 +1226,152 @@ pub trait PostDialect: Backend {
         post_id: PostId,
         desired: &[TagLabel],
     ) -> Result<(), TaggingError>;
+
+    /// Atomically installs references re-derived outside the writer lock.
+    ///
+    /// The backend rejects the batch if an authoritative HTML snapshot changed after
+    /// derivation, so startup fails safely and a later open derives a fresh batch.
+    async fn apply_post_media_reference_backfill(
+        pool: &Pool<Self>,
+        candidates: &[PostMediaReferenceBackfill],
+    ) -> sqlx::Result<()>;
+
+    /// Inserts a deduplicated `post_media` batch in one statement.
+    async fn insert_post_media_rows(
+        conn: &mut Self::Connection,
+        rows: BTreeSet<(PostId, MediaRef, MediaReferenceKind, MediaReferenceForm)>,
+    ) -> sqlx::Result<()>;
+    /// Lists the owner's live references after excluding evidence proved foreign for
+    /// `current_instance_id`. Dynamic evidence binds require a concrete `SQLx` dialect.
+    async fn list_posts_referencing_media(
+        pool: &Pool<Self>,
+        user_id: UserId,
+        media: &MediaRef,
+        current_instance_id: &InstanceId,
+        evidence: &MediaReferenceEvidence,
+    ) -> sqlx::Result<Vec<PostId>>;
 }
 
-/// The single definition of "which of `user_id`'s live posts reference this media" —
-/// the `FROM`/`JOIN`/`WHERE` half of that question, leaving the projection (and any
-/// `ORDER BY`) to whoever splices it in.
+/// Appends a dynamic evidence relation for one ownership decision.
 ///
-/// Bind order: `$1` `user_id`, `$2` `source`, `$3` `sha256`, `$4` `filename`.
-///
-/// Both places that ask the question use this fragment:
-/// [`PostStorage::list_posts_referencing_media`], which *reports* the references so a
-/// refusal can be explained, and the `NOT EXISTS` guard inside
-/// [`try_delete_media`][crate::media::MediaStorage::try_delete_media], which *makes*
-/// that refusal atomically (#711, spec D8). They have to agree: spelled separately,
-/// widening or narrowing "referenced" in one would leave the guard blocking deletes
-/// the message says are unblocked, or vice versa — a disagreement nothing would catch
-/// at compile time. So it is spelled once, here, in the module that owns `post_media`.
-pub(crate) const POSTS_REFERENCING_MEDIA_FROM_WHERE: &str = "\
-     FROM post_media pm \
-     JOIN posts p ON p.post_id = pm.post_id \
-     WHERE p.user_id = $1 \
-       AND p.deleted_at IS NULL \
-       AND pm.source = $2 \
-       AND pm.sha256 = $3 \
-       AND pm.filename = $4";
+/// Every row includes the complete persisted key and the instance identity it
+/// was proved against.  The matching predicate below deliberately compares all
+/// of them: a foreign proof must not exempt a newly inserted spelling, a
+/// differently keyed media entry, or evidence collected for another instance.
+pub(crate) fn push_media_reference_evidence_cte<DB>(
+    query: &mut QueryBuilder<'_, DB>,
+    evidence: &MediaReferenceEvidence,
+) where
+    DB: Database,
+    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    String: sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
+{
+    query.push(
+        "WITH foreign_evidence \
+         (post_id, source, sha256, filename, reference_kind, reference_form, expected_instance_id) AS (",
+    );
+    if evidence.references.is_empty() {
+        // Explicit types keep the empty CTE valid on Postgres while SQLite accepts
+        // the same portable spelling.
+        query.push(
+            "SELECT CAST(NULL AS BIGINT), CAST(NULL AS TEXT), CAST(NULL AS TEXT), \
+             CAST(NULL AS TEXT), CAST(NULL AS TEXT), CAST(NULL AS TEXT), CAST(NULL AS TEXT) \
+             WHERE FALSE",
+        );
+    } else {
+        query.push("VALUES ");
+        for (index, proof) in evidence.references.iter().enumerate() {
+            if index > 0 {
+                query.push(", ");
+            }
+            let reference = proof.reference();
+            query
+                .push("(")
+                .push_bind(reference.post_id())
+                .push(", ")
+                .push_bind(reference.media().source)
+                .push(", ")
+                .push_bind(reference.media().sha256.clone())
+                .push(", ")
+                .push_bind(reference.media().filename.clone())
+                .push(", ")
+                .push_bind(reference.kind())
+                .push(", ")
+                .push_bind(reference.reference_form().clone())
+                .push(", ")
+                .push_bind(proof.expected_instance_id().to_string())
+                .push(")");
+        }
+    }
+    query.push(") ");
+}
 
-/// The global version of [`POSTS_REFERENCING_MEDIA_FROM_WHERE`], used by media
-/// file reclamation where any live Post naming the on-disk entry keeps the file
-/// present, regardless of which user owns the media row being deleted.
-///
-/// Bind order: `$1` `source`, `$2` `sha256`, `$3` `filename`.
-pub(crate) const ANY_POST_REFERENCING_MEDIA_FROM_WHERE: &str = "\
-     FROM post_media pm \
-     JOIN posts p ON p.post_id = pm.post_id \
-     WHERE p.deleted_at IS NULL \
-       AND pm.source = $1 \
-       AND pm.sha256 = $2 \
-       AND pm.filename = $3";
+/// Appends the sole rule for a persisted reference to remain live: it is not an
+/// exact foreign proof made for the current instance identity.
+pub(crate) fn push_live_media_reference_predicate<DB>(
+    query: &mut QueryBuilder<'_, DB>,
+    current_instance_id: &InstanceId,
+) where
+    DB: Database,
+    String: sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
+{
+    query.push(
+        " AND NOT EXISTS (\
+           SELECT 1 FROM foreign_evidence evidence \
+           WHERE evidence.post_id = pm.post_id \
+             AND evidence.source = pm.source \
+             AND evidence.sha256 = pm.sha256 \
+             AND evidence.filename = pm.filename \
+             AND evidence.reference_kind = pm.reference_kind \
+             AND evidence.reference_form = pm.reference_form \
+             AND evidence.expected_instance_id = ",
+    );
+    query.push_bind(current_instance_id.to_string());
+    query.push(")");
+}
+
+/// Appends the owner-scoped reference lookup and its binds.
+pub(crate) fn push_owner_media_reference_from_where<DB>(
+    query: &mut QueryBuilder<'_, DB>,
+    user_id: UserId,
+    media: &MediaRef,
+) where
+    DB: Database,
+    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    String: sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
+{
+    query
+        .push(" FROM post_media pm JOIN posts p ON p.post_id = pm.post_id WHERE p.user_id = ")
+        .push_bind(user_id)
+        .push(" AND p.deleted_at IS NULL AND pm.source = ")
+        .push_bind(media.source)
+        .push(" AND pm.sha256 = ")
+        .push_bind(media.sha256.clone())
+        .push(" AND pm.filename = ")
+        .push_bind(media.filename.clone());
+}
+pub(crate) fn push_any_media_reference_from_where<DB>(
+    query: &mut QueryBuilder<'_, DB>,
+    media: &MediaRef,
+) where
+    DB: Database,
+    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    String: sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
+{
+    query
+        .push(" FROM post_media pm JOIN posts p ON p.post_id = pm.post_id WHERE p.deleted_at IS NULL AND pm.source = ")
+        .push_bind(media.source)
+        .push(" AND pm.sha256 = ")
+        .push_bind(media.sha256.clone())
+        .push(" AND pm.filename = ")
+        .push_bind(media.filename.clone());
+}
 
 /// Generic [`PostStorage`] backed by any [`PostDialect`] database.
 ///
@@ -1127,7 +1407,30 @@ where
     for<'r> FeedPath: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
     for<'r> UtcInstant: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
     for<'r> &'r str: sqlx::ColumnIndex<DB::Row>,
-    // Not residue: the ADR-0071 bridge *delegates* to `i64`, so this pair is what
+    // Every post-media column decodes as its domain type through ADR-0071's
+    // bridge; this tuple keeps the reference form typed at the SQL boundary.
+    (
+        PostId,
+        common::media::MediaSource,
+        common::media::ContentHash,
+        common::media::Filename,
+        MediaReferenceKind,
+        MediaReferenceForm,
+    ): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (
+        PostId,
+        UserId,
+        common::media::MediaSource,
+        common::media::ContentHash,
+        common::media::Filename,
+        MediaReferenceKind,
+        MediaReferenceForm,
+    ): for<'r> sqlx::FromRow<'r, DB::Row>,
+    for<'q> MediaReferenceKind: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> common::media::MediaSource: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> &'q common::media::ContentHash: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> &'q common::media::Filename: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> MediaReferenceForm: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // makes every id newtype bind on a generic backend.
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -1184,6 +1487,17 @@ where
             return Ok(Vec::new());
         }
         let mut tx = self.pool.begin().await?;
+        let media = inputs
+            .iter()
+            .flat_map(|input| {
+                input
+                    .rendered
+                    .media()
+                    .iter()
+                    .map(|reference| reference.media().clone())
+            })
+            .collect();
+        DB::lock_media_references(&mut *tx, &media).await?;
         let mut ids = Vec::with_capacity(inputs.len());
         for input in inputs {
             // `?` drops `tx` on error → whole-batch rollback (atomic seed).
@@ -1264,30 +1578,74 @@ where
     }
 
     #[tracing::instrument(
-        name = "storage.posts.list_referencing_media",
+        name = "storage.posts.list_media_references",
         skip(self, media),
+        fields(db.system = DB::DB_SYSTEM)
+    )]
+    async fn list_media_references(
+        &self,
+        media: &MediaRef,
+    ) -> sqlx::Result<MediaReferenceSnapshot> {
+        let mut rows: Vec<(
+            PostId,
+            UserId,
+            common::media::MediaSource,
+            common::media::ContentHash,
+            common::media::Filename,
+            MediaReferenceKind,
+            MediaReferenceForm,
+        )> = sqlx::query_as(
+            "SELECT pm.post_id, p.user_id, pm.source, pm.sha256, pm.filename, \
+                    pm.reference_kind, pm.reference_form
+             FROM post_media pm
+             JOIN posts p ON p.post_id = pm.post_id
+             WHERE pm.source = $1 AND pm.sha256 = $2 AND pm.filename = $3
+             ORDER BY pm.post_id, pm.reference_kind, pm.reference_form
+             LIMIT $4",
+        )
+        .bind(media.source)
+        .bind(&media.sha256)
+        .bind(&media.filename)
+        .bind(MEDIA_REFERENCE_SNAPSHOT_QUERY_LIMIT)
+        .fetch_all(&self.pool)
+        .await?;
+        let has_unexamined_references = rows.len() > MAX_MEDIA_REFERENCE_SNAPSHOT;
+        rows.truncate(MAX_MEDIA_REFERENCE_SNAPSHOT);
+        Ok(MediaReferenceSnapshot::new(
+            rows.into_iter()
+                .map(
+                    |(post_id, owner_id, source, sha256, filename, kind, reference_form)| {
+                        PersistedMediaReference::new(
+                            post_id,
+                            MediaRef {
+                                source,
+                                sha256,
+                                filename,
+                            },
+                            kind,
+                            reference_form,
+                        )
+                        .with_owner(owner_id)
+                    },
+                )
+                .collect(),
+            has_unexamined_references,
+        ))
+    }
+
+    #[tracing::instrument(
+        name = "storage.posts.list_referencing_media",
+        skip(self, media, evidence),
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn list_posts_referencing_media(
         &self,
         user_id: UserId,
         media: &MediaRef,
+        current_instance_id: &InstanceId,
+        evidence: &MediaReferenceEvidence,
     ) -> sqlx::Result<Vec<PostId>> {
-        // Identical on both backends, so it stays here rather than becoming a
-        // `PostDialect` const (ADR-0019). No `LIMIT`: see the trait doc. The predicate
-        // itself is `POSTS_REFERENCING_MEDIA_FROM_WHERE`, shared with the delete guard.
-        //
-        // Decodes straight into `PostId` rather than `i64`-then-convert: an id column
-        // decodes as its newtype (ADR-0085, #715), which is also what keeps the `i64`
-        // decode bound off this impl.
-        let sql =
-            format!("SELECT pm.post_id {POSTS_REFERENCING_MEDIA_FROM_WHERE} ORDER BY pm.post_id");
-        sqlx::query_scalar::<_, PostId>(&sql)
-            .bind(user_id)
-            .bind(media.source)
-            .bind(&media.sha256)
-            .bind(&media.filename)
-            .fetch_all(&self.pool)
+        DB::list_posts_referencing_media(&self.pool, user_id, media, current_instance_id, evidence)
             .await
     }
 
@@ -2409,6 +2767,43 @@ fn map_idempotency_insert_error(e: sqlx::Error) -> CreatePostError {
     }
 }
 
+/// Maps every distinct media identity to the signed 64-bit advisory-lock key
+/// derived from the first eight bytes of SHA-256 over an unambiguous encoding.
+///
+/// The resulting vector is sorted and deduplicated before a backend acquires
+/// locks, preventing opposite-order updates from deadlocking.
+#[must_use]
+pub(crate) fn media_advisory_lock_key(media: &MediaRef) -> i64 {
+    let mut digest = Sha256::new();
+    digest.update(media.source.to_string().as_bytes());
+    digest.update([0]);
+    digest.update(media.sha256.to_string().as_bytes());
+    digest.update([0]);
+    digest.update(media.filename.to_string().as_bytes());
+    let digest: [u8; 32] = digest.finalize().into();
+    i64::from_be_bytes([
+        digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7],
+    ])
+}
+
+/// Maps every distinct media identity to a signed 64-bit advisory-lock key.
+#[must_use]
+pub(crate) fn media_advisory_lock_keys(media: impl IntoIterator<Item = MediaRef>) -> Vec<i64> {
+    media
+        .into_iter()
+        .map(|media| media_advisory_lock_key(&media))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Returns media identities once, in canonical order, for a write-side lock.
+pub(crate) fn media_lock_set(references: &[MediaReference]) -> BTreeSet<MediaRef> {
+    references
+        .iter()
+        .map(|reference| reference.media().clone())
+        .collect()
+}
 /// Writes one post row and its audience rows onto a caller-supplied transaction
 /// connection, so it joins whatever transaction is open.
 ///
@@ -2443,6 +2838,8 @@ where
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
+    DB::lock_media_references(conn, &media_lock_set(input.rendered.media())).await?;
+
     let now = UtcInstant::now();
 
     let post_id = sqlx::query_scalar::<_, PostId>(
@@ -2529,53 +2926,125 @@ where
     Ok(())
 }
 
+/// A rendered-HTML snapshot and the references derived from it before a backfill write.
+///
+/// This keeps HTML extraction out of the backend's writer lock. The dialect re-reads the
+/// snapshot while holding its write discipline before it installs these rows.
+#[derive(Debug)]
+pub struct PostMediaReferenceBackfill {
+    pub(crate) post_id: PostId,
+    pub(crate) rendered_html: String,
+    pub(crate) references: Vec<MediaReference>,
+}
+
+/// Re-derives exact reference rows copied by migration 0027 before the application state
+/// becomes available. Derivation deliberately occurs before the backend acquires its write lock;
+/// the atomic write phase validates each authoritative HTML snapshot and retries if one changed.
+pub(crate) async fn backfill_post_media_references<DB>(pool: &Pool<DB>) -> sqlx::Result<()>
+where
+    DB: PostDialect,
+    (PostId, RenderedHtml): for<'r> sqlx::FromRow<'r, DB::Row>,
+    for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+{
+    let posts: Vec<(PostId, RenderedHtml)> = sqlx::query_as(
+        "SELECT p.post_id, p.rendered_html
+         FROM posts p
+         WHERE EXISTS (
+             SELECT 1 FROM post_media pm
+             WHERE pm.post_id = p.post_id AND pm.reference_kind = 'legacy'
+         )
+         ORDER BY p.post_id",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let candidates: Vec<PostMediaReferenceBackfill> = posts
+        .into_iter()
+        .map(|(post_id, rendered_html)| PostMediaReferenceBackfill {
+            references: common::render::extract_media_refs(rendered_html.as_ref()),
+            post_id,
+            rendered_html: rendered_html.to_string(),
+        })
+        .collect();
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    DB::apply_post_media_reference_backfill(pool, &candidates).await
+}
+
 /// Replaces a post's `post_media` rows to exactly match `media`.
-///
-/// Deletes every existing row for `post_id`, then inserts one per reference, so an
-/// edit that *removes* an embed removes its row. Runs on the caller's executor so it
-/// shares the create/update transaction — the sibling of [`replace_post_audiences`],
-/// and kept beside it at every call site because they are one concern: a post's child
-/// rows (#711).
-///
-/// `media` is [`RenderOutput::media`](common::render::RenderOutput::media), which is
-/// already deduplicated and sorted, so the composite primary key can never be violated
-/// and no dialect-divergent conflict handling is needed.
 pub(crate) async fn replace_post_media<DB>(
     conn: &mut DB::Connection,
     post_id: PostId,
-    media: &[MediaRef],
+    media: &[MediaReference],
 ) -> sqlx::Result<()>
 where
     DB: PostDialect,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
-    // `MediaSource`/`ContentHash`/`Filename` all bind as themselves through the shared
-    // sqlx bridge (ADR-0071), which is what these bounds make available on the generic
-    // backend. The `sqlx-newtype-bind` gate forbids stripping any of them to `&str` here.
-    //
-    // The newtypes delegate `Encode` to `String`; `MediaSource` delegates to `&'q str`,
-    // because a `#[text_enum]` token is a `&'static str` and encoding it needs no
-    // allocation (#746 D4). Hence both pairs — the `&'q str` one is the same bound the
-    // other generic binders in this module already carry.
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
+    let rows = media_reference_rows([(post_id, media)]);
     sqlx::query(DB::DELETE_POST_MEDIA)
         .bind(post_id)
         .execute(&mut *conn)
         .await?;
-    for reference in media {
-        sqlx::query(DB::INSERT_POST_MEDIA)
-            .bind(post_id)
-            .bind(reference.source)
-            .bind(&reference.sha256)
-            .bind(&reference.filename)
-            .execute(&mut *conn)
-            .await?;
-    }
-    Ok(())
+    DB::insert_post_media_rows(conn, rows).await
+}
+
+/// Installs all rows from a validated startup-backfill snapshot in two set-based writes.
+pub(crate) async fn replace_legacy_post_media<DB>(
+    conn: &mut DB::Connection,
+    candidates: &[PostMediaReferenceBackfill],
+) -> sqlx::Result<()>
+where
+    DB: PostDialect,
+    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    String: sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
+    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+{
+    sqlx::query(
+        "DELETE FROM post_media
+         WHERE post_id IN (
+             SELECT post_id FROM post_media WHERE reference_kind = 'legacy'
+         )",
+    )
+    .execute(&mut *conn)
+    .await?;
+    DB::insert_post_media_rows(
+        conn,
+        media_reference_rows(
+            candidates
+                .iter()
+                .map(|candidate| (candidate.post_id, candidate.references.as_slice())),
+        ),
+    )
+    .await
+}
+
+fn media_reference_rows<'a>(
+    references: impl IntoIterator<Item = (PostId, &'a [MediaReference])>,
+) -> BTreeSet<(PostId, MediaRef, MediaReferenceKind, MediaReferenceForm)> {
+    references
+        .into_iter()
+        .flat_map(|(post_id, references)| {
+            references.iter().map(move |reference| {
+                (
+                    post_id,
+                    reference.media().clone(),
+                    reference.kind(),
+                    reference.reference_form().clone(),
+                )
+            })
+        })
+        .collect()
 }
 
 /// Runs the hybrid-window query for `surface`, returning [`PostRecord`]s.
@@ -2867,8 +3336,8 @@ mod tests {
     use common::time::UtcInstant;
     use rstest::*;
     use rstest_reuse::*;
-    use std::sync::Arc;
-    use std::time::Duration;
+    use std::{sync::Arc, time::Duration};
+    use tokio::sync::Barrier;
 
     /// Guards the two dialect constants against drifting apart — the failure mode
     /// where one is edited and the other forgotten (#772; the rationale for the
@@ -2966,6 +3435,210 @@ mod tests {
             .expect("owner can decode a draft record");
         assert_eq!(draft.published_at, None);
         assert_eq!(draft.deleted_at, None);
+    }
+
+    #[test]
+    fn media_advisory_lock_keys_are_sorted_and_deduplicated() {
+        let first = media_ref_for("first.jpg");
+        let second = media_ref_for("second.jpg");
+        let forward = media_advisory_lock_keys([first.clone(), second.clone()]);
+        let reverse_with_duplicate =
+            media_advisory_lock_keys([second.clone(), first.clone(), second]);
+
+        assert_eq!(
+            forward, reverse_with_duplicate,
+            "opposite-order updates acquire precisely the same lock sequence"
+        );
+        assert_eq!(forward.len(), 2, "one lock per distinct media identity");
+        assert!(
+            forward.windows(2).all(|pair| pair[0] < pair[1]),
+            "advisory lock keys are strictly ascending"
+        );
+    }
+
+    #[test]
+    fn foreign_evidence_rejects_another_instance_and_encodes_multiple_proofs() {
+        let expected: InstanceId = "123e4567-e89b-12d3-a456-426614174000"
+            .parse()
+            .expect("canonical instance ID");
+        let other: InstanceId = "123e4567-e89b-12d3-a456-426614174001"
+            .parse()
+            .expect("canonical instance ID");
+        let parsed = common::media::parse_media_url(&media_url_for("evidence.jpg"))
+            .expect("media form parses");
+        let first = PersistedMediaReference::new(
+            PostId::from(1),
+            parsed.media().clone(),
+            parsed.kind(),
+            parsed.reference_form().clone(),
+        );
+        let second = PersistedMediaReference::new(
+            PostId::from(2),
+            parsed.media().clone(),
+            parsed.kind(),
+            parsed.reference_form().clone(),
+        );
+        let mut evidence = MediaReferenceEvidence::new(expected.clone());
+        assert!(!evidence.insert(ProvenForeignReference::new(first, other)));
+        assert!(evidence.insert(ProvenForeignReference::new(second, expected.clone())));
+        assert!(evidence.insert(ProvenForeignReference::new(
+            PersistedMediaReference::new(
+                PostId::from(1),
+                parsed.media().clone(),
+                parsed.kind(),
+                parsed.reference_form().clone(),
+            ),
+            expected,
+        )));
+
+        let mut query = QueryBuilder::<sqlx::Sqlite>::new("");
+        push_media_reference_evidence_cte(&mut query, &evidence);
+        assert!(
+            query.sql().contains("), ("),
+            "multiple proofs must be separate CTE rows"
+        );
+    }
+
+    /// Two independent edits whose old/new media sets are reversed must complete:
+    /// `PostgreSQL` acquires their common advisory keys in one order, while `SQLite`
+    /// serializes both writers through its immediate transaction.
+    #[apply(backends)]
+    #[tokio::test]
+    async fn opposite_media_updates_complete_without_deadlock(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+        let first = media_url_for("first-lock.jpg");
+        let second = media_url_for("second-lock.jpg");
+        let first_post = create_post_via_service(
+            &env.state,
+            user,
+            parse_post_body(&format!("<img src=\"{first}\">")),
+        )
+        .await;
+        let second_post = create_post_via_service(
+            &env.state,
+            user,
+            parse_post_body(&format!("<img src=\"{second}\">")),
+        )
+        .await;
+
+        let barrier = Arc::new(Barrier::new(3));
+        let first_update = tokio::spawn({
+            let state = Arc::clone(&env.state);
+            let barrier = Arc::clone(&barrier);
+            let body = parse_post_body(&format!("<img src=\"{second}\">"));
+            async move {
+                barrier.wait().await;
+                update_post_body_via_service(&state, first_post, user, body).await;
+            }
+        });
+        let second_update = tokio::spawn({
+            let state = Arc::clone(&env.state);
+            let barrier = Arc::clone(&barrier);
+            let body = parse_post_body(&format!("<img src=\"{first}\">"));
+            async move {
+                barrier.wait().await;
+                update_post_body_via_service(&state, second_post, user, body).await;
+            }
+        });
+        barrier.wait().await;
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            first_update
+                .await
+                .expect("first update task does not panic");
+            second_update
+                .await
+                .expect("second update task does not panic");
+        })
+        .await
+        .expect("opposite media updates must not deadlock");
+
+        assert_eq!(
+            fetch_post_media(&env.base, first_post).await[0].0,
+            media_ref_for("second-lock.jpg"),
+            "the first post completed its reversed update"
+        );
+        assert_eq!(
+            fetch_post_media(&env.base, second_post).await[0].0,
+            media_ref_for("first-lock.jpg"),
+            "the second post completed its reversed update"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn reversed_media_batches_complete_without_deadlock(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+        let first = media_url_for("batch-first-lock.jpg");
+        let second = media_url_for("batch-second-lock.jpg");
+        let forward = [
+            SeedRawPost::new(user)
+                .body(parse_post_body(&format!("<img src=\"{first}\">")))
+                .build(),
+            SeedRawPost::new(user)
+                .body(parse_post_body(&format!("<img src=\"{second}\">")))
+                .build(),
+        ];
+        let reverse = [
+            SeedRawPost::new(user)
+                .body(parse_post_body(&format!("<img src=\"{second}\">")))
+                .build(),
+            SeedRawPost::new(user)
+                .body(parse_post_body(&format!("<img src=\"{first}\">")))
+                .build(),
+        ];
+        let forward_media: BTreeSet<_> = forward
+            .iter()
+            .flat_map(|input| input.rendered.media())
+            .map(|reference| reference.media().clone())
+            .collect();
+        let reverse_media: BTreeSet<_> = reverse
+            .iter()
+            .flat_map(|input| input.rendered.media())
+            .map(|reference| reference.media().clone())
+            .collect();
+        assert_eq!(
+            forward_media, reverse_media,
+            "each batch prelocks the full media union before writing either post"
+        );
+
+        let barrier = Arc::new(Barrier::new(3));
+        let forward_create = tokio::spawn({
+            let state = Arc::clone(&env.state);
+            let barrier = Arc::clone(&barrier);
+            async move {
+                barrier.wait().await;
+                state.posts.create_posts(&forward).await
+            }
+        });
+        let reverse_create = tokio::spawn({
+            let state = Arc::clone(&env.state);
+            let barrier = Arc::clone(&barrier);
+            async move {
+                barrier.wait().await;
+                state.posts.create_posts(&reverse).await
+            }
+        });
+        barrier.wait().await;
+
+        let (forward_ids, reverse_ids) = tokio::time::timeout(Duration::from_secs(5), async {
+            (
+                forward_create
+                    .await
+                    .expect("forward batch task does not panic")
+                    .expect("forward batch succeeds"),
+                reverse_create
+                    .await
+                    .expect("reverse batch task does not panic")
+                    .expect("reverse batch succeeds"),
+            )
+        })
+        .await
+        .expect("reversed batch transactions must not deadlock");
+        assert_eq!(forward_ids.len(), 2);
+        assert_eq!(reverse_ids.len(), 2);
     }
 
     /// A local viewer's channel is not a bind: both subscription branches resolve
@@ -3872,7 +4545,7 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn create_post_writes_its_media_rows(#[case] backend: Backend) {
+    async fn post_media_create_post_writes_its_media_rows(#[case] backend: Backend) {
         // A11, and the web half of A14: `create_post_via_service` is the entry point
         // `web::posts::create` uses, so this drives render -> extract -> write through
         // the product's own path rather than a synthetic input.
@@ -3885,7 +4558,13 @@ mod tests {
 
         assert_eq!(
             fetch_post_media(&env.base, post_id).await,
-            vec![media_ref_for("photo.jpg")]
+            vec![(
+                media_ref_for("photo.jpg"),
+                MediaReferenceKind::Local,
+                media_url_for("photo.jpg")
+                    .parse()
+                    .expect("valid media reference form"),
+            )]
         );
         // The recorded triple names the entry the `media` table holds — the join a
         // reference guard reads in the other direction.
@@ -3910,7 +4589,7 @@ mod tests {
         let names: Vec<String> = fetch_post_media(&env.base, post_id)
             .await
             .into_iter()
-            .map(|media| media.filename.to_string())
+            .map(|(media, _, _)| media.filename.to_string())
             .collect();
         assert!(
             names.contains(&"my%20photo.jpg".to_owned()),
@@ -3964,7 +4643,13 @@ mod tests {
         assert_eq!(rows.len(), 1, "the removed reference is gone: {rows:?}");
         assert_eq!(
             rows[0],
-            media_ref_for("b.jpg"),
+            (
+                media_ref_for("b.jpg"),
+                MediaReferenceKind::Local,
+                media_url_for("b.jpg")
+                    .parse()
+                    .expect("valid media reference form"),
+            ),
             "the added reference is present"
         );
 
@@ -4017,6 +4702,7 @@ mod tests {
         // A16.
         let env = backend.setup().await;
         let [owner, stranger] = seed_users::<2>(&env.state).await;
+        let evidence = MediaReferenceEvidence::new(env.base.instance_id().clone());
         let embed = format!("<img src=\"{}\">", media_url_for("photo.jpg"));
 
         let first = create_post_via_service(&env.state, owner, parse_post_body(&embed)).await;
@@ -4034,7 +4720,12 @@ mod tests {
         let found = env
             .state
             .posts
-            .list_posts_referencing_media(owner, &media_ref_for("photo.jpg"))
+            .list_posts_referencing_media(
+                owner,
+                &media_ref_for("photo.jpg"),
+                env.base.instance_id(),
+                &evidence,
+            )
             .await
             .expect("listing succeeds");
 
@@ -4052,6 +4743,41 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn list_posts_referencing_media_reports_a_post_once_for_local_and_foreign_spellings(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let evidence = MediaReferenceEvidence::new(env.base.instance_id().clone());
+        let [user] = seed_users::<1>(&env.state).await;
+        let media = seed_media(&env.state, user, "mixed-origin.jpg").await;
+        let media_url = media_url_for("mixed-origin.jpg");
+        let post_id = create_post_via_service(
+            &env.state,
+            user,
+            parse_post_body(&format!(
+                "<img src=\"{media_url}\"><img src=\"https://foreign.example{media_url}\">"
+            )),
+        )
+        .await;
+
+        assert_eq!(
+            fetch_post_media(&env.base, post_id).await.len(),
+            2,
+            "both persisted URL spellings retain their distinct exact forms"
+        );
+        assert_eq!(
+            env.state
+                .posts
+                .list_posts_referencing_media(user, &media, env.base.instance_id(), &evidence)
+                .await
+                .expect("listing succeeds"),
+            vec![post_id],
+            "one post ID is reported even though the Post has multiple persisted spellings"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn list_posts_referencing_media_reports_every_reference_past_the_old_scan_window(
         #[case] backend: Backend,
     ) {
@@ -4065,6 +4791,7 @@ mod tests {
         // Here the cap has 1201 rows to truncate, so the absence of a limit is what
         // the assertions actually rest on.
         let env = backend.setup().await;
+        let evidence = MediaReferenceEvidence::new(env.base.instance_id().clone());
         let [user] = seed_users::<1>(&env.state).await;
         let body = parse_post_body(&format!("<img src=\"{}\">", media_url_for("needle.jpg")));
 
@@ -4084,7 +4811,12 @@ mod tests {
         let found = env
             .state
             .posts
-            .list_posts_referencing_media(user, &media_ref_for("needle.jpg"))
+            .list_posts_referencing_media(
+                user,
+                &media_ref_for("needle.jpg"),
+                env.base.instance_id(),
+                &evidence,
+            )
             .await
             .expect("listing succeeds");
 
@@ -4103,23 +4835,54 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
+    async fn list_media_references_returns_a_bounded_snapshot_with_a_sentinel(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let [user] = seed_users::<1>(&env.state).await;
+        let media = media_ref_for("bounded-snapshot.jpg");
+        let body = parse_post_body(&format!(
+            "<img src=\"{}\">",
+            media_url_for("bounded-snapshot.jpg")
+        ));
+        let inputs: Vec<CreatePostInput> = (0..=MAX_MEDIA_REFERENCE_SNAPSHOT)
+            .map(|_| SeedRawPost::new(user).body(body.clone()).build())
+            .collect();
+        env.state.posts.create_posts(&inputs).await.unwrap();
+
+        let snapshot = env.state.posts.list_media_references(&media).await.unwrap();
+
+        assert_eq!(snapshot.references().len(), MAX_MEDIA_REFERENCE_SNAPSHOT);
+        assert!(
+            snapshot.has_unexamined_references(),
+            "the extra row is a fail-closed sentinel, not an unbounded allocation"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
     async fn list_posts_referencing_media_returns_empty_for_unreferenced_media(
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
         let [user] = seed_users::<1>(&env.state).await;
+        let evidence = MediaReferenceEvidence::new(env.base.instance_id().clone());
         create_post_via_service(&env.state, user, parse_post_body("no media")).await;
 
         let found = env
             .state
             .posts
-            .list_posts_referencing_media(user, &media_ref_for("absent.jpg"))
+            .list_posts_referencing_media(
+                user,
+                &media_ref_for("absent.jpg"),
+                env.base.instance_id(),
+                &evidence,
+            )
             .await
             .expect("listing succeeds");
 
         assert!(found.is_empty());
     }
-
     #[apply(backends)]
     #[tokio::test]
     async fn reading_post_with_overlong_summary_in_db_errors(#[case] backend: Backend) {

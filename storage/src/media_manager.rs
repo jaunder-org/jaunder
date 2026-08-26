@@ -21,7 +21,11 @@ use common::media::{
 };
 use common::time::UtcInstant;
 
-use crate::{CreateMediaError, MediaRecord, MediaStorage, SiteConfigStorage, TryDeleteOutcome};
+use crate::InstanceId;
+use crate::{
+    CreateMediaError, MediaRecord, MediaReferenceEvidence, MediaStorage, SiteConfigStorage,
+    TryDeleteOutcome,
+};
 
 /// A media upload failure with a bounded, client-mappable classification. `pub`
 /// so the HTTP boundary in `server` can `downcast_ref` it to a `StatusCode`
@@ -421,14 +425,21 @@ impl MediaManager {
         &self,
         user_id: UserId,
         media: &MediaRef,
+        current_instance_id: &InstanceId,
+        evidence: &MediaReferenceEvidence,
         force: bool,
     ) -> anyhow::Result<TryDeleteOutcome> {
-        let outcome = self.media.try_delete_media(user_id, media, force).await?;
+        let outcome = self
+            .media
+            .try_delete_media(user_id, media, current_instance_id, evidence, force)
+            .await?;
         if outcome == TryDeleteOutcome::Deleted {
             Self::reclaim_deleted_media_file(
                 self.media.as_ref(),
                 self.storage_path.as_ref(),
                 media,
+                current_instance_id,
+                evidence,
             )
             .await?;
         }
@@ -446,8 +457,13 @@ impl MediaManager {
         media_storage: &dyn MediaStorage,
         storage_path: &Path,
         media: &MediaRef,
+        current_instance_id: &InstanceId,
+        evidence: &MediaReferenceEvidence,
     ) -> anyhow::Result<()> {
-        if !media_storage.media_entry_is_reclaimable(media).await? {
+        if !media_storage
+            .media_entry_is_reclaimable(media, current_instance_id, evidence)
+            .await?
+        {
             return Ok(());
         }
 
@@ -995,7 +1011,16 @@ mod tests {
         assert!(file_path.exists(), "upload stores the file before deletion");
 
         assert_eq!(
-            manager.delete_media(user_id, &media, false).await.unwrap(),
+            manager
+                .delete_media(
+                    user_id,
+                    &media,
+                    env.base.instance_id(),
+                    &MediaReferenceEvidence::new(env.base.instance_id().clone()),
+                    false,
+                )
+                .await
+                .unwrap(),
             TryDeleteOutcome::Deleted
         );
 
@@ -1037,7 +1062,13 @@ mod tests {
         std::fs::create_dir(&file_path).unwrap();
 
         let error = manager
-            .delete_media(user_id, &media, false)
+            .delete_media(
+                user_id,
+                &media,
+                env.base.instance_id(),
+                &MediaReferenceEvidence::new(env.base.instance_id().clone()),
+                false,
+            )
             .await
             .unwrap_err();
 
@@ -1077,7 +1108,16 @@ mod tests {
         .await;
 
         assert_eq!(
-            manager.delete_media(user_id, &media, true).await.unwrap(),
+            manager
+                .delete_media(
+                    user_id,
+                    &media,
+                    env.base.instance_id(),
+                    &MediaReferenceEvidence::new(env.base.instance_id().clone()),
+                    true,
+                )
+                .await
+                .unwrap(),
             TryDeleteOutcome::RefusedReferenced
         );
         assert!(media_row_exists(&env.state, user_id, &media).await);
@@ -1119,7 +1159,13 @@ mod tests {
         assert_eq!(upload_ref(&second), media);
 
         manager
-            .delete_media(first_user, &media, false)
+            .delete_media(
+                first_user,
+                &media,
+                env.base.instance_id(),
+                &MediaReferenceEvidence::new(env.base.instance_id().clone()),
+                false,
+            )
             .await
             .unwrap();
 
@@ -1128,7 +1174,13 @@ mod tests {
         assert!(file_path.exists(), "remaining media row retains the file");
 
         manager
-            .delete_media(second_user, &media, false)
+            .delete_media(
+                second_user,
+                &media,
+                env.base.instance_id(),
+                &MediaReferenceEvidence::new(env.base.instance_id().clone()),
+                false,
+            )
             .await
             .unwrap();
 
@@ -1172,7 +1224,13 @@ mod tests {
         let second_path = stored_path(env.base.path(), &second_media);
 
         manager
-            .delete_media(user_id, &first_media, false)
+            .delete_media(
+                user_id,
+                &first_media,
+                env.base.instance_id(),
+                &MediaReferenceEvidence::new(env.base.instance_id().clone()),
+                false,
+            )
             .await
             .unwrap();
 

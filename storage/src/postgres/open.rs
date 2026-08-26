@@ -15,6 +15,8 @@ use super::{
     PostgresSessionStorage, PostgresSiteConfigStorage, PostgresSubscriptionStorage,
     PostgresUserConfigStorage, PostgresUserStorage,
 };
+use crate::instance_identity::ensure_instance_identity;
+use crate::posts::backfill_post_media_references;
 
 fn make_postgres_app_state(pool: PgPool) -> Arc<crate::AppState> {
     Arc::new(crate::AppState {
@@ -108,11 +110,13 @@ pub fn resolved_postgres_options(options: &PgConnectOptions) -> sqlx::Result<PgC
 #[tracing::instrument(name = "storage.postgres.open_database", skip(options))]
 pub(crate) async fn open_postgres_database_with_pool(
     options: &PgConnectOptions,
-) -> sqlx::Result<(Arc<crate::AppState>, PgPool)> {
+) -> sqlx::Result<(Arc<crate::AppState>, PgPool, crate::InstanceId)> {
     let options = resolved_postgres_options(options)?;
     let pool = PgPool::connect_with(options).await?;
     sqlx::migrate!("./migrations/postgres").run(&pool).await?;
-    Ok((make_postgres_app_state(pool.clone()), pool))
+    let instance_id = ensure_instance_identity(&pool).await?;
+    backfill_post_media_references(&pool).await?;
+    Ok((make_postgres_app_state(pool.clone()), pool, instance_id))
 }
 
 /// Returns `true` if the `PostgreSQL` database holds no user data — every table
