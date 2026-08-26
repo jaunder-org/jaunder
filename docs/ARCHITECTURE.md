@@ -323,6 +323,13 @@ the AtomPub Collection the native source — detailed in the Protocols section
 `storage/src/posts.rs:42::PostRecord` carries both plus title, `Slug`, summary,
 tags, and `created_at`/`updated_at`/`published_at`/`deleted_at`.
 
+`PostRecord.summary` is optional authored Post content. In contrast,
+`summary_label` is disposable presentation metadata for a titleless unpublished
+row: it is recomputed from the canonical `PostBody` at read time and is never
+stored. The bounded unpublished-post query already carries the body; persisting
+the label would impose freshness obligations across writes and direct backup
+restore.
+
 **A body has at least one non-blank line, and normalization is format-aware**
 ([ADR-0105](adr/0105-post-body-non-blank-invariant.md)). `PostBody::from_str` is
 the one door — the `StrNewtype` derive routes serde and sqlx through it, and
@@ -2852,6 +2859,10 @@ workspace/gate boundaries
 ([ADR-0141](adr/0141-cargo-workspace-execution-boundaries.md)), and Emacs
 credential storage
 ([ADR-0143](adr/0143-emacs-auth-source-app-password-storage.md)).
+
+The derived `summary_label` persistence policy is deliberately not ADR-backed:
+[#754](https://github.com/jaunder-org/jaunder/issues/754) retains the existing
+storage boundary rather than establishing a new durable architectural decision.
 
 Two gaps a reader might expect here are absent because the system closed them.
 The content-addressed media store is no longer un-ADR'd: ADR-0080 decides the

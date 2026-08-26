@@ -101,6 +101,11 @@ impl PostRecord {
 
     /// Generates a fallback summary from the post's first non-blank body line.
     ///
+    /// This label is disposable presentation metadata for an unpublished row, not authored Post
+    /// content or historical state; it is derived from the canonical [`PostBody`]. Recomputing it
+    /// at read time is deliberate: the bounded draft query already loads the body, while storing
+    /// it would need freshness maintenance across body writes and direct backup restores.
+    ///
     /// No title/slug fallbacks: [`PostBody`]'s invariant is *exactly* the condition
     /// [`PostSummary::from_body_line`] relies on — at least one line non-empty after
     /// trimming — so the body always answers (#811, #830, #858).
