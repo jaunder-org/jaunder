@@ -241,6 +241,12 @@ fn has_immutable_self_receiver(signature: &syn::Signature) -> bool {
         )
 }
 
+fn has_conditional_compilation(attrs: &[syn::Attribute]) -> bool {
+    attrs
+        .iter()
+        .any(|attr| attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr"))
+}
+
 fn is_plain_safe_method(signature: &syn::Signature) -> bool {
     signature.constness.is_none()
         && signature.asyncness.is_none()
@@ -252,7 +258,7 @@ fn is_plain_safe_method(signature: &syn::Signature) -> bool {
 }
 
 fn record_owned_error_surface(index: &mut TypeIndex, item: &syn::ItemImpl) {
-    if item.trait_.is_some() {
+    if item.trait_.is_some() || has_conditional_compilation(&item.attrs) {
         return;
     }
     let Some(error_name) = type_name(&item.self_ty) else {
@@ -267,6 +273,7 @@ fn record_owned_error_surface(index: &mut TypeIndex, item: &syn::ItemImpl) {
                 && item.sig.ident == name
                 && has_immutable_self_receiver(&item.sig)
                 && is_plain_safe_method(&item.sig)
+                && !has_conditional_compilation(&item.attrs)
                 && returns_str_reference(&item.sig.output, require_static)
         })
     };
@@ -579,6 +586,12 @@ struct ExternalFormatCall {
     literal_argument: bool,
 }
 
+#[derive(Default)]
+struct ExternalFormatScan {
+    calls: Vec<ExternalFormatCall>,
+    indirect_references: Vec<usize>,
+}
+
 #[derive(Debug, Clone)]
 enum FlatToken {
     Ident(String, usize),
@@ -608,10 +621,10 @@ fn flatten_tokens(tokens: proc_macro2::TokenStream, out: &mut Vec<FlatToken>) {
     }
 }
 
-fn external_format_calls(file: &syn::File) -> Vec<ExternalFormatCall> {
+fn external_format_calls(file: &syn::File) -> ExternalFormatScan {
     let mut tokens = Vec::new();
     flatten_tokens(file.to_token_stream(), &mut tokens);
-    let mut calls = Vec::new();
+    let mut scan = ExternalFormatScan::default();
 
     for (index, token) in tokens.iter().enumerate() {
         let FlatToken::Ident(name, line) = token else {
@@ -637,6 +650,7 @@ fn external_format_calls(file: &syn::File) -> Vec<ExternalFormatCall> {
             tokens.get(call_open),
             Some(FlatToken::Open(proc_macro2::Delimiter::Parenthesis))
         ) {
+            scan.indirect_references.push(*line);
             continue;
         }
         let mut argument = call_open + 1;
@@ -646,12 +660,12 @@ fn external_format_calls(file: &syn::File) -> Vec<ExternalFormatCall> {
         ) {
             argument += 1;
         }
-        calls.push(ExternalFormatCall {
+        scan.calls.push(ExternalFormatCall {
             line: *line,
             literal_argument: matches!(tokens.get(argument), Some(FlatToken::Literal)),
         });
     }
-    calls
+    scan
 }
 
 fn external_format_marker_reason(line: &str) -> Option<&str> {
@@ -683,8 +697,14 @@ fn external_format_doors(sources: &[(String, String)]) -> Result<Vec<String>, Ve
                 continue;
             }
         };
+        let scan = external_format_calls(&file);
+        for line in scan.indirect_references {
+            problems.push(format!(
+                "{path}:{line}: indirect reference to external formatter is forbidden; call it directly behind one marker"
+            ));
+        }
         let mut calls = BTreeMap::<usize, Vec<bool>>::new();
-        for call in external_format_calls(&file) {
+        for call in scan.calls {
             calls
                 .entry(call.line)
                 .or_default()
@@ -872,6 +892,7 @@ fn validate_owned_surfaces(
     }
 
     problems.sort();
+
     if problems.is_empty() {
         Ok(())
     } else {
@@ -893,6 +914,26 @@ fn read_sources(root: &str) -> Result<Vec<(String, String)>, String> {
         .collect()
 }
 
+const WORKSPACE_SOURCE_ROOTS: &[&str] = &[
+    "client/src",
+    "common/src",
+    "csr/src",
+    "host/src",
+    "macros/src",
+    "server/src",
+    "storage/src",
+    "test-support/src",
+    "web/src",
+];
+
+fn read_workspace_sources() -> Result<Vec<(String, String)>, String> {
+    let mut sources = Vec::new();
+    for root in WORKSPACE_SOURCE_ROOTS {
+        sources.extend(read_sources(root)?);
+    }
+    Ok(sources)
+}
+
 pub fn run(result: &mut CommandResult) {
     let web_sources = match read_sources(web_server_fns::WEB_SRC) {
         Ok(sources) => sources,
@@ -902,6 +943,13 @@ pub fn run(result: &mut CommandResult) {
         }
     };
     let common_sources = match read_sources("common/src") {
+        Ok(sources) => sources,
+        Err(e) => {
+            result.push(StepResult::fail("server-fn-wire-arg-error").detail(e));
+            return;
+        }
+    };
+    let workspace_sources = match read_workspace_sources() {
         Ok(sources) => sources,
         Err(e) => {
             result.push(StepResult::fail("server-fn-wire-arg-error").detail(e));
@@ -934,7 +982,7 @@ pub fn run(result: &mut CommandResult) {
             return;
         }
     };
-    match validate_owned_surfaces(&inputs, &index, &server_error_src, &index_sources_input) {
+    match validate_owned_surfaces(&inputs, &index, &server_error_src, &workspace_sources) {
         Ok(()) => result.push(StepResult::ok("server-fn-wire-arg-error")),
         Err(problems) => {
             result.push(StepResult::fail("server-fn-wire-arg-error").detail(problems.join("\n")));
@@ -1360,6 +1408,30 @@ mod tests {
                     )
                 })
                 .collect::<Vec<_>>(),
+            original
+                .iter()
+                .map(|(path, source)| {
+                    (
+                        path.clone(),
+                        source.replace(
+                            "impl InvalidBackupSchedule",
+                            "#[cfg(test)]\nimpl InvalidBackupSchedule",
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            original
+                .iter()
+                .map(|(path, source)| {
+                    (
+                        path.clone(),
+                        source.replace(
+                            "pub fn user_message",
+                            "#[cfg_attr(feature = \"hidden\", cfg(test))]\npub fn user_message",
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>(),
         ];
         for sources in variants {
             let index = index_sources(&sources).expect("index");
@@ -1438,6 +1510,11 @@ mod tests {
                 "unmarked",
                 "// server-fn-wire-arg-error:allowance typo\n\
                  UserFacingMessage::from_external(format_args!(\"{error}\"));",
+            ),
+            (
+                "indirect",
+                "let capture = UserFacingMessage::from_external;\n\
+                 capture(format_args!(\"{error}\"));",
             ),
             (
                 "bare",

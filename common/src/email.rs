@@ -1,8 +1,8 @@
+use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
 use email_address::{EmailAddress, Options};
 use macros::StrNewtype;
-use thiserror::Error;
 
 /// A validated, domain-normalized email address (RFC 5321/6531 addr-spec).
 ///
@@ -24,8 +24,7 @@ pub struct Email(String);
 /// The foreign parser detail is discarded at this boundary. User responses and
 /// telemetry choose separate stable surfaces, and neither can recover rejected
 /// raw input from this value.
-#[derive(Debug, Error)]
-#[error("invalid email address")]
+#[derive(Debug)]
 pub struct InvalidEmail;
 
 impl InvalidEmail {
@@ -41,6 +40,14 @@ impl InvalidEmail {
         "invalid_email"
     }
 }
+
+impl Display for InvalidEmail {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.user_message())
+    }
+}
+
+impl std::error::Error for InvalidEmail {}
 
 impl FromStr for Email {
     type Err = InvalidEmail;
