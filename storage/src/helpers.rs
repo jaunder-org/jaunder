@@ -649,13 +649,40 @@ pub(crate) mod swallowed_test {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::parse_invite_code;
+    use crate::test_support::{Backend, backends, parse_invite_code};
     use chrono::Utc;
     use common::test_support::{
         parse_bio, parse_byte_size, parse_content_hash, parse_content_type, parse_display_name,
         parse_email, parse_filename, parse_password, parse_session_label, parse_token_hash,
         parse_username,
     };
+    use common::time::UtcInstant;
+    use rstest::*;
+    use rstest_reuse::*;
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn utc_instant_round_trips_directly_through_sqlx(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let expected = "2026-08-26T12:34:56.123456Z".parse::<UtcInstant>().unwrap();
+        let actual = crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query_scalar::<_, UtcInstant>("SELECT $1")
+                .bind(expected)
+                .fetch_one(pool)
+                .await
+                .unwrap()
+        });
+        assert_eq!(actual, expected);
+
+        let absent = crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query_scalar::<_, Option<UtcInstant>>("SELECT $1")
+                .bind(None::<UtcInstant>)
+                .fetch_one(pool)
+                .await
+                .unwrap()
+        });
+        assert_eq!(absent, None);
+    }
 
     #[test]
     fn test_build_user_record() {

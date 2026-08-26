@@ -1927,17 +1927,24 @@ column to ten (`storage/src/feed_events.rs:57-79`, #728); and a row whose own id
 will not decode fails the batch. Dual-backend tests assert the skip/purge
 behaviour per site.
 
-**Time.** A timestamp crossing the web boundary is `UtcInstant`
-(`common/src/time.rs:26`), a third instant-backed flavor of the convention
-wrapping `chrono::DateTime<Utc>`
-([ADR-0072](adr/0072-timestamps-cross-boundary-as-utcinstant.md)). Its trailer
-is hand-written: the wire form is RFC 3339 via chrono's own serde, and `FromStr`
-canonicalizes any offset to UTC, making it the single validation chokepoint and
-the hook for the client-side `Field<T>` path. The premise that unblocked it is
-that `chrono` is already in the wasm bundle through the unconditional
-`web → common → chrono` chain — the `web`-level server-only gate never kept the
-crate out. Storage and `common`/`host` internals still carry raw
-`DateTime<Utc>`; the newtype is a boundary type.
+**Time.** `common::time::UtcInstant` is the domain type for absolute UTC
+instants at both the web and storage boundaries. It is a minimal Chrono-backed,
+instant-backed newtype: transparent serde retains its RFC 3339 wire form,
+`FromStr` canonicalizes offsets to UTC for the client-side `Field<T>` path, and
+its existing `value()`/`From` conversions remain available
+([ADR-0072](adr/0072-timestamps-cross-boundary-as-utcinstant.md);
+[storage-owned instants use UtcInstant](adr/drafts/storage-owned-instants.md)).
+Storage records and traits, private rows/cursors/inputs/dialects,
+`BackupManifest`, and storage fixtures carry `UtcInstant`; existing
+role-specific wrappers over it remain intact. Its plain SQLx bridge and
+dual-backend coverage preserve SQLite/Postgres schemas, physical values,
+backend-specific precision, and timezone semantics. Public-read APIs likewise
+take an explicit `UtcInstant` `now`, preserving ADR-0027's visibility behavior.
+`UtcInstant` remains Chrono-backed: Chrono's soft deprecation makes the named
+type a smaller future migration seam, not a claim of complete implementation
+isolation or a Jiff migration; Jiff has no native SQLx integration. Durations,
+local wall-clock values, `SystemTime` suffixes, SQL physical types and values,
+and non-storage protocol representations remain outside this decision.
 
 **URLs.** The `url` crate is the sanctioned absolute-URL parser and normalizer,
 and it is a direct dependency of `common` (`common/Cargo.toml:24`) — which means
