@@ -141,7 +141,7 @@ Out:
     structural/text audit finds no forbidden declaration; focused storage and
     external fixture tests pass.
 
-- [ ] Task 13: Reconcile decision records and run full conformance.
+- [x] Task 13: Reconcile decision records and run full conformance.
   - Contract: the spec, proposed ADR draft, and architecture projection describe
     the delivered behavior; `CONTEXT.md` and generated `docs/README.md` remain
     untouched. ADR promotion remains a separate post-merge workflow.
