@@ -47,7 +47,7 @@ Out:
     tag rules, the full lifecycle matrix, weekday/DST edges, one-clock equality,
     and metadata-only rejection.
 
-- [ ] Task 2: Make persistence-dependent finalization atomic on both backends
+- [x] Task 2: Make persistence-dependent finalization atomic on both backends
   - Depends on: Task 1 typed normalization/bookkeeping result.
   - Contract: shared post orchestration captures exactly one request clock and
     passes that instant through normalization and explicit persistence values;

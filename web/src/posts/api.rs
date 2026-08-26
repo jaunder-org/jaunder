@@ -50,10 +50,10 @@ use {
     leptos::prelude::*,
     std::{collections::BTreeSet, sync::Arc},
     storage::{
-        FeedEventStorage, PostCreation, PostRecord, PostStorage, PostUpdate, PublishUpdate,
-        SiteConfigStorage, fetch_post_record, keyset_cursor, perform_post_creation,
-        perform_post_update, scheduled_keyset_cursor, to_post_cursor, to_scheduled_post_cursor,
-        wire_cursor, wire_scheduled_cursor,
+        FeedEventStorage, PostBookkeepingExpectation, PostCreation, PostRecord, PostStorage,
+        PostUpdate, PublishUpdate, SiteConfigStorage, fetch_post_record, keyset_cursor,
+        perform_post_creation, perform_post_update, scheduled_keyset_cursor, to_post_cursor,
+        to_scheduled_post_cursor, wire_cursor, wire_scheduled_cursor,
     },
 };
 
@@ -200,6 +200,7 @@ pub async fn create(post: PostInputs) -> WebResult<SavedPost> {
             summary,
             audiences,
             idempotency_key: None,
+            expectations: PostBookkeepingExpectation::default(),
         },
     )
     .await?;
@@ -329,6 +330,7 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost> {
     // See `create`: the typed `PostSummary` arg is already validated at
     // decode, so no `non_empty_owned` normalization is applied here.
     let audiences = audience_targets_or_public(audience.as_ref());
+    let request_clock = Utc::now();
 
     // A supplied time schedules/backdates; `None` lets storage keep an
     // existing timestamp or stamp `now` for a not-yet-published post.
@@ -349,6 +351,8 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost> {
             },
             summary,
             audiences,
+            request_clock,
+            expectations: PostBookkeepingExpectation::default(),
         },
     )
     .await?;

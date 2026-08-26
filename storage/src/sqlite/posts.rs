@@ -2,10 +2,11 @@ use async_trait::async_trait;
 use sqlx::{Pool, QueryBuilder, Sqlite, SqliteConnection};
 
 use crate::posts::{
-    DELETE_POST_TAG_BY_SLUG, INSERT_POST_TAG, MediaReferenceEvidence, PostMediaReferenceBackfill,
-    PostOwnershipRow, PostTagRow, SELECT_POST_TAGS, UPSERT_TAG_RETURNING_ID, post_tag_diff,
-    post_tags_from_rows, push_live_media_reference_predicate, push_media_reference_evidence_cte,
-    push_owner_media_reference_from_where, replace_legacy_post_media,
+    DELETE_POST_TAG_BY_SLUG, INSERT_POST_TAG, MediaReferenceEvidence, PostBookkeepingRow,
+    PostMediaReferenceBackfill, PostOwnershipRow, PostTagRow, SELECT_POST_TAGS,
+    UPSERT_TAG_RETURNING_ID, post_tag_diff, post_tags_from_rows,
+    push_live_media_reference_predicate, push_media_reference_evidence_cte,
+    push_owner_media_reference_from_where, replace_legacy_post_media, update_expectation_error,
 };
 use crate::{
     InstanceId, PostDialect, PostRecord, PostStore, PublishUpdate, RenderedHtml, TaggingError,
@@ -106,22 +107,36 @@ impl PostDialect for Sqlite {
         // mirroring create_user_with_invite / sqlite/backup.rs.
         let mut conn = pool.acquire().await?;
         sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
-        let now = UtcInstant::now();
+        let now = input.request_clock;
 
         let result: Result<PostRecord, UpdatePostError> = async {
-            let existing = sqlx::query_as::<_, PostOwnershipRow>(
-                "SELECT user_id, deleted_at FROM posts WHERE post_id = $1",
+            let existing = sqlx::query_as::<_, PostBookkeepingRow>(
+                "SELECT user_id, deleted_at, title, slug, body, format, summary, published_at
+                 FROM posts WHERE post_id = $1",
             )
             .bind(post_id)
             .fetch_optional(&mut *conn)
             .await?;
 
-            match existing {
+            let existing = match existing {
                 None => return Err(UpdatePostError::NotFound),
-                Some((owner_id, deleted_at)) if owner_id != editor_user_id || deleted_at.is_some() => {
+                Some(existing)
+                    if existing.user_id != editor_user_id || existing.deleted_at.is_some() =>
+                {
                     return Err(UpdatePostError::Unauthorized);
                 }
-                Some(_) => {}
+                Some(existing) => existing,
+            };
+            let tags = sqlx::query_scalar::<_, TagLabel>(
+                "SELECT pt.tag_display FROM post_tags pt
+                 JOIN tags t ON t.tag_id = pt.tag_id
+                 WHERE pt.post_id = $1 ORDER BY t.tag_slug",
+            )
+            .bind(post_id)
+            .fetch_all(&mut *conn)
+            .await?;
+            if let Some(error) = update_expectation_error(post_id, &existing, &tags, input) {
+                return Err(error);
             }
             lock_updated_media(&mut conn, post_id, input).await?;
             sqlx::query(

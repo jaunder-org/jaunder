@@ -8,6 +8,7 @@ use sqlx::{Database, Pool, QueryBuilder, Row};
 use thiserror::Error;
 
 use crate::InstanceId;
+use common::etag::{ETag, post_content_etag};
 use common::feed::FeedPath;
 use common::ids::{AudienceId, ChannelId, PostId, RevisionId, TagId, UserId};
 use common::media::{MediaRef, MediaReference, MediaReferenceForm, MediaReferenceKind};
@@ -203,12 +204,34 @@ pub struct PostRevisionRecord {
     pub edited_at: UtcInstant,
 }
 
+/// Non-authoritative metadata an Org ingress expects the stored post to match.
+///
+/// Storage evaluates this inside the write transaction: create compares after its
+/// successful unique-index insert, while update compares the locked pre-write row
+/// and its tag projection before creating a revision.
+#[derive(Clone, Debug, Default)]
+pub struct PostBookkeepingExpectation {
+    /// Final collision-resolved slug.
+    pub slug: Option<Slug>,
+    /// Final stored markup format.
+    pub format: Option<PostFormat>,
+    /// Final stored publication instant; `Some(None)` expects a draft.
+    pub published_at: Option<Option<UtcInstant>>,
+    /// Target identity for an update.
+    pub post_id: Option<PostId>,
+    /// Current pre-write content validator for an update.
+    pub content_etag: Option<ETag>,
+}
+
 /// Errors that can occur when creating a post.
 #[derive(Debug, Error)]
 pub enum CreatePostError {
     /// A post with the same slug already exists for this user on this day.
     #[error("slug already taken for this user on this date")]
     SlugConflict,
+    /// A non-authoritative bookkeeping property disagreed with the final row.
+    #[error("post bookkeeping does not match the stored post")]
+    BookkeepingMismatch,
     /// The `(user_id, idempotency_key)` pair has already been used to create a
     /// post; the create is a duplicate of an earlier one.
     #[error("idempotency key already used for this user")]
@@ -227,6 +250,12 @@ pub enum UpdatePostError {
     /// The user is not authorized to edit this post.
     #[error("not authorized")]
     Unauthorized,
+    /// A non-authoritative target/final-state property disagreed with the locked row.
+    #[error("post bookkeeping does not match the stored post")]
+    BookkeepingMismatch,
+    /// The non-authoritative current-content validator is stale.
+    #[error("post content has changed")]
+    StaleContent,
     /// An unexpected database error occurred.
     #[error(transparent)]
     Internal(#[from] sqlx::Error),
@@ -241,6 +270,9 @@ impl From<UpdatePostError> for host::error::InternalError {
         match error {
             UpdatePostError::NotFound | UpdatePostError::Unauthorized => {
                 InternalError::not_found("Post")
+            }
+            UpdatePostError::BookkeepingMismatch | UpdatePostError::StaleContent => {
+                InternalError::validation_source(error.to_string(), error)
             }
             UpdatePostError::Internal(e) => InternalError::storage(e),
         }
@@ -295,6 +327,8 @@ pub struct CreatePostInput {
     /// Audience targeting for the post. Each entry becomes a `post_audiences`
     /// row; `Private` and an empty vec produce no rows (the post is private).
     pub audiences: Vec<AudienceTarget>,
+    /// Non-authoritative Org bookkeeping to compare after the successful row insert.
+    pub expectations: PostBookkeepingExpectation,
     /// If `Some`, register this idempotency key against the new post in the
     /// same transaction. A `(user_id, key)` collision maps to
     /// [`CreatePostError::IdempotencyConflict`] and rolls the whole create back.
@@ -332,6 +366,10 @@ pub struct UpdatePostInput {
     /// `post_audiences` rows are replaced to match this vec; `Private` and an
     /// empty vec produce no rows (the post is private).
     pub audiences: Vec<AudienceTarget>,
+    /// The single request clock used when publishing a previously-draft post now.
+    pub request_clock: DateTime<Utc>,
+    /// Non-authoritative Org bookkeeping to compare under the owner lock.
+    pub expectations: PostBookkeepingExpectation,
 }
 
 /// A tag record returned by [`PostStorage`] tag queries.
@@ -412,6 +450,18 @@ pub(crate) const DELETE_POST_TAG_BY_SLUG: &str = "DELETE FROM post_tags
      WHERE post_id = $1 AND tag_id = (SELECT tag_id FROM tags WHERE tag_slug = $2)";
 
 pub(crate) type PostOwnershipRow = (UserId, Option<UtcInstant>);
+/// The locked pre-write columns needed for final-state and content expectations.
+#[derive(sqlx::FromRow)]
+pub(crate) struct PostBookkeepingRow {
+    pub user_id: UserId,
+    pub deleted_at: Option<DateTime<Utc>>,
+    pub title: Option<PostTitle>,
+    pub slug: Slug,
+    pub body: PostBody,
+    pub format: PostFormat,
+    pub summary: Option<PostSummary>,
+    pub published_at: Option<DateTime<Utc>>,
+}
 pub(crate) type TagListRow = (TagId, Tag);
 pub(crate) type PostTagRow = (PostId, TagId, Tag, TagLabel);
 
@@ -2754,6 +2804,18 @@ fn audience_target_from_row(
     }
 }
 
+fn create_expectations_match(input: &CreatePostInput) -> bool {
+    let expected = &input.expectations;
+    expected
+        .slug
+        .as_ref()
+        .is_none_or(|slug| slug == &input.slug)
+        && expected.format.is_none_or(|format| format == input.format)
+        && expected
+            .published_at
+            .is_none_or(|published_at| published_at.map(UtcInstant::value) == input.published_at)
+}
+
 /// Maps an error from the idempotency-key `INSERT`. A `(user_id, key)` unique
 /// violation is a [`CreatePostError::IdempotencyConflict`] (a duplicate create),
 /// distinct from the post `INSERT`'s `SlugConflict` — attribution is by which
@@ -2803,6 +2865,55 @@ pub(crate) fn media_lock_set(references: &[MediaReference]) -> BTreeSet<MediaRef
         .iter()
         .map(|reference| reference.media().clone())
         .collect()
+}
+pub(crate) fn update_expectation_error(
+    post_id: PostId,
+    existing: &PostBookkeepingRow,
+    tags: &[TagLabel],
+    input: &UpdatePostInput,
+) -> Option<UpdatePostError> {
+    let expected = &input.expectations;
+    if expected
+        .post_id
+        .is_some_and(|expected_id| expected_id != post_id)
+    {
+        return Some(UpdatePostError::BookkeepingMismatch);
+    }
+    let final_slug = if existing.published_at.is_some() {
+        &existing.slug
+    } else {
+        &input.slug
+    };
+    let final_published_at = match input.publish {
+        PublishUpdate::Unpublish => None,
+        PublishUpdate::Publish { at: Some(at) } => Some(at),
+        PublishUpdate::Publish { at: None } => existing.published_at.or(Some(input.request_clock)),
+    };
+    if expected
+        .slug
+        .as_ref()
+        .is_some_and(|slug| slug != final_slug)
+        || expected.format.is_some_and(|format| format != input.format)
+        || expected
+            .published_at
+            .is_some_and(|published_at| published_at.map(UtcInstant::value) != final_published_at)
+    {
+        return Some(UpdatePostError::BookkeepingMismatch);
+    }
+
+    let current_etag = post_content_etag(
+        existing.title.as_ref(),
+        &existing.body,
+        &existing.format,
+        existing.summary.as_ref(),
+        tags.iter(),
+        existing.published_at.is_none(),
+    );
+    expected
+        .content_etag
+        .as_ref()
+        .is_some_and(|etag| etag != &current_etag)
+        .then_some(UpdatePostError::StaleContent)
 }
 /// Writes one post row and its audience rows onto a caller-supplied transaction
 /// connection, so it joins whatever transaction is open.
@@ -2868,6 +2979,13 @@ where
         sqlx::Error::Database(db) if db.is_unique_violation() => CreatePostError::SlugConflict,
         e => CreatePostError::Internal(e),
     })?;
+
+    // The unique index is the only slug-availability probe. A successful insert
+    // proves this candidate won; compare it before child writes so a mismatch
+    // rolls the entire transaction back without leaving related rows behind.
+    if !create_expectations_match(input) {
+        return Err(CreatePostError::BookkeepingMismatch);
+    }
 
     replace_post_audiences::<DB>(conn, post_id, &input.audiences).await?;
     replace_post_media::<DB>(conn, post_id, input.rendered.media()).await?;
@@ -5368,6 +5486,7 @@ mod tests {
                 published_at: None,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                expectations: PostBookkeepingExpectation::default(),
                 idempotency_key: None,
             })
             .await

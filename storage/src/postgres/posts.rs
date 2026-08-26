@@ -2,11 +2,11 @@ use async_trait::async_trait;
 use sqlx::{Pool, Postgres, QueryBuilder};
 
 use crate::posts::{
-    DELETE_POST_TAG_BY_SLUG, INSERT_POST_TAG, MediaReferenceEvidence, PostMediaReferenceBackfill,
-    PostOwnershipRow, PostTagRow, SELECT_POST_TAGS, UPSERT_TAG_RETURNING_ID,
-    media_advisory_lock_keys, media_lock_set, post_tag_diff, post_tags_from_rows,
-    push_live_media_reference_predicate, push_media_reference_evidence_cte,
-    push_owner_media_reference_from_where, replace_legacy_post_media,
+    DELETE_POST_TAG_BY_SLUG, INSERT_POST_TAG, MediaReferenceEvidence, PostBookkeepingRow,
+    PostMediaReferenceBackfill, PostOwnershipRow, PostTagRow, SELECT_POST_TAGS,
+    UPSERT_TAG_RETURNING_ID, media_advisory_lock_keys, media_lock_set, post_tag_diff,
+    post_tags_from_rows, push_live_media_reference_predicate, push_media_reference_evidence_cte,
+    push_owner_media_reference_from_where, replace_legacy_post_media, update_expectation_error,
 };
 use crate::{
     InstanceId, PostDialect, PostRecord, PostStore, PublishUpdate, RenderedHtml, TaggingError,
@@ -85,34 +85,48 @@ impl PostDialect for Postgres {
         input: &UpdatePostInput,
     ) -> Result<PostRecord, UpdatePostError> {
         let mut tx = pool.begin().await?;
-        let now = UtcInstant::now();
+        let now = input.request_clock;
 
         // FOR UPDATE locks the row for the read-then-write: it stops a concurrent
         // edit from slipping between this ownership/liveness check and the UPDATE
         // below (ADR-0021 / #52). SQLite needs no equivalent — its transaction
         // already serializes writers.
-        let existing = sqlx::query_as::<_, PostOwnershipRow>(
-            "SELECT user_id, deleted_at FROM posts WHERE post_id = $1 FOR UPDATE",
+        let existing = sqlx::query_as::<_, PostBookkeepingRow>(
+            "SELECT user_id, deleted_at, title, slug, body, format, summary, published_at
+             FROM posts WHERE post_id = $1 FOR UPDATE",
         )
         .bind(post_id)
         .fetch_optional(&mut *tx)
         .await?;
 
-        match existing {
+        let existing = match existing {
             None => {
                 return finish_post_update_rejection(
                     Err(UpdatePostError::NotFound),
                     tx.rollback().await,
                 );
             }
-            Some((owner_id, deleted_at)) if owner_id != editor_user_id || deleted_at.is_some() => {
+            Some(existing)
+                if existing.user_id != editor_user_id || existing.deleted_at.is_some() =>
+            {
                 return finish_post_update_rejection(
                     Err(UpdatePostError::Unauthorized),
                     tx.rollback().await,
                 );
             }
-
-            Some(_) => {}
+            Some(existing) => {
+                let tags = sqlx::query_scalar::<_, TagLabel>(
+                    "SELECT pt.tag_display FROM post_tags pt
+                     JOIN tags t ON t.tag_id = pt.tag_id
+                     WHERE pt.post_id = $1 ORDER BY t.tag_slug COLLATE \"C\"",
+                )
+                .bind(post_id)
+                .fetch_all(&mut *tx)
+                .await?;
+                if let Some(error) = update_expectation_error(post_id, &existing, &tags, input) {
+                    return finish_post_update_rejection(Err(error), tx.rollback().await);
+                }
+            }
         }
         let old_media: Vec<(
             common::media::MediaSource,
@@ -354,10 +368,17 @@ mod tests {
 
     #[test]
     fn continuation_reporting_rollback_failures_preserve_post_domain_rejections_and_report_once() {
-        for primary in [UpdatePostError::NotFound, UpdatePostError::Unauthorized] {
+        for primary in [
+            UpdatePostError::NotFound,
+            UpdatePostError::Unauthorized,
+            UpdatePostError::BookkeepingMismatch,
+            UpdatePostError::StaleContent,
+        ] {
             let expected = match primary {
                 UpdatePostError::NotFound => "not-found",
                 UpdatePostError::Unauthorized => "unauthorized",
+                UpdatePostError::BookkeepingMismatch => "bookkeeping-mismatch",
+                UpdatePostError::StaleContent => "stale-content",
                 UpdatePostError::Internal(_) => unreachable!("test variants are domain errors"),
             };
             let (result, trace) = crate::helpers::swallowed_test::capture(|| {
@@ -368,6 +389,11 @@ mod tests {
                     (&result, expected),
                     (Err(UpdatePostError::NotFound), "not-found")
                         | (Err(UpdatePostError::Unauthorized), "unauthorized")
+                        | (
+                            Err(UpdatePostError::BookkeepingMismatch),
+                            "bookkeeping-mismatch"
+                        )
+                        | (Err(UpdatePostError::StaleContent), "stale-content")
                 ),
                 "primary variant changed: {result:?}"
             );

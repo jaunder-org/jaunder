@@ -7,8 +7,8 @@
 use thiserror::Error;
 
 use crate::{
-    CreatePostError, CreatePostInput, PostFormat, PostRecord, PostStorage, PublishUpdate,
-    UpdatePostError, UpdatePostInput,
+    CreatePostError, CreatePostInput, PostBookkeepingExpectation, PostFormat, PostRecord,
+    PostStorage, PublishUpdate, UpdatePostError, UpdatePostInput,
 };
 use common::ids::{PostId, UserId};
 use common::post_body::PostBody;
@@ -45,6 +45,8 @@ pub struct RenderedPostContent {
     pub audiences: Vec<AudienceTarget>,
     /// Owned idempotency key to register with the post, or `None`.
     pub idempotency_key: Option<String>,
+    /// Non-authoritative Org bookkeeping expected to match the final stored row.
+    pub expectations: PostBookkeepingExpectation,
 }
 
 /// Renders `body` according to `format` and creates the post via storage.
@@ -75,6 +77,7 @@ pub fn render_post_input(content: RenderedPostContent) -> CreatePostInput {
         summary,
         audiences,
         idempotency_key,
+        expectations,
     } = content;
     let rendered = RenderOutput::render(&body, &format);
     CreatePostInput {
@@ -87,6 +90,7 @@ pub fn render_post_input(content: RenderedPostContent) -> CreatePostInput {
         published_at,
         summary,
         audiences,
+        expectations,
         idempotency_key,
     }
 }
@@ -119,6 +123,7 @@ pub fn seed_post_input(
         summary: None,
         audiences: vec![AudienceTarget::Public],
         idempotency_key: None,
+        expectations: PostBookkeepingExpectation::default(),
     })
 }
 
@@ -138,6 +143,10 @@ pub enum PerformUpdateError {
     NotFound,
     #[error("not authorized")]
     Unauthorized,
+    #[error("post bookkeeping does not match the stored post")]
+    BookkeepingMismatch,
+    #[error("post content has changed")]
+    StaleContent,
     #[error("storage error: {0}")]
     Storage(#[source] sqlx::Error),
 }
@@ -147,6 +156,8 @@ impl From<UpdatePostError> for PerformUpdateError {
         match e {
             UpdatePostError::NotFound => Self::NotFound,
             UpdatePostError::Unauthorized => Self::Unauthorized,
+            UpdatePostError::BookkeepingMismatch => Self::BookkeepingMismatch,
+            UpdatePostError::StaleContent => Self::StaleContent,
             UpdatePostError::Internal(e) => Self::Storage(e),
         }
     }
@@ -161,7 +172,9 @@ impl From<PerformUpdateError> for host::error::InternalError {
     fn from(error: PerformUpdateError) -> Self {
         use host::error::InternalError;
         match error {
-            PerformUpdateError::EmptyPost => {
+            PerformUpdateError::EmptyPost
+            | PerformUpdateError::BookkeepingMismatch
+            | PerformUpdateError::StaleContent => {
                 InternalError::validation_source(error.to_string(), error)
             }
             PerformUpdateError::NotFound | PerformUpdateError::Unauthorized => {
@@ -195,6 +208,10 @@ pub struct PostUpdate<'a> {
     /// Audience targeting for the post (replaces its existing rows). An empty
     /// vec (or `[Private]`) makes the post author-only.
     pub audiences: Vec<AudienceTarget>,
+    /// The request clock reused if this update publishes a draft without a date.
+    pub request_clock: DateTime<Utc>,
+    /// Non-authoritative Org bookkeeping expected to match the locked row.
+    pub expectations: PostBookkeepingExpectation,
 }
 
 /// Validates inputs, computes the slug, renders the body, and atomically
@@ -220,6 +237,8 @@ pub async fn perform_post_update(
         publish,
         summary,
         audiences,
+        request_clock,
+        expectations,
     } = input;
     let (title, derived_slug) = derive_post_naming(title, &body, &format);
 
@@ -247,6 +266,8 @@ pub async fn perform_post_update(
         publish,
         summary,
         audiences,
+        request_clock,
+        expectations,
     };
     storage
         .update_post(post_id, editor_user_id, &input)
@@ -276,6 +297,8 @@ pub enum PerformCreationError {
     /// create is a duplicate and no new post was written.
     #[error("idempotency key already used for this user")]
     IdempotencyConflict,
+    #[error("post bookkeeping does not match the stored post")]
+    BookkeepingMismatch,
     #[error("storage error: {0}")]
     Storage(#[source] sqlx::Error),
 }
@@ -288,8 +311,9 @@ impl From<PerformCreationError> for host::error::InternalError {
         use host::error::InternalError;
         match error {
             // Single-sourced from the variant's `#[error]` so the public message
-            // cannot drift from the cause the variant documents.
-            PerformCreationError::EmptyPost => InternalError::validation(error.to_string()),
+            PerformCreationError::EmptyPost | PerformCreationError::BookkeepingMismatch => {
+                InternalError::validation(error.to_string())
+            }
             PerformCreationError::InvalidSlug(_) => {
                 InternalError::validation_source(error.to_string(), error)
             }
@@ -358,6 +382,8 @@ pub struct PostCreation<'a> {
     /// Client-supplied idempotency key (already trimmed / non-empty), or `None`
     /// to create without deduplication.
     pub idempotency_key: Option<&'a str>,
+    /// Non-authoritative Org bookkeeping expected to match the collision winner.
+    pub expectations: PostBookkeepingExpectation,
 }
 
 /// Validates inputs, computes the slug, renders the body, and atomically
@@ -382,6 +408,7 @@ pub async fn perform_post_creation(
         summary,
         audiences,
         idempotency_key,
+        expectations,
     } = input;
     let (title, derived_slug) = derive_post_naming(title, &body, &format);
 
@@ -402,6 +429,10 @@ pub async fn perform_post_creation(
     for attempt in 0..max_attempts {
         let slug =
             candidate_slug(&slug_seed, attempt).map_err(PerformCreationError::InvalidSlug)?;
+        let is_expected_slug = expectations
+            .slug
+            .as_ref()
+            .is_some_and(|expected| expected == &slug);
 
         match create_rendered_post(
             storage,
@@ -415,6 +446,7 @@ pub async fn perform_post_creation(
                 summary: summary.clone(),
                 audiences: audiences.clone(),
                 idempotency_key: idempotency_key.map(str::to_owned),
+                expectations: expectations.clone(),
             },
         )
         .await
@@ -431,12 +463,18 @@ pub async fn perform_post_creation(
                     .ok_or(PerformCreationError::CreatedNotFound)?;
                 return Ok(record);
             }
+            Err(CreatePostError::SlugConflict) if is_expected_slug => {
+                return Err(PerformCreationError::BookkeepingMismatch);
+            }
             Err(CreatePostError::SlugConflict) => {}
             // A duplicate idempotency key is not a slug collision — do not retry;
             // the whole create (post included) rolled back. The caller looks up
             // and returns the original post.
             Err(CreatePostError::IdempotencyConflict) => {
                 return Err(PerformCreationError::IdempotencyConflict);
+            }
+            Err(CreatePostError::BookkeepingMismatch) => {
+                return Err(PerformCreationError::BookkeepingMismatch);
             }
             Err(CreatePostError::Internal(e)) => {
                 return Err(PerformCreationError::Storage(e));
@@ -480,6 +518,7 @@ mod tests {
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
                 idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
             },
         )
         .await
@@ -517,6 +556,7 @@ mod tests {
                 summary: None,
                 audiences: vec![],
                 idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
             },
         )
         .await
@@ -561,6 +601,7 @@ mod tests {
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
                 idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
             },
         )
         .await
@@ -593,6 +634,7 @@ mod tests {
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
                 idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
             },
         )
         .await
@@ -627,6 +669,7 @@ mod tests {
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
                 idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
             },
         )
         .await
@@ -656,6 +699,7 @@ mod tests {
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
                 idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
             },
         )
         .await
@@ -685,6 +729,7 @@ mod tests {
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
                 idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
             },
         )
         .await
@@ -738,6 +783,7 @@ mod tests {
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
                 idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
             },
         )
         .await
@@ -756,6 +802,7 @@ mod tests {
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
                 idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
             },
         )
         .await
@@ -774,6 +821,7 @@ mod tests {
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
                 idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
             },
         )
         .await
@@ -784,6 +832,374 @@ mod tests {
         assert_eq!(r3.slug, "hello-world-3");
     }
 
+    #[apply(backends)]
+    #[tokio::test]
+    async fn bookkeeping_creation_expectations_follow_the_slug_retry_matrix(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let storage = &*env.state.posts;
+        let expected = parse_slug("expected");
+        let expected_second = parse_slug("expected-2");
+        let create = |user_id, expectations| PostCreation {
+            user_id,
+            body: parse_post_body("Expected"),
+            title: None,
+            format: PostFormat::Markdown,
+            slug_override: None,
+            published_at: None,
+            max_attempts: 10,
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
+            expectations,
+        };
+
+        let first_free_user = SeedUser::new().seed(&env.state).await.user_id;
+        let first_free = perform_post_creation(
+            storage,
+            create(
+                first_free_user,
+                PostBookkeepingExpectation {
+                    slug: Some(expected.clone()),
+                    ..Default::default()
+                },
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(first_free.slug, expected);
+
+        let earlier_free_user = SeedUser::new().seed(&env.state).await.user_id;
+        assert!(matches!(
+            perform_post_creation(
+                storage,
+                create(
+                    earlier_free_user,
+                    PostBookkeepingExpectation {
+                        slug: Some(expected_second.clone()),
+                        ..Default::default()
+                    },
+                ),
+            )
+            .await,
+            Err(PerformCreationError::BookkeepingMismatch)
+        ));
+        assert!(
+            storage
+                .list_collection_by_user(earlier_free_user, None, parse_row_limit("10"))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let conflict_before_expected_user = SeedUser::new().seed(&env.state).await.user_id;
+        perform_post_creation(
+            storage,
+            create(
+                conflict_before_expected_user,
+                PostBookkeepingExpectation::default(),
+            ),
+        )
+        .await
+        .unwrap();
+        let collision_winner = perform_post_creation(
+            storage,
+            create(
+                conflict_before_expected_user,
+                PostBookkeepingExpectation {
+                    slug: Some(expected_second.clone()),
+                    ..Default::default()
+                },
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(collision_winner.slug, expected_second);
+
+        let occupied_expected_user = SeedUser::new().seed(&env.state).await.user_id;
+        perform_post_creation(
+            storage,
+            create(
+                occupied_expected_user,
+                PostBookkeepingExpectation::default(),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            perform_post_creation(
+                storage,
+                create(
+                    occupied_expected_user,
+                    PostBookkeepingExpectation {
+                        slug: Some(expected),
+                        ..Default::default()
+                    },
+                ),
+            )
+            .await,
+            Err(PerformCreationError::BookkeepingMismatch)
+        ));
+        assert_eq!(
+            storage
+                .list_collection_by_user(occupied_expected_user, None, parse_row_limit("10"))
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn bookkeeping_creation_format_and_publication_mismatches_roll_back(
+        #[case] backend: Backend,
+    ) {
+        use common::time::UtcInstant;
+
+        let env = backend.setup().await;
+        let storage = &*env.state.posts;
+        let create = |user_id, expectations| PostCreation {
+            user_id,
+            body: parse_post_body("Mismatch"),
+            title: None,
+            format: PostFormat::Markdown,
+            slug_override: None,
+            published_at: None,
+            max_attempts: 10,
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+            idempotency_key: None,
+            expectations,
+        };
+
+        let format_user = SeedUser::new().seed(&env.state).await.user_id;
+        assert!(matches!(
+            perform_post_creation(
+                storage,
+                create(
+                    format_user,
+                    PostBookkeepingExpectation {
+                        format: Some(PostFormat::Org),
+                        ..Default::default()
+                    },
+                ),
+            )
+            .await,
+            Err(PerformCreationError::BookkeepingMismatch)
+        ));
+        assert!(
+            storage
+                .list_collection_by_user(format_user, None, parse_row_limit("10"))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let publication_user = SeedUser::new().seed(&env.state).await.user_id;
+        assert!(matches!(
+            perform_post_creation(
+                storage,
+                create(
+                    publication_user,
+                    PostBookkeepingExpectation {
+                        published_at: Some(Some(UtcInstant::from(Utc::now()))),
+                        ..Default::default()
+                    },
+                ),
+            )
+            .await,
+            Err(PerformCreationError::BookkeepingMismatch)
+        ));
+        assert!(
+            storage
+                .list_collection_by_user(publication_user, None, parse_row_limit("10"))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn bookkeeping_update_uses_final_draft_or_published_slug(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let storage = &*env.state.posts;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let draft = crate::test_support::SeedRawPost::new(user_id)
+            .draft()
+            .seed(&env.state)
+            .await;
+        let published = crate::test_support::SeedRawPost::new(user_id)
+            .seed(&env.state)
+            .await;
+        let changed_slug = parse_slug("changed-slug");
+        let update = |post_id, expected_slug| PostUpdate {
+            post_id,
+            editor_user_id: user_id,
+            body: parse_post_body("updated body"),
+            title: None,
+            format: PostFormat::Markdown,
+            slug_override: Some(&changed_slug),
+            publish: PublishUpdate::Publish { at: None },
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+            request_clock: Utc::now(),
+            expectations: PostBookkeepingExpectation {
+                slug: Some(expected_slug),
+                ..Default::default()
+            },
+        };
+
+        let updated_draft =
+            perform_post_update(storage, update(draft.post_id, changed_slug.clone()))
+                .await
+                .unwrap();
+        assert_eq!(updated_draft.slug, changed_slug);
+
+        let updated_published =
+            perform_post_update(storage, update(published.post_id, published.slug.clone()))
+                .await
+                .unwrap();
+        assert_eq!(updated_published.slug, published.slug);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn bookkeeping_update_publishes_now_at_the_supplied_request_clock(
+        #[case] backend: Backend,
+    ) {
+        use chrono::TimeZone;
+
+        let env = backend.setup().await;
+        let storage = &*env.state.posts;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let draft = crate::test_support::SeedRawPost::new(user_id)
+            .draft()
+            .seed(&env.state)
+            .await;
+        let clock = Utc.with_ymd_and_hms(2042, 7, 1, 12, 0, 0).unwrap();
+        let record = perform_post_update(
+            storage,
+            PostUpdate {
+                post_id: draft.post_id,
+                editor_user_id: user_id,
+                body: parse_post_body("updated body"),
+                title: None,
+                format: PostFormat::Markdown,
+                slug_override: None,
+                publish: PublishUpdate::Publish { at: None },
+                summary: None,
+                audiences: vec![AudienceTarget::Public],
+                request_clock: clock,
+                expectations: PostBookkeepingExpectation::default(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(record.published_at, Some(clock));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn bookkeeping_update_id_and_etag_mismatches_leave_the_post_unchanged(
+        #[case] backend: Backend,
+    ) {
+        use common::etag::ETag;
+
+        let env = backend.setup().await;
+        let storage = &*env.state.posts;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        let post = crate::test_support::SeedRawPost::new(user_id)
+            .draft()
+            .seed(&env.state)
+            .await;
+        let viewer = common::visibility::ViewerIdentity::local(user_id);
+        let original = storage
+            .get_post_by_id(post.post_id, &viewer)
+            .await
+            .unwrap()
+            .unwrap();
+        let revision_count = env
+            .base
+            .pool()
+            .scalar_i64("SELECT COUNT(*) FROM post_revisions")
+            .await
+            .unwrap();
+        let update = |expectations| PostUpdate {
+            post_id: post.post_id,
+            editor_user_id: user_id,
+            body: parse_post_body("changed body"),
+            title: None,
+            format: PostFormat::Markdown,
+            slug_override: None,
+            publish: PublishUpdate::Unpublish,
+            summary: None,
+            audiences: vec![AudienceTarget::Public],
+            request_clock: Utc::now(),
+            expectations,
+        };
+
+        assert!(matches!(
+            perform_post_update(
+                storage,
+                update(PostBookkeepingExpectation {
+                    post_id: Some(PostId::from(999_999)),
+                    ..Default::default()
+                }),
+            )
+            .await,
+            Err(PerformUpdateError::BookkeepingMismatch)
+        ));
+        assert!(matches!(
+            perform_post_update(
+                storage,
+                update(PostBookkeepingExpectation {
+                    format: Some(PostFormat::Html),
+                    ..Default::default()
+                }),
+            )
+            .await,
+            Err(PerformUpdateError::BookkeepingMismatch)
+        ));
+        assert!(matches!(
+            perform_post_update(
+                storage,
+                update(PostBookkeepingExpectation {
+                    published_at: Some(Some("2026-08-26T12:00:00Z".parse().unwrap())),
+                    ..Default::default()
+                }),
+            )
+            .await,
+            Err(PerformUpdateError::BookkeepingMismatch)
+        ));
+        assert!(matches!(
+            perform_post_update(
+                storage,
+                update(PostBookkeepingExpectation {
+                    content_etag: Some(ETag::sha256_of(b"stale")),
+                    ..Default::default()
+                }),
+            )
+            .await,
+            Err(PerformUpdateError::StaleContent)
+        ));
+        let unchanged = storage
+            .get_post_by_id(post.post_id, &viewer)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(unchanged.body, original.body);
+        assert_eq!(
+            env.base
+                .pool()
+                .scalar_i64("SELECT COUNT(*) FROM post_revisions")
+                .await
+                .unwrap(),
+            revision_count
+        );
+    }
     #[apply(backends)]
     #[tokio::test]
     async fn test_perform_post_creation_slug_exhaustion(#[case] backend: Backend) {
@@ -804,6 +1220,7 @@ mod tests {
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
                 idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
             },
         )
         .await
@@ -822,6 +1239,7 @@ mod tests {
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
                 idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
             },
         )
         .await
@@ -843,6 +1261,7 @@ mod tests {
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
                 idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
             },
         )
         .await
@@ -872,6 +1291,7 @@ mod tests {
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
                 idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
             },
         )
         .await
@@ -908,6 +1328,7 @@ mod tests {
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
                 idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
             },
         )
         .await
@@ -925,6 +1346,8 @@ mod tests {
                 publish: PublishUpdate::Publish { at: None },
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                request_clock: Utc::now(),
+                expectations: PostBookkeepingExpectation::default(),
             },
         )
         .await
@@ -964,6 +1387,7 @@ mod tests {
             summary: None,
             audiences: vec![AudienceTarget::Public],
             idempotency_key: None,
+            expectations: PostBookkeepingExpectation::default(),
         };
 
         let err = perform_post_creation(storage, creation("* My Title\n", PostFormat::Org))
@@ -1000,6 +1424,7 @@ mod tests {
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
                 idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
             },
         )
         .await
@@ -1017,6 +1442,8 @@ mod tests {
                 publish: PublishUpdate::Publish { at: None },
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                request_clock: Utc::now(),
+                expectations: PostBookkeepingExpectation::default(),
             },
         )
         .await
@@ -1046,6 +1473,7 @@ mod tests {
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
                 idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
             },
         )
         .await
@@ -1076,6 +1504,7 @@ mod tests {
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
                 idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
             },
         )
         .await
@@ -1110,6 +1539,7 @@ mod tests {
             summary: None,
             audiences: vec![AudienceTarget::Public],
             idempotency_key: key,
+            expectations: PostBookkeepingExpectation::default(),
         }
     }
 

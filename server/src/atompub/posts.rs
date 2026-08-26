@@ -311,10 +311,12 @@ pub async fn collection_post(
     let categories = common::tag::parse_and_validate_tags(fields.categories)?;
     // Non-draft entries honor the wire `<published>`: a future time schedules
     // the post, a past time backdates it; absent falls back to "now".
+    let request_clock = chrono::Utc::now();
+
     let published_at = if fields.is_draft {
         None
     } else {
-        Some(fields.published.unwrap_or_else(UtcInstant::now))
+        Some(fields.published.unwrap_or(request_clock))
     };
 
     // AtomPub has no audience picker; new posts adopt the instance default.
@@ -340,6 +342,7 @@ pub async fn collection_post(
             summary: fields.summary,
             audiences: vec![default_audience.into()],
             idempotency_key: idem,
+            expectations: storage::PostBookkeepingExpectation::default(),
         },
     )
     .await;
@@ -434,6 +437,8 @@ pub async fn member_put(
     // rejected, not updated-then-rejected (#771 D9/D12, ADR-0092).
     let categories = common::tag::parse_and_validate_tags(fields.categories)?;
 
+    let request_clock = chrono::Utc::now();
+
     // AtomPub has no audience picker; preserve the post's existing targeting
     // across the edit rather than resetting it.
     let audiences = posts.get_post_audiences(post_id).await?;
@@ -456,6 +461,8 @@ pub async fn member_put(
                     at: fields.published,
                 }
             },
+            request_clock,
+            expectations: storage::PostBookkeepingExpectation::default(),
             summary: fields.summary,
             audiences,
         },

@@ -12,8 +12,8 @@ use common::{
 use std::sync::Arc;
 use storage::test_support::{Backend, SeedRawPost, SeedUser, backends, fp};
 use storage::{
-    AppState, FeedCacheRow, GoLivePost, ListByTagError, PostCursor, PostFormat, PostRecord,
-    RenderedPostContent, create_rendered_post,
+    AppState, FeedCacheRow, GoLivePost, ListByTagError, PostBookkeepingExpectation, PostCursor,
+    PostFormat, PostRecord, RenderedPostContent, create_rendered_post,
 };
 
 use rstest::*;
@@ -94,6 +94,7 @@ async fn seed_post_published_at(
             summary: None,
             audiences: vec![AudienceTarget::Public],
             idempotency_key: None,
+            expectations: PostBookkeepingExpectation::default(),
         },
     )
     .await

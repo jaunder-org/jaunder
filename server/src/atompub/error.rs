@@ -134,7 +134,7 @@ impl From<storage::PerformCreationError> for HandlerError {
     fn from(err: storage::PerformCreationError) -> Self {
         use storage::PerformCreationError as E;
         match err {
-            E::EmptyPost | E::InvalidSlug(_) => HandlerError::BadRequest,
+            E::EmptyPost | E::InvalidSlug(_) | E::BookkeepingMismatch => HandlerError::BadRequest,
             // Exhausted/CreatedNotFound/Storage are all internal failures.
             error => internal(error),
         }
@@ -145,7 +145,8 @@ impl From<storage::PerformUpdateError> for HandlerError {
     fn from(err: storage::PerformUpdateError) -> Self {
         use storage::PerformUpdateError as E;
         match err {
-            E::EmptyPost => HandlerError::BadRequest,
+            E::EmptyPost | E::BookkeepingMismatch => HandlerError::BadRequest,
+            E::StaleContent => HandlerError::PreconditionFailed,
             E::NotFound | E::Unauthorized => HandlerError::NotFound,
             error @ E::Storage(_) => internal(error),
         }
