@@ -62,9 +62,9 @@ pub struct ComposeState {
     /// renders the control; the compact composer leaves it empty (publish-now).
     pub publish_at: RwSignal<String>,
     pub tags: RwSignal<Vec<TagSummary>>,
-    /// Whether the author explicitly supplied the current tag collection. A new
-    /// composer leaves this false so Org header metadata can fill the absence;
-    /// loading a post or changing tags makes even an empty collection explicit.
+    /// Whether the author explicitly supplied the current tag collection. New
+    /// and freshly-seeded editors leave this false so Org header metadata can
+    /// fill the absence; changing tags makes even an empty collection explicit.
     tags_supplied: RwSignal<bool>,
     pub audience: RwSignal<AudienceSelection>,
 }
@@ -157,7 +157,7 @@ impl ComposeState {
         self.summary_field
             .set_input(fetched.post.summary.as_deref().unwrap_or_default());
         self.tags.set(fetched.post.tags.clone());
-        self.tags_supplied.set(true);
+        self.tags_supplied.set(false);
     }
 
     /// Empty the composer for the next post, after a successful create.
@@ -444,16 +444,8 @@ mod tests {
                 None,
             );
             assert_eq!(
-                inputs.tags,
-                Some(
-                    fetched
-                        .post
-                        .tags
-                        .iter()
-                        .map(|tag| tag.display.clone())
-                        .collect()
-                ),
-                "an existing post always supplies its loaded tag replacement"
+                inputs.tags, None,
+                "loaded tags remain implicit until the author changes them"
             );
             assert_eq!(
                 state.summary_field.value.get(),

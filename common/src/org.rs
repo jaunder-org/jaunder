@@ -120,6 +120,7 @@ pub fn normalize_org(
     operation: OrgOperation,
     request_clock: UtcInstant,
 ) -> Result<OrgNormalization, OrgMetadataError> {
+    validate_lifecycle(&structured.lifecycle, request_clock)?;
     let document = Org::parse(source);
     let parsed = parse_leading_block(source, &document, request_clock)?;
     validate_operation(&parsed.bookkeeping, operation)?;
@@ -134,7 +135,7 @@ pub fn normalize_org(
     let tags = choose(structured.tags, parsed.tags);
     let audiences = choose(structured.audiences, parsed.audiences);
     validate_audiences(&audiences)?;
-    let lifecycle = choose_lifecycle(structured.lifecycle, parsed.lifecycle, request_clock)?;
+    let lifecycle = choose(structured.lifecycle, parsed.lifecycle);
 
     Ok(OrgNormalization {
         body,
@@ -422,7 +423,9 @@ fn parse_lifecycle(
         ("published", at) => PublicationState::Published(at.unwrap_or(clock)),
         _ => return invalid("invalid JAUNDER_STATUS lifecycle"),
     };
-    Ok(Presence::Present(state))
+    let lifecycle = Presence::Present(state);
+    validate_lifecycle(&lifecycle, clock)?;
+    Ok(lifecycle)
 }
 
 fn parse_org_date(value: &str, timezone: &str) -> Result<UtcInstant, OrgMetadataError> {
@@ -457,17 +460,15 @@ fn choose<T>(structured: Presence<T>, header: Presence<T>) -> Presence<T> {
         Presence::Absent => header,
     }
 }
-fn choose_lifecycle(
-    structured: Presence<PublicationState>,
-    header: Presence<PublicationState>,
+fn validate_lifecycle(
+    lifecycle: &Presence<PublicationState>,
     clock: UtcInstant,
-) -> Result<Presence<PublicationState>, OrgMetadataError> {
-    let chosen = choose(structured, header);
-    match chosen {
+) -> Result<(), OrgMetadataError> {
+    match lifecycle {
         Presence::Present(PublicationState::Published(at)) if at.value() > clock.value() => {
             invalid("published instant must not be future")
         }
-        value => Ok(value),
+        _ => Ok(()),
     }
 }
 fn validate_audiences(audiences: &Presence<Vec<AudienceTarget>>) -> Result<(), OrgMetadataError> {
@@ -676,6 +677,44 @@ mod tests {
             "#+DATE: [2026-03-08 Sun 02:30]\n#+PROPERTY: JAUNDER_DATE_TZ America/New_York\n#+PROPERTY: JAUNDER_STATUS published\nBody",
         );
         invalid("#+DATE: [2026-08-26 Wed 12:00]\nBody");
+    }
+
+    #[test]
+    fn validates_displaced_header_lifecycle_before_precedence() {
+        let future_published = "#+DATE: [2026-08-27 Thu 12:00]\n#+PROPERTY: JAUNDER_DATE_TZ UTC\n#+PROPERTY: JAUNDER_STATUS published\nBody";
+
+        for lifecycle in [
+            PublicationState::Draft,
+            PublicationState::Published(clock()),
+        ] {
+            assert!(matches!(
+                normalize_org(
+                    future_published,
+                    OrgStructuredMetadata {
+                        lifecycle: Presence::Present(lifecycle),
+                        ..OrgStructuredMetadata::default()
+                    },
+                    OrgOperation::Create,
+                    clock(),
+                ),
+                Err(OrgMetadataError::Invalid(_))
+            ));
+        }
+
+        let normalized = normalize_org(
+            "#+DATE: [2026-08-25 Tue 12:00]\n#+PROPERTY: JAUNDER_DATE_TZ UTC\n#+PROPERTY: JAUNDER_STATUS published\nBody",
+            OrgStructuredMetadata {
+                lifecycle: Presence::Present(PublicationState::Draft),
+                ..OrgStructuredMetadata::default()
+            },
+            OrgOperation::Create,
+            clock(),
+        )
+        .expect("a valid displaced header lifecycle is accepted");
+        assert_eq!(
+            normalized.metadata.lifecycle,
+            Presence::Present(PublicationState::Draft)
+        );
     }
 
     #[test]

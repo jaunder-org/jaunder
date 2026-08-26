@@ -166,6 +166,93 @@ Canonical Org body`,
   expect(canonicalSource).toContain("Canonical Org body");
 });
 
+// #77: editor updates apply the same Org normalization and precedence as the
+// composer. A stale sync marker is a write precondition, so it must reject
+// atomically after a previously accepted editor update.
+test("Org editor update preserves canonical state when a stale sync marker rejects", async ({
+  registeredPage,
+}) => {
+  const page = await registeredPage("/posts/new");
+  const initialSummary = await composePost(page, {
+    body: "# Initial browser post\n\nInitial body",
+    publish: false,
+  });
+
+  await followPermalink(page, initialSummary);
+  await openEditor(page);
+
+  const acceptedTitle = "Accepted browser Org title";
+  const acceptedSummary = "Structured editor summary";
+  const acceptedSlug = "structured-editor-slug";
+  const unknownDirective = "#+AUTHOR: Editor compatibility";
+  const acceptedBody = "Accepted editor Org body";
+  await click(page, SEL.formatButton("Org"));
+  await page.fill(
+    SEL.postBody,
+    `#+TITLE: ${acceptedTitle}
+#+DESCRIPTION: Header summary must lose
+#+KEYWORDS: editororg
+#+PROPERTY: JAUNDER_STATUS published
+#+PROPERTY: JAUNDER_SLUG ${acceptedSlug}
+${unknownDirective}
+
+${acceptedBody}`,
+  );
+  await page.fill(SEL.postSummary, acceptedSummary);
+  await page.fill(SEL.postSlug, acceptedSlug);
+
+  // Structured form fields remain authoritative over mutable metadata: save
+  // stays a draft and the structured summary displaces its header. The
+  // non-authoritative slug bookkeeping must agree with the structured slug.
+  await click(page, SEL.publishButton("false"));
+  await expectFlash(page, "Draft saved.");
+  await expect(page.locator(SEL.saveSummary)).toContainText(
+    `Slug: ${acceptedSlug}`,
+  );
+
+  await followPermalink(page, page.locator(SEL.saveSummary));
+  await expect(page.locator("article .j-post-title")).toHaveText(acceptedTitle);
+  await expect(page.locator("article.j-post")).toContainText(acceptedSummary);
+
+  await openEditor(page);
+  await expect(
+    page.locator('.j-tag-chip-label:has-text("#editororg")'),
+  ).toBeVisible();
+  await expect(page.locator(SEL.postSummary)).toHaveValue(acceptedSummary);
+  await expect(page.locator(SEL.postSlug)).toHaveValue(acceptedSlug);
+  const canonicalBody = page.locator(SEL.postBody);
+  const canonicalSource = await canonicalBody.inputValue();
+  expect(canonicalSource).toContain(unknownDirective);
+  expect(canonicalSource).toContain(acceptedBody);
+  expect(canonicalSource).not.toContain("#+TITLE:");
+  expect(canonicalSource).not.toContain("#+DESCRIPTION:");
+  expect(canonicalSource).not.toContain("#+KEYWORDS:");
+  expect(canonicalSource).not.toContain("#+PROPERTY: JAUNDER_STATUS");
+  expect(canonicalSource).not.toContain("#+PROPERTY: JAUNDER_SLUG");
+
+  const editorUrl = page.url();
+  await page.fill(
+    SEL.postBody,
+    `#+PROPERTY: JAUNDER_SYNCED "stale"
+#+TITLE: Rejected browser Org title
+
+Rejected editor Org body`,
+  );
+  await click(page, SEL.publishButton("false"));
+  await expect(page.locator(SEL.error)).toHaveText("post content has changed");
+  await expect(page).toHaveURL(editorUrl);
+
+  await openPostFromDrafts(page, acceptedTitle);
+  await expect(page.locator(SEL.postSummary)).toHaveValue(acceptedSummary);
+  await expect(page.locator(SEL.postSlug)).toHaveValue(acceptedSlug);
+  await expect(page.locator(SEL.postBody)).toHaveValue(
+    new RegExp(acceptedBody),
+  );
+  await expect(page.locator(SEL.postBody)).not.toHaveValue(
+    /Rejected editor Org body/,
+  );
+});
+
 test("metadata-only Org composer input reports validation without saving", async ({
   registeredPage,
 }) => {
