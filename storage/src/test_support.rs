@@ -16,8 +16,8 @@
 
 use crate::media::MediaRecord;
 use crate::posts::{
-    CreatePostError, CreatePostInput, INSERT_POST_TAG, PublishUpdate, UPSERT_TAG_RETURNING_ID,
-    UpdatePostInput,
+    CreatePostError, CreatePostInput, INSERT_POST_TAG, PostBookkeepingExpectation, PublishUpdate,
+    UPSERT_TAG_RETURNING_ID, UpdatePostInput,
 };
 use crate::sql::quote_identifier;
 use crate::{AppState, DbConnectOptions, PostFormat, PostRecord, resolved_postgres_options};
@@ -1180,6 +1180,7 @@ impl SeedPost {
                 summary: None,
                 audiences: self.audiences,
                 idempotency_key: None,
+                expectations: PostBookkeepingExpectation::default(),
             },
         )
         .await
@@ -1348,6 +1349,7 @@ impl SeedRawPost {
             published_at: self.published_at,
             summary: self.summary,
             audiences: self.audiences,
+            expectations: PostBookkeepingExpectation::default(),
             idempotency_key: None,
         }
     }
@@ -1501,6 +1503,8 @@ impl UpdateRawPost {
             publish: self.publish,
             summary: self.summary,
             audiences: self.audiences,
+            request_clock: UtcInstant::now(),
+            expectations: PostBookkeepingExpectation::default(),
         }
     }
 }
@@ -1662,6 +1666,7 @@ async fn create_via_service(
             summary: None,
             audiences: vec![AudienceTarget::Public],
             idempotency_key: None,
+            expectations: PostBookkeepingExpectation::default(),
         },
     )
     .await
@@ -1694,6 +1699,8 @@ pub async fn update_post_body_via_service(
             slug_override: None,
             publish: crate::PublishUpdate::Publish { at: None },
             summary: None,
+            request_clock: UtcInstant::now(),
+            expectations: PostBookkeepingExpectation::default(),
             audiences: vec![AudienceTarget::Public],
         },
     )

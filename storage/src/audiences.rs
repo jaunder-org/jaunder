@@ -15,6 +15,7 @@ use common::audience::AudienceName;
 use common::ids::{AudienceId, SubscriptionId, UserId};
 use common::time::UtcInstant;
 use sqlx::{Database, Pool};
+use std::collections::BTreeSet;
 
 use crate::backend::Backend;
 
@@ -63,6 +64,70 @@ impl From<AudienceError> for host::error::InternalError {
             AudienceError::NotFound => InternalError::not_found("audience"),
             AudienceError::Storage(e) => InternalError::storage(e),
         }
+    }
+}
+/// Failure from validating named audience targets for a particular author.
+///
+/// [`Invalid`](Self::Invalid) deliberately covers both foreign and nonexistent
+/// audience identifiers. Callers must project it as one opaque validation error.
+#[derive(Debug)]
+pub enum InvalidAudienceTargets {
+    /// At least one named target is not owned by the author.
+    Invalid,
+    /// Listing the author's audiences failed.
+    Storage(sqlx::Error),
+}
+
+impl From<InvalidAudienceTargets> for host::error::InternalError {
+    fn from(error: InvalidAudienceTargets) -> Self {
+        match error {
+            InvalidAudienceTargets::Invalid => {
+                host::error::InternalError::validation("invalid audience")
+            }
+            InvalidAudienceTargets::Storage(error) => host::error::InternalError::storage(error),
+        }
+    }
+}
+
+/// Validates that each named audience target belongs to `author_user_id`.
+///
+/// The lookup is author-scoped, so a foreign identifier and an identifier that
+/// does not exist produce the same [`InvalidAudienceTargets::Invalid`] error.
+///
+/// # Errors
+///
+/// Returns [`InvalidAudienceTargets::Invalid`] when any named target is not
+/// owned by the author, or [`InvalidAudienceTargets::Storage`] when the
+/// author-scoped lookup fails.
+pub async fn validate_named_audience_targets(
+    storage: &dyn AudienceStorage,
+    author_user_id: UserId,
+    targets: &[common::visibility::AudienceTarget],
+) -> Result<(), InvalidAudienceTargets> {
+    let named: BTreeSet<_> = targets
+        .iter()
+        .filter_map(|target| match target {
+            common::visibility::AudienceTarget::Named(id) => Some(*id),
+            common::visibility::AudienceTarget::Public
+            | common::visibility::AudienceTarget::Private
+            | common::visibility::AudienceTarget::Subscribers => None,
+        })
+        .collect();
+    if named.is_empty() {
+        return Ok(());
+    }
+
+    let allowed: BTreeSet<_> = storage
+        .list_audiences(author_user_id)
+        .await
+        .map_err(InvalidAudienceTargets::Storage)?
+        .into_iter()
+        .map(|audience| audience.audience_id)
+        .collect();
+    if named.is_subset(&allowed) {
+        Ok(())
+    } else {
+        Err(InvalidAudienceTargets::Invalid)
     }
 }
 
@@ -345,10 +410,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::AudienceError;
+    use super::{AudienceError, InvalidAudienceTargets, validate_named_audience_targets};
     use crate::test_support::{Backend, SeedUser, backends};
     use common::test_support::parse_audience_name;
     use common::time::UtcInstant;
+    use common::visibility::AudienceTarget;
     use host::error::{ErrorKind, InternalError};
     use rstest::*;
     use rstest_reuse::*;
@@ -427,6 +493,53 @@ mod tests {
         );
     }
 
+    #[apply(backends)]
+    #[tokio::test]
+    async fn named_target_validation_is_author_scoped_and_opaque(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let author = SeedUser::new().seed(&env.state).await;
+        let other = SeedUser::new().seed(&env.state).await;
+        let owned = env
+            .state
+            .audiences
+            .create_audience(author.user_id, &parse_audience_name("Owned"))
+            .await
+            .unwrap();
+        let foreign = env
+            .state
+            .audiences
+            .create_audience(other.user_id, &parse_audience_name("Foreign"))
+            .await
+            .unwrap();
+
+        validate_named_audience_targets(
+            env.state.audiences.as_ref(),
+            author.user_id,
+            &[AudienceTarget::Public, AudienceTarget::Named(owned)],
+        )
+        .await
+        .unwrap();
+
+        let foreign = validate_named_audience_targets(
+            env.state.audiences.as_ref(),
+            author.user_id,
+            &[AudienceTarget::Named(foreign)],
+        )
+        .await
+        .unwrap_err();
+        let unknown = validate_named_audience_targets(
+            env.state.audiences.as_ref(),
+            author.user_id,
+            &[AudienceTarget::Named(common::ids::AudienceId::from(
+                999_999,
+            ))],
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(foreign, InvalidAudienceTargets::Invalid));
+        assert!(matches!(unknown, InvalidAudienceTargets::Invalid));
+    }
+
     // Each variant's `(kind, public_message)` is the wire projection; these pin it.
     #[test]
     fn from_audience_error_maps_variants() {
@@ -444,5 +557,12 @@ mod tests {
         let storage: InternalError = AudienceError::Storage(sqlx::Error::PoolClosed).into();
         assert_eq!(storage.kind(), ErrorKind::Storage);
         assert_eq!(storage.public_message(), "storage operation failed");
+    }
+
+    #[test]
+    fn invalid_audience_target_storage_failure_is_masked_as_storage() {
+        let error: InternalError = InvalidAudienceTargets::Storage(sqlx::Error::PoolClosed).into();
+        assert_eq!(error.kind(), ErrorKind::Storage);
+        assert_eq!(error.public_message(), "storage operation failed");
     }
 }

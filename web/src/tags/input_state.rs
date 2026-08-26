@@ -15,14 +15,15 @@ use super::input_logic::{next_suggestion, parse_committed_tag, prev_suggestion, 
 
 /// The committed `tags` plus the transient text-field / autocomplete signals.
 ///
-/// Every field is an `RwSignal` (a `Copy` handle into the reactive runtime), so the
-/// whole struct is `Copy` and can be handed to each event closure and child callback
-/// without per-signal capture. `pub` (and re-exported from `tags`) only so the
+/// Its signals and change callback are `Copy` handles into the reactive runtime, so
+/// the whole struct can be handed to each event closure and child callback without
+/// per-signal capture. `pub` (and re-exported from `tags`) only so the
 /// wasm-only `component` — which never host-compiles — doesn't leave these host-lib
 /// items looking like dead code.
 #[derive(Clone, Copy)]
 pub struct InputState {
     pub tags: RwSignal<Vec<TagSummary>>,
+    on_change: Callback<()>,
     pub input_text: RwSignal<String>,
     pub error: RwSignal<Option<String>>,
     pub suggestions: RwSignal<Vec<TagSummary>>,
@@ -37,12 +38,28 @@ impl InputState {
     pub fn new(tags: RwSignal<Vec<TagSummary>>) -> Self {
         Self {
             tags,
+            on_change: Callback::new(|()| {}),
             input_text: RwSignal::new(String::new()),
             error: RwSignal::new(None),
             suggestions: RwSignal::new(Vec::new()),
             suggestions_open: RwSignal::new(false),
             selected_idx: RwSignal::new(None),
             debounce_tick: RwSignal::new(0),
+        }
+    }
+
+    /// Notify the owning form when a committed tag collection actually changes.
+    #[must_use]
+    pub fn with_on_change(mut self, on_change: Callback<()>) -> Self {
+        self.on_change = on_change;
+        self
+    }
+
+    fn mutate_tags(self, mutate: impl FnOnce(&mut Vec<TagSummary>) -> bool) {
+        let mut changed = false;
+        self.tags.update(|tags| changed = mutate(tags));
+        if changed {
+            self.on_change.run(());
         }
     }
 
@@ -56,10 +73,24 @@ impl InputState {
     /// The one commit path — shared by the keyboard handler and the dropdown click:
     /// dedup-append `tag`, then clear the field and close the suggestions.
     pub fn commit(self, tag: TagSummary) {
-        self.tags.update(|t| push_unique(t, tag));
+        self.mutate_tags(|tags| {
+            let length = tags.len();
+            push_unique(tags, tag);
+            tags.len() != length
+        });
         self.input_text.set(String::new());
         self.error.set(None);
         self.close_suggestions();
+    }
+
+    /// Remove the chip represented by `tag`, notifying the owning form only when
+    /// that collection changed.
+    pub fn remove(self, tag: &TagSummary) {
+        self.mutate_tags(|tags| {
+            let length = tags.len();
+            tags.retain(|current| current.slug != tag.slug);
+            tags.len() != length
+        });
     }
 
     /// Apply a text-field change: mirror the value and reset the error/selection.
@@ -112,9 +143,7 @@ impl InputState {
                 true
             }
             "Backspace" if self.input_text.get().is_empty() => {
-                self.tags.update(|t| {
-                    t.pop();
-                });
+                self.mutate_tags(|tags| tags.pop().is_some());
                 false
             }
             "ArrowDown" => {

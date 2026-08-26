@@ -17,17 +17,18 @@ use super::input_state::InputState;
 ///
 /// Renders each tag in `tags` as a removable chip and emits one
 /// `<input type="hidden" name=name value=display>` per chip so an enclosing
-/// form receives a `Vec<String>`. Its behavior lives on [`InputState`].
+/// form receives a `Vec<String>`; calls `on_change` after an actual tag mutation.
 #[component]
 pub fn TagInput(
     tags: RwSignal<Vec<TagSummary>>,
+    on_change: Callback<()>,
     #[prop(default = "tags")] name: &'static str,
 ) -> impl IntoView {
-    let state = InputState::new(tags);
+    let state = InputState::new(tags).with_on_change(on_change);
 
     view! {
         <div class="j-tag-input">
-            <TagChips tags name />
+            <TagChips tags name on_remove=Callback::new(move |tag| state.remove(&tag)) />
             <input
                 type="text"
                 class="j-tag-text"
@@ -65,12 +66,16 @@ pub fn TagInput(
 /// The committed-tag chips: one removable `#tag` chip per entry, each emitting a
 /// hidden `<input name=… value=display>` so an enclosing form receives the tags.
 #[component]
-fn TagChips(tags: RwSignal<Vec<TagSummary>>, name: &'static str) -> impl IntoView {
+fn TagChips(
+    tags: RwSignal<Vec<TagSummary>>,
+    name: &'static str,
+    on_remove: Callback<TagSummary>,
+) -> impl IntoView {
     move || {
         tags.get()
             .into_iter()
             .map(|tag| {
-                let slug = tag.slug.clone();
+                let tag_for_remove = tag.clone();
                 let display = tag.display.to_string();
                 view! {
                     <span class="j-tag-chip">
@@ -80,9 +85,7 @@ fn TagChips(tags: RwSignal<Vec<TagSummary>>, name: &'static str) -> impl IntoVie
                             type="button"
                             class="j-tag-chip-remove"
                             aria-label="Remove tag"
-                            on:click=move |_| {
-                                tags.update(|t| t.retain(|x| x.slug != slug));
-                            }
+                            on:click=move |_| on_remove.run(tag_for_remove.clone())
                         >
                             "\u{00d7}"
                         </button>

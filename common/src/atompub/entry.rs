@@ -158,22 +158,43 @@ fn prune_empty_extensions(entry: &mut Entry) {
 // Draft flag (app:control/app:draft) helpers
 // ---------------------------------------------------------------------------
 
+/// Returns the explicit `app:control/app:draft` marker when present.
+///
+/// `Some(true)` is RFC 5023's `yes` value; any other explicit marker value is
+/// `Some(false)`. This preserves the distinction between an explicit
+/// non-draft marker and no marker, which callers that merge lifecycle sources
+/// need. Multiple valid markers retain [`is_draft`]'s established meaning:
+/// `yes` wins.
+#[must_use]
+pub fn draft_marker(entry: &Entry) -> Option<bool> {
+    markers_in(entry, APP_NS, "control")
+        .filter_map(|(_, control)| control_draft_marker(&entry.namespaces, control))
+        .reduce(|draft, marker| draft || marker)
+}
+
 /// Returns true when the entry carries `app:control/app:draft = yes`.
 #[must_use]
 pub fn is_draft(entry: &Entry) -> bool {
-    markers_in(entry, APP_NS, "control")
-        .any(|(_, control)| control_marks_draft(&entry.namespaces, control))
+    draft_marker(entry).unwrap_or(false)
 }
 
-fn control_marks_draft(namespaces: &BTreeMap<String, String>, control: &Extension) -> bool {
-    control.children.get("draft").is_some_and(|drafts| {
-        drafts.iter().any(|d| {
-            child_in_namespace(namespaces, &control.attrs, d, APP_NS)
-                && d.value
-                    .as_deref()
-                    .is_some_and(|v| v.trim().eq_ignore_ascii_case("yes"))
-        })
-    })
+fn control_draft_marker(
+    namespaces: &BTreeMap<String, String>,
+    control: &Extension,
+) -> Option<bool> {
+    let drafts = control.children.get("draft")?;
+    let mut found = false;
+    let mut is_draft = false;
+    for draft in drafts {
+        if child_in_namespace(namespaces, &control.attrs, draft, APP_NS) {
+            found = true;
+            is_draft |= draft
+                .value
+                .as_deref()
+                .is_some_and(|v| v.trim().eq_ignore_ascii_case("yes"));
+        }
+    }
+    found.then_some(is_draft)
 }
 
 /// Sets or clears the `app:control/app:draft` marker on an entry.
@@ -802,6 +823,33 @@ mod tests {
                 .expect("serialize")
                 .contains("app:draft")
         );
+    }
+
+    #[test]
+    fn draft_marker_preserves_explicit_non_draft_presence() {
+        let absent = r#"<entry xmlns="http://www.w3.org/2005/Atom"><title>T</title></entry>"#
+            .parse::<Entry>()
+            .expect("parse");
+        let explicit_no =
+            r#"<entry xmlns="http://www.w3.org/2005/Atom" xmlns:app="http://www.w3.org/2007/app">
+  <title>T</title>
+  <app:control><app:draft>no</app:draft></app:control>
+</entry>"#
+                .parse::<Entry>()
+                .expect("parse");
+        let explicit_yes =
+            r#"<entry xmlns="http://www.w3.org/2005/Atom" xmlns:app="http://www.w3.org/2007/app">
+  <title>T</title>
+  <app:control><app:draft>yes</app:draft></app:control>
+</entry>"#
+                .parse::<Entry>()
+                .expect("parse");
+
+        assert_eq!(draft_marker(&absent), None);
+        assert_eq!(draft_marker(&explicit_no), Some(false));
+        assert_eq!(draft_marker(&explicit_yes), Some(true));
+        assert!(!is_draft(&explicit_no));
+        assert!(is_draft(&explicit_yes));
     }
 
     #[test]

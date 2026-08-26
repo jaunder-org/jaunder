@@ -15,10 +15,14 @@
 use std::str::FromStr;
 
 use macros::StrNewtype;
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::media::ContentHash;
+use crate::{
+    media::ContentHash, post_body::PostBody, post_summary::PostSummary, post_title::PostTitle,
+    render::PostFormat, tag::TagLabel,
+};
 
 /// A strong HTTP `ETag` — a double-quoted opaque validator (RFC 7232). The wrapped
 /// `String` is private, so the only ways in are the validating [`FromStr`] (for stored /
@@ -127,6 +131,43 @@ impl ETag {
         s.push('"');
         ETag(s)
     }
+}
+
+/// Computes the canonical strong validator for a Post's mutable content.
+///
+/// This deliberately serializes the historical `AtomPub` projection byte-for-byte:
+/// field order, `format`'s display spelling, tag order, and the boolean draft
+/// projection are part of the validator contract. Storage-specific ids and
+/// timestamps are absent so an idempotent publish leaves the value unchanged.
+#[must_use]
+pub fn post_content_etag<'a>(
+    title: Option<&'a PostTitle>,
+    body: &'a PostBody,
+    format: &'a PostFormat,
+    summary: Option<&'a PostSummary>,
+    tags: impl IntoIterator<Item = &'a TagLabel>,
+    draft: bool,
+) -> ETag {
+    #[derive(Serialize)]
+    struct Content<'a> {
+        title: Option<&'a PostTitle>,
+        body: &'a PostBody,
+        format: String,
+        summary: Option<&'a PostSummary>,
+        tags: Vec<&'a TagLabel>,
+        draft: bool,
+    }
+
+    let content = Content {
+        title,
+        body,
+        format: format.to_string(),
+        summary,
+        tags: tags.into_iter().collect(),
+        draft,
+    };
+    let bytes = serde_json::to_vec(&content).unwrap_or_else(|_| Vec::new());
+    ETag::sha256_of(bytes)
 }
 
 #[cfg(test)]

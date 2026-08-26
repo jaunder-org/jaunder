@@ -121,6 +121,14 @@ impl From<common::tag::TagValidationError> for HandlerError {
     }
 }
 
+impl From<common::org::OrgMetadataError> for HandlerError {
+    /// The parsed Org metadata is request input; neither malformed metadata nor
+    /// a metadata-only document may reach persistence.
+    fn from(_: common::org::OrgMetadataError) -> Self {
+        HandlerError::BadRequest
+    }
+}
+
 impl From<common::post_body::InvalidPostBody> for HandlerError {
     /// An entry whose content is nothing but blank lines describes no post, so it is
     /// the client's error — the same `400` the service layer's `EmptyPost` earns
@@ -134,7 +142,7 @@ impl From<storage::PerformCreationError> for HandlerError {
     fn from(err: storage::PerformCreationError) -> Self {
         use storage::PerformCreationError as E;
         match err {
-            E::EmptyPost | E::InvalidSlug(_) => HandlerError::BadRequest,
+            E::EmptyPost | E::InvalidSlug(_) | E::BookkeepingMismatch => HandlerError::BadRequest,
             // Exhausted/CreatedNotFound/Storage are all internal failures.
             error => internal(error),
         }
@@ -145,7 +153,8 @@ impl From<storage::PerformUpdateError> for HandlerError {
     fn from(err: storage::PerformUpdateError) -> Self {
         use storage::PerformUpdateError as E;
         match err {
-            E::EmptyPost => HandlerError::BadRequest,
+            E::EmptyPost | E::BookkeepingMismatch => HandlerError::BadRequest,
+            E::StaleContent => HandlerError::PreconditionFailed,
             E::NotFound | E::Unauthorized => HandlerError::NotFound,
             error @ E::Storage(_) => internal(error),
         }
@@ -255,6 +264,10 @@ mod tests {
             StatusCode::BAD_REQUEST
         );
         assert_eq!(
+            status(PerformCreationError::BookkeepingMismatch.into()),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
             status(PerformCreationError::CreatedNotFound.into()),
             StatusCode::INTERNAL_SERVER_ERROR
         );
@@ -269,6 +282,14 @@ mod tests {
         assert_eq!(
             status(PerformUpdateError::EmptyPost.into()),
             StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            status(PerformUpdateError::BookkeepingMismatch.into()),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            status(PerformUpdateError::StaleContent.into()),
+            StatusCode::PRECONDITION_FAILED
         );
         assert_eq!(
             status(PerformUpdateError::NotFound.into()),

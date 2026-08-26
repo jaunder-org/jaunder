@@ -12,8 +12,8 @@ use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, SeedRawPost, SeedUser, TestEnv, UpdateRawPost, backends};
 use storage::{
-    CreatePostError, PostFormat, PostUpdate, PublishUpdate, RenderedPostContent, UpdatePostError,
-    create_rendered_post, perform_post_update,
+    CreatePostError, PostBookkeepingExpectation, PostFormat, PostUpdate, PublishUpdate,
+    RenderedPostContent, UpdatePostError, create_rendered_post, perform_post_update,
 };
 
 use super::fixtures::{anon_by_tag, open_pool};
@@ -155,6 +155,8 @@ fn update_input<'a>(
         publish,
         summary: None,
         audiences: vec![AudienceTarget::Public],
+        request_clock: common::time::UtcInstant::now(),
+        expectations: PostBookkeepingExpectation::default(),
     }
 }
 
@@ -635,6 +637,7 @@ async fn create_rendered_post_markdown_renders_and_stores(#[case] backend: Backe
             summary: None,
             audiences: vec![AudienceTarget::Public],
             idempotency_key: None,
+            expectations: PostBookkeepingExpectation::default(),
         },
     )
     .await
@@ -676,6 +679,7 @@ async fn create_rendered_post_org_renders_and_stores(#[case] backend: Backend) {
             summary: None,
             audiences: vec![AudienceTarget::Public],
             idempotency_key: None,
+            expectations: PostBookkeepingExpectation::default(),
         },
     )
     .await
@@ -725,6 +729,7 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
             summary: None,
             audiences: vec![AudienceTarget::Public],
             idempotency_key: None,
+            expectations: PostBookkeepingExpectation::default(),
         },
     )
     .await
@@ -854,6 +859,8 @@ async fn perform_post_update_markdown_renders_and_updates(#[case] backend: Backe
             publish: PublishUpdate::Unpublish,
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            request_clock: common::time::UtcInstant::now(),
+            expectations: PostBookkeepingExpectation::default(),
         },
     )
     .await
@@ -894,6 +901,8 @@ async fn perform_post_update_org_renders_and_updates(#[case] backend: Backend) {
             publish: PublishUpdate::Unpublish,
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            request_clock: common::time::UtcInstant::now(),
+            expectations: PostBookkeepingExpectation::default(),
         },
     )
     .await

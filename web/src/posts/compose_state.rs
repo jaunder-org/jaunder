@@ -62,6 +62,10 @@ pub struct ComposeState {
     /// renders the control; the compact composer leaves it empty (publish-now).
     pub publish_at: RwSignal<String>,
     pub tags: RwSignal<Vec<TagSummary>>,
+    /// Whether the author explicitly supplied the current tag collection. New
+    /// and freshly-seeded editors leave this false so Org header metadata can
+    /// fill the absence; changing tags makes even an empty collection explicit.
+    tags_supplied: RwSignal<bool>,
     pub audience: RwSignal<AudienceSelection>,
 }
 
@@ -79,6 +83,7 @@ impl ComposeState {
             summary_field: Field::<PostSummary>::optional(),
             publish_at: RwSignal::new(String::new()),
             tags: RwSignal::new(Vec::new()),
+            tags_supplied: RwSignal::new(false),
             audience: RwSignal::new(AudienceSelection {
                 base: AudienceBase::Public,
                 named: Vec::new(),
@@ -105,9 +110,9 @@ impl ComposeState {
         slug_override: Option<Slug>,
     ) -> PostInputs {
         let (publish, publish_at) = match publication {
-            PublicationIntent::Draft => (false, None),
-            PublicationIntent::PublishNow => (true, None),
-            PublicationIntent::PublishAt(at) => (true, Some(at)),
+            PublicationIntent::Draft => (Some(false), None),
+            PublicationIntent::PublishNow => (Some(true), None),
+            PublicationIntent::PublishAt(at) => (Some(true), Some(at)),
         };
         PostInputs {
             body,
@@ -115,10 +120,23 @@ impl ComposeState {
             slug_override,
             publish,
             publish_at,
-            tags: Some(self.tags.get().into_iter().map(|t| t.display).collect()),
+            tags: self
+                .tags_supplied
+                .get()
+                .then(|| self.tags.get().into_iter().map(|t| t.display).collect()),
             summary: self.summary_field.parsed(),
             audience: Some(self.audience.get()),
         }
+    }
+
+    /// Mark the tag collection as explicitly supplied after a tag-input mutation.
+    ///
+    /// The tag widget owns its interaction paths, so callers hand this callback to
+    /// it rather than duplicating presence bookkeeping in each event handler.
+    #[must_use]
+    pub fn tag_input_changed(&self) -> Callback<()> {
+        let tags_supplied = self.tags_supplied;
+        Callback::new(move |()| tags_supplied.set(true))
     }
 
     /// Load an existing post's contents into the fields this bundle owns.
@@ -139,6 +157,7 @@ impl ComposeState {
         self.summary_field
             .set_input(fetched.post.summary.as_deref().unwrap_or_default());
         self.tags.set(fetched.post.tags.clone());
+        self.tags_supplied.set(false);
     }
 
     /// Empty the composer for the next post, after a successful create.
@@ -151,6 +170,7 @@ impl ComposeState {
         self.summary_field.reset();
         self.publish_at.set(String::new());
         self.tags.set(Vec::new());
+        self.tags_supplied.set(false);
     }
 }
 
@@ -231,17 +251,21 @@ mod tests {
 
             let draft = state.inputs(body.clone(), PublicationIntent::Draft, None);
             assert_eq!(draft.body.as_ref(), "hello");
-            assert!(!draft.publish);
+            assert_eq!(draft.publish, Some(false));
             assert_eq!(draft.publish_at, None);
             assert_eq!(draft.format, PostFormat::Markdown);
             assert!(draft.slug_override.is_none());
+            assert_eq!(
+                draft.tags, None,
+                "an untouched new composer leaves Org header tags absent"
+            );
 
             let now = state.inputs(body.clone(), PublicationIntent::PublishNow, None);
-            assert!(now.publish);
+            assert_eq!(now.publish, Some(true));
             assert_eq!(now.publish_at, None);
 
             let scheduled = state.inputs(body, PublicationIntent::PublishAt(scheduled_at), None);
-            assert!(scheduled.publish);
+            assert_eq!(scheduled.publish, Some(true));
             assert_eq!(scheduled.publish_at, Some(scheduled_at));
         });
     }
@@ -414,10 +438,51 @@ mod tests {
             assert_eq!(state.body.value.get(), "raw");
             assert_eq!(state.format.get(), PostFormat::Markdown);
             assert_eq!(state.tags.get().len(), 1);
+            let inputs = state.inputs(
+                "edited body".parse().expect("a non-blank body parses"),
+                PublicationIntent::PublishNow,
+                None,
+            );
+            assert_eq!(
+                inputs.tags, None,
+                "loaded tags remain implicit until the author changes them"
+            );
             assert_eq!(
                 state.summary_field.value.get(),
                 "",
                 "a post with no summary seeds an empty field, not the string \"None\""
+            );
+        });
+    }
+
+    #[test]
+    fn tag_interactions_make_even_an_empty_collection_explicit() {
+        with_owner(|| {
+            let state = ComposeState::new();
+            let input =
+                crate::tags::InputState::new(state.tags).with_on_change(state.tag_input_changed());
+            let tag = crate::posts::render::test_fixtures::sample_post()
+                .post
+                .tags
+                .into_iter()
+                .next()
+                .expect("the sample post has a tag");
+            let body: PostBody = "body".parse().expect("a non-blank body parses");
+
+            input.commit(tag.clone());
+            assert_eq!(
+                state
+                    .inputs(body.clone(), PublicationIntent::PublishNow, None)
+                    .tags,
+                Some(vec![tag.display.clone()]),
+                "adding a tag supplies the structured collection"
+            );
+
+            input.remove(&tag);
+            assert_eq!(
+                state.inputs(body, PublicationIntent::PublishNow, None).tags,
+                Some(Vec::new()),
+                "clearing tags after interaction remains an explicit empty collection"
             );
         });
     }

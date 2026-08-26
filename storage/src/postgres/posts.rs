@@ -2,11 +2,11 @@ use async_trait::async_trait;
 use sqlx::{Pool, Postgres, QueryBuilder};
 
 use crate::posts::{
-    DELETE_POST_TAG_BY_SLUG, INSERT_POST_TAG, MediaReferenceEvidence, PostMediaReferenceBackfill,
-    PostOwnershipRow, PostTagRow, SELECT_POST_TAGS, UPSERT_TAG_RETURNING_ID,
+    DELETE_POST_TAG_BY_SLUG, INSERT_POST_TAG, MediaReferenceEvidence, PostBookkeepingRow,
+    PostMediaReferenceBackfill, PostTagRow, SELECT_POST_TAGS, UPSERT_TAG_RETURNING_ID,
     media_advisory_lock_keys, media_lock_set, post_tag_diff, post_tags_from_rows,
     push_live_media_reference_predicate, push_media_reference_evidence_cte,
-    push_owner_media_reference_from_where, replace_legacy_post_media,
+    push_owner_media_reference_from_where, replace_legacy_post_media, update_expectation_error,
 };
 use crate::{
     InstanceId, PostDialect, PostRecord, PostStore, PublishUpdate, RenderedHtml, TaggingError,
@@ -14,7 +14,12 @@ use crate::{
 };
 use common::ids::{PostId, TagId, UserId};
 use common::tag::TagLabel;
-use common::time::UtcInstant;
+
+type MediaRefRow = (
+    common::media::MediaSource,
+    common::media::ContentHash,
+    common::media::Filename,
+);
 
 pub(crate) fn finish_post_update_rejection(
     primary: Result<PostRecord, UpdatePostError>,
@@ -27,6 +32,23 @@ pub(crate) fn finish_post_update_rejection(
         host::error::ErrorClass::Transient,
         "storage.postgres.post_update.rollback_domain_rejection",
     )
+}
+
+async fn locked_update_expectation_error(
+    tx: &mut sqlx::Transaction<'_, Postgres>,
+    post_id: PostId,
+    existing: &PostBookkeepingRow,
+    input: &UpdatePostInput,
+) -> Result<Option<UpdatePostError>, sqlx::Error> {
+    let tags = sqlx::query_scalar::<_, TagLabel>(
+        "SELECT pt.tag_display FROM post_tags pt \
+         JOIN tags t ON t.tag_id = pt.tag_id \
+         WHERE pt.post_id = $1 ORDER BY t.tag_slug COLLATE \"C\"",
+    )
+    .bind(post_id)
+    .fetch_all(&mut **tx)
+    .await?;
+    Ok(update_expectation_error(post_id, existing, &tags, input))
 }
 
 pub(crate) fn finish_post_tags_not_found(
@@ -85,14 +107,15 @@ impl PostDialect for Postgres {
         input: &UpdatePostInput,
     ) -> Result<PostRecord, UpdatePostError> {
         let mut tx = pool.begin().await?;
-        let now = UtcInstant::now();
+        let now = input.request_clock;
 
         // FOR UPDATE locks the row for the read-then-write: it stops a concurrent
         // edit from slipping between this ownership/liveness check and the UPDATE
         // below (ADR-0021 / #52). SQLite needs no equivalent — its transaction
         // already serializes writers.
-        let existing = sqlx::query_as::<_, PostOwnershipRow>(
-            "SELECT user_id, deleted_at FROM posts WHERE post_id = $1 FOR UPDATE",
+        let existing = sqlx::query_as::<_, PostBookkeepingRow>(
+            "SELECT user_id, deleted_at, title, slug, body, format, summary, published_at
+             FROM posts WHERE post_id = $1 FOR UPDATE",
         )
         .bind(post_id)
         .fetch_optional(&mut *tx)
@@ -105,23 +128,27 @@ impl PostDialect for Postgres {
                     tx.rollback().await,
                 );
             }
-            Some((owner_id, deleted_at)) if owner_id != editor_user_id || deleted_at.is_some() => {
+            Some(existing)
+                if existing.user_id != editor_user_id || existing.deleted_at.is_some() =>
+            {
                 return finish_post_update_rejection(
                     Err(UpdatePostError::Unauthorized),
                     tx.rollback().await,
                 );
             }
-
-            Some(_) => {}
+            Some(existing) => {
+                if let Some(error) =
+                    locked_update_expectation_error(&mut tx, post_id, &existing, input).await?
+                {
+                    return finish_post_update_rejection(Err(error), tx.rollback().await);
+                }
+            }
         }
-        let old_media: Vec<(
-            common::media::MediaSource,
-            common::media::ContentHash,
-            common::media::Filename,
-        )> = sqlx::query_as("SELECT source, sha256, filename FROM post_media WHERE post_id = $1")
-            .bind(post_id)
-            .fetch_all(&mut *tx)
-            .await?;
+        let old_media: Vec<MediaRefRow> =
+            sqlx::query_as("SELECT source, sha256, filename FROM post_media WHERE post_id = $1")
+                .bind(post_id)
+                .fetch_all(&mut *tx)
+                .await?;
         let mut locked_media = media_lock_set(input.rendered.media());
         locked_media.extend(old_media.into_iter().map(|(source, sha256, filename)| {
             common::media::MediaRef {
@@ -354,10 +381,17 @@ mod tests {
 
     #[test]
     fn continuation_reporting_rollback_failures_preserve_post_domain_rejections_and_report_once() {
-        for primary in [UpdatePostError::NotFound, UpdatePostError::Unauthorized] {
+        for primary in [
+            UpdatePostError::NotFound,
+            UpdatePostError::Unauthorized,
+            UpdatePostError::BookkeepingMismatch,
+            UpdatePostError::StaleContent,
+        ] {
             let expected = match primary {
                 UpdatePostError::NotFound => "not-found",
                 UpdatePostError::Unauthorized => "unauthorized",
+                UpdatePostError::BookkeepingMismatch => "bookkeeping-mismatch",
+                UpdatePostError::StaleContent => "stale-content",
                 UpdatePostError::Internal(_) => unreachable!("test variants are domain errors"),
             };
             let (result, trace) = crate::helpers::swallowed_test::capture(|| {
@@ -368,6 +402,11 @@ mod tests {
                     (&result, expected),
                     (Err(UpdatePostError::NotFound), "not-found")
                         | (Err(UpdatePostError::Unauthorized), "unauthorized")
+                        | (
+                            Err(UpdatePostError::BookkeepingMismatch),
+                            "bookkeeping-mismatch"
+                        )
+                        | (Err(UpdatePostError::StaleContent), "stale-content")
                 ),
                 "primary variant changed: {result:?}"
             );

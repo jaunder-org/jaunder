@@ -46,17 +46,68 @@ use {
     crate::error::InternalError,
     crate::feed_events::enqueue_feed_events,
     crate::viewer::viewer_identity,
-    common::tag::Tag,
+    common::{
+        org::{
+            OrgNormalization, OrgOperation, OrgStructuredMetadata, Presence, PublicationState,
+            normalize_org,
+        },
+        tag::Tag,
+    },
     leptos::prelude::*,
     std::{collections::BTreeSet, sync::Arc},
     storage::{
-        FeedEventStorage, PostCreation, PostRecord, PostStorage, PostUpdate, PublishUpdate,
-        SiteConfigStorage, fetch_post_record, keyset_cursor, perform_post_creation,
-        perform_post_update, scheduled_keyset_cursor, to_post_cursor, to_scheduled_post_cursor,
-        wire_cursor, wire_scheduled_cursor,
+        AudienceStorage, FeedEventStorage, PerformUpdateError, PostBookkeepingExpectation,
+        PostCreation, PostRecord, PostStorage, PostUpdate, PublishUpdate, SiteConfigStorage,
+        fetch_post_record, keyset_cursor, perform_post_creation, perform_post_update,
+        scheduled_keyset_cursor, to_post_cursor, to_scheduled_post_cursor, wire_cursor,
+        wire_scheduled_cursor,
     },
 };
 
+/// Builds structured lifecycle only when the transport explicitly supplied a
+/// publication control. Omission lets an Org header lifecycle take effect.
+#[cfg(feature = "server")]
+fn structured_lifecycle(
+    publish: Option<bool>,
+    publish_at: Option<UtcInstant>,
+    request_clock: UtcInstant,
+) -> Presence<PublicationState> {
+    match publish {
+        None => Presence::Absent,
+        Some(false) => Presence::Present(PublicationState::Draft),
+        Some(true) => match publish_at {
+            Some(at) if at.value() > request_clock.value() => {
+                Presence::Present(PublicationState::Scheduled(at))
+            }
+            Some(at) => Presence::Present(PublicationState::Published(at)),
+            None => Presence::Present(PublicationState::Published(request_clock)),
+        },
+    }
+}
+
+/// Normalizes an Org request after preserving the web wire's actual field
+/// presence. Non-Org requests never reach this seam.
+#[cfg(feature = "server")]
+fn normalize_web_org(
+    body: &PostBody,
+    structured: OrgStructuredMetadata,
+    operation: OrgOperation,
+    request_clock: UtcInstant,
+) -> Result<OrgNormalization, InternalError> {
+    normalize_org(body.as_ref(), structured, operation, request_clock)
+        .map_err(|error| InternalError::validation(error.to_string()))
+}
+
+#[cfg(feature = "server")]
+async fn validate_org_audiences(
+    targets: &[AudienceTarget],
+    author_user_id: common::ids::UserId,
+) -> Result<(), InternalError> {
+    let audiences = expect_context::<Arc<dyn AudienceStorage>>();
+    storage::validate_named_audience_targets(audiences.as_ref(), author_user_id, targets)
+        .await
+        .map_err(InternalError::from)
+}
 #[cfg(feature = "server")]
 fn unpublished_post_from_record(post: PostRecord) -> UnpublishedPost {
     let summary_label = post.fallback_summary_label();
@@ -145,7 +196,7 @@ pub struct PostInputs {
     pub body: PostBody,
     pub format: PostFormat,
     pub slug_override: Option<Slug>,
-    pub publish: bool,
+    pub publish: Option<bool>,
     pub publish_at: Option<UtcInstant>,
     pub tags: Option<Vec<TagLabel>>,
     pub summary: Option<PostSummary>,
@@ -161,6 +212,7 @@ pub struct PostInputs {
 /// `datetime-local` value to UTC before sending.
 #[macros::server(input = Json, skip_all)]
 pub async fn create(post: PostInputs) -> WebResult<SavedPost> {
+    let request_clock = UtcInstant::now();
     let PostInputs {
         body,
         format,
@@ -177,22 +229,84 @@ pub async fn create(post: PostInputs) -> WebResult<SavedPost> {
     // The wire delivers `Vec<TagLabel>` directly: each tag is validated at
     // arg-decode (ADR-0065) and a `TagLabel` is never empty, so the body only
     // dedups and enforces the per-post cap.
-    let validated_tags = common::tag::parse_and_validate_tags(tags.unwrap_or_default())?;
+    let structured_tags = tags.map(common::tag::parse_and_validate_tags).transpose()?;
+    let structured_audiences = audience
+        .as_ref()
+        .map(|selection| audience_targets_or_public(Some(selection)));
 
-    // Publish + a supplied time = scheduled (future) or backdated (past);
-    // publish + no time = live now; not publishing = draft (NULL).
-    let published_at = publish.then(|| publish_at.unwrap_or_else(UtcInstant::now));
-    // `PostSummary`'s `FromStr` already trims and rejects empty at arg-decode
-    // (ADR-0065), so the value is passed through typed — no `non_empty_owned`
-    // normalization needed.
-    let audiences = audience_targets_or_public(audience.as_ref());
+    let (body, title, summary, audiences, published_at, expectations, validated_tags) = if format
+        == PostFormat::Org
+    {
+        let normalized = normalize_web_org(
+            &body,
+            OrgStructuredMetadata {
+                title: Presence::Absent,
+                summary: summary.map_or(Presence::Absent, Presence::Present),
+                tags: structured_tags.map_or(Presence::Absent, Presence::Present),
+                audiences: structured_audiences.map_or(Presence::Absent, Presence::Present),
+                lifecycle: structured_lifecycle(publish, publish_at, request_clock),
+            },
+            OrgOperation::Create,
+            request_clock,
+        )?;
+        let metadata = normalized.metadata;
+        let audiences = match metadata.audiences {
+            Presence::Present(audiences) => audiences,
+            Presence::Absent => audience_targets_or_public(None),
+        };
+        validate_org_audiences(&audiences, auth.user_id).await?;
+        let published_at = match metadata.lifecycle {
+            Presence::Present(PublicationState::Draft) | Presence::Absent => None,
+            Presence::Present(
+                PublicationState::Scheduled(at) | PublicationState::Published(at),
+            ) => Some(at),
+        };
+        let tags = match metadata.tags {
+            Presence::Present(tags) => tags,
+            Presence::Absent => Vec::new(),
+        };
+        (
+            normalized.body,
+            match metadata.title {
+                Presence::Present(title) => Some(title),
+                Presence::Absent => None,
+            },
+            match metadata.summary {
+                Presence::Present(summary) => Some(summary),
+                Presence::Absent => None,
+            },
+            audiences,
+            published_at,
+            normalized.bookkeeping.into(),
+            tags,
+        )
+    } else {
+        // Non-Org writes require explicit lifecycle control; unlike Org,
+        // they have no header metadata from which to derive it.
+        let publish = publish
+            .ok_or_else(|| InternalError::validation("missing required structured lifecycle"))?;
+        let published_at = if publish {
+            Some(publish_at.unwrap_or(request_clock))
+        } else {
+            None
+        };
+        (
+            body,
+            None,
+            summary,
+            structured_audiences.unwrap_or_else(|| audience_targets_or_public(None)),
+            published_at,
+            PostBookkeepingExpectation::default(),
+            structured_tags.unwrap_or_default(),
+        )
+    };
 
     let record = perform_post_creation(
         posts.as_ref(),
         PostCreation {
             user_id: auth.user_id,
             body,
-            title: None,
+            title: title.as_ref(),
             format,
             slug_override: slug_override.as_ref(),
             published_at,
@@ -200,6 +314,7 @@ pub async fn create(post: PostInputs) -> WebResult<SavedPost> {
             summary,
             audiences,
             idempotency_key: None,
+            expectations,
         },
     )
     .await?;
@@ -299,6 +414,7 @@ pub async fn get_preview(post_id: PostId) -> WebResult<EditPostPreview> {
 /// See `create` for why it crosses the boundary as a [`UtcInstant`].
 #[macros::server(input = Json, skip_all)]
 pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost> {
+    let request_clock = UtcInstant::now();
     let PostInputs {
         body,
         format,
@@ -320,18 +436,77 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost> {
         .map(|p| p.tags.iter().map(|t| t.tag_slug.clone()).collect())
         .unwrap_or_default();
 
-    // Validate tags up-front so a malformed input rejects before any
-    // post mutation lands. The wire delivers `Vec<TagLabel>` (validated at
-    // arg-decode per ADR-0065); the body only dedups and caps. `None` leaves
-    // the existing tags untouched.
-    let new_tags = tags.map(common::tag::parse_and_validate_tags).transpose()?;
+    // Validate tags up-front so a malformed input rejects before any post
+    // mutation lands. `None` preserves the current update surface behavior.
+    let structured_tags = tags.map(common::tag::parse_and_validate_tags).transpose()?;
+    let structured_audiences = audience
+        .as_ref()
+        .map(|selection| audience_targets_or_public(Some(selection)));
 
-    // See `create`: the typed `PostSummary` arg is already validated at
-    // decode, so no `non_empty_owned` normalization is applied here.
-    let audiences = audience_targets_or_public(audience.as_ref());
-
-    // A supplied time schedules/backdates; `None` lets storage keep an
-    // existing timestamp or stamp `now` for a not-yet-published post.
+    let (body, title, summary, audiences, publish, expectations, new_tags) = if format
+        == PostFormat::Org
+    {
+        let normalized = normalize_web_org(
+            &body,
+            OrgStructuredMetadata {
+                title: Presence::Absent,
+                summary: summary.map_or(Presence::Absent, Presence::Present),
+                tags: structured_tags.map_or(Presence::Absent, Presence::Present),
+                audiences: structured_audiences.map_or(Presence::Absent, Presence::Present),
+                lifecycle: structured_lifecycle(publish, publish_at, request_clock),
+            },
+            OrgOperation::Update { post_id },
+            request_clock,
+        )?;
+        let metadata = normalized.metadata;
+        let audiences = match metadata.audiences {
+            Presence::Present(audiences) => audiences,
+            Presence::Absent => audience_targets_or_public(None),
+        };
+        validate_org_audiences(&audiences, auth.user_id).await?;
+        let publish = match metadata.lifecycle {
+            Presence::Present(PublicationState::Draft) | Presence::Absent => {
+                PublishUpdate::Unpublish
+            }
+            Presence::Present(
+                PublicationState::Scheduled(at) | PublicationState::Published(at),
+            ) => PublishUpdate::Publish { at: Some(at) },
+        };
+        (
+            normalized.body,
+            match metadata.title {
+                Presence::Present(title) => Some(title),
+                Presence::Absent => None,
+            },
+            match metadata.summary {
+                Presence::Present(summary) => Some(summary),
+                Presence::Absent => None,
+            },
+            audiences,
+            publish,
+            normalized.bookkeeping.into(),
+            match metadata.tags {
+                Presence::Present(tags) => Some(tags),
+                Presence::Absent => None,
+            },
+        )
+    } else {
+        let publish = publish
+            .ok_or_else(|| InternalError::validation("missing required structured lifecycle"))?;
+        (
+            body,
+            None,
+            summary,
+            structured_audiences.unwrap_or_else(|| audience_targets_or_public(None)),
+            if publish {
+                PublishUpdate::Publish { at: publish_at }
+            } else {
+                PublishUpdate::Unpublish
+            },
+            PostBookkeepingExpectation::default(),
+            structured_tags,
+        )
+    };
 
     let record = perform_post_update(
         posts.as_ref(),
@@ -339,21 +514,22 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost> {
             post_id,
             editor_user_id: auth.user_id,
             body,
-            title: None,
+            title: title.as_ref(),
             format,
             slug_override: slug_override.as_ref(),
-            publish: if publish {
-                PublishUpdate::Publish { at: publish_at }
-            } else {
-                PublishUpdate::Unpublish
-            },
+            publish,
             summary,
             audiences,
+            request_clock,
+            expectations,
         },
     )
-    .await?;
-
-    let mut all_tag_slugs: BTreeSet<Tag> = old_tag_slugs;
+    .await
+    .map_err(|error| match error {
+        PerformUpdateError::StaleContent => InternalError::conflict(error.to_string()),
+        error => error.into(),
+    })?;
+    let mut all_tag_slugs = old_tag_slugs;
     if let Some(new_tags) = new_tags {
         posts.set_post_tags(post_id, &new_tags).await?;
         // Union old with new so both the vacated and the newly-occupied tag
@@ -724,7 +900,7 @@ mod tests {
             body: parse_post_body("hi"),
             format: PostFormat::Markdown,
             slug_override: None,
-            publish: false,
+            publish: Some(false),
             publish_at: None,
             tags: None,
             summary: None,
@@ -850,7 +1026,6 @@ mod server_tests {
     use super::{PostInputs, create, list_drafts, publish, update};
     use crate::error::WebError;
     use crate::test_support::auth_parts;
-    use chrono::Utc;
     use common::ids::{PostId, UserId};
     use common::pagination::PageSize;
     use common::slug::Slug;
@@ -861,12 +1036,12 @@ mod server_tests {
     use leptos::reactive::owner::Owner;
     use std::sync::Arc;
     use storage::{
-        FeedEventStorage, MockFeedEventStorage, MockPostStorage, PostFormat, PostRecord,
-        PostStorage, RenderedHtml, UpdatePostError,
+        AudienceStorage, FeedEventStorage, MockAudienceStorage, MockFeedEventStorage,
+        MockPostStorage, PostFormat, PostRecord, PostStorage, RenderedHtml, UpdatePostError,
     };
 
     fn owned_post(user_id: UserId) -> PostRecord {
-        let now = Utc::now();
+        let now = UtcInstant::now();
         PostRecord {
             post_id: PostId::from(1),
             user_id,
@@ -876,8 +1051,8 @@ mod server_tests {
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
-            created_at: UtcInstant::from(now),
-            updated_at: UtcInstant::from(now),
+            created_at: now,
+            updated_at: now,
             published_at: None,
             deleted_at: None,
             summary: None,
@@ -905,6 +1080,30 @@ mod server_tests {
             post_id: PostId::from(post_id),
             ..owned_post(UserId::from(1))
         }
+    }
+
+    #[test]
+    fn structured_lifecycle_preserves_transport_presence() {
+        use common::org::{Presence, PublicationState};
+
+        let clock: UtcInstant = "2026-08-26T12:00:00Z".parse().unwrap();
+        assert!(matches!(
+            super::structured_lifecycle(None, None, clock),
+            Presence::Absent
+        ));
+        assert!(matches!(
+            super::structured_lifecycle(Some(false), None, clock),
+            Presence::Present(PublicationState::Draft)
+        ));
+        assert!(matches!(
+            super::structured_lifecycle(Some(true), None, clock),
+            Presence::Present(PublicationState::Published(at)) if at == clock
+        ));
+        let future = common::test_support::parse_utc_instant("2026-08-26T12:01:00Z");
+        assert!(matches!(
+            super::structured_lifecycle(Some(true), Some(future), clock),
+            Presence::Present(PublicationState::Scheduled(at)) if at == future
+        ));
     }
 
     /// The probing-row twin of `listing.rs`'s
@@ -990,6 +1189,7 @@ mod server_tests {
         owner.set();
         provide_context(auth_parts(UserId::from(1), "alice"));
         provide_context(Arc::new(posts) as Arc<dyn PostStorage>);
+        provide_context(Arc::new(MockAudienceStorage::new()) as Arc<dyn AudienceStorage>);
         let mut events = MockFeedEventStorage::new();
         events.expect_enqueue_many().returning(|_| Ok(()));
         provide_context(Arc::new(events) as Arc<dyn FeedEventStorage>);
@@ -1003,7 +1203,7 @@ mod server_tests {
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
             slug_override: None,
-            publish: false,
+            publish: Some(false),
             publish_at: None,
             tags,
             summary: None,
@@ -1077,9 +1277,79 @@ mod server_tests {
             .expect_update_post()
             .returning(|_id, _user, _input| Ok(owned_post(UserId::from(1))));
         posts.expect_set_post_tags().times(0);
+
         let owner = mutation_owner(posts);
         let result = update(PostId::from(1), post_inputs(None)).await;
         drop(owner);
         result.expect("update succeeds");
+    }
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn update_org_keeps_structured_audience_and_summary() {
+        use common::test_support::parse_post_summary;
+        use common::visibility::{AudienceBase, AudienceSelection, AudienceTarget};
+
+        let mut posts = MockPostStorage::new();
+        posts
+            .expect_get_post_by_id()
+            .returning(|_id, _viewer| Ok(Some(owned_post(UserId::from(1)))));
+        posts
+            .expect_update_post()
+            .withf(|_id, _user, input| {
+                input.summary.as_deref() == Some("structured summary")
+                    && input.audiences == [AudienceTarget::Subscribers]
+            })
+            .returning(|_id, _user, _input| Ok(owned_post(UserId::from(1))));
+        let owner = mutation_owner(posts);
+        let result = update(
+            PostId::from(1),
+            PostInputs {
+                body: parse_post_body("Body"),
+                format: PostFormat::Org,
+                slug_override: None,
+                publish: Some(false),
+                publish_at: None,
+                tags: None,
+                summary: Some(parse_post_summary("structured summary")),
+                audience: Some(AudienceSelection {
+                    base: AudienceBase::Subscribers,
+                    named: vec![],
+                }),
+            },
+        )
+        .await;
+        drop(owner);
+        result.expect("update succeeds");
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn update_projects_stale_org_sync_to_conflict() {
+        let mut posts = MockPostStorage::new();
+        posts
+            .expect_get_post_by_id()
+            .returning(|_id, _viewer| Ok(Some(owned_post(UserId::from(1)))));
+        posts
+            .expect_update_post()
+            .returning(|_id, _user, _input| Err(UpdatePostError::StaleContent));
+        let owner = mutation_owner(posts);
+        let result = update(
+            PostId::from(1),
+            PostInputs {
+                body: parse_post_body(
+                    "#+PROPERTY: JAUNDER_ID 1\n#+PROPERTY: JAUNDER_SYNCED \"sha256-stale\"\n\nbody",
+                ),
+                format: PostFormat::Org,
+                slug_override: None,
+                publish: Some(false),
+                publish_at: None,
+                tags: None,
+                summary: None,
+                audience: None,
+            },
+        )
+        .await;
+        drop(owner);
+        assert!(matches!(result, Err(WebError::Conflict { .. })));
     }
 }

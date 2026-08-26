@@ -6,7 +6,10 @@
 //! (collection member) operations.
 
 use chrono::Utc;
-use common::atompub::{Category, Content, Entry, Link, Text, is_draft, set_draft, set_j_slug};
+use common::atompub::{
+    Category, Content, Entry, Link, Text, draft_marker, is_draft, set_draft, set_j_slug,
+};
+use common::org::{Presence, PublicationState};
 use common::post_body::{InvalidPostBody, PostBody};
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
@@ -27,14 +30,16 @@ pub struct PostFields {
     /// Optional summary/excerpt (validated `PostSummary`; an over-cap wire value
     /// is dropped on ingest, mirroring the lenient category handling below).
     pub summary: Option<PostSummary>,
-    /// Categories/tags extracted from the entry (author labels).
-    pub categories: Vec<TagLabel>,
-    /// Whether the entry is marked as draft.
+    /// Categories/tags extracted from the entry, preserving whether any category
+    /// elements were supplied so an explicit empty collection remains distinct
+    /// from omission when Org headers are normalized.
+    pub categories: Presence<Vec<TagLabel>>,
+    /// The entry's explicit lifecycle source. A draft marker or `<published>`
+    /// element wins over Org metadata; their absence remains absence.
+    pub lifecycle: Presence<PublicationState>,
+    /// Legacy Atom lifecycle fallback used after Org normalization when neither
+    /// wire nor header metadata supplied a lifecycle.
     pub is_draft: bool,
-    /// Explicit publication time from the entry's `<published>` element
-    /// (`None` when absent). A future time schedules the post; a past time
-    /// backdates it. The inverse of [`post_to_entry`]'s `published` mapping.
-    pub published: Option<UtcInstant>,
 }
 
 /// The wire `atom:content` `type` for a post format (ADR-0023). `Html` uses the
@@ -67,6 +72,16 @@ fn wire_to_format(content_type: Option<&str>, default: PostFormat) -> PostFormat
     }
 }
 
+/// Classifies an Atom publication instant against the single clock captured for
+/// the handler request.
+fn classify_published(published: UtcInstant, request_clock: UtcInstant) -> PublicationState {
+    if published.value() > request_clock.value() {
+        PublicationState::Scheduled(published)
+    } else {
+        PublicationState::Published(published)
+    }
+}
+
 /// Maps an incoming `AtomPub` `Entry` to Jaunder post fields.
 ///
 /// Per ADR-0023, the entry's content `type` carries the storage format as a media
@@ -86,6 +101,7 @@ fn wire_to_format(content_type: Option<&str>, default: PostFormat) -> PostFormat
 pub fn entry_to_post_fields(
     entry: &Entry,
     default_format: PostFormat,
+    request_clock: UtcInstant,
 ) -> Result<PostFields, InvalidPostBody> {
     let (ctype, value) = entry
         .content()
@@ -111,32 +127,42 @@ pub fn entry_to_post_fields(
     // boundary where a conforming term becomes a `TagLabel`. `entry_to_post_fields`
     // is infallible, so an invalid term is silently skipped here: dropping a
     // malformed term keeps one bad category from failing the whole entry (R5).
-    // Skipping is the *only* policy applied here — the set is neither deduped nor
-    // capped. The handlers run `common::tag::parse_and_validate_tags` on this vec
-    // before any write, so an over-cap entry is a `400` rather than an unbounded
-    // batched tag write (#771 D9, ADR-0092).
     let categories = entry
         .categories()
         .iter()
         .filter_map(|c| c.term().parse::<TagLabel>().ok())
         .collect();
     let is_draft = is_draft(entry);
-    // Any incoming `j:slug` is deliberately ignored (ADR-0023): the slug is a
-    // read-only server property, derived here from the title/body, never the wire.
-    // Inverse of `post_to_entry`'s `published: post.published_at.map(fixed_offset)`:
-    // read the entry's `<published>` (a fixed-offset datetime) back to UTC.
+    // A declared `app:draft` is an explicit Atom lifecycle source, including
+    // `no`; only a genuinely absent marker leaves room for Org metadata.
     let published = entry
         .published()
-        .map(|d| UtcInstant::from(d.with_timezone(&Utc)));
+        .map(|published| UtcInstant::from(published.with_timezone(&Utc)));
+    let lifecycle = match draft_marker(entry) {
+        Some(true) => Presence::Present(PublicationState::Draft),
+        Some(false) => Presence::Present(classify_published(
+            published.unwrap_or(request_clock),
+            request_clock,
+        )),
+        None => published
+            .map(|published| classify_published(published, request_clock))
+            .map_or(Presence::Absent, Presence::Present),
+    };
+    // Any incoming `j:slug` is deliberately ignored (ADR-0023): the slug is a
+    // read-only server property, derived here from the title/body, never the wire.
 
     Ok(PostFields {
         title,
         body,
         format,
         summary,
-        categories,
+        categories: if entry.categories().is_empty() {
+            Presence::Absent
+        } else {
+            Presence::Present(categories)
+        },
+        lifecycle,
         is_draft,
-        published,
     })
 }
 
@@ -285,7 +311,9 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
+        let fields =
+            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
+                .expect("valid body");
 
         assert_eq!(fields.format, PostFormat::Html);
         assert_eq!(fields.body, "<p>HTML content</p>");
@@ -303,7 +331,9 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
+        let fields =
+            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
+                .expect("valid body");
 
         assert_eq!(fields.format, PostFormat::Html);
     }
@@ -319,7 +349,9 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
+        let fields =
+            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
+                .expect("valid body");
 
         assert_eq!(fields.format, PostFormat::Markdown);
         assert_eq!(fields.body, "# Markdown");
@@ -337,7 +369,9 @@ mod tests {
 
         let entry = xml.parse::<Entry>().expect("parse entry");
         // Default is Markdown, but the explicit media type selects Org.
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
+        let fields =
+            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
+                .expect("valid body");
 
         assert_eq!(fields.format, PostFormat::Org);
         assert_eq!(fields.body, "* Org body");
@@ -355,7 +389,8 @@ mod tests {
 
         let entry = xml.parse::<Entry>().expect("parse entry");
         // Default is Org, but the explicit media type selects Markdown.
-        let fields = entry_to_post_fields(&entry, PostFormat::Org).expect("valid body");
+        let fields = entry_to_post_fields(&entry, PostFormat::Org, UtcInstant::from(Utc::now()))
+            .expect("valid body");
 
         assert_eq!(fields.format, PostFormat::Markdown);
         assert_eq!(fields.body, "# Markdown body");
@@ -372,7 +407,8 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Org).expect("valid body");
+        let fields = entry_to_post_fields(&entry, PostFormat::Org, UtcInstant::from(Utc::now()))
+            .expect("valid body");
 
         assert_eq!(fields.format, PostFormat::Org);
         assert_eq!(fields.body, "some text");
@@ -391,7 +427,10 @@ mod tests {
 
         let entry = xml.parse::<Entry>().expect("parse entry");
 
-        assert!(entry_to_post_fields(&entry, PostFormat::Markdown).is_err());
+        assert!(
+            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
+                .is_err()
+        );
     }
 
     #[test]
@@ -406,7 +445,9 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
+        let fields =
+            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
+                .expect("valid body");
 
         assert_eq!(
             fields.summary,
@@ -425,7 +466,9 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
+        let fields =
+            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
+                .expect("valid body");
 
         assert_eq!(fields.summary, None);
     }
@@ -443,9 +486,17 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
+        let fields =
+            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
+                .expect("valid body");
 
-        assert_eq!(fields.categories, vec!["rust", "programming"]);
+        assert_eq!(
+            fields.categories,
+            Presence::Present(vec![
+                "rust".parse().unwrap(),
+                "programming".parse().unwrap()
+            ])
+        );
     }
 
     #[test]
@@ -459,9 +510,11 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
+        let fields =
+            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
+                .expect("valid body");
 
-        assert_eq!(fields.categories, Vec::<TagLabel>::new());
+        assert_eq!(fields.categories, Presence::Absent);
     }
 
     #[test]
@@ -480,9 +533,14 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
+        let fields =
+            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
+                .expect("valid body");
 
-        assert_eq!(fields.categories, vec!["rust".parse::<TagLabel>().unwrap()]);
+        assert_eq!(
+            fields.categories,
+            Presence::Present(vec!["rust".parse::<TagLabel>().unwrap()])
+        );
     }
 
     #[test]
@@ -499,9 +557,41 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
+        let fields =
+            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
+                .expect("valid body");
 
         assert!(fields.is_draft);
+        assert_eq!(fields.lifecycle, Presence::Present(PublicationState::Draft));
+    }
+
+    #[test]
+    fn entry_to_post_fields_explicit_non_draft_preserves_published_instant() {
+        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom" xmlns:app="http://www.w3.org/2007/app"><title>Test</title><id>id</id><updated>2026-05-31T00:00:00Z</updated><published>2026-05-30T09:15:00Z</published><content>body</content><app:control><app:draft>no</app:draft></app:control></entry>"#;
+        let clock: UtcInstant = "2026-06-01T12:00:00Z".parse().expect("valid clock");
+        let published: UtcInstant = "2026-05-30T09:15:00Z".parse().expect("valid timestamp");
+        let entry = xml.parse::<Entry>().expect("parse entry");
+
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown, clock).expect("valid body");
+
+        assert_eq!(
+            fields.lifecycle,
+            Presence::Present(PublicationState::Published(published))
+        );
+    }
+
+    #[test]
+    fn entry_to_post_fields_explicit_non_draft_without_published_uses_request_clock() {
+        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom" xmlns:app="http://www.w3.org/2007/app"><title>Test</title><id>id</id><updated>2026-05-31T00:00:00Z</updated><content>body</content><app:control><app:draft>no</app:draft></app:control></entry>"#;
+        let clock: UtcInstant = "2026-06-01T12:00:00Z".parse().expect("valid clock");
+        let entry = xml.parse::<Entry>().expect("parse entry");
+
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown, clock).expect("valid body");
+
+        assert_eq!(
+            fields.lifecycle,
+            Presence::Present(PublicationState::Published(clock))
+        );
     }
 
     #[test]
@@ -515,9 +605,71 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
+        let fields =
+            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
+                .expect("valid body");
 
         assert!(!fields.is_draft);
+        assert_eq!(fields.lifecycle, Presence::Absent);
+    }
+
+    #[test]
+    fn entry_to_post_fields_published_without_draft_marker_uses_its_instant() {
+        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom"><title>Test</title><id>id</id><updated>2026-05-31T00:00:00Z</updated><published>2026-05-30T09:15:00Z</published><content>body</content></entry>"#;
+        let clock: UtcInstant = "2026-06-01T12:00:00Z".parse().expect("valid clock");
+        let published: UtcInstant = "2026-05-30T09:15:00Z".parse().expect("valid timestamp");
+        let entry = xml.parse::<Entry>().expect("parse entry");
+
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown, clock).expect("valid body");
+
+        assert_eq!(
+            fields.lifecycle,
+            Presence::Present(PublicationState::Published(published))
+        );
+    }
+
+    #[test]
+    fn entry_to_post_fields_future_published_without_draft_marker_is_scheduled() {
+        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom"><title>Test</title><id>id</id><updated>2026-05-31T00:00:00Z</updated><published>2026-06-02T09:15:00Z</published><content>body</content></entry>"#;
+        let clock: UtcInstant = "2026-06-01T12:00:00Z".parse().expect("valid clock");
+        let published: UtcInstant = "2026-06-02T09:15:00Z".parse().expect("valid timestamp");
+        let entry = xml.parse::<Entry>().expect("parse entry");
+
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown, clock).expect("valid body");
+
+        assert_eq!(
+            fields.lifecycle,
+            Presence::Present(PublicationState::Scheduled(published))
+        );
+    }
+
+    #[test]
+    fn entry_to_post_fields_published_at_request_clock_is_published() {
+        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom"><title>Test</title><id>id</id><updated>2026-05-31T00:00:00Z</updated><published>2026-06-01T12:00:00Z</published><content>body</content></entry>"#;
+        let clock: UtcInstant = "2026-06-01T12:00:00Z".parse().expect("valid clock");
+        let entry = xml.parse::<Entry>().expect("parse entry");
+
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown, clock).expect("valid body");
+
+        assert_eq!(
+            fields.lifecycle,
+            Presence::Present(PublicationState::Published(clock))
+        );
+    }
+
+    #[test]
+    fn entry_to_post_fields_explicit_non_draft_with_future_published_is_scheduled() {
+        let xml = r#"<entry xmlns="http://www.w3.org/2005/Atom" xmlns:app="http://www.w3.org/2007/app"><title>Test</title><id>id</id><updated>2026-05-31T00:00:00Z</updated><published>2026-06-02T09:15:00Z</published><content>body</content><app:control><app:draft>no</app:draft></app:control></entry>"#;
+        let clock: UtcInstant = "2026-06-01T12:00:00Z".parse().expect("valid clock");
+        let published: UtcInstant = "2026-06-02T09:15:00Z".parse().expect("valid timestamp");
+        let entry = xml.parse::<Entry>().expect("parse entry");
+
+        let fields = entry_to_post_fields(&entry, PostFormat::Markdown, clock).expect("valid body");
+
+        assert_eq!(
+            fields.lifecycle,
+            Presence::Present(PublicationState::Scheduled(published))
+        );
     }
 
     #[test]
@@ -531,7 +683,9 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
+        let fields =
+            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
+                .expect("valid body");
 
         assert_eq!(fields.title.as_deref(), Some("My Post Title"));
     }
@@ -546,7 +700,9 @@ mod tests {
 </entry>"#;
 
         let entry = xml.parse::<Entry>().expect("parse entry");
-        let fields = entry_to_post_fields(&entry, PostFormat::Markdown).expect("valid body");
+        let fields =
+            entry_to_post_fields(&entry, PostFormat::Markdown, UtcInstant::from(Utc::now()))
+                .expect("valid body");
 
         assert_eq!(fields.title, None);
     }

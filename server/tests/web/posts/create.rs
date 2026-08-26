@@ -429,6 +429,299 @@ async fn create_post_applies_tags_from_param(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
+async fn create_org_header_merges_structured_metadata_and_stores_canonical_body(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let session = create_user_and_session(&state).await;
+    let cookie = session.cookie();
+    let payload = serde_json::json!({
+        "post": {
+            "body": "#+TITLE: Header title\n#+DESCRIPTION: Header summary\n#+KEYWORDS: header, ignored\n#+PROPERTY: JAUNDER_AUDIENCE public\n#+PROPERTY: JAUNDER_STATUS published\n#+PROPERTY: JAUNDER_SLUG header-title\n#+PROPERTY: JAUNDER_FORMAT org\n#+UNKNOWN: preserved\n\nBody",
+            "format": "org",
+            "publish": false,
+            "tags": [],
+            "summary": "Structured summary",
+            "audience": { "base": "private", "named": [] },
+        }
+    });
+    let (status, body) = post_json(
+        &state,
+        <web::posts::Create as ServerFn>::PATH,
+        payload,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let record = state
+        .posts
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Local {
+                user_id: session.user_id,
+            },
+        )
+        .await
+        .unwrap()
+        .expect("created post exists");
+    assert_eq!(record.title.as_deref(), Some("Header title"));
+    assert_eq!(record.summary.as_deref(), Some("Structured summary"));
+    assert_eq!(record.body, "#+UNKNOWN: preserved\n\nBody\n");
+    assert!(record.tags.is_empty());
+    let (status, body) = post_form(
+        &state,
+        <web::posts::GetAudienceSelection as ServerFn>::PATH,
+        format!("post_id={}", created.post_id),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "audience body: {body}");
+    let audience: common::visibility::AudienceSelection = serde_json::from_str(&body).unwrap();
+    assert_eq!(audience.base, common::visibility::AudienceBase::Private);
+    assert!(audience.named.is_empty());
+    assert!(record.published_at.is_none());
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn create_org_uses_header_lifecycle_when_publish_is_omitted(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_user_and_session(&state).await.cookie();
+    let payload = serde_json::json!({
+        "post": {
+            "body": "#+TITLE: Header lifecycle\n#+PROPERTY: JAUNDER_STATUS published\n\nBody",
+            "format": "org",
+        }
+    });
+    let (status, body) = post_json(
+        &state,
+        <web::posts::Create as ServerFn>::PATH,
+        payload,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    assert!(
+        created.published_at.is_some(),
+        "an omitted transport lifecycle must leave the valid Org header effective"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn create_non_org_requires_publish_presence(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_user_and_session(&state).await.cookie();
+    let payload = serde_json::json!({
+        "post": {
+            "body": "No lifecycle",
+            "format": "markdown",
+        }
+    });
+    let (status, body) = post_json(
+        &state,
+        <web::posts::Create as ServerFn>::PATH,
+        payload,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn create_org_header_named_audience_is_author_scoped_and_opaque(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let author = create_user_and_session(&state).await;
+    let foreign = create_user_and_session(&state).await;
+    let cookie = author.cookie();
+    let owned = state
+        .audiences
+        .create_audience(
+            author.user_id,
+            &common::test_support::parse_audience_name("Owned"),
+        )
+        .await
+        .unwrap();
+    let foreign = state
+        .audiences
+        .create_audience(
+            foreign.user_id,
+            &common::test_support::parse_audience_name("Foreign"),
+        )
+        .await
+        .unwrap();
+
+    let payload = |audience_id| {
+        serde_json::json!({
+            "post": {
+                "body": format!("#+TITLE: Named\n#+PROPERTY: JAUNDER_AUDIENCE named:{audience_id}\n#+PROPERTY: JAUNDER_STATUS draft\n\nBody"),
+                "format": "org",
+                "publish": false,
+            }
+        })
+    };
+    let (status, body) = post_json(
+        &state,
+        <web::posts::Create as ServerFn>::PATH,
+        payload(owned),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let (status, body) = post_form(
+        &state,
+        <web::posts::GetAudienceSelection as ServerFn>::PATH,
+        format!("post_id={}", created.post_id),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "audience body: {body}");
+    let selection: common::visibility::AudienceSelection = serde_json::from_str(&body).unwrap();
+    assert_eq!(selection.named, vec![owned]);
+
+    let (foreign_status, foreign_body) = post_json(
+        &state,
+        <web::posts::Create as ServerFn>::PATH,
+        payload(foreign),
+        Some(&cookie),
+    )
+    .await;
+    let (unknown_status, unknown_body) = post_json(
+        &state,
+        <web::posts::Create as ServerFn>::PATH,
+        payload(common::ids::AudienceId::from(999_999)),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        foreign_status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "body: {foreign_body}"
+    );
+    assert_eq!(
+        unknown_status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "body: {unknown_body}"
+    );
+    assert_eq!(
+        foreign_body, unknown_body,
+        "audience existence must remain opaque"
+    );
+    let drafts = state
+        .posts
+        .list_drafts_by_user(
+            author.user_id,
+            None,
+            parse_row_limit("10"),
+            common::time::UtcInstant::now(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        drafts.len(),
+        1,
+        "rejected audience writes must not create posts"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn create_org_publish_now_overrides_header_draft(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let cookie = create_user_and_session(&state).await.cookie();
+    let payload = serde_json::json!({
+        "post": {
+            "body": "#+TITLE: Publish now\n#+PROPERTY: JAUNDER_STATUS draft\n\nBody",
+            "format": "org",
+            "publish": true,
+        }
+    });
+    let (status, body) = post_json(
+        &state,
+        <web::posts::Create as ServerFn>::PATH,
+        payload,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    assert!(
+        created.published_at.is_some(),
+        "structured publish-now wins over header draft"
+    );
+}
+#[apply(backends)]
+#[tokio::test]
+async fn create_org_metadata_failures_do_not_create_rows(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let session = create_user_and_session(&state).await;
+    let cookie = session.cookie();
+    let cases = [
+        (
+            "#+PROPERTY: JAUNDER_STATUS draft",
+            serde_json::json!({ "publish": false }),
+        ),
+        (
+            "#+PROPERTY: JAUNDER_STATUS scheduled\n#+DATE: [2026-02-30 Mon 12:00]\n#+PROPERTY: JAUNDER_DATE_TZ UTC\n\nBody",
+            serde_json::json!({ "publish": false }),
+        ),
+        (
+            "#+TITLE: Expected slug\n#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_SLUG wrong\n\nBody",
+            serde_json::json!({ "publish": false }),
+        ),
+        (
+            "#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_FORMAT markdown\n\nBody",
+            serde_json::json!({ "publish": false }),
+        ),
+        (
+            "#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_DATE_UTC 2020-01-01T00:00:01Z\n\nBody",
+            serde_json::json!({
+                "publish": true,
+                "publish_at": "2020-01-01T00:00:00Z",
+            }),
+        ),
+    ];
+    for (org_body, lifecycle) in cases {
+        let mut post = serde_json::json!({
+            "body": org_body,
+            "format": "org",
+        });
+        post.as_object_mut()
+            .expect("test payload is an object")
+            .extend(
+                lifecycle
+                    .as_object()
+                    .expect("test lifecycle is an object")
+                    .clone(),
+            );
+        let (status, body) = post_json(
+            &state,
+            <web::posts::Create as ServerFn>::PATH,
+            serde_json::json!({ "post": post }),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    }
+    let drafts = state
+        .posts
+        .list_drafts_by_user(
+            session.user_id,
+            None,
+            parse_row_limit("10"),
+            common::time::UtcInstant::now(),
+        )
+        .await
+        .unwrap();
+    assert!(drafts.is_empty(), "rejected creates must not leave rows");
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn create_post_rejects_invalid_tag_token(#[case] backend: Backend) {
     let (_base, state, cookie) = login_and_state(backend).await;
 

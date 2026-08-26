@@ -8,21 +8,28 @@ use axum::extract::{FromRequestParts, Path, Query};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use common::atompub::{CollectionFeedTitle, Entry, FeedMeta, entry_to_xml, render_feed};
-use common::etag::ETag;
+use common::etag::{ETag, post_content_etag};
 use common::ids::PostId;
+use common::org::{OrgOperation, OrgStructuredMetadata, Presence, PublicationState, normalize_org};
 use common::pagination::PageSize;
+use common::post_body::PostBody;
+use common::post_summary::PostSummary;
+use common::post_title::PostTitle;
 use common::tag::TagLabel;
 use common::tagged_url::{BaseUrl, EditUriUrl, FeedUrl, PaginationUrl, compose};
 use common::time::UtcInstant;
 use common::username::Username;
-use common::visibility::ViewerIdentity;
-use storage::{CollectionCursor, PostRecord, PostStorage, SiteConfigStorage, UserConfigStorage};
+use common::visibility::{AudienceTarget, ViewerIdentity};
+use storage::{
+    AudienceStorage, CollectionCursor, InvalidAudienceTargets, PostRecord, PostStorage,
+    SiteConfigStorage, UserConfigStorage, validate_named_audience_targets,
+};
 use web::auth;
 
-use super::mapping::{entry_to_post_fields, post_to_entry};
+use super::mapping::{PostFields, entry_to_post_fields, post_to_entry};
 use super::{HandlerError, required_base_url};
 
 const FEED_CONTENT_TYPE: &str = "application/atom+xml;type=feed;charset=utf-8";
@@ -37,6 +44,7 @@ const DEFAULT_PAGE_SIZE: PageSize = PageSize::clamped(25);
 /// Each field is pulled from the request `Extension`s the app router layers.
 pub struct PostServices {
     posts: Arc<dyn PostStorage>,
+    audiences: Arc<dyn AudienceStorage>,
     user_config: Arc<dyn UserConfigStorage>,
     site_config: Arc<dyn SiteConfigStorage>,
 }
@@ -47,6 +55,9 @@ impl<S: Send + Sync> FromRequestParts<S> for PostServices {
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         Ok(Self {
             posts: Extension::<Arc<dyn PostStorage>>::from_request_parts(parts, state)
+                .await?
+                .0,
+            audiences: Extension::<Arc<dyn AudienceStorage>>::from_request_parts(parts, state)
                 .await?
                 .0,
             user_config: Extension::<Arc<dyn UserConfigStorage>>::from_request_parts(parts, state)
@@ -66,6 +77,12 @@ impl PostServices {
         self.posts.as_ref()
     }
 
+    /// Borrows the named-audience store for author-scoped target authorization.
+    #[must_use]
+    pub fn audiences(&self) -> &dyn AudienceStorage {
+        self.audiences.as_ref()
+    }
+
     /// Borrows the per-user configuration store for one handler operation.
     #[must_use]
     pub fn user_config(&self) -> &dyn UserConfigStorage {
@@ -79,39 +96,18 @@ impl PostServices {
     }
 }
 
-/// A strong, content-hash `ETag` for a post: `"sha256-<hex>"` over the post's
-/// content fields (title, stored body, format, summary, tag display names, and
-/// the draft flag) — never a timestamp. So identical content yields an identical
-/// `ETag` and an idempotent re-publish does not change it, removing the time-based
-/// divergence false-positive (#78).
+/// A strong, content-hash `ETag` for a post's mutable representation. The
+/// transport-neutral projection is owned by `common`; this storage adapter only
+/// projects ordered post-tag labels into it.
 pub(crate) fn etag_for(post: &PostRecord) -> ETag {
-    /// The content projection that the `ETag` hashes. Newtype fields stay typed
-    /// through this seam and serialize through their ADR-0063 string bridges;
-    /// `PostFormat` and `draft` are reduced to their stable wire values. `PostTag`
-    /// itself is never hashed because it carries DB-assigned ids that would differ
-    /// between identical-content posts.
-    #[derive(Serialize)]
-    struct EtagContent<'a> {
-        title: Option<&'a common::post_title::PostTitle>,
-        body: &'a common::post_body::PostBody,
-        format: String,
-        summary: Option<&'a common::post_summary::PostSummary>,
-        tags: Vec<&'a TagLabel>,
-        draft: bool,
-    }
-    let content = EtagContent {
-        title: post.title.as_ref(),
-        body: &post.body,
-        format: post.format.to_string(),
-        summary: post.summary.as_ref(),
-        // Tags are folded in iteration order, which `TAGS_SUBQUERY`'s `ORDER BY`
-        // makes deterministic across query plans and backends (#772). An ETag change
-        // costs a re-fetch, never staleness.
-        tags: post.tags.iter().map(|t| &t.tag_display).collect(),
-        draft: post.published_at.is_none(),
-    };
-    let bytes = serde_json::to_vec(&content).unwrap_or_else(|_| Vec::new());
-    ETag::sha256_of(&bytes)
+    post_content_etag(
+        post.title.as_ref(),
+        &post.body,
+        &post.format,
+        post.summary.as_ref(),
+        post.tags.iter().map(|tag| &tag.tag_display),
+        post.published_at.is_none(),
+    )
 }
 
 /// Whether a request's `If-Match` precondition is satisfied for a post with ETAG.
@@ -122,6 +118,137 @@ fn if_match_satisfied(headers: &HeaderMap, etag: &ETag) -> bool {
         // `ETag: PartialEq<&str>` (the reverse `str: PartialEq<ETag>` isn't derived).
         Some(if_match) => if_match == "*" || *etag == if_match,
         None => true,
+    }
+}
+fn scalar_presence<T: Clone>(value: Option<&T>) -> Presence<T> {
+    value.cloned().map_or(Presence::Absent, Presence::Present)
+}
+
+fn validated_categories(
+    categories: Presence<Vec<TagLabel>>,
+) -> Result<Presence<Vec<TagLabel>>, HandlerError> {
+    match categories {
+        Presence::Absent => Ok(Presence::Absent),
+        Presence::Present(categories) => Ok(Presence::Present(
+            common::tag::parse_and_validate_tags(categories)?,
+        )),
+    }
+}
+
+async fn authorize_audiences(
+    audiences: &dyn AudienceStorage,
+    author_user_id: common::ids::UserId,
+    targets: Presence<Vec<AudienceTarget>>,
+) -> Result<Presence<Vec<AudienceTarget>>, HandlerError> {
+    let Presence::Present(targets) = targets else {
+        return Ok(Presence::Absent);
+    };
+    validate_named_audience_targets(audiences, author_user_id, &targets)
+        .await
+        .map_err(|error| match error {
+            InvalidAudienceTargets::Invalid => HandlerError::BadRequest,
+            InvalidAudienceTargets::Storage(error) => HandlerError::from(error),
+        })?;
+    Ok(Presence::Present(targets))
+}
+
+/// Atom entry fields after format-specific normalization and shared validation.
+struct NormalizedAtomInput {
+    body: PostBody,
+    title: Option<PostTitle>,
+    summary: Option<PostSummary>,
+    categories: Vec<TagLabel>,
+    lifecycle: Presence<PublicationState>,
+    audiences: Presence<Vec<AudienceTarget>>,
+    expectations: storage::PostBookkeepingExpectation,
+}
+
+/// Normalizes an incoming entry's format-dependent metadata and validates its
+/// common storage fields before the create/update handler applies its fallback policy.
+async fn normalize_atom_input(
+    fields: PostFields,
+    operation: OrgOperation,
+    request_clock: UtcInstant,
+    audiences: &dyn AudienceStorage,
+    author_user_id: common::ids::UserId,
+) -> Result<NormalizedAtomInput, HandlerError> {
+    if fields.format != storage::PostFormat::Org {
+        let categories = match validated_categories(fields.categories)? {
+            Presence::Present(tags) => tags,
+            Presence::Absent => Vec::new(),
+        };
+        return Ok(NormalizedAtomInput {
+            body: fields.body,
+            title: fields.title,
+            summary: fields.summary,
+            categories,
+            lifecycle: fields.lifecycle,
+            audiences: Presence::Absent,
+            expectations: storage::PostBookkeepingExpectation::default(),
+        });
+    }
+
+    let normalized = normalize_org(
+        fields.body.as_ref(),
+        OrgStructuredMetadata {
+            title: scalar_presence(fields.title.as_ref()),
+            summary: scalar_presence(fields.summary.as_ref()),
+            tags: validated_categories(fields.categories)?,
+            audiences: Presence::Absent,
+            lifecycle: fields.lifecycle,
+        },
+        operation,
+        request_clock,
+    )?;
+    let audiences =
+        authorize_audiences(audiences, author_user_id, normalized.metadata.audiences).await?;
+
+    Ok(NormalizedAtomInput {
+        body: normalized.body,
+        title: match normalized.metadata.title {
+            Presence::Present(title) => Some(title),
+            Presence::Absent => None,
+        },
+        summary: match normalized.metadata.summary {
+            Presence::Present(summary) => Some(summary),
+            Presence::Absent => None,
+        },
+        categories: match normalized.metadata.tags {
+            Presence::Present(tags) => tags,
+            Presence::Absent => Vec::new(),
+        },
+        lifecycle: normalized.metadata.lifecycle,
+        audiences,
+        expectations: normalized.bookkeeping.into(),
+    })
+}
+
+fn create_published_at(
+    lifecycle: &Presence<PublicationState>,
+    is_draft: bool,
+    request_clock: UtcInstant,
+) -> Option<UtcInstant> {
+    match lifecycle {
+        Presence::Present(PublicationState::Draft) => None,
+        Presence::Present(PublicationState::Scheduled(at) | PublicationState::Published(at)) => {
+            Some(*at)
+        }
+        Presence::Absent if is_draft => None,
+        Presence::Absent => Some(request_clock),
+    }
+}
+
+fn update_publish(
+    lifecycle: &Presence<PublicationState>,
+    is_draft: bool,
+) -> storage::PublishUpdate {
+    match lifecycle {
+        Presence::Present(PublicationState::Draft) => storage::PublishUpdate::Unpublish,
+        Presence::Present(PublicationState::Scheduled(at) | PublicationState::Published(at)) => {
+            storage::PublishUpdate::Publish { at: Some(*at) }
+        }
+        Presence::Absent if is_draft => storage::PublishUpdate::Unpublish,
+        Presence::Absent => storage::PublishUpdate::Publish { at: None },
     }
 }
 
@@ -320,26 +447,37 @@ pub async fn collection_post(
     body: String,
 ) -> Result<Response, HandlerError> {
     let posts = services.posts();
+    let audiences = services.audiences();
     let user_config = services.user_config();
     let site_config = services.site_config();
     super::require_user_match(&auth_user, &username)?;
     let entry: Entry = body.parse()?;
+    let request_clock = UtcInstant::now();
     let default_format = storage::get_default_post_format(user_config, auth_user.user_id).await?;
-    let fields = entry_to_post_fields(&entry, default_format)?;
-    // Bound the tag set before anything is written: an over-cap entry must be
-    // rejected, not created-then-rejected (#771 D9/D12, ADR-0092).
-    let categories = common::tag::parse_and_validate_tags(fields.categories)?;
-    // Non-draft entries honor the wire `<published>`: a future time schedules
-    // the post, a past time backdates it; absent falls back to "now".
-    let published_at = if fields.is_draft {
-        None
-    } else {
-        Some(fields.published.unwrap_or_else(UtcInstant::now))
+    let fields = entry_to_post_fields(&entry, default_format, request_clock)?;
+    let format = fields.format;
+    let is_draft = fields.is_draft;
+    let NormalizedAtomInput {
+        body,
+        title,
+        summary,
+        categories,
+        lifecycle,
+        audiences: audience_input,
+        expectations,
+    } = normalize_atom_input(
+        fields,
+        OrgOperation::Create,
+        request_clock,
+        audiences,
+        auth_user.user_id,
+    )
+    .await?;
+    let published_at = create_published_at(&lifecycle, is_draft, request_clock);
+    let audiences = match audience_input {
+        Presence::Present(audiences) => audiences,
+        Presence::Absent => vec![site_config.get_default_audience().await?.into()],
     };
-
-    // AtomPub has no audience picker; new posts adopt the instance default.
-    let default_audience = site_config.get_default_audience().await?;
-
     // A client-supplied idempotency key dedups a retried create (duplicate-on-retry).
     let idem = headers
         .get("idempotency-key")
@@ -351,15 +489,16 @@ pub async fn collection_post(
         posts,
         storage::PostCreation {
             user_id: auth_user.user_id,
-            body: fields.body,
-            title: fields.title.as_ref(),
-            format: fields.format,
+            body,
+            title: title.as_ref(),
+            format,
             slug_override: None,
             published_at,
             max_attempts: 100,
-            summary: fields.summary,
-            audiences: vec![default_audience.into()],
+            summary,
+            audiences,
             idempotency_key: idem,
+            expectations,
         },
     )
     .await;
@@ -425,10 +564,11 @@ fn post_entry_response(
 ///
 /// # Errors
 ///
-/// Returns `400` if the entry is malformed.
+/// Returns `400` if the entry is malformed, invalid for replacement, or names
+/// an audience the authenticated author does not own.
 /// Returns `403` if the authenticated user does not match the target username.
-/// Returns `404` if the post is not found, is deleted, or belongs to another user.
-/// Returns `412` if `If-Match` is present and stale.
+/// Returns `404` if the post is not found, soft-deleted, or belongs to another user.
+/// Returns `412` if an `If-Match` header is present and does not match the post's `ETag`.
 /// Returns `500` if storage fails.
 #[tracing::instrument(name = "atompub.posts.member_put", skip_all)]
 pub async fn member_put(
@@ -439,6 +579,7 @@ pub async fn member_put(
     body: String,
 ) -> Result<Response, HandlerError> {
     let posts = services.posts();
+    let audiences = services.audiences();
     let user_config = services.user_config();
     let site_config = services.site_config();
     let current = owned_post(posts, &auth_user, &username, post_id).await?;
@@ -448,35 +589,44 @@ pub async fn member_put(
     }
 
     let entry: Entry = body.parse()?;
+    let request_clock = UtcInstant::now();
     let default_format = storage::get_default_post_format(user_config, auth_user.user_id).await?;
-    let fields = entry_to_post_fields(&entry, default_format)?;
-    // Bound the tag set before anything is written: an over-cap entry must be
-    // rejected, not updated-then-rejected (#771 D9/D12, ADR-0092).
-    let categories = common::tag::parse_and_validate_tags(fields.categories)?;
-
-    // AtomPub has no audience picker; preserve the post's existing targeting
-    // across the edit rather than resetting it.
-    let audiences = posts.get_post_audiences(post_id).await?;
+    let fields = entry_to_post_fields(&entry, default_format, request_clock)?;
+    let format = fields.format;
+    let is_draft = fields.is_draft;
+    let NormalizedAtomInput {
+        body,
+        title,
+        summary,
+        categories,
+        lifecycle,
+        audiences: audience_input,
+        expectations,
+    } = normalize_atom_input(
+        fields,
+        OrgOperation::Update { post_id },
+        request_clock,
+        audiences,
+        auth_user.user_id,
+    )
+    .await?;
+    let audiences = match audience_input {
+        Presence::Present(audiences) => audiences,
+        Presence::Absent => posts.get_post_audiences(post_id).await?,
+    };
     storage::perform_post_update(
         posts,
         storage::PostUpdate {
             post_id,
             editor_user_id: auth_user.user_id,
-            body: fields.body,
-            title: fields.title.as_ref(),
-            format: fields.format,
+            body,
+            title: title.as_ref(),
+            format,
             slug_override: None,
-            // A non-draft entry publishes at the wire `<published>` timestamp
-            // (future = scheduled, past = backdated, absent = keep/now); a draft
-            // clears publication.
-            publish: if fields.is_draft {
-                storage::PublishUpdate::Unpublish
-            } else {
-                storage::PublishUpdate::Publish {
-                    at: fields.published,
-                }
-            },
-            summary: fields.summary,
+            publish: update_publish(&lifecycle, is_draft),
+            request_clock,
+            expectations,
+            summary,
             audiences,
         },
     )
@@ -484,17 +634,13 @@ pub async fn member_put(
 
     posts.set_post_tags(post_id, &categories).await?;
 
-    // Load as the authenticated owner so a non-Public post is not hidden.
     let viewer = owner_viewer(&auth_user);
     let post = posts
         .get_post_by_id(post_id, &viewer)
         .await?
         .ok_or(HandlerError::Invariant)?;
-
     let base = required_base_url(site_config).await?;
-    let entry_out = post_to_entry(&post, &base);
-    let xml = entry_to_xml(&entry_out)?;
-
+    let xml = entry_to_xml(&post_to_entry(&post, &base))?;
     Ok((
         StatusCode::OK,
         [
@@ -510,10 +656,12 @@ pub async fn member_put(
 mod etag_tests {
     use super::*;
     use chrono::{TimeZone, Utc};
-    use common::ids::{PostId, TagId, UserId};
-    use common::tag::Tag;
-    use common::test_support::{parse_post_body, parse_post_summary, parse_post_title};
-    use storage::{PostFormat, PostTag, RenderedHtml};
+    use common::ids::{TagId, UserId};
+    use common::tag::{Tag, TagLabel};
+    use common::test_support::{
+        parse_post_body, parse_post_summary, parse_post_title, parse_utc_instant,
+    };
+    use storage::{MockAudienceStorage, PostFormat, PostTag, PublishUpdate, RenderedHtml};
 
     fn mk_tag(post_id: PostId, tag_id: TagId, slug: Tag, display: TagLabel) -> PostTag {
         PostTag {
@@ -645,5 +793,65 @@ mod etag_tests {
             e
         ); // tag display set
         assert_ne!(flip(&|p| p.published_at = None), e); // draft flip
+    }
+    fn org_fields(body: &str) -> PostFields {
+        PostFields {
+            title: None,
+            body: parse_post_body(body),
+            format: PostFormat::Org,
+            summary: None,
+            categories: Presence::Absent,
+            lifecycle: Presence::Absent,
+            is_draft: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn org_normalization_keeps_an_absent_title_absent() {
+        let normalized = normalize_atom_input(
+            org_fields("Body"),
+            OrgOperation::Create,
+            parse_utc_instant("2026-08-26T12:00:00Z"),
+            &MockAudienceStorage::new(),
+            UserId::from(1),
+        )
+        .await
+        .expect("normalization succeeds");
+
+        assert_eq!(normalized.title, None);
+    }
+
+    #[tokio::test]
+    async fn org_audience_storage_failure_is_an_internal_handler_error() {
+        let mut audiences = MockAudienceStorage::new();
+        audiences
+            .expect_list_audiences()
+            .returning(|_| Err(sqlx::Error::PoolClosed));
+
+        let result = normalize_atom_input(
+            org_fields("#+PROPERTY: JAUNDER_AUDIENCE named:42\nBody"),
+            OrgOperation::Create,
+            parse_utc_instant("2026-08-26T12:00:00Z"),
+            &audiences,
+            UserId::from(1),
+        )
+        .await;
+
+        assert!(matches!(result, Err(HandlerError::Internal(_))));
+    }
+
+    #[test]
+    fn legacy_draft_lifecycle_fallbacks_remain_unpublished() {
+        let clock = parse_utc_instant("2026-08-26T12:00:00Z");
+        assert_eq!(
+            create_published_at(&Presence::Absent, true, clock),
+            None,
+            "a legacy Atom draft stays unpublished at create"
+        );
+        assert_eq!(
+            update_publish(&Presence::Absent, true),
+            PublishUpdate::Unpublish,
+            "a legacy Atom draft stays unpublished at update"
+        );
     }
 }
