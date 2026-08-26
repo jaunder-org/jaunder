@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use quote::ToTokens;
+use syn::spanned::Spanned;
+use syn::visit::Visit;
 
 use crate::result::{CommandResult, StepResult};
 use crate::{files, web_server_fns};
@@ -226,6 +228,17 @@ fn returns_str_reference(output: &syn::ReturnType, require_static: bool) -> bool
     )
 }
 
+fn has_immutable_self_receiver(signature: &syn::Signature) -> bool {
+    signature.inputs.len() == 1
+        && matches!(
+            signature.inputs.first(),
+            Some(syn::FnArg::Receiver(receiver))
+                if receiver.reference.is_some()
+                    && receiver.mutability.is_none()
+                    && receiver.colon_token.is_none()
+        )
+}
+
 fn record_owned_error_surface(index: &mut TypeIndex, item: &syn::ItemImpl) {
     if item.trait_.is_some() {
         return;
@@ -240,6 +253,7 @@ fn record_owned_error_surface(index: &mut TypeIndex, item: &syn::ItemImpl) {
             };
             matches!(item.vis, syn::Visibility::Public(_))
                 && item.sig.ident == name
+                && has_immutable_self_receiver(&item.sig)
                 && returns_str_reference(&item.sig.output, require_static)
         })
     };
@@ -546,86 +560,146 @@ fn wire_inputs(
 }
 
 const EXTERNAL_FORMAT_MARKER: &str = "// server-fn-wire-arg-error:allow";
-const EXTERNAL_FORMAT_CALL: &str = "UserFacingMessage::from_external";
+#[derive(Debug, Clone, Copy)]
+struct ExternalFormatCall {
+    line: usize,
+    literal_argument: bool,
+}
+
+#[derive(Default)]
+struct ExternalFormatCallVisitor {
+    calls: Vec<ExternalFormatCall>,
+}
+
+fn is_external_format_path(path: &syn::ExprPath) -> bool {
+    if path.path.segments.last().map(|segment| &segment.ident)
+        != Some(&syn::Ident::new(
+            "from_external",
+            proc_macro2::Span::call_site(),
+        ))
+    {
+        return false;
+    }
+    let direct_owner = path
+        .path
+        .segments
+        .iter()
+        .rev()
+        .nth(1)
+        .is_some_and(|segment| segment.ident == "UserFacingMessage");
+    let qualified_owner = path
+        .qself
+        .as_ref()
+        .and_then(|qself| type_name(&qself.ty))
+        .is_some_and(|name| name == "UserFacingMessage");
+    direct_owner || qualified_owner
+}
+
+impl<'ast> Visit<'ast> for ExternalFormatCallVisitor {
+    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(path) = call.func.as_ref()
+            && is_external_format_path(path)
+        {
+            self.calls.push(ExternalFormatCall {
+                line: call.func.span().start().line,
+                literal_argument: matches!(call.args.first(), Some(syn::Expr::Lit(_))),
+            });
+        }
+        syn::visit::visit_expr_call(self, call);
+    }
+}
 
 /// Census the reviewed doors that turn foreign `Display` into a user-only
-/// message. The marker is intentionally line-local: one non-empty reason,
-/// immediately before one non-literal call.
+/// message. Calls are found structurally; marker adjacency remains deliberately
+/// line-local: one non-empty reason immediately before one non-literal call.
 fn external_format_doors(sources: &[(String, String)]) -> Result<Vec<String>, Vec<String>> {
     let mut doors = Vec::new();
     let mut problems = Vec::new();
 
     for (path, source) in sources {
         let lines = source.lines().collect::<Vec<_>>();
-        for (index, line) in lines.iter().enumerate() {
-            let trimmed = line.trim();
-            let call_count = line.matches(EXTERNAL_FORMAT_CALL).count();
-            if call_count > 0 {
-                let marker = index.checked_sub(1).and_then(|previous| {
-                    lines[previous].trim().strip_prefix(EXTERNAL_FORMAT_MARKER)
-                });
-                let Some(reason) = marker else {
-                    let shared = index >= 2
-                        && lines[index - 1].contains(EXTERNAL_FORMAT_CALL)
-                        && lines[index - 2].trim().starts_with(EXTERNAL_FORMAT_MARKER);
-                    problems.push(format!(
-                        "{path}:{}: {} external formatter call",
-                        index + 1,
-                        if shared {
-                            "shared marker cannot cover"
-                        } else {
-                            "unmarked"
-                        }
-                    ));
-                    continue;
-                };
-                if reason.trim().is_empty() {
-                    problems.push(format!("{path}:{}: bare external formatter marker", index));
-                    continue;
-                }
-                if call_count != 1 {
-                    problems.push(format!(
-                        "{path}:{}: shared marker cannot cover multiple external formatter calls",
-                        index + 1
-                    ));
-                    continue;
-                }
-                let argument = trimmed
-                    .split_once(EXTERNAL_FORMAT_CALL)
-                    .map_or("", |(_, tail)| tail.trim_start());
-                if argument.starts_with("(\"") {
-                    problems.push(format!(
-                        "{path}:{}: stale external formatter marker wraps an owned literal",
-                        index
-                    ));
-                    continue;
-                }
-                doors.push(format!("{path}:{}", index + 1));
+        let file = match syn::parse_file(source) {
+            Ok(file) => file,
+            Err(error) => {
+                problems.push(format!(
+                    "{path}: cannot parse external formatter census: {error}"
+                ));
+                continue;
             }
+        };
+        let mut visitor = ExternalFormatCallVisitor::default();
+        visitor.visit_file(&file);
+        let mut calls = BTreeMap::<usize, Vec<bool>>::new();
+        for call in visitor.calls {
+            calls
+                .entry(call.line)
+                .or_default()
+                .push(call.literal_argument);
+        }
 
-            let Some(reason) = trimmed.strip_prefix(EXTERNAL_FORMAT_MARKER) else {
+        for (line, literal_arguments) in &calls {
+            let marker = line
+                .checked_sub(2)
+                .and_then(|index| lines.get(index))
+                .and_then(|line| line.trim().strip_prefix(EXTERNAL_FORMAT_MARKER));
+            let Some(reason) = marker else {
+                let shared = *line >= 3
+                    && calls.contains_key(&(line - 1))
+                    && lines[*line - 3].trim().starts_with(EXTERNAL_FORMAT_MARKER);
+                problems.push(format!(
+                    "{path}:{line}: {} external formatter call",
+                    if shared {
+                        "shared marker cannot cover"
+                    } else {
+                        "unmarked"
+                    }
+                ));
+                continue;
+            };
+            if reason.trim().is_empty() {
+                problems.push(format!(
+                    "{path}:{}: bare external formatter marker",
+                    line - 1
+                ));
+                continue;
+            }
+            if literal_arguments.len() != 1 {
+                problems.push(format!(
+                    "{path}:{line}: shared marker cannot cover multiple external formatter calls"
+                ));
+                continue;
+            }
+            if literal_arguments[0] {
+                problems.push(format!(
+                    "{path}:{}: stale external formatter marker wraps an owned literal",
+                    line - 1
+                ));
+                continue;
+            }
+            doors.push(format!("{path}:{line}"));
+        }
+
+        for (index, line) in lines.iter().enumerate() {
+            let Some(reason) = line.trim().strip_prefix(EXTERNAL_FORMAT_MARKER) else {
                 continue;
             };
             if reason.trim().is_empty() {
                 continue;
             }
-            let next_call_count = lines
-                .get(index + 1)
-                .map_or(0, |next| next.matches(EXTERNAL_FORMAT_CALL).count());
+            let marker_line = index + 1;
+            let next_call_count = calls.get(&(marker_line + 1)).map_or(0, Vec::len);
             if next_call_count == 0 {
-                let kind = if index > 0 && lines[index - 1].contains(EXTERNAL_FORMAT_CALL) {
+                let kind = if calls.contains_key(&marker_line.saturating_sub(1)) {
                     "trailing"
                 } else {
                     "orphan"
                 };
                 problems.push(format!(
-                    "{path}:{}: {kind} external formatter marker",
-                    index + 1
+                    "{path}:{marker_line}: {kind} external formatter marker"
                 ));
             } else if next_call_count > 1 {
                 problems.push(format!(
-                    "{path}:{}: shared external formatter marker",
-                    index + 1
+                    "{path}:{marker_line}: shared external formatter marker"
                 ));
             }
         }
@@ -1186,6 +1260,25 @@ mod tests {
     }
 
     #[test]
+    fn associated_functions_do_not_count_as_owned_error_surfaces() {
+        let sources = owned_surface_sources()
+            .into_iter()
+            .map(|(path, source)| (path, source.replace("(&self)", "()")))
+            .collect::<Vec<_>>();
+        let index = index_sources(&sources).expect("index");
+        assert!(!index.owned_error_surfaces.contains("InvalidBackupSchedule"));
+        let error = validate_owned_surfaces(
+            &one_input("BackupSchedule"),
+            &index,
+            sanitized_server_error(),
+            &sources,
+        )
+        .unwrap_err()
+        .join("\n");
+        assert!(error.contains("has no owned user_message"), "{error}");
+    }
+
+    #[test]
     fn owned_surfaces_still_require_source_free_decode_telemetry() {
         let sources = owned_surface_sources();
         let index = index_sources(&sources).expect("index");
@@ -1207,22 +1300,24 @@ mod tests {
     }
 
     fn marker_errors(source: &str) -> String {
-        external_format_doors(&[(("common/src/example.rs").to_string(), source.to_string())])
+        let wrapped = format!("fn check() {{\n{source}\n}}");
+        external_format_doors(&[("common/src/example.rs".to_string(), wrapped)])
             .unwrap_err()
             .join("\n")
     }
-
     #[test]
     fn marked_external_user_message_conversion_enters_the_census() {
         let sources = vec![(
             "common/src/backup.rs".to_string(),
-            "// server-fn-wire-arg-error:allow detailed operator feedback\n\
-             UserFacingMessage::from_external(format_args!(\"detail: {error}\"));"
-                .to_string(),
+            "fn check() {\n\
+             // server-fn-wire-arg-error:allow detailed operator feedback\n\
+             UserFacingMessage::from_external(format_args!(\"detail: {error}\"));\n\
+             }"
+            .to_string(),
         )];
         assert_eq!(
             external_format_doors(&sources).unwrap(),
-            ["common/src/backup.rs:2"]
+            ["common/src/backup.rs:3"]
         );
     }
 
@@ -1232,6 +1327,10 @@ mod tests {
             (
                 "unmarked",
                 "UserFacingMessage::from_external(format_args!(\"{error}\"));",
+            ),
+            (
+                "unmarked",
+                "<UserFacingMessage>::from_external(format_args!(\"{error}\"));",
             ),
             (
                 "bare",
