@@ -160,94 +160,152 @@ struct ParsedBlock {
     lifecycle: Presence<PublicationState>,
     bookkeeping: OrgBookkeeping,
 }
+#[derive(Default)]
+struct HeaderFields {
+    titles: Vec<String>,
+    summaries: Vec<String>,
+    tags: Vec<TagLabel>,
+    audiences: Vec<AudienceTarget>,
+    date: Option<String>,
+    timezone: Option<String>,
+    status: Option<String>,
+    bookkeeping: OrgBookkeeping,
+}
+
+enum HeaderKeyword<'a> {
+    Title(&'a str),
+    Description(&'a str),
+    Keywords(&'a str),
+    Date(&'a str),
+    Property(&'a str),
+}
+
+#[derive(Clone, Copy)]
+enum PropertyName {
+    DateTimezone,
+    Status,
+    Audience,
+    Slug,
+    Format,
+    Id,
+    Synced,
+    SyncedAt,
+    DateUtc,
+}
+
+enum PropertyLine<'a> {
+    Unknown,
+    Recognized(PropertyName, &'a str),
+}
+
 fn parse_leading_block(
     source: &str,
     document: &Org,
     request_clock: UtcInstant,
 ) -> Result<ParsedBlock, OrgMetadataError> {
-    let mut parsed = ParsedBlock::default();
     let header_end = leading_keyword_end(document);
     let mut body = Vec::new();
     let mut offset = 0;
-    let mut titles = Vec::new();
-    let mut summaries = Vec::new();
-    let mut tags = Vec::new();
-    let mut audiences = Vec::new();
-    let mut date = None;
-    let mut timezone = None;
-    let mut status = None;
+    let mut fields = HeaderFields::default();
 
     for source_line in source.split_inclusive('\n') {
         let line = source_line.strip_suffix('\n').unwrap_or(source_line);
-        if offset < header_end && line.trim_start().starts_with("#+") {
-            match keyword(line) {
-                Some((name, value)) if name == "property" && !recognized_property(value) => {
-                    body.push(line);
-                }
-                Some((name, value)) if recognized(&name) => match name.as_str() {
-                    "title" => titles.push(nonblank(value, "TITLE")?.to_owned()),
-                    "description" => summaries.push(nonblank(value, "DESCRIPTION")?.to_owned()),
-                    "keywords" => {
-                        let terms: Vec<_> = value
-                            .split(',')
-                            .map(str::trim)
-                            .filter(|term| !term.is_empty())
-                            .collect();
-                        if terms.is_empty() {
-                            return invalid("KEYWORDS must contain a tag");
-                        }
-                        for term in terms {
-                            tags.push(term.parse().map_err(|_| {
-                                OrgMetadataError::Invalid("invalid KEYWORDS tag".into())
-                            })?);
-                        }
-                    }
-                    "date" => set_once(&mut date, nonblank(value, "DATE")?.to_owned(), "DATE")?,
-                    "property" => parse_property(
-                        value,
-                        &mut timezone,
-                        &mut status,
-                        &mut audiences,
-                        &mut parsed.bookkeeping,
-                    )?,
-                    _ => unreachable!(),
-                },
-                _ => body.push(line),
-            }
-        } else {
+        let handled = offset < header_end && parse_header_keyword(line, &mut fields)?;
+        if !handled {
             body.push(line);
         }
         offset += source_line.len();
     }
 
-    if !titles.is_empty() {
+    let mut parsed = ParsedBlock {
+        body: body.join("\n"),
+        bookkeeping: fields.bookkeeping,
+        ..ParsedBlock::default()
+    };
+    if !fields.titles.is_empty() {
         parsed.title = Presence::Present(
-            titles
+            fields
+                .titles
                 .join("\n")
                 .parse()
                 .map_err(|_| OrgMetadataError::Invalid("invalid TITLE".into()))?,
         );
     }
-    if !summaries.is_empty() {
+    if !fields.summaries.is_empty() {
         parsed.summary = Presence::Present(
-            summaries
+            fields
+                .summaries
                 .join("\n")
                 .parse()
                 .map_err(|_| OrgMetadataError::Invalid("invalid DESCRIPTION".into()))?,
         );
     }
-    if !tags.is_empty() {
+    if !fields.tags.is_empty() {
         parsed.tags = Presence::Present(
-            parse_and_validate_tags(tags)
+            parse_and_validate_tags(fields.tags)
                 .map_err(|_| OrgMetadataError::Invalid("invalid KEYWORDS".into()))?,
         );
     }
-    if !audiences.is_empty() {
-        parsed.audiences = Presence::Present(audiences);
+    if !fields.audiences.is_empty() {
+        parsed.audiences = Presence::Present(fields.audiences);
     }
-    parsed.lifecycle = parse_lifecycle(status, date, timezone, request_clock)?;
-    parsed.body = body.join("\n");
+    parsed.lifecycle = parse_lifecycle(fields.status, fields.date, fields.timezone, request_clock)?;
     Ok(parsed)
+}
+
+fn parse_header_keyword(line: &str, fields: &mut HeaderFields) -> Result<bool, OrgMetadataError> {
+    let Some(keyword) = header_keyword(line) else {
+        return Ok(false);
+    };
+    match keyword {
+        HeaderKeyword::Title(value) => fields.titles.push(nonblank(value, "TITLE")?.to_owned()),
+        HeaderKeyword::Description(value) => fields
+            .summaries
+            .push(nonblank(value, "DESCRIPTION")?.to_owned()),
+        HeaderKeyword::Keywords(value) => fields.tags.extend(parse_keywords(value)?),
+        HeaderKeyword::Date(value) => set_once(
+            &mut fields.date,
+            nonblank(value, "DATE")?.to_owned(),
+            "DATE",
+        )?,
+        HeaderKeyword::Property(value) => match property_line(value)? {
+            PropertyLine::Unknown => return Ok(false),
+            PropertyLine::Recognized(name, value) => {
+                parse_property(name, value, fields)?;
+            }
+        },
+    }
+    Ok(true)
+}
+
+fn header_keyword(line: &str) -> Option<HeaderKeyword<'_>> {
+    let (name, value) = keyword(line)?;
+    match name.as_str() {
+        "title" => Some(HeaderKeyword::Title(value)),
+        "description" => Some(HeaderKeyword::Description(value)),
+        "keywords" => Some(HeaderKeyword::Keywords(value)),
+        "date" => Some(HeaderKeyword::Date(value)),
+        "property" => Some(HeaderKeyword::Property(value)),
+        _ => None,
+    }
+}
+
+fn parse_keywords(value: &str) -> Result<Vec<TagLabel>, OrgMetadataError> {
+    let terms: Vec<_> = value
+        .split(',')
+        .map(str::trim)
+        .filter(|term| !term.is_empty())
+        .collect();
+    if terms.is_empty() {
+        return invalid("KEYWORDS must contain a tag");
+    }
+    terms
+        .into_iter()
+        .map(|term| {
+            term.parse()
+                .map_err(|_| OrgMetadataError::Invalid("invalid KEYWORDS tag".into()))
+        })
+        .collect()
 }
 
 fn leading_keyword_end(document: &Org) -> usize {
@@ -275,29 +333,38 @@ fn keyword(line: &str) -> Option<(String, &str)> {
     Some((key.to_ascii_lowercase(), value.trim()))
 }
 
-fn recognized(name: &str) -> bool {
-    matches!(
+fn property_line(value: &str) -> Result<PropertyLine<'_>, OrgMetadataError> {
+    let Some((name, value)) = value.split_once(char::is_whitespace) else {
+        return if property_name(value).is_some() {
+            invalid("PROPERTY must name a value")
+        } else {
+            Ok(PropertyLine::Unknown)
+        };
+    };
+    let Some(name) = property_name(name) else {
+        return Ok(PropertyLine::Unknown);
+    };
+    Ok(PropertyLine::Recognized(
         name,
-        "title" | "description" | "keywords" | "date" | "property"
-    )
+        nonblank(value.trim(), "PROPERTY")?,
+    ))
 }
 
-fn recognized_property(value: &str) -> bool {
-    value.split_whitespace().next().is_some_and(|name| {
-        matches!(
-            name.to_ascii_lowercase().as_str(),
-            "jaunder_date_tz"
-                | "jaunder_status"
-                | "jaunder_audience"
-                | "jaunder_slug"
-                | "jaunder_format"
-                | "jaunder_id"
-                | "jaunder_synced"
-                | "jaunder_synced_at"
-                | "jaunder_date_utc"
-        )
-    })
+fn property_name(name: &str) -> Option<PropertyName> {
+    match name.to_ascii_lowercase().as_str() {
+        "jaunder_date_tz" => Some(PropertyName::DateTimezone),
+        "jaunder_status" => Some(PropertyName::Status),
+        "jaunder_audience" => Some(PropertyName::Audience),
+        "jaunder_slug" => Some(PropertyName::Slug),
+        "jaunder_format" => Some(PropertyName::Format),
+        "jaunder_id" => Some(PropertyName::Id),
+        "jaunder_synced" => Some(PropertyName::Synced),
+        "jaunder_synced_at" => Some(PropertyName::SyncedAt),
+        "jaunder_date_utc" => Some(PropertyName::DateUtc),
+        _ => None,
+    }
 }
+
 fn nonblank<'a>(value: &'a str, field: &str) -> Result<&'a str, OrgMetadataError> {
     if value.is_empty() {
         invalid(&format!("{field} must not be blank"))
@@ -317,66 +384,60 @@ fn set_once(slot: &mut Option<String>, value: String, name: &str) -> Result<(), 
 }
 
 fn parse_property(
+    name: PropertyName,
     value: &str,
-    timezone: &mut Option<String>,
-    status: &mut Option<String>,
-    audiences: &mut Vec<AudienceTarget>,
-    bookkeeping: &mut OrgBookkeeping,
+    fields: &mut HeaderFields,
 ) -> Result<(), OrgMetadataError> {
-    let Some((name, value)) = value.split_once(char::is_whitespace) else {
-        return invalid("PROPERTY must name a value");
-    };
-    let name = name.to_ascii_lowercase();
-    let value = nonblank(value.trim(), "PROPERTY")?;
-    match name.as_str() {
-        "jaunder_date_tz" => set_once(timezone, value.to_owned(), "JAUNDER_DATE_TZ"),
-        "jaunder_status" => set_once(status, value.to_owned(), "JAUNDER_STATUS"),
-        "jaunder_audience" => {
-            audiences.push(parse_audience(value)?);
+    match name {
+        PropertyName::DateTimezone => {
+            set_once(&mut fields.timezone, value.to_owned(), "JAUNDER_DATE_TZ")
+        }
+        PropertyName::Status => set_once(&mut fields.status, value.to_owned(), "JAUNDER_STATUS"),
+        PropertyName::Audience => {
+            fields.audiences.push(parse_audience(value)?);
             Ok(())
         }
-        "jaunder_slug" => set_bookkeeping(
-            &mut bookkeeping.slug,
+        PropertyName::Slug => set_bookkeeping(
+            &mut fields.bookkeeping.slug,
             value
                 .parse()
                 .map_err(|_| OrgMetadataError::Invalid("invalid Jaunder slug".into()))?,
             "JAUNDER_SLUG",
         ),
-        "jaunder_format" => set_bookkeeping(
-            &mut bookkeeping.format,
+        PropertyName::Format => set_bookkeeping(
+            &mut fields.bookkeeping.format,
             value
                 .parse()
                 .map_err(|_| OrgMetadataError::Invalid("invalid Jaunder format".into()))?,
             "JAUNDER_FORMAT",
         ),
-        "jaunder_id" => set_bookkeeping(
-            &mut bookkeeping.post_id,
+        PropertyName::Id => set_bookkeeping(
+            &mut fields.bookkeeping.post_id,
             value
                 .parse()
                 .map_err(|_| OrgMetadataError::Invalid("invalid Jaunder ID".into()))?,
             "JAUNDER_ID",
         ),
-        "jaunder_synced" => set_bookkeeping(
-            &mut bookkeeping.synced,
+        PropertyName::Synced => set_bookkeeping(
+            &mut fields.bookkeeping.synced,
             ETag::from_str(value)
                 .map_err(|_| OrgMetadataError::Invalid("invalid Jaunder sync ETag".into()))?,
             "JAUNDER_SYNCED",
         ),
-        "jaunder_synced_at" => set_bookkeeping(
-            &mut bookkeeping.synced_at,
+        PropertyName::SyncedAt => set_bookkeeping(
+            &mut fields.bookkeeping.synced_at,
             value
                 .parse()
                 .map_err(|_| OrgMetadataError::Invalid("invalid Jaunder sync time".into()))?,
             "JAUNDER_SYNCED_AT",
         ),
-        "jaunder_date_utc" => set_bookkeeping(
-            &mut bookkeeping.date_utc,
+        PropertyName::DateUtc => set_bookkeeping(
+            &mut fields.bookkeeping.date_utc,
             value.parse().map_err(|_| {
                 OrgMetadataError::Invalid("invalid Jaunder publication time".into())
             })?,
             "JAUNDER_DATE_UTC",
         ),
-        _ => Ok(()),
     }
 }
 fn set_bookkeeping<T>(slot: &mut Option<T>, value: T, name: &str) -> Result<(), OrgMetadataError> {
@@ -571,6 +632,18 @@ mod tests {
     }
 
     #[test]
+    fn preserves_unrecognized_header_keywords_and_properties() {
+        let normalized = normalize(
+            "#+AUTHOR: Author\n#+PROPERTY: EXPORT_FILE_NAME example\n#+PROPERTY: EXPORT_FILE_NAME\n#+NOT_A_KEYWORD: retained\nBody",
+        );
+
+        assert_eq!(
+            normalized.body.to_string(),
+            "#+AUTHOR: Author\n#+PROPERTY: EXPORT_FILE_NAME example\n#+PROPERTY: EXPORT_FILE_NAME\n#+NOT_A_KEYWORD: retained\nBody\n"
+        );
+    }
+
+    #[test]
     fn composes_repeated_text_and_keywords_with_tag_identity_order_and_cap() {
         let normalized = normalize(
             "#+TITLE: First\n#+TITLE: Second\n#+DESCRIPTION: One\n#+DESCRIPTION: Two\n#+KEYWORDS: Rust, , Emacs\n#+KEYWORDS: rust, Lisp\nBody",
@@ -593,6 +666,7 @@ mod tests {
             ])
         );
         invalid("#+KEYWORDS: , ,\nBody");
+        invalid("#+KEYWORDS: rust/lang\nBody");
     }
 
     #[test]
@@ -677,6 +751,14 @@ mod tests {
             "#+DATE: [2026-03-08 Sun 02:30]\n#+PROPERTY: JAUNDER_DATE_TZ America/New_York\n#+PROPERTY: JAUNDER_STATUS published\nBody",
         );
         invalid("#+DATE: [2026-08-26 Wed 12:00]\nBody");
+        invalid("#+DATE: [2026-08-26 Wed 12:00]\n#+PROPERTY: JAUNDER_STATUS published\nBody");
+        invalid("#+PROPERTY: JAUNDER_DATE_TZ UTC\n#+PROPERTY: JAUNDER_STATUS published\nBody");
+        invalid(
+            "#+DATE: <2026-08-26 Wed 12:00>\n#+PROPERTY: JAUNDER_DATE_TZ UTC\n#+PROPERTY: JAUNDER_STATUS published\nBody",
+        );
+        invalid(
+            "#+DATE: [2026-08-26 Wed]\n#+PROPERTY: JAUNDER_DATE_TZ UTC\n#+PROPERTY: JAUNDER_STATUS published\nBody",
+        );
     }
 
     #[test]
@@ -734,6 +816,7 @@ mod tests {
         invalid("#+PROPERTY: JAUNDER_AUDIENCE named:invalid\nBody");
         invalid("#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: Jaunder_Status draft\nBody");
         invalid("#+DATE: [2026-08-26 Wed 12:00]\n#+DATE: [2026-08-26 Wed 12:00]\nBody");
+        invalid("#+PROPERTY: JAUNDER_STATUS\nBody");
     }
 
     #[test]
@@ -749,6 +832,7 @@ mod tests {
         invalid("#+PROPERTY: JAUNDER_FORMAT org\n#+PROPERTY: JAUNDER_FORMAT org\nBody");
         invalid("#+PROPERTY: JAUNDER_SYNCED weak\nBody");
         invalid("#+PROPERTY: JAUNDER_ID 7\nBody");
+        invalid("#+PROPERTY: JAUNDER_DATE_UTC not-a-time\nBody");
         assert!(matches!(
             normalize_org(
                 "#+PROPERTY: JAUNDER_ID 7\nBody",

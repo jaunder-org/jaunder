@@ -658,10 +658,12 @@ pub async fn member_put(
 mod etag_tests {
     use super::*;
     use chrono::{TimeZone, Utc};
-    use common::ids::{PostId, TagId, UserId};
-    use common::tag::Tag;
-    use common::test_support::{parse_post_body, parse_post_summary, parse_post_title};
-    use storage::{PostFormat, PostTag, RenderedHtml};
+    use common::ids::{TagId, UserId};
+    use common::tag::{Tag, TagLabel};
+    use common::test_support::{
+        parse_post_body, parse_post_summary, parse_post_title, parse_utc_instant,
+    };
+    use storage::{MockAudienceStorage, PostFormat, PostTag, PublishUpdate, RenderedHtml};
 
     fn mk_tag(post_id: PostId, tag_id: TagId, slug: Tag, display: TagLabel) -> PostTag {
         PostTag {
@@ -793,5 +795,68 @@ mod etag_tests {
             e
         ); // tag display set
         assert_ne!(flip(&|p| p.published_at = None), e); // draft flip
+    }
+    fn org_fields(body: &str) -> PostFields {
+        PostFields {
+            title: None,
+            body: parse_post_body(body),
+            format: PostFormat::Org,
+            summary: None,
+            categories: Presence::Absent,
+            lifecycle: Presence::Absent,
+            is_draft: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn org_normalization_keeps_an_absent_title_absent() {
+        let normalized = normalize_atom_input(
+            org_fields("Body"),
+            OrgOperation::Create,
+            parse_utc_instant("2026-08-26T12:00:00Z").value(),
+            &MockAudienceStorage::new(),
+            UserId::from(1),
+        )
+        .await
+        .expect("normalization succeeds");
+
+        assert_eq!(normalized.title, None);
+    }
+
+    #[tokio::test]
+    async fn org_audience_storage_failure_is_an_internal_handler_error() {
+        let mut audiences = MockAudienceStorage::new();
+        audiences
+            .expect_list_audiences()
+            .returning(|_| Err(sqlx::Error::PoolClosed));
+
+        let Err(error) = normalize_atom_input(
+            org_fields("#+PROPERTY: JAUNDER_AUDIENCE named:42\nBody"),
+            OrgOperation::Create,
+            parse_utc_instant("2026-08-26T12:00:00Z").value(),
+            &audiences,
+            UserId::from(1),
+        )
+        .await
+        else {
+            panic!("storage failures must not become validation errors");
+        };
+
+        assert!(matches!(error, HandlerError::Internal(_)));
+    }
+
+    #[test]
+    fn legacy_draft_lifecycle_fallbacks_remain_unpublished() {
+        let clock = parse_utc_instant("2026-08-26T12:00:00Z").value();
+        assert_eq!(
+            create_published_at(&Presence::Absent, true, clock),
+            None,
+            "a legacy Atom draft stays unpublished at create"
+        );
+        assert_eq!(
+            update_publish(&Presence::Absent, true),
+            PublishUpdate::Unpublish,
+            "a legacy Atom draft stays unpublished at update"
+        );
     }
 }

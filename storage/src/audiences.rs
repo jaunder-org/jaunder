@@ -558,4 +558,11 @@ mod tests {
         assert_eq!(storage.kind(), ErrorKind::Storage);
         assert_eq!(storage.public_message(), "storage operation failed");
     }
+
+    #[test]
+    fn invalid_audience_target_storage_failure_is_masked_as_storage() {
+        let error: InternalError = InvalidAudienceTargets::Storage(sqlx::Error::PoolClosed).into();
+        assert_eq!(error.kind(), ErrorKind::Storage);
+        assert_eq!(error.public_message(), "storage operation failed");
+    }
 }

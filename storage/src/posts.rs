@@ -5292,6 +5292,17 @@ mod tests {
         let internal: InternalError = UpdatePostError::Internal(sqlx::Error::PoolClosed).into();
         assert_eq!(internal.kind(), ErrorKind::Storage);
         assert_eq!(internal.public_message(), "storage operation failed");
+
+        for error in [
+            UpdatePostError::BookkeepingMismatch,
+            UpdatePostError::StaleContent,
+        ] {
+            let expected_operator_message = error.to_string();
+            let internal: InternalError = error.into();
+            assert_eq!(internal.kind(), ErrorKind::Validation);
+            assert_eq!(internal.public_message(), expected_operator_message);
+            assert_eq!(internal.operator_message(), expected_operator_message);
+        }
     }
 
     // The `set_post_tags` lift masks as a server error

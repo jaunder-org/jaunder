@@ -1111,6 +1111,11 @@ mod server_tests {
             super::structured_lifecycle(Some(true), None, clock),
             Presence::Present(PublicationState::Published(at)) if at.value() == clock
         ));
+        let future = common::test_support::parse_utc_instant("2026-08-26T12:01:00Z");
+        assert!(matches!(
+            super::structured_lifecycle(Some(true), Some(future), clock),
+            Presence::Present(PublicationState::Scheduled(at)) if at == future
+        ));
     }
 
     /// The probing-row twin of `listing.rs`'s
@@ -1284,8 +1289,47 @@ mod server_tests {
             .expect_update_post()
             .returning(|_id, _user, _input| Ok(owned_post(UserId::from(1))));
         posts.expect_set_post_tags().times(0);
+
         let owner = mutation_owner(posts);
         let result = update(PostId::from(1), post_inputs(None)).await;
+        drop(owner);
+        result.expect("update succeeds");
+    }
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn update_org_keeps_structured_audience_and_summary() {
+        use common::test_support::parse_post_summary;
+        use common::visibility::{AudienceBase, AudienceSelection, AudienceTarget};
+
+        let mut posts = MockPostStorage::new();
+        posts
+            .expect_get_post_by_id()
+            .returning(|_id, _viewer| Ok(Some(owned_post(UserId::from(1)))));
+        posts
+            .expect_update_post()
+            .withf(|_id, _user, input| {
+                input.summary.as_deref() == Some("structured summary")
+                    && input.audiences == [AudienceTarget::Subscribers]
+            })
+            .returning(|_id, _user, _input| Ok(owned_post(UserId::from(1))));
+        let owner = mutation_owner(posts);
+        let result = update(
+            PostId::from(1),
+            PostInputs {
+                body: parse_post_body("Body"),
+                format: PostFormat::Org,
+                slug_override: None,
+                publish: Some(false),
+                publish_at: None,
+                tags: None,
+                summary: Some(parse_post_summary("structured summary")),
+                audience: Some(AudienceSelection {
+                    base: AudienceBase::Subscribers,
+                    named: vec![],
+                }),
+            },
+        )
+        .await;
         drop(owner);
         result.expect("update succeeds");
     }
