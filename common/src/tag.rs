@@ -96,8 +96,9 @@ impl From<Tag> for TagLabel {
     }
 }
 
-/// Hard upper bound on tags per post. Enforced by [`parse_and_validate_tags`].
-pub const MAX_TAGS_PER_POST: usize = 25;
+/// Finite resource bound on tags per post, enforced at the shared validation
+/// boundary by [`parse_and_validate_tags`].
+pub const MAX_TAGS_PER_POST: usize = 256;
 
 /// Error returned when a tag list fails validation in
 /// [`parse_and_validate_tags`].
@@ -374,6 +375,15 @@ mod tests {
         let tags = parse_and_validate_tags(labels(&["Rust", "rust", "LEPTOS"]))
             .expect("valid tags should validate");
         assert_eq!(tags, labels(&["Rust", "LEPTOS"]));
+    }
+
+    #[test]
+    fn parse_and_validate_tags_accepts_exactly_the_tag_limit() {
+        let raw: Vec<TagLabel> = (0..MAX_TAGS_PER_POST)
+            .map(|i| format!("tag{i}").parse().unwrap())
+            .collect();
+        let tags = parse_and_validate_tags(raw).expect("tags at the limit should validate");
+        assert_eq!(tags.len(), MAX_TAGS_PER_POST);
     }
 
     #[test]

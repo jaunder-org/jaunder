@@ -1,5 +1,6 @@
 use axum::http::StatusCode;
 use chrono::Datelike;
+use common::tag::MAX_TAGS_PER_POST;
 use common::test_support::parse_row_limit;
 use server_fn::ServerFn;
 use storage::PostFormat;
@@ -455,9 +456,11 @@ async fn create_post_rejects_invalid_tag_token(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
-async fn create_post_rejects_more_than_25_tags(#[case] backend: Backend) {
-    let (_base, state, cookie) = login_and_state(backend).await;
-    let many: Vec<String> = (0..26).map(|n| format!("tag{n}")).collect();
+async fn create_post_rejects_over_limit_tags(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let session = create_user_and_session(&state).await;
+    let cookie = session.cookie();
+    let many: Vec<String> = (0..=MAX_TAGS_PER_POST).map(|n| format!("tag{n}")).collect();
 
     let payload = serde_json::json!({
         "post": {
@@ -477,6 +480,23 @@ async fn create_post_rejects_more_than_25_tags(#[case] backend: Backend) {
     .await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
     assert!(body.contains("too many tags"), "body: {body}");
+
+    let posts = state
+        .posts
+        .list_collection_by_user(session.user_id, None, parse_row_limit("50"))
+        .await
+        .unwrap();
+    assert!(
+        posts.is_empty(),
+        "over-limit request created posts: {posts:?}"
+    );
+
+    let tags = state
+        .posts
+        .list_tags(None, parse_row_limit("50"))
+        .await
+        .unwrap();
+    assert!(tags.is_empty(), "over-limit request created tags: {tags:?}");
 }
 
 #[apply(backends)]
