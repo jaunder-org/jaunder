@@ -1047,8 +1047,8 @@ mod server_tests {
     use leptos::reactive::owner::Owner;
     use std::sync::Arc;
     use storage::{
-        FeedEventStorage, MockFeedEventStorage, MockPostStorage, PostFormat, PostRecord,
-        PostStorage, RenderedHtml, UpdatePostError,
+        AudienceStorage, FeedEventStorage, MockAudienceStorage, MockFeedEventStorage,
+        MockPostStorage, PostFormat, PostRecord, PostStorage, RenderedHtml, UpdatePostError,
     };
 
     fn owned_post(user_id: UserId) -> PostRecord {
@@ -1196,6 +1196,7 @@ mod server_tests {
         owner.set();
         provide_context(auth_parts(UserId::from(1), "alice"));
         provide_context(Arc::new(posts) as Arc<dyn PostStorage>);
+        provide_context(Arc::new(MockAudienceStorage::new()) as Arc<dyn AudienceStorage>);
         let mut events = MockFeedEventStorage::new();
         events.expect_enqueue_many().returning(|_| Ok(()));
         provide_context(Arc::new(events) as Arc<dyn FeedEventStorage>);
