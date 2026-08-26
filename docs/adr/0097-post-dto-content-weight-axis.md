@@ -92,11 +92,9 @@ that and files it as duplication should read rule 3 first: the absence of any
 conversion between them is the reason, and it is recorded here so the finding
 does not recur.
 
-**This does not reach beyond the posts family.**
-`common::media::UploadResponse`, `web::auth::LoginResponse`, and
-`web::media::DeleteResult` still carry role suffixes; #782 tracks auditing them.
-Those verticals will have their own discriminating axis — it should be derived
-from their own types rather than assumed to be content weight.
+**This does not reach beyond the posts family.** `common::media::UploadedMedia`,
+`web::auth::SessionUser`, and `web::media::MediaDeletion` are vertical-specific
+content names; they do not extend this posts content-weight axis.
 
 **Nor does it reach the storage layer.** `storage::PostRecord` and
 `storage::helpers::PostRow` are a database record and a `sqlx` row; they are not

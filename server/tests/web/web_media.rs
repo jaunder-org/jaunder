@@ -7,7 +7,7 @@ use axum::{
 use server_fn::ServerFn;
 use tempfile::TempDir;
 use tower::ServiceExt;
-use web::media::{DeleteResult, Item, UsageData};
+use web::media::{Item, MediaDeletion, UsageData};
 
 use chrono::Utc;
 use storage::{CreateMediaError, MediaRecord};
@@ -18,13 +18,24 @@ use rstest_reuse::*;
 use crate::helpers::{
     MultipartFile, create_user_and_session, make_app, post_form, post_multipart, post_server_fn,
 };
-use common::media::{MaxFileSize, MediaSource, UploadResponse, UserQuota};
+use common::media::{MaxFileSize, MediaSource, UploadedMedia, UserQuota};
 use common::test_support::{
     parse_byte_size, parse_content_hash, parse_content_type, parse_filename, parse_post_body,
 };
 use storage::test_support::{
     Backend, SeedRawPost, TestEnv, backends, backends_matrix, noop_mailer,
 };
+
+fn assert_json_object_keys(body: &str, expected: &[&str]) {
+    let value: serde_json::Value =
+        serde_json::from_str(body).expect("response should be valid JSON");
+    let object = value.as_object().expect("response should be a JSON object");
+    let mut actual = object.keys().map(String::as_str).collect::<Vec<_>>();
+    actual.sort_unstable();
+    let mut expected = expected.to_vec();
+    expected.sort_unstable();
+    assert_eq!(actual, expected, "unexpected response keys: {body}");
+}
 
 // ─── media_usage ──────────────────────────────────────────────
 
@@ -270,7 +281,8 @@ async fn delete_nested_request_maps_identity_without_force(#[case] backend: Back
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body_str}");
-    let result: DeleteResult =
+    assert_json_object_keys(&body_str, &["deleted", "referenced_in_posts"]);
+    let result: MediaDeletion =
         serde_json::from_str(&body_str).expect("response should be valid JSON");
     assert!(
         result.deleted,
@@ -333,7 +345,7 @@ async fn delete_nested_request_refuses_referenced_without_force(#[case] backend:
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body_str}");
-    let result: DeleteResult =
+    let result: MediaDeletion =
         serde_json::from_str(&body_str).expect("response should be valid JSON");
     assert!(
         !result.deleted,
@@ -389,7 +401,7 @@ async fn delete_nested_request_refuses_force_that_would_leave_rowless_reference(
     .await;
 
     assert_eq!(status, StatusCode::OK, "body: {body_str}");
-    let result: DeleteResult =
+    let result: MediaDeletion =
         serde_json::from_str(&body_str).expect("response should be valid JSON");
     assert!(
         !result.deleted,
@@ -433,9 +445,13 @@ async fn upload_media_stores_file_and_returns_metadata(#[case] backend: Backend)
     )
     .await;
 
-    // The server fn returns 200 with the bare `UploadResponse` JSON.
+    // The server fn returns 200 with the bare `UploadedMedia` JSON.
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let resp: UploadResponse = serde_json::from_str(&body).expect("response should be valid JSON");
+    assert_json_object_keys(
+        &body,
+        &["sha256", "filename", "content_type", "size_bytes", "url"],
+    );
+    let resp: UploadedMedia = serde_json::from_str(&body).expect("response should be valid JSON");
     assert_eq!(resp.filename, "photo.jpg");
     assert_eq!(resp.content_type, "image/jpeg");
     assert!(resp.url.contains("/media/upload/"), "url: {}", resp.url);
@@ -468,7 +484,7 @@ async fn upload_media_detects_content_type_when_field_omits_it(#[case] backend: 
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
-    let response: UploadResponse =
+    let response: UploadedMedia =
         serde_json::from_str(&crate::helpers::body_string(response).await).unwrap();
     assert_eq!(response.content_type, "image/jpeg");
 }
@@ -496,7 +512,7 @@ async fn upload_then_serve_round_trips_a_filename_needing_encoding(#[case] backe
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let resp: UploadResponse = serde_json::from_str(&body).expect("response should be valid JSON");
+    let resp: UploadedMedia = serde_json::from_str(&body).expect("response should be valid JSON");
 
     // The wire field carries the *canonical* encoded spelling (#720), because it is a
     // lookup key rather than a display value — `atompub::media::collection_post` passes it
@@ -576,7 +592,7 @@ async fn upload_then_serve_survives_a_name_too_long_to_store(#[case] backend: Ba
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let resp: UploadResponse = serde_json::from_str(&body).expect("response should be valid JSON");
+    let resp: UploadedMedia = serde_json::from_str(&body).expect("response should be valid JSON");
 
     // Truncated, not rejected — and the extension survived, so the detected content type is
     // still an image rather than octet-stream.

@@ -24,7 +24,7 @@ pub use format::{format_bytes, storage_usage_percent};
 pub use upload_state::{UploadCallbacks, UploadOutcome, UploadState};
 
 pub use api::{
-    Delete, DeleteMediaRequest, DeleteResult, GetUsage, Item, ListMine, Upload, UsageData, delete,
+    Delete, DeleteMediaRequest, GetUsage, Item, ListMine, MediaDeletion, Upload, UsageData, delete,
     get_usage, list_mine, upload,
 };
 

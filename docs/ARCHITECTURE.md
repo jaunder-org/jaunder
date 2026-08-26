@@ -777,16 +777,17 @@ error for every failure attributable to a Bearer or Basic credential.
 ([ADR-0107](adr/0107-web-session-establishment-is-cookie-only.md)): a
 `#[server]` fn on the auth path sets the `HttpOnly` `session` cookie and returns
 **no session-token material** in its body. Concretely `register` returns `()`
-(`web/src/registration/api.rs:59`) and `login` returns a `LoginResponse`
-carrying only `is_operator` (`web/src/auth/api.rs:38`). The one deliberate
+(`web/src/registration/api.rs:59`) and `login` returns the complete advisory
+`SessionUser` identity: the authenticated record's canonical `username` and
+`is_operator`, not a credential (`web/src/auth/api.rs:54`). The one deliberate
 exception is `create_app_password` (`web/src/sessions/api.rs:62`), which returns
 the raw token because showing it once at creation is the whole point of an app
 password — that endpoint establishes no browser session. **No web endpoint hands
 the browser a bearer token** — though endpoints will still _accept_ one, as
 logout does. No machine gate enforces the rule: it is held by
-`assert_body_carries_no_token` (`server/tests/web/web_auth.rs:34`), which checks
+`assert_body_carries_no_token` (`server/tests/web/web_auth.rs:50`), which checks
 the success body against the token recovered from `Set-Cookie`, called for
-register (`:83`) and login (`:332`)
+register (`:281`) and login (`:530`, `:564`)
 ([ADR-0107](adr/0107-web-session-establishment-is-cookie-only.md)). Two limits
 worth knowing: it covers those two endpoints only, so a new auth `#[server]` fn
 inherits no protection, and it is a substring check, so a re-encoded token would

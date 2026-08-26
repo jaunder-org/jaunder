@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 // `upload`'s return type; ungated so it is nameable on the wasm client stub
 // (where `storage` is not compiled). (#517)
-use common::media::UploadResponse;
+use common::media::UploadedMedia;
 
 #[cfg(feature = "server")]
 use {
@@ -61,9 +61,9 @@ pub struct UsageData {
     pub max_file_size_bytes: MaxFileSize,
 }
 
-/// Result returned by [`delete`].
+/// The deletion disposition returned by [`delete`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DeleteResult {
+pub struct MediaDeletion {
     pub deleted: bool,
     pub referenced_in_posts: Vec<PostId>,
 }
@@ -136,7 +136,7 @@ pub async fn get_usage() -> WebResult<UsageData> {
 /// refuses when it would leave referenced bytes without any media row accounting
 /// for them.
 #[macros::server(skip_all)]
-pub async fn delete(request: DeleteMediaRequest) -> WebResult<DeleteResult> {
+pub async fn delete(request: DeleteMediaRequest) -> WebResult<MediaDeletion> {
     let DeleteMediaRequest {
         sha256,
         filename,
@@ -176,7 +176,7 @@ pub async fn delete(request: DeleteMediaRequest) -> WebResult<DeleteResult> {
         Vec::new()
     };
 
-    Ok(DeleteResult {
+    Ok(MediaDeletion {
         deleted: outcome == TryDeleteOutcome::Deleted,
         referenced_in_posts,
     })
@@ -265,7 +265,7 @@ fn map_multipart_error(error: multer::Error) -> InternalError {
 /// Streams a multipart file upload to storage and returns its stored URL/metadata.
 /// The multipart `#[server]` fn (#517).
 #[macros::server(input = MultipartFormData, skip_all)]
-pub async fn upload(data: MultipartData) -> WebResult<UploadResponse> {
+pub async fn upload(data: MultipartData) -> WebResult<UploadedMedia> {
     let auth = require_auth().await?;
     let media = expect_context::<Arc<dyn MediaStorage>>();
     let site_config = expect_context::<Arc<dyn SiteConfigStorage>>();

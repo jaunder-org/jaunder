@@ -945,16 +945,17 @@ pub struct UserQuota(i64);
 )]
 pub struct ByteSize(i64);
 
-/// The metadata returned on a successful media upload — the server-fn wire response
-/// (#517), living here (not in `server`) so it is nameable on the wasm client. `storage`'s
-/// `MediaManager` returns it directly; `web`'s `media::upload` fn returns it; `AtomPub`
-/// serializes it. Every field is a validated `common` newtype, so each re-validates on
-/// deserialize — including `url`, the derived serve path: it is a
+/// Metadata for a successfully stored upload — the server-fn wire value (#517), living
+/// here (not in `server`) so it is nameable on the wasm client. `storage`'s
+/// `MediaManager` and `web`'s `media::upload` return it directly; `AtomPub` consumes its
+/// identity to load and serialize the stored record. Every field is a validated `common`
+/// newtype, so each re-validates on deserialize — including `url`, the derived serve path,
+/// which is a
 /// [`RootRelativeUrl`][crate::root_relative_url::RootRelativeUrl] because being *derived*
 /// is not a reason to leave it stringly (ADR-0063 §5), and because the derivation is only
 /// well-formed thanks to [`media_path`]'s encoding, which the type is what pins.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UploadResponse {
+pub struct UploadedMedia {
     pub sha256: ContentHash,
     pub filename: Filename,
     pub content_type: ContentType,

@@ -11,14 +11,14 @@ import {
 import { createPostViaApi } from "./posts";
 import type { Page } from "@playwright/test";
 
-type UploadResponse = { url: string; filename: string };
+type UploadedMedia = { url: string; filename: string };
 
 /** Uploads `name` and returns the upload response (`url`, canonical `filename`). */
 async function uploadMedia(
   page: Page,
   name: string,
   content: Buffer = Buffer.from("delete guard content"),
-): Promise<UploadResponse> {
+): Promise<UploadedMedia> {
   const response = await page.request.post(BASE_URL + "/api/media/upload", {
     multipart: {
       file: {
@@ -37,7 +37,7 @@ test.describe("Media upload and serving", () => {
     await signInAsNewUser(page);
 
     // Drive the `media::upload` server fn directly — session cookie is in page's
-    // cookie jar. The fn returns 200 with the bare `UploadResponse` JSON.
+    // cookie jar. The fn returns 200 with the bare `UploadedMedia` JSON.
     const fileContent = Buffer.from("fake image content for testing");
     const json = await uploadMedia(page, "test-image.jpg", fileContent);
     expect(json.filename).toBe("test-image.jpg");

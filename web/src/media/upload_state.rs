@@ -13,7 +13,7 @@
 
 use leptos::prelude::*;
 
-use common::media::UploadResponse;
+use common::media::UploadedMedia;
 use common::root_relative_url::RootRelativeUrl;
 
 use crate::error::WebResult;
@@ -32,11 +32,10 @@ pub enum UploadOutcome {
 }
 
 impl UploadOutcome {
-    /// Fold the server fn's result. Only the URL survives a success: the rest of
-    /// [`UploadResponse`] (hash, filename, size) is what the media *page* lists, not
-    /// what this control reports.
+    /// Fold the server fn's result. Only the URL survives a success; this control
+    /// does not need the rest of [`UploadedMedia`]'s stored-upload metadata.
     #[must_use]
-    pub fn classify(result: WebResult<UploadResponse>) -> Self {
+    pub fn classify(result: WebResult<UploadedMedia>) -> Self {
         match result {
             Ok(response) => Self::Uploaded(response.url),
             Err(error) => Self::Failed(error.to_string()),
@@ -121,7 +120,7 @@ impl UploadState {
     /// The ordering is the pre-extraction body's, verbatim: `uploading` clears
     /// first, the caller's callback runs next (so a caller that refetches sees the
     /// button already re-enabled), and the inline signals are written last.
-    pub fn settle(&self, result: WebResult<UploadResponse>, callbacks: UploadCallbacks) {
+    pub fn settle(&self, result: WebResult<UploadedMedia>, callbacks: UploadCallbacks) {
         self.uploading.set(false);
         let outcome = UploadOutcome::classify(result);
         callbacks.notify(&outcome);
@@ -168,8 +167,8 @@ mod tests {
         parse_root_relative_url("/media/upload/abc/cat.png")
     }
 
-    fn response() -> UploadResponse {
-        UploadResponse {
+    fn response() -> UploadedMedia {
+        UploadedMedia {
             sha256: parse_content_hash(&"a".repeat(64)),
             filename: parse_filename("cat.png"),
             content_type: parse_content_type("image/png"),

@@ -54,21 +54,6 @@ fn assert_body_carries_no_token(endpoint: &str, body: &str, token: &RawToken) {
     );
 }
 
-/// The `is_operator` flag from a login response body — all that `login` returns now
-/// that the session token travels only in the `HttpOnly` cookie (#533).
-///
-/// Deserializes its own shape rather than `web::auth::LoginResponse`, so a change
-/// to that type cannot silently make this assertion vacuous.
-fn is_operator_from_body(body: &str) -> bool {
-    #[derive(serde::Deserialize)]
-    struct Resp {
-        is_operator: bool,
-    }
-    serde_json::from_str::<Resp>(body.trim())
-        .expect("valid login JSON body")
-        .is_operator
-}
-
 fn register_input(
     username: &str,
     password: &str,
@@ -511,7 +496,7 @@ async fn register_closed_policy_returns_error(#[case] backend: Backend) {
     );
 }
 
-// M2.9.12: `login` with correct password sets cookie and returns token.
+// M2.9.12: `login` with correct password sets its cookie-only session.
 #[apply(backends)]
 #[tokio::test]
 async fn login_correct_password_sets_session_cookie(#[case] backend: Backend) {
@@ -545,11 +530,11 @@ async fn login_correct_password_sets_session_cookie(#[case] backend: Backend) {
     assert_body_carries_no_token("login", &body, &cookie_token);
 }
 
-// #591: login's response carries `is_operator` so the client writes a complete
-// marker (flash-free first login). A freshly registered user is a non-operator.
+// #591: login returns a complete marker (flash-free first-login chrome) without
+// exposing its cookie credential.
 #[apply(backends)]
 #[tokio::test]
-async fn login_returns_is_operator_flag(#[case] backend: Backend) {
+async fn login_returns_session_user_without_token(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     state
         .site_config
@@ -564,7 +549,7 @@ async fn login_returns_is_operator_flag(#[case] backend: Backend) {
     )
     .await;
 
-    let (status, _cookie, body) = post_server_fn_with_secure_flag(
+    let (status, set_cookie, body) = post_server_fn_with_secure_flag(
         &state,
         &login_input("alice", "password123", None),
         None,
@@ -573,8 +558,14 @@ async fn login_returns_is_operator_flag(#[case] backend: Backend) {
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    let is_operator = is_operator_from_body(&body);
-    assert!(!is_operator, "a freshly registered user is not an operator");
+    let cookie = set_cookie.expect("Set-Cookie header should be present on login");
+    assert!(cookie.starts_with("session="), "cookie: {cookie}");
+    let token = token_from_set_cookie(&cookie);
+    assert_body_carries_no_token("login", &body, &token);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(body.trim()).expect("valid login JSON body"),
+        serde_json::json!({"username": "alice", "is_operator": false}),
+    );
 }
 
 #[apply(backends)]

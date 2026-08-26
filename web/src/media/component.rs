@@ -12,7 +12,7 @@ use common::pagination::{PageOffset, PageSize};
 use common::root_relative_url::RootRelativeUrl;
 
 use super::{
-    Delete, DeleteMediaRequest, DeleteResult, Item, UploadCallbacks, UploadState, UsageData,
+    Delete, DeleteMediaRequest, Item, MediaDeletion, UploadCallbacks, UploadState, UsageData,
     format_bytes, get_usage, list_mine, storage_usage_percent, upload,
 };
 use crate::error::{WebError, WebResult};
@@ -298,7 +298,7 @@ fn MediaDeleteOutcome(
             delete_action
                 .value()
                 .get()
-                .map(|result: Result<DeleteResult, WebError>| match result {
+                .map(|result: Result<MediaDeletion, WebError>| match result {
                     Ok(r) if r.deleted => {
                         view! { <p class="success">"Media deleted."</p> }.into_any()
                     }
