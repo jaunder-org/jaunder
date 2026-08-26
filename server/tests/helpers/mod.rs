@@ -26,11 +26,12 @@ pub use atompub::{
     atompub_put_xml, atompub_upload, atompub_xml,
 };
 pub use http::{
-    MultipartFile, TestHttpResponse, body_string, get_asset, make_app, post_form,
-    post_form_with_bearer, post_form_with_credentials, post_form_with_mailer,
-    post_form_with_secure_flag, post_json, post_json_with_credentials, post_multipart,
-    post_server_fn, post_server_fn_request_fixture, post_server_fn_request_fixture_with_mailer,
-    post_server_fn_request_fixture_with_secure_flag, post_server_fn_with_mailer,
+    ForeignReferenceResolver, MultipartFile, TestHttpResponse, body_string, get_asset, make_app,
+    make_app_with_media_ownership_resolver, post_form, post_form_with_bearer,
+    post_form_with_credentials, post_form_with_mailer, post_form_with_secure_flag, post_json,
+    post_json_with_credentials, post_multipart, post_server_fn, post_server_fn_request_fixture,
+    post_server_fn_request_fixture_with_mailer, post_server_fn_request_fixture_with_secure_flag,
+    post_server_fn_with_mailer, post_server_fn_with_media_ownership_resolver,
     post_server_fn_with_secure_flag, post_server_fn_with_ua,
 };
 pub use registrar::ensure_server_fns_registered;

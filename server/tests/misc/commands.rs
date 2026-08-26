@@ -15,7 +15,10 @@ use jaunder::commands::{
     app_password_create, cmd_app_password_create, cmd_backup, cmd_init, cmd_restore, cmd_serve,
     cmd_smtp_test, cmd_user_create, cmd_user_invite, prepare_server,
 };
-use storage::{BackupError, BackupMode, open_database, open_existing_database};
+use storage::{
+    BackupError, BackupMode, OpenedDatabase, open_database, open_existing_database,
+    open_existing_database_with_observer,
+};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -266,8 +269,19 @@ async fn after_init_server_responds_to_health_check(#[case] backend: Backend) {
 
     cmd_init(&args, false).await.unwrap();
 
-    let db = open_existing_database(&args.db).await.unwrap();
-    let router = jaunder::create_router(db, noop_mailer(), true, args.storage_path.clone());
+    let OpenedDatabase {
+        state, instance_id, ..
+    } = open_existing_database_with_observer(&args.db)
+        .await
+        .unwrap();
+    let router = jaunder::create_router(
+        state,
+        instance_id,
+        noop_mailer(),
+        true,
+        args.storage_path.clone(),
+    )
+    .expect("canonical instance identity is an HTTP header");
 
     let response = router
         .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())

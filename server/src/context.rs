@@ -14,9 +14,10 @@ use std::sync::Arc;
 use common::mailer::MailSender;
 use leptos::prelude::provide_context;
 use storage::{
-    AppState, AtomicOps, AudienceStorage, EmailVerificationStorage, FeedEventStorage,
-    InviteStorage, MediaStorage, PasswordResetStorage, PostStorage, SessionStorage,
-    SiteConfigStorage, SubscriptionStorage, UserConfigStorage, UserStorage,
+    AppState, AtomicOps, AudienceStorage, EmailVerificationStorage, FeedEventStorage, InstanceId,
+    InviteStorage, MediaReferenceOwnershipResolver, MediaStorage, PasswordResetStorage,
+    PostStorage, SessionStorage, SiteConfigStorage, SubscriptionStorage, UserConfigStorage,
+    UserStorage,
 };
 
 /// Place every storage handle in `state` into the current Leptos context as
@@ -36,6 +37,16 @@ pub fn provide_app_state_contexts(state: &Arc<AppState>) {
     provide_context::<Arc<dyn UserConfigStorage>>(state.user_config.clone());
     provide_context::<Arc<dyn SiteConfigStorage>>(state.site_config.clone());
     provide_context::<Arc<dyn FeedEventStorage>>(state.feed_events.clone());
+}
+
+/// Places the immutable instance identity and live media-reference resolver in
+/// the current Leptos request context.
+pub fn provide_media_ownership_context(
+    resolver: &Arc<dyn MediaReferenceOwnershipResolver>,
+    instance_id: &InstanceId,
+) {
+    provide_context::<Arc<dyn MediaReferenceOwnershipResolver>>(resolver.clone());
+    provide_context(instance_id.clone());
 }
 
 /// Place the mailer in the current Leptos context. Server functions that

@@ -24,28 +24,55 @@ use rstest_reuse::*;
 use crate::helpers::{ensure_server_fns_registered, tmp_storage_path};
 use storage::test_support::{Backend, TestEnv, backends, noop_mailer};
 
+const INSTANCE_HEADER: &str = "x-jaunder-instance";
+
+fn assert_instance_header(response: &axum::response::Response, expected: &storage::InstanceId) {
+    let values = response.headers().get_all(INSTANCE_HEADER);
+    assert_eq!(
+        values.iter().count(),
+        1,
+        "response must carry one instance header"
+    );
+    let expected = expected.to_string();
+    assert_eq!(
+        values.iter().next().and_then(|value| value.to_str().ok()),
+        Some(expected.as_str())
+    );
+}
+
 #[apply(backends)]
 #[tokio::test]
 async fn home_route_returns_ok(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base } = backend.setup().await;
+    let instance_id = base.instance_id().clone();
     ensure_server_fns_registered();
-    let app = jaunder::create_router(state, noop_mailer(), true, tmp_storage_path());
+    let app = jaunder::create_router(
+        state,
+        instance_id.clone(),
+        noop_mailer(),
+        true,
+        tmp_storage_path(),
+    )
+    .expect("canonical instance identity is an HTTP header");
     let response = app
         .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    assert_instance_header(&response, &instance_id);
 }
 
 #[apply(backends)]
 #[tokio::test]
 async fn spa_fallback_serves_embedded_shell_without_disk_index_html(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base } = backend.setup().await;
+    let instance_id = base.instance_id().clone();
     // No index.html exists on disk (the host reality, #239); the server owns the
     // embedded shell. The SPA fallback must still serve it — 200, text/html,
     // boots wasm.
     ensure_server_fns_registered();
-    let app = jaunder::create_router(state, noop_mailer(), true, tmp_storage_path());
+    let app = jaunder::create_router(state, instance_id, noop_mailer(), true, tmp_storage_path())
+        .expect("canonical instance identity is an HTTP header");
     // `/login` is a client route → not a projector route → SPA fallback.
     let response = app
         .oneshot(
@@ -93,9 +120,16 @@ async fn spa_fallback_serves_embedded_shell_without_disk_index_html(#[case] back
 #[apply(backends)]
 #[tokio::test]
 async fn session_api_route_returns_ok(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base } = backend.setup().await;
     ensure_server_fns_registered();
-    let app = jaunder::create_router(state, noop_mailer(), true, tmp_storage_path());
+    let app = jaunder::create_router(
+        state,
+        base.instance_id().clone(),
+        noop_mailer(),
+        true,
+        tmp_storage_path(),
+    )
+    .expect("canonical instance identity is an HTTP header");
     let response = app
         .oneshot(
             Request::builder()
@@ -122,9 +156,16 @@ async fn session_api_route_returns_ok(#[case] backend: Backend) {
 #[apply(backends)]
 #[tokio::test]
 async fn multi_segment_server_fn_route_is_reachable(#[case] backend: Backend) {
-    let TestEnv { state, base: _base } = backend.setup().await;
+    let TestEnv { state, base } = backend.setup().await;
     ensure_server_fns_registered();
-    let app = jaunder::create_router(state, noop_mailer(), true, tmp_storage_path());
+    let app = jaunder::create_router(
+        state,
+        base.instance_id().clone(),
+        noop_mailer(),
+        true,
+        tmp_storage_path(),
+    )
+    .expect("canonical instance identity is an HTTP header");
     let path = <web::auth::GetSession as ServerFn>::PATH;
     assert_eq!(path, "/api/auth/get_session", "the #684 scheme under test");
     let response = app
@@ -143,4 +184,62 @@ async fn multi_segment_server_fn_route_is_reachable(#[case] backend: Backend) {
         StatusCode::NOT_FOUND,
         "`/api/{{*fn_name}}` must capture a multi-segment server-fn path"
     );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn instance_header_covers_not_found_method_not_allowed_and_handler_error(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base } = backend.setup().await;
+    let instance_id = base.instance_id().clone();
+    ensure_server_fns_registered();
+
+    let app = jaunder::create_router(
+        state,
+        instance_id.clone(),
+        noop_mailer(),
+        true,
+        tmp_storage_path(),
+    )
+    .expect("canonical instance identity is an HTTP header");
+    let not_found = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/style/not-found.css")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(not_found.status(), StatusCode::NOT_FOUND);
+    assert_instance_header(&not_found, &instance_id);
+
+    let method_not_allowed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/feed.rss")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(method_not_allowed.status(), StatusCode::METHOD_NOT_ALLOWED);
+    assert_instance_header(&method_not_allowed, &instance_id);
+
+    base.close_pool().await;
+    let handler_error = app
+        .oneshot(
+            Request::builder()
+                .uri("/feed.rss")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(handler_error.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_instance_header(&handler_error, &instance_id);
 }

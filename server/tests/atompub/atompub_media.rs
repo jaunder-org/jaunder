@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::{
     body::Body,
     http::{HeaderValue, Method, StatusCode, header},
@@ -15,8 +17,9 @@ use rstest_reuse::*;
 use storage::test_support::{Backend, SeedRawPost, TestEnv, backends, backends_matrix};
 
 use crate::helpers::{
-    atompub, atompub_at, atompub_get, atompub_location, atompub_upload, body_string,
-    create_user_and_session, make_app, setup_with_base_url,
+    ForeignReferenceResolver, atompub, atompub_at, atompub_get, atompub_location, atompub_upload,
+    body_string, create_user_and_session, make_app, make_app_with_media_ownership_resolver,
+    setup_with_base_url,
 };
 
 const PNG: &[u8] = &[
@@ -327,6 +330,119 @@ async fn delete_media_member_refuses_rowless_referenced_file(#[case] backend: Ba
         .unwrap();
 
     assert_eq!(del_resp.status(), StatusCode::CONFLICT);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn delete_media_member_uses_live_ownership_evidence(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let storage = TempDir::new().unwrap();
+    let resolver = Arc::new(ForeignReferenceResolver::new([]));
+    let app = make_app_with_media_ownership_resolver(&state, &storage, resolver.clone());
+    let exact_member_url = upload_and_member_url(&app, &session, "exact-origin.png").await;
+    let exact_hash = exact_member_url
+        .rsplit('/')
+        .nth(1)
+        .map(parse_content_hash)
+        .expect("member URL includes the content hash");
+    let exact_filename = parse_filename("exact-origin.png");
+    let exact_media_url = common::media::media_url(
+        &common::media::MediaSource::Upload,
+        &exact_hash,
+        &exact_filename,
+    );
+    SeedRawPost::new(session.user_id)
+        .body(parse_post_body(&format!(
+            "<img src=\"https://example.com{exact_media_url}\">"
+        )))
+        .seed(&state)
+        .await;
+
+    let exact_delete = app
+        .clone()
+        .oneshot(
+            atompub_at(&session, Method::DELETE, &exact_member_url)
+                .body(Body::empty())
+                .expect("failed to build atompub DELETE request"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        exact_delete.status(),
+        StatusCode::CONFLICT,
+        "exact configured-origin reference refuses deletion"
+    );
+
+    let foreign_member_url = upload_and_member_url(&app, &session, "foreign-origin.png").await;
+    let foreign_hash = foreign_member_url
+        .rsplit('/')
+        .nth(1)
+        .map(parse_content_hash)
+        .expect("member URL includes the content hash");
+    let foreign_filename = parse_filename("foreign-origin.png");
+    let foreign_media_url = common::media::media_url(
+        &common::media::MediaSource::Upload,
+        &foreign_hash,
+        &foreign_filename,
+    );
+    SeedRawPost::new(session.user_id)
+        .body(parse_post_body(&format!(
+            "<img src=\"https://foreign.example{foreign_media_url}\">"
+        )))
+        .seed(&state)
+        .await;
+
+    resolver.insert_foreign_form(
+        format!("https://foreign.example{foreign_media_url}")
+            .parse()
+            .expect("valid media reference form"),
+    );
+    let foreign_delete = app
+        .clone()
+        .oneshot(
+            atompub_at(&session, Method::DELETE, &foreign_member_url)
+                .body(Body::empty())
+                .expect("failed to build atompub DELETE request"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        foreign_delete.status(),
+        StatusCode::NO_CONTENT,
+        "foreign-origin reference does not guard deletion"
+    );
+
+    let unknown_member_url = upload_and_member_url(&app, &session, "unknown-origin.png").await;
+    let unknown_hash = unknown_member_url
+        .rsplit('/')
+        .nth(1)
+        .map(parse_content_hash)
+        .expect("member URL includes the content hash");
+    let unknown_media_url = common::media::media_url(
+        &common::media::MediaSource::Upload,
+        &unknown_hash,
+        &parse_filename("unknown-origin.png"),
+    );
+    SeedRawPost::new(session.user_id)
+        .body(parse_post_body(&format!(
+            "<img src=\"https://unknown.example{unknown_media_url}\">"
+        )))
+        .seed(&state)
+        .await;
+    let unknown_delete = app
+        .oneshot(
+            atompub_at(&session, Method::DELETE, &unknown_member_url)
+                .body(Body::empty())
+                .expect("failed to build atompub DELETE request"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        unknown_delete.status(),
+        StatusCode::CONFLICT,
+        "unproven foreign ownership fails closed"
+    );
 }
 
 /// Replaces the trailing filename segment of a member URL, keeping everything before it.

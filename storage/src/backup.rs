@@ -20,10 +20,10 @@ use common::time::UtcInstant;
 mod restore_validation;
 
 pub use common::backup::BackupMode;
-pub(crate) use restore_validation::validate_restore_row;
 pub use restore_validation::{
     BackupRestoreOutcome, RestoreValidationIssue, RestoreValidationReport,
 };
+pub(crate) use restore_validation::{validate_instance_identity_backup, validate_restore_row};
 
 // Tables deliberately excluded from backup: `_sqlx_migrations` is schema state
 // re-applied by migrations on the restore target, and `feed_cache` is a
@@ -306,11 +306,21 @@ fn validate_manifest(manifest: &BackupManifest) -> Result<(), BackupError> {
     Ok(())
 }
 
+/// Whether this backup is the immediately preceding, pre-identity schema.
+///
+/// The manifest's schema version distinguishes it from a malformed current
+/// backup: only migration 0026 backups may omit the 0027 singleton table.
+pub(crate) fn is_pre_identity_backup(manifest: &BackupManifest, target_version: i64) -> bool {
+    manifest.schema_version == 26 && target_version == 27
+}
+
 pub(crate) fn ensure_schema_version(
     manifest: &BackupManifest,
     target_version: i64,
 ) -> Result<(), BackupError> {
-    if manifest.schema_version != target_version {
+    if manifest.schema_version != target_version
+        && !is_pre_identity_backup(manifest, target_version)
+    {
         return Err(BackupError::SchemaVersionMismatch {
             backup_version: manifest.schema_version,
             target_version,
@@ -743,6 +753,7 @@ mod tests {
             "email_verifications",
             "feed_events",
             "idempotency_keys",
+            "instance_identity",
             "invites",
             "media",
             "password_resets",
@@ -784,8 +795,10 @@ mod tests {
             .fetch_one(pool)
             .await?,
         };
+        // The schema is the backed-up tables plus `feed_cache` and
+        // `_sqlx_migrations`, both intentionally excluded from export.
         assert_eq!(
-            live_count, 24,
+            live_count, 25,
             "a table was added or removed — update the golden set and denylist deliberately"
         );
 
@@ -808,7 +821,12 @@ mod tests {
             crate::database_is_empty(&db).await?,
             "a freshly-initialized database must count as empty"
         );
-        for table in ["channels", "subscription_statuses", "target_kinds"] {
+        for table in [
+            "channels",
+            "subscription_statuses",
+            "target_kinds",
+            "instance_identity",
+        ] {
             let count: i64 = crate::with_closeable_pool!(env.base.pool(), pool, {
                 sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table}"))
                     .fetch_one(pool)
@@ -823,6 +841,49 @@ mod tests {
             !crate::database_is_empty(&db).await?,
             "a database holding a user must not count as empty"
         );
+        Ok(())
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn pristine_restore_adopts_the_backup_instance_identity(
+        #[case] backend: Backend,
+    ) -> Result<(), BackupError> {
+        let source = backend.setup().await;
+        let source_identity = source.base.instance_id().to_string();
+        let temp = TempDir::new()?;
+        let media = temp.path().join("media");
+        fs::create_dir_all(&media)?;
+        let backup = temp.path().join("backup");
+        let source_db = backup_db_options(backend, &source.base)?;
+        export_backup(BackupExportOptions {
+            database: &source_db,
+            media_path: &media,
+            destination_path: &backup,
+            mode: BackupMode::Directory,
+        })
+        .await?;
+
+        let target = backend.setup().await;
+        let bootstrap_identity = target.base.instance_id().to_string();
+        assert_ne!(source_identity, bootstrap_identity);
+        let target_db = backup_db_options(backend, &target.base)?;
+        restore_backup(BackupRestoreOptions {
+            database: &target_db,
+            media_path: &temp.path().join("restored-media"),
+            source_path: &backup,
+        })
+        .await?;
+
+        let identity = target
+            .base
+            .pool()
+            .string_quintuples("SELECT instance_id, '', '', '', '' FROM instance_identity")
+            .await?
+            .into_iter()
+            .map(|row| row.0)
+            .collect::<Vec<_>>();
+        assert_eq!(identity, vec![source_identity]);
         Ok(())
     }
 
@@ -1339,6 +1400,7 @@ mod tests {
         fs::write(&users_ndjson, corrupted)?;
 
         let target = backend.setup().await;
+        let bootstrap_identity = target.base.instance_id().to_string();
         let target_db = backup_db_options(backend, &target.base)?;
         let error = restore_backup(BackupRestoreOptions {
             database: &target_db,
@@ -1349,6 +1411,62 @@ mod tests {
         .expect_err("restore should reject a row missing a column");
 
         assert!(matches!(error, BackupError::InvalidBackup(_)));
+        let identity = target
+            .base
+            .pool()
+            .string_quintuples("SELECT instance_id, '', '', '', '' FROM instance_identity")
+            .await?
+            .into_iter()
+            .map(|row| row.0)
+            .collect::<Vec<_>>();
+        assert_eq!(identity, vec![bootstrap_identity]);
+        Ok(())
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn restore_from_the_pre_identity_schema_bootstraps_a_new_identity(
+        #[case] backend: Backend,
+    ) -> Result<(), BackupError> {
+        let source = backend.setup().await;
+        let temp = TempDir::new()?;
+        let backup = temp.path().join("backup");
+        fs::create_dir_all(temp.path().join("source-media"))?;
+        let source_db = backup_db_options(backend, &source.base)?;
+        export_backup(BackupExportOptions {
+            database: &source_db,
+            media_path: &temp.path().join("source-media"),
+            destination_path: &backup,
+            mode: BackupMode::Directory,
+        })
+        .await?;
+
+        let manifest_path = backup.join("manifest.json");
+        let mut manifest: BackupManifest =
+            serde_json::from_str(&fs::read_to_string(&manifest_path)?)?;
+        manifest.schema_version = 26;
+        manifest.tables.retain(|table| table != "instance_identity");
+        fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)?;
+        fs::remove_file(backup.join("db").join("instance_identity.ndjson"))?;
+
+        let target = backend.setup().await;
+        let previous_identity = target.base.instance_id().to_string();
+        let target_db = backup_db_options(backend, &target.base)?;
+        restore_backup(BackupRestoreOptions {
+            database: &target_db,
+            media_path: &temp.path().join("restored-media"),
+            source_path: &backup,
+        })
+        .await?;
+
+        let identity = target
+            .base
+            .pool()
+            .string_quintuples("SELECT instance_id, '', '', '', '' FROM instance_identity")
+            .await?;
+        assert_eq!(identity.len(), 1);
+        assert_ne!(identity[0].0, previous_identity);
+        assert!(identity[0].0.parse::<crate::InstanceId>().is_ok());
         Ok(())
     }
 }

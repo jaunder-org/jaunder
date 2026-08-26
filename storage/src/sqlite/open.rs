@@ -14,6 +14,8 @@ use super::{
 };
 use crate::AppState;
 use crate::db::sql_slow_query_threshold;
+use crate::instance_identity::ensure_instance_identity;
+use crate::posts::backfill_post_media_references;
 
 fn make_sqlite_app_state(pool: SqlitePool) -> Arc<AppState> {
     Arc::new(AppState {
@@ -45,7 +47,7 @@ fn make_sqlite_app_state(pool: SqlitePool) -> Arc<AppState> {
 pub(crate) async fn open_sqlite_database_with_pool(
     options: &SqliteConnectOptions,
     create_if_missing: bool,
-) -> sqlx::Result<(Arc<AppState>, SqlitePool)> {
+) -> sqlx::Result<(Arc<AppState>, SqlitePool, crate::InstanceId)> {
     let mut options = options.clone();
     if create_if_missing {
         options = options.create_if_missing(true);
@@ -67,7 +69,9 @@ pub(crate) async fn open_sqlite_database_with_pool(
         .await?;
 
     sqlx::migrate!("./migrations/sqlite").run(&pool).await?;
-    Ok((make_sqlite_app_state(pool.clone()), pool))
+    let instance_id = ensure_instance_identity(&pool).await?;
+    backfill_post_media_references(&pool).await?;
+    Ok((make_sqlite_app_state(pool.clone()), pool, instance_id))
 }
 
 /// Returns `true` if the `SQLite` database holds no user data — every table

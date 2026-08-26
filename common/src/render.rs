@@ -208,7 +208,7 @@ impl PartialEq<&str> for RenderedHtml {
 #[cfg(feature = "sanitize")]
 mod sanitized {
     use super::{PostFormat, RenderedHtml};
-    use crate::media::{MediaRef, parse_media_url};
+    use crate::media::{MediaReference, parse_media_url};
     use crate::post_body::PostBody;
 
     /// The single allowlist every [`RenderedHtml::sanitize`] call scrubs against —
@@ -395,7 +395,7 @@ mod sanitized {
     /// The output is sorted and deduplicated (it is collected through a `BTreeSet`), so a
     /// byte-identical body yields a byte-identical set of rows.
     #[must_use]
-    pub fn extract_media_refs(html: &str) -> Vec<MediaRef> {
+    pub fn extract_media_refs(html: &str) -> Vec<MediaReference> {
         extract_media_refs_with(html, MEDIA_URL_ATTRS)
     }
 
@@ -407,11 +407,14 @@ mod sanitized {
     /// enforces the `language-*` class policy, and its ordering against URL-scheme filtering
     /// would have to be verified and then depended on. A second parse of the final string is
     /// the literal reading of "extract from the rendered, sanitized HTML", and yields a pure
-    /// `&str -> Vec<MediaRef>` that the coupling test and future reclamation work reuse.
+    /// `&str -> Vec<MediaReference>` that the coupling test and future reclamation work reuse.
     ///
     /// Uses `html5ever`'s tokenizer, not its tree builder: only start tags and their
     /// attributes are needed, and the input is already well-formed sanitizer output.
-    pub(super) fn extract_media_refs_with(html: &str, pairs: &[(&str, &str)]) -> Vec<MediaRef> {
+    pub(super) fn extract_media_refs_with(
+        html: &str,
+        pairs: &[(&str, &str)],
+    ) -> Vec<MediaReference> {
         use std::cell::RefCell;
         use std::collections::BTreeSet;
 
@@ -425,7 +428,7 @@ mod sanitized {
         /// `TokenSink::process_token` takes `&self`, so the set lives behind a `RefCell`.
         struct MediaRefSink<'a> {
             pairs: &'a [(&'a str, &'a str)],
-            refs: RefCell<BTreeSet<MediaRef>>,
+            refs: RefCell<BTreeSet<MediaReference>>,
         }
 
         impl TokenSink for MediaRefSink<'_> {
@@ -526,7 +529,7 @@ mod sanitized {
         // rendered-html-from-trusted:allow RenderOutput is minted only by render/sanitize before pairing media refs (#701)
         html: RenderedHtml,
         /// What that HTML points a reader at. Private — see the type's docs.
-        media: Vec<MediaRef>,
+        media: Vec<MediaReference>,
     }
 
     impl RenderOutput {
@@ -551,7 +554,7 @@ mod sanitized {
         /// The media the HTML references — sorted and deduplicated, as
         /// [`extract_media_refs`] returns them.
         #[must_use]
-        pub fn media(&self) -> &[MediaRef] {
+        pub fn media(&self) -> &[MediaReference] {
             &self.media
         }
 
@@ -1774,7 +1777,7 @@ mod tests {
             let body = parse_post_body(&format!("![alt]({})", media_url_for("photo.jpg")));
             let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
             assert_eq!(refs.len(), 1);
-            assert_eq!(refs[0].filename.as_ref(), "photo.jpg");
+            assert_eq!(refs[0].media().filename.as_ref(), "photo.jpg");
         }
 
         #[test]
@@ -1783,7 +1786,7 @@ mod tests {
             let body = parse_post_body(&format!("<img src=\"{}\">", media_url_for("photo.jpg")));
             let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
             assert_eq!(refs.len(), 1);
-            assert_eq!(refs[0].filename.as_ref(), "photo.jpg");
+            assert_eq!(refs[0].media().filename.as_ref(), "photo.jpg");
         }
 
         #[test]
@@ -1793,7 +1796,7 @@ mod tests {
             let body = parse_post_body(&format!("<img src=\"{}\">", media_url_for("my photo.jpg")));
             let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
             assert_eq!(refs.len(), 1);
-            assert_eq!(refs[0].filename.as_ref(), "my%20photo.jpg");
+            assert_eq!(refs[0].media().filename.as_ref(), "my%20photo.jpg");
         }
 
         #[test]
@@ -1803,7 +1806,7 @@ mod tests {
             ));
             let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
             assert_eq!(refs.len(), 1);
-            assert_eq!(refs[0].source, MediaSource::Upload);
+            assert_eq!(refs[0].media().source, MediaSource::Upload);
         }
 
         #[test]
@@ -1821,17 +1824,20 @@ mod tests {
         }
 
         #[test]
-        fn extract_deduplicates_and_sorts() {
-            let one = media_url_for("a.jpg");
-            let two = media_url_for("b.jpg");
+        fn extract_deduplicates_and_sorts_complete_references() {
+            let local = media_url_for("photo.jpg");
+            let absolute = format!("https://example.com{local}?download=1");
+            let scheme_relative = format!("//example.com:8443{local}?download=1");
             let body = parse_post_body(&format!(
-                "<img src=\"{two}\"><img src=\"{one}\"><img src=\"{one}\">"
+                "<img src=\"{scheme_relative}\"><img src=\"{local}\"><img src=\"{absolute}\"><img src=\"{absolute}\">"
             ));
             let refs = extract_media_refs(render(&body, &PostFormat::Markdown).as_ref());
-            assert_eq!(refs.len(), 2, "duplicate references collapse to one row");
-            assert!(
-                refs[0] < refs[1],
-                "output is sorted for deterministic writes"
+            assert_eq!(refs.len(), 3, "only complete duplicate references collapse");
+            assert_eq!(
+                refs.iter()
+                    .map(crate::media::MediaReference::reference_form)
+                    .collect::<Vec<_>>(),
+                vec![local.as_str(), absolute.as_str(), scheme_relative.as_str()]
             );
         }
 

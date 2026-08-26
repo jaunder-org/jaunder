@@ -16,12 +16,24 @@ use common::media::{ContentHash, Filename, MediaRef, MediaSource, media_url};
 use common::root_relative_url::RootRelativeUrl;
 use common::tagged_url::{BaseUrl, EditMediaUriUrl, EditUriUrl, compose};
 use common::username::Username;
-use storage::{MediaManager, MediaRecord, MediaStorage, SiteConfigStorage};
+use storage::{
+    InstanceId, MediaManager, MediaRecord, MediaReferenceOwnershipResolver, MediaStorage,
+    PostStorage, SiteConfigStorage, resolve_media_reference_ownership,
+};
 use web::auth;
 
 use super::{HandlerError, required_base_url};
 
 const ENTRY_CONTENT_TYPE: &str = "application/atom+xml;type=entry;charset=utf-8";
+
+type MemberDeleteExtensions = (
+    Extension<Arc<dyn MediaStorage>>,
+    Extension<Arc<dyn PostStorage>>,
+    Extension<Arc<dyn SiteConfigStorage>>,
+    Extension<Arc<PathBuf>>,
+    Extension<InstanceId>,
+    Extension<Arc<dyn MediaReferenceOwnershipResolver>>,
+);
 
 /// Builds the media-link entry for a stored media record.
 fn media_link_entry(record: &MediaRecord, base: &BaseUrl, username: &Username) -> MediaLinkEntry {
@@ -216,9 +228,14 @@ pub(super) async fn member_get(
 /// `403` wrong user; `404` unknown; `500` on storage failure.
 #[tracing::instrument(name = "atompub.media.member_delete", skip_all)]
 pub(super) async fn member_delete(
-    Extension(media): Extension<Arc<dyn MediaStorage>>,
-    Extension(site_config): Extension<Arc<dyn SiteConfigStorage>>,
-    Extension(storage_path): Extension<Arc<PathBuf>>,
+    (
+        Extension(media),
+        Extension(posts),
+        Extension(site_config),
+        Extension(storage_path),
+        Extension(instance_id),
+        Extension(resolver),
+    ): MemberDeleteExtensions,
     auth_user: auth::User,
     Path(address): Path<MediaMemberAddress>,
 ) -> Result<Response, HandlerError> {
@@ -237,9 +254,21 @@ pub(super) async fn member_delete(
         sha256: sha,
         filename,
     };
+    // Take one identity/global-reference snapshot, resolve network ownership
+    // before storage locking, and carry the resulting evidence through both
+    // forced deletion and potential last-row reclamation.
+    let identity = site_config.get_identity().await?;
+    let references = posts.list_media_references(&media_ref).await?;
+    let evidence = resolve_media_reference_ownership(
+        resolver.as_ref(),
+        references.references(),
+        &instance_id,
+        identity.base_url.as_ref(),
+    )
+    .await;
     let manager = MediaManager::new(media, site_config, storage_path);
     let outcome = manager
-        .delete_media(auth_user.user_id, &media_ref, true)
+        .delete_media(auth_user.user_id, &media_ref, &instance_id, &evidence, true)
         .await
         .map_err(map_delete_error)?;
     if outcome == storage::TryDeleteOutcome::RefusedReferenced {

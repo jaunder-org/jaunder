@@ -1,13 +1,17 @@
 use std::fmt;
 use std::str::FromStr;
 
+use crate::InstanceId;
 use common::audience::AudienceName;
 use common::bio::Bio;
 use common::config_key::{SiteConfigKey, UserConfigKey};
 use common::display_name::DisplayName;
 use common::email::Email;
 use common::feed::{FeedEventStatus, FeedPath};
-use common::media::{ByteSize, ContentHash, ContentType, Filename, MediaSource};
+use common::media::{
+    ByteSize, ContentHash, ContentType, Filename, MediaReferenceForm, MediaReferenceKind,
+    MediaSource,
+};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
@@ -105,6 +109,43 @@ pub(crate) fn validate_restore_row(
         "users" => validate_typed_restore_row::<UsersRestoreRow>(row, report),
         _ => {}
     }
+}
+
+/// Validates the singleton instance identity before a restore clears the target.
+///
+/// A current-schema backup must carry one canonical UUID. Pre-identity backups
+/// cannot reach this point because the schema-version gate rejects them before
+/// import; accepting them needs a deliberately versioned compatibility path.
+pub(crate) fn validate_instance_identity_backup(
+    source_path: &std::path::Path,
+    manifest: &BackupManifest,
+) -> Result<(), crate::backup::BackupError> {
+    if !manifest
+        .tables
+        .iter()
+        .any(|table| table == "instance_identity")
+    {
+        return Err(crate::backup::BackupError::InvalidBackup(
+            "current-schema backup is missing instance_identity".to_owned(),
+        ));
+    }
+    let rows = super::read_table_rows(source_path, "instance_identity")?;
+    let [row] = rows.as_slice() else {
+        return Err(crate::backup::BackupError::InvalidBackup(
+            "instance_identity must contain exactly one row".to_owned(),
+        ));
+    };
+    let Some(value) = row.get("instance_id").and_then(json_value_as_restore_text) else {
+        return Err(crate::backup::BackupError::InvalidBackup(
+            "instance_identity.instance_id must be a string".to_owned(),
+        ));
+    };
+    value.parse::<InstanceId>().map_err(|_| {
+        crate::backup::BackupError::InvalidBackup(
+            "instance_identity.instance_id must be a canonical UUID".to_owned(),
+        )
+    })?;
+    Ok(())
 }
 
 trait RestoreTableRow: Sized {
@@ -228,6 +269,8 @@ typed_restore_row!(PostMediaRestoreRow, "post_media" {
     source: MediaSource => ("source", "media source"),
     sha256: ContentHash => ("sha256", "content hash"),
     filename: Filename => ("filename", "filename"),
+    reference_kind: MediaReferenceKind => ("reference_kind", "media reference kind"),
+    reference_form: MediaReferenceForm => ("reference_form", "media reference form"),
 });
 
 typed_restore_row!(PostRevisionsRestoreRow, "post_revisions" {
@@ -409,14 +452,23 @@ pub(crate) const RESTORE_COLUMN_COVERAGE: &[RestoreColumnCoverage] = &[
         "filename",
         RestoreBadValue::Text("my photo.jpg"),
     ),
-    covered("post_revisions", "title", RestoreBadValue::Text("")),
-    covered("post_revisions", "slug", RestoreBadValue::Text("!")),
-    covered("post_revisions", "body", RestoreBadValue::Text("   ")),
+    covered(
+        "post_media",
+        "reference_kind",
+        RestoreBadValue::Text("not-a-reference-kind"),
+    ),
+    primitive(
+        "post_media",
+        "reference_form",
+        "reference form is exact persisted evidence validated by the media parser on write",
+    ),
     covered(
         "post_revisions",
         "format",
         RestoreBadValue::Text("sideways"),
     ),
+    covered("post_revisions", "title", RestoreBadValue::Text("")),
+    covered("post_revisions", "body", RestoreBadValue::Text("   ")),
     covered("post_tags", "tag_display", RestoreBadValue::Text("")),
     covered("posts", "title", RestoreBadValue::Text("")),
     covered("posts", "slug", RestoreBadValue::Text("!")),
@@ -435,6 +487,11 @@ pub(crate) const RESTORE_COLUMN_COVERAGE: &[RestoreColumnCoverage] = &[
     covered("target_kinds", "name", RestoreBadValue::Text("private")),
     covered("user_config", "key", RestoreBadValue::Text("bad.key")),
     covered("user_config", "value", RestoreBadValue::Text("sideways")),
+    primitive(
+        "instance_identity",
+        "instance_id",
+        "singleton identity is validated before restore clears the target",
+    ),
     covered("users", "username", RestoreBadValue::Text("Bad User")),
     covered("users", "password_hash", RestoreBadValue::Text("")),
     covered("users", "display_name", RestoreBadValue::Text("")),
@@ -512,6 +569,7 @@ const fn primitive(
 
 #[cfg(test)]
 const BACKED_UP_DOMAIN_COLUMNS: &[(&str, &str)] = &[
+    ("instance_identity", "instance_id"),
     ("audience_members", "audience_id"),
     ("audience_members", "author_user_id"),
     ("audience_members", "subscription_id"),
@@ -533,10 +591,11 @@ const BACKED_UP_DOMAIN_COLUMNS: &[(&str, &str)] = &[
     ("post_media", "filename"),
     ("post_media", "sha256"),
     ("post_media", "source"),
+    ("post_media", "reference_kind"),
+    ("post_media", "reference_form"),
     ("post_revisions", "body"),
     ("post_revisions", "format"),
     ("post_revisions", "rendered_html"),
-    ("post_revisions", "slug"),
     ("post_revisions", "title"),
     ("post_tags", "tag_display"),
     ("posts", "body"),
@@ -564,9 +623,11 @@ const BACKED_UP_DOMAIN_COLUMNS: &[(&str, &str)] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backup::{BackupManifest, BackupMode};
+    use common::time::UtcInstant;
     use sqlx::Row;
     use std::collections::BTreeSet;
-
+    use tempfile::TempDir;
     // guard:low-level-db — compares the restore domain-column inventory to the live SQLite backup schema surface.
     #[tokio::test]
     async fn restore_typed_column_inventory_matches_current_backup_schema() {
@@ -600,6 +661,43 @@ mod tests {
             actual.len(),
             "inventory must not duplicate columns"
         );
+    }
+
+    fn identity_manifest(tables: Vec<String>) -> BackupManifest {
+        BackupManifest {
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            schema_version: 27,
+            schema_checksum: "test".to_owned(),
+            timestamp: UtcInstant::now(),
+            mode: BackupMode::Directory,
+            tables,
+        }
+    }
+
+    #[test]
+    fn restore_identity_validation_rejects_every_malformed_backup_shape() {
+        let temp = TempDir::new().expect("make backup fixture");
+        let database = temp.path().join("db");
+        std::fs::create_dir(&database).expect("make backup database directory");
+
+        let missing = identity_manifest(Vec::new());
+        assert!(validate_instance_identity_backup(temp.path(), &missing).is_err());
+
+        let manifest = identity_manifest(vec!["instance_identity".to_owned()]);
+        for rows in [
+            "",
+            "{\"instance_id\":\"123e4567-e89b-12d3-a456-426614174000\"}\n{\"instance_id\":\"123e4567-e89b-12d3-a456-426614174000\"}\n",
+            "{}\n",
+            "{\"instance_id\":7}\n",
+            "{\"instance_id\":\"not-a-uuid\"}\n",
+        ] {
+            std::fs::write(database.join("instance_identity.ndjson"), rows)
+                .expect("write malformed identity rows");
+            assert!(
+                validate_instance_identity_backup(temp.path(), &manifest).is_err(),
+                "{rows:?} must be rejected"
+            );
+        }
     }
 
     #[test]

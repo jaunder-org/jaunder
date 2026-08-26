@@ -26,11 +26,12 @@ use {
     leptos::prelude::*,
     leptos::server_fn::error::ServerFnErrorErr,
     leptos_axum::extract,
-    std::path::PathBuf,
     std::sync::Arc,
+    std::{collections::BTreeSet, path::PathBuf},
     storage::{
-        DeleteMediaError, MediaError, MediaManager, MediaStorage, PostStorage, SiteConfigStorage,
-        TryDeleteOutcome,
+        DeleteMediaError, InstanceId, MediaError, MediaManager, MediaReferenceOwnershipResolver,
+        MediaStorage, PostStorage, SiteConfigStorage, TryDeleteOutcome,
+        resolve_media_reference_ownership,
     },
 };
 
@@ -157,21 +158,48 @@ pub async fn delete(request: DeleteMediaRequest) -> WebResult<MediaDeletion> {
         filename,
     };
 
+    // Site identity and the global reference set are a request-scoped snapshot.
+    // Resolve foreign ownership before the manager takes storage locks, then pass
+    // the same immutable evidence to deletion, reclamation, and refusal reporting.
+    let identity = site_config.get_identity().await?;
+    let references = posts.list_media_references(&media_ref).await?;
+    let resolver = expect_context::<Arc<dyn MediaReferenceOwnershipResolver>>();
+    let instance_id = expect_context::<InstanceId>();
+    let evidence = resolve_media_reference_ownership(
+        resolver.as_ref(),
+        references.references(),
+        &instance_id,
+        identity.base_url.as_ref(),
+    )
+    .await;
+
     // The manager delegates the row decision to storage's one-statement guard, then
     // reclaims the file only when that decision deleted the row.
     let manager = MediaManager::new(media.clone(), site_config, storage_path);
     let outcome = manager
-        .delete_media(auth.user_id, &media_ref, force.unwrap_or(false))
+        .delete_media(
+            auth.user_id,
+            &media_ref,
+            &instance_id,
+            &evidence,
+            force.unwrap_or(false),
+        )
         .await
         .map_err(map_delete_error)?;
 
-    // Pure reporting, and only for a refusal — the one outcome that has to be explained.
-    // A successful delete reports an empty list, including forced deletes that are safe
-    // because another media row still accounts for the retained file.
+    // Reporting is derived from the exact globally resolved rows; querying after
+    // the guarded delete would race a concurrent post edit into the explanation.
     let referenced_in_posts: Vec<PostId> = if outcome == TryDeleteOutcome::RefusedReferenced {
-        posts
-            .list_posts_referencing_media(auth.user_id, &media_ref)
-            .await?
+        references
+            .references()
+            .iter()
+            .filter(|reference| {
+                reference.owner_id() == Some(auth.user_id) && !evidence.proves_foreign(reference)
+            })
+            .map(storage::PersistedMediaReference::post_id)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
     } else {
         Vec::new()
     };

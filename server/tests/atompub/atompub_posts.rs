@@ -19,6 +19,7 @@ use crate::helpers::{
     SeededSession, atompub, atompub_at, atompub_get, atompub_location, atompub_post_xml,
     atompub_put_xml, body_string, create_user_and_session, make_app, setup_with_base_url,
 };
+use common::media::MediaReferenceKind;
 use storage::test_support::{
     Backend, TestEnv, backends, backends_matrix, fetch_post_media, media_ref_for, media_url_for,
 };
@@ -1894,6 +1895,12 @@ async fn create_writes_the_entrys_media_rows(#[case] backend: Backend) {
 
     assert_eq!(
         fetch_post_media(&base, post_id).await,
-        vec![media_ref_for("photo.jpg")]
+        vec![(
+            media_ref_for("photo.jpg"),
+            MediaReferenceKind::Local,
+            media_url_for("photo.jpg")
+                .parse()
+                .expect("valid media reference form"),
+        )]
     );
 }

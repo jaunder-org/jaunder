@@ -21,9 +21,11 @@ mod error;
 mod feed_cache;
 mod feed_events;
 mod helpers;
+mod instance_identity;
 mod invites;
 mod media;
 mod media_manager;
+mod media_ownership;
 #[cfg(test)]
 mod migrations;
 mod password;
@@ -60,9 +62,11 @@ pub use email::*;
 pub use error::{MissingRow, RequireRow};
 pub use feed_cache::*;
 pub use feed_events::*;
+pub use instance_identity::*;
 pub use invites::*;
 pub use media::*;
 pub use media_manager::{MediaError, MediaManager};
+pub use media_ownership::*;
 pub use password::*;
 pub use post_service::*;
 pub use postgres::{

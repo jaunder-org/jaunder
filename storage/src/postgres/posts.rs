@@ -1,14 +1,16 @@
 use async_trait::async_trait;
-
-use sqlx::{Pool, Postgres};
+use sqlx::{Pool, Postgres, QueryBuilder};
 
 use crate::posts::{
-    DELETE_POST_TAG_BY_SLUG, INSERT_POST_TAG, PostOwnershipRow, PostTagRow, SELECT_POST_TAGS,
-    UPSERT_TAG_RETURNING_ID, post_tag_diff, post_tags_from_rows,
+    DELETE_POST_TAG_BY_SLUG, INSERT_POST_TAG, MediaReferenceEvidence, PostMediaReferenceBackfill,
+    PostOwnershipRow, PostTagRow, SELECT_POST_TAGS, UPSERT_TAG_RETURNING_ID,
+    media_advisory_lock_keys, media_lock_set, post_tag_diff, post_tags_from_rows,
+    push_live_media_reference_predicate, push_media_reference_evidence_cte,
+    push_owner_media_reference_from_where, replace_legacy_post_media,
 };
 use crate::{
-    PostDialect, PostRecord, PostStore, PublishUpdate, TaggingError, UpdatePostError,
-    UpdatePostInput,
+    InstanceId, PostDialect, PostRecord, PostStore, PublishUpdate, RenderedHtml, TaggingError,
+    UpdatePostError, UpdatePostInput,
 };
 use common::ids::{PostId, TagId, UserId};
 use common::tag::TagLabel;
@@ -61,12 +63,20 @@ impl PostDialect for Postgres {
          (post_id, audience_id, target_kind_id) \
          VALUES ($1, $2, (SELECT kind_id FROM target_kinds WHERE name = $3))";
 
-    const DELETE_POST_MEDIA: &'static str = "DELETE FROM post_media WHERE post_id = $1";
+    async fn lock_media_references(
+        conn: &mut <Self as sqlx::Database>::Connection,
+        media: &std::collections::BTreeSet<common::media::MediaRef>,
+    ) -> sqlx::Result<()> {
+        for key in media_advisory_lock_keys(media.iter().cloned()) {
+            sqlx::query("SELECT pg_advisory_xact_lock($1)")
+                .bind(key)
+                .execute(&mut *conn)
+                .await?;
+        }
+        Ok(())
+    }
 
-    // Bind order: post_id, source, sha256, filename (matches `replace_post_media`).
-    const INSERT_POST_MEDIA: &'static str = "INSERT INTO post_media \
-         (post_id, source, sha256, filename) \
-         VALUES ($1, $2, $3, $4)";
+    const DELETE_POST_MEDIA: &'static str = "DELETE FROM post_media WHERE post_id = $1";
 
     async fn update_post(
         pool: &Pool<Postgres>,
@@ -101,8 +111,26 @@ impl PostDialect for Postgres {
                     tx.rollback().await,
                 );
             }
+
             Some(_) => {}
         }
+        let old_media: Vec<(
+            common::media::MediaSource,
+            common::media::ContentHash,
+            common::media::Filename,
+        )> = sqlx::query_as("SELECT source, sha256, filename FROM post_media WHERE post_id = $1")
+            .bind(post_id)
+            .fetch_all(&mut *tx)
+            .await?;
+        let mut locked_media = media_lock_set(input.rendered.media());
+        locked_media.extend(old_media.into_iter().map(|(source, sha256, filename)| {
+            common::media::MediaRef {
+                source,
+                sha256,
+                filename,
+            }
+        }));
+        Self::lock_media_references(&mut *tx, &locked_media).await?;
 
         sqlx::query(
             "INSERT INTO post_revisions (post_id, user_id, title, slug, body, format, rendered_html, edited_at)
@@ -233,6 +261,90 @@ impl PostDialect for Postgres {
 
         tx.commit().await?;
         Ok(())
+    }
+
+    async fn apply_post_media_reference_backfill(
+        pool: &Pool<Self>,
+        candidates: &[PostMediaReferenceBackfill],
+    ) -> sqlx::Result<()> {
+        let mut tx = pool.begin().await?;
+        let current: Vec<(PostId, RenderedHtml)> = sqlx::query_as(
+            "SELECT p.post_id, p.rendered_html
+             FROM posts p
+             WHERE EXISTS (
+                 SELECT 1 FROM post_media pm
+                 WHERE pm.post_id = p.post_id AND pm.reference_kind = 'legacy'
+             )
+             ORDER BY p.post_id
+             FOR UPDATE",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        let unchanged = current.len() == candidates.len()
+            && current
+                .iter()
+                .zip(candidates)
+                .all(|((post_id, html), candidate)| {
+                    *post_id == candidate.post_id
+                        && html.as_ref() == candidate.rendered_html.as_str()
+                });
+        if !unchanged {
+            return crate::helpers::preserve_after_secondary(
+                Err(sqlx::Error::Protocol(
+                    "post rendered HTML changed during media-reference backfill".to_owned(),
+                )),
+                tx.rollback().await,
+                host::error::ErrorKind::Storage,
+                host::error::ErrorClass::Transient,
+                "storage.postgres.post_media_reference_backfill.rollback",
+            );
+        }
+        replace_legacy_post_media::<Postgres>(&mut tx, candidates).await?;
+        tx.commit().await
+    }
+
+    async fn insert_post_media_rows(
+        conn: &mut Self::Connection,
+        rows: std::collections::BTreeSet<(
+            PostId,
+            common::media::MediaRef,
+            common::media::MediaReferenceKind,
+            common::media::MediaReferenceForm,
+        )>,
+    ) -> sqlx::Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut query = QueryBuilder::<Postgres>::new(
+            "INSERT INTO post_media (post_id, source, sha256, filename, reference_kind, reference_form) ",
+        );
+        query.push_values(rows, |mut values, (post_id, media, kind, form)| {
+            values
+                .push_bind(post_id)
+                .push_bind(media.source)
+                .push_bind(media.sha256)
+                .push_bind(media.filename)
+                .push_bind(kind.to_string())
+                .push_bind(form);
+        });
+        query.build().execute(&mut *conn).await?;
+        Ok(())
+    }
+
+    async fn list_posts_referencing_media(
+        pool: &Pool<Self>,
+        user_id: UserId,
+        media: &common::media::MediaRef,
+        current_instance_id: &InstanceId,
+        evidence: &MediaReferenceEvidence,
+    ) -> sqlx::Result<Vec<PostId>> {
+        let mut query = QueryBuilder::<Postgres>::new(String::new());
+        push_media_reference_evidence_cte(&mut query, evidence);
+        query.push("SELECT DISTINCT pm.post_id");
+        push_owner_media_reference_from_where(&mut query, user_id, media);
+        push_live_media_reference_predicate(&mut query, current_instance_id);
+        query.push(" ORDER BY pm.post_id");
+        query.build_query_scalar::<PostId>().fetch_all(pool).await
     }
 }
 
