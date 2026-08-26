@@ -157,7 +157,7 @@ impl FeedWorker {
         // Enqueue go-live regeneration first so the same tick drains what it
         // just enqueued. A failure here must not abort the independent queue
         // drain, but it remains operationally visible.
-        if let Err(e) = self.go_live_pass(UtcInstant::from(Utc::now())).await {
+        if let Err(e) = self.go_live_pass(UtcInstant::now()).await {
             report_continuation(
                 host::error::ErrorKind::Storage,
                 host::error::ErrorClass::Transient,
@@ -489,7 +489,7 @@ mod tests {
     use storage::{FeedEventError, FeedEventRecord, FeedEventStatus};
 
     fn event(id: i64, feed_url: &str, attempts: i32) -> FeedEventRecord {
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
         FeedEventRecord {
             id: FeedEventId::from(id),
             feed_path: feed_url.parse().expect("valid feed path in test"),
@@ -1054,7 +1054,7 @@ mod tests {
             storage::MockFeedCacheStorage::new(),
             events,
         );
-        w.go_live_pass(UtcInstant::from(Utc::now()))
+        w.go_live_pass(UtcInstant::now())
             .await
             .expect("catch-up pass");
     }
@@ -1100,10 +1100,10 @@ mod tests {
             storage::MockFeedCacheStorage::new(),
             events,
         );
-        w.go_live_pass(UtcInstant::from(Utc::now()))
+        w.go_live_pass(UtcInstant::now())
             .await
             .expect("priming pass");
-        w.go_live_pass(UtcInstant::from(Utc::now()))
+        w.go_live_pass(UtcInstant::now())
             .await
             .expect("windowed pass");
     }

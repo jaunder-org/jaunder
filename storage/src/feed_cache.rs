@@ -182,13 +182,13 @@ where
 mod tests {
     use super::*;
     use crate::test_support::{Backend, backends, fp};
-    use chrono::Utc;
+
     use common::test_support::{parse_content_type, parse_etag};
     use rstest::*;
     use rstest_reuse::*;
 
     fn sample(url: &str) -> FeedCacheRow {
-        let updated_at = UtcInstant::from(Utc::now());
+        let updated_at = UtcInstant::now();
         FeedCacheRow {
             feed_path: fp(url),
             body: "<rss/>".into(),
@@ -201,7 +201,7 @@ mod tests {
 
     #[test]
     fn timestamp_role_wrappers_preserve_distinct_instants() {
-        let updated_at = UtcInstant::from(Utc::now());
+        let updated_at = UtcInstant::now();
         let generated_at = UtcInstant::from(updated_at.value() + chrono::Duration::seconds(5));
 
         assert_eq!(FeedCacheUpdatedAt::from(updated_at).value(), updated_at);

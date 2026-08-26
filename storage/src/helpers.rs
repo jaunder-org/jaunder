@@ -664,7 +664,7 @@ pub(crate) mod swallowed_test {
 mod tests {
     use super::*;
     use crate::test_support::{Backend, backends, parse_invite_code};
-    use chrono::Utc;
+
     use common::test_support::{
         parse_bio, parse_byte_size, parse_content_hash, parse_content_type, parse_display_name,
         parse_email, parse_filename, parse_password, parse_session_label, parse_token_hash,
@@ -700,7 +700,7 @@ mod tests {
 
     #[test]
     fn test_build_user_record() {
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
         let parts = UserRecordParts {
             user_id: UserId::from(1),
             username: parse_username("alice"),
@@ -720,7 +720,7 @@ mod tests {
 
     #[test]
     fn test_build_session_record() {
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
         let later = UtcInstant::from(now.value() + chrono::Duration::seconds(5));
         let record = build_session_record(SessionRecordParts {
             token_hash: parse_token_hash("hash"),
@@ -736,7 +736,7 @@ mod tests {
 
     #[test]
     fn test_build_invite_record() {
-        let created_at = UtcInstant::from(Utc::now());
+        let created_at = UtcInstant::now();
         let expires_at = UtcInstant::from(created_at.value() + chrono::Duration::days(7));
         let used_at = UtcInstant::from(created_at.value() + chrono::Duration::hours(1));
         let record = build_invite_record(InviteRecordParts {
@@ -911,7 +911,7 @@ mod tests {
             parse_content_type("image/png"),
             parse_byte_size("42"),
             None,
-            UtcInstant::from(Utc::now()),
+            UtcInstant::now(),
         );
         let record = media_record_from_row(row);
         assert_eq!(record.user_id, UserId::from(1));
@@ -922,7 +922,7 @@ mod tests {
 
     #[test]
     fn session_and_invite_row_helpers_round_trip() {
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
         let last_used_at = UtcInstant::from(now.value() + chrono::Duration::seconds(5));
         let session = SessionRow {
             token_hash: parse_token_hash("tokenhash"),
@@ -953,7 +953,7 @@ mod tests {
 
     #[test]
     fn user_row_helper_delegates_to_build_user_record() {
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
         let row: UserRow = (
             UserId::from(1),
             parse_username("alice"),
@@ -1124,7 +1124,7 @@ mod tests {
 
     #[test]
     fn user_record_from_row_maps_some_fields() {
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
         let row: UserRow = (
             UserId::from(1),
             parse_username("alice"),
@@ -1149,7 +1149,7 @@ mod tests {
 
     #[test]
     fn invite_record_from_row_maps_some_fields() {
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
         let expires_at = UtcInstant::from(now.value() + chrono::Duration::days(7));
         let used_at = UtcInstant::from(now.value() + chrono::Duration::hours(1));
         let row = InviteRow {

@@ -1,7 +1,7 @@
 //! Email verification token storage.
 
 use async_trait::async_trait;
-use chrono::Utc;
+
 use sqlx::{Database, Pool};
 use thiserror::Error;
 
@@ -119,7 +119,7 @@ where
         expires_at: UtcInstant,
     ) -> sqlx::Result<RawToken> {
         let (raw_token, token_hash) = host::token::generate_hashed();
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
 
         let mut tx = self.pool.begin().await?;
 
@@ -160,7 +160,7 @@ where
         let token_hash =
             host::token::hash(raw_token).map_err(|_| UseEmailVerificationError::NotFound)?;
 
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
 
         // Atomically claim the token: the UPDATE succeeds only when the token
         // exists, has not yet been used, and has not expired. This single
@@ -305,7 +305,7 @@ mod tests {
     async fn create_email_verification_with_closed_pool_returns_error(#[case] backend: Backend) {
         let TestEnv { state, base } = backend.setup().await;
         base.close_pool().await;
-        let expires_at = UtcInstant::from(chrono::Utc::now());
+        let expires_at = UtcInstant::now();
         let email = parse_email("test@example.com");
         let result = state
             .email_verifications

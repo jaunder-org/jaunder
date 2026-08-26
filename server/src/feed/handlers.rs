@@ -285,7 +285,7 @@ mod tests {
         let mut cache = storage::MockFeedCacheStorage::new();
         cache
             .expect_get()
-            .returning(|_| Ok(Some(sample_row("\"etag-1\"", UtcInstant::from(Utc::now())))));
+            .returning(|_| Ok(Some(sample_row("\"etag-1\"", UtcInstant::now()))));
 
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -311,7 +311,7 @@ mod tests {
         let mut cache = storage::MockFeedCacheStorage::new();
         cache
             .expect_get()
-            .returning(|_| Ok(Some(sample_row("\"etag-1\"", UtcInstant::from(Utc::now())))));
+            .returning(|_| Ok(Some(sample_row("\"etag-1\"", UtcInstant::now()))));
 
         // IF_NONE_MATCH present but a different etag: the conditional falls
         // through to a normal 200 rather than returning 304.
@@ -338,7 +338,7 @@ mod tests {
     async fn serve_returns_200_when_modified_since_is_stale() {
         // Row updated *after* the client's If-Modified-Since date: the
         // conditional falls through to a 200 rather than returning 304.
-        let updated_at = UtcInstant::from(Utc::now());
+        let updated_at = UtcInstant::now();
         let mut cache = storage::MockFeedCacheStorage::new();
         cache
             .expect_get()
@@ -411,7 +411,7 @@ mod tests {
         let mut cache = storage::MockFeedCacheStorage::new();
         cache
             .expect_get()
-            .returning(|_| Ok(Some(sample_row("\"etag-1\"", UtcInstant::from(Utc::now())))));
+            .returning(|_| Ok(Some(sample_row("\"etag-1\"", UtcInstant::now()))));
 
         let resp = feed_site(
             Extension(Arc::new(cache) as Arc<dyn FeedCacheStorage>),
@@ -462,7 +462,7 @@ mod tests {
         let mut cache = storage::MockFeedCacheStorage::new();
         cache
             .expect_get()
-            .returning(|_| Ok(Some(sample_row("\"etag-1\"", UtcInstant::from(Utc::now())))));
+            .returning(|_| Ok(Some(sample_row("\"etag-1\"", UtcInstant::now()))));
 
         let resp = feed_user_tag(
             Extension(Arc::new(cache) as Arc<dyn FeedCacheStorage>),

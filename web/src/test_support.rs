@@ -32,8 +32,8 @@ pub(crate) fn auth_parts(user_id: UserId, username: &str) -> Parts {
             user_id,
             username: username.clone(),
             label: "test".parse().expect("valid session label"),
-            created_at: UtcInstant::from(chrono::Utc::now()),
-            last_used_at: UtcInstant::from(chrono::Utc::now()),
+            created_at: UtcInstant::now(),
+            last_used_at: UtcInstant::now(),
         })
     });
     let sessions: Arc<dyn SessionStorage> = Arc::new(mock);

@@ -1,7 +1,7 @@
 //! Invite code storage.
 
 use async_trait::async_trait;
-use chrono::Utc;
+
 use host::invite::InviteCode;
 use sqlx::{Database, Pool};
 
@@ -72,7 +72,7 @@ where
         // directly, so the code is a domain value end-to-end with no raw-`String` bind
         // and no fallible re-parse on the return (#438).
         let code = host::invite::generate();
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
 
         sqlx::query("INSERT INTO invites (code, created_at, expires_at) VALUES ($1, $2, $3)")
             .bind(&code)
@@ -105,6 +105,7 @@ where
 mod tests {
     use super::*;
     use crate::test_support::{Backend, TestEnv, backends};
+    use chrono::Utc;
     use rstest::*;
     use rstest_reuse::*;
 
@@ -130,7 +131,7 @@ mod tests {
     #[tokio::test]
     async fn list_invites_rejects_a_malformed_code_column(#[case] backend: Backend) {
         let TestEnv { state, base } = backend.setup().await;
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
         let expires_at = UtcInstant::from(now.value() + chrono::Duration::days(7));
 
         // Seed a row whose `code` column holds a value `InviteCode::from_str`
@@ -163,7 +164,7 @@ mod tests {
     async fn create_invite_with_closed_pool_returns_error(#[case] backend: Backend) {
         let TestEnv { state, base } = backend.setup().await;
         base.close_pool().await;
-        let expires_at = UtcInstant::from(chrono::Utc::now());
+        let expires_at = UtcInstant::now();
         let result = state.invites.create_invite(expires_at).await;
         assert!(result.is_err());
     }

@@ -1,4 +1,3 @@
-use chrono::Utc;
 use common::ids::PostId;
 use common::test_support::{parse_audience_name, parse_row_limit};
 use common::visibility::{AudienceTarget, ViewerIdentity, local_subscriber_identity};
@@ -143,7 +142,7 @@ async fn resolution_matrix(#[case] backend: Backend) {
                 None,
                 parse_row_limit("100"),
                 viewer,
-                common::time::UtcInstant::from(Utc::now()),
+                common::time::UtcInstant::now(),
             )
             .await
             .unwrap()

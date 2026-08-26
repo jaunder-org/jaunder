@@ -33,6 +33,12 @@ pub struct UtcInstant(DateTime<Utc>);
 pub struct InvalidInstant;
 
 impl UtcInstant {
+    /// The current wall-clock instant in UTC.
+    #[must_use]
+    pub fn now() -> Self {
+        Self(Utc::now())
+    }
+
     /// The inner `DateTime<Utc>` — the ADR-0063 `value()` accessor convention (by
     /// value; `UtcInstant` is `Copy`). Use `DateTime::from(x)` / `x.into()` where that
     /// reads better than `x.value()`.
@@ -318,6 +324,15 @@ mod tests {
         let earlier = "2026-07-19T10:30:00Z".parse::<UtcInstant>().unwrap();
         let later = "2026-07-19T10:30:01Z".parse::<UtcInstant>().unwrap();
         assert!(earlier < later);
+    }
+
+    #[test]
+    fn now_returns_the_current_utc_instant() {
+        let before = Utc::now();
+        let instant = UtcInstant::now().value();
+        let after = Utc::now();
+        assert!(instant >= before);
+        assert!(instant <= after);
     }
 
     #[test]

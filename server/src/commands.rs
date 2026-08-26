@@ -1479,7 +1479,7 @@ mod tests {
                 username: returned_username,
                 display_name: None,
                 bio: None,
-                created_at: common::time::UtcInstant::from(chrono::Utc::now()),
+                created_at: common::time::UtcInstant::now(),
                 last_authenticated_at: None,
                 email: None,
                 email_verified: false,
@@ -1731,7 +1731,7 @@ mod tests {
             .await
             .expect("open db");
 
-        let before = common::time::UtcInstant::from(chrono::Utc::now());
+        let before = common::time::UtcInstant::now();
         cmd_user_invite(&storage_args, Some(parse_invite_ttl_hours("24")))
             .await
             .expect("create invite");

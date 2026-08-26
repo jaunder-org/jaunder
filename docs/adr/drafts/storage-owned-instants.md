@@ -37,10 +37,11 @@ remain where they already communicate a distinct role; this migration does not
 flatten them into the common type.
 
 `UtcInstant` remains a minimal Chrono-backed wrapper. It retains its `value()`
-accessor, existing `From` conversions, transparent serde, parsing, and display.
-It gains only the plain `SqlxBridge` required to encode/decode the wrapped
-instant on SQLite and Postgres, and `PartialOrd`/`Ord`; it gains no wider
-convenience or clock API.
+accessor, existing `From` conversions, transparent serde, parsing, and display,
+and owns the `now()` constructor so callers do not repeat its backing-library
+implementation. It also gains the plain `SqlxBridge` required to encode/decode
+the wrapped instant on SQLite and Postgres, and `PartialOrd`/`Ord`; it gains no
+wider arithmetic or calendar convenience API.
 
 Every newly migrated storage shape receives dual-backend coverage. The bridge
 must preserve the existing SQL schema and physical values: timestamp precision,

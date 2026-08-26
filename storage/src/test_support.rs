@@ -21,7 +21,7 @@ use crate::posts::{
 };
 use crate::sql::quote_identifier;
 use crate::{AppState, DbConnectOptions, PostFormat, PostRecord, resolved_postgres_options};
-use chrono::Utc;
+
 use common::feed::FeedPath;
 use common::ids::{PostId, TagId, UserId};
 use common::mailer::{MailSender, NoopMailSender};
@@ -1087,7 +1087,7 @@ impl SeedPost {
                 title: self.title.as_ref(),
                 format: PostFormat::Markdown,
                 slug_override: None,
-                published_at: Some(UtcInstant::from(Utc::now())),
+                published_at: Some(UtcInstant::now()),
                 max_attempts: 100,
                 summary: None,
                 audiences: self.audiences,
@@ -1154,7 +1154,7 @@ impl SeedRawPost {
             slug: None,
             body: parse_post_body("seed body"),
             format: PostFormat::Markdown,
-            published_at: Some(UtcInstant::from(Utc::now())),
+            published_at: Some(UtcInstant::now()),
             summary: None,
             audiences: vec![AudienceTarget::Public],
             tags: Vec::new(),
@@ -1471,7 +1471,7 @@ pub async fn seed_media(state: &Arc<AppState>, user_id: UserId, name: &str) -> M
             content_type: detect_content_type(&media.filename),
             size_bytes: parse_byte_size("1"),
             source_url: None,
-            created_at: UtcInstant::from(Utc::now()),
+            created_at: UtcInstant::now(),
         })
         .await
         .expect("seed media should be created");
@@ -1533,7 +1533,7 @@ pub async fn create_post_via_service(
     user_id: UserId,
     body: PostBody,
 ) -> PostId {
-    create_via_service(state, user_id, body, Some(UtcInstant::from(Utc::now()))).await
+    create_via_service(state, user_id, body, Some(UtcInstant::now())).await
 }
 
 /// The unpublished twin of [`create_post_via_service`] — the draft a publication test
@@ -1618,7 +1618,7 @@ mod tests {
         SeedUser, UtcInstant, backends, bootstrap_url, parse_password, parse_post_title,
         report_drop_outcome, splice_db_name,
     };
-    use chrono::Utc;
+
     // The free renderer, to pin that the builder's HTML is exactly `render(body)` — the
     // half of `RenderOutput` the seeded record carries.
     use common::render::render;
@@ -1951,7 +1951,7 @@ mod tests {
                 None,
                 parse_row_limit("50"),
                 &ViewerIdentity::Anonymous,
-                UtcInstant::from(Utc::now()),
+                UtcInstant::now(),
             )
             .await
             .unwrap();

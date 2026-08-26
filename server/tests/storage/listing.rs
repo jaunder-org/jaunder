@@ -35,7 +35,7 @@ async fn anon_user_by_tag(
             None,
             parse_row_limit(limit),
             &ViewerIdentity::Anonymous,
-            common::time::UtcInstant::from(Utc::now()),
+            common::time::UtcInstant::now(),
         )
         .await
         .expect("list_user_posts_by_tag failed")
@@ -53,7 +53,7 @@ async fn anon_published_by_user(
             None,
             parse_row_limit(limit),
             &ViewerIdentity::Anonymous,
-            common::time::UtcInstant::from(Utc::now()),
+            common::time::UtcInstant::now(),
         )
         .await
         .expect("list_published_by_user failed")
@@ -66,7 +66,7 @@ async fn drafts_of(state: &AppState, user_id: UserId, limit: &str) -> Vec<PostRe
             user_id,
             None,
             parse_row_limit(limit),
-            common::time::UtcInstant::from(Utc::now()),
+            common::time::UtcInstant::now(),
         )
         .await
         .expect("list_drafts_by_user failed")
@@ -1035,7 +1035,7 @@ async fn list_posts_by_nonexistent_tag(#[case] backend: Backend) {
             None,
             parse_row_limit("50"),
             &ViewerIdentity::Anonymous,
-            common::time::UtcInstant::from(Utc::now()),
+            common::time::UtcInstant::now(),
         )
         .await;
 
@@ -1062,7 +1062,7 @@ async fn list_user_posts_by_nonexistent_tag(#[case] backend: Backend) {
             None,
             parse_row_limit("50"),
             &ViewerIdentity::Anonymous,
-            common::time::UtcInstant::from(Utc::now()),
+            common::time::UtcInstant::now(),
         )
         .await;
 
@@ -1172,7 +1172,7 @@ async fn tag_not_found_error(#[case] backend: Backend) {
             None,
             parse_row_limit("50"),
             &ViewerIdentity::Anonymous,
-            common::time::UtcInstant::from(Utc::now()),
+            common::time::UtcInstant::now(),
         )
         .await;
 
@@ -1288,7 +1288,7 @@ async fn list_published_cursor_boundary(#[case] backend: Backend) {
                 Some(&cursor),
                 parse_row_limit("2"),
                 &ViewerIdentity::Anonymous,
-                common::time::UtcInstant::from(Utc::now()),
+                common::time::UtcInstant::now(),
             )
             .await
             .expect("list_published with cursor failed");
@@ -1326,7 +1326,7 @@ async fn list_drafts_cursor_boundary(#[case] backend: Backend) {
                 user,
                 Some(&cursor),
                 parse_row_limit("2"),
-                common::time::UtcInstant::from(Utc::now()),
+                common::time::UtcInstant::now(),
             )
             .await
             .expect("list_drafts_by_user with cursor failed");
@@ -1372,7 +1372,7 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
                 Some(&cursor),
                 parse_row_limit("2"),
                 &ViewerIdentity::Anonymous,
-                common::time::UtcInstant::from(Utc::now()),
+                common::time::UtcInstant::now(),
             )
             .await
             .expect("list_user_posts_by_tag with cursor failed");
@@ -1417,7 +1417,7 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
                 Some(&cursor),
                 parse_row_limit("2"),
                 &ViewerIdentity::Anonymous,
-                common::time::UtcInstant::from(Utc::now()),
+                common::time::UtcInstant::now(),
             )
             .await
             .expect("list_posts_by_tag with cursor failed");
@@ -1438,7 +1438,7 @@ async fn list_published_by_user_no_posts(#[case] backend: Backend) {
     assert!(posts.is_empty());
 
     let cursor = PostCursor {
-        created_at: common::time::UtcInstant::from(Utc::now()),
+        created_at: common::time::UtcInstant::now(),
         post_id: PostId::from(999),
     };
     let posts = state
@@ -1448,7 +1448,7 @@ async fn list_published_by_user_no_posts(#[case] backend: Backend) {
             Some(&cursor),
             parse_row_limit("10"),
             &ViewerIdentity::Anonymous,
-            common::time::UtcInstant::from(Utc::now()),
+            common::time::UtcInstant::now(),
         )
         .await
         .expect("list_published_by_user with cursor failed");
@@ -1476,7 +1476,7 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
             permalink_date(created_at.year(), created_at.month(), created_at.day()),
             &seeded.slug,
             &ViewerIdentity::Anonymous,
-            common::time::UtcInstant::from(Utc::now()),
+            common::time::UtcInstant::now(),
         )
         .await
         .expect("get_post_by_permalink failed");
@@ -1495,7 +1495,7 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
             permalink_date(created_at.year(), created_at.month(), created_at.day()),
             &seeded.slug,
             &ViewerIdentity::Anonymous,
-            common::time::UtcInstant::from(Utc::now()),
+            common::time::UtcInstant::now(),
         )
         .await
         .expect("get_post_by_permalink after delete failed");
@@ -1533,7 +1533,7 @@ async fn list_published_with_cursor_same_timestamp(#[case] backend: Backend) {
                 Some(&cursor),
                 parse_row_limit("2"),
                 &ViewerIdentity::Anonymous,
-                common::time::UtcInstant::from(Utc::now()),
+                common::time::UtcInstant::now(),
             )
             .await
             .expect("list_published with cursor failed");

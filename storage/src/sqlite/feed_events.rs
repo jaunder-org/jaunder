@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use chrono::Utc;
+
 use common::feed::FeedEventClaimLimit;
 use common::ids::FeedEventId;
 use common::time::UtcInstant;
@@ -100,7 +100,7 @@ impl FeedEventDialect for Sqlite {
         pool: &Pool<Sqlite>,
         ids: &[FeedEventId],
     ) -> Result<(), FeedEventError> {
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
         let ph = placeholders(ids.len());
         let sql = format!("UPDATE feed_events SET regenerated_at = ? WHERE id IN ({ph})");
         let mut q = sqlx::query(&sql).bind(now);
@@ -112,7 +112,7 @@ impl FeedEventDialect for Sqlite {
     }
 
     async fn mark_pinged(pool: &Pool<Sqlite>, ids: &[FeedEventId]) -> Result<(), FeedEventError> {
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
         let ph = placeholders(ids.len());
         let sql =
             format!("UPDATE feed_events SET status = 'done', pinged_at = ? WHERE id IN ({ph})");
@@ -180,7 +180,7 @@ mod tests {
     use super::finish_purge;
     use crate::test_support::{Backend, fp, sqlite_only};
     use crate::{FeedEventError, FeedEventRecord, FeedEventStatus};
-    use chrono::{Duration, Utc};
+    use chrono::Duration;
     use common::{ids::FeedEventId, time::UtcInstant};
 
     use rstest::*;
@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn continuation_reporting_corrupt_purge_failure_preserves_valid_batch_and_reports_once() {
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
         let valid = vec![FeedEventRecord {
             id: FeedEventId::from(17),
             feed_path: fp("/feed.rss"),

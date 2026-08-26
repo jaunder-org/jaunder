@@ -249,7 +249,7 @@ pub(crate) fn build_manifest(
         version: env!("CARGO_PKG_VERSION").to_owned(),
         schema_version,
         schema_checksum,
-        timestamp: UtcInstant::from(Utc::now()),
+        timestamp: UtcInstant::now(),
         mode,
         tables,
     }
@@ -1116,7 +1116,7 @@ mod tests {
             version: "0.0.0".to_owned(),
             schema_version: 11,
             schema_checksum: "checksum".to_owned(),
-            timestamp: UtcInstant::from(Utc::now()),
+            timestamp: UtcInstant::now(),
             mode: BackupMode::Directory,
             tables: Vec::new(),
         };
@@ -1131,7 +1131,7 @@ mod tests {
             version: env!("CARGO_PKG_VERSION").to_owned(),
             schema_version: 10,
             schema_checksum: "checksum".to_owned(),
-            timestamp: UtcInstant::from(Utc::now()),
+            timestamp: UtcInstant::now(),
             mode: BackupMode::Directory,
             tables: Vec::new(),
         };

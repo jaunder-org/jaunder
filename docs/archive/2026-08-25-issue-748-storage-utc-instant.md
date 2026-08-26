@@ -30,9 +30,10 @@ type wording while retaining its explicit-`now` rule.
 - `UtcInstant` remains a minimal chrono-backed wrapper around
   `chrono::DateTime<Utc>`. It retains `value()`, the established `From`
   conversions, transparent serde, parsing, and display behavior.
-- Its only new general capabilities are `SqlxBridge` and `PartialOrd`/`Ord`. No
-  broad newtype trailer, validation rule, parsing format, serde form, or
-  storage-specific sibling type is introduced.
+- Its new general capabilities are `SqlxBridge`, `PartialOrd`/`Ord`, and the
+  `now()` constructor that centralizes its backing-library clock. No broad
+  newtype trailer, validation rule, parsing format, serde form, arithmetic API,
+  or storage-specific sibling type is introduced.
 - `SqlxBridge` is the ordinary transparent SQLx bridge: binds and decodes retain
   `UtcInstant` directly on both SQLite and PostgreSQL rather than stripping to a
   raw chrono value at the storage edge.

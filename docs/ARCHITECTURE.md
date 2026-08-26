@@ -1930,8 +1930,9 @@ behaviour per site.
 **Time.** `common::time::UtcInstant` is the domain type for absolute UTC
 instants at both the web and storage boundaries. It is a minimal Chrono-backed,
 instant-backed newtype: transparent serde retains its RFC 3339 wire form,
-`FromStr` canonicalizes offsets to UTC for the client-side `Field<T>` path, and
-its existing `value()`/`From` conversions remain available
+`FromStr` canonicalizes offsets to UTC for the client-side `Field<T>` path,
+`now()` centralizes wall-clock construction, and its existing `value()`/`From`
+conversions remain available
 ([ADR-0072](adr/0072-timestamps-cross-boundary-as-utcinstant.md);
 [storage-owned instants use UtcInstant](adr/drafts/storage-owned-instants.md)).
 Storage records and traits, private rows/cursors/inputs/dialects,

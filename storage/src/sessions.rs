@@ -1,7 +1,7 @@
 //! Session and device token storage.
 
 use async_trait::async_trait;
-use chrono::Utc;
+
 use thiserror::Error;
 
 use common::ids::UserId;
@@ -170,7 +170,7 @@ where
         label: &SessionLabel,
     ) -> sqlx::Result<RawToken> {
         let (raw_token, token_hash) = host::token::generate_hashed();
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
 
         sqlx::query(
             "INSERT INTO sessions (token_hash, user_id, label, created_at, last_used_at)
@@ -196,7 +196,7 @@ where
         let token_hash =
             host::token::hash(raw_token).map_err(|_| SessionAuthError::InvalidToken)?;
 
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
         let stale_before = session_touch_cutoff(now);
 
         let row = DB::touch_and_load(&self.pool, &token_hash, now, stale_before)

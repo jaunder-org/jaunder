@@ -1,7 +1,7 @@
 //! User account and profile storage.
 
 use async_trait::async_trait;
-use chrono::Utc;
+
 use sqlx::{Database, Pool};
 use thiserror::Error;
 use tracing::Instrument;
@@ -310,7 +310,7 @@ impl<DB: Database> UserStore<DB> {
             return Err(UserAuthError::InvalidCredentials);
         }
 
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
 
         sqlx::query("UPDATE users SET last_authenticated_at = $1 WHERE user_id = $2")
             .bind(now)
@@ -397,7 +397,7 @@ where
             .await
             .map_err(|e| CreateUserError::Internal(sqlx::Error::Io(e)))?;
 
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
 
         let result = sqlx::query_scalar::<_, UserId>(
             "INSERT INTO users (username, password_hash, display_name, created_at, is_operator)
@@ -599,7 +599,7 @@ mod tests {
             .unwrap();
 
         let created = env.state.users.get_user(user_id).await.unwrap().unwrap();
-        assert!(created.created_at <= UtcInstant::from(Utc::now()));
+        assert!(created.created_at <= UtcInstant::now());
         assert_eq!(created.last_authenticated_at, None);
 
         let authenticated = env

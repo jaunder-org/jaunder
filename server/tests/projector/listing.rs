@@ -1,7 +1,6 @@
 use axum::http::{StatusCode, header};
 use tower::ServiceExt;
 
-use chrono::Utc;
 use common::seed::{PageSeed, TimelinePage};
 use common::time::{PermalinkDate, UtcInstant};
 use common::visibility::ViewerIdentity;
@@ -180,7 +179,7 @@ async fn every_page_seed_variant_serializes_without_null_fallback(#[case] backen
         &username,
         date,
         &slug,
-        UtcInstant::from(Utc::now()),
+        UtcInstant::now(),
     )
     .await
     .expect("permalink lookup")

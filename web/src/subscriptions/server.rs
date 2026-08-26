@@ -45,7 +45,7 @@ mod tests {
             username: parse_username(username),
             display_name: None,
             bio: None,
-            created_at: UtcInstant::from(chrono::Utc::now()),
+            created_at: UtcInstant::now(),
             last_authenticated_at: None,
             email: None,
             email_verified: false,

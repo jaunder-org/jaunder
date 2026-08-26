@@ -1697,7 +1697,7 @@ async fn create_with_future_published_is_scheduled(#[case] backend: Backend) {
             permalink_date(2099, 1, 1),
             &rec.slug,
             &viewer,
-            common::time::UtcInstant::from(chrono::Utc::now()),
+            common::time::UtcInstant::now(),
         )
         .await
         .unwrap();

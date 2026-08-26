@@ -323,7 +323,7 @@ async fn create_post_with_future_publish_at_is_scheduled(#[case] backend: Backen
             None,
             parse_row_limit("50"),
             &common::visibility::ViewerIdentity::Anonymous,
-            common::time::UtcInstant::from(chrono::Utc::now()),
+            common::time::UtcInstant::now(),
         )
         .await
         .unwrap();

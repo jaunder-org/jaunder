@@ -523,7 +523,7 @@ mod tests {
             content_type: parse_content_type("image/jpeg"),
             size_bytes: parse_byte_size("2048"),
             source_url: None,
-            created_at: UtcInstant::from(chrono::Utc::now()),
+            created_at: UtcInstant::now(),
         };
         env.state.media.create_media(&record).await.unwrap();
         let got = env
@@ -659,7 +659,7 @@ mod tests {
             content_type: parse_content_type("image/jpeg"),
             size_bytes: parse_byte_size("1"),
             source_url: None,
-            created_at: UtcInstant::from(chrono::Utc::now()),
+            created_at: UtcInstant::now(),
         };
         env.state.media.create_media(&good).await.unwrap();
         // A second row's `sha256` is tampered to a non-hex value — only reachable via
@@ -704,7 +704,7 @@ mod tests {
             content_type: parse_content_type("image/jpeg"),
             size_bytes: parse_byte_size("1024"),
             source_url: None,
-            created_at: UtcInstant::from(chrono::Utc::now()),
+            created_at: UtcInstant::now(),
         };
         let result = state.media.create_media(&record).await;
         assert!(result.is_err());

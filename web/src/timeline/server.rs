@@ -70,7 +70,7 @@ pub async fn fetch_user_posts(
             cursor.as_ref(),
             page_size.fetch_limit(),
             viewer,
-            UtcInstant::from(chrono::Utc::now()),
+            UtcInstant::now(),
         )
         .await?;
     Ok(page_from_rows(rows, page_size, viewer_user_id(viewer)))
@@ -94,7 +94,7 @@ pub async fn fetch_local_timeline(
             cursor.as_ref(),
             page_size.fetch_limit(),
             viewer,
-            UtcInstant::from(chrono::Utc::now()),
+            UtcInstant::now(),
         )
         .await?;
     Ok(page_from_rows(rows, page_size, viewer_user_id(viewer)))
@@ -121,7 +121,7 @@ pub async fn fetch_posts_by_tag(
                 cursor.as_ref(),
                 page_size.fetch_limit(),
                 viewer,
-                UtcInstant::from(chrono::Utc::now()),
+                UtcInstant::now(),
             )
             .await,
     )?;
@@ -156,7 +156,7 @@ pub async fn fetch_user_posts_by_tag(
                 cursor.as_ref(),
                 page_size.fetch_limit(),
                 viewer,
-                UtcInstant::from(chrono::Utc::now()),
+                UtcInstant::now(),
             )
             .await,
     )?;
@@ -205,7 +205,7 @@ mod tests {
             username: parse_username(username),
             display_name: None,
             bio: None,
-            created_at: UtcInstant::from(chrono::Utc::now()),
+            created_at: UtcInstant::now(),
             last_authenticated_at: None,
             email: None,
             email_verified: false,

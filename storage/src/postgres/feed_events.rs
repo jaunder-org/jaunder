@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use chrono::Utc;
+
 use common::feed::FeedEventClaimLimit;
 use common::ids::FeedEventId;
 use common::time::UtcInstant;
@@ -93,7 +93,7 @@ impl FeedEventDialect for Postgres {
         pool: &Pool<Postgres>,
         ids: &[FeedEventId],
     ) -> Result<(), FeedEventError> {
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
         sqlx::query("UPDATE feed_events SET regenerated_at = $1 WHERE id = ANY($2)")
             .bind(now)
             .bind(ids)
@@ -103,7 +103,7 @@ impl FeedEventDialect for Postgres {
     }
 
     async fn mark_pinged(pool: &Pool<Postgres>, ids: &[FeedEventId]) -> Result<(), FeedEventError> {
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
         sqlx::query("UPDATE feed_events SET status = 'done', pinged_at = $1 WHERE id = ANY($2)")
             .bind(now)
             .bind(ids)
@@ -154,7 +154,7 @@ mod tests {
 
     #[test]
     fn continuation_reporting_corrupt_purge_failure_preserves_valid_batch_and_reports_once() {
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
         let valid = vec![FeedEventRecord {
             id: FeedEventId::from(17),
             feed_path: "/feed.rss".parse().expect("valid feed path"),

@@ -46,7 +46,6 @@ use {
     crate::error::InternalError,
     crate::feed_events::enqueue_feed_events,
     crate::viewer::viewer_identity,
-    chrono::Utc,
     common::tag::Tag,
     leptos::prelude::*,
     std::{collections::BTreeSet, sync::Arc},
@@ -182,7 +181,7 @@ pub async fn create(post: PostInputs) -> WebResult<SavedPost> {
 
     // Publish + a supplied time = scheduled (future) or backdated (past);
     // publish + no time = live now; not publishing = draft (NULL).
-    let published_at = publish.then(|| publish_at.unwrap_or_else(|| UtcInstant::from(Utc::now())));
+    let published_at = publish.then(|| publish_at.unwrap_or_else(UtcInstant::now));
     // `PostSummary`'s `FromStr` already trims and rejects empty at arg-decode
     // (ADR-0065), so the value is passed through typed — no `non_empty_owned`
     // normalization needed.
@@ -237,7 +236,7 @@ pub async fn create(post: PostInputs) -> WebResult<SavedPost> {
 #[macros::server]
 pub async fn get(username: Username, date: PermalinkDate, slug: Slug) -> WebResult<AuthoredPost> {
     let posts = expect_context::<Arc<dyn PostStorage>>();
-    let now = UtcInstant::from(Utc::now());
+    let now = UtcInstant::now();
 
     let viewer = viewer_identity().await?;
     if let Some(post) =
@@ -287,7 +286,7 @@ pub async fn get_preview(post_id: PostId) -> WebResult<EditPostPreview> {
         return Err(not_found_error());
     }
 
-    let fetched_at = UtcInstant::from(Utc::now());
+    let fetched_at = UtcInstant::now();
     Ok(EditPostPreview {
         post: authored_post(post, true),
         fetched_at,
@@ -434,7 +433,7 @@ pub async fn list_drafts(
             auth.user_id,
             parsed_cursor.as_ref(),
             page_size.fetch_limit(),
-            UtcInstant::from(chrono::Utc::now()),
+            UtcInstant::now(),
         )
         .await?;
 
@@ -478,7 +477,7 @@ pub async fn list_scheduled(
             auth.user_id,
             parsed_cursor.as_ref(),
             page_size.fetch_limit(),
-            UtcInstant::from(chrono::Utc::now()),
+            UtcInstant::now(),
         )
         .await?;
 

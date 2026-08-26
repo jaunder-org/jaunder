@@ -84,7 +84,7 @@ pub async fn list_home_feed(
             cursor.as_ref(),
             page_size.fetch_limit(),
             &viewer,
-            UtcInstant::from(chrono::Utc::now()),
+            UtcInstant::now(),
         )
         .await?;
 

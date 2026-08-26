@@ -275,7 +275,7 @@ impl MediaManager {
             content_type: content_type.clone(),
             size_bytes,
             source_url: None,
-            created_at: UtcInstant::from(chrono::Utc::now()),
+            created_at: UtcInstant::now(),
         };
         match self.media.create_media(&record).await {
             Ok(()) | Err(CreateMediaError::AlreadyExists) => Ok(()),

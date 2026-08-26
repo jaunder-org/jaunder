@@ -259,7 +259,7 @@ async fn create_user_with_invite_duplicate_username_returns_username_taken(
 async fn invite_list_operations(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
-    let now = UtcInstant::from(Utc::now());
+    let now = UtcInstant::now();
     let future = UtcInstant::from(now.value() + chrono::Duration::hours(1));
     let past = UtcInstant::from(now.value() - chrono::Duration::hours(1));
 

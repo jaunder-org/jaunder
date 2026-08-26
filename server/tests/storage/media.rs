@@ -26,7 +26,7 @@ fn make_media_record(
         content_type: parse_content_type("image/jpeg"),
         size_bytes: parse_byte_size("12345"),
         source_url: None,
-        created_at: UtcInstant::from(chrono::Utc::now()),
+        created_at: UtcInstant::now(),
     }
 }
 

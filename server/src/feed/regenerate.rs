@@ -1,4 +1,3 @@
-use chrono::Utc;
 use common::feed::{
     FeedFormat, FeedItem, FeedMetadata, FeedPath, FeedSurface, FeedTitle, HybridWindow, feed_etag,
     parse,
@@ -52,7 +51,7 @@ pub async fn regenerate_feed(
         min_items: feeds.min_items,
         min_days: feeds.min_days,
     };
-    let now = UtcInstant::from(Utc::now());
+    let now = UtcInstant::now();
     let published = posts
         // Published feeds are public-only (M8 / ADR-0020): regeneration resolves
         // posts as an anonymous viewer, so the resolution filter reduces to the

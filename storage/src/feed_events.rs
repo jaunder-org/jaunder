@@ -3,7 +3,7 @@
 //! claims are re-eligible after `lease_timeout` elapses (claim-lease pattern).
 
 use async_trait::async_trait;
-use chrono::{Duration, Utc};
+use chrono::Duration;
 use common::feed::{FeedEventClaimLimit, FeedPath};
 use common::ids::FeedEventId;
 use common::time::UtcInstant;
@@ -316,7 +316,7 @@ where
         limit: usize,
         lease_timeout: Duration,
     ) -> Result<Vec<FeedEventRecord>, FeedEventError> {
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
         let lease_cutoff = UtcInstant::from(now.value() - lease_timeout);
         let limit = FeedEventClaimLimit::from_usize(limit);
         DB::claim_pending_batch(&self.pool, now, lease_cutoff, limit).await
@@ -328,7 +328,7 @@ where
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn claimable_count(&self, lease_timeout: Duration) -> Result<u64, FeedEventError> {
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
         let lease_cutoff = UtcInstant::from(now.value() - lease_timeout);
         DB::claimable_count(&self.pool, now, lease_cutoff).await
     }
@@ -389,7 +389,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use chrono::{TimeZone, Timelike};
+    use chrono::{TimeZone, Timelike, Utc};
 
     use super::*;
     use crate::test_support::{Backend, backends, fp};
@@ -1096,7 +1096,7 @@ mod tests {
         env.state.feed_events.mark_pinged(&[]).await.unwrap();
         env.state
             .feed_events
-            .mark_failed(&[], "x", UtcInstant::from(Utc::now()))
+            .mark_failed(&[], "x", UtcInstant::now())
             .await
             .unwrap();
         env.state

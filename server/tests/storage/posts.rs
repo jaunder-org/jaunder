@@ -705,7 +705,7 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
 
     let user_id = SeedUser::new().seed(state).await.user_id;
 
-    let now = UtcInstant::from(Utc::now());
+    let now = UtcInstant::now();
 
     let occ = SeedRawPost::new(user_id)
         .published_at(now)

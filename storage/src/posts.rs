@@ -1,7 +1,7 @@
 //! Content storage for posts, revisions, and tagging.
 
 use async_trait::async_trait;
-use chrono::Utc;
+
 use sqlx::{Database, Pool, Row};
 use thiserror::Error;
 
@@ -1407,7 +1407,7 @@ where
               WHERE post_id = $2 AND user_id = $3 AND deleted_at IS NULL
           RETURNING post_id",
         )
-        .bind(UtcInstant::from(Utc::now()))
+        .bind(UtcInstant::now())
         .bind(post_id)
         .bind(user_id)
         .fetch_optional(&self.pool)
@@ -1457,7 +1457,7 @@ where
         fields(db.system = DB::DB_SYSTEM)
     )]
     async fn soft_delete_post(&self, post_id: PostId) -> sqlx::Result<()> {
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
         sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
             .bind(now)
             .bind(post_id)
@@ -2443,7 +2443,7 @@ where
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
-    let now = UtcInstant::from(Utc::now());
+    let now = UtcInstant::now();
 
     let post_id = sqlx::query_scalar::<_, PostId>(
         "INSERT INTO posts (user_id, title, slug, body, format, rendered_html, created_at, updated_at, published_at, summary)
@@ -2859,6 +2859,7 @@ mod tests {
         media_ref_for, media_row_exists, media_url_for, seed_media, seed_users,
         update_post_body_via_service,
     };
+    use chrono::Utc;
     use common::test_support::{
         parse_content_type, parse_etag, parse_post_body, parse_post_summary, parse_post_title,
         parse_row_limit, parse_slug, parse_tag, parse_tag_label, parse_username, parse_utc_instant,
@@ -3606,8 +3607,8 @@ mod tests {
             rendered_html: RenderedHtml::from_trusted(
                 "<p>The first non-empty line of the body is here.</p>",
             ),
-            created_at: UtcInstant::from(Utc::now()),
-            updated_at: UtcInstant::from(Utc::now()),
+            created_at: UtcInstant::now(),
+            updated_at: UtcInstant::now(),
             published_at: None,
             deleted_at: None,
             summary: None,
@@ -3660,8 +3661,8 @@ mod tests {
             body: parse_post_body("My body"),
             format: PostFormat::Markdown,
             rendered_html: RenderedHtml::from_trusted("<p>My body</p>"),
-            created_at: UtcInstant::from(Utc::now()),
-            updated_at: UtcInstant::from(Utc::now()),
+            created_at: UtcInstant::now(),
+            updated_at: UtcInstant::now(),
             published_at: None,
             deleted_at: None,
             summary: None,
@@ -4252,7 +4253,7 @@ mod tests {
                 None,
                 parse_row_limit("10"),
                 &ViewerIdentity::Anonymous,
-                UtcInstant::from(Utc::now()),
+                UtcInstant::now(),
             )
             .await;
         assert!(result.is_err());
@@ -4501,7 +4502,7 @@ mod tests {
             &record.author_username,
             date,
             &record.slug,
-            UtcInstant::from(Utc::now()),
+            UtcInstant::now(),
         )
         .await
         .unwrap();
@@ -4514,7 +4515,7 @@ mod tests {
             &record.author_username,
             date,
             &parse_slug("no-such-slug"),
-            UtcInstant::from(Utc::now()),
+            UtcInstant::now(),
         )
         .await
         .unwrap();

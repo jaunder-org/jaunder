@@ -85,7 +85,7 @@ async fn permalink(
         &username,
         date,
         &slug,
-        UtcInstant::from(chrono::Utc::now()),
+        UtcInstant::now(),
     )
     .await;
     permalink_response(result, &headers, &shell)

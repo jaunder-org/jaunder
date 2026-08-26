@@ -599,8 +599,8 @@ mod tests {
             body,
             format,
             rendered_html: storage::RenderedHtml::from_trusted("<p>html</p>"),
-            created_at: UtcInstant::from(Utc::now()),
-            updated_at: UtcInstant::from(Utc::now()),
+            created_at: UtcInstant::now(),
+            updated_at: UtcInstant::now(),
             published_at,
             deleted_at: None,
             summary,
@@ -616,7 +616,7 @@ mod tests {
             slug: parse_slug("slug"),
             body: parse_post_body("# Markdown Body"),
             format: PostFormat::Markdown,
-            published_at: Some(UtcInstant::from(Utc::now())),
+            published_at: Some(UtcInstant::now()),
             summary: None,
             tags: vec![],
         });
@@ -638,7 +638,7 @@ mod tests {
             slug: parse_slug("slug"),
             body: parse_post_body("* Org Body"),
             format: PostFormat::Org,
-            published_at: Some(UtcInstant::from(Utc::now())),
+            published_at: Some(UtcInstant::now()),
             summary: None,
             tags: vec![],
         });
@@ -657,7 +657,7 @@ mod tests {
             slug: parse_slug("slug"),
             body: parse_post_body("<p>HTML</p>"),
             format: PostFormat::Html,
-            published_at: Some(UtcInstant::from(Utc::now())),
+            published_at: Some(UtcInstant::now()),
             summary: None,
             tags: vec![],
         });
@@ -676,7 +676,7 @@ mod tests {
             slug: parse_slug("slug"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            published_at: Some(UtcInstant::from(Utc::now())),
+            published_at: Some(UtcInstant::now()),
             summary: None,
             tags: vec![],
         });
@@ -694,7 +694,7 @@ mod tests {
             slug: parse_slug("slug"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            published_at: Some(UtcInstant::from(Utc::now())),
+            published_at: Some(UtcInstant::now()),
             summary: None,
             tags: vec![],
         });
@@ -770,7 +770,7 @@ mod tests {
             slug: parse_slug("slug"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            published_at: Some(UtcInstant::from(Utc::now())),
+            published_at: Some(UtcInstant::now()),
             summary: None,
             tags: vec![],
         });
@@ -788,7 +788,7 @@ mod tests {
             slug: parse_slug("my-slug"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            published_at: Some(UtcInstant::from(Utc::now())),
+            published_at: Some(UtcInstant::now()),
             summary: None,
             tags: vec![],
         });
@@ -806,7 +806,7 @@ mod tests {
             slug: parse_slug("my-slug"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            published_at: Some(UtcInstant::from(Utc::now())),
+            published_at: Some(UtcInstant::now()),
             summary: None,
             tags: vec![],
         });
@@ -824,7 +824,7 @@ mod tests {
             slug: parse_slug("slug"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            published_at: Some(UtcInstant::from(Utc::now())),
+            published_at: Some(UtcInstant::now()),
             summary: Some(parse_post_summary("This is a summary")),
             tags: vec![],
         });
@@ -842,7 +842,7 @@ mod tests {
             slug: parse_slug("slug"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            published_at: Some(UtcInstant::from(Utc::now())),
+            published_at: Some(UtcInstant::now()),
             summary: None,
             tags: vec![],
         });
@@ -860,7 +860,7 @@ mod tests {
             slug: parse_slug("slug"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            published_at: Some(UtcInstant::from(Utc::now())),
+            published_at: Some(UtcInstant::now()),
             summary: None,
             tags: vec![
                 ("rust".parse().unwrap(), "Rust".parse().unwrap()),
@@ -885,7 +885,7 @@ mod tests {
             slug: parse_slug("slug"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            published_at: Some(UtcInstant::from(Utc::now())),
+            published_at: Some(UtcInstant::now()),
             summary: None,
             tags: vec![],
         });
@@ -903,7 +903,7 @@ mod tests {
             slug: parse_slug("slug"),
             body: parse_post_body("body"),
             format: PostFormat::Markdown,
-            published_at: Some(UtcInstant::from(Utc::now())),
+            published_at: Some(UtcInstant::now()),
             summary: None,
             tags: vec![],
         });

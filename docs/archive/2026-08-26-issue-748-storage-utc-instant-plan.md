@@ -33,7 +33,7 @@ Out:
 
 - [x] Task 1: Make `UtcInstant` a first-class ordered SQL scalar.
   - Contract: retain the current Chrono-backed representation, serde, parsing,
-    display, `value()`, and conversions; add only `PartialOrd`/`Ord` and the
+    display, `value()`, and conversions; add `now()`, `PartialOrd`/`Ord`, and the
     plain `SqlxBridge`.
   - Verification: focused common/macro checks plus `#[apply(backends)]` scalar
     tests prove ordering, direct bind/decode, and nullable decode on SQLite and

@@ -1,4 +1,3 @@
-use chrono::Utc;
 use common::ids::{ChannelId, SubscriptionId};
 use common::password::Password;
 use common::tag::Tag;
@@ -35,7 +34,7 @@ pub(super) async fn anon_by_tag(
             None,
             parse_row_limit(limit),
             &ViewerIdentity::Anonymous,
-            common::time::UtcInstant::from(Utc::now()),
+            common::time::UtcInstant::now(),
         )
         .await
         .expect("list_posts_by_tag failed")
@@ -48,7 +47,7 @@ pub(super) async fn anon_published(state: &AppState, limit: &str) -> Vec<storage
             None,
             parse_row_limit(limit),
             &ViewerIdentity::Anonymous,
-            common::time::UtcInstant::from(Utc::now()),
+            common::time::UtcInstant::now(),
         )
         .await
         .expect("list_published failed")

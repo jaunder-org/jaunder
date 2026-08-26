@@ -1,7 +1,7 @@
 //! Password reset token storage.
 
 use async_trait::async_trait;
-use chrono::Utc;
+
 use sqlx::{Database, Pool};
 use thiserror::Error;
 
@@ -93,7 +93,7 @@ where
         expires_at: UtcInstant,
     ) -> sqlx::Result<RawToken> {
         let (raw_token, token_hash) = host::token::generate_hashed();
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
 
         sqlx::query(
             "INSERT INTO password_resets (token_hash, user_id, created_at, expires_at)
@@ -116,7 +116,7 @@ where
         let token_hash =
             host::token::hash(raw_token).map_err(|_| UsePasswordResetError::NotFound)?;
 
-        let now = UtcInstant::from(Utc::now());
+        let now = UtcInstant::now();
 
         // Atomically claim the token in one statement: the UPDATE succeeds only
         // when it exists, is unused, and is unexpired, so two concurrent requests
@@ -188,7 +188,7 @@ mod tests {
     async fn create_password_reset_with_closed_pool_returns_error(#[case] backend: Backend) {
         let TestEnv { state, base } = backend.setup().await;
         base.close_pool().await;
-        let expires_at = UtcInstant::from(chrono::Utc::now());
+        let expires_at = UtcInstant::now();
         let result = state
             .password_resets
             .create_password_reset(UserId::from(1), expires_at)

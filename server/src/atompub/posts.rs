@@ -197,7 +197,7 @@ pub async fn collection_get(
 
     let updated = records
         .first()
-        .map_or_else(|| UtcInstant::from(chrono::Utc::now()), |p| p.updated_at);
+        .map_or_else(UtcInstant::now, |p| p.updated_at);
 
     let meta = FeedMeta {
         // The collection URL *is* the feed's atom:id.
@@ -334,11 +334,7 @@ pub async fn collection_post(
     let published_at = if fields.is_draft {
         None
     } else {
-        Some(
-            fields
-                .published
-                .unwrap_or_else(|| UtcInstant::from(chrono::Utc::now())),
-        )
+        Some(fields.published.unwrap_or_else(UtcInstant::now))
     };
 
     // AtomPub has no audience picker; new posts adopt the instance default.
