@@ -351,12 +351,13 @@ where
         subscription_id: SubscriptionId,
     ) -> Result<(), AudienceError> {
         sqlx::query(
-            "INSERT INTO audience_members (author_user_id, audience_id, subscription_id) \
-             VALUES ($1, $2, $3)",
+            "INSERT INTO audience_members (audience_id, subscription_id, author_user_id) \
+             VALUES ($1, $2, $3) \
+             ON CONFLICT (audience_id, subscription_id) DO NOTHING",
         )
-        .bind(author_user_id)
         .bind(audience_id)
         .bind(subscription_id)
+        .bind(author_user_id)
         .execute(&self.pool)
         .await?;
         Ok(())
