@@ -17,7 +17,7 @@
 //! their own modules and are called cross-module.
 
 use common::seed::PageSeed;
-use maud::html;
+use maud::{PreEscaped, html};
 
 use crate::html::Markup;
 
@@ -49,21 +49,39 @@ pub const PREPAINT_SCRIPT: &str = concat!(
 /// shell; copied to no build output.
 pub const SPA_SHELL: &str = include_str!("../../../csr/index.html");
 
+/// Keep the wasm URL literal single-sourced while allowing the static starter
+/// script to be assembled entirely at compile time.
+macro_rules! wasm_url {
+    () => {
+        "/pkg/jaunder.wasm"
+    };
+}
+
 /// The wasm bundle's URL, and the JS glue's. Single source of truth for the boot
 /// artifacts' paths (#866).
 ///
 /// Every consumer — both shells, the projector's boot script, and two xtask
-/// checks — reads these constants, and the shell's `initMeasured()` target, its
-/// glue `import`, and the projector's boot script are asserted against them by the
-/// drift guards in this module's tests. Hand-written copies with nothing tying
+/// checks — reads these constants. The starter URL, measured initializer
+/// fallback, glue `import`, and projector boot script are asserted against them
+/// by this module's drift guards. Hand-written copies with nothing tying
 /// them together are the hazard (see
 /// docs/adr/0121-no-wasm-preload.md for the double-download failure a
 /// drifted copy causes).
-pub const WASM_URL: &str = "/pkg/jaunder.wasm";
+pub const WASM_URL: &str = wasm_url!();
+/// The static, single-request handle both shells publish before their
+/// render-blocking stylesheets. wasm-bindgen is the sole response-body consumer.
+pub const EARLY_WASM_FETCH_SCRIPT: &str = concat!(
+    "<script>\n",
+    "      window.__jaunderWasmFetch = fetch(\"",
+    wasm_url!(),
+    "\");\n",
+    "    </script>",
+);
 /// The wasm-bindgen JS glue's URL. See [`WASM_URL`].
 pub const GLUE_URL: &str = "/pkg/jaunder.js";
-/// The document-frame mark emitted immediately before `initMeasured()` starts the
-/// wasm fetch. Shared with both shell surfaces and drift-guarded in tests (#870).
+/// The document-frame mark emitted immediately before `initMeasured()` consumes
+/// the early response (or starts the explicit fallback). Shared with both shell
+/// surfaces and drift-guarded in tests (#870).
 pub const MODULE_BEFORE_INIT_MARK: &str = "jaunder.module.before_init";
 
 /// The document `<head>` inner HTML: per-page title + description + Open Graph.
@@ -90,6 +108,8 @@ pub fn render_head(seed: &PageSeed) -> Markup {
         PageSeed::UserTag { username, tag, .. } => (format!("#{tag} by {username}"), String::new()),
     };
     Markup::new(html! {
+        // raw-html-door:allow static script bytes assembled from WASM_URL; no request or viewer data enters this sink
+        (PreEscaped(EARLY_WASM_FETCH_SCRIPT))
         meta charset="utf-8";
         meta name="viewport" content="width=device-width, initial-scale=1";
         // NO wasm preload here — a measured decision with a fired abort rule, not
@@ -285,18 +305,63 @@ mod tests {
     }
 
     #[test]
-    fn csr_index_html_boots_wasm_with_an_explicit_url() {
-        // Fast unit smoke (#234): the SPA shell must pass an explicit wasm URL to
-        // initMeasured(), not the arg-less wasm-bindgen default initializer that
-        // falls back to `jaunder_bg.wasm`. This runs in `check`; `cargo xtask
-        // audit-wasm` is what ties this URL to the file the build actually emits.
-        //
-        // Derived from WASM_URL rather than a literal (#866), so the shell and every
-        // other consumer of the boot URLs share one definition.
+    fn both_shell_heads_start_the_same_single_wasm_request_before_stylesheets() {
+        let starter = EARLY_WASM_FETCH_SCRIPT;
         assert!(
-            SPA_SHELL.contains(&format!(r#"initMeasured("{WASM_URL}")"#)),
-            "csr/index.html must boot via initMeasured(\"{WASM_URL}\") (drift guard #234)"
+            starter.starts_with("<script>") && starter.ends_with("</script>"),
+            "{starter}"
         );
+        assert_eq!(
+            starter.matches("window.__jaunderWasmFetch =").count(),
+            1,
+            "{starter}"
+        );
+        assert_eq!(starter.matches("fetch(").count(), 1, "{starter}");
+        assert!(
+            starter.contains(&format!(r#"fetch("{WASM_URL}")"#)),
+            "{starter}"
+        );
+
+        let csr_prepaint = SPA_SHELL
+            .find(PREPAINT_SCRIPT)
+            .expect("CSR pre-paint script");
+        let csr_starter = SPA_SHELL.find(starter).expect("CSR early wasm starter");
+        let csr_style = SPA_SHELL
+            .find(r#"<link rel="stylesheet" href="/style/jaunder.css" />"#)
+            .expect("CSR base stylesheet");
+        let csr_theme = SPA_SHELL
+            .find(r#"<link rel="stylesheet" href="/style/jaunder-themes.css" />"#)
+            .expect("CSR theme stylesheet");
+        assert!(
+            csr_prepaint < csr_starter && csr_starter < csr_style && csr_starter < csr_theme,
+            "{SPA_SHELL}"
+        );
+
+        let head = render_head(&PageSeed::SiteTimeline(one_post_page())).into_string();
+        assert!(head.starts_with(starter), "{head}");
+        let head_style = head
+            .find(r#"<link rel="stylesheet" href="/style/jaunder.css">"#)
+            .expect("projector base stylesheet");
+        let head_theme = head
+            .find(r#"<link rel="stylesheet" href="/style/jaunder-themes.css">"#)
+            .expect("projector theme stylesheet");
+        assert!(
+            starter.len() < head_style && starter.len() < head_theme,
+            "{head}"
+        );
+    }
+
+    #[test]
+    fn csr_index_html_consumes_the_early_request_with_an_explicit_url_fallback() {
+        // The promise is the delivery path; the explicit URL preserves boot when
+        // the static starter is absent and remains tied to the artifact audit.
+        let init = format!(r#"initMeasured(window.__jaunderWasmFetch ?? "{WASM_URL}")"#);
+        assert!(
+            SPA_SHELL.contains(&init),
+            "csr/index.html must consume the early request with {WASM_URL} fallback: {SPA_SHELL}"
+        );
+        assert!(!SPA_SHELL.contains("modulepreload"), "{SPA_SHELL}");
+        assert!(!SPA_SHELL.contains(r#"rel="preload""#), "{SPA_SHELL}");
     }
 
     /// The glue's URL has the same drift exposure as the wasm's: the shell imports
@@ -316,15 +381,24 @@ mod tests {
             r#"performance.mark("{}");"#,
             crate::app::MODULE_BEFORE_INIT_MARK
         );
-        let init = format!(r#"initMeasured("{WASM_URL}")"#);
+        let init = format!(r#"initMeasured(window.__jaunderWasmFetch ?? "{WASM_URL}")"#);
         let import_index = SPA_SHELL.find(&import).expect("csr shell imports glue");
+        for stylesheet in [
+            r#"<link rel="stylesheet" href="/style/jaunder.css" />"#,
+            r#"<link rel="stylesheet" href="/style/jaunder-themes.css" />"#,
+        ] {
+            assert!(
+                SPA_SHELL.find(stylesheet).expect("CSR stylesheet") < import_index,
+                "both stylesheets must precede the module import: {SPA_SHELL}"
+            );
+        }
         let mark_index = SPA_SHELL
             .find(&mark)
             .expect("csr shell marks immediately before init");
         let init_index = SPA_SHELL.find(&init).expect("csr shell calls initMeasured");
         assert!(
             import_index < mark_index && mark_index < init_index,
-            "csr/index.html must keep import → mark → init order: {SPA_SHELL}"
+            "csr/index.html must keep stylesheets → import → mark → init order: {SPA_SHELL}"
         );
     }
 

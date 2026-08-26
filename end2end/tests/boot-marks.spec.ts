@@ -522,6 +522,10 @@ test("boot fetches the wasm once and the harness captures the full mark set", as
   // Resource timing remains a delivery diagnostic. Direct initializer marks
   // supply the independent initialization measurements below.
   expect(timing?.wasm ?? null).not.toBeNull();
+  expect(timing?.wasm?.startTime ?? null).not.toBeNull();
+  expect(
+    stylesheetModuleDiagnosticsFrom(timing).styleMaxResponseEndMs,
+  ).not.toBeNull();
 
   const completionDetail = await page.evaluate(() => {
     const entry = performance

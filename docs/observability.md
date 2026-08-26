@@ -1569,6 +1569,141 @@ This closes #870. It does **not** close #869, #895, #1103, or #1138. The finding
 does not reinterpret Node-frame `commitToMountMs` as document boot time and does
 not re-open wasm preload; ADR-0100 and ADR-0121 still apply.
 
+## #1162 — early single-request wasm fetch (kept, 2026-08-25)
+
+**Verdict up front: keep the early fetch.** Both shell surfaces now publish one
+`window.__jaunderWasmFetch = fetch("/pkg/jaunder.wasm")` promise after the
+unchanged synchronous pre-paint auth script and before metadata and the two
+render-blocking stylesheets. Their module scripts retain the
+`jaunder.module.before_init` mark and call
+`initMeasured(window.__jaunderWasmFetch ?? "/pkg/jaunder.wasm")`. `initMeasured`
+forwards that input unchanged to wasm-bindgen; wasm-bindgen awaits a non-URL
+input, recognizes the resulting `Response`, and retains `instantiateStreaming`
+plus its MIME-driven buffered fallback. It remains the sole response-body
+consumer. There is no clone, retry, preload, modulepreload, or second fetch.
+
+The generated-glue gate pins that contract: URL-like inputs are fetched exactly
+once, a promised response is awaited, the resolved response takes the streaming
+path, and only its existing streaming failure path buffers `arrayBuffer()`.
+`cargo xtask e2e-local boot-marks.spec.ts` and
+`cargo xtask e2e-local authed-flash.spec.ts` passed. The first proves one
+pathname-matched `/pkg/jaunder.wasm` request, successful `path: "streaming"`
+initialization, and non-null wasm/stylesheet document timings; the second proves
+ADR-0044's authenticated-owner pre-paint behavior remains intact.
+
+### Corpus and protocol
+
+Corpus:
+`~/measurements/jaunder/issue-1162-early-wasm-fetch/{baseline,candidate}/`. Each
+arm has the six files `<arm>-q{1,2,3}-{chromium,firefox}.jsonl`. The baseline
+was the unmodified `origin/main`-based branch after the approved spec/outline
+and before product changes. The candidate was the retained implementation. Both
+arms used SQLite single-worker builds on the same host, with q1/q3 ordered
+Chromium→Firefox and q2 ordered Firefox→Chromium. Salts were
+`issue1162-<arm>-q<q>` and `e2eSalt` was restored to `""` after each arm.
+
+For every round and engine the commands were:
+
+```text
+devtool run -- nix build --print-out-paths --no-link .#packages.x86_64-linux.e2e-sqlite-chromium-single-worker
+devtool run -- nix build --print-out-paths --no-link .#packages.x86_64-linux.e2e-sqlite-firefox-single-worker
+devtool run -- tar -xzf <out>/capture-sqlite.tar.gz -C ~/measurements/jaunder/issue-1162-early-wasm-fetch/<arm>/ capture/otel-traces.jsonl
+mv ~/measurements/jaunder/issue-1162-early-wasm-fetch/<arm>/capture/otel-traces.jsonl ~/measurements/jaunder/issue-1162-early-wasm-fetch/<arm>/<arm>-q<q>-<engine>.jsonl
+```
+
+The extraction was immediately followed by the unique rename before extracting
+the other engine. Each of the 12 files was analyzed separately:
+
+```text
+devtool run -- cargo xtask traces boot-phases <one explicit JSONL path>
+```
+
+Then each arm was certified with one invocation naming its six explicit paths;
+both arm invocations reported 36 populations and zero closure violations. No
+glob was hidden inside `devtool`.
+
+`/proc/loadavg` was recorded immediately before and after each accepted round:
+
+| arm       | round | before         | after          |
+| --------- | ----- | -------------- | -------------- |
+| baseline  | q1    | 0.94/0.73/1.55 | 1.72/2.33/2.29 |
+| baseline  | q2    | 1.34/2.21/2.26 | 2.77/2.41/2.15 |
+| baseline  | q3    | 2.73/2.42/2.16 | 1.26/1.63/1.86 |
+| candidate | q1    | 1.87/2.02/1.82 | 1.71/1.90/1.99 |
+| candidate | q2    | 1.47/1.84/1.97 | 1.16/1.65/1.82 |
+| candidate | q3    | 1.05/1.60/1.80 | 1.24/1.79/1.85 |
+
+No competing build, test, or agent workload contaminated an accepted round.
+
+### Coverage and request-count evidence
+
+Means below use only default-page navigation rows on `e2e.test`, matching the
+`boot-phases` analyzer's ownership rule; secondary `e2e.page` rows are not
+folded in. Every file contained 215 current-schema navigation rows. Per file,
+208 had the complete `documentBootTotalMs` plus stylesheet/direct-init fields
+used for the paired result, 212 had complete direct-init diagnostics, and the
+stylesheet/fetch gap was present for 213 Chromium or 214 Firefox rows.
+Incomplete fields were counted, never backfilled.
+
+Aggregated per arm and engine:
+
+| arm       | engine   | total | full rows | direct-init | streaming/buffered | gap rows |
+| --------- | -------- | ----: | --------: | ----------: | -----------------: | -------: |
+| baseline  | chromium |   645 |       624 |         636 |              630/6 |      639 |
+| baseline  | firefox  |   645 |       624 |         636 |              630/6 |      642 |
+| candidate | chromium |   645 |       624 |         636 |              630/6 |      639 |
+| candidate | firefox  |   645 |       624 |         636 |              630/6 |      642 |
+
+The buffered rows are the suite's deliberate buffered-path exercise, not a
+starter fallback. Every one of the 12 captures contains one passed **“boot
+fetches the wasm once and the harness captures the full mark set”** test span
+for its engine, with one navigation. Thus the pathname-based exactly-one
+wasm-request assertion passed 12/12 capture runs; the aggregate
+`e2e.request_count` is not used as a wasm count because it includes every
+resource.
+
+### Paired boot result
+
+Per-round means use the 208 finite `documentBootTotalMs` rows in each file.
+Values are milliseconds; `d` is candidate minus baseline:
+
+| engine   | round | baseline | candidate |      `d` |
+| -------- | ----- | -------: | --------: | -------: |
+| chromium | q1    |  562.460 |   403.226 | -159.233 |
+| chromium | q2    |  474.429 |   406.270 |  -68.159 |
+| chromium | q3    |  483.581 |   408.297 |  -75.284 |
+| firefox  | q1    |  774.255 |   766.495 |   -7.760 |
+| firefox  | q2    |  771.630 |   753.288 |  -18.341 |
+| firefox  | q3    |  768.971 |   780.188 |   11.216 |
+
+The pre-registered statistic uses the three round differences as the sample:
+`lower = mean(d) - 4.3026527299 * s / sqrt(3)`, with sample standard deviation
+`s`. Regression requires both `mean(d) > 0` and `lower > 0` in either engine.
+
+| engine   | `mean(d)` |    `s` | lower 95% bound | regression |
+| -------- | --------: | -----: | --------------: | ---------- |
+| chromium |  -100.892 | 50.650 |        -226.714 | no         |
+| firefox  |    -4.962 | 14.976 |         -42.164 | no         |
+
+Neither engine meets the regression rule. Chromium improved materially in this
+corpus; Firefox is statistically inconclusive around zero, but the retention
+rule is keep unless a positive regression is established.
+
+### Fetch start versus stylesheet completion
+
+The mean document-frame gap `wasmFetchStartMs - styleMaxResponseEndMs` moved
+from +119.332 ms to -65.855 ms in Chromium and from +132.181 ms to -65.379 ms in
+Firefox. All baseline gap rows started wasm at or after stylesheet completion.
+In the candidate, wasm started before stylesheet completion in 516/639 Chromium
+rows (80.8%) and 516/642 Firefox rows (80.4%). The remaining 123 Chromium and
+126 Firefox rows still serialized at or after stylesheet completion; that
+browser/path-specific behavior is documented evidence, not an abort condition.
+
+The no-flash and one-request invariants passed, pinned wasm-bindgen support was
+proven, and neither engine regressed under the registered paired rule. Therefore
+the starter/consumer change is **kept**. These values remain entirely in the
+document frame; `commitToMountMs` is not used or mixed into the decision.
+
 ## #868 — frame skew bridge (finding, 2026-08-24)
 
 **Verdict up front: the frame skew is mostly a mount-ready bridge term, not an

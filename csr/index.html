@@ -7,6 +7,9 @@
       // prettier-ignore
       (function () {try {var m = localStorage.getItem('jaunder_auth'); if (m) {var u = JSON.parse(m).username; if (u) {var e = document.documentElement; e.classList.add('authed'); e.setAttribute('data-user', u); if (localStorage.getItem('jaunder_home_redirect') === 'app' && location.pathname === '/') {location.replace('/app');} } } } catch (_) { } })();
     </script>
+    <script>
+      window.__jaunderWasmFetch = fetch("/pkg/jaunder.wasm");
+    </script>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <!-- No wasm preload, and that is measured rather than an oversight (#866): it
@@ -21,7 +24,7 @@
     <script type="module">
       import { initMeasured } from "/pkg/jaunder.js";
       performance.mark("jaunder.module.before_init");
-      initMeasured("/pkg/jaunder.wasm");
+      initMeasured(window.__jaunderWasmFetch ?? "/pkg/jaunder.wasm");
     </script>
   </body>
 </html>
