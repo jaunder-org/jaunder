@@ -318,23 +318,20 @@ mod tests {
     #[test]
     fn backup_schedule_error_separates_detailed_user_and_redacted_telemetry_surfaces() {
         let error = "not a cron".parse::<BackupSchedule>().unwrap_err();
+        let user_message = error.user_message();
         assert!(
-            error
-                .user_message()
-                .starts_with("invalid backup schedule: "),
-            "{}",
-            error.user_message()
+            user_message.starts_with("invalid backup schedule: "),
+            "{user_message}"
         );
         assert!(
-            error.user_message().len() > "invalid backup schedule: ".len(),
-            "{}",
-            error.user_message()
+            user_message.len() > "invalid backup schedule: ".len(),
+            "{user_message}"
         );
-        assert_eq!(error.to_string(), error.user_message());
+        assert_eq!(error.to_string(), user_message);
         assert_eq!(error.telemetry_code(), "invalid_backup_schedule");
         let debug = format!("{error:?}");
         assert!(debug.contains("UserFacingMessage([redacted])"), "{debug}");
-        assert!(!debug.contains(error.user_message()), "{debug}");
+        assert!(!debug.contains(user_message), "{debug}");
     }
 
     #[test]

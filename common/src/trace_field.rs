@@ -166,6 +166,7 @@ mod tests {
     #[test]
     fn recursive_projections_preserve_option_and_reference_shape() {
         let value = 7_u32;
+        assert!(true.trace_value());
         assert_eq!(value.trace_value(), 7);
         assert_eq!(Some(value).trace_value(), Some(7));
         assert_eq!(None::<u32>.trace_value(), None);

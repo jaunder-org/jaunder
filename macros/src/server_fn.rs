@@ -300,11 +300,11 @@ pub(crate) fn expand(
     };
     let declared_fields: Vec<_> = instrument_args
         .iter()
-        .filter_map(|arg| {
+        .map(|arg| {
             let syn::Meta::List(list) = arg else {
-                return None;
+                unreachable!("route stores only declaration-only fields lists")
             };
-            Some(&list.tokens)
+            &list.tokens
         })
         .collect();
     let fields_arg = if projected_fields.is_empty() && declared_fields.is_empty() {
@@ -458,6 +458,18 @@ mod tests {
     }
 
     #[test]
+    fn rejects_malformed_skip_arguments() {
+        for arg in [
+            parse_quote!(skip),
+            parse_quote!(skip()),
+            parse_quote!(skip_all(name)),
+        ] {
+            let error = expect_err(derive("web/src/audiences/api.rs", &ident("rename"), &[arg]));
+            assert!(error.to_string().contains("skip"), "{error}");
+        }
+    }
+
+    #[test]
     fn rejects_a_passed_endpoint() {
         let args: Vec<syn::Meta> = vec![parse_quote!(endpoint = "/x/y")];
         let e = expect_err(derive("web/src/audiences/api.rs", &ident("rename"), &args));
@@ -591,6 +603,29 @@ mod tests {
             !out.contains("left = ?") && !out.contains("right = ?"),
             "{out}"
         );
+    }
+
+    #[test]
+    fn expansion_ignores_receiver_and_pattern_inputs_without_projectable_names() {
+        for f in [
+            parse_quote! {
+                pub async fn method(&self) -> WebResult<()> { do_it().await }
+            },
+            parse_quote! {
+                pub async fn pair((left, right): (u32, u32)) -> WebResult<()> {
+                    do_it().await
+                }
+            },
+        ] {
+            let out = expand("web/src/posts/api.rs", &[], f)
+                .expect("expands")
+                .to_string();
+            assert!(out.contains("skip_all"), "{out}");
+            assert!(
+                !out.contains("left = ?") && !out.contains("right = ?"),
+                "{out}"
+            );
+        }
     }
 
     #[test]
