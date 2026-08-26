@@ -81,7 +81,7 @@ Out:
     `devtool run -- cargo test --manifest-path xtask/Cargo.toml audit_wasm`
     proves URL derivation and rejection of a missing explicit fallback.
 
-- [ ] Task 5: Prove one-request and no-flash browser behavior
+- [x] Task 5: Prove one-request and no-flash browser behavior
   - Contract: extend the existing boot-marks test rather than adding a separate
     navigation test. Retain pathname-based request counting and require one wasm
     request, `path: "streaming"`, and non-null wasm/style document timings.
