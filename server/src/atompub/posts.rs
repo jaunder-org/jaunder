@@ -828,19 +828,16 @@ mod etag_tests {
             .expect_list_audiences()
             .returning(|_| Err(sqlx::Error::PoolClosed));
 
-        let Err(error) = normalize_atom_input(
+        let result = normalize_atom_input(
             org_fields("#+PROPERTY: JAUNDER_AUDIENCE named:42\nBody"),
             OrgOperation::Create,
             parse_utc_instant("2026-08-26T12:00:00Z"),
             &audiences,
             UserId::from(1),
         )
-        .await
-        else {
-            panic!("storage failures must not become validation errors");
-        };
+        .await;
 
-        assert!(matches!(error, HandlerError::Internal(_)));
+        assert!(matches!(result, Err(HandlerError::Internal(_))));
     }
 
     #[test]
