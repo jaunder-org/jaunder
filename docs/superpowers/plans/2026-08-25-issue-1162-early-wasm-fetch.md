@@ -56,7 +56,7 @@ Out:
     starter or consumer change; record the prerequisite failure and retained
     existing boot behavior in `docs/observability.md`.
 
-- [ ] Task 3: Start one early request on both shell surfaces
+- [x] Task 3: Start one early request on both shell surfaces
   - Contract: `web::app::EARLY_WASM_FETCH_SCRIPT` assigns
     `window.__jaunderWasmFetch` exactly once from `fetch(WASM_URL)` without
     reading viewer state. CSR order is unchanged `PREPAINT_SCRIPT`, starter,

@@ -17,7 +17,7 @@
 //! their own modules and are called cross-module.
 
 use common::seed::PageSeed;
-use maud::html;
+use maud::{PreEscaped, html};
 
 use crate::html::Markup;
 
@@ -49,6 +49,14 @@ pub const PREPAINT_SCRIPT: &str = concat!(
 /// shell; copied to no build output.
 pub const SPA_SHELL: &str = include_str!("../../../csr/index.html");
 
+/// Keep the wasm URL literal single-sourced while allowing the static starter
+/// script to be assembled entirely at compile time.
+macro_rules! wasm_url {
+    () => {
+        "/pkg/jaunder.wasm"
+    };
+}
+
 /// The wasm bundle's URL, and the JS glue's. Single source of truth for the boot
 /// artifacts' paths (#866).
 ///
@@ -59,7 +67,16 @@ pub const SPA_SHELL: &str = include_str!("../../../csr/index.html");
 /// them together are the hazard (see
 /// docs/adr/0121-no-wasm-preload.md for the double-download failure a
 /// drifted copy causes).
-pub const WASM_URL: &str = "/pkg/jaunder.wasm";
+pub const WASM_URL: &str = wasm_url!();
+/// The static, single-request handle both shells publish before their
+/// render-blocking stylesheets. wasm-bindgen is the sole response-body consumer.
+pub const EARLY_WASM_FETCH_SCRIPT: &str = concat!(
+    "<script>\n",
+    "      window.__jaunderWasmFetch = fetch(\"",
+    wasm_url!(),
+    "\");\n",
+    "    </script>",
+);
 /// The wasm-bindgen JS glue's URL. See [`WASM_URL`].
 pub const GLUE_URL: &str = "/pkg/jaunder.js";
 /// The document-frame mark emitted immediately before `initMeasured()` starts the
@@ -90,6 +107,8 @@ pub fn render_head(seed: &PageSeed) -> Markup {
         PageSeed::UserTag { username, tag, .. } => (format!("#{tag} by {username}"), String::new()),
     };
     Markup::new(html! {
+        // raw-html-door:allow static script bytes assembled from WASM_URL; no request or viewer data enters this sink
+        (PreEscaped(EARLY_WASM_FETCH_SCRIPT))
         meta charset="utf-8";
         meta name="viewport" content="width=device-width, initial-scale=1";
         // NO wasm preload here — a measured decision with a fired abort rule, not
@@ -281,6 +300,53 @@ mod tests {
         assert!(
             index.contains(PREPAINT_SCRIPT),
             "csr/index.html must embed app::PREPAINT_SCRIPT verbatim (drift guard)"
+        );
+    }
+
+    #[test]
+    fn both_shell_heads_start_the_same_single_wasm_request_before_stylesheets() {
+        let starter = EARLY_WASM_FETCH_SCRIPT;
+        assert!(
+            starter.starts_with("<script>") && starter.ends_with("</script>"),
+            "{starter}"
+        );
+        assert_eq!(
+            starter.matches("window.__jaunderWasmFetch =").count(),
+            1,
+            "{starter}"
+        );
+        assert_eq!(starter.matches("fetch(").count(), 1, "{starter}");
+        assert!(
+            starter.contains(&format!(r#"fetch("{WASM_URL}")"#)),
+            "{starter}"
+        );
+
+        let csr_prepaint = SPA_SHELL
+            .find(PREPAINT_SCRIPT)
+            .expect("CSR pre-paint script");
+        let csr_starter = SPA_SHELL.find(starter).expect("CSR early wasm starter");
+        let csr_style = SPA_SHELL
+            .find(r#"<link rel="stylesheet" href="/style/jaunder.css" />"#)
+            .expect("CSR base stylesheet");
+        let csr_theme = SPA_SHELL
+            .find(r#"<link rel="stylesheet" href="/style/jaunder-themes.css" />"#)
+            .expect("CSR theme stylesheet");
+        assert!(
+            csr_prepaint < csr_starter && csr_starter < csr_style && csr_starter < csr_theme,
+            "{SPA_SHELL}"
+        );
+
+        let head = render_head(&PageSeed::SiteTimeline(one_post_page())).into_string();
+        assert!(head.starts_with(starter), "{head}");
+        let head_style = head
+            .find(r#"<link rel="stylesheet" href="/style/jaunder.css">"#)
+            .expect("projector base stylesheet");
+        let head_theme = head
+            .find(r#"<link rel="stylesheet" href="/style/jaunder-themes.css">"#)
+            .expect("projector theme stylesheet");
+        assert!(
+            starter.len() < head_style && starter.len() < head_theme,
+            "{head}"
         );
     }
 

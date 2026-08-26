@@ -204,7 +204,7 @@ mod tests {
     }
 
     #[test]
-    fn document_head_starts_with_the_prepaint_script() {
+    fn document_head_starts_with_prepaint_then_early_wasm_fetch() {
         use super::document;
         use common::seed::{PageSeed, TimelinePage};
         let doc = document(&PageSeed::SiteTimeline(TimelinePage {
@@ -212,11 +212,29 @@ mod tests {
             next_cursor: None,
             has_more: false,
         }));
-        assert!(doc.contains(web::app::PREPAINT_SCRIPT), "{doc}");
-        assert!(
-            doc.contains(&format!("<head>{}", web::app::PREPAINT_SCRIPT)),
-            "prepaint is first in head: {doc}"
+        let prepaint_then_starter = format!(
+            "<head>{}{}",
+            web::app::PREPAINT_SCRIPT,
+            web::app::EARLY_WASM_FETCH_SCRIPT
         );
+        assert!(
+            doc.contains(&prepaint_then_starter),
+            "prepaint then starter must begin the head: {doc}"
+        );
+        let starter = doc
+            .find(web::app::EARLY_WASM_FETCH_SCRIPT)
+            .expect("projector early wasm starter");
+        for stylesheet in [
+            r#"<link rel="stylesheet" href="/style/jaunder.css">"#,
+            r#"<link rel="stylesheet" href="/style/jaunder-themes.css">"#,
+        ] {
+            assert!(
+                starter < doc.find(stylesheet).expect("projector stylesheet"),
+                "starter must precede {stylesheet}: {doc}"
+            );
+        }
+        assert!(!doc.contains("modulepreload"), "{doc}");
+        assert!(!doc.contains(r#"rel="preload""#), "{doc}");
     }
 
     #[test]
