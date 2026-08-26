@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use common::ids::PostId;
+use common::tag::MAX_TAGS_PER_POST;
 use server_fn::ServerFn;
 use web::posts::SavedPost;
 
@@ -684,6 +685,90 @@ async fn update_post_applies_tag_set_diff(#[case] backend: Backend) {
         .tags;
     let slugs: Vec<&str> = stored.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert_eq!(slugs, vec!["new-tag", "rust"]);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn update_post_rejects_over_limit_tags_without_mutating_post_or_tags(
+    #[case] backend: Backend,
+) {
+    let (_base, state, cookie) = login_and_state(backend).await;
+    let original_body = "# Original Title\n\noriginal body";
+    let create_payload = serde_json::json!({
+        "post": {
+            "body": original_body,
+            "format": "markdown",
+            "slug_override": null,
+            "publish": false,
+            "tags": ["original-tag"],
+        }
+    });
+    let (status, body) = post_json(
+        &state,
+        <web::posts::Create as ServerFn>::PATH,
+        create_payload,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
+
+    let original = state
+        .posts
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
+        .await
+        .unwrap()
+        .expect("created post exists");
+    let original_title = original.title;
+    let original_body = original.body;
+    let original_tags: Vec<String> = original
+        .tags
+        .iter()
+        .map(|tag| tag.tag_slug.to_string())
+        .collect();
+
+    let replacement_tags: Vec<String> =
+        (0..=MAX_TAGS_PER_POST).map(|n| format!("tag{n}")).collect();
+    let update_payload = serde_json::json!({
+        "post_id": created.post_id,
+        "post": {
+            "body": "# Replacement Title\n\nreplacement body",
+            "format": "markdown",
+            "slug_override": null,
+            "publish": false,
+            "tags": replacement_tags,
+        }
+    });
+    let (status, body) = post_json(
+        &state,
+        <web::posts::Update as ServerFn>::PATH,
+        update_payload,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(body.contains("too many tags"), "body: {body}");
+
+    let stored = state
+        .posts
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Anonymous,
+        )
+        .await
+        .unwrap()
+        .expect("post exists");
+    assert_eq!(stored.title, original_title);
+    assert_eq!(stored.body, original_body);
+    let tags: Vec<String> = stored
+        .tags
+        .iter()
+        .map(|tag| tag.tag_slug.to_string())
+        .collect();
+    assert_eq!(tags, original_tags);
 }
 
 #[apply(backends)]

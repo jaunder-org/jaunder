@@ -1114,7 +1114,10 @@ mod tests {
         check!(common::slug::InvalidSlug);
         check!(common::username::InvalidUsername);
         check!(common::tag::InvalidTag);
-        check!(common::tag::TagValidationError::TooMany { count: 99, max: 25 });
+        check!(common::tag::TagValidationError::TooMany {
+            count: common::tag::MAX_TAGS_PER_POST + 1,
+            max: common::tag::MAX_TAGS_PER_POST,
+        });
         check!(common::password::PasswordError::PasswordTooShort);
         check!(common::render::InvalidPostFormat);
         check!(common::media::InvalidMediaSource);
