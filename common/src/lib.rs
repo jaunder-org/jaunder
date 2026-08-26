@@ -53,6 +53,7 @@ pub mod test_support;
 pub mod text;
 pub mod time;
 pub mod token;
+pub mod trace_field;
 pub mod username;
 pub mod visibility;
 

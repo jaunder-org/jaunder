@@ -26,7 +26,7 @@ Out:
 
 ## Task outline
 
-- [ ] Task 1: Add type-owned trace projections
+- [x] Task 1: Add type-owned trace projections
   - Contract: export `common::trace_field::TraceField` with the approved GAT
     signature. Implement only the exact primitive, domain, `Option<T>`, and `&T`
     projections from the spec; every projection is by value or borrow and
