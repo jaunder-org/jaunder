@@ -112,6 +112,12 @@ fn ensure_promise_response_input_contract(js: &str) -> anyhow::Result<()> {
             bail!("wasm-bindgen glue no longer {behavior}; missing {fragment:?}");
         }
     }
+    let initializer_fetches = js.matches("fetch(module_or_path)").count();
+    if initializer_fetches != 1 {
+        bail!(
+            "wasm-bindgen glue must fetch URL-like initializer input exactly once; found {initializer_fetches}"
+        );
+    }
     Ok(())
 }
 
@@ -420,6 +426,17 @@ async function __wbg_init(module_or_path) {
             error.to_string().contains("await a Promise<Response>"),
             "{error:#}"
         );
+    }
+
+    #[test]
+    fn rejects_wasm_bindgen_glue_that_fetches_the_initializer_input_twice() {
+        let drifted = WASM_BINDGEN_PROMISE_RESPONSE_GLUE.replace(
+            "module_or_path = fetch(module_or_path);",
+            "module_or_path = fetch(module_or_path);\nmodule_or_path = fetch(module_or_path);",
+        );
+
+        let error = ensure_promise_response_input_contract(&drifted).unwrap_err();
+        assert!(error.to_string().contains("exactly once"), "{error:#}");
     }
 
     #[test]

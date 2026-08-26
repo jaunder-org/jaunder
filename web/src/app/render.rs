@@ -382,16 +382,22 @@ mod tests {
             crate::app::MODULE_BEFORE_INIT_MARK
         );
         let init = format!(r#"initMeasured(window.__jaunderWasmFetch ?? "{WASM_URL}")"#);
-        let stylesheet = SPA_SHELL
-            .find(r#"<link rel="stylesheet" href="/style/jaunder-themes.css" />"#)
-            .expect("CSR theme stylesheet");
         let import_index = SPA_SHELL.find(&import).expect("csr shell imports glue");
+        for stylesheet in [
+            r#"<link rel="stylesheet" href="/style/jaunder.css" />"#,
+            r#"<link rel="stylesheet" href="/style/jaunder-themes.css" />"#,
+        ] {
+            assert!(
+                SPA_SHELL.find(stylesheet).expect("CSR stylesheet") < import_index,
+                "both stylesheets must precede the module import: {SPA_SHELL}"
+            );
+        }
         let mark_index = SPA_SHELL
             .find(&mark)
             .expect("csr shell marks immediately before init");
         let init_index = SPA_SHELL.find(&init).expect("csr shell calls initMeasured");
         assert!(
-            stylesheet < import_index && import_index < mark_index && mark_index < init_index,
+            import_index < mark_index && mark_index < init_index,
             "csr/index.html must keep stylesheets → import → mark → init order: {SPA_SHELL}"
         );
     }

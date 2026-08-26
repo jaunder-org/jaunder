@@ -292,16 +292,22 @@ mod tests {
             r#"initMeasured(window.__jaunderWasmFetch ?? "{}")"#,
             web::app::WASM_URL
         );
-        let stylesheet = doc
-            .find(r#"<link rel="stylesheet" href="/style/jaunder-themes.css">"#)
-            .expect("projector theme stylesheet");
         let import_index = doc.find(&import).expect("projector shell imports glue");
+        for stylesheet in [
+            r#"<link rel="stylesheet" href="/style/jaunder.css">"#,
+            r#"<link rel="stylesheet" href="/style/jaunder-themes.css">"#,
+        ] {
+            assert!(
+                doc.find(stylesheet).expect("projector stylesheet") < import_index,
+                "both stylesheets must precede the module import: {doc}"
+            );
+        }
         let mark_index = doc
             .find(&mark)
             .expect("projector shell marks immediately before init");
         let init_index = doc.find(&init).expect("projector shell calls initMeasured");
         assert!(
-            stylesheet < import_index && import_index < mark_index && mark_index < init_index,
+            import_index < mark_index && mark_index < init_index,
             "projector document must keep stylesheets → import → mark → init order: {doc}"
         );
     }
