@@ -182,7 +182,7 @@ pub fn PostDisplay<'a>(
         summary: post.summary.as_ref(),
         rendered_html: &post.rendered_html,
         time: &time_label,
-        permalink: post.permalink.as_deref().unwrap_or_default(),
+        permalink: post.permalink.as_ref(),
         tags: &post.tags,
         tag_ctx: tag_context,
     };
@@ -319,7 +319,7 @@ pub fn PostCard<'a>(
     // Unpublish (#23): an Unpublish column would be a no-op on an already-
     // unpublished post.
     let is_draft = post.is_draft;
-    let edit_url = format!("/posts/{post_id}/edit");
+    let edit_url = crate::posts::render::edit_post_url(post_id);
     let delete_action = ServerAction::<Delete>::new();
     let unpublish_action = ServerAction::<Unpublish>::new();
     let publish_action = ServerAction::<Publish>::new();
@@ -367,7 +367,7 @@ pub fn PostCard<'a>(
     let action_col = is_author.then(move || {
         view! {
             <div class="j-post-acts">
-                <a class="j-btn" href=edit_url>
+                <a class="j-btn" href=String::from(edit_url)>
                     "Edit"
                 </a>
                 {primary_action}

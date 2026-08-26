@@ -58,18 +58,6 @@ use {
     },
 };
 
-/// Wraps a server-composed `/…` path (draft-preview / edit routes) as a
-/// [`RootRelativeUrl`]. The path is built from a known-valid literal template, so
-/// the parse cannot fail; the `unreachable!` arm keeps a genuine panic branch
-/// (never an uncovered `expect`).
-#[cfg(feature = "server")]
-fn root_relative_path(path: String) -> RootRelativeUrl {
-    let Ok(url) = RootRelativeUrl::try_from(path) else {
-        unreachable!("server composes a valid root-relative path");
-    };
-    url
-}
-
 #[cfg(feature = "server")]
 fn unpublished_post_from_record(post: PostRecord) -> UnpublishedPost {
     let summary_label = post.fallback_summary_label();
@@ -83,7 +71,7 @@ fn unpublished_post_from_record(post: PostRecord) -> UnpublishedPost {
         },
         title: post.title,
         summary_label,
-        edit_url: root_relative_path(format!("/posts/{}/edit", post.post_id)),
+        edit_url: super::render::edit_post_url(post.post_id),
     }
 }
 

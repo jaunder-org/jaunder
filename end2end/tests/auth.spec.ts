@@ -316,6 +316,9 @@ test("sidebar footer shows Sign out link when logged in", async ({
   // Home, Feed (/app cockpit, #181), Drafts, Scheduled, Media, and Audiences have hrefs.
   await waitForSelector(page, ".j-nav a[href='/audiences']");
   await expect(page.locator(".j-nav a")).toHaveCount(6);
+  // The reactive app does not pass an active key, and unlinked catalog entries stay hidden.
+  await expect(page.locator(".j-nav .is-active")).toHaveCount(0);
+  await expect(page.locator(".j-nav div.j-nav-item")).toHaveCount(0);
 
   // Footer has Sign out.
   await expect(page.locator(SEL.logoutLink)).toBeVisible();
