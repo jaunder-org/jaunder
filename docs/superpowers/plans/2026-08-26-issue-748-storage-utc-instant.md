@@ -122,7 +122,7 @@ Out:
   - Verification: `#[apply(backends)]` create/list round trips include
     `created_at` and preserve ordering.
 
-- [ ] Task 11: Migrate audience storage instants.
+- [x] Task 11: Migrate audience storage instants.
   - Contract: audience records, private summary rows, fixtures, and callers use
     `UtcInstant`; audience membership behavior is unchanged.
   - Dependency: Task 1.
