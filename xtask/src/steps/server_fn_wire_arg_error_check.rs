@@ -9,8 +9,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use quote::ToTokens;
-use syn::spanned::Spanned;
-use syn::visit::Visit;
 
 use crate::result::{CommandResult, StepResult};
 use crate::{files, web_server_fns};
@@ -222,10 +220,11 @@ fn returns_str_reference(output: &syn::ReturnType, require_static: bool) -> bool
     {
         return false;
     }
-    matches!(
-        reference.elem.as_ref(),
-        syn::Type::Path(path) if path.path.is_ident("str")
-    )
+    reference.mutability.is_none()
+        && matches!(
+            reference.elem.as_ref(),
+            syn::Type::Path(path) if path.path.is_ident("str")
+        )
 }
 
 fn has_immutable_self_receiver(signature: &syn::Signature) -> bool {
@@ -233,10 +232,23 @@ fn has_immutable_self_receiver(signature: &syn::Signature) -> bool {
         && matches!(
             signature.inputs.first(),
             Some(syn::FnArg::Receiver(receiver))
-                if receiver.reference.is_some()
+                if receiver
+                    .reference
+                    .as_ref()
+                    .is_some_and(|(_, lifetime)| lifetime.is_none())
                     && receiver.mutability.is_none()
                     && receiver.colon_token.is_none()
         )
+}
+
+fn is_plain_safe_method(signature: &syn::Signature) -> bool {
+    signature.constness.is_none()
+        && signature.asyncness.is_none()
+        && signature.unsafety.is_none()
+        && signature.abi.is_none()
+        && signature.variadic.is_none()
+        && signature.generics.params.is_empty()
+        && signature.generics.where_clause.is_none()
 }
 
 fn record_owned_error_surface(index: &mut TypeIndex, item: &syn::ItemImpl) {
@@ -254,6 +266,7 @@ fn record_owned_error_surface(index: &mut TypeIndex, item: &syn::ItemImpl) {
             matches!(item.vis, syn::Visibility::Public(_))
                 && item.sig.ident == name
                 && has_immutable_self_receiver(&item.sig)
+                && is_plain_safe_method(&item.sig)
                 && returns_str_reference(&item.sig.output, require_static)
         })
     };
@@ -566,47 +579,88 @@ struct ExternalFormatCall {
     literal_argument: bool,
 }
 
-#[derive(Default)]
-struct ExternalFormatCallVisitor {
-    calls: Vec<ExternalFormatCall>,
+#[derive(Debug, Clone)]
+enum FlatToken {
+    Ident(String, usize),
+    Literal,
+    Punct,
+    Open(proc_macro2::Delimiter),
+    Close,
 }
 
-fn is_external_format_path(path: &syn::ExprPath) -> bool {
-    if path.path.segments.last().map(|segment| &segment.ident)
-        != Some(&syn::Ident::new(
-            "from_external",
-            proc_macro2::Span::call_site(),
-        ))
-    {
-        return false;
-    }
-    let direct_owner = path
-        .path
-        .segments
-        .iter()
-        .rev()
-        .nth(1)
-        .is_some_and(|segment| segment.ident == "UserFacingMessage");
-    let qualified_owner = path
-        .qself
-        .as_ref()
-        .and_then(|qself| type_name(&qself.ty))
-        .is_some_and(|name| name == "UserFacingMessage");
-    direct_owner || qualified_owner
-}
-
-impl<'ast> Visit<'ast> for ExternalFormatCallVisitor {
-    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
-        if let syn::Expr::Path(path) = call.func.as_ref()
-            && is_external_format_path(path)
-        {
-            self.calls.push(ExternalFormatCall {
-                line: call.func.span().start().line,
-                literal_argument: matches!(call.args.first(), Some(syn::Expr::Lit(_))),
-            });
+fn flatten_tokens(tokens: proc_macro2::TokenStream, out: &mut Vec<FlatToken>) {
+    for token in tokens {
+        match token {
+            proc_macro2::TokenTree::Ident(ident) => {
+                out.push(FlatToken::Ident(
+                    ident.to_string(),
+                    ident.span().start().line,
+                ));
+            }
+            proc_macro2::TokenTree::Literal(_) => out.push(FlatToken::Literal),
+            proc_macro2::TokenTree::Punct(_) => out.push(FlatToken::Punct),
+            proc_macro2::TokenTree::Group(group) => {
+                out.push(FlatToken::Open(group.delimiter()));
+                flatten_tokens(group.stream(), out);
+                out.push(FlatToken::Close);
+            }
         }
-        syn::visit::visit_expr_call(self, call);
     }
+}
+
+fn external_format_calls(file: &syn::File) -> Vec<ExternalFormatCall> {
+    let mut tokens = Vec::new();
+    flatten_tokens(file.to_token_stream(), &mut tokens);
+    let mut calls = Vec::new();
+
+    for (index, token) in tokens.iter().enumerate() {
+        let FlatToken::Ident(name, line) = token else {
+            continue;
+        };
+        if name != "from_external" {
+            continue;
+        }
+        let owner = tokens[..index].iter().rev().find_map(|token| match token {
+            FlatToken::Ident(name, _) => Some(name.as_str()),
+            _ => None,
+        });
+        if owner != Some("UserFacingMessage") {
+            continue;
+        }
+        let mut call_open = index + 1;
+        while matches!(tokens.get(call_open), Some(FlatToken::Close)) {
+            call_open += 1;
+        }
+        if !matches!(
+            tokens.get(call_open),
+            Some(FlatToken::Open(proc_macro2::Delimiter::Parenthesis))
+        ) {
+            continue;
+        }
+        let mut argument = call_open + 1;
+        while matches!(
+            tokens.get(argument),
+            Some(FlatToken::Open(proc_macro2::Delimiter::Parenthesis))
+        ) {
+            argument += 1;
+        }
+        calls.push(ExternalFormatCall {
+            line: *line,
+            literal_argument: matches!(tokens.get(argument), Some(FlatToken::Literal)),
+        });
+    }
+    calls
+}
+
+fn external_format_marker_reason(line: &str) -> Option<&str> {
+    let rest = line.trim().strip_prefix(EXTERNAL_FORMAT_MARKER)?;
+    if rest.is_empty() {
+        return Some("");
+    }
+    rest.chars()
+        .next()
+        .is_some_and(char::is_whitespace)
+        .then(|| rest.trim())
 }
 
 /// Census the reviewed doors that turn foreign `Display` into a user-only
@@ -627,10 +681,8 @@ fn external_format_doors(sources: &[(String, String)]) -> Result<Vec<String>, Ve
                 continue;
             }
         };
-        let mut visitor = ExternalFormatCallVisitor::default();
-        visitor.visit_file(&file);
         let mut calls = BTreeMap::<usize, Vec<bool>>::new();
-        for call in visitor.calls {
+        for call in external_format_calls(&file) {
             calls
                 .entry(call.line)
                 .or_default()
@@ -641,7 +693,7 @@ fn external_format_doors(sources: &[(String, String)]) -> Result<Vec<String>, Ve
             let marker = line
                 .checked_sub(2)
                 .and_then(|index| lines.get(index))
-                .and_then(|line| line.trim().strip_prefix(EXTERNAL_FORMAT_MARKER));
+                .and_then(|line| external_format_marker_reason(line));
             let Some(reason) = marker else {
                 let shared = *line >= 3
                     && calls.contains_key(&(line - 1))
@@ -680,7 +732,7 @@ fn external_format_doors(sources: &[(String, String)]) -> Result<Vec<String>, Ve
         }
 
         for (index, line) in lines.iter().enumerate() {
-            let Some(reason) = line.trim().strip_prefix(EXTERNAL_FORMAT_MARKER) else {
+            let Some(reason) = external_format_marker_reason(line) else {
                 continue;
             };
             if reason.trim().is_empty() {
@@ -1260,22 +1312,57 @@ mod tests {
     }
 
     #[test]
-    fn associated_functions_do_not_count_as_owned_error_surfaces() {
-        let sources = owned_surface_sources()
-            .into_iter()
-            .map(|(path, source)| (path, source.replace("(&self)", "()")))
-            .collect::<Vec<_>>();
-        let index = index_sources(&sources).expect("index");
-        assert!(!index.owned_error_surfaces.contains("InvalidBackupSchedule"));
-        let error = validate_owned_surfaces(
-            &one_input("BackupSchedule"),
-            &index,
-            sanitized_server_error(),
-            &sources,
-        )
-        .unwrap_err()
-        .join("\n");
-        assert!(error.contains("has no owned user_message"), "{error}");
+    fn non_exact_methods_do_not_count_as_owned_error_surfaces() {
+        let original = owned_surface_sources();
+        let variants = [
+            original
+                .iter()
+                .map(|(path, source)| (path.clone(), source.replace("(&self)", "()")))
+                .collect::<Vec<_>>(),
+            original
+                .iter()
+                .map(|(path, source)| {
+                    (
+                        path.clone(),
+                        source.replace("pub fn user_message", "pub async fn user_message"),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            original
+                .iter()
+                .map(|(path, source)| {
+                    (
+                        path.clone(),
+                        source.replace("pub fn telemetry_code", "pub unsafe fn telemetry_code"),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            original
+                .iter()
+                .map(|(path, source)| {
+                    (
+                        path.clone(),
+                        source.replace(
+                            "pub fn telemetry_code(&self) -> &'static str",
+                            "pub fn telemetry_code(&self) -> &'static mut str",
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            original
+                .iter()
+                .map(|(path, source)| {
+                    (
+                        path.clone(),
+                        source.replace("user_message(&self)", "user_message<T>(&self)"),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        ];
+        for sources in variants {
+            let index = index_sources(&sources).expect("index");
+            assert!(!index.owned_error_surfaces.contains("InvalidBackupSchedule"));
+        }
     }
 
     #[test]
@@ -1331,6 +1418,19 @@ mod tests {
             (
                 "unmarked",
                 "<UserFacingMessage>::from_external(format_args!(\"{error}\"));",
+            ),
+            (
+                "unmarked",
+                "(UserFacingMessage::from_external)(format_args!(\"{error}\"));",
+            ),
+            (
+                "unmarked",
+                "let _ = vec![UserFacingMessage::from_external(format_args!(\"{error}\"))];",
+            ),
+            (
+                "unmarked",
+                "// server-fn-wire-arg-error:allowance typo\n\
+                 UserFacingMessage::from_external(format_args!(\"{error}\"));",
             ),
             (
                 "bare",
