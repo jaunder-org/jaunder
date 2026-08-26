@@ -121,6 +121,14 @@ impl From<common::tag::TagValidationError> for HandlerError {
     }
 }
 
+impl From<common::org::OrgMetadataError> for HandlerError {
+    /// The parsed Org metadata is request input; neither malformed metadata nor
+    /// a metadata-only document may reach persistence.
+    fn from(_: common::org::OrgMetadataError) -> Self {
+        HandlerError::BadRequest
+    }
+}
+
 impl From<common::post_body::InvalidPostBody> for HandlerError {
     /// An entry whose content is nothing but blank lines describes no post, so it is
     /// the client's error — the same `400` the service layer's `EmptyPost` earns
@@ -256,6 +264,10 @@ mod tests {
             StatusCode::BAD_REQUEST
         );
         assert_eq!(
+            status(PerformCreationError::BookkeepingMismatch.into()),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
             status(PerformCreationError::CreatedNotFound.into()),
             StatusCode::INTERNAL_SERVER_ERROR
         );
@@ -270,6 +282,14 @@ mod tests {
         assert_eq!(
             status(PerformUpdateError::EmptyPost.into()),
             StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            status(PerformUpdateError::BookkeepingMismatch.into()),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            status(PerformUpdateError::StaleContent.into()),
+            StatusCode::PRECONDITION_FAILED
         );
         assert_eq!(
             status(PerformUpdateError::NotFound.into()),

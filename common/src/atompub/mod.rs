@@ -22,8 +22,8 @@ pub use title::{CollectionFeedTitle, CollectionTitle, WorkspaceTitle};
 
 pub mod entry;
 pub use entry::{
-    FeedMeta, MediaLinkEntry, entry_to_xml, is_draft, j_slug, render_feed, render_media_link_entry,
-    set_draft, set_j_slug,
+    FeedMeta, MediaLinkEntry, draft_marker, entry_to_xml, is_draft, j_slug, render_feed,
+    render_media_link_entry, set_draft, set_j_slug,
 };
 
 pub mod service;

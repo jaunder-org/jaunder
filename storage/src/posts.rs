@@ -223,6 +223,20 @@ pub struct PostBookkeepingExpectation {
     pub content_etag: Option<ETag>,
 }
 
+/// Converts normalized Org bookkeeping into the persistence checks that must run
+/// inside the post write transaction.
+impl From<common::org::OrgBookkeeping> for PostBookkeepingExpectation {
+    fn from(bookkeeping: common::org::OrgBookkeeping) -> Self {
+        Self {
+            slug: bookkeeping.slug,
+            format: bookkeeping.format,
+            published_at: bookkeeping.date_utc.map(Some),
+            post_id: bookkeeping.post_id,
+            content_etag: bookkeeping.synced,
+        }
+    }
+}
+
 /// Errors that can occur when creating a post.
 #[derive(Debug, Error)]
 pub enum CreatePostError {
@@ -3553,6 +3567,28 @@ mod tests {
             .expect("owner can decode a draft record");
         assert_eq!(draft.published_at, None);
         assert_eq!(draft.deleted_at, None);
+    }
+    #[test]
+    fn org_bookkeeping_conversion_preserves_each_persistence_expectation() {
+        let published_at = "2026-08-26T12:00:00Z".parse().unwrap();
+        let bookkeeping = common::org::OrgBookkeeping {
+            slug: Some(parse_slug("expected-slug")),
+            format: Some(PostFormat::Org),
+            post_id: Some(PostId::from(7)),
+            synced: Some(parse_etag("\"sha256-current\"")),
+            synced_at: None,
+            date_utc: Some(published_at),
+        };
+
+        let expectations: PostBookkeepingExpectation = bookkeeping.into();
+        assert_eq!(expectations.slug, Some(parse_slug("expected-slug")));
+        assert_eq!(expectations.format, Some(PostFormat::Org));
+        assert_eq!(expectations.published_at, Some(Some(published_at)));
+        assert_eq!(expectations.post_id, Some(PostId::from(7)));
+        assert_eq!(
+            expectations.content_etag,
+            Some(parse_etag("\"sha256-current\""))
+        );
     }
 
     #[test]

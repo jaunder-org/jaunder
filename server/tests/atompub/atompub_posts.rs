@@ -896,6 +896,393 @@ async fn create_draft_entry_is_unpublished(#[case] backend: Backend) {
     );
 }
 
+/// Atom's explicit `app:draft` is a structured lifecycle scalar: `no` publishes
+/// now and prevents an Org `JAUNDER_STATUS` header from supplying the lifecycle.
+/// Other structured Atom fields still outrank their Org-header counterparts, and
+/// accepted recognized headers are stripped from the native Org readback.
+#[apply(backends)]
+#[tokio::test]
+async fn explicit_atom_draft_no_beats_org_metadata_and_canonicalizes_org(#[case] backend: Backend) {
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let xml = r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom" xmlns:app="http://www.w3.org/2007/app">
+  <title>Atom title</title>
+  <summary>Atom summary</summary>
+  <content type="text/org">#+TITLE: Header title
+#+DESCRIPTION: Header summary
+#+KEYWORDS: header-tag
+#+PROPERTY: JAUNDER_STATUS draft
+#+UNKNOWN: retained
+
+Org body</content>
+  <category term="atom-tag"/>
+  <app:control><app:draft>no</app:draft></app:control>
+</entry>"#;
+
+    let response = make_app(&state, &base)
+        .oneshot(atompub_post_xml(&session, "posts", xml))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let location = atompub_location(
+        response
+            .headers()
+            .get(header::LOCATION)
+            .expect("create response has Location")
+            .to_str()
+            .expect("Location is text"),
+    );
+    let response = make_app(&state, &base)
+        .oneshot(
+            atompub_at(&session, Method::GET, &location)
+                .body(Body::empty())
+                .expect("build member GET"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_string(response).await;
+    assert!(body.contains("<title>Atom title</title>"), "body: {body}");
+    assert!(
+        body.contains("<summary>Atom summary</summary>"),
+        "body: {body}"
+    );
+    assert!(body.contains("term=\"atom-tag\""), "body: {body}");
+    assert!(body.contains("type=\"text/org\""), "body: {body}");
+    assert!(body.contains("<published>"), "body: {body}");
+    assert!(!body.contains("app:draft"), "body: {body}");
+    assert!(body.contains("#+UNKNOWN: retained"), "body: {body}");
+    assert!(body.contains("Org body"), "body: {body}");
+    assert!(!body.contains("JAUNDER_STATUS"), "body: {body}");
+    assert!(!body.contains("#+TITLE:"), "body: {body}");
+    assert!(!body.contains("#+DESCRIPTION:"), "body: {body}");
+    assert!(!body.contains("#+KEYWORDS:"), "body: {body}");
+}
+
+/// Org metadata errors are `AtomPub` client errors and must not partially replace
+/// the existing member before the full header has been accepted.
+#[apply(backends)]
+#[tokio::test]
+async fn malformed_org_header_update_returns_400_without_mutation(#[case] backend: Backend) {
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let post = session
+        .seed_post()
+        .body(parse_post_body("Original body"))
+        .seed(&state)
+        .await;
+    let invalid = entry_xml(
+        "Replacement",
+        "text/org",
+        "#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_STATUS published\n\nReplacement body",
+    );
+
+    let response = make_app(&state, &base)
+        .oneshot(atompub_put_xml(
+            &session,
+            &format!("posts/{}", post.post_id),
+            &invalid,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response = make_app(&state, &base)
+        .oneshot(atompub_get(&session, &format!("posts/{}", post.post_id)))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_string(response).await;
+    assert!(body.contains("Original body"), "body: {body}");
+    assert!(!body.contains("Replacement body"), "body: {body}");
+}
+
+/// A stale Org `JAUNDER_SYNCED` is an independent `AtomPub` precondition: even a
+/// matching HTTP `If-Match` cannot make it apply, and the stored member remains
+/// unchanged.
+#[apply(backends)]
+#[tokio::test]
+async fn stale_org_synced_returns_412_despite_matching_if_match_without_mutation(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let post = session
+        .seed_post()
+        .body(parse_post_body("Original body"))
+        .seed(&state)
+        .await;
+    let member = format!("posts/{}", post.post_id);
+    let initial = make_app(&state, &base)
+        .oneshot(atompub_get(&session, &member))
+        .await
+        .unwrap();
+    assert_eq!(initial.status(), StatusCode::OK);
+    let current_etag = etag_of(&initial);
+    let xml = entry_xml(
+        "Replacement",
+        "text/org",
+        &format!(
+            "#+PROPERTY: JAUNDER_ID {}\n#+PROPERTY: JAUNDER_SYNCED \"stale\"\n\nReplacement body",
+            post.post_id
+        ),
+    );
+
+    let response = make_app(&state, &base)
+        .oneshot(
+            atompub(&session, Method::PUT, &member)
+                .header(header::CONTENT_TYPE, "application/atom+xml")
+                .header(header::IF_MATCH, current_etag)
+                .body(Body::from(xml))
+                .expect("build matching If-Match PUT"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+    let response = make_app(&state, &base)
+        .oneshot(atompub_get(&session, &member))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_string(response).await;
+    assert!(body.contains("Original body"), "body: {body}");
+    assert!(!body.contains("Replacement body"), "body: {body}");
+}
+
+/// Metadata without remaining Org content names no post and cannot replace an
+/// existing member.
+#[apply(backends)]
+#[tokio::test]
+async fn metadata_only_org_update_returns_400_without_mutation(#[case] backend: Backend) {
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let post = session
+        .seed_post()
+        .body(parse_post_body("Original body"))
+        .seed(&state)
+        .await;
+    let metadata_only = entry_xml(
+        "Replacement",
+        "text/org",
+        "#+TITLE: Header title\n#+PROPERTY: JAUNDER_STATUS draft",
+    );
+
+    let response = make_app(&state, &base)
+        .oneshot(atompub_put_xml(
+            &session,
+            &format!("posts/{}", post.post_id),
+            &metadata_only,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let response = make_app(&state, &base)
+        .oneshot(atompub_get(&session, &format!("posts/{}", post.post_id)))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_string(response).await;
+    assert!(body.contains("Original body"), "body: {body}");
+}
+
+/// Create bookkeeping is checked against the finalized Org record, including
+/// collision-free slug, selected format, and the supplied publication instant.
+#[apply(backends)]
+#[tokio::test]
+async fn create_org_bookkeeping_must_match_final_values(#[case] backend: Backend) {
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let publication = "2024-01-02T03:04:05Z";
+    let valid = format!(
+        r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>Final Title</title>
+  <content type="text/org">#+PROPERTY: JAUNDER_SLUG final-title
+#+PROPERTY: JAUNDER_FORMAT org
+#+PROPERTY: JAUNDER_DATE_UTC 2024-01-02T03:04:05+00:00
+
+Body</content>
+  <published>{publication}</published>
+</entry>"#
+    );
+    let response = make_app(&state, &base)
+        .oneshot(atompub_post_xml(&session, "posts", &valid))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    for metadata in [
+        "#+PROPERTY: JAUNDER_SLUG wrong-slug",
+        "#+PROPERTY: JAUNDER_FORMAT markdown",
+        "#+PROPERTY: JAUNDER_DATE_UTC 2024-01-02T03:04:06Z",
+    ] {
+        let xml = format!(
+            r#"<?xml version="1.0"?>
+<entry xmlns="http://www.w3.org/2005/Atom">
+  <title>Different Title</title>
+  <content type="text/org">{metadata}
+
+Body</content>
+  <published>{publication}</published>
+</entry>"#
+        );
+        let response = make_app(&state, &base)
+            .oneshot(atompub_post_xml(&session, "posts", &xml))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "bookkeeping {metadata:?} must match final post"
+        );
+    }
+    let response = make_app(&state, &base)
+        .oneshot(atompub_get(&session, "posts"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        body_string(response).await.matches("<entry").count(),
+        1,
+        "rejected bookkeeping must not create posts"
+    );
+}
+
+/// Update bookkeeping identifies the addressed member; a mismatched
+/// `JAUNDER_ID` is rejected before any replacement is persisted.
+#[apply(backends)]
+#[tokio::test]
+async fn mismatched_org_id_returns_400_without_mutation(#[case] backend: Backend) {
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let post = session
+        .seed_post()
+        .body(parse_post_body("Original body"))
+        .seed(&state)
+        .await;
+    let xml = entry_xml(
+        "Replacement",
+        "text/org",
+        "#+PROPERTY: JAUNDER_ID 999999999\n#+PROPERTY: JAUNDER_STATUS draft\n\nReplacement body",
+    );
+
+    let response = make_app(&state, &base)
+        .oneshot(atompub_put_xml(
+            &session,
+            &format!("posts/{}", post.post_id),
+            &xml,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response = make_app(&state, &base)
+        .oneshot(atompub_get(&session, &format!("posts/{}", post.post_id)))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        body_string(response).await.contains("Original body"),
+        "mismatched ID must leave the member unchanged"
+    );
+}
+
+/// Matching update bookkeeping uses the target ID and the pre-write content
+/// `ETag`; it is accepted independently of the optional HTTP conditional header.
+#[apply(backends)]
+#[tokio::test]
+async fn matching_org_id_and_synced_bookkeeping_updates_member(#[case] backend: Backend) {
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let post = session.seed_post().seed(&state).await;
+    let member = format!("posts/{}", post.post_id);
+    let initial = make_app(&state, &base)
+        .oneshot(atompub_get(&session, &member))
+        .await
+        .unwrap();
+    assert_eq!(initial.status(), StatusCode::OK);
+    let etag = etag_of(&initial);
+    let xml = entry_xml(
+        "Updated title",
+        "text/org",
+        &format!(
+            "#+PROPERTY: JAUNDER_ID {}\n#+PROPERTY: JAUNDER_SYNCED {etag}\n#+PROPERTY: JAUNDER_SLUG {}\n#+PROPERTY: JAUNDER_FORMAT org\n#+PROPERTY: JAUNDER_STATUS draft\n\nUpdated body",
+            post.post_id, post.slug
+        ),
+    );
+
+    let response = make_app(&state, &base)
+        .oneshot(atompub_put_xml(&session, &member, &xml))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_string(response).await;
+    assert!(body.contains("Updated body"), "body: {body}");
+    assert!(body.contains(post.slug.as_ref()), "body: {body}");
+}
+
+/// Named audience metadata is resolved in the authenticated author's namespace;
+/// foreign and nonexistent IDs deliberately share `AtomPub`'s opaque 400 outcome.
+#[apply(backends)]
+#[tokio::test]
+async fn org_named_audiences_are_author_scoped(#[case] backend: Backend) {
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let author = create_user_and_session(&state).await;
+    let foreign = create_user_and_session(&state).await;
+    let owned = state
+        .audiences
+        .create_audience(
+            author.user_id,
+            &common::test_support::parse_audience_name("Owned"),
+        )
+        .await
+        .expect("create author's audience");
+    let foreign_audience = state
+        .audiences
+        .create_audience(
+            foreign.user_id,
+            &common::test_support::parse_audience_name("Foreign"),
+        )
+        .await
+        .expect("create foreign audience");
+
+    let owned_xml = entry_xml(
+        "Audience",
+        "text/org",
+        &format!(
+            "#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_AUDIENCE named:{owned}\n\nBody"
+        ),
+    );
+    let response = make_app(&state, &base)
+        .oneshot(atompub_post_xml(&author, "posts", &owned_xml))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    for audience_id in [foreign_audience.to_string(), "999999999".to_string()] {
+        let xml = entry_xml(
+            "Rejected",
+            "text/org",
+            &format!(
+                "#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_AUDIENCE named:{audience_id}\n\nBody"
+            ),
+        );
+        let response = make_app(&state, &base)
+            .oneshot(atompub_post_xml(&author, "posts", &xml))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "audience {audience_id} must remain opaque"
+        );
+    }
+}
 #[apply(backends)]
 #[tokio::test]
 async fn member_carries_read_only_j_slug(#[case] backend: Backend) {

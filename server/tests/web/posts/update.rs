@@ -828,3 +828,212 @@ async fn update_post_with_tags_unset_leaves_existing_tags_alone(#[case] backend:
     let slugs: Vec<&str> = stored.iter().map(|t| t.tag_slug.as_ref()).collect();
     assert_eq!(slugs, vec!["keep"]);
 }
+
+#[apply(backends)]
+#[tokio::test]
+async fn update_org_header_applies_tags_and_rejects_mismatched_bookkeeping(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let session = create_user_and_session(&state).await;
+    let cookie = session.cookie();
+    let (status, body) =
+        create_post_json(&state, "original", "org", None, false, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
+
+    let org_body = format!(
+        "#+TITLE: Canonical title\n#+KEYWORDS: org-tag, other\n#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_ID {}\n\nUpdated body",
+        created.post_id
+    );
+    let update_payload = serde_json::json!({
+        "post_id": created.post_id,
+        "post": {
+            "body": org_body,
+            "format": "org",
+            "publish": false,
+        }
+    });
+    let (status, body) = post_json(
+        &state,
+        <web::posts::Update as ServerFn>::PATH,
+        update_payload,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "update body: {body}");
+    let updated: SavedPost = serde_json::from_str(&body).unwrap();
+    let record = state
+        .posts
+        .get_post_by_id(
+            updated.post_id,
+            &common::visibility::ViewerIdentity::Local {
+                user_id: session.user_id,
+            },
+        )
+        .await
+        .unwrap()
+        .expect("updated post exists");
+    assert_eq!(record.title.as_deref(), Some("Canonical title"));
+    assert_eq!(record.body, "Updated body\n");
+    assert_eq!(
+        record
+            .tags
+            .iter()
+            .map(|tag| tag.tag_slug.as_ref())
+            .collect::<Vec<_>>(),
+        vec!["org-tag", "other"]
+    );
+
+    let rejection_payload = serde_json::json!({
+        "post_id": updated.post_id,
+        "post": {
+            "body": "#+TITLE: rejected\n#+PROPERTY: JAUNDER_ID 999\n\nRejected body",
+            "format": "org",
+            "publish": false,
+        }
+    });
+    let (status, body) = post_json(
+        &state,
+        <web::posts::Update as ServerFn>::PATH,
+        rejection_payload,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
+    assert!(
+        body.contains("JAUNDER_ID does not match update target"),
+        "body: {body}"
+    );
+    let unchanged = state
+        .posts
+        .get_post_by_id(
+            updated.post_id,
+            &common::visibility::ViewerIdentity::Local {
+                user_id: session.user_id,
+            },
+        )
+        .await
+        .unwrap()
+        .expect("post survives rejected write");
+    assert_eq!(unchanged.body, record.body);
+    assert_eq!(
+        unchanged
+            .tags
+            .iter()
+            .map(|tag| (&tag.tag_slug, &tag.tag_display))
+            .collect::<Vec<_>>(),
+        record
+            .tags
+            .iter()
+            .map(|tag| (&tag.tag_slug, &tag.tag_display))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(unchanged.title, record.title);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn update_org_current_sync_succeeds_and_stale_sync_preserves_post(#[case] backend: Backend) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let session = create_user_and_session(&state).await;
+    let cookie = session.cookie();
+    let (status, body) =
+        create_post_json(&state, "original", "org", None, false, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK, "create body: {body}");
+    let created: SavedPost = serde_json::from_str(&body).unwrap();
+    let before = state
+        .posts
+        .get_post_by_id(
+            created.post_id,
+            &common::visibility::ViewerIdentity::Local {
+                user_id: session.user_id,
+            },
+        )
+        .await
+        .unwrap()
+        .expect("created post exists");
+    let current_etag = common::etag::post_content_etag(
+        before.title.as_ref(),
+        &before.body,
+        &before.format,
+        before.summary.as_ref(),
+        before.tags.iter().map(|tag| &tag.tag_display),
+        before.published_at.is_none(),
+    );
+    let matching_payload = serde_json::json!({
+        "post_id": created.post_id,
+        "post": {
+            "body": format!("#+TITLE: Changed\n#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_ID {}\n#+PROPERTY: JAUNDER_SYNCED {current_etag}\n\nChanged body", created.post_id),
+            "format": "org",
+            "publish": false,
+        }
+    });
+    let (status, body) = post_json(
+        &state,
+        <web::posts::Update as ServerFn>::PATH,
+        matching_payload,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "matching sync update: {body}");
+    let changed: SavedPost = serde_json::from_str(&body).unwrap();
+    let before_stale = state
+        .posts
+        .get_post_by_id(
+            changed.post_id,
+            &common::visibility::ViewerIdentity::Local {
+                user_id: session.user_id,
+            },
+        )
+        .await
+        .unwrap()
+        .expect("changed post exists");
+
+    let stale_payload = serde_json::json!({
+        "post_id": changed.post_id,
+        "post": {
+            "body": format!("#+TITLE: Stale\n#+PROPERTY: JAUNDER_STATUS draft\n#+PROPERTY: JAUNDER_ID {}\n#+PROPERTY: JAUNDER_SYNCED {current_etag}\n\nStale body", changed.post_id),
+            "format": "org",
+            "publish": false,
+        }
+    });
+    let (status, body) = post_json(
+        &state,
+        <web::posts::Update as ServerFn>::PATH,
+        stale_payload,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "stale sync body: {body}"
+    );
+    assert!(body.contains("\"conflict\""), "stale sync body: {body}");
+    let unchanged = state
+        .posts
+        .get_post_by_id(
+            changed.post_id,
+            &common::visibility::ViewerIdentity::Local {
+                user_id: session.user_id,
+            },
+        )
+        .await
+        .unwrap()
+        .expect("stale update must not remove post");
+    assert_eq!(unchanged.body, before_stale.body);
+    assert_eq!(unchanged.title, before_stale.title);
+    assert_eq!(
+        unchanged
+            .tags
+            .iter()
+            .map(|tag| (&tag.tag_slug, &tag.tag_display))
+            .collect::<Vec<_>>(),
+        before_stale
+            .tags
+            .iter()
+            .map(|tag| (&tag.tag_slug, &tag.tag_display))
+            .collect::<Vec<_>>()
+    );
+}

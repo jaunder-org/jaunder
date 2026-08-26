@@ -71,7 +71,7 @@ Out:
     behavior, explicit publication-clock persistence, and identical
     SQLite/PostgreSQL results.
 
-- [ ] Task 3: Adapt web create/update without duplicating Org policy
+- [x] Task 3: Adapt web create/update without duplicating Org policy
   - Depends on: Tasks 1-2.
   - Contract: `PostInputs` mapping preserves per-field collection presence and
     treats lifecycle as one source; transport defaults do not become header
@@ -84,7 +84,7 @@ Out:
     suites for precedence, explicit empty collections, current omission/default
     behavior, audiences, bookkeeping, atomic rejection, and error kinds.
 
-- [ ] Task 4: Adapt AtomPub POST/PUT and preserve protocol behavior
+- [x] Task 4: Adapt AtomPub POST/PUT and preserve protocol behavior
   - Depends on: Tasks 1-2; may execute alongside Task 3.
   - Contract: `entry_to_post_fields` preserves actual Atom element/lifecycle
     presence and remains only a wire adapter. Inject `AudienceStorage` into
