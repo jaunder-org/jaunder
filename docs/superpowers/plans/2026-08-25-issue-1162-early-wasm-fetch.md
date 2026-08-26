@@ -92,7 +92,7 @@ Out:
     `devtool run -- cargo xtask e2e-local authed-flash.spec.ts` proves the
     existing authenticated-owner pre-paint/no-flash behavior.
 
-- [ ] Task 6: Capture candidate data and publish the retention verdict
+- [x] Task 6: Capture candidate data and publish the retention verdict
   - Contract: repeat Task 1's complete build, extract, immediate-rename, load,
     salt, contamination, and engine-order protocol with candidate salts and
     filenames. Analyze all 12 files individually with
