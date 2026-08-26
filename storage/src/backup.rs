@@ -9,13 +9,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{DbConnectOptions, resolved_postgres_options};
+use common::time::UtcInstant;
 mod restore_validation;
 
 pub use common::backup::BackupMode;
@@ -52,7 +53,7 @@ pub struct BackupManifest {
     pub version: String,
     pub schema_version: i64,
     pub schema_checksum: String,
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: UtcInstant,
     pub mode: BackupMode,
     pub tables: Vec<String>,
 }
@@ -248,7 +249,7 @@ pub(crate) fn build_manifest(
         version: env!("CARGO_PKG_VERSION").to_owned(),
         schema_version,
         schema_checksum,
-        timestamp: Utc::now(),
+        timestamp: UtcInstant::from(Utc::now()),
         mode,
         tables,
     }
@@ -687,6 +688,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn backup_manifest_timestamp_retains_rfc3339_serde_form() {
+        let manifest = BackupManifest {
+            version: "0.1.0".to_owned(),
+            schema_version: 1,
+            schema_checksum: "checksum".to_owned(),
+            timestamp: "2026-08-26T01:02:03.123456Z"
+                .parse()
+                .expect("valid instant"),
+            mode: BackupMode::Directory,
+            tables: Vec::new(),
+        };
+
+        let json = serde_json::to_value(&manifest).expect("manifest serializes");
+        assert_eq!(json["timestamp"], "2026-08-26T01:02:03.123456Z");
+        assert_eq!(
+            serde_json::from_value::<BackupManifest>(json)
+                .expect("manifest deserializes")
+                .timestamp,
+            manifest.timestamp
+        );
+    }
+
     // Guardrail: a real export of a fresh database backs up exactly the expected
     // set of tables, and every live table is either backed up or a deliberate
     // exclusion. A migration that adds a table trips the golden assertion (if
@@ -1092,7 +1116,7 @@ mod tests {
             version: "0.0.0".to_owned(),
             schema_version: 11,
             schema_checksum: "checksum".to_owned(),
-            timestamp: Utc::now(),
+            timestamp: UtcInstant::from(Utc::now()),
             mode: BackupMode::Directory,
             tables: Vec::new(),
         };
@@ -1107,7 +1131,7 @@ mod tests {
             version: env!("CARGO_PKG_VERSION").to_owned(),
             schema_version: 10,
             schema_checksum: "checksum".to_owned(),
-            timestamp: Utc::now(),
+            timestamp: UtcInstant::from(Utc::now()),
             mode: BackupMode::Directory,
             tables: Vec::new(),
         };
@@ -1186,6 +1210,56 @@ mod tests {
 
         assert!(destination.is_dir());
         assert!(fs::read_dir(destination)?.next().is_none());
+        Ok(())
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn backup_restore_preserves_microsecond_utc_instants(
+        #[case] backend: Backend,
+    ) -> Result<(), BackupError> {
+        let source = backend.setup().await;
+        let user = SeedUser::new().seed(&source.state).await;
+        let expected: UtcInstant = "2026-08-26T12:34:56.123456Z"
+            .parse()
+            .expect("valid microsecond instant");
+        crate::with_closeable_pool!(source.base.pool(), pool, {
+            sqlx::query("UPDATE users SET created_at = $1 WHERE user_id = $2")
+                .bind(expected)
+                .bind(user.user_id)
+                .execute(pool)
+                .await?;
+        });
+
+        let temp = TempDir::new()?;
+        let media = temp.path().join("media");
+        fs::create_dir_all(&media)?;
+        let backup = temp.path().join("backup");
+        let source_db = backup_db_options(backend, &source.base)?;
+        export_backup(BackupExportOptions {
+            database: &source_db,
+            media_path: &media,
+            destination_path: &backup,
+            mode: BackupMode::Directory,
+        })
+        .await?;
+
+        let target = backend.setup().await;
+        let target_db = backup_db_options(backend, &target.base)?;
+        restore_backup(BackupRestoreOptions {
+            database: &target_db,
+            media_path: &temp.path().join("restored-media"),
+            source_path: &backup,
+        })
+        .await?;
+        let restored = crate::with_closeable_pool!(target.base.pool(), pool, {
+            sqlx::query_scalar::<_, UtcInstant>("SELECT created_at FROM users WHERE user_id = $1")
+                .bind(user.user_id)
+                .fetch_one(pool)
+                .await?
+        });
+
+        assert_eq!(restored, expected);
         Ok(())
     }
 

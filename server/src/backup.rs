@@ -7,11 +7,11 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
 use flate2::read::GzDecoder;
 use tokio_cron_scheduler::{Job, JobScheduler};
 
 use common::backup::BackupConfig;
+use common::time::UtcInstant;
 use storage::{
     BackupExportOptions, BackupManifest, BackupMode, DbConnectOptions, SiteConfigStorage,
     export_backup,
@@ -245,12 +245,12 @@ fn backup_path_for_mode(destination_root: &Path, mode: BackupMode) -> PathBuf {
 /// Returns an error when the destination root exists but cannot be enumerated.
 pub fn latest_successful_backup_timestamp(
     destination_root: &Path,
-) -> anyhow::Result<Option<DateTime<Utc>>> {
+) -> anyhow::Result<Option<UtcInstant>> {
     if !destination_root.exists() {
         return Ok(None);
     }
 
-    let mut latest: Option<DateTime<Utc>> = None;
+    let mut latest: Option<UtcInstant> = None;
     let mut saw_malformed_artifact = false;
     for entry in fs::read_dir(destination_root)? {
         let path = entry?.path();
@@ -286,13 +286,13 @@ pub fn latest_successful_backup_timestamp(
     Ok(latest)
 }
 
-fn read_directory_backup_timestamp(path: &Path) -> anyhow::Result<DateTime<Utc>> {
+fn read_directory_backup_timestamp(path: &Path) -> anyhow::Result<UtcInstant> {
     let manifest = fs::read_to_string(path.join("manifest.json"))?;
     let manifest: BackupManifest = serde_json::from_str(&manifest)?;
     Ok(manifest.timestamp)
 }
 
-fn read_archive_backup_timestamp(path: &Path) -> anyhow::Result<DateTime<Utc>> {
+fn read_archive_backup_timestamp(path: &Path) -> anyhow::Result<UtcInstant> {
     let file = File::open(path)?;
     let decoder = GzDecoder::new(file);
     let mut archive = tar::Archive::new(decoder);
@@ -399,9 +399,7 @@ mod tests {
             version: "0.1.0".to_owned(),
             schema_version: 1,
             schema_checksum: "test".to_owned(),
-            timestamp: DateTime::parse_from_rfc3339(timestamp)
-                .expect("test timestamp")
-                .with_timezone(&Utc),
+            timestamp: timestamp.parse().expect("test timestamp"),
             mode,
             tables: Vec::new(),
         }
@@ -451,7 +449,7 @@ mod tests {
             .expect("timestamp scan")
             .expect("timestamp");
 
-        assert_eq!(timestamp.to_rfc3339(), "2026-01-02T00:00:00+00:00");
+        assert_eq!(timestamp.value().to_rfc3339(), "2026-01-02T00:00:00+00:00");
     }
 
     #[test]
@@ -466,7 +464,7 @@ mod tests {
             .expect("timestamp scan")
             .expect("timestamp");
 
-        assert_eq!(timestamp.to_rfc3339(), "2026-01-02T00:00:00+00:00");
+        assert_eq!(timestamp.value().to_rfc3339(), "2026-01-02T00:00:00+00:00");
     }
 
     #[test]

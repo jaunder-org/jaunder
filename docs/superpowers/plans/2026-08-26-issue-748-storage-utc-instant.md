@@ -129,7 +129,7 @@ Out:
   - Verification: `#[apply(backends)]` create/get/list round trips include
     `created_at` and preserve ordering.
 
-- [ ] Task 12: Migrate backup metadata and close the storage boundary.
+- [x] Task 12: Migrate backup metadata and close the storage boundary.
   - Contract: `BackupManifest`, remaining storage-private tuples/locals, and
     storage test fixtures use `UtcInstant` wherever they represent absolute
     instants. Production storage has no raw `DateTime<Utc>` absolute-instant
