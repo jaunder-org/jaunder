@@ -17,7 +17,7 @@ use host::atompub::{self, MediaLinkEntry};
 use storage::{MediaManager, MediaRecord, MediaStorage, SiteConfigStorage};
 use web::auth;
 
-use super::HandlerError;
+use super::{HandlerError, error::MediaDeleteConflict};
 
 const ENTRY_CONTENT_TYPE: &str = "application/atom+xml;type=entry;charset=utf-8";
 
@@ -229,25 +229,28 @@ pub(super) async fn member_delete(
     super::require_user_match(&auth_user, &username)?;
     // The private address extractor rejects malformed segments before handler logic;
     // a well-formed but absent record still yields `NotFound` below.
-    // `force = true`: AtomPub has no confirmation UI. The storage guard still refuses
-    // deletes that would leave referenced bytes without any remaining media row (#721).
+    // AtomPub offers no force-delete input, so referenced media must remain guarded.
     let media_ref = MediaRef {
         source: MediaSource::Upload,
         sha256: sha,
         filename,
     };
-    let outcome = match super::mutation::confirmed_or_accepted(
-        manager
-            .delete_media(auth_user.user_id, &media_ref, true)
-            .await
-            .map_err(map_delete_error)?
-            .into_outcome(),
-    ) {
+    let result = manager
+        .delete_media(auth_user.user_id, &media_ref, false)
+        .await
+        .map_err(map_delete_error)?;
+    let post_ids = result.referenced_post_ids(auth_user.user_id);
+    let outcome = match super::mutation::confirmed_or_accepted(result.into_outcome()) {
         Ok(outcome) => outcome,
         Err(status) => return Ok(status.into_response()),
     };
     if outcome == storage::TryDeleteOutcome::RefusedReferenced {
-        return Err(StatusCode::CONFLICT.into());
+        return Ok(if post_ids.is_empty() {
+            MediaDeleteConflict::global_safety()
+        } else {
+            MediaDeleteConflict::owner_references(post_ids)
+        }
+        .into_response());
     }
     Ok(StatusCode::NO_CONTENT.into_response())
 }
