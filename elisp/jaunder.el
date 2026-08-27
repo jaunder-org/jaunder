@@ -38,6 +38,7 @@
 (require 'jaunder-media)
 (require 'jaunder-publish)
 (require 'jaunder-reconcile)
+(require 'jaunder-delete)
 (require 'jaunder-pull)
 
 (provide 'jaunder)
