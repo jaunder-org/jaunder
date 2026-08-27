@@ -38,7 +38,7 @@ Out:
     unavailable tooling, failed-cell exit behavior, and partial-result
     preservation.
 
-- [ ] Task 2: Implement dependency, semantic, and structural collectors
+- [x] Task 2: Implement dependency, semantic, and structural collectors
   - Contract: collectors consume the Task 1 `CollectorContext`/`CellReport`
     interface and own no output policy.
   - Contract: Rust and TypeScript reference evidence is semantic only;

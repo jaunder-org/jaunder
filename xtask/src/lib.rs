@@ -810,7 +810,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         Command::Census => {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("census");
-            let report = census::collect(Path::new("."), &[])?;
+            let report = census::collect(Path::new("."), &census::collectors::specs())?;
             let failed = report.has_failed_cells();
             let cells = report.cell_count();
             result.census = Some(report);

@@ -1,5 +1,6 @@
 //! Repository-census report contract and host-side orchestration.
 
+pub(crate) mod collectors;
 pub(crate) mod model;
 mod orchestrate;
 mod render;
