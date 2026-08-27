@@ -40,7 +40,7 @@ Out:
     and prove both VM definitions consume it while retaining their existing
     endpoints and capture path.
 
-- [ ] Task 2: Provide an independently tested host collector guard.
+- [x] Task 2: Provide an independently tested host collector guard.
   - Contract: the guard owns one `otelcol-contrib` child, distinct loopback
     receiver endpoints, stderr diagnostics, and a temporary capture directory.
     It exposes the gRPC exporter URL and browser HTTP trace URL only after both
@@ -52,7 +52,7 @@ Out:
     shutdown, Drop cleanup, and two simultaneous guards with distinct ports and
     capture directories.
 
-- [ ] Task 3: Integrate one collector guard into each existing local E2E
+- [x] Task 3: Integrate one collector guard into each existing local E2E
       lifecycle.
   - Contract: one guard belongs to one `run_lifecycle` interval, starts before
     Jaunder and seeding, and outlives every Playwright invocation and fixture
@@ -69,7 +69,7 @@ Out:
     cardinality, ordering, and combined result recording. Use the
     repository-native xtask test lane with `--manifest-path xtask/Cargo.toml`.
 
-- [ ] Task 4: Retain and report every completed or failed lifecycle capture.
+- [x] Task 4: Retain and report every completed or failed lifecycle capture.
   - Contract: after collector shutdown, copy the whole capture directory across
     filesystem boundaries into
     `.xtask/e2e-local/<unique-run>/<browser>/capture`, then print the trace path

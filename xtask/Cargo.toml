@@ -48,6 +48,8 @@ wasmparser = "0.244"
 # that emitted it.
 rustc-demangle = "0.1"
 
+# Sends SIGTERM to the supervised host collector so it can flush buffered spans.
+libc = "0.2"
 [dev-dependencies]
 # Synthesizes the fixture modules the attribution tests parse, so no binary wasm
 # blob is checked into the tree.
