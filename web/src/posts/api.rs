@@ -742,34 +742,19 @@ pub async fn delete(post_id: PostId) -> WebResult<()> {
 pub async fn unpublish(post_id: PostId) -> WebResult<SavedPost> {
     let auth = require_auth().await?;
     let posts = expect_context::<Arc<dyn PostStorage>>();
+    let updated = posts.unpublish_post(post_id, auth.user_id).await?;
 
-    let mut existing = posts
-        .get_post_by_id(post_id, &viewer_identity().await?)
-        .await?
-        .ok_or_else(|| InternalError::not_found("Post"))?;
-
-    if existing.deleted_at.is_some() || existing.user_id != auth.user_id {
-        return Err(InternalError::not_found("Post"));
-    }
-
-    posts.unpublish_post(post_id).await?;
-
-    let tag_slugs: BTreeSet<Tag> = existing.tags.iter().map(|t| t.tag_slug.clone()).collect();
+    let tag_slugs: BTreeSet<Tag> = updated.tags.iter().map(|t| t.tag_slug.clone()).collect();
     let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
-    enqueue_feed_events(feed_events.as_ref(), &existing.author_username, &tag_slugs)
+    enqueue_feed_events(feed_events.as_ref(), &updated.author_username, &tag_slugs)
         .await
         .map_err(InternalError::storage)?;
 
-    // Reverting to draft moves the permalink back to its created_at-based form,
-    // and `permalink()` keys off `published_at` — so the record we loaded before
-    // the write must be cleared first, or we would hand the caller the stale
-    // published URL it is navigating away from.
-    existing.published_at = None;
     Ok(SavedPost {
-        post_id,
-        slug: existing.slug.clone(),
-        published_at: None,
-        permalink: existing.permalink(),
+        post_id: updated.post_id,
+        slug: updated.slug.clone(),
+        published_at: updated.published_at,
+        permalink: updated.permalink(),
     })
 }
 
@@ -1023,7 +1008,7 @@ mod server_tests {
     // allow-{unwrap,expect}-in-tests, so expect the test-scaffolding panics.
     // lint-suppression:allow approved in #294; existing expectation documents intentional test-scaffolding or naming exception
     #![expect(clippy::unwrap_used)]
-    use super::{PostInputs, create, list_drafts, publish, update};
+    use super::{PostInputs, create, list_drafts, publish, unpublish, update};
     use crate::error::WebError;
     use crate::test_support::auth_parts;
     use common::ids::{PostId, UserId};
@@ -1194,6 +1179,44 @@ mod server_tests {
         events.expect_enqueue_many().returning(|_| Ok(()));
         provide_context(Arc::new(events) as Arc<dyn FeedEventStorage>);
         owner
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn unpublish_uses_the_guarded_returned_record_without_a_preread() {
+        let returned = owned_post(UserId::from(1));
+        let expected_permalink = returned.permalink();
+        let mut posts = MockPostStorage::new();
+        posts
+            .expect_unpublish_post()
+            .times(1)
+            .withf(|post_id, user_id| *post_id == PostId::from(1) && *user_id == UserId::from(1))
+            .returning(move |_post_id, _user_id| Ok(returned.clone()));
+        let owner = mutation_owner(posts);
+
+        let saved = unpublish(PostId::from(1)).await;
+        drop(owner);
+        let saved = saved.expect("unpublish succeeds");
+        assert_eq!(saved.post_id, PostId::from(1));
+        assert_eq!(saved.published_at, None);
+        assert_eq!(saved.permalink, expected_permalink);
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn unpublish_masks_storage_unauthorized_as_not_found() {
+        let owner = Owner::new();
+        owner.set();
+        provide_context(auth_parts(UserId::from(1), "alice"));
+        let mut posts = MockPostStorage::new();
+        posts
+            .expect_unpublish_post()
+            .returning(|_post_id, _user_id| Err(UpdatePostError::Unauthorized));
+        provide_context(Arc::new(posts) as Arc<dyn PostStorage>);
+
+        let result = unpublish(PostId::from(1)).await;
+        drop(owner);
+        assert!(matches!(result.unwrap_err(), WebError::NotFound { .. }));
     }
 
     /// The content half of a mutation call. `create` and `update` take the same

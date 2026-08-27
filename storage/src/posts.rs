@@ -990,8 +990,19 @@ pub trait PostStorage: Send + Sync {
     /// Marks a post as deleted without removing it from the database.
     async fn soft_delete_post(&self, post_id: PostId) -> sqlx::Result<()>;
 
-    /// Reverts a published post to draft status.
-    async fn unpublish_post(&self, post_id: PostId) -> sqlx::Result<()>;
+    /// Reverts a live post owned by `user_id` to draft status, returning the row
+    /// written by the guarded mutation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UpdatePostError::NotFound`] if the post does not exist or is
+    /// soft-deleted, or [`UpdatePostError::Unauthorized`] if `user_id` does not
+    /// own its live row.
+    async fn unpublish_post(
+        &self,
+        post_id: PostId,
+        user_id: UserId,
+    ) -> Result<PostRecord, UpdatePostError>;
 
     /// Lists published posts for a specific user, ordered by creation date,
     /// applying the viewer-resolution filter. See ADR-0020.
@@ -1197,7 +1208,6 @@ pub trait PostStorage: Send + Sync {
         evidence: &MediaReferenceEvidence,
     ) -> sqlx::Result<Vec<PostId>>;
 }
-
 /// Backend-specific divergence for [`PostStore`].
 ///
 /// Two consts capture SQL-fragment divergence shared by many methods:
@@ -1212,9 +1222,9 @@ pub trait PostStorage: Send + Sync {
 /// `FOR UPDATE`) and [`set_post_tags`][PostDialect::set_post_tags], which
 /// diverges twice over — the transaction shape (`SQLite` drives a manual
 /// `BEGIN IMMEDIATE`, Postgres locks the post row with `FOR UPDATE`; ADR-0021).
-/// That transaction shape is the *only* divergence — the tag write itself is
-/// the shared [`UPSERT_TAG_RETURNING_ID`] and [`INSERT_POST_TAG`] (#876).
-/// Everything else is shared on [`PostStore`]. See ADR-0019.
+/// [`unpublish_post`][PostDialect::unpublish_post] is likewise dialect-specific
+/// only for its complete `UPDATE ... RETURNING` JSON tag aggregate. Everything
+/// else is shared on [`PostStore`]. See ADR-0019.
 #[async_trait]
 pub trait PostDialect: Backend {
     /// Correlated JSON tag-aggregation subquery (on `p.post_id`) spelled in
@@ -1257,6 +1267,14 @@ pub trait PostDialect: Backend {
         editor_user_id: UserId,
         input: &UpdatePostInput,
     ) -> Result<PostRecord, UpdatePostError>;
+
+    /// Clear a live owner's publication timestamp and return the complete
+    /// `UPDATE ... RETURNING` row. The JSON aggregate is dialect-specific.
+    async fn unpublish_post(
+        pool: &Pool<Self>,
+        post_id: PostId,
+        user_id: UserId,
+    ) -> Result<Option<PostRecord>, sqlx::Error>;
 
     /// Reconcile the post's tags to `desired` in one transaction. Monomorphised
     /// because the **serialization** differs: `SQLite` opens `BEGIN IMMEDIATE`,
@@ -1870,12 +1888,30 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn unpublish_post(&self, post_id: PostId) -> sqlx::Result<()> {
-        sqlx::query("UPDATE posts SET published_at = NULL WHERE post_id = $1")
-            .bind(post_id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
+    async fn unpublish_post(
+        &self,
+        post_id: PostId,
+        user_id: UserId,
+    ) -> Result<PostRecord, UpdatePostError> {
+        let row = DB::unpublish_post(&self.pool, post_id, user_id).await?;
+        if let Some(row) = row {
+            return Ok(row);
+        }
+
+        // The guarded UPDATE wrote nothing. As in publish, a pure existence
+        // read distinguishes a foreign live post without disclosing its owner;
+        // missing and deleted rows intentionally share NotFound.
+        let live = sqlx::query_scalar::<_, PostId>(
+            "SELECT post_id FROM posts WHERE post_id = $1 AND deleted_at IS NULL",
+        )
+        .bind(post_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Err(if live.is_some() {
+            UpdatePostError::Unauthorized
+        } else {
+            UpdatePostError::NotFound
+        })
     }
 
     #[tracing::instrument(
@@ -4657,6 +4693,130 @@ mod tests {
         ));
     }
 
+    #[apply(backends)]
+    #[tokio::test]
+    async fn unpublish_post_returns_the_complete_draft_row_without_editing_it(
+        #[case] backend: Backend,
+    ) {
+        // Unpublish is a publication-state transition, not an edit: the row returned
+        // by UPDATE RETURNING keeps every persisted field other than published_at,
+        // including the author and the deliberately slug-ordered tag aggregate.
+        let env = backend.setup().await;
+        let user = SeedUser::new().seed(&env.state).await;
+        let posts = &*env.state.posts;
+        let seeded = SeedRawPost::new(user.user_id)
+            .slug("unpublish-complete-row")
+            .summary(parse_post_summary("the summary"))
+            .tags(["Zed", "alpha", "beta"])
+            .seed(&env.state)
+            .await;
+        let before = posts
+            .get_post_by_id(seeded.post_id, &ViewerIdentity::Anonymous)
+            .await
+            .unwrap()
+            .unwrap();
+        let revisions_before = env
+            .base
+            .pool()
+            .scalar_i64("SELECT COUNT(*) FROM post_revisions")
+            .await
+            .unwrap();
+
+        let updated = posts
+            .unpublish_post(seeded.post_id, user.user_id)
+            .await
+            .expect("owner may unpublish a live post");
+
+        assert_eq!(updated.post_id, before.post_id);
+        assert_eq!(updated.user_id, before.user_id);
+        assert_eq!(updated.author_username, user.username);
+        assert_eq!(updated.title, before.title);
+        assert_eq!(updated.slug, before.slug);
+        assert_eq!(updated.body, before.body);
+        assert_eq!(updated.format, before.format);
+        assert_eq!(updated.rendered_html, before.rendered_html);
+        assert_eq!(updated.created_at, before.created_at);
+        assert_eq!(updated.updated_at, before.updated_at);
+        assert_eq!(updated.deleted_at, before.deleted_at);
+        assert_eq!(updated.summary, before.summary);
+        assert!(
+            updated.published_at.is_none(),
+            "the returned row is a draft"
+        );
+        assert_eq!(
+            updated
+                .tags
+                .iter()
+                .map(|tag| tag.tag_slug.as_ref())
+                .collect::<Vec<_>>(),
+            vec!["alpha", "beta", "zed"],
+            "RETURNING preserves the canonical slug order"
+        );
+        for (returned, original) in updated.tags.iter().zip(&before.tags) {
+            assert_eq!(returned.post_id, original.post_id);
+            assert_eq!(returned.tag_id, original.tag_id);
+            assert_eq!(returned.tag_slug, original.tag_slug);
+            assert_eq!(returned.tag_display, original.tag_display);
+        }
+        assert_eq!(
+            env.base
+                .pool()
+                .scalar_i64("SELECT COUNT(*) FROM post_revisions")
+                .await
+                .unwrap(),
+            revisions_before,
+            "unpublish creates no revision"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn unpublish_post_rejects_missing_foreign_and_deleted_rows_without_writing(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let [owner, stranger] = seed_users::<2>(&env.state).await;
+        let posts = &*env.state.posts;
+        let post_id = SeedRawPost::new(owner)
+            .slug("guarded-unpublish")
+            .seed(&env.state)
+            .await
+            .post_id;
+
+        assert!(matches!(
+            posts.unpublish_post(PostId::from(999_999), owner).await,
+            Err(UpdatePostError::NotFound)
+        ));
+        assert!(matches!(
+            posts.unpublish_post(post_id, stranger).await,
+            Err(UpdatePostError::Unauthorized)
+        ));
+        assert!(
+            posts
+                .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
+                .await
+                .unwrap()
+                .unwrap()
+                .published_at
+                .is_some(),
+            "the foreign rejection must not clear publication"
+        );
+
+        posts.soft_delete_post(post_id).await.unwrap();
+        assert!(matches!(
+            posts.unpublish_post(post_id, owner).await,
+            Err(UpdatePostError::NotFound)
+        ));
+        let publication_rows = format!(
+            "SELECT COUNT(*) FROM posts WHERE post_id = {} AND published_at IS NOT NULL",
+            i64::from(post_id)
+        );
+        assert_eq!(
+            env.base.pool().scalar_i64(&publication_rows).await.unwrap(),
+            1,
+            "the deleted rejection must not clear publication"
+        );
+    }
     #[apply(backends)]
     #[tokio::test]
     async fn publish_post_with_closed_pool_returns_error(#[case] backend: Backend) {
