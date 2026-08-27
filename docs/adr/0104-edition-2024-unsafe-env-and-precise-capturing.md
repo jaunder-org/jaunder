@@ -6,7 +6,7 @@
 
 > **Supersession note (2026-08-27):** Decision 1, the audited in-process
 > environment-mutation seam, was superseded by
-> `docs/adr/drafts/peripheral-process-configuration.md`. The edition migration,
+> `docs/adr/0158-peripheral-process-configuration.md`. The edition migration,
 > precise-capturing decision, and formatter/resolver pins remain current.
 
 ## Context

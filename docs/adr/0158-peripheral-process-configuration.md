@@ -1,6 +1,6 @@
-# ADR-DRAFT: Process environment is resolved at the periphery
+# ADR-0158: Process environment is resolved at the periphery
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-27
 - Issue: [#848](https://github.com/jaunder-org/jaunder/issues/848)
 
@@ -8,14 +8,14 @@
 
 Rust 2024 makes process-environment mutation unsafe on platforms where readers
 and writers cannot be synchronized.
-[ADR-0104](../0104-edition-2024-unsafe-env-and-precise-capturing.md) centralized
+[ADR-0104](0104-edition-2024-unsafe-env-and-precise-capturing.md) centralized
 test mutation behind one lock, but that lock cannot constrain reads performed by
 runtime threads, libc, or dependencies. The safety obligation is therefore
 auditable but not structurally discharged.
 
 The prohibition also applies to code generated inside a Jaunder crate. The
 `linkme` distributed slice selected by
-[ADR-0066](../0066-server-fn-test-registrar-guard.md) expands to an unsafe
+[ADR-0066](0066-server-fn-test-registrar-guard.md) expands to an unsafe
 `link_section` declaration in `web`; centralizing unsafe inside a dependency
 does not make the repository exception-free.
 
@@ -25,7 +25,7 @@ configuration from ambient process state at different depths. Tests mutate that
 state to reach policy branches, while reconnect and teardown paths may reread it
 later. This is difficult to reason about even apart from unsafe mutation.
 
-[ADR-0016](../0016-dependency-injection-and-appstate.md) already concentrates
+[ADR-0016](0016-dependency-injection-and-appstate.md) already concentrates
 breadth at composition roots and requires subsystems to declare narrow
 constructor dependencies rather than receive heterogeneous bundles or service
 locators. Process configuration should follow the same rule.
