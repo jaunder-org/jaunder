@@ -40,6 +40,10 @@
         # service envs below; the whole dir is tarred out per combo in e2eRunAndCapture.
         JAUNDER_CAPTURE_DIR = "/var/lib/jaunder/capture";
       };
+      e2eOtelCollectorEnv = captureEnv // {
+        OTELCOL_GRPC_ENDPOINT = "127.0.0.1:4317";
+        OTELCOL_HTTP_ENDPOINT = "127.0.0.1:4318";
+      };
 
       jaunderModule =
         {
@@ -823,10 +827,7 @@
                   after = [ "network.target" ];
                   # The collector configuration reads these runtime endpoints and capture
                   # directory through its environment providers.
-                  environment = captureEnv // {
-                    OTELCOL_GRPC_ENDPOINT = "127.0.0.1:4317";
-                    OTELCOL_HTTP_ENDPOINT = "127.0.0.1:4318";
-                  };
+                  environment = e2eOtelCollectorEnv;
                   serviceConfig = {
                     ExecStart = "${pkgs.opentelemetry-collector-contrib}/bin/otelcol-contrib --config /etc/jaunder-otel-collector.yaml";
                     Restart = "on-failure";
@@ -935,10 +936,7 @@
                   after = [ "network.target" ];
                   # The collector configuration reads these runtime endpoints and capture
                   # directory through its environment providers.
-                  environment = captureEnv // {
-                    OTELCOL_GRPC_ENDPOINT = "127.0.0.1:4317";
-                    OTELCOL_HTTP_ENDPOINT = "127.0.0.1:4318";
-                  };
+                  environment = e2eOtelCollectorEnv;
                   serviceConfig = {
                     ExecStart = "${pkgs.opentelemetry-collector-contrib}/bin/otelcol-contrib --config /etc/jaunder-otel-collector.yaml";
                     Restart = "on-failure";

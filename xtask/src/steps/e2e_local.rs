@@ -226,21 +226,34 @@ impl CollectorGuard {
             );
             match guard.wait_until_ready() {
                 Ok(()) => return Ok(guard),
-                Err(_)
+                Err(error)
                     if guard.stderr_diagnostics().is_ok_and(|diagnostics| {
                         diagnostics.contains("address already in use")
                     }) && attempt + 1 < COLLECTOR_PORT_ATTEMPTS =>
                 {
-                    let _ = guard.kill_and_reap();
+                    if let Err(cleanup) = guard.kill_and_reap() {
+                        return Err(CollectorStartError {
+                            error: anyhow::anyhow!(
+                                "{error}; failed to clean up collector before retry: {cleanup}"
+                            ),
+                            capture_dir: guard.take_capture_dir(),
+                        });
+                    }
                     capture_dir = guard.take_capture_dir();
                 }
                 Err(error) => {
                     let diagnostics = guard
                         .stderr_diagnostics()
                         .unwrap_or_else(|_| "<unavailable>".to_owned());
-                    let _ = guard.kill_and_reap();
+                    let cleanup = guard.kill_and_reap().err();
+                    let error = match cleanup {
+                        Some(cleanup) => anyhow::anyhow!(
+                            "{error}; collector stderr: {diagnostics}; cleanup failed: {cleanup}"
+                        ),
+                        None => anyhow::anyhow!("{error}; collector stderr: {diagnostics}"),
+                    };
                     return Err(CollectorStartError {
-                        error: anyhow::anyhow!("{error}; collector stderr: {diagnostics}"),
+                        error,
                         capture_dir: guard.take_capture_dir(),
                     });
                 }
@@ -294,10 +307,6 @@ impl CollectorGuard {
             .expect("collector capture directory is retained or live")
     }
 
-    fn keep_capture_dir(&mut self) -> PathBuf {
-        self.take_capture_dir().keep()
-    }
-
     fn take_capture_dir(&mut self) -> tempfile::TempDir {
         self.capture_dir
             .take()
@@ -349,10 +358,18 @@ impl CollectorGuard {
                     );
                 }
                 None if Instant::now() >= deadline => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    self.join_stderr_mirror()?;
-                    anyhow::bail!("otelcol-contrib did not stop after SIGTERM");
+                    let mut failures =
+                        vec!["otelcol-contrib did not stop after SIGTERM".to_owned()];
+                    if let Err(error) = child.kill() {
+                        failures.push(format!("failed to force-stop otelcol-contrib: {error}"));
+                    }
+                    if let Err(error) = child.wait() {
+                        failures.push(format!("failed to reap otelcol-contrib: {error}"));
+                    }
+                    if let Err(error) = self.join_stderr_mirror() {
+                        failures.push(error.to_string());
+                    }
+                    anyhow::bail!(failures.join("; "));
                 }
                 None => sleep(Duration::from_millis(25)),
             }
@@ -407,11 +424,27 @@ impl CollectorGuard {
         }
         self.join_stderr_mirror()
     }
+
+    fn cleanup_for_drop_with(
+        &mut self,
+        cleanup: impl FnOnce(&mut Self) -> anyhow::Result<()>,
+        stderr: &mut impl Write,
+    ) {
+        if let Err(error) = cleanup(self) {
+            let _ = writeln!(
+                stderr,
+                "xtask: warning: xtask.e2e.collector_cleanup: failed to stop e2e-local collector during drop: {error}"
+            );
+        }
+    }
 }
 
 impl Drop for CollectorGuard {
     fn drop(&mut self) {
-        let _ = self.kill_and_reap();
+        self.cleanup_for_drop_with(
+            |collector| collector.kill_and_reap(),
+            &mut std::io::stderr(),
+        );
     }
 }
 
@@ -439,9 +472,64 @@ fn send_sigterm(child: &Child, name: &str) -> anyhow::Result<()> {
     }
 }
 
-enum CaptureFinalization {
-    Trace(PathBuf),
-    Missing { run_dir: PathBuf, expected: PathBuf },
+struct RetainedCapture {
+    run_dir: PathBuf,
+    capture_dir: PathBuf,
+    trace_path: PathBuf,
+}
+
+fn allocate_retained_run_dir(root: &Path) -> anyhow::Result<PathBuf> {
+    let retained_root = root.join(".xtask/e2e-local");
+    fs::create_dir_all(&retained_root)
+        .with_context(|| format!("creating {}", retained_root.display()))?;
+    Ok(tempfile::Builder::new()
+        .prefix("run-")
+        .tempdir_in(&retained_root)
+        .context("creating unique retained e2e-local run directory")?
+        .keep())
+}
+
+fn allocate_retained_capture(
+    root: &Path,
+    browser: &str,
+    test_support: &Path,
+) -> anyhow::Result<RetainedCapture> {
+    let run_dir = allocate_retained_run_dir(root)?;
+    let capture_dir = run_dir.join(browser).join("capture");
+    let output = Command::new(test_support)
+        .args(["capture-path", "otel"])
+        .env("JAUNDER_CAPTURE_DIR", &capture_dir)
+        .env_remove("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT")
+        .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .output()
+        .with_context(|| {
+            format!(
+                "resolving OTel capture path with {}",
+                test_support.display()
+            )
+        })?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "test-support capture-path otel failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    let trace_path = PathBuf::from(
+        String::from_utf8(output.stdout)
+            .context("test-support capture path was not UTF-8")?
+            .trim(),
+    );
+    anyhow::ensure!(
+        trace_path.parent() == Some(capture_dir.as_path()),
+        "test-support returned OTel capture path outside {}: {}",
+        capture_dir.display(),
+        trace_path.display()
+    );
+    Ok(RetainedCapture {
+        run_dir,
+        capture_dir,
+        trace_path,
+    })
 }
 
 fn copy_capture_directory(source: &Path, destination: &Path) -> anyhow::Result<()> {
@@ -470,32 +558,38 @@ fn copy_capture_directory(source: &Path, destination: &Path) -> anyhow::Result<(
     Ok(())
 }
 
-fn finalize_capture(
-    root: &Path,
-    browser: &str,
-    source: &Path,
-) -> anyhow::Result<CaptureFinalization> {
-    let retained_root = root.join(".xtask/e2e-local");
-    fs::create_dir_all(&retained_root)
-        .with_context(|| format!("creating {}", retained_root.display()))?;
-    let run_dir = tempfile::Builder::new()
-        .prefix("run-")
-        .tempdir_in(&retained_root)
-        .context("creating unique retained e2e-local run directory")?
-        .keep();
-    let capture = run_dir.join(browser).join("capture");
-    copy_capture_directory(source, &capture)?;
-    let expected = capture.join("otel-traces.jsonl");
-    if expected.is_file() {
-        println!("e2e-local trace: {}", expected.display());
-        Ok(CaptureFinalization::Trace(expected))
+fn finalize_capture(retained: &RetainedCapture, source: &Path) -> anyhow::Result<bool> {
+    copy_capture_directory(source, &retained.capture_dir)?;
+    if retained.trace_path.is_file() {
+        println!("e2e-local trace: {}", retained.trace_path.display());
+        Ok(true)
     } else {
         println!(
             "e2e-local capture retained at {}; expected trace missing: {}",
-            run_dir.display(),
-            expected.display()
+            retained.run_dir.display(),
+            retained.trace_path.display()
         );
-        Ok(CaptureFinalization::Missing { run_dir, expected })
+        Ok(false)
+    }
+}
+
+fn new_trace_id() -> anyhow::Result<String> {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    loop {
+        let mut bytes = [0_u8; 16];
+        File::open("/dev/urandom")
+            .context("opening /dev/urandom for e2e trace id")?
+            .read_exact(&mut bytes)
+            .context("reading e2e trace id")?;
+        if bytes.iter().all(|byte| *byte == 0) {
+            continue;
+        }
+        let mut trace_id = String::with_capacity(32);
+        for byte in bytes {
+            trace_id.push(HEX[usize::from(byte >> 4)] as char);
+            trace_id.push(HEX[usize::from(byte & 0x0f)] as char);
+        }
+        return Ok(trace_id);
     }
 }
 #[derive(Debug, Eq, PartialEq)]
@@ -693,8 +787,6 @@ fn record_panic_gate_result(
 struct LifecycleVerification<'a> {
     browser: &'a str,
     test_support: &'a str,
-    capture: &'a str,
-    server_stderr: &'a Path,
 }
 
 fn record_collector_result(
@@ -726,66 +818,38 @@ fn shutdown_collector(result: &mut CommandResult, browser: &str, collector: &mut
     );
 }
 
-fn finalize_collector_capture(
+fn record_capture_finalization(
     result: &mut CommandResult,
-    root: &Path,
     browser: &str,
-    collector: &mut CollectorGuard,
-) {
+    retained: &RetainedCapture,
+    source: tempfile::TempDir,
+) -> PathBuf {
     let finalization_start = Instant::now();
     let step = step_name(browser, "capture");
-    match finalize_capture(root, browser, collector.capture_dir()) {
-        Ok(CaptureFinalization::Trace(trace)) => result.push(
-            StepResult::ok(&step)
-                .detail(format!("trace retained at {}", trace.display()))
-                .with_duration(finalization_start.elapsed()),
-        ),
-        Ok(CaptureFinalization::Missing { run_dir, expected }) => result.push(
-            StepResult::fail(&step)
-                .detail(format!(
-                    "collector produced no trace file; retained capture directory: {}; expected: {}",
-                    run_dir.display(),
-                    expected.display()
-                ))
-                .with_duration(finalization_start.elapsed()),
-        ),
-        Err(error) => {
-            let source = collector.keep_capture_dir();
+    match finalize_capture(retained, source.path()) {
+        Ok(true) => {
             result.push(
-                StepResult::fail(&step)
+                StepResult::ok(&step)
                     .detail(format!(
-                        "failed to retain collector capture: {error}; source retained at {}",
-                        source.display()
+                        "trace retained at {}",
+                        retained.trace_path.display()
                     ))
                     .with_duration(finalization_start.elapsed()),
             );
+            retained.capture_dir.clone()
         }
-    }
-}
-
-fn finalize_unowned_capture(
-    result: &mut CommandResult,
-    root: &Path,
-    browser: &str,
-    source: tempfile::TempDir,
-) {
-    let finalization_start = Instant::now();
-    let step = step_name(browser, "capture");
-    match finalize_capture(root, browser, source.path()) {
-        Ok(CaptureFinalization::Trace(trace)) => result.push(
-            StepResult::ok(&step)
-                .detail(format!("trace retained at {}", trace.display()))
-                .with_duration(finalization_start.elapsed()),
-        ),
-        Ok(CaptureFinalization::Missing { run_dir, expected }) => result.push(
-            StepResult::fail(&step)
-                .detail(format!(
-                    "collector produced no trace file; retained capture directory: {}; expected: {}",
-                    run_dir.display(),
-                    expected.display()
-                ))
-                .with_duration(finalization_start.elapsed()),
-        ),
+        Ok(false) => {
+            result.push(
+                StepResult::fail(&step)
+                    .detail(format!(
+                        "collector produced no trace file; retained capture directory: {}; expected: {}",
+                        retained.run_dir.display(),
+                        retained.trace_path.display()
+                    ))
+                    .with_duration(finalization_start.elapsed()),
+            );
+            retained.capture_dir.clone()
+        }
         Err(error) => {
             let source = source.keep();
             result.push(
@@ -796,14 +860,40 @@ fn finalize_unowned_capture(
                     ))
                     .with_duration(finalization_start.elapsed()),
             );
+            source
         }
     }
 }
 
+fn record_capture_setup_failure(
+    result: &mut CommandResult,
+    browser: &str,
+    retained: &RetainedCapture,
+    error: &std::io::Error,
+    duration: Duration,
+) {
+    result.push(
+        StepResult::fail(&step_name(browser, "collector"))
+            .detail(format!(
+                "cannot create collector capture directory: {error}"
+            ))
+            .with_duration(duration),
+    );
+    result.push(
+        StepResult::fail(&step_name(browser, "capture"))
+            .detail(format!(
+                "collector produced no trace file; retained capture directory: {}; expected: {}",
+                retained.run_dir.display(),
+                retained.trace_path.display()
+            ))
+            .with_duration(duration),
+    );
+}
+
 fn record_collector_start_failure(
     result: &mut CommandResult,
-    root: &Path,
     browser: &str,
+    retained: &RetainedCapture,
     failure: CollectorStartError,
     duration: Duration,
 ) {
@@ -815,25 +905,26 @@ fn record_collector_start_failure(
             ))
             .with_duration(duration),
     );
-    finalize_unowned_capture(result, root, browser, failure.capture_dir);
+    record_capture_finalization(result, browser, retained, failure.capture_dir);
 }
 
 fn finish_server_setup_failure(
     result: &mut CommandResult,
-    root: &Path,
     browser: &str,
+    retained: &RetainedCapture,
     collector: &mut CollectorGuard,
 ) {
     shutdown_collector(result, browser, collector);
-    finalize_collector_capture(result, root, browser, collector);
+    let source = collector.take_capture_dir();
+    record_capture_finalization(result, browser, retained, source);
 }
 
 fn finish_lifecycle(
     sh: &Shell,
     result: &mut CommandResult,
-    root: &Path,
     server: &mut ServerChild,
     collector: &mut CollectorGuard,
+    retained: &RetainedCapture,
     verification: &LifecycleVerification<'_>,
     playwright_result: Option<(Result<(), String>, Duration)>,
 ) {
@@ -846,12 +937,12 @@ fn finish_lifecycle(
     }
 
     shutdown_collector(result, verification.browser, collector);
-    finalize_collector_capture(result, root, verification.browser, collector);
+    let source = collector.take_capture_dir();
+    let capture = record_capture_finalization(result, verification.browser, retained, source);
 
     let test_support = verification.test_support;
-    let capture = verification.capture;
-    let server_stderr = verification.server_stderr;
-    let panic_gate_start = std::time::Instant::now();
+    let server_stderr = capture.join("server-stderr.log");
+    let panic_gate_start = Instant::now();
     let panic_gate_result = cmd!(
         sh,
         "{test_support} verify-no-panics --capture-dir {capture} --server-log {server_stderr}"
@@ -892,17 +983,44 @@ fn run_lifecycle(
     let server_log_step = step_name(browser, "server-log");
     let server_step = step_name(browser, "server");
     let seed_step = step_name(browser, "seed");
+    let test_support_path = root.join("target/debug/test-support");
+    let test_support = test_support_path.display().to_string();
+    let retained = match allocate_retained_capture(root, browser, &test_support_path) {
+        Ok(retained) => retained,
+        Err(error) => {
+            result.push(
+                StepResult::fail(&step_name(browser, "capture"))
+                    .detail(format!("cannot allocate retained capture: {error:#}")),
+            );
+            return;
+        }
+    };
 
     // A distinct temp storage directory gives every browser a fresh database,
     // capture directory, runtime file, port, server, and teardown.
     let tmpdir_start = std::time::Instant::now();
-    let Ok(storage) = tempfile::tempdir() else {
-        result.push(
-            StepResult::fail(&tmpdir_step)
-                .detail("cannot create temp storage dir".to_owned())
-                .with_duration(tmpdir_start.elapsed()),
-        );
-        return;
+    let storage = match tempfile::tempdir() {
+        Ok(storage) => storage,
+        Err(error) => {
+            result.push(
+                StepResult::fail(&tmpdir_step)
+                    .detail(format!(
+                        "cannot create temp storage dir: {error}; retained run: {}",
+                        retained.run_dir.display()
+                    ))
+                    .with_duration(tmpdir_start.elapsed()),
+            );
+            result.push(
+                StepResult::fail(&step_name(browser, "capture"))
+                    .detail(format!(
+                        "collector produced no trace file; retained capture directory: {}; expected: {}",
+                        retained.run_dir.display(),
+                        retained.trace_path.display()
+                    ))
+                    .with_duration(tmpdir_start.elapsed()),
+            );
+            return;
+        }
     };
     let sp = storage.path().display();
     let db = format!("sqlite:{sp}/jaunder.db");
@@ -911,12 +1029,12 @@ fn run_lifecycle(
     let collector_capture = match tempfile::tempdir() {
         Ok(capture) => capture,
         Err(error) => {
-            result.push(
-                StepResult::fail(&step_name(browser, "collector"))
-                    .detail(format!(
-                        "cannot create collector capture directory: {error}"
-                    ))
-                    .with_duration(collector_start.elapsed()),
+            record_capture_setup_failure(
+                result,
+                browser,
+                &retained,
+                &error,
+                collector_start.elapsed(),
             );
             return;
         }
@@ -932,11 +1050,22 @@ fn run_lifecycle(
         Err(failure) => {
             record_collector_start_failure(
                 result,
-                root,
                 browser,
+                &retained,
                 failure,
                 collector_start.elapsed(),
             );
+            return;
+        }
+    };
+    let trace_id = match new_trace_id() {
+        Ok(trace_id) => trace_id,
+        Err(error) => {
+            result.push(
+                StepResult::fail(&step_name(browser, "trace-context"))
+                    .detail(format!("cannot create E2E trace context: {error:#}")),
+            );
+            finish_server_setup_failure(result, browser, &retained, &mut collector);
             return;
         }
     };
@@ -951,7 +1080,7 @@ fn run_lifecycle(
                     .detail(format!("failed to create server stderr capture: {error}"))
                     .with_duration(server_log_start.elapsed()),
             );
-            finish_server_setup_failure(result, root, browser, &mut collector);
+            finish_server_setup_failure(result, browser, &retained, &mut collector);
             return;
         }
     };
@@ -979,7 +1108,7 @@ fn run_lifecycle(
                     .detail(format!("failed to spawn jaunder serve: {error}"))
                     .with_duration(server_start.elapsed()),
             );
-            finish_server_setup_failure(result, root, browser, &mut collector);
+            finish_server_setup_failure(result, browser, &retained, &mut collector);
             return;
         }
     };
@@ -991,17 +1120,14 @@ fn run_lifecycle(
                     .detail(format!("failed to start server stderr capture: {error}"))
                     .with_duration(server_log_start.elapsed()),
             );
-            finish_server_setup_failure(result, root, browser, &mut collector);
+            finish_server_setup_failure(result, browser, &retained, &mut collector);
             return;
         }
     };
 
-    let test_support = root.join("target/debug/test-support").display().to_string();
     let verification = LifecycleVerification {
         browser,
         test_support: &test_support,
-        capture: &capture,
-        server_stderr: &server_stderr,
     };
     let mut discovered = None;
     for _ in 0..30 {
@@ -1023,9 +1149,9 @@ fn run_lifecycle(
         finish_lifecycle(
             sh,
             result,
-            root,
             &mut server,
             &mut collector,
+            &retained,
             &verification,
             None,
         );
@@ -1052,9 +1178,9 @@ fn run_lifecycle(
         finish_lifecycle(
             sh,
             result,
-            root,
             &mut server,
             &mut collector,
+            &retained,
             &verification,
             None,
         );
@@ -1077,6 +1203,7 @@ fn run_lifecycle(
                 "JAUNDER_E2E_OTLP_HTTP_ENDPOINT",
                 collector.browser_http_trace_url(),
             )
+            .env("JAUNDER_E2E_TRACE_ID", &trace_id)
             .env("JAUNDER_E2E_WORKERS", workers)
             .env("PLAYWRIGHT_HTML_OPEN", "never")
             .env("PATH", path)
@@ -1094,9 +1221,9 @@ fn run_lifecycle(
     finish_lifecycle(
         sh,
         result,
-        root,
         &mut server,
         &mut collector,
+        &retained,
         &verification,
         Some((playwright_result, playwright_start.elapsed())),
     );
@@ -1748,25 +1875,41 @@ int main(int argc, char **argv) {
             ]
         );
     }
+    fn retained_capture(
+        workspace: &tempfile::TempDir,
+        run: &str,
+        browser: &str,
+        trace_name: &str,
+    ) -> RetainedCapture {
+        let run_dir = workspace.path().join(run);
+        let capture_dir = run_dir.join(browser).join("capture");
+        fs::create_dir_all(&capture_dir).expect("retained capture directory");
+        let trace_path = capture_dir.join(trace_name);
+        RetainedCapture {
+            run_dir,
+            capture_dir,
+            trace_path,
+        }
+    }
+
     #[test]
     fn finalize_capture_recursively_copies_trace_and_diagnostics() {
         let workspace = tempfile::tempdir().expect("workspace");
+        let retained = retained_capture(&workspace, "run-a", "chromium", "trace.jsonl");
         let source = tempfile::tempdir().expect("capture source");
         let nested = source.path().join("nested");
         fs::create_dir(&nested).expect("nested capture directory");
-        fs::write(source.path().join("otel-traces.jsonl"), "trace\n").expect("trace");
+        fs::write(
+            source.path().join(retained.trace_path.file_name().unwrap()),
+            "trace\n",
+        )
+        .expect("trace");
         fs::write(nested.join("collector.stderr.log"), "diagnostic\n").expect("diagnostic");
 
-        let CaptureFinalization::Trace(trace) =
-            finalize_capture(workspace.path(), "chromium", source.path()).expect("finalize")
-        else {
-            panic!("trace should be retained");
-        };
-
-        assert_eq!(fs::read_to_string(&trace).unwrap(), "trace\n");
+        assert!(finalize_capture(&retained, source.path()).expect("finalize"));
+        assert_eq!(fs::read_to_string(&retained.trace_path).unwrap(), "trace\n");
         assert_eq!(
-            fs::read_to_string(trace.parent().unwrap().join("nested/collector.stderr.log"))
-                .unwrap(),
+            fs::read_to_string(retained.capture_dir.join("nested/collector.stderr.log")).unwrap(),
             "diagnostic\n"
         );
     }
@@ -1774,19 +1917,15 @@ int main(int argc, char **argv) {
     #[test]
     fn finalize_capture_reports_missing_trace_with_retained_run_directory() {
         let workspace = tempfile::tempdir().expect("workspace");
+        let retained = retained_capture(&workspace, "run-b", "firefox", "trace.jsonl");
         let source = tempfile::tempdir().expect("capture source");
         fs::write(source.path().join("server-stderr.log"), "server\n").expect("server log");
 
-        let CaptureFinalization::Missing { run_dir, expected } =
-            finalize_capture(workspace.path(), "firefox", source.path()).expect("finalize")
-        else {
-            panic!("missing trace must fail finalization");
-        };
-
-        assert!(run_dir.is_dir());
-        assert!(!expected.exists());
+        assert!(!finalize_capture(&retained, source.path()).expect("finalize"));
+        assert!(retained.run_dir.is_dir());
+        assert!(!retained.trace_path.exists());
         assert_eq!(
-            fs::read_to_string(run_dir.join("firefox/capture/server-stderr.log")).unwrap(),
+            fs::read_to_string(retained.capture_dir.join("server-stderr.log")).unwrap(),
             "server\n"
         );
     }
@@ -1794,20 +1933,19 @@ int main(int argc, char **argv) {
     #[test]
     fn finalization_failure_keeps_source_and_records_existing_failures() {
         let workspace = tempfile::tempdir().expect("workspace");
-        fs::write(workspace.path().join(".xtask"), "not a directory").expect("blocking file");
-        let grpc = TcpListener::bind("127.0.0.1:0").expect("gRPC listener");
-        let http = TcpListener::bind("127.0.0.1:0").expect("HTTP listener");
-        let mut collector = test_collector(
-            sleeping_collector(),
-            grpc.local_addr().expect("gRPC address"),
-            http.local_addr().expect("HTTP address"),
-        );
-        fs::write(
-            collector.capture_dir().join("otel-traces.jsonl"),
-            "partial\n",
-        )
-        .expect("partial trace");
-        let source = collector.capture_dir().to_owned();
+        let run_dir = workspace.path().join("run-c");
+        let browser_dir = run_dir.join("chromium");
+        fs::create_dir_all(&browser_dir).expect("browser directory");
+        let capture_dir = browser_dir.join("capture");
+        fs::write(&capture_dir, "not a directory").expect("blocking file");
+        let retained = RetainedCapture {
+            trace_path: capture_dir.join("trace.jsonl"),
+            run_dir,
+            capture_dir,
+        };
+        let source = tempfile::tempdir().expect("capture source");
+        fs::write(source.path().join("trace.jsonl"), "partial\n").expect("partial trace");
+        let source_path = source.path().to_owned();
         let mut result = CommandResult::new("e2e-local");
         record_post_playwright_results(
             &mut result,
@@ -1818,61 +1956,45 @@ int main(int argc, char **argv) {
             Duration::from_millis(1),
         );
 
-        finalize_collector_capture(&mut result, workspace.path(), "chromium", &mut collector);
+        let fallback = record_capture_finalization(&mut result, "chromium", &retained, source);
 
-        let failures = result
-            .steps
-            .iter()
-            .filter(|step| !step.ok)
-            .map(|step| step.name.as_str())
-            .collect::<Vec<_>>();
+        assert_eq!(fallback, source_path);
+        assert!(source_path.exists(), "failed finalization keeps the source");
         assert_eq!(
-            failures,
+            result
+                .steps
+                .iter()
+                .filter(|step| !step.ok)
+                .map(|step| step.name.as_str())
+                .collect::<Vec<_>>(),
             vec![
                 "e2e-local-chromium-playwright",
                 "e2e-local-chromium-capture"
             ]
         );
-        assert!(
-            source.exists(),
-            "failed finalization keeps the source capture"
-        );
     }
 
     #[test]
-    fn finalization_allocates_unique_retained_run_directories() {
+    fn retained_run_allocation_is_unique() {
         let workspace = tempfile::tempdir().expect("workspace");
-        let first_source = tempfile::tempdir().expect("first source");
-        let second_source = tempfile::tempdir().expect("second source");
-        fs::write(first_source.path().join("otel-traces.jsonl"), "one\n").expect("first trace");
-        fs::write(second_source.path().join("otel-traces.jsonl"), "two\n").expect("second trace");
-
-        let CaptureFinalization::Trace(first) =
-            finalize_capture(workspace.path(), "chromium", first_source.path()).expect("first")
-        else {
-            panic!("first trace should be retained");
-        };
-        let CaptureFinalization::Trace(second) =
-            finalize_capture(workspace.path(), "chromium", second_source.path()).expect("second")
-        else {
-            panic!("second trace should be retained");
-        };
-
-        assert_ne!(
-            first.parent().unwrap().parent(),
-            second.parent().unwrap().parent()
-        );
+        let first = allocate_retained_run_dir(workspace.path()).expect("first run");
+        let second = allocate_retained_run_dir(workspace.path()).expect("second run");
+        assert_ne!(first, second);
+        assert!(first.is_dir());
+        assert!(second.is_dir());
     }
+
     #[test]
     fn readiness_failure_retains_a_missing_trace_capture_in_the_workspace_area() {
         let workspace = tempfile::tempdir().expect("workspace");
+        let retained = retained_capture(&workspace, "run-d", "chromium", "trace.jsonl");
         let capture = tempfile::tempdir().expect("capture");
         let mut result = CommandResult::new("e2e-local");
 
         record_collector_start_failure(
             &mut result,
-            workspace.path(),
             "chromium",
+            &retained,
             CollectorStartError {
                 error: anyhow::anyhow!("collector exited before readiness"),
                 capture_dir: capture,
@@ -1893,13 +2015,39 @@ int main(int argc, char **argv) {
         assert!(!collector.ok);
         assert!(!capture.ok);
         let detail = capture.detail.as_deref().expect("capture detail");
-        assert!(detail.contains(".xtask/e2e-local/run-"));
-        assert!(detail.contains("otel-traces.jsonl"));
+        assert!(detail.contains(retained.run_dir.to_str().unwrap()));
+        assert!(detail.contains(retained.trace_path.to_str().unwrap()));
+    }
+
+    #[test]
+    fn capture_setup_failure_reports_the_preallocated_run() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let retained = retained_capture(&workspace, "run-e", "chromium", "trace.jsonl");
+        let mut result = CommandResult::new("e2e-local");
+        let error = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+
+        record_capture_setup_failure(
+            &mut result,
+            "chromium",
+            &retained,
+            &error,
+            Duration::from_millis(1),
+        );
+
+        let detail = result
+            .steps
+            .iter()
+            .find(|step| step.name == "e2e-local-chromium-capture")
+            .and_then(|step| step.detail.as_deref())
+            .expect("capture failure detail");
+        assert!(detail.contains(retained.run_dir.to_str().unwrap()));
+        assert!(detail.contains(retained.trace_path.to_str().unwrap()));
     }
 
     #[test]
     fn server_setup_failure_is_preserved_with_collector_finalization() {
         let workspace = tempfile::tempdir().expect("workspace");
+        let retained = retained_capture(&workspace, "run-f", "chromium", "trace.jsonl");
         let grpc = TcpListener::bind("127.0.0.1:0").expect("gRPC listener");
         let http = TcpListener::bind("127.0.0.1:0").expect("HTTP listener");
         let mut collector = test_collector(
@@ -1908,7 +2056,9 @@ int main(int argc, char **argv) {
             http.local_addr().expect("HTTP address"),
         );
         fs::write(
-            collector.capture_dir().join("otel-traces.jsonl"),
+            collector
+                .capture_dir()
+                .join(retained.trace_path.file_name().unwrap()),
             "partial\n",
         )
         .expect("partial trace");
@@ -1917,7 +2067,7 @@ int main(int argc, char **argv) {
             StepResult::fail("e2e-local-chromium-server").detail("server setup failed".to_owned()),
         );
 
-        finish_server_setup_failure(&mut result, workspace.path(), "chromium", &mut collector);
+        finish_server_setup_failure(&mut result, "chromium", &retained, &mut collector);
 
         assert!(!result.ok);
         assert!(
@@ -1932,5 +2082,31 @@ int main(int argc, char **argv) {
                 .iter()
                 .any(|step| step.name == "e2e-local-chromium-capture" && step.ok)
         );
+    }
+
+    #[test]
+    fn lifecycle_trace_ids_are_valid_nonzero_and_distinct() {
+        let first = new_trace_id().expect("first trace id");
+        let second = new_trace_id().expect("second trace id");
+        assert_eq!(first.len(), 32);
+        assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_ne!(first, "00000000000000000000000000000000");
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn collector_drop_cleanup_failure_emits_contextual_warning() {
+        let grpc = TcpListener::bind("127.0.0.1:0").expect("gRPC listener");
+        let http = TcpListener::bind("127.0.0.1:0").expect("HTTP listener");
+        let mut collector = test_collector(
+            sleeping_collector(),
+            grpc.local_addr().expect("gRPC address"),
+            http.local_addr().expect("HTTP address"),
+        );
+        let mut stderr = Vec::new();
+        collector.cleanup_for_drop_with(|_| anyhow::bail!("cleanup failed"), &mut stderr);
+        let warning = String::from_utf8(stderr).expect("utf8 warning");
+        assert!(warning.contains("xtask.e2e.collector_cleanup"));
+        assert!(warning.contains("cleanup failed"));
     }
 }

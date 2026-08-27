@@ -13,6 +13,7 @@
 
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt as _;
+use host::capture::Stream;
 use std::process::Command;
 
 /// `reset-mail` derives `<JAUNDER_CAPTURE_DIR>/mail.jsonl`, deletes it, and exits 0 —
@@ -125,18 +126,20 @@ fn capture_path_prints_the_derived_absolute_path() {
     let dir = tempfile::tempdir().expect("tempdir");
     let capture_dir = dir.path().join("capture");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_test-support"))
-        .args(["capture-path", "mail"])
-        .env("JAUNDER_CAPTURE_DIR", &capture_dir)
-        .output()
-        .expect("spawn test-support binary");
+    for (key, stream) in [("mail", Stream::Mail), ("otel", Stream::Otel)] {
+        let out = Command::new(env!("CARGO_BIN_EXE_test-support"))
+            .args(["capture-path", key])
+            .env("JAUNDER_CAPTURE_DIR", &capture_dir)
+            .output()
+            .expect("spawn test-support binary");
 
-    assert!(out.status.success(), "capture-path should exit 0");
-    let printed = String::from_utf8(out.stdout).expect("utf8 stdout");
-    assert_eq!(
-        printed.trim(),
-        capture_dir.join("mail.jsonl").to_string_lossy()
-    );
+        assert!(out.status.success(), "capture-path should exit 0");
+        let printed = String::from_utf8(out.stdout).expect("utf8 stdout");
+        assert_eq!(
+            printed.trim(),
+            capture_dir.join(stream.filename()).to_string_lossy()
+        );
+    }
 }
 
 #[test]
