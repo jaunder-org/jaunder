@@ -1,3 +1,9 @@
+//! Deterministic human rendering for the census report.
+//!
+//! Rendering exposes each cell's independently keyed capability, provenance,
+//! state, and bounded evidence. It reports unavailable and failed collection
+//! truthfully and never upgrades either state to a clean result.
+
 use std::fmt::Write as _;
 
 use super::{CellState, CensusReport, SignalSection};
@@ -10,9 +16,10 @@ pub fn render_human(report: &CensusReport) -> String {
         for cell in &section.cells {
             writeln!(
                 out,
-                "  {} / {} [{}; {}] — {}",
+                "  {} / {} / {} [{}; {}] — {}",
                 signal_name_cell(cell.signal),
                 language_name(cell.language),
+                capability_name(cell.capability),
                 evidence_name(cell.collector.evidence_method),
                 cell.collector.identity,
                 state_detail(&cell.state),
@@ -72,11 +79,14 @@ fn state_name(section: &SignalSection) -> &'static str {
 }
 
 fn language_name(language: super::Language) -> &'static str {
-    match language {
-        super::Language::Rust => "Rust",
-        super::Language::TypeScript => "TypeScript",
-        super::Language::Elisp => "Elisp",
-        super::Language::Repository => "repository-wide",
+    language.display_name()
+}
+
+fn capability_name(capability: super::CellCapability) -> &'static str {
+    match capability {
+        super::CellCapability::Default => "default",
+        super::CellCapability::UnusedDependency => "unused-dependency",
+        super::CellCapability::UnreferencedExportedSymbol => "unreferenced-exported-symbol",
     }
 }
 
@@ -106,7 +116,7 @@ fn state_detail(state: &CellState) -> String {
                 )
             }
         }
-        CellState::Unavailable { capability } => format!("unavailable: {capability}"),
+        CellState::Unavailable { reason } => format!("unavailable: {reason}"),
         CellState::Failed { error } => format!("failed: {error}"),
     }
 }
@@ -124,6 +134,7 @@ mod tests {
         let report = CensusReport::from_cells(vec![CellReport {
             signal: SignalFamily::DependencyStructure,
             language: Language::Rust,
+            capability: super::super::CellCapability::Default,
             collector: CollectorMetadata {
                 identity: "fixture".into(),
                 version: None,
@@ -131,7 +142,7 @@ mod tests {
                 limitation: "no parser".into(),
             },
             state: CellState::Unavailable {
-                capability: "rust analyzer".into(),
+                reason: "rust analyzer".into(),
             },
         }]);
         let first = render_human(&report);

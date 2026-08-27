@@ -60,12 +60,15 @@ cargo xtask census --json
 ```
 
 The compact output and JSON describe the same ordered signal sections and
-language/signal cells. A cell is `clean` when its collector completed without
-emitting candidates, `candidates` when it emitted repository-relative review
-leads, `unavailable` when its declared analyzer or input capability is absent,
-and `failed` when collection could not complete. A failed cell makes the command
-fail while retaining every completed cell in the report; neither `unavailable`
-nor `failed` means clean. Each candidate cell retains at most
+independently keyed language/signal/capability cells. A cell is `clean` when its
+collector completed without emitting candidates, `candidates` when it emitted
+repository-relative review leads, `unavailable` when its declared analyzer or
+input capability is absent, and `failed` when collection could not complete. A
+failed cell makes the command fail while retaining every completed cell in the
+report; neither `unavailable` nor `failed` means clean. The unused-dependencies
+and-symbols section separately identifies `unused-dependency` and
+`unreferenced-exported-symbol` capabilities, so unavailable dependency analysis
+cannot conceal semantic symbol evidence. Each candidate cell retains at most
 `MAX_CANDIDATES_PER_CELL` (currently 10) deterministically ordered candidates in
 both outputs, together with its pre-cap `total_candidates`. Each candidate
 likewise retains at most `MAX_PATHS_PER_CANDIDATE` (currently 10) sorted paths
@@ -76,16 +79,18 @@ vanished.
 
 The census covers Rust, TypeScript, and Elisp dependency/structural signals,
 Rust and TypeScript semantic-reference signals when their analyzers are
-available, Git-history churn and co-change for all three languages, and
-SQLite/PostgreSQL storage adapter path correspondence. TypeScript semantic
-collection opens the approved snapshot documents in the analyzer's declared
-workspace before requesting symbols and references. Semantic collectors use
-their declared semantic analyzer; structural collectors inspect syntax; history
-uses full `HEAD`-reachable non-merge Git history with rename detection; adapter
-correspondence matches `storage/src/sqlite` and `storage/src/postgres` paths.
-Every cell records its collector identity, evidence method, version when
-available, and material limitation so its lead can be reviewed at the right
-confidence.
+available, repository-wide Git-history churn and co-change for every approved
+tracked source path, and SQLite/PostgreSQL storage adapter path correspondence.
+Sound unused-dependency analysis is explicitly unavailable for Rust, TypeScript,
+and Elisp until a collector exists. TypeScript semantic collection opens the
+approved snapshot documents in the analyzer's declared workspace before
+requesting symbols and references. Semantic collectors use their declared
+semantic analyzer; structural clone evidence comes from parsed function and test
+forms; history uses full `HEAD`-reachable non-merge Git history with rename
+detection; adapter correspondence matches `storage/src/sqlite` and
+`storage/src/postgres` paths. Every cell records its collector identity,
+evidence method, version when available, and material limitation so its lead can
+be reviewed at the right confidence.
 
 The report is ephemeral: do not commit generated census output or treat it as a
 baseline. It is neither a verification gate nor a finding or backlog. In

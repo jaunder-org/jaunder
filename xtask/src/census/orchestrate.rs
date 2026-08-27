@@ -1,9 +1,18 @@
+//! Census cell orchestration and stable report aggregation.
+//!
+//! This module owns the seam between snapshot construction and independently
+//! registered collectors. It validates each result, retains partial reports, and
+//! preserves unavailable and failed states instead of treating absent evidence as
+//! clean.
+
 use std::path::Path;
 
 use anyhow::Result;
 use serde::Serialize;
 
-use super::{CellReport, CellState, CollectorSpec, Language, SignalFamily, SourceSnapshot};
+use super::{
+    CellCapability, CellReport, CellState, CollectorSpec, Language, SignalFamily, SourceSnapshot,
+};
 
 /// Immutable input shared by every collector for one command invocation.
 pub struct CollectorContext {
@@ -48,7 +57,7 @@ pub struct CensusReport {
 
 impl CensusReport {
     pub fn from_cells(mut cells: Vec<CellReport>) -> Self {
-        cells.sort_by_key(|cell| (cell.signal, cell.language));
+        cells.sort_by_key(|cell| (cell.signal, cell.language, cell.capability));
         for cell in &mut cells {
             cell.normalize();
         }
@@ -121,11 +130,19 @@ pub fn collect(repo_root: &Path, specs: &[CollectorSpec]) -> Result<CensusReport
     let mut cells = required_cells(&context.snapshot);
     for spec in specs {
         let report = validate((spec.collect)(&context));
-        if report.signal != spec.signal || report.language != spec.language {
-            cells.retain(|cell| !(cell.signal == spec.signal && cell.language == spec.language));
+        if report.signal != spec.signal
+            || report.language != spec.language
+            || report.capability != spec.capability
+        {
+            cells.retain(|cell| {
+                !(cell.signal == spec.signal
+                    && cell.language == spec.language
+                    && cell.capability == spec.capability)
+            });
             cells.push(CellReport {
                 signal: spec.signal,
                 language: spec.language,
+                capability: spec.capability,
                 collector: report.collector,
                 state: CellState::Failed {
                     error: "collector returned a report for a different cell".into(),
@@ -133,7 +150,11 @@ pub fn collect(repo_root: &Path, specs: &[CollectorSpec]) -> Result<CensusReport
             });
             continue;
         }
-        cells.retain(|cell| !(cell.signal == spec.signal && cell.language == spec.language));
+        cells.retain(|cell| {
+            !(cell.signal == spec.signal
+                && cell.language == spec.language
+                && cell.capability == spec.capability)
+        });
         cells.push(report);
     }
     Ok(CensusReport::from_cells(cells))
@@ -178,25 +199,22 @@ fn required_cells(snapshot: &SourceSnapshot) -> Vec<CellReport> {
             snapshot,
             SignalFamily::DependencyStructure,
             language,
+            CellCapability::Default,
             "dependency collector is not available",
         ));
         cells.push(unavailable(
             snapshot,
             SignalFamily::ClonesAndRepeatedTestShapes,
             language,
+            CellCapability::Default,
             "structural clone collector is not available",
         ));
         cells.push(unavailable(
             snapshot,
             SignalFamily::UnusedDependenciesAndSymbols,
             language,
-            "unused-dependency or symbol analyzer is not available",
-        ));
-        cells.push(unavailable(
-            snapshot,
-            SignalFamily::ChurnAndCochange,
-            language,
-            "history collector is not available",
+            CellCapability::UnusedDependency,
+            "sound unused-dependency collector is not available",
         ));
     }
     for language in [Language::Rust, Language::TypeScript] {
@@ -204,19 +222,36 @@ fn required_cells(snapshot: &SourceSnapshot) -> Vec<CellReport> {
             snapshot,
             SignalFamily::ExportedSymbolReferences,
             language,
+            CellCapability::Default,
+            "semantic analyzer is not available",
+        ));
+        cells.push(unavailable(
+            snapshot,
+            SignalFamily::UnusedDependenciesAndSymbols,
+            language,
+            CellCapability::UnreferencedExportedSymbol,
             "semantic analyzer is not available",
         ));
         cells.push(unavailable(
             snapshot,
             SignalFamily::ConversionAndErrorMapping,
             language,
+            CellCapability::Default,
             "structural conversion collector is not available",
         ));
     }
     cells.push(unavailable(
         snapshot,
+        SignalFamily::ChurnAndCochange,
+        Language::Repository,
+        CellCapability::Default,
+        "history collector is not available",
+    ));
+    cells.push(unavailable(
+        snapshot,
         SignalFamily::AdapterPaths,
         Language::Repository,
+        CellCapability::Default,
         "SQLite/PostgreSQL adapter-path collector is not available",
     ));
     cells
@@ -226,6 +261,7 @@ fn unavailable(
     snapshot: &SourceSnapshot,
     signal: SignalFamily,
     language: Language,
+    cell_capability: CellCapability,
     capability: &str,
 ) -> CellReport {
     let capability = if has_source_inputs(snapshot, language) {
@@ -233,21 +269,14 @@ fn unavailable(
     } else {
         format!("{capability}; no tracked {language:?} source inputs")
     };
-    CellReport::unavailable(signal, language, capability)
+    CellReport::unavailable(signal, language, capability).with_capability(cell_capability)
 }
 
 fn has_source_inputs(snapshot: &SourceSnapshot, language: Language) -> bool {
-    snapshot.files.iter().any(|file| match language {
-        Language::Rust => file.path.ends_with(".rs"),
-        Language::TypeScript => {
-            file.path.ends_with(".ts")
-                || file.path.ends_with(".tsx")
-                || file.path.ends_with(".js")
-                || file.path.ends_with(".jsx")
-        }
-        Language::Elisp => file.path.ends_with(".el"),
-        Language::Repository => true,
-    })
+    snapshot
+        .files
+        .iter()
+        .any(|file| language == Language::Repository || language.matches_path(&file.path))
 }
 
 #[cfg(test)]
@@ -262,6 +291,7 @@ mod tests {
         CellReport {
             signal,
             language,
+            capability: CellCapability::Default,
             collector: CollectorMetadata {
                 identity: "fixture".into(),
                 version: Some("1".into()),
@@ -284,11 +314,32 @@ mod tests {
                 SignalFamily::DependencyStructure,
                 Language::TypeScript,
                 CellState::Unavailable {
-                    capability: "semantic analyzer".into(),
+                    reason: "semantic analyzer".into(),
                 },
             ),
         ]);
         assert_eq!(census.sections[0].state, SectionState::Unavailable);
+    }
+
+    #[test]
+    fn required_unused_dependency_cells_remain_unavailable_beside_unreferenced_symbol_cells() {
+        let cells = required_cells(&SourceSnapshot::default());
+        for language in [Language::Rust, Language::TypeScript, Language::Elisp] {
+            assert!(cells.iter().any(|cell| {
+                cell.signal == SignalFamily::UnusedDependenciesAndSymbols
+                    && cell.language == language
+                    && cell.capability == CellCapability::UnusedDependency
+                    && matches!(cell.state, CellState::Unavailable { .. })
+            }));
+        }
+        for language in [Language::Rust, Language::TypeScript] {
+            assert!(cells.iter().any(|cell| {
+                cell.signal == SignalFamily::UnusedDependenciesAndSymbols
+                    && cell.language == language
+                    && cell.capability == CellCapability::UnreferencedExportedSymbol
+                    && matches!(cell.state, CellState::Unavailable { .. })
+            }));
+        }
     }
 
     #[test]

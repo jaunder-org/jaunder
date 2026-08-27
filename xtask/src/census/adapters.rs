@@ -1,19 +1,24 @@
 //! Storage-adapter path correspondence collector.
+//!
+//! This module compares approved SQLite and PostgreSQL path inventories through
+//! the shared snapshot seam. It emits heuristic correspondence candidates only,
+//! never behavioral-equivalence claims; missing paths simply remain unmatched.
 
 use std::collections::BTreeSet;
 
-use super::model::{Candidate, CollectorMetadata};
+use super::model::{Candidate, CellCapability, CollectorMetadata};
 use super::{CellReport, CollectorContext, CollectorSpec, EvidenceMethod, Language, SignalFamily};
 
 const ADAPTER_VERSION: &str = "1";
 const SQLITE_ROOT: &str = "storage/src/sqlite/";
 const POSTGRES_ROOT: &str = "storage/src/postgres/";
 
-/// Task 3 registration for the repository-wide storage adapter path signal.
+/// Registers the repository-wide storage adapter path signal.
 pub(crate) fn specs() -> Vec<CollectorSpec> {
     vec![CollectorSpec {
         signal: SignalFamily::AdapterPaths,
         language: Language::Repository,
+        capability: CellCapability::Default,
         collect,
     }]
 }
@@ -124,5 +129,21 @@ mod tests {
                 "adapter-unmatched:postgres:catalog.rs".into(),
             ])
         );
+    }
+
+    #[test]
+    fn reports_clean_without_storage_adapter_paths() {
+        let report = collect(&CollectorContext {
+            repo_root: Default::default(),
+            snapshot: SourceSnapshot {
+                files: vec![SourceFile {
+                    path: "server/src/lib.rs".into(),
+                    content: String::new(),
+                }],
+            },
+        });
+
+        assert!(matches!(report.state, CellState::Clean));
+        assert_eq!(report.collector.evidence_method, EvidenceMethod::Heuristic);
     }
 }

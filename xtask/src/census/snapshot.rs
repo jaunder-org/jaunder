@@ -1,3 +1,10 @@
+//! Git-tracked, approved working-tree inputs for census collectors.
+//!
+//! The snapshot is the sole source-content seam: it excludes generated and
+//! vendored paths while retaining approved text inputs for both language-specific
+//! and repository-wide collectors. Read failures stop collection rather than
+//! silently shrinking the audit surface.
+
 use std::path::Path;
 
 use anyhow::{Context, Result};

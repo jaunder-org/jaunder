@@ -1,3 +1,10 @@
+//! Stable census report cells and their serializable state contract.
+//!
+//! The model makes each collected capability independently addressable within a
+//! signal family, so one unavailable capability cannot conceal another result.
+//! It preserves collector provenance and incomplete states rather than deriving
+//! claims from missing data.
+
 use serde::Serialize;
 
 /// The owned-language surface a collector describes.
@@ -69,6 +76,15 @@ pub const MAX_CANDIDATES_PER_CELL: usize = 10;
 /// The maximum number of paths retained per candidate in both human and JSON reports.
 pub const MAX_PATHS_PER_CANDIDATE: usize = 10;
 
+/// The independently collected capability represented by a report cell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CellCapability {
+    Default,
+    UnusedDependency,
+    UnreferencedExportedSymbol,
+}
+
 /// The only possible result for a required language/signal cell.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "state", rename_all = "kebab-case")]
@@ -79,7 +95,7 @@ pub enum CellState {
         total_candidates: usize,
     },
     Unavailable {
-        capability: String,
+        reason: String,
     },
     Failed {
         error: String,
@@ -91,6 +107,7 @@ pub enum CellState {
 pub struct CellReport {
     pub signal: SignalFamily,
     pub language: Language,
+    pub capability: CellCapability,
     pub collector: CollectorMetadata,
     #[serde(flatten)]
     pub state: CellState,
@@ -100,19 +117,22 @@ impl CellReport {
     pub fn unavailable(
         signal: SignalFamily,
         language: Language,
-        capability: impl Into<String>,
+        unavailable_capability: impl Into<String>,
     ) -> Self {
-        let capability = capability.into();
+        let unavailable_capability = unavailable_capability.into();
         Self {
             signal,
             language,
+            capability: CellCapability::Default,
             collector: CollectorMetadata {
                 identity: "census-contract".into(),
                 version: None,
                 evidence_method: EvidenceMethod::Heuristic,
-                limitation: format!("{capability}; no collector supplied a result"),
+                limitation: format!("{unavailable_capability}; no collector supplied a result"),
             },
-            state: CellState::Unavailable { capability },
+            state: CellState::Unavailable {
+                reason: unavailable_capability,
+            },
         }
     }
 
@@ -120,14 +140,15 @@ impl CellReport {
         signal: SignalFamily,
         language: Language,
         collector: CollectorMetadata,
-        capability: impl Into<String>,
+        unavailable_capability: impl Into<String>,
     ) -> Self {
         Self {
             signal,
             language,
+            capability: CellCapability::Default,
             collector,
             state: CellState::Unavailable {
-                capability: capability.into(),
+                reason: unavailable_capability.into(),
             },
         }
     }
@@ -142,6 +163,7 @@ impl CellReport {
         Self {
             signal,
             language,
+            capability: CellCapability::Default,
             collector,
             state: if candidates.is_empty() {
                 CellState::Clean
@@ -154,7 +176,11 @@ impl CellReport {
         }
     }
 
-    pub fn has_failed(&self) -> bool {
+    pub fn with_capability(mut self, capability: CellCapability) -> Self {
+        self.capability = capability;
+        self
+    }
+    pub(crate) fn has_failed(&self) -> bool {
         matches!(self.state, CellState::Failed { .. })
     }
 
@@ -187,5 +213,13 @@ impl CellReport {
 pub struct CollectorSpec {
     pub signal: SignalFamily,
     pub language: Language,
+    pub capability: CellCapability,
     pub collect: fn(&crate::census::CollectorContext) -> CellReport,
+}
+
+impl CollectorSpec {
+    pub fn with_capability(mut self, capability: CellCapability) -> Self {
+        self.capability = capability;
+        self
+    }
 }

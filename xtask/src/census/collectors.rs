@@ -1,5 +1,10 @@
-//! Concrete Task 2 repository-census collectors.
+//! Source and analyzer-backed census collectors.
 //!
+//! Collectors convert parsed source and protocol results into isolated report
+//! cells. Structural extraction never claims semantic references, and missing or
+//! incomplete analyzers degrade to unavailable cells while malformed input or
+//! protocol failures remain explicit failures.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};
@@ -7,19 +12,23 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
 use oxc_allocator::Allocator;
-use oxc_parser::Parser;
-use oxc_parser::ParserReturn;
-use oxc_span::SourceType;
+use oxc_ast::ast::{ArrowFunctionExpression, Function};
+use oxc_ast_visit::{Visit as OxcVisit, walk as oxc_walk};
+use oxc_parser::{Parser, ParserReturn};
+use oxc_span::Span;
+use oxc_syntax::scope::ScopeFlags;
+use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use syn::visit::Visit;
 
-use super::model::{Candidate, CollectorMetadata};
+use super::model::{Candidate, CellCapability, CollectorMetadata};
+use super::source::language_for_path;
 use super::{
     CellReport, CellState, CollectorContext, CollectorSpec, EvidenceMethod, Language, SignalFamily,
 };
 
 const STRUCTURAL_VERSION: &str = "1";
 
-/// Task 2 registrations for the shared Task 1 collector interface.
+/// Registers collectors for the parsed-source and semantic minimum matrix.
 pub(crate) fn specs() -> Vec<CollectorSpec> {
     vec![
         spec(
@@ -51,12 +60,14 @@ pub(crate) fn specs() -> Vec<CollectorSpec> {
             SignalFamily::UnusedDependenciesAndSymbols,
             Language::Rust,
             rust_unreferenced_symbols,
-        ),
+        )
+        .with_capability(CellCapability::UnreferencedExportedSymbol),
         spec(
             SignalFamily::UnusedDependenciesAndSymbols,
             Language::TypeScript,
             typescript_unreferenced_symbols,
-        ),
+        )
+        .with_capability(CellCapability::UnreferencedExportedSymbol),
         spec(
             SignalFamily::ClonesAndRepeatedTestShapes,
             Language::Rust,
@@ -93,6 +104,7 @@ fn spec(
     CollectorSpec {
         signal,
         language,
+        capability: CellCapability::Default,
         collect,
     }
 }
@@ -107,7 +119,7 @@ fn structural(
         signal,
         language,
         CollectorMetadata {
-            identity: format!("census-{}-structural", language_name(language)),
+            identity: format!("census-{}-structural", language.slug()),
             version: Some(STRUCTURAL_VERSION.into()),
             evidence_method: EvidenceMethod::Structural,
             limitation: limitation.into(),
@@ -120,6 +132,7 @@ fn failed(signal: SignalFamily, language: Language, identity: &str, error: Strin
     CellReport {
         signal,
         language,
+        capability: CellCapability::Default,
         collector: CollectorMetadata {
             identity: identity.into(),
             version: Some(STRUCTURAL_VERSION.into()),
@@ -130,26 +143,10 @@ fn failed(signal: SignalFamily, language: Language, identity: &str, error: Strin
     }
 }
 
-fn language_name(language: Language) -> &'static str {
-    match language {
-        Language::Rust => "rust",
-        Language::TypeScript => "typescript",
-        Language::Elisp => "elisp",
-        Language::Repository => "repository",
-    }
-}
-
 fn files(context: &CollectorContext, language: Language) -> impl Iterator<Item = (&str, &str)> {
     context.snapshot.files.iter().filter_map(move |file| {
-        let selected = match language {
-            Language::Rust => file.path.ends_with(".rs"),
-            Language::TypeScript => [".ts", ".tsx", ".js", ".jsx"]
-                .iter()
-                .any(|suffix| file.path.ends_with(suffix)),
-            Language::Elisp => file.path.ends_with(".el"),
-            Language::Repository => false,
-        };
-        selected.then_some((file.path.as_str(), file.content.as_str()))
+        (language_for_path(&file.path) == Some(language))
+            .then_some((file.path.as_str(), file.content.as_str()))
     })
 }
 
@@ -222,7 +219,9 @@ fn parse_typescript(path: &str, source: &str) -> Result<(), String> {
     } = Parser::new(
         &allocator,
         source,
-        SourceType::from_path(path).unwrap_or_else(|_| SourceType::ts()),
+        Language::TypeScript
+            .typescript_source_type(path)
+            .expect("TypeScript language has a parser mode"),
     )
     .parse();
     if panicked || !diagnostics.is_empty() {
@@ -345,43 +344,48 @@ fn elisp_clones(context: &CollectorContext) -> CellReport {
 fn clones(context: &CollectorContext, language: Language) -> CellReport {
     let mut groups = BTreeMap::<String, Vec<String>>::new();
     for (path, source) in files(context, language) {
-        let valid = match language {
-            Language::Rust => syn::parse_file(source)
-                .map(|_| ())
-                .map_err(|error| error.to_string()),
-            Language::TypeScript => parse_typescript(path, source),
-            Language::Elisp => balanced_elisp(source)
-                .then_some(())
-                .ok_or_else(|| "unbalanced Elisp forms".into()),
-            Language::Repository => Ok(()),
+        let shapes = match language {
+            Language::Rust => rust_function_shapes(source),
+            Language::TypeScript => typescript_function_shapes(path, source),
+            Language::Elisp => elisp_function_shapes(source),
+            Language::Repository => Ok(Vec::new()),
         };
-        if let Err(error) = valid {
-            return failed(
-                SignalFamily::ClonesAndRepeatedTestShapes,
-                language,
-                &format!("census-{}-structural", language_name(language)),
-                format!("{path}: {error}"),
-            );
-        }
-        for block in candidate_blocks(source, language) {
-            groups
-                .entry(normalize_shape(block))
-                .or_default()
-                .push(path.into());
+        let shapes = match shapes {
+            Ok(shapes) => shapes,
+            Err(CloneShapeError::ReaderUnavailable) => {
+                return CellReport::unavailable_with_collector(
+                    SignalFamily::ClonesAndRepeatedTestShapes,
+                    language,
+                    CollectorMetadata {
+                        identity: "census-elisp-structural".into(),
+                        version: Some(STRUCTURAL_VERSION.into()),
+                        evidence_method: EvidenceMethod::Structural,
+                        limitation: "the declared Emacs reader is not available".into(),
+                    },
+                    "Emacs reader structural shape collector is not available",
+                );
+            }
+            Err(CloneShapeError::Failed(error)) => {
+                return failed(
+                    SignalFamily::ClonesAndRepeatedTestShapes,
+                    language,
+                    &format!("census-{}-structural", language.slug()),
+                    format!("{path}: {error}"),
+                );
+            }
+        };
+        for shape in shapes {
+            groups.entry(shape).or_default().push(path.into());
         }
     }
     let candidates = groups
         .into_iter()
         .filter(|(_, paths)| paths.len() > 1)
         .map(|(shape, paths)| Candidate {
-            identity: format!(
-                "{}-shape:{:x}",
-                language_name(language),
-                stable_hash(&shape)
-            ),
+            identity: format!("{}-shape:{:x}", language.slug(), stable_hash(&shape)),
             summary: format!(
-                "repeated parsed {} block shape across {} files",
-                language_name(language),
+                "repeated parsed {} function or test shape across {} files",
+                language.slug(),
                 paths.len()
             ),
             total_paths: paths.len(),
@@ -391,69 +395,243 @@ fn clones(context: &CollectorContext, language: Language) -> CellReport {
     structural(
         SignalFamily::ClonesAndRepeatedTestShapes,
         language,
-        "normalized parsed block shapes are review candidates; formatting and identifier spelling are discarded",
+        "normalized parsed function and test shapes are structural review candidates",
         candidates,
     )
 }
-fn candidate_blocks(source: &str, language: Language) -> Vec<&str> {
-    let markers: &[&str] = match language {
-        Language::Rust => &["fn "],
-        Language::TypeScript => &["function ", "test("],
-        Language::Elisp => &["(defun ", "(ert-deftest "],
-        Language::Repository => &[],
-    };
-    markers
-        .iter()
-        .flat_map(|marker| source.match_indices(marker))
-        .filter_map(|(start, _)| block_after(&source[start..], language))
-        .collect()
+
+enum CloneShapeError {
+    ReaderUnavailable,
+    Failed(String),
 }
-fn block_after(source: &str, language: Language) -> Option<&str> {
-    let (open, close) = match language {
-        Language::Elisp => ('(', ')'),
-        _ => ('{', '}'),
-    };
-    let first = source.find(open)?;
-    let mut depth = 0i32;
-    for (offset, character) in source[first..].char_indices() {
-        if character == open {
-            depth += 1;
+
+impl From<String> for CloneShapeError {
+    fn from(error: String) -> Self {
+        Self::Failed(error)
+    }
+}
+
+fn rust_function_shapes(source: &str) -> Result<Vec<String>, CloneShapeError> {
+    struct Functions {
+        shapes: Vec<String>,
+    }
+    impl<'ast> Visit<'ast> for Functions {
+        fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+            self.shapes.push(normalize_rust_shape(quote::quote!(#item)));
+            syn::visit::visit_item_fn(self, item);
         }
-        if character == close {
-            depth -= 1;
-            if depth == 0 {
-                return Some(&source[..first + offset + 1]);
+    }
+    let file =
+        syn::parse_file(source).map_err(|error| CloneShapeError::Failed(error.to_string()))?;
+    let mut functions = Functions { shapes: Vec::new() };
+    functions.visit_file(&file);
+    Ok(functions.shapes)
+}
+
+fn typescript_function_shapes(path: &str, source: &str) -> Result<Vec<String>, CloneShapeError> {
+    struct Functions<'s> {
+        source: &'s str,
+        shapes: Vec<String>,
+    }
+    impl<'a> OxcVisit<'a> for Functions<'_> {
+        fn visit_function(&mut self, function: &Function<'a>, flags: ScopeFlags) {
+            self.shapes
+                .push(normalize_typescript_span(self.source, function.span));
+            oxc_walk::walk_function(self, function, flags);
+        }
+
+        fn visit_arrow_function_expression(&mut self, function: &ArrowFunctionExpression<'a>) {
+            self.shapes
+                .push(normalize_typescript_span(self.source, function.span));
+            oxc_walk::walk_arrow_function_expression(self, function);
+        }
+    }
+
+    let allocator = Allocator::default();
+    let ParserReturn {
+        program,
+        diagnostics,
+        panicked,
+        ..
+    } = Parser::new(
+        &allocator,
+        source,
+        Language::TypeScript
+            .typescript_source_type(path)
+            .expect("TypeScript language has a parser mode"),
+    )
+    .parse();
+    if panicked || !diagnostics.is_empty() {
+        return Err(diagnostics
+            .iter()
+            .map(|error| format!("{error:?}"))
+            .collect::<Vec<_>>()
+            .join("; ")
+            .into());
+    }
+    let mut functions = Functions {
+        source,
+        shapes: Vec::new(),
+    };
+    functions.visit_program(&program);
+    Ok(functions.shapes)
+}
+
+fn normalize_typescript_span(source: &str, span: Span) -> String {
+    normalize_shape(&source[span.start as usize..span.end as usize])
+}
+
+fn elisp_function_shapes(source: &str) -> Result<Vec<String>, CloneShapeError> {
+    const READER: &str = r#"(progn
+(defun census-normalize (value)
+  (cond ((consp value) (cons (census-normalize (car value))
+                              (census-normalize (cdr value))))
+        ((symbolp value) 'id)
+        ((numberp value) 'number)
+        ((stringp value) 'string)
+        (t 'literal)))
+(with-temp-buffer
+  (insert-file-contents "/dev/stdin")
+  (emacs-lisp-mode)
+  (check-parens)
+  (goto-char (point-min))
+  (condition-case nil
+      (while t
+        (let ((form (read (current-buffer))))
+          (when (memq (car-safe form) '(defun ert-deftest))
+            (princ (prin1-to-string (census-normalize form)))
+            (princ "\n"))))
+    (end-of-file nil))))"#;
+    let mut reader = Command::new("emacs")
+        .args(["--batch", "--quick", "--eval", READER])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                CloneShapeError::ReaderUnavailable
+            } else {
+                CloneShapeError::Failed(error.to_string())
+            }
+        })?;
+    reader
+        .stdin
+        .take()
+        .expect("configured piped stdin")
+        .write_all(source.as_bytes())
+        .map_err(|error| CloneShapeError::Failed(error.to_string()))?;
+    let output = reader
+        .wait_with_output()
+        .map_err(|error| CloneShapeError::Failed(error.to_string()))?;
+    if !output.status.success() {
+        return Err(CloneShapeError::Failed(
+            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::to_owned)
+        .collect())
+}
+
+fn normalize_rust_shape(tokens: TokenStream) -> String {
+    fn tokens_into(out: &mut String, tokens: TokenStream) {
+        for token in tokens {
+            match token {
+                TokenTree::Group(group) => {
+                    let (open, close) = match group.delimiter() {
+                        Delimiter::Parenthesis => ('(', ')'),
+                        Delimiter::Brace => ('{', '}'),
+                        Delimiter::Bracket => ('[', ']'),
+                        Delimiter::None => ('<', '>'),
+                    };
+                    out.push(open);
+                    tokens_into(out, group.stream());
+                    out.push(close);
+                }
+                TokenTree::Ident(_) => out.push_str("id"),
+                TokenTree::Punct(punctuation) => out.push(punctuation.as_char()),
+                TokenTree::Literal(_) => out.push('#'),
             }
         }
     }
-    None
+
+    let mut out = String::new();
+    tokens_into(&mut out, tokens);
+    out
 }
+
 fn normalize_shape(source: &str) -> String {
+    enum State {
+        Code,
+        LineComment,
+        BlockComment(usize),
+        String(char),
+    }
+    let mut state = State::Code;
     let mut out = String::new();
     let mut token = String::new();
-    for character in source.chars() {
-        if character.is_ascii_alphanumeric() || character == '_' {
-            token.push(character);
-        } else {
-            if !token.is_empty() {
-                out.push_str(
-                    if token.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-                        "#"
-                    } else {
-                        "id"
-                    },
-                );
-                token.clear();
+    let mut characters = source.chars().peekable();
+    while let Some(character) = characters.next() {
+        match &mut state {
+            State::Code if character == '/' && characters.peek() == Some(&'/') => {
+                characters.next();
+                state = State::LineComment;
             }
-            if !character.is_whitespace() {
-                out.push(character);
+            State::Code if character == '/' && characters.peek() == Some(&'*') => {
+                characters.next();
+                state = State::BlockComment(1);
             }
+            State::Code if matches!(character, '"' | '\'' | '`') => {
+                normalize_token(&mut out, &mut token);
+                out.push_str("str");
+                state = State::String(character);
+            }
+            State::Code if character.is_ascii_alphanumeric() || character == '_' => {
+                token.push(character)
+            }
+            State::Code => {
+                normalize_token(&mut out, &mut token);
+                if !character.is_whitespace() {
+                    out.push(character);
+                }
+            }
+            State::LineComment if character == '\n' => state = State::Code,
+            State::BlockComment(depth) if character == '*' && characters.peek() == Some(&'/') => {
+                characters.next();
+                *depth -= 1;
+                if *depth == 0 {
+                    state = State::Code;
+                }
+            }
+            State::String(_) if character == '\\' => {
+                characters.next();
+            }
+            State::String(delimiter) if character == *delimiter => state = State::Code,
+            _ => {}
         }
     }
-    if !token.is_empty() {
-        out.push_str("id");
-    }
+    normalize_token(&mut out, &mut token);
     out
+}
+
+fn normalize_token(out: &mut String, token: &mut String) {
+    if token.is_empty() {
+        return;
+    }
+    out.push_str(
+        if token
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_digit())
+        {
+            "#"
+        } else {
+            "id"
+        },
+    );
+    token.clear();
 }
 fn stable_hash(value: &str) -> u64 {
     value.bytes().fold(0xcbf29ce484222325, |hash, byte| {
@@ -481,7 +659,7 @@ fn conversion_sequences(context: &CollectorContext, language: Language) -> CellR
             return failed(
                 SignalFamily::ConversionAndErrorMapping,
                 language,
-                &format!("census-{}-structural", language_name(language)),
+                &format!("census-{}-structural", language.slug()),
                 format!("{path}: {error}"),
             );
         }
@@ -499,10 +677,10 @@ fn conversion_sequences(context: &CollectorContext, language: Language) -> CellR
         };
         if found {
             candidates.push(Candidate {
-                identity: format!("{}-conversion-error:{}", language_name(language), path),
+                identity: format!("{}-conversion-error:{}", language.slug(), path),
                 summary: format!(
                     "parsed {} conversion and error-mapping sequence",
-                    language_name(language)
+                    language.slug()
                 ),
                 paths: vec![path.into()],
                 total_paths: 1,
@@ -540,6 +718,7 @@ fn rust_unreferenced_symbols(context: &CollectorContext) -> CellReport {
         Language::Rust,
         "rust-analyzer",
     )
+    .with_capability(CellCapability::UnreferencedExportedSymbol)
 }
 fn typescript_unreferenced_symbols(context: &CollectorContext) -> CellReport {
     semantic_symbols(
@@ -548,6 +727,7 @@ fn typescript_unreferenced_symbols(context: &CollectorContext) -> CellReport {
         Language::TypeScript,
         "typescript-language-server",
     )
+    .with_capability(CellCapability::UnreferencedExportedSymbol)
 }
 
 fn semantic_symbols(
@@ -595,7 +775,33 @@ fn semantic_symbols(
     if let Err(error) = client.open_documents(context, language) {
         return semantic_failed(signal, language, analyzer, Some(version), error);
     }
-    let symbols = match client.request("workspace/symbol", serde_json::json!({ "query": "" })) {
+    semantic_symbols_with_session(
+        context,
+        signal,
+        language,
+        analyzer,
+        Some(version),
+        &mut client,
+    )
+}
+
+trait SemanticSession {
+    fn request(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, String>;
+}
+
+fn semantic_symbols_with_session(
+    context: &CollectorContext,
+    signal: SignalFamily,
+    language: Language,
+    analyzer: &str,
+    version: Option<String>,
+    session: &mut impl SemanticSession,
+) -> CellReport {
+    let symbols = match session.request("workspace/symbol", serde_json::json!({ "query": "" })) {
         Ok(response) => match symbols_from_response(context, response) {
             Ok(Some(symbols)) => symbols,
             Ok(None) => {
@@ -603,18 +809,20 @@ fn semantic_symbols(
                     signal,
                     language,
                     analyzer,
-                    Some(version),
+                    version.clone(),
                     "did not report export visibility",
                 );
             }
-            Err(error) => return semantic_failed(signal, language, analyzer, Some(version), error),
+            Err(error) => {
+                return semantic_failed(signal, language, analyzer, version.clone(), error);
+            }
         },
-        Err(error) => return semantic_failed(signal, language, analyzer, Some(version), error),
+        Err(error) => return semantic_failed(signal, language, analyzer, version.clone(), error),
     };
     let mut candidates = Vec::new();
     let mut exported_symbols = 0;
     for symbol in symbols {
-        let exported = match client.request(
+        let exported = match session.request(
             "textDocument/hover",
             serde_json::json!({
                 "textDocument": { "uri": symbol.uri },
@@ -622,13 +830,15 @@ fn semantic_symbols(
             }),
         ) {
             Ok(response) => hover_reports_exported(language, response),
-            Err(error) => return semantic_failed(signal, language, analyzer, Some(version), error),
+            Err(error) => {
+                return semantic_failed(signal, language, analyzer, version.clone(), error);
+            }
         };
         if !exported {
             continue;
         }
         exported_symbols += 1;
-        let references = match client.request(
+        let references = match session.request(
             "textDocument/references",
             serde_json::json!({
                 "textDocument": { "uri": symbol.uri },
@@ -639,10 +849,12 @@ fn semantic_symbols(
             Ok(response) => match references_from_response(context, response) {
                 Ok(references) => references,
                 Err(error) => {
-                    return semantic_failed(signal, language, analyzer, Some(version), error);
+                    return semantic_failed(signal, language, analyzer, version.clone(), error);
                 }
             },
-            Err(error) => return semantic_failed(signal, language, analyzer, Some(version), error),
+            Err(error) => {
+                return semantic_failed(signal, language, analyzer, version.clone(), error);
+            }
         };
         let emit = match signal {
             SignalFamily::ExportedSymbolReferences => !references.is_empty(),
@@ -668,14 +880,14 @@ fn semantic_symbols(
             signal,
             language,
             analyzer,
-            Some(version),
+            version,
             "did not report export visibility",
         );
     }
     CellReport::candidates(
         signal,
         language,
-        semantic_metadata(language, analyzer, Some(version)),
+        semantic_metadata(language, analyzer, version),
         candidates,
     )
 }
@@ -686,7 +898,7 @@ fn semantic_metadata(
     version: Option<String>,
 ) -> CollectorMetadata {
     CollectorMetadata {
-        identity: format!("census-{}-semantic-lsp", language_name(language)),
+        identity: format!("census-{}-semantic-lsp", language.slug()),
         version,
         evidence_method: EvidenceMethod::Semantic,
         limitation: format!(
@@ -721,17 +933,43 @@ fn analyzer_stdio_args(language: Language) -> &'static [&'static str] {
 struct LspClient {
     child: std::process::Child,
     input: std::process::ChildStdin,
+    stderr: std::process::ChildStderr,
     responses: Receiver<Result<serde_json::Value, String>>,
     next_id: u64,
 }
 
 impl Drop for LspClient {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        match self.child.try_wait() {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                if let Err(error) = self.child.kill() {
+                    eprintln!("warning: stopping census LSP server failed: {error}");
+                }
+                if let Err(error) = self.child.wait() {
+                    eprintln!("warning: reaping census LSP server failed: {error}");
+                }
+            }
+            Err(error) => {
+                eprintln!("warning: checking census LSP server status failed: {error}");
+                if let Err(error) = self.child.wait() {
+                    eprintln!(
+                        "warning: reaping census LSP server after status failure failed: {error}"
+                    );
+                }
+            }
+        }
+        let mut stderr = String::new();
+        if let Err(error) = self.stderr.read_to_string(&mut stderr) {
+            eprintln!("warning: reading census LSP server stderr during cleanup failed: {error}");
+        } else if !stderr.trim().is_empty() {
+            eprintln!(
+                "warning: census LSP server stderr during cleanup: {}",
+                stderr.trim()
+            );
+        }
     }
 }
-
 impl LspClient {
     fn start(
         context: &CollectorContext,
@@ -744,7 +982,7 @@ impl LspClient {
             .current_dir(&context.repo_root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped());
         let mut child = command
             .spawn()
             .map_err(|error| format!("starting `{analyzer}` LSP server: {error}"))?;
@@ -756,6 +994,10 @@ impl LspClient {
             .stdout
             .take()
             .ok_or_else(|| format!("`{analyzer}` did not provide LSP stdout"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| format!("`{analyzer}` did not provide LSP stderr"))?;
         let (sender, responses) = mpsc::sync_channel(16);
         std::thread::spawn(move || {
             let mut output = BufReader::new(output);
@@ -770,6 +1012,7 @@ impl LspClient {
         let mut client = Self {
             child,
             input,
+            stderr,
             responses,
             next_id: 1,
         };
@@ -805,14 +1048,7 @@ impl LspClient {
     }
 
     fn lsp_language_id(language: Language, path: &str) -> Option<&'static str> {
-        match language {
-            Language::Rust if path.ends_with(".rs") => Some("rust"),
-            Language::TypeScript if path.ends_with(".ts") => Some("typescript"),
-            Language::TypeScript if path.ends_with(".tsx") => Some("typescriptreact"),
-            Language::TypeScript if path.ends_with(".js") => Some("javascript"),
-            Language::TypeScript if path.ends_with(".jsx") => Some("javascriptreact"),
-            Language::Elisp | Language::Repository | Language::Rust | Language::TypeScript => None,
-        }
+        language.lsp_language_id(path)
     }
 
     fn request(
@@ -908,6 +1144,7 @@ fn read_lsp_message(
         if read == 0 {
             return Err("LSP server closed stdout".into());
         }
+
         let line = line.trim_end();
         if line.is_empty() {
             break;
@@ -927,6 +1164,15 @@ fn read_lsp_message(
         .read_exact(&mut body)
         .map_err(|error| format!("reading LSP response body: {error}"))?;
     serde_json::from_slice(&body).map_err(|error| format!("malformed LSP JSON response: {error}"))
+}
+impl SemanticSession for LspClient {
+    fn request(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        LspClient::request(self, method, params)
+    }
 }
 
 struct SemanticSymbol {
@@ -1035,6 +1281,7 @@ fn semantic_failed(
     CellReport {
         signal,
         language,
+        capability: CellCapability::Default,
         collector: semantic_metadata(language, analyzer, version),
         state: CellState::Failed { error },
     }
@@ -1066,6 +1313,130 @@ mod tests {
     use super::super::SourceSnapshot;
     use super::super::snapshot::SourceFile;
     use super::*;
+    use std::collections::VecDeque;
+    struct FixtureLspSession {
+        responses: VecDeque<(&'static str, serde_json::Value)>,
+    }
+
+    impl SemanticSession for FixtureLspSession {
+        fn request(
+            &mut self,
+            method: &str,
+            _: serde_json::Value,
+        ) -> Result<serde_json::Value, String> {
+            let (expected_method, response) = self
+                .responses
+                .pop_front()
+                .ok_or_else(|| format!("unexpected LSP request `{method}`"))?;
+            if method != expected_method {
+                return Err(format!(
+                    "expected LSP request `{expected_method}`, got `{method}`"
+                ));
+            }
+            Ok(response)
+        }
+    }
+
+    fn standard_lsp_session(references: serde_json::Value) -> FixtureLspSession {
+        FixtureLspSession {
+            responses: VecDeque::from([
+                (
+                    "workspace/symbol",
+                    serde_json::json!([{
+                        "name": "public_api",
+                        "kind": 12,
+                        "location": {
+                            "uri": "file:///repo/src/lib.rs",
+                            "range": {
+                                "start": { "line": 4, "character": 7 },
+                                "end": { "line": 4, "character": 17 }
+                            }
+                        }
+                    }]),
+                ),
+                (
+                    "textDocument/hover",
+                    serde_json::json!({
+                        "contents": { "kind": "markdown", "value": "```rust\npub fn public_api()\n```" }
+                    }),
+                ),
+                ("textDocument/references", references),
+            ]),
+        }
+    }
+
+    #[test]
+    fn semantic_collectors_classify_standard_lsp_reference_results_through_the_session_seam() {
+        let context = CollectorContext {
+            repo_root: "/repo".into(),
+            snapshot: SourceSnapshot::default(),
+        };
+        let referenced = serde_json::json!([{
+            "uri": "file:///repo/src/caller.rs",
+            "range": {
+                "start": { "line": 8, "character": 2 },
+                "end": { "line": 8, "character": 12 }
+            }
+        }]);
+        let unreferenced = serde_json::json!([]);
+
+        let mut exported_positive = standard_lsp_session(referenced.clone());
+        let report = semantic_symbols_with_session(
+            &context,
+            SignalFamily::ExportedSymbolReferences,
+            Language::Rust,
+            "fixture-lsp",
+            Some("1.0".into()),
+            &mut exported_positive,
+        );
+        let CellState::Candidates { candidates, .. } = report.state else {
+            panic!("a standard LSP reference must be an exported-reference candidate");
+        };
+        assert_eq!(candidates[0].paths, ["src/caller.rs", "src/lib.rs"]);
+        assert_eq!(report.collector.evidence_method, EvidenceMethod::Semantic);
+
+        let mut exported_clean = standard_lsp_session(unreferenced.clone());
+        assert!(matches!(
+            semantic_symbols_with_session(
+                &context,
+                SignalFamily::ExportedSymbolReferences,
+                Language::Rust,
+                "fixture-lsp",
+                Some("1.0".into()),
+                &mut exported_clean,
+            )
+            .state,
+            CellState::Clean
+        ));
+
+        let mut unreferenced_positive = standard_lsp_session(unreferenced);
+        assert!(matches!(
+            semantic_symbols_with_session(
+                &context,
+                SignalFamily::UnusedDependenciesAndSymbols,
+                Language::Rust,
+                "fixture-lsp",
+                Some("1.0".into()),
+                &mut unreferenced_positive,
+            )
+            .state,
+            CellState::Candidates { .. }
+        ));
+
+        let mut unreferenced_clean = standard_lsp_session(referenced);
+        assert!(matches!(
+            semantic_symbols_with_session(
+                &context,
+                SignalFamily::UnusedDependenciesAndSymbols,
+                Language::Rust,
+                "fixture-lsp",
+                Some("1.0".into()),
+                &mut unreferenced_clean,
+            )
+            .state,
+            CellState::Clean
+        ));
+    }
     fn context(files: &[(&str, &str)]) -> CollectorContext {
         CollectorContext {
             repo_root: ".".into(),
@@ -1294,30 +1665,64 @@ mod tests {
         ));
     }
     #[test]
-    fn typescript_and_elisp_clone_positive_and_negative() {
-        assert!(matches!(
-            typescript_clones(&context(&[
-                ("a.ts", "function a(){const x=1; return x+1;}"),
-                ("b.ts", "function b(){const y=2; return y+2;}")
-            ]))
-            .state,
-            CellState::Candidates { .. }
-        ));
-        assert!(matches!(
-            typescript_clones(&context(&[("a.ts", "function a(){}")])).state,
-            CellState::Clean
-        ));
-        assert!(matches!(
-            elisp_clones(&context(&[
-                ("a.el", "(defun a () (let ((x 1)) (+ x 1)))"),
-                ("b.el", "(defun b () (let ((y 2)) (+ y 2)))")
-            ]))
-            .state,
-            CellState::Candidates { .. }
-        ));
-        assert!(matches!(
-            elisp_clones(&context(&[("a.el", "(defun a () nil)")])).state,
-            CellState::Clean
-        ));
+    fn clone_collectors_use_parsed_function_shapes_and_ignore_markers_in_comments_and_strings() {
+        let typescript = typescript_clones(&context(&[
+            (
+                "a.ts",
+                "function alpha() { /* CLONE-A */ return \"CLONE-A\"; }",
+            ),
+            (
+                "b.ts",
+                "function beta() { /* CLONE-B */ return \"CLONE-B\"; }",
+            ),
+        ]));
+        let CellState::Candidates { candidates, .. } = typescript.state else {
+            panic!("parsed TypeScript functions with equivalent structure are candidates");
+        };
+        assert_eq!(candidates[0].paths, ["a.ts", "b.ts"]);
+        assert_eq!(
+            typescript.collector.evidence_method,
+            EvidenceMethod::Structural
+        );
+
+        let clean = typescript_clones(&context(&[
+            ("a.ts", "function alpha() { return 1; }"),
+            ("b.ts", "function beta() { return 1; return 2; }"),
+        ]));
+        assert!(matches!(clean.state, CellState::Clean));
+
+        let malformed = typescript_clones(&context(&[("a.ts", "function broken( {")]));
+        assert!(matches!(malformed.state, CellState::Failed { .. }));
+    }
+
+    #[test]
+    fn elisp_clone_collector_reads_top_level_functions_and_tests() {
+        let report = elisp_clones(&context(&[
+            (
+                "a.el",
+                "(defun alpha () (message \"CLONE-A\"))\n(ert-deftest alpha-test () (should t))",
+            ),
+            (
+                "b.el",
+                "(defun beta () (message \"CLONE-B\"))\n(ert-deftest beta-test () (should t))",
+            ),
+        ]));
+        match report.state {
+            CellState::Candidates { candidates, .. } => {
+                assert_eq!(candidates.len(), 2);
+                assert!(
+                    candidates
+                        .iter()
+                        .all(|candidate| candidate.paths == ["a.el", "b.el"])
+                );
+            }
+            CellState::Unavailable { .. } => {
+                assert!(report.collector.limitation.contains("Emacs reader"));
+            }
+            state => {
+                panic!("top-level Elisp forms must be reader-derived candidates, got {state:?}")
+            }
+        }
+        assert_eq!(report.collector.evidence_method, EvidenceMethod::Structural);
     }
 }

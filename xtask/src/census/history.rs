@@ -1,42 +1,41 @@
-//! Git-history census collectors for churn and co-change candidates.
+//! Git-history census collector for repository-wide churn and co-change.
+//!
+//! The collector attributes non-merge history, including renames, to approved
+//! current source paths from the snapshot. Its counts are heuristic maintenance
+//! signals only; Git failures remain explicit cell failures rather than clean
+//! history.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::model::{Candidate, CollectorMetadata};
+use super::model::{Candidate, CellCapability, CollectorMetadata};
+use super::source::language_for_path;
 use super::{
     CellReport, CellState, CollectorContext, CollectorSpec, EvidenceMethod, Language, SignalFamily,
 };
-
 const HISTORY_VERSION: &str = "1";
 const MINIMUM_OBSERVATIONS: usize = 2;
 
-/// Task 3 history registrations for each supported source language.
+/// Registers one repository-wide history cell so every approved source path participates.
 pub(crate) fn specs() -> Vec<CollectorSpec> {
-    vec![
-        spec(Language::Rust, rust),
-        spec(Language::TypeScript, typescript),
-        spec(Language::Elisp, elisp),
-    ]
+    vec![spec(Language::Repository, repository)]
 }
 
 fn spec(language: Language, collect: fn(&CollectorContext) -> CellReport) -> CollectorSpec {
     CollectorSpec {
         signal: SignalFamily::ChurnAndCochange,
         language,
+        capability: CellCapability::Default,
         collect,
     }
 }
 
+fn repository(context: &CollectorContext) -> CellReport {
+    collect(context, Language::Repository)
+}
+
+#[cfg(test)]
 fn rust(context: &CollectorContext) -> CellReport {
     collect(context, Language::Rust)
-}
-
-fn typescript(context: &CollectorContext) -> CellReport {
-    collect(context, Language::TypeScript)
-}
-
-fn elisp(context: &CollectorContext) -> CellReport {
-    collect(context, Language::Elisp)
 }
 
 fn collect(context: &CollectorContext, language: Language) -> CellReport {
@@ -76,6 +75,7 @@ fn collect(context: &CollectorContext, language: Language) -> CellReport {
         Err(error) => CellReport {
             signal: SignalFamily::ChurnAndCochange,
             language,
+            capability: CellCapability::Default,
             collector: metadata,
             state: CellState::Failed { error },
         },
@@ -176,23 +176,11 @@ fn current_paths_for_commit(
 }
 
 fn belongs_to_language(path: &str, language: Language) -> bool {
-    match language {
-        Language::Rust => path.ends_with(".rs"),
-        Language::TypeScript => [".ts", ".tsx", ".js", ".jsx"]
-            .iter()
-            .any(|suffix| path.ends_with(suffix)),
-        Language::Elisp => path.ends_with(".el"),
-        Language::Repository => false,
-    }
+    language == Language::Repository || language_for_path(path) == Some(language)
 }
 
 fn language_name(language: Language) -> &'static str {
-    match language {
-        Language::Rust => "rust",
-        Language::TypeScript => "typescript",
-        Language::Elisp => "elisp",
-        Language::Repository => "repository",
-    }
+    language.slug()
 }
 
 #[cfg(test)]
@@ -267,6 +255,20 @@ mod tests {
         assert!(identities.contains("churn:server/src/hot.rs"));
         assert!(identities.contains("cochange:server/src/b.rs+server/src/hot.rs"));
         assert!(!identities.contains("churn:server/src/merge_only.rs"));
+    }
+
+    #[test]
+    fn reports_clean_when_history_is_below_the_observation_threshold() {
+        let temporary = tempfile::tempdir().expect("tempdir");
+        let root = temporary.path();
+        git(root, &["init"]);
+        git(root, &["config", "user.email", "census@example.test"]);
+        git(root, &["config", "user.name", "Census Fixture"]);
+        fs::create_dir_all(root.join("server/src")).expect("source dir");
+        fs::write(root.join("server/src/a.rs"), "fn a() {}\n").expect("source");
+        commit(root, "initial source");
+
+        assert!(matches!(rust(&context(root)).state, CellState::Clean));
     }
 
     #[test]

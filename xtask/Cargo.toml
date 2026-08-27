@@ -38,6 +38,7 @@ oxc_allocator = "0.146.0"
 oxc_ast = "0.146.0"
 oxc_ast_visit = "0.146.0"
 oxc_parser = "0.146.0"
+oxc_syntax = "0.146.0"
 oxc_span = "0.146.0"
 tempfile = "3"
 # Wasm bundle attribution (#836): section spans and the name section, so

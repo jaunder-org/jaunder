@@ -1228,10 +1228,84 @@ mod cli_tests {
         specs.extend(census::adapters::specs());
         let keys = specs
             .iter()
-            .map(|spec| (spec.signal, spec.language))
+            .map(|spec| (spec.signal, spec.language, spec.capability))
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(keys.len(), specs.len());
-        assert_eq!(keys.len(), 16);
+        assert_eq!(
+            keys,
+            std::collections::BTreeSet::from([
+                (
+                    census::SignalFamily::DependencyStructure,
+                    census::Language::Rust,
+                    census::CellCapability::Default
+                ),
+                (
+                    census::SignalFamily::DependencyStructure,
+                    census::Language::TypeScript,
+                    census::CellCapability::Default
+                ),
+                (
+                    census::SignalFamily::DependencyStructure,
+                    census::Language::Elisp,
+                    census::CellCapability::Default
+                ),
+                (
+                    census::SignalFamily::ExportedSymbolReferences,
+                    census::Language::Rust,
+                    census::CellCapability::Default
+                ),
+                (
+                    census::SignalFamily::ExportedSymbolReferences,
+                    census::Language::TypeScript,
+                    census::CellCapability::Default
+                ),
+                (
+                    census::SignalFamily::UnusedDependenciesAndSymbols,
+                    census::Language::Rust,
+                    census::CellCapability::UnreferencedExportedSymbol
+                ),
+                (
+                    census::SignalFamily::UnusedDependenciesAndSymbols,
+                    census::Language::TypeScript,
+                    census::CellCapability::UnreferencedExportedSymbol
+                ),
+                (
+                    census::SignalFamily::ClonesAndRepeatedTestShapes,
+                    census::Language::Rust,
+                    census::CellCapability::Default
+                ),
+                (
+                    census::SignalFamily::ClonesAndRepeatedTestShapes,
+                    census::Language::TypeScript,
+                    census::CellCapability::Default
+                ),
+                (
+                    census::SignalFamily::ClonesAndRepeatedTestShapes,
+                    census::Language::Elisp,
+                    census::CellCapability::Default
+                ),
+                (
+                    census::SignalFamily::ConversionAndErrorMapping,
+                    census::Language::Rust,
+                    census::CellCapability::Default
+                ),
+                (
+                    census::SignalFamily::ConversionAndErrorMapping,
+                    census::Language::TypeScript,
+                    census::CellCapability::Default
+                ),
+                (
+                    census::SignalFamily::ChurnAndCochange,
+                    census::Language::Repository,
+                    census::CellCapability::Default
+                ),
+                (
+                    census::SignalFamily::AdapterPaths,
+                    census::Language::Repository,
+                    census::CellCapability::Default
+                ),
+            ])
+        );
     }
     #[test]
     fn prepush_parses_as_first_class_subcommand() {
