@@ -10,11 +10,11 @@ use common::config_key::SiteConfigKey;
 use common::display_name::DisplayName;
 use common::email::Email;
 use common::invite::InviteTtlHours;
-use common::password::Password;
 use common::pg_identifier::{InvalidPgDatabaseName, InvalidPgRoleName, PgDatabaseName, PgRoleName};
 use common::pg_role_password::PgRolePassword;
 use common::session_label::SessionLabel;
 use common::username::Username;
+use host::password::Password;
 use storage::DbConnectOptions;
 
 #[derive(Parser, Clone)]

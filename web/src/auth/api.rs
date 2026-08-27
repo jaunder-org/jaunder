@@ -19,7 +19,7 @@ use common::username::Username;
 #[cfg(feature = "server")]
 use {
     super::server::{clear_session_cookie, optional_auth, set_session_cookie},
-    common::password::Password,
+    host::password::Password,
     leptos::prelude::*,
     std::sync::Arc,
     storage::{SessionStorage, UserStorage},

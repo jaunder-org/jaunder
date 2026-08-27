@@ -8,7 +8,6 @@ use crate::audience::AudienceName;
 use crate::bio::Bio;
 use crate::display_name::DisplayName;
 use crate::email::Email;
-use crate::password::Password;
 use crate::session_label::SessionLabel;
 use crate::smtp_password::SmtpPassword;
 use crate::smtp_username::SmtpUsername;
@@ -111,18 +110,6 @@ pub fn parse_username(name: &str) -> Username {
 #[must_use]
 pub fn parse_token_hash(s: &str) -> TokenHash {
     s.parse().expect("valid test token hash")
-}
-
-/// Parse `s` into a valid [`Password`] for tests — the single place a test password
-/// literal is parsed, so a too-short fixture fails loudly and the validating `FromStr`
-/// isn't re-spelled at every `create_user`/`verify_password` call site.
-///
-/// # Panics
-///
-/// Panics if `s` does not meet the minimum-length requirement.
-#[must_use]
-pub fn parse_password(s: &str) -> Password {
-    s.parse().expect("valid test password")
 }
 
 /// Parse `s` into a valid [`SmtpPassword`] for tests — the single place a test

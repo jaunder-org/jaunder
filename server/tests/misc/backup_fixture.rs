@@ -1,6 +1,5 @@
 use common::ids::{PostId, UserId};
 use common::media::MediaSource;
-use common::password::Password;
 use common::post_title::PostTitle;
 use common::slug::Slug;
 use common::test_support::{
@@ -10,6 +9,7 @@ use common::test_support::{
 use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::{AudienceTarget, ViewerIdentity, local_subscriber_identity};
+use host::password::Password;
 use jaunder::cli::StorageArgs;
 use std::sync::Arc;
 use storage::test_support::{SeedRawPost, fp};

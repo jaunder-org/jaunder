@@ -12,13 +12,13 @@ use common::email::Email;
 use common::ids::{PostId, TagId, UserId};
 use common::media::{ByteSize, ContentHash, ContentType, Filename, MediaSource};
 use common::session_label::SessionLabel;
-use common::stored_password_hash::StoredPasswordHash;
 use common::tag::{Tag, TagLabel};
 use common::tagged_url::MediaSourceUrl;
 use common::time::UtcInstant;
 use common::token::TokenHash;
 use common::username::Username;
 use host::invite::InviteCode;
+use host::stored_password_hash::StoredPasswordHash;
 
 /// The `sessions.created_at` storage timestamp role, distinct from
 /// `last_used_at` so mappings cannot transpose silently (#751).
@@ -431,7 +431,7 @@ pub(crate) fn password_reset_claim_error(
 /// names explicitly as the pattern to avoid.
 #[tracing::instrument(name = "crypto.password.hash", skip(password))]
 pub(crate) async fn hash_password(
-    password: common::password::Password,
+    password: host::password::Password,
 ) -> io::Result<StoredPasswordHash> {
     let operation = hash_password_operation(&password);
 
@@ -439,21 +439,21 @@ pub(crate) async fn hash_password(
 }
 
 pub(crate) type HashPasswordOperation =
-    fn(&common::password::Password) -> Result<String, common::password::PasswordError>;
+    fn(&host::password::Password) -> Result<String, host::password::PasswordError>;
 
 pub(crate) fn hash_password_operation(
-    password: &common::password::Password,
+    password: &host::password::Password,
 ) -> HashPasswordOperation {
     #[cfg(any(test, feature = "test-utils"))]
     if password.as_ref() == "force-hash-error-for-test-coverage" {
         return forced_hash_failure;
     }
 
-    common::password::Password::hash
+    host::password::hash
 }
 
 pub(crate) async fn hash_password_with(
-    password: common::password::Password,
+    password: host::password::Password,
     operation: HashPasswordOperation,
 ) -> io::Result<StoredPasswordHash> {
     use std::str::FromStr;
@@ -468,11 +468,11 @@ pub(crate) async fn hash_password_with(
 
 #[cfg(any(test, feature = "test-utils"))]
 pub(crate) fn forced_hash_failure(
-    password: &common::password::Password,
-) -> Result<String, common::password::PasswordError> {
-    match password.verify(NON_PASSWORD_ARGON2_FAILURE_HASH) {
-        Err(common::password::PasswordError::VerificationFailed(source)) => {
-            Err(common::password::PasswordError::HashingFailed(source))
+    password: &host::password::Password,
+) -> Result<String, host::password::PasswordError> {
+    match host::password::verify(password, NON_PASSWORD_ARGON2_FAILURE_HASH) {
+        Err(host::password::PasswordError::VerificationFailed(source)) => {
+            Err(host::password::PasswordError::HashingFailed(source))
         }
         _ => unreachable!("the fixed test hash always produces a non-password Argon2 failure"),
     }
@@ -484,7 +484,7 @@ const DUMMY_PASSWORD: &str = "jaunder-timing-equalization-dummy";
 /// Valid Argon2id hash (default parameters) used only if runtime hashing of
 /// [`DUMMY_PASSWORD`] ever fails, so initialization stays infallible (no
 /// `unwrap`/`expect` in production). Regenerate with the same parameters as
-/// `common::password::Password::hash` if the Argon2 defaults change.
+/// `host::password::hash` if the Argon2 defaults change.
 const DUMMY_PASSWORD_HASH_FALLBACK: &str = "$argon2id$v=19$m=19456,t=2,p=1$MlXSqqFgPKBHXn92Klja9Q$FCo2fJCKGcEhWHiq+R7lVdfcP/TpFgrVKfK6bMoB3CM";
 
 /// Returns a fixed, valid Argon2id hash used to equalize authentication timing
@@ -495,20 +495,20 @@ const DUMMY_PASSWORD_HASH_FALLBACK: &str = "$argon2id$v=19$m=19456,t=2,p=1$MlXSq
 /// exists; an attacker can otherwise distinguish "no such user" (fast) from
 /// "wrong password" (slow). The absent path verifies against this hash so both
 /// outcomes take the same time. It is computed once with the same default
-/// Argon2 parameters as real password hashes (`Password::hash`), so the dummy
-/// verification costs the same as a genuine one.
+/// Argon2 parameters as [`host::password::hash`], so the dummy verification
+/// costs the same as a genuine one.
 pub(crate) fn dummy_password_hash() -> &'static StoredPasswordHash {
     use std::sync::OnceLock;
 
     static HASH: OnceLock<StoredPasswordHash> = OnceLock::new();
-    dummy_password_hash_with(&HASH, common::password::Password::hash)
+    dummy_password_hash_with(&HASH, host::password::hash)
 }
 
 fn dummy_password_hash_with(
     hash: &std::sync::OnceLock<StoredPasswordHash>,
     operation: HashPasswordOperation,
 ) -> &StoredPasswordHash {
-    use common::password::Password;
+    use host::password::Password;
     use std::str::FromStr;
 
     hash.get_or_init(|| {
@@ -524,7 +524,7 @@ fn dummy_password_hash_with(
         };
         match StoredPasswordHash::from_str(&generated) {
             Ok(hash) => hash,
-            Err(_) => unreachable!("Password::hash returns a valid stored password hash"),
+            Err(_) => unreachable!("host::password::hash returns a valid stored password hash"),
         }
     })
 }
@@ -560,11 +560,11 @@ fn fallback_dummy_password_hash() -> StoredPasswordHash {
 }
 
 pub(crate) type VerifyPasswordOperation =
-    fn(&common::password::Password, &str) -> Result<bool, common::password::PasswordError>;
+    fn(&host::password::Password, &str) -> Result<bool, host::password::PasswordError>;
 
 #[tracing::instrument(name = "crypto.password.verify", skip(password, hash, operation))]
 pub(crate) async fn verify_password_with(
-    password: common::password::Password,
+    password: host::password::Password,
     hash: StoredPasswordHash,
     operation: VerifyPasswordOperation,
 ) -> io::Result<bool> {
@@ -582,10 +582,10 @@ const NON_PASSWORD_ARGON2_FAILURE_HASH: &str =
 
 #[cfg(test)]
 pub(crate) fn forced_verify_failure(
-    password: &common::password::Password,
+    password: &host::password::Password,
     _: &str,
-) -> Result<bool, common::password::PasswordError> {
-    password.verify(NON_PASSWORD_ARGON2_FAILURE_HASH)
+) -> Result<bool, host::password::PasswordError> {
+    host::password::verify(password, NON_PASSWORD_ARGON2_FAILURE_HASH)
 }
 
 #[cfg(test)]
@@ -667,8 +667,7 @@ mod tests {
 
     use common::test_support::{
         parse_bio, parse_byte_size, parse_content_hash, parse_content_type, parse_display_name,
-        parse_email, parse_filename, parse_password, parse_session_label, parse_token_hash,
-        parse_username,
+        parse_email, parse_filename, parse_session_label, parse_token_hash, parse_username,
     };
     use common::time::UtcInstant;
     use rstest::*;
@@ -788,25 +787,21 @@ mod tests {
     // guard:no-backend — password hashing/verification; no database
     #[tokio::test]
     async fn test_hash_and_verify_password() {
-        let password: common::password::Password = parse_password("password123");
+        let password: host::password::Password = host::test_support::parse_password("password123");
         // No `.parse()` here: `hash_password` returns the newtype, per ADR-0063 §5. A
         // re-derive at the assignment is exactly what that section forbids.
         let hash = hash_password(password.clone()).await.unwrap();
 
         assert!(
-            verify_password_with(
-                password.clone(),
-                hash.clone(),
-                common::password::Password::verify,
-            )
-            .await
-            .unwrap()
+            verify_password_with(password.clone(), hash.clone(), host::password::verify,)
+                .await
+                .unwrap()
         );
         assert!(
             !verify_password_with(
-                parse_password("other-pass"),
+                host::test_support::parse_password("other-pass"),
                 hash,
-                common::password::Password::verify,
+                host::password::verify,
             )
             .await
             .unwrap()
@@ -820,9 +815,9 @@ mod tests {
         // argon2 remains the single arbiter of whether a stored string is a usable hash.
         let malformed: StoredPasswordHash = "not-a-hash".parse().expect("non-empty");
         let err = verify_password_with(
-            parse_password("password123"),
+            host::test_support::parse_password("password123"),
             malformed,
-            common::password::Password::verify,
+            host::password::verify,
         )
         .await
         .unwrap_err();
@@ -833,19 +828,19 @@ mod tests {
     // guard:no-backend — injected password hashing failure; no database
     #[tokio::test]
     async fn hash_password_preserves_password_error_source_through_io() {
-        let password = parse_password("password123");
+        let password = host::test_support::parse_password("password123");
         let expected = forced_hash_failure(&password).unwrap_err();
         let error = hash_password_with(password, forced_hash_failure)
             .await
             .unwrap_err();
         let source = error
             .get_ref()
-            .and_then(|source| source.downcast_ref::<common::password::PasswordError>())
+            .and_then(|source| source.downcast_ref::<host::password::PasswordError>())
             .expect("io error retains PasswordError");
 
         let (
-            common::password::PasswordError::HashingFailed(actual),
-            common::password::PasswordError::HashingFailed(expected),
+            host::password::PasswordError::HashingFailed(actual),
+            host::password::PasswordError::HashingFailed(expected),
         ) = (source, &expected)
         else {
             panic!("expected typed hashing failures"); // cov:ignore
@@ -856,7 +851,7 @@ mod tests {
     // guard:no-backend — injected password verification failure; no database
     #[tokio::test]
     async fn verify_password_preserves_password_error_source_through_io() {
-        let password = parse_password("password123");
+        let password = host::test_support::parse_password("password123");
         let hash = fallback_dummy_password_hash();
         let expected = forced_verify_failure(&password, hash.as_ref()).unwrap_err();
         let error = verify_password_with(password, hash, forced_verify_failure)
@@ -864,12 +859,12 @@ mod tests {
             .unwrap_err();
         let source = error
             .get_ref()
-            .and_then(|source| source.downcast_ref::<common::password::PasswordError>())
+            .and_then(|source| source.downcast_ref::<host::password::PasswordError>())
             .expect("io error retains PasswordError");
 
         let (
-            common::password::PasswordError::VerificationFailed(actual),
-            common::password::PasswordError::VerificationFailed(expected),
+            host::password::PasswordError::VerificationFailed(actual),
+            host::password::PasswordError::VerificationFailed(expected),
         ) = (source, &expected)
         else {
             panic!("expected typed verification failures"); // cov:ignore
@@ -1075,14 +1070,11 @@ mod tests {
         // equalize timing (§2.1). It must be a well-formed Argon2 hash so the
         // verification does real work and returns Ok(false) for a non-matching
         // password — not a fast Err that would reintroduce a timing oracle.
-        let wrong = parse_password("definitely-not-the-dummy");
-        let result = verify_password_with(
-            wrong,
-            dummy_password_hash().clone(),
-            common::password::Password::verify,
-        )
-        .await
-        .expect("dummy hash must be well-formed");
+        let wrong = host::test_support::parse_password("definitely-not-the-dummy");
+        let result =
+            verify_password_with(wrong, dummy_password_hash().clone(), host::password::verify)
+                .await
+                .expect("dummy hash must be well-formed");
         assert!(!result, "a non-matching password must verify to false");
     }
 
@@ -1094,11 +1086,11 @@ mod tests {
         // runtime one must: a fast `Err` on the absent-user path would reintroduce the
         // timing oracle this mechanism exists to close
         // (docs/adr/0114-absent-user-timing-equalization.md).
-        let wrong = parse_password("definitely-not-the-dummy");
+        let wrong = host::test_support::parse_password("definitely-not-the-dummy");
         let result = verify_password_with(
             wrong,
             fallback_dummy_password_hash(),
-            common::password::Password::verify,
+            host::password::verify,
         )
         .await
         .expect("the fallback hash constant must be well-formed");
@@ -1114,8 +1106,7 @@ mod tests {
         // Timing parity requires the dummy hash to carry the same Argon2
         // parameters as real password hashes (verify cost is derived from the
         // hash string's encoded params).
-        let real = parse_password("some-real-password")
-            .hash()
+        let real = host::password::hash(&host::test_support::parse_password("some-real-password"))
             .expect("hashing succeeds");
         // PHC format: $argon2id$v=19$<params>$<salt>$<hash>
         let params = |h: &str| h.split('$').nth(3).map(str::to_owned);

@@ -7,9 +7,9 @@ use axum::{
 };
 use clap::Parser as _;
 use common::config_key::SiteConfigKey;
-use common::password::Password;
 use common::test_support::{parse_email, parse_invite_ttl_hours, parse_session_label};
 use common::username::Username;
+use host::password::Password;
 use jaunder::cli::{Cli, Commands, StorageArgs};
 use jaunder::commands::{
     ServeCapturePaths, app_password_create, cmd_app_password_create, cmd_backup, cmd_init,

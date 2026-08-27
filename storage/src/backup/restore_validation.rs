@@ -18,13 +18,13 @@ use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
 use common::render::PostFormat;
 use common::slug::Slug;
-use common::stored_password_hash::StoredPasswordHash;
 use common::tag::{Tag, TagLabel};
 use common::tagged_url::MediaSourceUrl;
 use common::token::TokenHash;
 use common::username::Username;
 use common::visibility::{Channel, SubscriptionStatus, TargetKind};
 use host::invite::InviteCode;
+use host::stored_password_hash::StoredPasswordHash;
 
 use super::{BackupManifest, json_value_as_restore_text};
 

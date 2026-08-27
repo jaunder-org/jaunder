@@ -116,7 +116,7 @@ pub async fn create_user(
         .parse::<Username>()
         .map_err(|_| anyhow::anyhow!("invalid username: {username}"))?;
     let pw = password
-        .parse::<common::password::Password>()
+        .parse::<host::password::Password>()
         .map_err(|e| anyhow::anyhow!("invalid password: {e}"))?;
     let id = state
         .users

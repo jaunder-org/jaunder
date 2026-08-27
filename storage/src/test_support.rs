@@ -39,8 +39,8 @@ use common::render::{RenderOutput, RenderedHtml};
 use common::slug::Slug;
 use common::tag::TagLabel;
 use common::test_support::{
-    parse_byte_size, parse_content_hash, parse_display_name, parse_password, parse_post_body,
-    parse_post_title, parse_slug, parse_tag_label, parse_username,
+    parse_byte_size, parse_content_hash, parse_display_name, parse_post_body, parse_post_title,
+    parse_slug, parse_tag_label, parse_username,
 };
 use common::time::UtcInstant;
 use common::username::Username;
@@ -1114,7 +1114,7 @@ impl<'a> SeedUser<'a> {
             .users
             .create_user(
                 &username,
-                &parse_password(self.password),
+                &host::test_support::parse_password(self.password),
                 display_name.as_ref(),
                 self.is_operator,
             )
@@ -1752,7 +1752,7 @@ mod tests {
     use super::{
         AudienceTarget, Backend, CreatePostError, PostFormat, PostSummary, PostgresDbGuard,
         PostgresTestConfig, SeedPost, SeedRawPost, SeedUser, UtcInstant, backends, bootstrap_url,
-        parse_password, parse_post_title, report_drop_outcome, splice_db_name,
+        parse_post_title, report_drop_outcome, splice_db_name,
     };
 
     // The free renderer, to pin that the builder's HTML is exactly `render(body)` — the
@@ -1781,7 +1781,10 @@ mod tests {
         // The default password authenticates — proves `seed` used `password123`.
         state
             .users
-            .authenticate(&user.username, &parse_password("password123"))
+            .authenticate(
+                &user.username,
+                &host::test_support::parse_password("password123"),
+            )
             .await
             .expect("default password authenticates");
     }
@@ -1810,7 +1813,10 @@ mod tests {
         // The overridden password authenticates — not the default.
         state
             .users
-            .authenticate(&user.username, &parse_password("hunter2xyz"))
+            .authenticate(
+                &user.username,
+                &host::test_support::parse_password("hunter2xyz"),
+            )
             .await
             .expect("overridden password authenticates");
     }

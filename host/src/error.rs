@@ -593,7 +593,7 @@ validation_from!(
     common::username::InvalidUsername,
     common::tag::InvalidTag,
     common::tag::TagValidationError,
-    common::password::PasswordError,
+    common::password::InvalidPassword,
     common::render::InvalidPostFormat,
     common::media::InvalidMediaSource,
 );
@@ -1118,7 +1118,7 @@ mod tests {
             count: common::tag::MAX_TAGS_PER_POST + 1,
             max: common::tag::MAX_TAGS_PER_POST,
         });
-        check!(common::password::PasswordError::PasswordTooShort);
+        check!(common::password::InvalidPassword::PasswordTooShort);
         check!(common::render::InvalidPostFormat);
         check!(common::media::InvalidMediaSource);
     }

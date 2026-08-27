@@ -6,6 +6,7 @@ license = "GPL-3.0-only"
 
 [dependencies]
 anyhow.workspace = true
+argon2.workspace = true
 base64.workspace = true
 http.workspace = true
 opentelemetry.workspace = true
@@ -19,6 +20,7 @@ tracing-opentelemetry.workspace = true
 tracing-error.workspace = true
 opentelemetry_sdk.workspace = true
 opentelemetry-otlp.workspace = true
+thiserror.workspace = true
 common = { path = "../common" }
 macros = { path = "../macros" }
 
@@ -36,6 +38,9 @@ tracing-subscriber = { workspace = true }
 # `sqlx` itself is a non-optional dep above.
 default = ["sqlx"]
 sqlx = []
+test-utils = ["cheap-kdf"]
+cheap-kdf = []
+test-support = []
 
 [lints]
 workspace = true

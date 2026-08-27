@@ -572,7 +572,6 @@ name = "common"
 version = "0.1.0"
 dependencies = [
  "ammonia",
- "argon2",
  "async-trait",
  "atom_syndication",
  "axum",
@@ -581,7 +580,6 @@ dependencies = [
  "chrono-tz",
  "croner",
  "email_address",
- "getrandom 0.2.17",
  "html5ever",
  "macros",
  "orgize",
@@ -1543,6 +1541,7 @@ name = "host"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "argon2",
  "base64 0.22.1",
  "common",
  "http",
@@ -1554,6 +1553,7 @@ dependencies = [
  "sha2",
  "sqlx",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-error",

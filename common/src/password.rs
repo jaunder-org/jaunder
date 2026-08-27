@@ -6,56 +6,32 @@ use thiserror::Error;
 const MIN_LENGTH: usize = 8;
 const MAX_LENGTH: usize = 512;
 
-/// A validated plaintext password containing between [`MIN_LENGTH`] and
-/// [`MAX_LENGTH`] Unicode scalar values.
-///
-/// Constructed via [`FromStr`]; passwords outside those inclusive bounds are
-/// rejected at the boundary. Validation does not normalize the input, so
-/// interior code and Argon2 retain the exact submitted UTF-8 bytes.
-///
-/// Adopts the [`StrNewtype`] `secret` surface (ADR-0063 §2): a redacting `Debug`
-/// and borrowed `AsRef<str>` access for hashing, with no `Display`, serde, or
-/// owned-`String` escape hatch — so a `Password` cannot be rendered, serialised,
-/// or leaked. The `macros` crate is the authoritative list of what `secret` emits.
-#[derive(Clone, StrNewtype)]
-#[str_newtype(secret)]
-pub struct Password(String);
-
+/// Error returned when a submitted password fails the shared input-shape invariant.
 #[derive(Debug, Error)]
-pub enum PasswordError {
+pub enum InvalidPassword {
     #[error("password must be at least {MIN_LENGTH} characters")]
     PasswordTooShort,
     #[error("password must be at most {MAX_LENGTH} characters")]
     PasswordTooLong,
-    #[error("hashing failed: {0}")]
-    HashingFailed(#[source] argon2::password_hash::Error),
-    #[error("verification failed: {0}")]
-    VerificationFailed(#[source] argon2::password_hash::Error),
 }
 
-impl FromStr for Password {
-    type Err = PasswordError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        validate_password_shape(s)?;
-        Ok(Password(s.to_owned()))
-    }
-}
-
-/// The shared shape invariant for a plaintext password: between [`MIN_LENGTH`]
-/// and [`MAX_LENGTH`] Unicode scalar values, inclusive. Both [`Password`] and
-/// [`ProfferedPassword`] delegate to it, so the inbound wire type and the domain
-/// type cannot drift (mirrors invite codes' `common::token::validate_shape`).
+/// Validates the shared shape invariant for submitted plaintext passwords.
 ///
-/// Counting scalar values without normalization preserves the submitted bytes
-/// while avoiding UTF-8 byte length as a proxy for characters.
-fn validate_password_shape(s: &str) -> Result<(), PasswordError> {
+/// The client-reachable [`ProfferedPassword`] and host-side `host::password::Password`
+/// both delegate to this one function, preserving submitted UTF-8 bytes without
+/// normalization while counting Unicode scalar values.
+///
+/// # Errors
+///
+/// Returns [`InvalidPassword`] when `s` has fewer than eight or more than 512
+/// Unicode scalar values.
+pub fn validate_password_shape(s: &str) -> Result<(), InvalidPassword> {
     let length = s.chars().count();
     if length < MIN_LENGTH {
-        return Err(PasswordError::PasswordTooShort);
+        return Err(InvalidPassword::PasswordTooShort);
     }
     if length > MAX_LENGTH {
-        return Err(PasswordError::PasswordTooLong);
+        return Err(InvalidPassword::PasswordTooLong);
     }
     Ok(())
 }
@@ -63,112 +39,22 @@ fn validate_password_shape(s: &str) -> Result<(), PasswordError> {
 /// A raw plaintext password as **submitted by a client** during registration,
 /// login, or password-reset confirmation.
 ///
-/// The serde-capable _inbound_ twin of the secret [`Password`], per ADR-0063's
-/// inbound-secret variant (`#[str_newtype(secret, serde)]`): redacting `Debug`,
-/// `AsRef<str>`, `TryFrom<String>`, and the validating serde bridge — but no
-/// `Display`/`Deref`/owned-`String`. It exists only to be validated (client-side
-/// per ADR-0065, and again on the wire at deserialize), travel client→server, and
-/// be converted into [`Password`]. A `proffered-secret` xtask gate pins it to
-/// `#[server]` parameter positions, so a plaintext password can never be rendered
-/// or returned to a client.
+/// The serde-capable inbound twin of the host-side secret `Password`, per
+/// ADR-0063's inbound-secret variant (`#[str_newtype(secret, serde)]`): redacting
+/// `Debug`, `AsRef<str>`, `TryFrom<String>`, and the validating serde bridge —
+/// but no `Display`/`Deref`/owned-`String`. It exists only to be validated
+/// client-side per ADR-0065, travel client→server, and be converted inward.
 #[derive(Clone, StrNewtype)]
 #[str_newtype(secret, serde)]
 pub struct ProfferedPassword(String);
 
 impl FromStr for ProfferedPassword {
-    type Err = PasswordError;
+    type Err = InvalidPassword;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         validate_password_shape(s)?;
-        Ok(ProfferedPassword(s.to_owned()))
+        Ok(Self(s.to_owned()))
     }
-}
-
-impl TryFrom<ProfferedPassword> for Password {
-    type Error = PasswordError;
-
-    /// Converts a client-submitted password into the domain type. `ProfferedPassword`
-    /// was already validated at construction, so this cannot actually fail — but it
-    /// re-runs the shared validator rather than relying on that (no infallible
-    /// cross-type constructor). Mirrors `InviteCode: TryFrom<ProfferedInviteCode>`.
-    fn try_from(p: ProfferedPassword) -> Result<Self, Self::Error> {
-        p.as_ref().parse()
-    }
-}
-
-impl Password {
-    /// Hashes the password using Argon2id with default parameters.
-    ///
-    /// This is a CPU-intensive operation and should be called from a blocking
-    /// context (e.g., via [`tokio::task::spawn_blocking`]).
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err` if Argon2 hashing fails.
-    pub fn hash(&self) -> Result<String, PasswordError> {
-        self.hash_with(hash_operation)
-    }
-
-    fn hash_with(&self, operation: HashOperation) -> Result<String, PasswordError> {
-        operation(self).map_err(PasswordError::HashingFailed)
-    }
-
-    /// Verifies the password against a stored Argon2 hash.
-    ///
-    /// This is a CPU-intensive operation and should be called from a blocking
-    /// context (e.g., via [`tokio::task::spawn_blocking`]).
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err` if Argon2 verification fails (e.g., the hash string is malformed).
-    pub fn verify(&self, hash: &str) -> Result<bool, PasswordError> {
-        self.verify_with(hash, verify_operation)
-    }
-
-    fn verify_with(&self, hash: &str, operation: VerifyOperation) -> Result<bool, PasswordError> {
-        match operation(self, hash) {
-            Ok(()) => Ok(true),
-            Err(argon2::password_hash::Error::Password) => Ok(false),
-            Err(error) => Err(PasswordError::VerificationFailed(error)),
-        }
-    }
-}
-
-type HashOperation = fn(&Password) -> Result<String, argon2::password_hash::Error>;
-type VerifyOperation = fn(&Password, &str) -> Result<(), argon2::password_hash::Error>;
-
-fn hash_operation(password: &Password) -> Result<String, argon2::password_hash::Error> {
-    use argon2::{
-        PasswordHasher,
-        password_hash::{SaltString, rand_core::OsRng},
-    };
-
-    let salt = SaltString::generate(&mut OsRng);
-
-    // Production uses the crate defaults (m=19456, t=2). Under `cheap-kdf`
-    // (test builds only) use the minimum memory cost so the suite is not
-    // dominated by KDF time. `verify()` derives cost from the stored hash, so
-    // it needs no branch.
-    #[cfg(feature = "cheap-kdf")]
-    let hasher = {
-        use argon2::{Algorithm, Argon2, Params, Version};
-        let params = Params::new(Params::MIN_M_COST, 1, 1, None)
-            .map_err(argon2::password_hash::Error::from)?;
-        Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
-    };
-    #[cfg(not(feature = "cheap-kdf"))]
-    let hasher = argon2::Argon2::default();
-
-    hasher
-        .hash_password(password.0.as_bytes(), &salt)
-        .map(|hash| hash.to_string())
-}
-
-fn verify_operation(password: &Password, hash: &str) -> Result<(), argon2::password_hash::Error> {
-    use argon2::{Argon2, PasswordHash, PasswordVerifier};
-
-    let parsed = PasswordHash::new(hash)?;
-    Argon2::default().verify_password(password.0.as_bytes(), &parsed)
 }
 
 #[cfg(test)]
@@ -176,7 +62,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn password_types_accept_inclusive_unicode_scalar_bounds() {
+    fn proffered_password_accepts_inclusive_unicode_scalar_bounds() {
         assert_eq!(MIN_LENGTH, 8);
         assert_eq!(MAX_LENGTH, 512);
 
@@ -185,63 +71,57 @@ mod tests {
 
         assert_eq!(minimum.chars().count(), MIN_LENGTH);
         assert!(minimum.len() > MIN_LENGTH);
-        assert!(minimum.parse::<Password>().is_ok());
         assert!(minimum.parse::<ProfferedPassword>().is_ok());
-
-        assert_eq!(maximum.chars().count(), MAX_LENGTH);
-        assert!(maximum.parse::<Password>().is_ok());
         assert!(maximum.parse::<ProfferedPassword>().is_ok());
     }
 
     #[test]
-    fn password_types_reject_outside_unicode_scalar_bounds_without_echoing_input() {
+    fn proffered_password_rejects_outside_unicode_scalar_bounds_without_echoing_input() {
         let too_short = "é".repeat(MIN_LENGTH - 1);
         let too_long = "x".repeat(MAX_LENGTH + 1);
-        assert_eq!(too_long.chars().count(), MAX_LENGTH + 1);
 
-        let password_short = too_short.parse::<Password>().unwrap_err();
-        let proffered_short = too_short.parse::<ProfferedPassword>().unwrap_err();
-        assert!(matches!(password_short, PasswordError::PasswordTooShort));
-        assert!(matches!(proffered_short, PasswordError::PasswordTooShort));
+        let short = too_short
+            .parse::<ProfferedPassword>()
+            .expect_err("too short");
+        assert!(matches!(short, InvalidPassword::PasswordTooShort));
         assert!(
-            password_short
+            short
                 .to_string()
                 .contains(&format!("at least {MIN_LENGTH} characters"))
         );
-        assert!(!password_short.to_string().contains(&too_short));
+        assert!(!short.to_string().contains(&too_short));
 
-        let password_long = too_long.parse::<Password>().unwrap_err();
-        let proffered_long = too_long.parse::<ProfferedPassword>().unwrap_err();
-        assert!(matches!(password_long, PasswordError::PasswordTooLong));
-        assert!(matches!(proffered_long, PasswordError::PasswordTooLong));
+        let long = too_long.parse::<ProfferedPassword>().expect_err("too long");
+        assert!(matches!(long, InvalidPassword::PasswordTooLong));
         assert!(
-            password_long
-                .to_string()
+            long.to_string()
                 .contains(&format!("at most {MAX_LENGTH} characters"))
         );
-        assert!(!password_long.to_string().contains(&too_long));
+        assert!(!long.to_string().contains(&too_long));
     }
 
     #[test]
-    fn password_validation_does_not_normalize_before_counting() {
+    fn validation_does_not_normalize_before_counting() {
         let decomposed = "e\u{301}".repeat(7);
         assert_eq!(decomposed.chars().count(), 14);
 
-        let password: Password = decomposed.parse().unwrap();
-        let proffered: ProfferedPassword = decomposed.parse().unwrap();
-        assert_eq!(password.as_ref(), decomposed);
+        let proffered: ProfferedPassword = decomposed.parse().expect("valid scalar count");
         assert_eq!(proffered.as_ref(), decomposed);
     }
 
     #[test]
     fn proffered_serde_enforces_unicode_scalar_bounds() {
-        let accepted: ProfferedPassword = "password123".parse().unwrap();
-        assert_eq!(serde_json::to_string(&accepted).unwrap(), "\"password123\"");
-        let roundtrip: ProfferedPassword = serde_json::from_str("\"password123\"").unwrap();
+        let accepted: ProfferedPassword = "password123".parse().expect("valid password");
+        assert_eq!(
+            serde_json::to_string(&accepted).expect("serializes"),
+            "\"password123\""
+        );
+        let roundtrip: ProfferedPassword =
+            serde_json::from_str("\"password123\"").expect("deserializes");
         assert_eq!(roundtrip.as_ref(), "password123");
 
-        let too_short = serde_json::to_string(&"é".repeat(MIN_LENGTH - 1)).unwrap();
-        let too_long = serde_json::to_string(&"a".repeat(MAX_LENGTH + 1)).unwrap();
+        let too_short = serde_json::to_string(&"é".repeat(MIN_LENGTH - 1)).expect("serializes");
+        let too_long = serde_json::to_string(&"a".repeat(MAX_LENGTH + 1)).expect("serializes");
         assert!(serde_json::from_str::<ProfferedPassword>(&too_short).is_err());
         assert!(serde_json::from_str::<ProfferedPassword>(&too_long).is_err());
     }
@@ -249,120 +129,10 @@ mod tests {
     #[test]
     fn proffered_debug_is_redacted() {
         let raw = "supersecret123";
-        let p: ProfferedPassword = raw.parse().unwrap();
-        let out = format!("{p:?}");
-        assert!(!out.contains(raw));
-        assert_eq!(out, "ProfferedPassword([redacted])");
-    }
+        let password: ProfferedPassword = raw.parse().expect("valid password");
+        let debug = format!("{password:?}");
 
-    #[test]
-    fn proffered_converts_into_password() {
-        let p: ProfferedPassword = "password123".parse().unwrap();
-        let pw = Password::try_from(p).expect("valid proffered password converts");
-        assert_eq!(pw.as_ref(), "password123");
-    }
-
-    #[test]
-    fn debug_does_not_expose_value() {
-        let val = "a".repeat(10);
-        let p: Password = val.parse().unwrap();
-        let debug_output = format!("{p:?}");
-        assert!(!debug_output.contains(&val));
-        assert_eq!(debug_output, "Password([redacted])");
-    }
-
-    #[test]
-    fn as_ref_returns_original_value() {
-        let raw = "correct horse battery staple";
-        let p: Password = raw.parse().expect("password meets minimum length");
-        assert_eq!(p.as_ref(), raw);
-    }
-
-    #[test]
-    fn hash_and_verify_roundtrip() {
-        let val = "a".repeat(10);
-        let p: Password = val.parse().unwrap();
-        let hash = p.hash().expect("hashing should succeed");
-        assert!(p.verify(&hash).expect("verification should succeed"));
-    }
-
-    #[test]
-    fn production_params_roundtrip_regardless_of_feature() {
-        // Guards prod-strength Argon2 even when the workspace test build turns on
-        // cheap-kdf: hash with explicit production params and verify.
-        use argon2::{
-            Argon2, PasswordHasher,
-            password_hash::{SaltString, rand_core::OsRng},
-        };
-        let p: Password = "a".repeat(10).parse().unwrap();
-        let salt = SaltString::generate(&mut OsRng);
-        let prod_hash = Argon2::default()
-            .hash_password(p.as_ref().as_bytes(), &salt)
-            .unwrap()
-            .to_string();
-        assert!(
-            prod_hash.contains("m=19456"),
-            "prod params must be Argon2 default"
-        );
-        assert!(p.verify(&prod_hash).unwrap());
-    }
-
-    #[test]
-    fn verify_rejects_wrong_password() {
-        let v1 = "a".repeat(10);
-        let v2 = "b".repeat(10);
-        let p1: Password = v1.parse().unwrap();
-        let p2: Password = v2.parse().unwrap();
-        let hash = p1.hash().unwrap();
-        assert!(
-            !p2.verify(&hash)
-                .expect("verification should return false, not error")
-        );
-    }
-
-    #[test]
-    fn verify_rejects_invalid_hash() {
-        let val = "c".repeat(10);
-        let p: Password = val.parse().unwrap();
-        assert!(p.verify("not a valid argon2 hash").is_err());
-    }
-
-    #[test]
-    fn hashing_failure_retains_argon2_source() {
-        fn fail(_: &Password) -> Result<String, argon2::password_hash::Error> {
-            Err(argon2::password_hash::Error::Algorithm)
-        }
-
-        let password: Password = "password1".parse().expect("minimum length");
-        let error = password.hash_with(fail).unwrap_err();
-        let source = std::error::Error::source(&error)
-            .and_then(|source| source.downcast_ref::<argon2::password_hash::Error>());
-
-        assert_eq!(source, Some(&argon2::password_hash::Error::Algorithm));
-    }
-
-    #[test]
-    fn password_mismatch_is_false_not_an_error() {
-        fn mismatch(_: &Password, _: &str) -> Result<(), argon2::password_hash::Error> {
-            Err(argon2::password_hash::Error::Password)
-        }
-
-        let password: Password = "password1".parse().expect("minimum length");
-        assert!(!password.verify_with("unused", mismatch).unwrap());
-    }
-
-    #[test]
-    fn verify_returns_error_for_non_password_argon2_failure() {
-        // v=1 is not a supported argon2 version (only 16 and 19 are valid).
-        // PasswordHash::new parses it; verify_password returns Error::Version,
-        // which is not Error::Password, so the Err(e) arm in verify() is hit.
-        let password: Password = "password1".parse().expect("minimum length");
-        let hash =
-            "$argon2id$v=1$m=65536,t=2,p=1$c29tZXNhbHQ$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-        let error = password.verify(hash).unwrap_err();
-        let source = std::error::Error::source(&error)
-            .and_then(|source| source.downcast_ref::<argon2::password_hash::Error>());
-
-        assert_eq!(source, Some(&argon2::password_hash::Error::Version));
+        assert!(!debug.contains(raw));
+        assert_eq!(debug, "ProfferedPassword([redacted])");
     }
 }

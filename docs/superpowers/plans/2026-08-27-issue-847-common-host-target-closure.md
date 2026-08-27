@@ -37,7 +37,7 @@ Out:
   - Verification: focused xtask tests cover each forbidden edge/feature path and
     an allowed external dependency, using the xtask workspace test lane.
 
-- [ ] Task 2: Move the password domain and storage surface to `host`.
+- [x] Task 2: Move the password domain and storage surface to `host`.
   - Contract: `ProfferedPassword` and shared shape validation stay in `common`;
     `Password`, password hashing/verification errors, and `StoredPasswordHash`
     move to `host`. Hash and verify are module-qualified `host::password` free

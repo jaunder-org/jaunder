@@ -26,12 +26,10 @@ fn telemetry_config(verbose: bool) -> host::telemetry::TelemetryConfig {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Fail-closed: a production binary must never link a `common` compiled with
-    // cheap test KDF params. Feature isolation (resolver 2, dev-deps only) keeps
-    // this false in production; if it is ever true, refuse to start rather than
-    // hash passwords weakly. main() is never run by the integration tests, so this
-    // does not affect the test build.
-    if common::CHEAP_KDF_ENABLED {
+    // Fail-closed: a production binary must never link host password hashing
+    // with cheap test KDF parameters. Feature isolation keeps this false in
+    // production; if it is ever true, refuse to start rather than hash weakly.
+    if host::CHEAP_KDF_ENABLED {
         eprintln!(
             "FATAL: jaunder built with cheap-kdf (test-only password hashing); refusing to start"
         );
@@ -80,7 +78,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use common::config_key::SiteConfigKey;
-    use common::test_support::{parse_email, parse_password, parse_session_label};
+    use common::test_support::{parse_email, parse_session_label};
     use jaunder::cli::{
         Cli, CliBackupMode, Commands, PgBootstrapArgs, SiteConfigAction, StorageArgs,
     };
@@ -128,7 +126,7 @@ mod tests {
             command: Some(Commands::UserCreate {
                 storage,
                 username: "alice".parse().unwrap(),
-                password: Some(parse_password("password123")),
+                password: Some(host::test_support::parse_password("password123")),
                 display_name: None,
                 operator: false,
             }),
@@ -466,7 +464,7 @@ mod tests {
             command: Some(Commands::UserCreate {
                 storage: storage.clone(),
                 username: "alice".parse().unwrap(),
-                password: Some(parse_password("password123")),
+                password: Some(host::test_support::parse_password("password123")),
                 display_name: None,
                 operator: false,
             }),

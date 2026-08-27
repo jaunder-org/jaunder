@@ -5,10 +5,10 @@ use thiserror::Error;
 
 use common::display_name::DisplayName;
 use common::ids::UserId;
-use common::password::Password;
 use common::token::RawToken;
 use common::username::Username;
 use host::invite::InviteCode;
+use host::password::Password;
 
 /// Errors that can occur during atomic invite-and-user creation.
 #[derive(Debug, Error)]
@@ -134,7 +134,7 @@ pub trait AtomicOps: Send + Sync {
 mod tests {
     use super::*;
     use crate::test_support::{Backend, CloseablePool, SeedUser, backends, parse_invite_code};
-    use common::test_support::{parse_display_name, parse_password, parse_username};
+    use common::test_support::{parse_display_name, parse_username};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -172,7 +172,8 @@ mod tests {
         let env = backend.setup().await;
         let code = seed_invite(&env.state).await;
         let username = parse_username("alice");
-        let password: Password = parse_password("force-hash-error-for-test-coverage");
+        let password: Password =
+            host::test_support::parse_password("force-hash-error-for-test-coverage");
         let result = env
             .state
             .atomic
@@ -195,7 +196,7 @@ mod tests {
             .await
             .unwrap();
         let username = parse_username("alice");
-        let password: Password = parse_password("password123");
+        let password: Password = host::test_support::parse_password("password123");
         let result = env
             .state
             .atomic
@@ -210,7 +211,7 @@ mod tests {
         let env = backend.setup().await;
         env.base.close_pool().await;
         let username = parse_username("alice");
-        let password: Password = parse_password("password123");
+        let password: Password = host::test_support::parse_password("password123");
         let display_name = parse_display_name("Alice");
 
         assert!(
@@ -248,7 +249,7 @@ mod tests {
         let env = backend.setup().await;
         let (raw_token, _) = host::token::generate_hashed();
         env.base.close_pool().await;
-        let password = parse_password("password123");
+        let password = host::test_support::parse_password("password123");
 
         let result = env
             .state
@@ -269,7 +270,7 @@ mod tests {
     ) {
         let env = backend.setup().await;
         let (raw_token, _) = host::token::generate_hashed();
-        let password = parse_password("password123");
+        let password = host::test_support::parse_password("password123");
         let primary = env
             .state
             .atomic
@@ -310,7 +311,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let password = parse_password("password123");
+        let password = host::test_support::parse_password("password123");
         let expected = crate::helpers::forced_hash_failure(&password).unwrap_err();
 
         let result = match env.base.pool() {
@@ -340,11 +341,11 @@ mod tests {
         };
         let password_error = io_error
             .get_ref()
-            .and_then(|source| source.downcast_ref::<common::password::PasswordError>())
+            .and_then(|source| source.downcast_ref::<host::password::PasswordError>())
             .expect("sqlx io::Error retains PasswordError");
         let (
-            common::password::PasswordError::HashingFailed(actual),
-            common::password::PasswordError::HashingFailed(expected),
+            host::password::PasswordError::HashingFailed(actual),
+            host::password::PasswordError::HashingFailed(expected),
         ) = (password_error, &expected)
         else {
             panic!("expected typed hashing failures");
