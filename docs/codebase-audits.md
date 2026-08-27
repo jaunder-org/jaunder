@@ -50,6 +50,51 @@ churn and co-change evidence.
 The census is not itself a backlog and should not initially gate changes. Every
 signal can have a legitimate explanation.
 
+### Running and interpreting the census
+
+Run the complete read-only census from the repository root:
+
+```bash
+cargo xtask census
+cargo xtask census --json
+```
+
+The compact output and JSON describe the same ordered signal sections and
+language/signal cells. A cell is `clean` when its collector completed without
+emitting candidates, `candidates` when it emitted repository-relative review
+leads, `unavailable` when its declared analyzer or input capability is absent,
+and `failed` when collection could not complete. A failed cell makes the command
+fail while retaining every completed cell in the report; neither `unavailable`
+nor `failed` means clean. Each candidate cell retains at most
+`MAX_CANDIDATES_PER_CELL` (currently 10) deterministically ordered candidates in
+both outputs, together with its pre-cap `total_candidates`. Each candidate
+likewise retains at most `MAX_PATHS_PER_CANDIDATE` (currently 10) sorted paths
+and carries its pre-cap `total_paths`; human output states `showing N / total`
+when either list is truncated. This keeps high-volume heuristic history and
+clone results reviewable without implying that omitted candidates or paths
+vanished.
+
+The census covers Rust, TypeScript, and Elisp dependency/structural signals,
+Rust and TypeScript semantic-reference signals when their analyzers are
+available, Git-history churn and co-change for all three languages, and
+SQLite/PostgreSQL storage adapter path correspondence. TypeScript semantic
+collection opens the approved snapshot documents in the analyzer's declared
+workspace before requesting symbols and references. Semantic collectors use
+their declared semantic analyzer; structural collectors inspect syntax; history
+uses full `HEAD`-reachable non-merge Git history with rename detection; adapter
+correspondence matches `storage/src/sqlite` and `storage/src/postgres` paths.
+Every cell records its collector identity, evidence method, version when
+available, and material limitation so its lead can be reviewed at the right
+confidence.
+
+The report is ephemeral: do not commit generated census output or treat it as a
+baseline. It is neither a verification gate nor a finding or backlog. In
+particular, churn and co-change are heuristic maintenance signals, and a paired
+SQLite/PostgreSQL path is only a correspondence candidate, never a claim of SQL,
+behavioral, or semantic equivalence. Read the cited code, tests, and applicable
+ADRs—especially ADR-0019's deliberate dialect boundaries—before recording a
+finding.
+
 ## Ranking hotspots
 
 Prefer candidates supported by several independent signals. A useful mental

@@ -19,7 +19,7 @@ pub fn render_human(report: &CensusReport) -> String {
             )
             .unwrap();
             writeln!(out, "    limitation: {}", cell.collector.limitation).unwrap();
-            if let CellState::Candidates { candidates } = &cell.state {
+            if let CellState::Candidates { candidates, .. } = &cell.state {
                 for candidate in candidates {
                     writeln!(
                         out,
@@ -27,6 +27,15 @@ pub fn render_human(report: &CensusReport) -> String {
                         candidate.identity, candidate.summary
                     )
                     .unwrap();
+                    if candidate.total_paths > candidate.paths.len() {
+                        writeln!(
+                            out,
+                            "      paths: showing {} / {}",
+                            candidate.paths.len(),
+                            candidate.total_paths
+                        )
+                        .unwrap();
+                    }
                     for path in &candidate.paths {
                         writeln!(out, "      {path}").unwrap();
                     }
@@ -82,7 +91,21 @@ fn evidence_name(method: super::EvidenceMethod) -> &'static str {
 fn state_detail(state: &CellState) -> String {
     match state {
         CellState::Clean => "clean".into(),
-        CellState::Candidates { candidates } => format!("{} candidate(s)", candidates.len()),
+        CellState::Candidates {
+            candidates,
+            total_candidates,
+        } => {
+            let truncated = total_candidates.saturating_sub(candidates.len());
+            if truncated == 0 {
+                format!("{total_candidates} candidate(s)")
+            } else {
+                format!(
+                    "{total_candidates} candidate(s); showing {} ({} truncated)",
+                    candidates.len(),
+                    truncated
+                )
+            }
+        }
         CellState::Unavailable { capability } => format!("unavailable: {capability}"),
         CellState::Failed { error } => format!("failed: {error}"),
     }
@@ -90,7 +113,9 @@ fn state_detail(state: &CellState) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::model::CollectorMetadata;
+    use super::super::model::{
+        Candidate, CollectorMetadata, MAX_CANDIDATES_PER_CELL, MAX_PATHS_PER_CANDIDATE,
+    };
     use super::*;
     use crate::census::{CellReport, CensusReport, EvidenceMethod, Language, SignalFamily};
 
@@ -113,5 +138,41 @@ mod tests {
         assert_eq!(first, render_human(&report));
         assert!(first.contains("unavailable: rust analyzer"));
         assert!(first.contains("[structural; fixture]"));
+    }
+
+    #[test]
+    fn human_rendering_exposes_candidate_truncation() {
+        let candidates = (0..(MAX_CANDIDATES_PER_CELL + 1))
+            .map(|index| Candidate {
+                identity: format!("candidate-{index:03}"),
+                summary: "found".into(),
+                paths: (0..(MAX_PATHS_PER_CANDIDATE + 1))
+                    .map(|path| format!("web/src/{path}.rs"))
+                    .collect(),
+                total_paths: MAX_PATHS_PER_CANDIDATE + 1,
+            })
+            .collect();
+        let report = CensusReport::from_cells(vec![CellReport::candidates(
+            SignalFamily::DependencyStructure,
+            Language::Rust,
+            CollectorMetadata {
+                identity: "fixture".into(),
+                version: None,
+                evidence_method: EvidenceMethod::Structural,
+                limitation: "fixture limitation".into(),
+            },
+            candidates,
+        )]);
+        let rendered = render_human(&report);
+        assert!(rendered.contains(&format!(
+            "{} candidate(s); showing {} (1 truncated)",
+            MAX_CANDIDATES_PER_CELL + 1,
+            MAX_CANDIDATES_PER_CELL
+        )));
+        assert!(rendered.contains(&format!(
+            "paths: showing {} / {}",
+            MAX_PATHS_PER_CANDIDATE,
+            MAX_PATHS_PER_CANDIDATE + 1
+        )));
     }
 }

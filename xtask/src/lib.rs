@@ -810,7 +810,10 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         Command::Census => {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("census");
-            let report = census::collect(Path::new("."), &census::collectors::specs())?;
+            let mut specs = census::collectors::specs();
+            specs.extend(census::history::specs());
+            specs.extend(census::adapters::specs());
+            let report = census::collect(Path::new("."), &specs)?;
             let failed = report.has_failed_cells();
             let cells = report.cell_count();
             result.census = Some(report);
@@ -1216,6 +1219,19 @@ mod cli_tests {
         assert!(cli.json);
         assert_eq!(cli.command_name(), "census");
         assert!(matches!(cli.command, Command::Census));
+    }
+
+    #[test]
+    fn complete_census_registry_has_one_spec_for_every_required_cell() {
+        let mut specs = census::collectors::specs();
+        specs.extend(census::history::specs());
+        specs.extend(census::adapters::specs());
+        let keys = specs
+            .iter()
+            .map(|spec| (spec.signal, spec.language))
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(keys.len(), specs.len());
+        assert_eq!(keys.len(), 16);
     }
     #[test]
     fn prepush_parses_as_first_class_subcommand() {

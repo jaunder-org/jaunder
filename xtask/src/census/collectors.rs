@@ -103,21 +103,17 @@ fn structural(
     limitation: &str,
     candidates: Vec<Candidate>,
 ) -> CellReport {
-    CellReport {
+    CellReport::candidates(
         signal,
         language,
-        collector: CollectorMetadata {
+        CollectorMetadata {
             identity: format!("census-{}-structural", language_name(language)),
             version: Some(STRUCTURAL_VERSION.into()),
             evidence_method: EvidenceMethod::Structural,
             limitation: limitation.into(),
         },
-        state: if candidates.is_empty() {
-            CellState::Clean
-        } else {
-            CellState::Candidates { candidates }
-        },
-    }
+        candidates,
+    )
 }
 
 fn failed(signal: SignalFamily, language: Language, identity: &str, error: String) -> CellReport {
@@ -205,6 +201,7 @@ fn rust_dependencies(context: &CollectorContext) -> CellReport {
                 "structural Rust import `{dependency}` used in {} files",
                 paths.len()
             ),
+            total_paths: paths.len(),
             paths,
         })
         .collect();
@@ -263,6 +260,7 @@ fn typescript_dependencies(context: &CollectorContext) -> CellReport {
                 "parsed TypeScript import `{module}` used in {} files",
                 paths.len()
             ),
+            total_paths: paths.len(),
             paths,
         })
         .collect();
@@ -316,6 +314,7 @@ fn elisp_dependencies(context: &CollectorContext) -> CellReport {
         .map(|(dependency, paths)| Candidate {
             identity: format!("elisp-dependency:{dependency}"),
             summary: format!("Elisp require `{dependency}` used in {} files", paths.len()),
+            total_paths: paths.len(),
             paths,
         })
         .collect();
@@ -385,6 +384,7 @@ fn clones(context: &CollectorContext, language: Language) -> CellReport {
                 language_name(language),
                 paths.len()
             ),
+            total_paths: paths.len(),
             paths,
         })
         .collect();
@@ -505,6 +505,7 @@ fn conversion_sequences(context: &CollectorContext, language: Language) -> CellR
                     language_name(language)
                 ),
                 paths: vec![path.into()],
+                total_paths: 1,
             });
         }
     }
@@ -557,9 +558,10 @@ fn semantic_symbols(
 ) -> CellReport {
     let version = match Command::new(analyzer).arg("--version").output() {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return CellReport::unavailable(
+            return CellReport::unavailable_with_collector(
                 signal,
                 language,
+                semantic_metadata(language, analyzer, None),
                 format!("semantic analyzer `{analyzer}` is not installed"),
             );
         }
@@ -590,9 +592,21 @@ fn semantic_symbols(
         Ok(client) => client,
         Err(error) => return semantic_failed(signal, language, analyzer, Some(version), error),
     };
+    if let Err(error) = client.open_documents(context, language) {
+        return semantic_failed(signal, language, analyzer, Some(version), error);
+    }
     let symbols = match client.request("workspace/symbol", serde_json::json!({ "query": "" })) {
         Ok(response) => match symbols_from_response(context, response) {
-            Ok(symbols) => symbols,
+            Ok(Some(symbols)) => symbols,
+            Ok(None) => {
+                return semantic_unavailable(
+                    signal,
+                    language,
+                    analyzer,
+                    Some(version),
+                    "did not report export visibility",
+                );
+            }
             Err(error) => return semantic_failed(signal, language, analyzer, Some(version), error),
         },
         Err(error) => return semantic_failed(signal, language, analyzer, Some(version), error),
@@ -644,28 +658,56 @@ fn semantic_symbols(
                     "LSP reference analysis for exported symbol `{}`",
                     symbol.name
                 ),
+                total_paths: paths.len(),
                 paths,
             });
         }
     }
     if exported_symbols == 0 {
-        return CellReport::unavailable(
+        return semantic_unavailable(
             signal,
             language,
-            format!("semantic analyzer `{analyzer}` did not report export visibility"),
+            analyzer,
+            Some(version),
+            "did not report export visibility",
         );
     }
-    CellReport {
+    CellReport::candidates(
         signal,
         language,
-        collector: CollectorMetadata {
-            identity: format!("census-{}-semantic-lsp", language_name(language)),
-            version: Some(version),
-            evidence_method: EvidenceMethod::Semantic,
-            limitation: "workspace/symbol, hover visibility, and textDocument/references depend on analyzer index and project configuration".into(),
-        },
-        state: if candidates.is_empty() { CellState::Clean } else { CellState::Candidates { candidates } },
+        semantic_metadata(language, analyzer, Some(version)),
+        candidates,
+    )
+}
+
+fn semantic_metadata(
+    language: Language,
+    analyzer: &str,
+    version: Option<String>,
+) -> CollectorMetadata {
+    CollectorMetadata {
+        identity: format!("census-{}-semantic-lsp", language_name(language)),
+        version,
+        evidence_method: EvidenceMethod::Semantic,
+        limitation: format!(
+            "requires `{analyzer}` workspace symbols, export visibility, and references from its declared project"
+        ),
     }
+}
+
+fn semantic_unavailable(
+    signal: SignalFamily,
+    language: Language,
+    analyzer: &str,
+    version: Option<String>,
+    reason: &str,
+) -> CellReport {
+    CellReport::unavailable_with_collector(
+        signal,
+        language,
+        semantic_metadata(language, analyzer, version),
+        format!("semantic analyzer `{analyzer}` {reason}"),
+    )
 }
 
 fn analyzer_stdio_args(language: Language) -> &'static [&'static str] {
@@ -735,13 +777,42 @@ impl LspClient {
         let root_uri = url::Url::from_directory_path(&root)
             .map_err(|_| format!("cannot form LSP root URI for {}", root.display()))?
             .to_string();
-        client.request("initialize", serde_json::json!({
-            "processId": null,
-            "rootUri": root_uri,
-            "capabilities": { "workspace": { "symbol": {} }, "textDocument": { "references": {} } }
-        }))?;
+        client.request(
+            "initialize",
+            serde_json::json!({
+                "processId": null,
+                "rootUri": root_uri.clone(),
+                "workspaceFolders": [{ "uri": root_uri, "name": "repository" }],
+                "capabilities": {
+                    "workspace": { "symbol": {}, "workspaceFolders": true },
+                    "textDocument": { "references": {} }
+                }
+            }),
+        )?;
         client.notify("initialized", serde_json::json!({}))?;
         Ok(client)
+    }
+
+    fn open_documents(
+        &mut self,
+        context: &CollectorContext,
+        language: Language,
+    ) -> Result<(), String> {
+        for params in lsp_open_document_params(context, language)? {
+            self.notify("textDocument/didOpen", params)?;
+        }
+        Ok(())
+    }
+
+    fn lsp_language_id(language: Language, path: &str) -> Option<&'static str> {
+        match language {
+            Language::Rust if path.ends_with(".rs") => Some("rust"),
+            Language::TypeScript if path.ends_with(".ts") => Some("typescript"),
+            Language::TypeScript if path.ends_with(".tsx") => Some("typescriptreact"),
+            Language::TypeScript if path.ends_with(".js") => Some("javascript"),
+            Language::TypeScript if path.ends_with(".jsx") => Some("javascriptreact"),
+            Language::Elisp | Language::Repository | Language::Rust | Language::TypeScript => None,
+        }
     }
 
     fn request(
@@ -797,6 +868,34 @@ impl LspClient {
     }
 }
 
+fn lsp_open_document_params(
+    context: &CollectorContext,
+    language: Language,
+) -> Result<Vec<serde_json::Value>, String> {
+    let root = absolute_repo_root(context)?;
+    context
+        .snapshot
+        .files
+        .iter()
+        .filter_map(|file| {
+            LspClient::lsp_language_id(language, &file.path).map(|language_id| (file, language_id))
+        })
+        .map(|(file, language_id)| {
+            let uri = url::Url::from_file_path(root.join(&file.path))
+                .map_err(|_| format!("cannot form LSP document URI for {}", file.path))?
+                .to_string();
+            Ok(serde_json::json!({
+                "textDocument": {
+                    "uri": uri,
+                    "languageId": language_id,
+                    "version": 1,
+                    "text": file.content,
+                }
+            }))
+        })
+        .collect()
+}
+
 fn read_lsp_message(
     output: &mut BufReader<std::process::ChildStdout>,
 ) -> Result<serde_json::Value, String> {
@@ -841,7 +940,10 @@ struct SemanticSymbol {
 fn symbols_from_response(
     context: &CollectorContext,
     response: serde_json::Value,
-) -> Result<Vec<SemanticSymbol>, String> {
+) -> Result<Option<Vec<SemanticSymbol>>, String> {
+    if response.is_null() {
+        return Ok(None);
+    }
     let entries = response
         .as_array()
         .ok_or_else(|| "LSP workspace/symbol result is not an array".to_owned())?;
@@ -884,7 +986,7 @@ fn symbols_from_response(
             path,
         });
     }
-    Ok(symbols)
+    Ok(Some(symbols))
 }
 fn hover_reports_exported(language: Language, response: serde_json::Value) -> bool {
     let text = response
@@ -933,12 +1035,7 @@ fn semantic_failed(
     CellReport {
         signal,
         language,
-        collector: CollectorMetadata {
-            identity: format!("census-{}-semantic-lsp", language_name(language)),
-            version,
-            evidence_method: EvidenceMethod::Semantic,
-            limitation: format!("requires `{analyzer}` LSP workspace symbols and references"),
-        },
+        collector: semantic_metadata(language, analyzer, version),
         state: CellState::Failed { error },
     }
 }
@@ -1050,6 +1147,7 @@ mod tests {
             }]),
         )
         .expect("standard workspace/symbol response parses");
+        let symbols = symbols.expect("array result contains symbols");
         assert_eq!(symbols[0].path, "src/lib.rs");
         let references = references_from_response(
             &context,
@@ -1060,8 +1158,54 @@ mod tests {
         )
         .expect("standard textDocument/references response parses");
         assert_eq!(references, ["src/caller.rs"]);
+
+        assert!(
+            symbols_from_response(&context, serde_json::Value::Null)
+                .expect("null workspace/symbol response is valid")
+                .is_none()
+        );
         assert!(symbols_from_response(&context, serde_json::json!({})).is_err());
         assert!(references_from_response(&context, serde_json::json!({})).is_err());
+    }
+    #[test]
+    fn typescript_project_documents_use_standard_did_open_parameters() {
+        let context = CollectorContext {
+            repo_root: "/repo".into(),
+            snapshot: SourceSnapshot {
+                files: vec![
+                    SourceFile {
+                        path: "end2end/tests/public-api.ts".into(),
+                        content: "export const api = 1;".into(),
+                    },
+                    SourceFile {
+                        path: "end2end/tests/view.tsx".into(),
+                        content: "export const View = () => null;".into(),
+                    },
+                    SourceFile {
+                        path: "server/src/lib.rs".into(),
+                        content: "pub fn ignored() {}".into(),
+                    },
+                ],
+            },
+        };
+        let documents = lsp_open_document_params(&context, Language::TypeScript)
+            .expect("forms didOpen payloads");
+        assert_eq!(documents.len(), 2);
+        assert_eq!(
+            documents[0],
+            serde_json::json!({
+                "textDocument": {
+                    "uri": "file:///repo/end2end/tests/public-api.ts",
+                    "languageId": "typescript",
+                    "version": 1,
+                    "text": "export const api = 1;",
+                }
+            })
+        );
+        assert_eq!(
+            documents[1]["textDocument"]["languageId"],
+            serde_json::json!("typescriptreact")
+        );
     }
     #[test]
     fn semantic_hover_filters_private_symbols() {
@@ -1087,8 +1231,9 @@ mod tests {
         assert!(analyzer_stdio_args(Language::Rust).is_empty());
         assert_eq!(analyzer_stdio_args(Language::TypeScript), ["--stdio"]);
     }
+
     #[test]
-    fn missing_semantic_analyzer_is_unavailable() {
+    fn missing_semantic_analyzer_is_unavailable_with_semantic_provenance() {
         let report = semantic_symbols(
             &context(&[]),
             SignalFamily::ExportedSymbolReferences,
@@ -1096,7 +1241,12 @@ mod tests {
             "jaunder-census-definitely-missing-analyzer",
         );
         assert!(matches!(report.state, CellState::Unavailable { .. }));
+        assert_eq!(report.collector.identity, "census-rust-semantic-lsp");
+        assert_eq!(report.collector.evidence_method, EvidenceMethod::Semantic);
+        assert_eq!(report.collector.version, None);
+        assert!(report.collector.limitation.contains("declared project"));
     }
+
     #[test]
     fn clone_positive_and_negative() {
         assert!(matches!(

@@ -51,7 +51,7 @@ Out:
     repeated-test, conversion, and error-mapping cells and assert evidence
     method, collector identity, and material limitations.
 
-- [ ] Task 3: Implement history and adapter correspondence, then document the
+- [x] Task 3: Implement history and adapter correspondence, then document the
       complete command
   - Contract: history considers full non-merge history reachable from `HEAD`,
     applies Git rename detection, and reports deterministic churn/co-change

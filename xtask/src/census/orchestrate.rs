@@ -143,12 +143,17 @@ fn validate(mut report: CellReport) -> CellReport {
     let invalid_metadata = report.collector.identity.trim().is_empty()
         || report.collector.limitation.trim().is_empty();
     let invalid_candidates = match &report.state {
-        CellState::Candidates { candidates } => {
+        CellState::Candidates {
+            candidates,
+            total_candidates,
+        } => {
             candidates.is_empty()
+                || *total_candidates < candidates.len()
                 || candidates.iter().any(|candidate| {
                     candidate.identity.trim().is_empty()
                         || candidate.summary.trim().is_empty()
                         || candidate.paths.is_empty()
+                        || candidate.total_paths < candidate.paths.len()
                         || candidate.paths.iter().any(|path| {
                             path.is_empty()
                                 || Path::new(path).is_absolute()
@@ -247,7 +252,9 @@ fn has_source_inputs(snapshot: &SourceSnapshot, language: Language) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::super::model::{Candidate, CollectorMetadata};
+    use super::super::model::{
+        Candidate, CollectorMetadata, MAX_CANDIDATES_PER_CELL, MAX_PATHS_PER_CANDIDATE,
+    };
     use super::*;
     use crate::census::EvidenceMethod;
 
@@ -289,6 +296,7 @@ mod tests {
         let candidate = Candidate {
             identity: "candidate-b".into(),
             summary: "found".into(),
+            total_paths: 2,
             paths: vec!["web/src/b.rs".into(), "web/src/a.rs".into()],
         };
         let census = CensusReport::from_cells(vec![
@@ -297,6 +305,7 @@ mod tests {
                 Language::Rust,
                 CellState::Candidates {
                     candidates: vec![candidate],
+                    total_candidates: 1,
                 },
             ),
             report(
@@ -310,7 +319,7 @@ mod tests {
         assert!(census.has_failed_cells());
         assert_eq!(census.sections[0].state, SectionState::Failed);
         assert_eq!(census.sections[0].cells.len(), 2);
-        let CellState::Candidates { candidates } = &census.sections[0].cells[0].state else {
+        let CellState::Candidates { candidates, .. } = &census.sections[0].cells[0].state else {
             panic!("completed candidate cell was discarded");
         };
         assert_eq!(candidates[0].paths, ["web/src/a.rs", "web/src/b.rs"]);
@@ -327,5 +336,51 @@ mod tests {
         assert_eq!(first, serde_json::to_string(&census).unwrap());
         assert_eq!(census.sections.len(), SignalFamily::ALL.len());
         assert!(first.contains("\"state\":\"clean\""));
+    }
+
+    #[test]
+    fn candidate_cap_is_deterministic_and_keeps_total_in_json() {
+        let candidates = (0..(MAX_CANDIDATES_PER_CELL + 2))
+            .rev()
+            .map(|index| Candidate {
+                identity: format!("candidate-{index:03}"),
+                summary: "found".into(),
+                total_paths: MAX_PATHS_PER_CANDIDATE + 1,
+                paths: (0..(MAX_PATHS_PER_CANDIDATE + 1))
+                    .map(|path| format!("web/src/{index}-{path}.rs"))
+                    .collect(),
+            })
+            .collect();
+        let census = CensusReport::from_cells(vec![CellReport::candidates(
+            SignalFamily::DependencyStructure,
+            Language::Rust,
+            CollectorMetadata {
+                identity: "fixture".into(),
+                version: Some("1".into()),
+                evidence_method: EvidenceMethod::Structural,
+                limitation: "fixture limitation".into(),
+            },
+            candidates,
+        )]);
+        let state = &census.sections[0].cells[0].state;
+        let CellState::Candidates {
+            candidates,
+            total_candidates,
+        } = state
+        else {
+            panic!("candidate cell became non-candidate");
+        };
+        assert_eq!(candidates.len(), MAX_CANDIDATES_PER_CELL);
+        assert_eq!(*total_candidates, MAX_CANDIDATES_PER_CELL + 2);
+        assert_eq!(candidates[0].identity, "candidate-000");
+        assert_eq!(candidates[0].paths.len(), MAX_PATHS_PER_CANDIDATE);
+        assert_eq!(candidates[0].total_paths, MAX_PATHS_PER_CANDIDATE + 1);
+        let serialized = serde_json::to_string(&census).expect("serializes capped report");
+        assert!(serialized.contains(&format!(
+            "\"total_candidates\":{}",
+            MAX_CANDIDATES_PER_CELL + 2
+        )));
+        assert!(serialized.contains(&format!("\"total_paths\":{}", MAX_PATHS_PER_CANDIDATE + 1)));
+        assert_eq!(serialized, serde_json::to_string(&census).unwrap());
     }
 }

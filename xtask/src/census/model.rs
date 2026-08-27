@@ -48,16 +48,42 @@ pub struct Candidate {
     pub identity: String,
     pub summary: String,
     pub paths: Vec<String>,
+    pub total_paths: usize,
 }
+
+impl Candidate {
+    pub fn new(identity: String, summary: String, paths: Vec<String>) -> Self {
+        let total_paths = paths.len();
+        Self {
+            identity,
+            summary,
+            paths,
+            total_paths,
+        }
+    }
+}
+
+/// The maximum number of candidates retained per cell in both human and JSON reports.
+pub const MAX_CANDIDATES_PER_CELL: usize = 10;
+
+/// The maximum number of paths retained per candidate in both human and JSON reports.
+pub const MAX_PATHS_PER_CANDIDATE: usize = 10;
 
 /// The only possible result for a required language/signal cell.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "state", rename_all = "kebab-case")]
 pub enum CellState {
     Clean,
-    Candidates { candidates: Vec<Candidate> },
-    Unavailable { capability: String },
-    Failed { error: String },
+    Candidates {
+        candidates: Vec<Candidate>,
+        total_candidates: usize,
+    },
+    Unavailable {
+        capability: String,
+    },
+    Failed {
+        error: String,
+    },
 }
 
 /// One collector result. The orchestration layer owns aggregation and exit policy.
@@ -90,17 +116,68 @@ impl CellReport {
         }
     }
 
+    pub fn unavailable_with_collector(
+        signal: SignalFamily,
+        language: Language,
+        collector: CollectorMetadata,
+        capability: impl Into<String>,
+    ) -> Self {
+        Self {
+            signal,
+            language,
+            collector,
+            state: CellState::Unavailable {
+                capability: capability.into(),
+            },
+        }
+    }
+
+    pub fn candidates(
+        signal: SignalFamily,
+        language: Language,
+        collector: CollectorMetadata,
+        candidates: Vec<Candidate>,
+    ) -> Self {
+        let total_candidates = candidates.len();
+        Self {
+            signal,
+            language,
+            collector,
+            state: if candidates.is_empty() {
+                CellState::Clean
+            } else {
+                CellState::Candidates {
+                    candidates,
+                    total_candidates,
+                }
+            },
+        }
+    }
+
     pub fn has_failed(&self) -> bool {
         matches!(self.state, CellState::Failed { .. })
     }
 
     pub(crate) fn normalize(&mut self) {
-        if let CellState::Candidates { candidates } = &mut self.state {
+        if let CellState::Candidates {
+            candidates,
+            total_candidates,
+        } = &mut self.state
+        {
             for candidate in candidates.iter_mut() {
                 candidate.paths.sort();
                 candidate.paths.dedup();
+                candidate.total_paths = candidate.paths.len();
+                candidate.paths.truncate(MAX_PATHS_PER_CANDIDATE);
             }
-            candidates.sort_by(|left, right| left.identity.cmp(&right.identity));
+            candidates.sort_by(|left, right| {
+                left.identity
+                    .cmp(&right.identity)
+                    .then_with(|| left.summary.cmp(&right.summary))
+                    .then_with(|| left.paths.cmp(&right.paths))
+            });
+            *total_candidates = candidates.len();
+            candidates.truncate(MAX_CANDIDATES_PER_CELL);
         }
     }
 }
