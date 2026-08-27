@@ -86,10 +86,13 @@ pub struct PageCursor {
     pub post_id: PostId,
 }
 
-/// A cursor-paginated page of timeline posts.
+/// A cursor-paginated page of rows.
+///
+/// The envelope is shared by listing endpoints, while each endpoint retains its
+/// own row type and the specialized logic that derives its cursor.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TimelinePage {
-    pub posts: Vec<RenderedPost>,
+pub struct Page<Row> {
+    pub posts: Vec<Row>,
     /// Where the next page starts; `None` on the last page.
     pub next_cursor: Option<PageCursor>,
     pub has_more: bool,
@@ -119,23 +122,23 @@ pub struct AuthoredPost {
 /// projector's `#jaunder-seed` blob and adopted by the CSR client on boot.
 ///
 /// Variants carry the route context (`username` / `tag`) the bare
-/// [`TimelinePage`] lacks but the heading, title, and permalinks need — the
-/// reactive components get it from the route params today.
+/// [`Page`] lacks but the heading, title, and permalinks need — the reactive
+/// components get it from the route params today.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PageSeed {
-    SiteTimeline(TimelinePage),
+    SiteTimeline(Page<RenderedPost>),
     Profile {
         username: Username,
-        page: TimelinePage,
+        page: Page<RenderedPost>,
     },
     SiteTag {
         tag: Tag,
-        page: TimelinePage,
+        page: Page<RenderedPost>,
     },
     UserTag {
         username: Username,
         tag: Tag,
-        page: TimelinePage,
+        page: Page<RenderedPost>,
     },
     Permalink(AuthoredPost),
 }
@@ -181,8 +184,8 @@ mod tests {
         assert!(deserialized.is_draft());
     }
 
-    fn page(next_cursor: Option<PageCursor>) -> TimelinePage {
-        TimelinePage {
+    fn page(next_cursor: Option<PageCursor>) -> Page<RenderedPost> {
+        Page {
             posts: Vec::new(),
             has_more: next_cursor.is_some(),
             next_cursor,
@@ -201,8 +204,26 @@ mod tests {
             })),
         ] {
             let json = serde_json::to_string(&original).unwrap();
-            let back: TimelinePage = serde_json::from_str(&json).unwrap();
+            let back: Page<RenderedPost> = serde_json::from_str(&json).unwrap();
             assert_eq!(back, original);
         }
+    }
+    /// The generic envelope must retain this pre-cutover JSON byte sequence for
+    /// rendered timeline rows, including the declaration order of its fields.
+    #[test]
+    fn rendered_page_serializes_to_the_pre_cutover_bytes() {
+        let page = Page {
+            posts: vec![rendered_post(Some(instant()))],
+            next_cursor: Some(PageCursor {
+                created_at: instant(),
+                post_id: PostId::from(7),
+            }),
+            has_more: true,
+        };
+
+        assert_eq!(
+            serde_json::to_string(&page).unwrap(),
+            r#"{"posts":[{"post_id":1,"username":"alice","title":null,"summary":null,"slug":"hello","rendered_html":"<p>hi</p>","created_at":"2026-07-19T10:30:00Z","published_at":"2026-07-19T10:30:00Z","permalink":null,"is_author":false,"tags":[]}],"next_cursor":{"created_at":"2026-07-19T10:30:00Z","post_id":7},"has_more":true}"#
+        );
     }
 }

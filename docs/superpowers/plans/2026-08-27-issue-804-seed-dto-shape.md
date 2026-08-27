@@ -30,7 +30,7 @@ Out:
     published classification; serialization omits the key; the existing draft
     lifecycle browser flow still proves banner and Publish/Unpublish
     transitions.
-- [ ] Task 2: Cut all page envelopes over to generic `Page<Row>`
+- [x] Task 2: Cut all page envelopes over to generic `Page<Row>`
   - Contract: `common::seed::Page<Row>` is the canonical public type and owns
     `posts`, `next_cursor`, and `has_more` in their current declaration order.
     Every former concrete page signature, constructor, fixture, and export uses

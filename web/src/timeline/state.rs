@@ -11,7 +11,7 @@
 
 use leptos::prelude::*;
 
-use common::seed::{PageCursor, RenderedPost, TimelinePage};
+use common::seed::{Page, PageCursor, RenderedPost};
 
 use crate::error::{WebError, WebResult};
 use crate::taglist::TagCtx;
@@ -127,7 +127,7 @@ impl TimelineState {
     /// path and the fetch-resolve path; the separate `resolve()` it replaced
     /// differed only by that line (#671). It also clears any prior failure, so a
     /// successful refetch after an error recovers.
-    pub fn adopt(&self, page: TimelinePage) {
+    pub fn adopt(&self, page: Page<RenderedPost>) {
         self.cursor.set(page.next_cursor);
         self.has_more.set(page.has_more);
         self.rows.set(page.posts);
@@ -137,14 +137,14 @@ impl TimelineState {
     /// Adopt a projector seed when the page was seeded for these params. `None`
     /// means the projector painted a different page (or none), so the timeline
     /// stays `NeverLoaded` and the reactive fetch fills it in.
-    pub fn adopt_seed(&self, page: Option<TimelinePage>) {
+    pub fn adopt_seed(&self, page: Option<Page<RenderedPost>>) {
         if let Some(page) = page {
             self.adopt(page);
         }
     }
 
     /// Apply an initial/refetch result: replace on success, reset on failure.
-    pub fn apply(&self, result: WebResult<TimelinePage>) {
+    pub fn apply(&self, result: WebResult<Page<RenderedPost>>) {
         match result {
             Ok(page) => self.adopt(page),
             Err(error) => self.fail(error),
@@ -179,7 +179,7 @@ impl TimelineState {
     /// Deliberately asymmetric with [`apply`](Self::apply), which clears: page 1
     /// succeeded and only page 2 failed, so throwing page 1 away would lose work
     /// the user already has.
-    pub fn append(&self, result: WebResult<TimelinePage>) {
+    pub fn append(&self, result: WebResult<Page<RenderedPost>>) {
         match result {
             Ok(page) => {
                 self.cursor.set(page.next_cursor);
@@ -263,8 +263,8 @@ mod tests {
         posts: Vec<RenderedPost>,
         next_cursor: Option<PageCursor>,
         has_more: bool,
-    ) -> TimelinePage {
-        TimelinePage {
+    ) -> Page<RenderedPost> {
+        Page {
             posts,
             next_cursor,
             has_more,

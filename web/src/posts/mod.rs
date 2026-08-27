@@ -64,7 +64,7 @@ pub use edit_state::{
 pub use api::{
     Create, Delete, EditPostPreview, Get, GetAudienceSelection, GetDefaultAudienceSelection,
     GetPreview, ListDrafts, ListScheduled, PostInputs, Publish, SavedPost, Unpublish,
-    UnpublishedPage, UnpublishedPost, Update, create, delete, get, get_audience_selection,
+    UnpublishedPost, Update, create, delete, get, get_audience_selection,
     get_default_audience_selection, get_preview, list_drafts, list_scheduled, publish, unpublish,
     update,
 };

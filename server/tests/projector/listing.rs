@@ -1,7 +1,7 @@
 use axum::http::{StatusCode, header};
 use tower::ServiceExt;
 
-use common::seed::{PageSeed, TimelinePage};
+use common::seed::{Page, PageSeed};
 use common::time::{PermalinkDate, UtcInstant};
 use common::visibility::ViewerIdentity;
 use rstest::*;
@@ -184,7 +184,7 @@ async fn every_page_seed_variant_serializes_without_null_fallback(#[case] backen
     .await
     .expect("permalink lookup")
     .expect("seeded post");
-    let page = TimelinePage {
+    let page = Page {
         posts: Vec::new(),
         next_cursor: None,
         has_more: false,
