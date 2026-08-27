@@ -332,46 +332,82 @@ impl CollectorGuard {
     }
 
     fn shutdown(&mut self) -> anyhow::Result<()> {
-        let mut child = self
+        let status = self
             .child
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("otelcol-contrib was already stopped"))?;
-        if let Err(error) = send_sigterm(&child, "otelcol-contrib") {
-            self.child = Some(child);
-            return Err(error);
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("otelcol-contrib was already stopped"))?
+            .try_wait();
+        match status {
+            Ok(Some(status)) => {
+                self.child.take();
+                self.join_stderr_mirror()?;
+                anyhow::bail!("otelcol-contrib exited prematurely before shutdown ({status})");
+            }
+            Ok(None) => {}
+            Err(error) => {
+                let cleanup = self.force_stop_and_reap().err();
+                anyhow::bail!(
+                    "failed to inspect otelcol-contrib before shutdown: {error}{}",
+                    cleanup
+                        .map(|cleanup| format!("; force-stop failed: {cleanup}"))
+                        .unwrap_or_default()
+                );
+            }
         }
+
+        if let Err(error) = send_sigterm(
+            self.child
+                .as_ref()
+                .expect("collector remains owned until it is reaped"),
+            "otelcol-contrib",
+        ) {
+            let cleanup = self.force_stop_and_reap().err();
+            anyhow::bail!(
+                "{error}{}",
+                cleanup
+                    .map(|cleanup| format!("; force-stop failed: {cleanup}"))
+                    .unwrap_or_default()
+            );
+        }
+
         let deadline = Instant::now() + COLLECTOR_SHUTDOWN_TIMEOUT;
         loop {
-            match child
-                .try_wait()
-                .context("checking otelcol-contrib during shutdown")?
-            {
-                Some(status) if status.success() => {
+            let status = self
+                .child
+                .as_mut()
+                .expect("collector remains owned until it is reaped")
+                .try_wait();
+            match status {
+                Ok(Some(status)) => {
+                    self.child.take();
                     self.join_stderr_mirror()?;
-                    return Ok(());
-                }
-                Some(status) => {
-                    self.join_stderr_mirror()?;
+                    if status.success() {
+                        return Ok(());
+                    }
                     anyhow::bail!(
                         "otelcol-contrib exited unsuccessfully during shutdown ({status}); collector stderr: {}",
                         self.stderr_diagnostics()?
                     );
                 }
-                None if Instant::now() >= deadline => {
-                    let mut failures =
-                        vec!["otelcol-contrib did not stop after SIGTERM".to_owned()];
-                    if let Err(error) = child.kill() {
-                        failures.push(format!("failed to force-stop otelcol-contrib: {error}"));
-                    }
-                    if let Err(error) = child.wait() {
-                        failures.push(format!("failed to reap otelcol-contrib: {error}"));
-                    }
-                    if let Err(error) = self.join_stderr_mirror() {
-                        failures.push(error.to_string());
-                    }
-                    anyhow::bail!(failures.join("; "));
+                Ok(None) if Instant::now() >= deadline => {
+                    let cleanup = self.force_stop_and_reap().err();
+                    anyhow::bail!(
+                        "otelcol-contrib did not stop after SIGTERM{}",
+                        cleanup
+                            .map(|cleanup| format!("; force-stop failed: {cleanup}"))
+                            .unwrap_or_default()
+                    );
                 }
-                None => sleep(Duration::from_millis(25)),
+                Ok(None) => sleep(Duration::from_millis(25)),
+                Err(error) => {
+                    let cleanup = self.force_stop_and_reap().err();
+                    anyhow::bail!(
+                        "failed to inspect otelcol-contrib during shutdown: {error}{}",
+                        cleanup
+                            .map(|cleanup| format!("; force-stop failed: {cleanup}"))
+                            .unwrap_or_default()
+                    );
+                }
             }
         }
     }
@@ -415,14 +451,53 @@ impl CollectorGuard {
         }
     }
 
-    fn kill_and_reap(&mut self) -> anyhow::Result<()> {
-        if let Some(mut child) = self.child.take() {
-            if child.try_wait()?.is_none() {
-                child.kill().context("killing otelcol-contrib")?;
+    fn force_stop_and_reap(&mut self) -> anyhow::Result<()> {
+        let Some(child) = self.child.as_mut() else {
+            return self.join_stderr_mirror();
+        };
+        let mut failures = Vec::new();
+        let mut stopped = false;
+        match child.try_wait() {
+            Ok(Some(_)) => stopped = true,
+            Ok(None) => match child.kill() {
+                Ok(()) => match child.wait() {
+                    Ok(_) => stopped = true,
+                    Err(error) => failures.push(format!("failed to reap otelcol-contrib: {error}")),
+                },
+                Err(error) => {
+                    failures.push(format!("failed to force-stop otelcol-contrib: {error}"))
+                }
+            },
+            Err(error) => {
+                failures.push(format!("failed to inspect otelcol-contrib: {error}"));
+                match child.kill() {
+                    Ok(()) => match child.wait() {
+                        Ok(_) => stopped = true,
+                        Err(error) => {
+                            failures.push(format!("failed to reap otelcol-contrib: {error}"));
+                        }
+                    },
+                    Err(error) => {
+                        failures.push(format!("failed to force-stop otelcol-contrib: {error}"));
+                    }
+                }
             }
-            child.wait().context("reaping otelcol-contrib")?;
         }
-        self.join_stderr_mirror()
+        if stopped {
+            self.child.take();
+            if let Err(error) = self.join_stderr_mirror() {
+                failures.push(error.to_string());
+            }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            anyhow::bail!(failures.join("; "))
+        }
+    }
+
+    fn kill_and_reap(&mut self) -> anyhow::Result<()> {
+        self.force_stop_and_reap()
     }
 
     fn cleanup_for_drop_with(
@@ -807,15 +882,22 @@ fn record_collector_result(
     }
 }
 
-fn shutdown_collector(result: &mut CommandResult, browser: &str, collector: &mut CollectorGuard) {
+fn shutdown_collector(
+    result: &mut CommandResult,
+    browser: &str,
+    collector: &mut CollectorGuard,
+) -> bool {
     let shutdown_start = Instant::now();
+    let shutdown = collector.shutdown();
+    let stopped = collector.child.is_none();
     record_collector_result(
         result,
         browser,
         "collector-shutdown",
-        collector.shutdown(),
+        shutdown,
         shutdown_start.elapsed(),
     );
+    stopped
 }
 
 fn record_capture_finalization(
@@ -862,6 +944,28 @@ fn record_capture_finalization(
             );
             source
         }
+    }
+}
+
+fn stop_and_finalize_collector(
+    result: &mut CommandResult,
+    browser: &str,
+    retained: &RetainedCapture,
+    collector: &mut CollectorGuard,
+) -> PathBuf {
+    let stopped = shutdown_collector(result, browser, collector);
+    let source = collector.take_capture_dir();
+    if stopped {
+        record_capture_finalization(result, browser, retained, source)
+    } else {
+        let source = source.keep();
+        result.push(
+            StepResult::fail(&step_name(browser, "capture")).detail(format!(
+                "collector could not be stopped; live capture source retained without copying at {}",
+                source.display()
+            )),
+        );
+        source
     }
 }
 
@@ -914,9 +1018,7 @@ fn finish_server_setup_failure(
     retained: &RetainedCapture,
     collector: &mut CollectorGuard,
 ) {
-    shutdown_collector(result, browser, collector);
-    let source = collector.take_capture_dir();
-    record_capture_finalization(result, browser, retained, source);
+    stop_and_finalize_collector(result, browser, retained, collector);
 }
 
 fn finish_lifecycle(
@@ -936,9 +1038,7 @@ fn finish_lifecycle(
         );
     }
 
-    shutdown_collector(result, verification.browser, collector);
-    let source = collector.take_capture_dir();
-    let capture = record_capture_finalization(result, verification.browser, retained, source);
+    let capture = stop_and_finalize_collector(result, verification.browser, retained, collector);
 
     let test_support = verification.test_support;
     let server_stderr = capture.join("server-stderr.log");
@@ -1727,6 +1827,28 @@ mod tests {
 
         guard.shutdown().expect("graceful collector shutdown");
         assert!(!proc.exists(), "collector should be reaped");
+    }
+
+    #[test]
+    fn collector_successful_exit_before_shutdown_is_a_premature_failure() {
+        let grpc = TcpListener::bind("127.0.0.1:0").expect("gRPC listener");
+        let http = TcpListener::bind("127.0.0.1:0").expect("HTTP listener");
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg("exit 0")
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn collector");
+        let mut guard = test_collector(
+            child,
+            grpc.local_addr().expect("gRPC address"),
+            http.local_addr().expect("HTTP address"),
+        );
+        sleep(Duration::from_millis(50));
+
+        let error = guard.shutdown().expect_err("premature exit must fail");
+        assert!(error.to_string().contains("exited prematurely"));
+        assert!(guard.child.is_none(), "exited collector is reaped");
     }
 
     #[test]
