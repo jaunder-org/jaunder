@@ -497,6 +497,7 @@ mod tests {
         Backend, SeedUser, backends, fetch_post_media, media_ref_for, media_url_for, seed_media,
     };
     use common::idempotency_key::IdempotencyKey;
+    use common::media::{MediaReferenceForm, MediaReferenceKind};
     use common::test_support::{parse_post_body, parse_post_title, parse_row_limit, parse_slug};
     use rstest::*;
     use rstest_reuse::*;
@@ -1592,7 +1593,13 @@ mod tests {
         assert_eq!(posts[0].post_id, first.post_id);
         assert_eq!(
             fetch_post_media(&env.base, first.post_id).await,
-            vec![media_ref_for("original.jpg")]
+            vec![(
+                media_ref_for("original.jpg"),
+                MediaReferenceKind::Local,
+                media_url_for("original.jpg")
+                    .parse::<MediaReferenceForm>()
+                    .expect("valid media reference form"),
+            )]
         );
         assert_eq!(
             storage.get_post_audiences(first.post_id).await.unwrap(),

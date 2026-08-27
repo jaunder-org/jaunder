@@ -252,9 +252,45 @@ typed_restore_row!(FeedEventsRestoreRow, "feed_events" {
     status: FeedEventStatus => ("status", "feed event status"),
 });
 
-typed_restore_row!(IdempotencyKeysRestoreRow, "idempotency_keys" {
-    key: IdempotencyKey => ("key", "idempotency key"),
-});
+struct IdempotencyKeysRestoreRow {
+    key: Option<RestoreText>,
+}
+
+impl RestoreTableRow for IdempotencyKeysRestoreRow {
+    fn from_restore(row: &RestoreRowMap) -> Self {
+        Self {
+            key: restore_text(row, "key"),
+        }
+    }
+
+    fn validate(&self, report: &mut RestoreValidationReport) {
+        let Some(raw_key) = &self.key else {
+            return;
+        };
+        let key = match raw_key.as_str().parse::<IdempotencyKey>() {
+            Ok(key) => key,
+            Err(error) => {
+                push_issue(
+                    report,
+                    "idempotency_keys",
+                    "key",
+                    "idempotency key",
+                    error.to_string(),
+                );
+                return;
+            }
+        };
+        if key.as_ref() != raw_key.as_str() {
+            push_issue(
+                report,
+                "idempotency_keys",
+                "key",
+                "idempotency key",
+                "idempotency key must be canonical (without surrounding whitespace)",
+            );
+        }
+    }
+}
 
 typed_restore_row!(InvitesRestoreRow, "invites" {
     code: InviteCode => ("code", "invite code"),
@@ -765,6 +801,26 @@ mod tests {
                 "key {key:?}"
             );
         }
+    }
+
+    #[test]
+    fn idempotency_key_restore_row_reports_padded_keys() {
+        let mut row = serde_json::Map::new();
+        row.insert("key".to_owned(), serde_json::json!(" retry-key\t"));
+        let mut report = RestoreValidationReport::default();
+
+        validate_restore_row("idempotency_keys", &row, &mut report);
+
+        assert_eq!(
+            report.issues(),
+            &[RestoreValidationIssue {
+                table: "idempotency_keys".to_owned(),
+                column: "key".to_owned(),
+                value_class: "idempotency key".to_owned(),
+                reason: "idempotency key must be canonical (without surrounding whitespace)"
+                    .to_owned(),
+            }]
+        );
     }
 
     #[test]
