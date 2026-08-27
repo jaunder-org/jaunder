@@ -713,14 +713,11 @@ and `j:slug` live in the entry's extension map behind `is_draft`/`set_draft` and
 `j_slug`/`set_j_slug`, each helper owning its `xmlns:` prefix so an entry
 declares a namespace only when it actually carries the marker. `quick-xml`
 remains a direct dependency, but only for the non-Atom documents Jaunder still
-writes itself: the service document, RSD, the shared XML helpers, and the
-categories renderer (`common/src/atompub/{service,rsd,xml,categories}.rs`).
-
-`common/src/atompub/categories.rs` is the exception that proves the rule.
-`render_categories_document` (`:20`) is written and re-exported, but no route
-and no server caller reaches it — the AtomPub categories document is **not
-served**. Whether the module survives is
-[#928](https://github.com/jaunder-org/jaunder/issues/928).
+writes itself: the Service Document, RSD, and the shared XML helpers
+(`common/src/atompub/{service,rsd,xml}.rs`). Category discovery is inline: an
+applicable Collection declares its open-set `app:categories` terms with
+`fixed="no"` in the Service Document. Jaunder does not advertise an
+`app:categories href` or serve an out-of-line Categories Document.
 
 The crates come from the registry — `atom_syndication` 0.12.10 and `rss` 2.1
 (`common/Cargo.toml:25-27`). Earlier,

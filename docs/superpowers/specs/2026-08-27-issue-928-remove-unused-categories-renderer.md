@@ -1,0 +1,42 @@
+# Remove the unused AtomPub Categories Document renderer
+
+## Outcome
+
+Jaunder no longer carries an unreachable serializer for an out-of-line AtomPub
+Categories Document. Its supported category-discovery behavior remains the
+inline `app:categories` declaration in each applicable Collection within the
+Service Document.
+
+## Load-bearing decisions
+
+- Jaunder does not serve an out-of-line Categories Document or advertise one
+  through an `app:categories href` reference.
+- Collection categories remain inline in the AtomPub Service Document with the
+  existing open-set `fixed="no"` semantics.
+- Remove the standalone renderer and its public module surface rather than
+  retaining speculative protocol code without a route or caller.
+- Keep the architecture view explicit about the supported inline form and the
+  intentionally unsupported out-of-line form.
+- Preserve archived implementation plans as historical records.
+- This retirement does not require an ADR: it removes an unused optional
+  facility and does not establish a hard-to-reverse architecture boundary.
+
+## Acceptance
+
+- No production symbol, module declaration, re-export, or renderer-local test
+  remains for the standalone Categories Document.
+- Current AtomPub module documentation no longer claims that Jaunder serializes
+  a standalone Categories Document.
+- The Service Document test proves that inline Collection categories retain
+  their terms and `fixed="no"` open-set declaration.
+- The architecture view states that Jaunder uses inline category discovery and
+  does not serve an out-of-line Categories Document.
+- `cargo xtask test-local -- -p common` and `cargo xtask precommit` pass.
+
+## Boundaries
+
+- Do not add, remove, or alter AtomPub routes.
+- Do not change category validation, tag storage, or Collection membership.
+- Do not change Service Document category serialization; strengthen its existing
+  test only to preserve the retained inline contract.
+- Do not modify archived plans or introduce a new protocol capability.

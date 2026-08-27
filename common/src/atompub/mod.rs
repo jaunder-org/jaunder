@@ -13,8 +13,7 @@
 //! its RFC 5005 paging links, and the RFC 5023 §9.6 media-link entry.
 //!
 //! What this module still serializes by hand is the part of RFC 5023 that is *not*
-//! Atom: the service document, the categories document, and RSD — none of which
-//! upstream models.
+//! Atom: the service document and RSD — neither of which upstream models.
 
 pub mod title;
 mod xml;
@@ -28,9 +27,6 @@ pub use entry::{
 
 pub mod service;
 pub use service::{CollectionAccept, CollectionDecl, ServiceDocument, render_service_document};
-
-pub mod categories;
-pub use categories::render_categories_document;
 
 pub mod rsd;
 pub use rsd::render_rsd_document;
