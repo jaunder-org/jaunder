@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::http::StatusCode;
 use chrono::Datelike;
 use common::ids::{PostId, UserId};
-use common::seed::{AuthoredPost, TimelinePage};
+use common::seed::{AuthoredPost, Page, RenderedPost};
 use common::test_support::parse_audience_name;
 use common::visibility::local_subscriber_identity;
 use server_fn::ServerFn;
@@ -167,7 +167,7 @@ draft",
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    assert!(body.contains("\"is_draft\":true"), "body: {body}");
+    assert!(!body.contains("\"is_draft\""), "body: {body}");
     assert!(body.contains("Draft"), "body: {body}");
 
     let (status, body) = get_post_preview_form(&state, created.post_id, Some(&author_cookie)).await;
@@ -317,7 +317,7 @@ async fn create_targeted_post(
 }
 
 /// The set of post slugs visible in a local-timeline response.
-fn timeline_slugs(page: &TimelinePage) -> std::collections::BTreeSet<String> {
+fn timeline_slugs(page: &Page<RenderedPost>) -> std::collections::BTreeSet<String> {
     page.posts.iter().map(|p| p.slug.to_string()).collect()
 }
 
@@ -367,7 +367,7 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     // Anonymous viewer: only the Public post.
     let (status, body) = list_local_timeline(&state, None, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let anon: TimelinePage = serde_json::from_str(&body).unwrap();
+    let anon: Page<RenderedPost> = serde_json::from_str(&body).unwrap();
     assert_eq!(
         timeline_slugs(&anon),
         [public.slug.to_string()].into_iter().collect(),
@@ -377,7 +377,7 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     // Author: sees all of their own posts, including the private one.
     let (status, body) = list_local_timeline(&state, None, 50, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let authored: TimelinePage = serde_json::from_str(&body).unwrap();
+    let authored: Page<RenderedPost> = serde_json::from_str(&body).unwrap();
     assert_eq!(
         timeline_slugs(&authored),
         [
@@ -394,7 +394,7 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     // Active subscriber + named member: Public + Subscribers + Named (not Private).
     let (status, body) = list_local_timeline(&state, None, 50, Some(&subscriber_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let sub: TimelinePage = serde_json::from_str(&body).unwrap();
+    let sub: Page<RenderedPost> = serde_json::from_str(&body).unwrap();
     assert_eq!(
         timeline_slugs(&sub),
         [
@@ -423,7 +423,7 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     )
     .await;
     assert_eq!(response.status, StatusCode::OK, "body: {}", response.body);
-    let bearer_page: TimelinePage = serde_json::from_str(&response.body).unwrap();
+    let bearer_page: Page<RenderedPost> = serde_json::from_str(&response.body).unwrap();
     assert_eq!(
         timeline_slugs(&bearer_page),
         [
@@ -453,7 +453,7 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     )
     .await;
     assert_ne!(response.status, StatusCode::OK);
-    assert!(serde_json::from_str::<TimelinePage>(&response.body).is_err());
+    assert!(serde_json::from_str::<Page<RenderedPost>>(&response.body).is_err());
     assert!(response.set_cookies.is_empty());
 
     // Authed non-subscriber: only the Public post (same reach as anonymous,
@@ -461,7 +461,7 @@ async fn local_timeline_enforces_visibility_for_viewer(#[case] backend: Backend)
     // admitted to subscriber/named content).
     let (status, body) = list_local_timeline(&state, None, 50, Some(&stranger_cookie)).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    let stranger_page: TimelinePage = serde_json::from_str(&body).unwrap();
+    let stranger_page: Page<RenderedPost> = serde_json::from_str(&body).unwrap();
     assert_eq!(
         timeline_slugs(&stranger_page),
         [public.slug.to_string()].into_iter().collect(),

@@ -11,6 +11,7 @@ use leptos::prelude::*;
 use leptos_router::NavigateOptions;
 use leptos_router::hooks::{use_navigate, use_params_map};
 
+use common::seed::Page;
 // `Summary` is module-qualified at its use site: this file already has
 // `PostSummary` and `TagSummary` in scope, and a bare `Summary` among them says
 // nothing about which one it is.
@@ -28,11 +29,11 @@ use crate::media::MediaUpload;
 use crate::posts::{
     ComposeState, Create, Delete, DraftRowDisplay, EditPublicationState, InvalidSchedule,
     ListingRoute, LoadedPublication, NamedAudienceState, PermalinkRoute, PublicationIntent,
-    Publish, SavedPost, ScheduledEditState, Unpublish, UnpublishedPage, UnpublishedPost,
-    draft_row_display, edit_submit_gate, get, get_audience_selection,
-    get_default_audience_selection, get_preview, list_drafts, list_scheduled, loaded_publication,
-    notify, notify_with_fallback, parse_permalink_route, publication_from_local, publish_redirect,
-    seeded_page, submit_gate, tag_query, user_query, user_tag_query, with_post_id,
+    Publish, SavedPost, ScheduledEditState, Unpublish, UnpublishedPost, draft_row_display,
+    edit_submit_gate, get, get_audience_selection, get_default_audience_selection, get_preview,
+    list_drafts, list_scheduled, loaded_publication, notify, notify_with_fallback,
+    parse_permalink_route, publication_from_local, publish_redirect, seeded_page, submit_gate,
+    tag_query, user_query, user_tag_query, with_post_id,
 };
 use crate::subscriptions::SubscribeButton;
 use crate::taglist::TagCtx as TagContext;
@@ -318,7 +319,7 @@ pub fn PostCard<'a>(
     // A draft rendered at its permalink gets a Publish affordance instead of
     // Unpublish (#23): an Unpublish column would be a no-op on an already-
     // unpublished post.
-    let is_draft = post.is_draft;
+    let is_draft = post.is_draft();
     let edit_url = crate::posts::render::edit_post_url(post_id);
     let delete_action = ServerAction::<Delete>::new();
     let unpublish_action = ServerAction::<Unpublish>::new();
@@ -1043,7 +1044,7 @@ pub fn PostPage() -> impl IntoView {
                             Ok(fetched) => {
                                 let banner = fetched
                                     .post
-                                    .is_draft
+                                    .is_draft()
                                     .then_some("Draft - visible only to you".to_string());
                                 let tag_context = TagContext::ForUser(
                                     fetched.post.username.clone(),
@@ -1667,7 +1668,7 @@ pub fn ScheduledPage() -> impl IntoView {
 }
 
 #[component]
-fn ScheduledList(scheduled: Result<UnpublishedPage, WebError>) -> impl IntoView {
+fn ScheduledList(scheduled: Result<Page<UnpublishedPost>, WebError>) -> impl IntoView {
     match scheduled {
         Ok(page) => {
             if page.posts.is_empty() {
@@ -1738,7 +1739,7 @@ fn render_scheduled_row(scheduled: UnpublishedPost) -> impl IntoView {
 /// owns the awaiting.
 #[component]
 fn DraftList(
-    drafts: Result<UnpublishedPage, WebError>,
+    drafts: Result<Page<UnpublishedPost>, WebError>,
     publish_action: ServerAction<Publish>,
     delete_action: ServerAction<Delete>,
 ) -> impl IntoView {

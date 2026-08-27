@@ -12,7 +12,7 @@
 
 use common::ids::UserId;
 use common::pagination::PageSize;
-use common::seed::TimelinePage;
+use common::seed::{Page, RenderedPost};
 use common::tag::Tag;
 use common::time::UtcInstant;
 use common::username::Username;
@@ -24,13 +24,14 @@ use storage::{
 use crate::error::{InternalError, InternalResult};
 use crate::posts::rendered_post;
 
-/// Assemble a cursor-paginated [`TimelinePage`] from one over-fetched row set
-/// (`page_size + 1` rows detect `has_more`). Shared by every `fetch_*` below.
+/// Assemble a cursor-paginated [`Page`] of [`RenderedPost`] rows from one
+/// over-fetched row set (`page_size + 1` rows detect `has_more`). Shared by every
+/// `fetch_*` below.
 pub(super) fn page_from_rows(
     mut rows: Vec<PostRecord>,
     page_size: PageSize,
     viewer_user_id: Option<UserId>,
-) -> TimelinePage {
+) -> Page<RenderedPost> {
     // The inverse of `PageSize::fetch_limit`: both halves of the has-more rule live on
     // `PageSize`, so neither is spelled by hand here (#696).
     let has_more = page_size.has_more(rows.len());
@@ -43,7 +44,7 @@ pub(super) fn page_from_rows(
         .into_iter()
         .filter_map(|post| rendered_post(post, viewer_user_id))
         .collect();
-    TimelinePage {
+    Page {
         posts,
         next_cursor,
         has_more,
@@ -62,7 +63,7 @@ pub async fn fetch_user_posts(
     username: &Username,
     cursor: Option<PostCursor>,
     limit: Option<PageSize>,
-) -> InternalResult<TimelinePage> {
+) -> InternalResult<Page<RenderedPost>> {
     let page_size = limit.unwrap_or_default();
     let rows = posts
         .list_published_by_user(
@@ -87,7 +88,7 @@ pub async fn fetch_local_timeline(
     viewer: &ViewerIdentity,
     cursor: Option<PostCursor>,
     limit: Option<PageSize>,
-) -> InternalResult<TimelinePage> {
+) -> InternalResult<Page<RenderedPost>> {
     let page_size = limit.unwrap_or_default();
     let rows = posts
         .list_published(
@@ -112,7 +113,7 @@ pub async fn fetch_posts_by_tag(
     tag: &Tag,
     cursor: Option<PostCursor>,
     limit: Option<PageSize>,
-) -> InternalResult<TimelinePage> {
+) -> InternalResult<Page<RenderedPost>> {
     let page_size = limit.unwrap_or_default();
     let rows = list_by_tag_rows(
         posts
@@ -142,7 +143,7 @@ pub async fn fetch_user_posts_by_tag(
     tag: &Tag,
     cursor: Option<PostCursor>,
     limit: Option<PageSize>,
-) -> InternalResult<TimelinePage> {
+) -> InternalResult<Page<RenderedPost>> {
     let author = users
         .get_user_by_username(username)
         .await?

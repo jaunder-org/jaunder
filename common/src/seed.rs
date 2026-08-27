@@ -54,10 +54,6 @@ pub struct RenderedPost {
     pub permalink: Option<RootRelativeUrl>,
     /// True when the viewing user is the post author.
     pub is_author: bool,
-    /// True when this post is the author's own unpublished draft. Timeline
-    /// listings only ever carry published rows, so this is `false` there; it is
-    /// `true` only when `PostPage` renders a draft at its permalink.
-    pub is_draft: bool,
     /// Tags applied to this post, ordered by canonical slug.
     pub tags: Vec<TagSummary>,
 }
@@ -69,6 +65,13 @@ impl RenderedPost {
     #[must_use]
     pub fn display_time(&self) -> UtcInstant {
         self.published_at.unwrap_or(self.created_at)
+    }
+
+    /// Whether the post has not been published. Publication time is the sole
+    /// lifecycle signal on this wire DTO, so scheduled posts are not drafts.
+    #[must_use]
+    pub fn is_draft(&self) -> bool {
+        self.published_at.is_none()
     }
 }
 
@@ -83,10 +86,13 @@ pub struct PageCursor {
     pub post_id: PostId,
 }
 
-/// A cursor-paginated page of timeline posts.
+/// A cursor-paginated page of rows.
+///
+/// The envelope is shared by listing endpoints, while each endpoint retains its
+/// own row type and the specialized logic that derives its cursor.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TimelinePage {
-    pub posts: Vec<RenderedPost>,
+pub struct Page<Row> {
+    pub posts: Vec<Row>,
     /// Where the next page starts; `None` on the last page.
     pub next_cursor: Option<PageCursor>,
     pub has_more: bool,
@@ -116,23 +122,23 @@ pub struct AuthoredPost {
 /// projector's `#jaunder-seed` blob and adopted by the CSR client on boot.
 ///
 /// Variants carry the route context (`username` / `tag`) the bare
-/// [`TimelinePage`] lacks but the heading, title, and permalinks need — the
-/// reactive components get it from the route params today.
+/// [`Page`] lacks but the heading, title, and permalinks need — the reactive
+/// components get it from the route params today.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PageSeed {
-    SiteTimeline(TimelinePage),
+    SiteTimeline(Page<RenderedPost>),
     Profile {
         username: Username,
-        page: TimelinePage,
+        page: Page<RenderedPost>,
     },
     SiteTag {
         tag: Tag,
-        page: TimelinePage,
+        page: Page<RenderedPost>,
     },
     UserTag {
         username: Username,
         tag: Tag,
-        page: TimelinePage,
+        page: Page<RenderedPost>,
     },
     Permalink(AuthoredPost),
 }
@@ -145,8 +151,41 @@ mod tests {
         "2026-07-19T10:30:00Z".parse().unwrap()
     }
 
-    fn page(next_cursor: Option<PageCursor>) -> TimelinePage {
-        TimelinePage {
+    fn rendered_post(published_at: Option<UtcInstant>) -> RenderedPost {
+        RenderedPost {
+            post_id: PostId::from(1),
+            username: "alice".parse().unwrap(),
+            title: None,
+            summary: None,
+            slug: "hello".parse().unwrap(),
+            rendered_html: RenderedHtml::from_trusted("<p>hi</p>"),
+            created_at: instant(),
+            published_at,
+            permalink: None,
+            is_author: false,
+            tags: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn rendered_post_derives_draft_state_and_omits_it_from_the_wire() {
+        let draft = rendered_post(None);
+        let published = rendered_post(Some("2026-07-19T10:30:00Z".parse().unwrap()));
+        let scheduled = rendered_post(Some("2026-07-20T10:30:00Z".parse().unwrap()));
+
+        assert!(draft.is_draft());
+        assert!(!published.is_draft());
+        assert!(!scheduled.is_draft());
+
+        let json = serde_json::to_value(draft).unwrap();
+        assert!(json.get("is_draft").is_none(), "wire shape: {json}");
+
+        let deserialized: RenderedPost = serde_json::from_value(json).unwrap();
+        assert!(deserialized.is_draft());
+    }
+
+    fn page(next_cursor: Option<PageCursor>) -> Page<RenderedPost> {
+        Page {
             posts: Vec::new(),
             has_more: next_cursor.is_some(),
             next_cursor,
@@ -165,8 +204,24 @@ mod tests {
             })),
         ] {
             let json = serde_json::to_string(&original).unwrap();
-            let back: TimelinePage = serde_json::from_str(&json).unwrap();
+            let back: Page<RenderedPost> = serde_json::from_str(&json).unwrap();
             assert_eq!(back, original);
         }
+    }
+    /// The generic envelope must retain this pre-cutover JSON byte sequence for
+    /// an empty rendered timeline page, including the declaration order of its
+    /// fields.
+    #[test]
+    fn rendered_page_serializes_to_the_pre_cutover_bytes() {
+        let page: Page<RenderedPost> = Page {
+            posts: Vec::new(),
+            next_cursor: None,
+            has_more: false,
+        };
+
+        assert_eq!(
+            serde_json::to_string(&page).unwrap(),
+            r#"{"posts":[],"next_cursor":null,"has_more":false}"#
+        );
     }
 }

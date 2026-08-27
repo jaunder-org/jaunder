@@ -31,7 +31,7 @@ use leptos::prelude::*;
 
 use common::ids::PostId;
 use common::root_relative_url::RootRelativeUrl;
-use common::seed::{PageSeed, TimelinePage};
+use common::seed::{Page, PageSeed, RenderedPost};
 use common::tag::Tag;
 use common::username::Username;
 use common::visibility::AudienceSelection;
@@ -103,7 +103,7 @@ pub enum ListingRoute {
 /// seed, a seed for a different page kind, and no seed at all all mean the same
 /// thing — nothing to adopt — and the reactive fetch fills the page in.
 #[must_use]
-pub fn seeded_page(seed: Option<PageSeed>, route: &ListingRoute) -> Option<TimelinePage> {
+pub fn seeded_page(seed: Option<PageSeed>, route: &ListingRoute) -> Option<Page<RenderedPost>> {
     match (seed?, route) {
         (PageSeed::Profile { username, page }, ListingRoute::Profile(wanted))
             if wanted.as_ref() == Some(&username) =>
@@ -233,8 +233,8 @@ mod tests {
     use common::test_support::{parse_root_relative_url, parse_slug, parse_tag, parse_username};
     use common::time::UtcInstant;
 
-    fn page(has_more: bool) -> TimelinePage {
-        TimelinePage {
+    fn page(has_more: bool) -> Page<RenderedPost> {
+        Page {
             posts: Vec::new(),
             next_cursor: None,
             has_more,

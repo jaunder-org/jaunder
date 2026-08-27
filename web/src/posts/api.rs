@@ -24,7 +24,7 @@ use common::{
     visibility::AudienceSelection,
 };
 
-use common::seed::{AuthoredPost, PageCursor};
+use common::seed::{AuthoredPost, Page, PageCursor};
 
 use crate::error::WebResult;
 
@@ -153,7 +153,8 @@ pub struct EditPostPreview {
     pub fetched_at: UtcInstant,
 }
 
-/// One of the author's not-yet-public posts, as a row in an [`UnpublishedPage`].
+/// One of the author's not-yet-public posts, as a row in a
+/// [`Page<UnpublishedPost>`](Page).
 ///
 /// Named for the predicate the listing selects on, not for "draft": `list_drafts`
 /// returns true drafts (`published_at` NULL) **and** scheduled posts
@@ -174,17 +175,6 @@ pub struct UnpublishedPost {
     pub title: Option<PostTitle>,
     pub summary_label: PostSummary,
     pub edit_url: RootRelativeUrl,
-}
-
-/// A cursor-paginated page of the author's unpublished posts, returned by
-/// [`list_drafts`] — the drafts-surface counterpart of
-/// [`TimelinePage`](common::seed::TimelinePage).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct UnpublishedPage {
-    pub posts: Vec<UnpublishedPost>,
-    /// Where the next page starts; `None` on the last page.
-    pub next_cursor: Option<PageCursor>,
-    pub has_more: bool,
 }
 
 /// The author-supplied content of a post — the shared RPC input contract for
@@ -598,7 +588,7 @@ pub async fn get_audience_selection(post_id: PostId) -> WebResult<AudienceSelect
 pub async fn list_drafts(
     cursor: Option<PageCursor>,
     limit: Option<PageSize>,
-) -> WebResult<UnpublishedPage> {
+) -> WebResult<Page<UnpublishedPost>> {
     let auth = require_auth().await?;
     let posts = expect_context::<Arc<dyn PostStorage>>();
 
@@ -614,9 +604,9 @@ pub async fn list_drafts(
         .await?;
 
     // The same derivation `crate::timeline`'s `page_from_rows` performs, spelled
-    // here only because that helper is typed to `TimelinePage`/`RenderedPost`.
-    // Both halves of the has-more rule still come off `PageSize` rather than
-    // hand-rolled arithmetic, so the two sites cannot drift apart (#696).
+    // here only because that helper derives a rendered-post page. Both halves of
+    // the has-more rule still come off `PageSize` rather than hand-rolled arithmetic,
+    // so the two sites cannot drift apart (#696).
     let has_more = page_size.has_more(rows.len());
     rows.truncate(page_size.page_len());
     let next_cursor = has_more
@@ -626,7 +616,7 @@ pub async fn list_drafts(
 
     let unpublished = rows.into_iter().map(unpublished_post_from_record).collect();
 
-    Ok(UnpublishedPage {
+    Ok(Page {
         posts: unpublished,
         next_cursor,
         has_more,
@@ -642,7 +632,7 @@ pub async fn list_drafts(
 pub async fn list_scheduled(
     cursor: Option<PageCursor>,
     limit: Option<PageSize>,
-) -> WebResult<UnpublishedPage> {
+) -> WebResult<Page<UnpublishedPost>> {
     let auth = require_auth().await?;
     let posts = expect_context::<Arc<dyn PostStorage>>();
 
@@ -670,7 +660,7 @@ pub async fn list_scheduled(
 
     let scheduled = rows.into_iter().map(unpublished_post_from_record).collect();
 
-    Ok(UnpublishedPage {
+    Ok(Page {
         posts: scheduled,
         next_cursor,
         has_more,
@@ -787,14 +777,16 @@ mod tests {
             published_at: Some(parse_utc_instant("2026-01-01T00:00:00Z")),
             permalink: Some(parse_root_relative_url("/~alice/2026/01/01/hello")),
             is_author: false,
-            is_draft: true,
             tags: vec![],
         };
         let json = serde_json::to_string(&original).unwrap();
         let round_tripped: RenderedPost = serde_json::from_str(&json).unwrap();
         assert_eq!(round_tripped.rendered_html.as_ref(), "<p>hi</p>");
-        // `is_draft` is a plain bool with no custom serde — pin that it survives.
-        assert!(round_tripped.is_draft);
+        assert!(
+            !json.contains("\"is_draft\""),
+            "RenderedPost must not serialize redundant draft state: {json}"
+        );
+        assert!(!round_tripped.is_draft());
         assert_eq!(round_tripped, original);
     }
 
@@ -827,14 +819,14 @@ mod tests {
     // cursor/has-more envelope that lets the surface turn a page at all.
     #[test]
     fn unpublished_page_wire_nests_the_saved_post() {
-        use super::{SavedPost, UnpublishedPage, UnpublishedPost};
+        use super::{SavedPost, UnpublishedPost};
         use common::ids::PostId;
-        use common::seed::PageCursor;
+        use common::seed::{Page, PageCursor};
         use common::test_support::{
             parse_post_summary, parse_root_relative_url, parse_utc_instant,
         };
 
-        let page = UnpublishedPage {
+        let page = Page {
             posts: vec![UnpublishedPost {
                 post: SavedPost {
                     post_id: PostId::from(1),
@@ -853,9 +845,12 @@ mod tests {
             has_more: true,
         };
         let json = serde_json::to_string(&page).unwrap();
-        assert!(json.contains("\"post\":{"), "row must nest `post`: {json}");
         assert_eq!(
-            serde_json::from_str::<UnpublishedPage>(&json).unwrap(),
+            json,
+            r#"{"posts":[{"post":{"post_id":1,"slug":"hello","published_at":"2099-01-01T00:00:00Z","permalink":"/~alice/2099/01/01/hello"},"title":null,"summary_label":"fallback label","edit_url":"/posts/1/edit"}],"next_cursor":{"created_at":"2026-01-01T00:00:00Z","post_id":1},"has_more":true}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<Page<UnpublishedPost>>(&json).unwrap(),
             page
         );
     }
@@ -974,7 +969,7 @@ mod tests {
             },
             true,
         );
-        assert!(draft.post.is_draft);
+        assert!(draft.post.is_draft());
         assert!(draft.post.published_at.is_none());
         assert_eq!(draft.post.username, "author");
 
@@ -997,7 +992,7 @@ mod tests {
             },
             false,
         );
-        assert!(!published.post.is_draft);
+        assert!(!published.post.is_draft());
         assert!(published.post.published_at.is_some());
     }
 }

@@ -3,7 +3,7 @@ use axum::{
     response::{Html, IntoResponse, Response},
 };
 use common::etag::ETag;
-use common::seed::{PageSeed, TimelinePage};
+use common::seed::{Page, PageSeed, RenderedPost};
 use web::app::{
     GLUE_URL, MODULE_BEFORE_INIT_MARK, PREPAINT_SCRIPT, WASM_URL, render_head, render_shell,
 };
@@ -110,9 +110,9 @@ pub(super) fn permalink_response(
 /// under a live DB failure — stays unit-testable; `into_seed` wraps the page in
 /// its route's [`PageSeed`] variant.
 pub(super) fn timeline_response(
-    result: web::error::InternalResult<TimelinePage>,
+    result: web::error::InternalResult<Page<RenderedPost>>,
     headers: &HeaderMap,
-    into_seed: impl FnOnce(TimelinePage) -> PageSeed,
+    into_seed: impl FnOnce(Page<RenderedPost>) -> PageSeed,
 ) -> Response {
     match result {
         Ok(page) => cacheable(headers, &into_seed(page)),
@@ -132,11 +132,11 @@ pub(super) fn timeline_response(
 /// handlers so the error arm — otherwise reachable only under a live DB failure —
 /// stays unit-testable; `into_seed` wraps the page in its route's [`PageSeed`].
 pub(super) fn tag_response(
-    result: web::error::InternalResult<TimelinePage>,
+    result: web::error::InternalResult<Page<RenderedPost>>,
     headers: &HeaderMap,
     shell: &Shell,
     context: &'static str,
-    into_seed: impl FnOnce(TimelinePage) -> PageSeed,
+    into_seed: impl FnOnce(Page<RenderedPost>) -> PageSeed,
 ) -> Response {
     match result {
         Ok(page) => cacheable(headers, &into_seed(page)),
@@ -206,8 +206,8 @@ mod tests {
     #[test]
     fn document_head_starts_with_prepaint_then_early_wasm_fetch() {
         use super::document;
-        use common::seed::{PageSeed, TimelinePage};
-        let doc = document(&PageSeed::SiteTimeline(TimelinePage {
+        use common::seed::{Page, PageSeed};
+        let doc = document(&PageSeed::SiteTimeline(Page {
             posts: vec![],
             next_cursor: None,
             has_more: false,
@@ -240,7 +240,7 @@ mod tests {
     #[test]
     fn document_boots_the_same_wasm_url_as_the_spa_shell() {
         use super::document;
-        use common::seed::{PageSeed, TimelinePage};
+        use common::seed::{Page, PageSeed};
         // Drift guard (#234): the projector's server-rendered boot and the SPA
         // shell (`csr/index.html`) are two hand-written copies — they must load the
         // SAME wasm URL, or the CSR boot 404s on projector routes. Cross-checking the
@@ -256,7 +256,7 @@ mod tests {
             let rest = &html[start..];
             &rest[..rest.find('"').expect("explicit fallback closing quote")]
         }
-        let doc = document(&PageSeed::SiteTimeline(TimelinePage {
+        let doc = document(&PageSeed::SiteTimeline(Page {
             posts: vec![],
             next_cursor: None,
             has_more: false,
@@ -277,8 +277,8 @@ mod tests {
     #[test]
     fn document_marks_module_before_init_immediately_before_wasm_init() {
         use super::document;
-        use common::seed::{PageSeed, TimelinePage};
-        let doc = document(&PageSeed::SiteTimeline(TimelinePage {
+        use common::seed::{Page, PageSeed};
+        let doc = document(&PageSeed::SiteTimeline(Page {
             posts: vec![],
             next_cursor: None,
             has_more: false,

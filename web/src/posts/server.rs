@@ -35,8 +35,6 @@ pub fn rendered_post(post: PostRecord, viewer_user_id: Option<UserId>) -> Option
         published_at: Some(published_at),
         permalink: Some(permalink),
         is_author: viewer_user_id == Some(user_id),
-        // Only ever built from a published post (the `?` above bails on a draft).
-        is_draft: false,
         tags: post_tags_to_summaries(tags),
     })
 }
@@ -53,12 +51,12 @@ fn post_tags_to_summaries(tags: Vec<PostTag>) -> Vec<TagSummary> {
 /// Build a permalink post — draft or published — for its author's own surfaces
 /// and for the projector's seed.
 ///
-/// Deliberately **not** built on [`rendered_post`]: three of the inner fields are
-/// derived differently here. A draft permalink is exactly what this serves, so
-/// there is no bail; `is_author` comes from the caller's session check rather
-/// than a viewer comparison; `is_draft` follows `published_at`; and the permalink
-/// is withheld from a draft, which has no public URL. Routing this through the
-/// listing builder would change the seeded draft paint with nothing to point at.
+/// Deliberately **not** built on [`rendered_post`]: two inner fields are derived
+/// differently here. A draft permalink is exactly what this serves, so there is
+/// no bail; `is_author` comes from the caller's session check rather than a viewer
+/// comparison; and the permalink is withheld from a draft, which has no public URL.
+/// Routing this through the listing builder would change the seeded draft paint with
+/// nothing to point at.
 #[must_use]
 pub fn authored_post(post: PostRecord, is_author: bool) -> AuthoredPost {
     // Only published posts have a public permalink. For drafts, the permalink is None.
@@ -86,7 +84,6 @@ pub fn authored_post(post: PostRecord, is_author: bool) -> AuthoredPost {
             slug,
             rendered_html,
             created_at,
-            is_draft: published_at.is_none(),
             published_at,
             permalink,
             is_author,
@@ -173,12 +170,12 @@ mod tests {
         assert_eq!(authored.format, PostFormat::Markdown);
     }
 
-    // `authored_post` and `rendered_post` build the same twelve inner fields, and
-    // three of them diverge: a draft permalink is exactly what `authored_post`
-    // serves, so it must not bail, must report `is_draft`, and must withhold the
-    // public permalink. Delegating to `rendered_post` (or factoring a shared inner
-    // builder) passes every other test and surfaces only as an unexplained
-    // ADR-0044 paint diff on the seeded draft permalink — this pins it.
+    // `authored_post` and `rendered_post` build the same eleven inner fields, and
+    // two of them diverge: a draft permalink is exactly what `authored_post`
+    // serves, so it must not bail and must withhold the public permalink.
+    // Delegating to `rendered_post` (or factoring a shared inner builder) passes every
+    // other test and surfaces only as an unexplained ADR-0044 paint diff on the seeded
+    // draft permalink — this pins it.
     #[cfg(feature = "server")]
     #[test]
     fn authored_post_leaves_a_draft_published_at_none() {
@@ -220,7 +217,7 @@ mod tests {
             "a draft has no publication instant"
         );
         assert!(
-            authored.post.is_draft,
+            authored.post.is_draft(),
             "a draft permalink must paint its draft banner"
         );
         assert_eq!(

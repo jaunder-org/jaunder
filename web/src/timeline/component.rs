@@ -12,7 +12,7 @@ use leptos::task::spawn_local;
 use leptos_router::components::Redirect;
 
 use common::pagination::PageSize;
-use common::seed::{PageCursor, TimelinePage};
+use common::seed::{Page, PageCursor, RenderedPost};
 
 use super::state::{NoIdentity, TimelinePaint, TimelineState};
 use crate::error::WebResult;
@@ -24,7 +24,7 @@ use crate::taglist::TagCtx as TagContext;
 pub fn spawn_load_more<F, Fut>(state: TimelineState, fetch: F)
 where
     F: FnOnce(Option<PageCursor>, Option<PageSize>) -> Fut + 'static,
-    Fut: Future<Output = WebResult<TimelinePage>> + 'static,
+    Fut: Future<Output = WebResult<Page<RenderedPost>>> + 'static,
 {
     // The guard, the cursor read, and the result fold are all host-tested on
     // `TimelineState` (#671); what cannot run on the host — and so all that is left
@@ -45,7 +45,7 @@ where
 /// `TimelineState::apply`.
 pub fn wire_timeline_resolve(
     state: TimelineState,
-    initial_page: Resource<WebResult<TimelinePage>>,
+    initial_page: Resource<WebResult<Page<RenderedPost>>>,
 ) {
     Effect::new(move |_| {
         if let Some(result) = initial_page.try_get().flatten() {

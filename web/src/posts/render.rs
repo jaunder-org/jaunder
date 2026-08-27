@@ -268,7 +268,7 @@ pub(crate) mod test_fixtures {
     use super::*;
     use common::ids::PostId;
     use common::render::PostFormat;
-    use common::seed::{AuthoredPost, TimelinePage};
+    use common::seed::{AuthoredPost, Page};
     use common::test_support::{
         parse_post_body, parse_post_summary, parse_root_relative_url, parse_username,
         parse_utc_instant,
@@ -287,7 +287,6 @@ pub(crate) mod test_fixtures {
                 published_at: Some(parse_utc_instant("2026-01-02T03:04:05Z")),
                 permalink: Some(parse_root_relative_url("/~alice/2026/01/02/hello")),
                 is_author: false,
-                is_draft: false,
                 tags: vec![TagSummary {
                     slug: "rust".parse().unwrap(),
                     display: "Rust".parse().unwrap(),
@@ -310,13 +309,12 @@ pub(crate) mod test_fixtures {
             published_at: Some(parse_utc_instant("2026-01-01T00:00:00Z")),
             permalink: Some(parse_root_relative_url("/~bob/2026/01/01/first")),
             is_author: false,
-            is_draft: false,
             tags: vec![],
         }
     }
 
-    pub(crate) fn one_post_page() -> TimelinePage {
-        TimelinePage {
+    pub(crate) fn one_post_page() -> Page<RenderedPost> {
+        Page {
             posts: vec![sample_summary()],
             next_cursor: None,
             has_more: false,
@@ -328,7 +326,7 @@ pub(crate) mod test_fixtures {
 mod tests {
     use super::test_fixtures::{one_post_page, sample_post, sample_summary};
     use super::*;
-    use common::seed::TimelinePage;
+    use common::seed::Page;
     use common::test_support::{
         parse_post_summary, parse_post_title, parse_root_relative_url, parse_username,
         parse_utc_instant,
@@ -421,7 +419,7 @@ mod tests {
 
     #[test]
     fn timeline_renders_each_post_and_heading() {
-        let page = TimelinePage {
+        let page = Page {
             posts: vec![sample_summary()],
             next_cursor: None,
             has_more: false,
@@ -438,7 +436,7 @@ mod tests {
 
     #[test]
     fn empty_timeline_renders_placeholder() {
-        let page = TimelinePage {
+        let page = Page {
             posts: vec![],
             next_cursor: None,
             has_more: false,
@@ -509,7 +507,7 @@ mod tests {
 
     #[test]
     fn timeline_page_empty_states_differ_by_route() {
-        let empty = TimelinePage {
+        let empty = Page {
             posts: vec![],
             next_cursor: None,
             has_more: false,
