@@ -1151,20 +1151,20 @@ Server fns get their dependencies via per-trait Leptos context, never a bundle �
 `expect_context::<Arc<dyn FooStorage>>()`
 ([ADR-0016](adr/0016-dependency-injection-and-appstate.md)), e.g.
 `web/src/audiences/api.rs:66`. The macro also wraps each body in
-`crate::error::server_boundary` (`macros/src/server_fn.rs:166`); there is no
+`crate::error::server_boundary` (`macros/src/server_fn.rs:304`); there is no
 hand-written `boundary!` call. Server integration/router tests call
-`server/tests/helpers/registrar.rs::ensure_server_fns_registered`, which
-iterates a host-only `linkme` distributed slice owned by `web` and populated by
-`#[macros::server]` registration thunks
-([ADR-0066](adr/0066-server-fn-test-registrar-guard.md)). There is no
-hand-maintained test registrar and no registrar-completeness xtask gate; the
-registration omission is made unrepresentable by macro expansion. ADR-0016's
-SSR-era owner-pinning addenda have been retired: the sole server-fn invocation
-path, `leptos_axum`'s `/api` handler, holds the owner strong for the whole call,
-so no `ScopedFuture` wrapper and no sanctioned `Resource` constructor exist —
-components call `Resource::new` directly (13 files across `web/src`), and no
-clippy `disallowed-methods` entry bans it — `clippy.toml` has no
-`disallowed-methods` entry at all; it only _relaxes_ `unwrap`/`expect` for
+`server/tests/helpers/registrar.rs::ensure_server_fns_registered()`, which
+initializes the sole explicit list of
+`server_fn::axum::register_explicit::<web::…>()` calls
+([ADR-0066](adr/0066-server-fn-test-registrar-guard.md), amended #848). The
+host-side `server-fn-registrar` gate parses both the `web` server-fn inventory
+and that list, so an omitted registration fails before it can silently 404.
+ADR-0016's SSR-era owner-pinning addenda have been retired: the sole server-fn
+invocation path, `leptos_axum`'s `/api` handler, holds the owner strong for the
+whole call, so no `ScopedFuture` wrapper and no sanctioned `Resource`
+constructor exist — components call `Resource::new` directly (13 files across
+`web/src`), and no clippy `disallowed-methods` entry bans it — `clippy.toml` has
+no `disallowed-methods` entry at all; it only _relaxes_ `unwrap`/`expect` for
 tests, which the workspace otherwise denies (`Cargo.toml:141`).
 
 `web/` is a **thin shell**
@@ -2424,6 +2424,7 @@ native host checks because `xtask/` is excluded from the flake source.
 | `doc-links`                                                | intra-doc link targets                                                                                                                                           |
 | `flow-docs`                                                | typed CSR route/endpoint/matrix declarations in `docs/flows/`; one flow owner per endpoint; checked snapshot status                                              |
 | `test-backend-pattern`                                     | dual-backend storage test shape                                                                                                                                  |
+| `server-fn-registrar`                                      | every `web` `#[server]` fn is in the explicit test registrar                                                                                                     |
 | `server-fn-tracing`                                        | each server fn's instrumentation                                                                                                                                 |
 | `server-fn-coverage`                                       | static lane of the flow-coverage snapshot                                                                                                                        |
 | `traced-context`                                           | context propagation                                                                                                                                              |
@@ -2541,17 +2542,20 @@ instrumentation.
 
 ### Server-fn gates
 
-One host gate directly guards server-fn flow evidence, while macro expansion and
-runtime tests own the guarantees that used to need source-list gates.
+Host gates and an enumeration-independent runtime suite protect the server-fn
+surface. `server-fn-registrar`
+([ADR-0066](adr/0066-server-fn-test-registrar-guard.md), amended #848) parses
+the `#[macros::server]` inventory and the sole explicit
+`register_explicit::<web::<vertical>::<Type>>()` list in
+`ensure_server_fns_registered()`. It rejects missing entries, malformed
+registrar paths, and duplicate `(vertical, leaf)` type keys; its real-tree test
+also proves the non-empty inventory count equals the deduplicated registrar
+count. The helper still initializes that list once for integration tests.
 
-`#[macros::server]` emits a host-only `linkme` registration thunk for every
-server fn into a `web`-owned distributed slice
-([ADR-0066](adr/0066-server-fn-test-registrar-guard.md)). Integration tests keep
-the stable harness call `ensure_server_fns_registered()`, but it now iterates
-the slice instead of maintaining `register_explicit::<web::…>()` calls by hand.
-Server-fn wire uniqueness rests on the placement rule and the generated-type
-wire assertions in `server/tests/web/server_fn_wire.rs`, including pairwise
-`ServerFn::PATH` distinctness.
+The generated-type wire assertions in `server/tests/web/server_fn_wire.rs`
+remain an enumeration-independent backstop: they assert each derived
+`ServerFn::PATH` and pairwise distinctness, and their table count agrees with
+the registrar count.
 
 `server-fn-coverage` ([ADR-0081](adr/0081-empirical-server-fn-flow-coverage.md))
 answers a question line coverage cannot: which server entry points a real

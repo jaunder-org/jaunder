@@ -19,7 +19,7 @@ use server_fn::ServerFn;
 /// `<type> => "<vertical>" / "<ident>"`, and generates the collector that asserts
 /// it.
 ///
-/// A table rather than 55 inline assertions: the list is the interesting part, and
+/// A table rather than 56 inline assertions: the list is the interesting part, and
 /// one line per fn keeps it readable — and short enough not to trip
 /// `clippy::too_many_lines`, which an unrolled version does at 138 lines.
 macro_rules! wire_contract {
@@ -114,8 +114,8 @@ fn every_server_fn_path_is_api_vertical_ident() {
     let paths = asserted_paths();
     assert_eq!(
         paths.len(),
-        web::server_fn_registration::registration_count(),
-        "every auto-registered server fn must have its wire path asserted here"
+        crate::helpers::REGISTERED_SERVER_FN_COUNT,
+        "every registered server fn must have its wire path asserted here"
     );
 }
 

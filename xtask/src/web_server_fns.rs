@@ -89,8 +89,9 @@ struct Visitor {
 /// is deliberately *not* enumerated, because a fn wearing it declares its own
 /// endpoint and span and is exactly what this migration retired. Nothing in
 /// `web/src` may reintroduce it. The runtime wire contract in
-/// `server/tests/web/server_fn_wire.rs` keeps a real generated-type backstop, and
-/// the coverage snapshot keeps an empty inventory from looking like success.
+/// `server/tests/web/server_fn_wire.rs` keeps a generated-type backstop, while
+/// the registrar gate's real-tree count assertion keeps an empty inventory from
+/// looking like success.
 fn is_server_attr(attr: &syn::Attribute) -> bool {
     let segments = &attr.path().segments;
     segments.len() == 2 && segments[0].ident == "macros" && segments[1].ident == "server"
@@ -310,8 +311,8 @@ mod tests {
         // #714 retired leptos's bare `#[server]` from `web/src`: a fn wearing it
         // declares its own endpoint and span, which is what the macro exists to
         // derive. Enumerating it would resurrect the gate branches that tolerated
-        // both spellings; the runtime wire contract and coverage snapshot are what
-        // stop this narrowing from becoming a silent green on the real tree.
+        // both spellings; the registrar gate's real-tree count assertion and the
+        // runtime wire contract stop this narrowing from becoming a silent green.
         let src = format!(
             "{}#[macros::server(skip(name))]\npub async fn create(name: AudienceName) -> R {{}}\n",
             retired_server_fn(

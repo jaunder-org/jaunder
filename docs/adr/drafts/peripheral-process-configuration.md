@@ -13,6 +13,12 @@ test mutation behind one lock, but that lock cannot constrain reads performed by
 runtime threads, libc, or dependencies. The safety obligation is therefore
 auditable but not structurally discharged.
 
+The prohibition also applies to code generated inside a Jaunder crate. The
+`linkme` distributed slice selected by
+[ADR-0066](../0066-server-fn-test-registrar-guard.md) expands to an unsafe
+`link_section` declaration in `web`; centralizing unsafe inside a dependency
+does not make the repository exception-free.
+
 The same migration exposed a broader design problem. Host telemetry and capture,
 storage opening, PostgreSQL test provisioning, and Clap tests obtain
 configuration from ambient process state at different depths. Tests mutate that
@@ -71,6 +77,9 @@ remain current.
   Third-party wrappers around the same operating-system mutation are ruled out.
 - The repository-wide unsafe prohibition becomes structural rather than a grep
   convention, and no lint suppression is needed.
+- Server-fn integration tests return to ADR-0066's explicit registrar plus
+  completeness gate. This trades generated unsafe code for a mechanical list
+  whose drift fails the ordinary static gate.
 - Compile-time environment access and process-manager or child-command
   provisioning are outside this decision because they do not mutate a running
   process's environment.

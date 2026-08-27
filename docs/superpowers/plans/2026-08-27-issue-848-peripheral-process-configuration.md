@@ -79,16 +79,20 @@ Out:
     or exported test `Env`, and runtime configuration `var`/`var_os` calls are
     confined to the approved composition roots.
 
-- [ ] Task 5: Enforce and document exception-free unsafe Rust
+- [x] Task 5: Enforce and document exception-free unsafe Rust
   - Contract: Cargo lint configuration forbids unsafe code in the root, `xtask`,
     and `tools` workspaces; root members inherit except `web`, whose local lint
     table carries the equivalent rule, and every tools member inherits its
-    workspace rule. No suppression exists. Ship the proposed peripheral-process
-    ADR, ADR-0104's dated partial-supersession note, and the truthful
-    architecture projection; `CONTEXT.md` remains unchanged.
+    workspace rule. No suppression exists. Because `linkme` expands to forbidden
+    `link_section` code in `web`, server-fn integration registration uses the
+    explicit registrar protected by its restored completeness gate. Ship the
+    proposed peripheral-process ADR, ADR-0104's dated partial-supersession note,
+    ADR-0066's dated registrar amendment, and the truthful architecture
+    projection; `CONTEXT.md` remains unchanged.
   - Verification: temporary unsafe probes fail through an inherited root member,
     `web`, standalone `xtask`, and an inherited tools member, then are removed.
-    Manifest/document checks and the relevant focused Rust lanes pass.
+    The registrar gate and macro/wire tests, manifest/document checks, and the
+    relevant focused Rust lanes pass.
 
 ## Ordering and contracts
 
@@ -98,8 +102,9 @@ Out:
 - Task 2's storage runtime configuration is application-only; Task 3's test
   provisioning configuration is a distinct type and must not acquire application
   password-override semantics.
-- Task 5 lands after Task 4 removes the only existing unsafe code; the temporary
-  probes verify enforcement and never enter a kept commit.
+- Task 5 lands after Task 4 removes the explicit unsafe seam; it also removes
+  the unsafe `linkme` expansion before enabling the lint. Temporary probes
+  verify every lint path and never enter a kept commit.
 - Each completed task reaches `jaunder-commit` after its focused evidence. The
   commit hook owns the single precommit run; commits carry no `Co-Authored-By`
   trailer.

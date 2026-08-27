@@ -36,7 +36,6 @@ serde_json = { workspace = true }
 strum.workspace = true
 thiserror.workspace = true
 tracing = { workspace = true }
-linkme = { workspace = true, optional = true }
 
 [dev-dependencies]
 common = { workspace = true, features = ["test-utils", "test-support"] }
@@ -66,7 +65,6 @@ server = [
     "dep:axum",
     "dep:chrono",
     "dep:storage",
-    "dep:linkme",
 ]
 
 [lints.clippy]
@@ -76,3 +74,8 @@ server = [
 pedantic = { level = "warn", priority = -1 }
 unwrap_used = "deny"
 expect_used = "deny"
+
+# Cargo forbids combining workspace lint inheritance with this local Clippy
+# exception, so this table carries the equivalent workspace Rust rule too.
+[lints.rust]
+unsafe_code = "forbid"

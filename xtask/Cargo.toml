@@ -4,11 +4,17 @@
 # are virtual manifests, which default to resolver 1, so all three must say it.
 resolver = "3"
 
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
 [package]
 name = "xtask"
 version = "0.1.0"
 edition = "2024"
 publish = false
+
+[lints]
+workspace = true
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
