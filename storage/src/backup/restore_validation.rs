@@ -8,6 +8,7 @@ use common::config_key::{SiteConfigKey, UserConfigKey};
 use common::display_name::DisplayName;
 use common::email::Email;
 use common::feed::{FeedEventStatus, FeedPath};
+use common::idempotency_key::IdempotencyKey;
 use common::media::{
     ByteSize, ContentHash, ContentType, Filename, MediaReferenceForm, MediaReferenceKind,
     MediaSource,
@@ -91,6 +92,9 @@ pub(crate) fn validate_restore_row(
             validate_typed_restore_row::<EmailVerificationsRestoreRow>(row, report);
         }
         "feed_events" => validate_typed_restore_row::<FeedEventsRestoreRow>(row, report),
+        "idempotency_keys" => {
+            validate_typed_restore_row::<IdempotencyKeysRestoreRow>(row, report);
+        }
         "invites" => validate_typed_restore_row::<InvitesRestoreRow>(row, report),
         "media" => validate_typed_restore_row::<MediaRestoreRow>(row, report),
         "password_resets" => validate_typed_restore_row::<PasswordResetsRestoreRow>(row, report),
@@ -247,6 +251,46 @@ typed_restore_row!(FeedEventsRestoreRow, "feed_events" {
     feed_url: FeedPath => ("feed_url", "feed path"),
     status: FeedEventStatus => ("status", "feed event status"),
 });
+
+struct IdempotencyKeysRestoreRow {
+    key: Option<RestoreText>,
+}
+
+impl RestoreTableRow for IdempotencyKeysRestoreRow {
+    fn from_restore(row: &RestoreRowMap) -> Self {
+        Self {
+            key: restore_text(row, "key"),
+        }
+    }
+
+    fn validate(&self, report: &mut RestoreValidationReport) {
+        let Some(raw_key) = &self.key else {
+            return;
+        };
+        let key = match raw_key.as_str().parse::<IdempotencyKey>() {
+            Ok(key) => key,
+            Err(error) => {
+                push_issue(
+                    report,
+                    "idempotency_keys",
+                    "key",
+                    "idempotency key",
+                    error.to_string(),
+                );
+                return;
+            }
+        };
+        if key.as_ref() != raw_key.as_str() {
+            push_issue(
+                report,
+                "idempotency_keys",
+                "key",
+                "idempotency key",
+                "idempotency key must be canonical (without surrounding whitespace)",
+            );
+        }
+    }
+}
 
 typed_restore_row!(InvitesRestoreRow, "invites" {
     code: InviteCode => ("code", "invite code"),
@@ -437,6 +481,7 @@ pub(crate) const RESTORE_COLUMN_COVERAGE: &[RestoreColumnCoverage] = &[
         RestoreBadValue::Text("not a feed"),
     ),
     covered("feed_events", "status", RestoreBadValue::Text("sideways")),
+    covered("idempotency_keys", "key", RestoreBadValue::Text("")),
     covered("invites", "code", RestoreBadValue::Text("!")),
     covered("media", "sha256", RestoreBadValue::Text("bad")),
     covered("media", "filename", RestoreBadValue::Text("my photo.jpg")),
@@ -511,11 +556,6 @@ pub(crate) const RESTORE_COLUMN_COVERAGE: &[RestoreColumnCoverage] = &[
         "audience_members",
         "author_user_id",
         "foreign-key id: schema validation preserves the value",
-    ),
-    primitive(
-        "idempotency_keys",
-        "key",
-        "primitive restore until idempotency keys are typed (#1086)",
     ),
     primitive(
         "post_revisions",
@@ -728,6 +768,69 @@ mod tests {
                 entry.column
             );
         }
+    }
+
+    #[test]
+    fn idempotency_key_restore_row_allows_missing_key_for_structural_validation() {
+        let row = serde_json::Map::new();
+        let mut report = RestoreValidationReport::default();
+
+        validate_restore_row("idempotency_keys", &row, &mut report);
+
+        assert!(report.is_empty(), "missing key produced {report:?}");
+    }
+
+    #[test]
+    fn idempotency_key_restore_row_accepts_valid_key() {
+        let mut row = serde_json::Map::new();
+        row.insert("key".to_owned(), serde_json::json!("retry-key"));
+        let mut report = RestoreValidationReport::default();
+
+        validate_restore_row("idempotency_keys", &row, &mut report);
+
+        assert!(report.is_empty(), "valid key produced {report:?}");
+    }
+
+    #[test]
+    fn idempotency_key_restore_row_reports_blank_keys() {
+        for key in ["", " \t\n"] {
+            let mut row = serde_json::Map::new();
+            row.insert("key".to_owned(), serde_json::json!(key));
+            let mut report = RestoreValidationReport::default();
+
+            validate_restore_row("idempotency_keys", &row, &mut report);
+
+            assert_eq!(
+                report.issues(),
+                &[RestoreValidationIssue {
+                    table: "idempotency_keys".to_owned(),
+                    column: "key".to_owned(),
+                    value_class: "idempotency key".to_owned(),
+                    reason: "idempotency key must be non-empty".to_owned(),
+                }],
+                "key {key:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn idempotency_key_restore_row_reports_padded_keys() {
+        let mut row = serde_json::Map::new();
+        row.insert("key".to_owned(), serde_json::json!(" retry-key\t"));
+        let mut report = RestoreValidationReport::default();
+
+        validate_restore_row("idempotency_keys", &row, &mut report);
+
+        assert_eq!(
+            report.issues(),
+            &[RestoreValidationIssue {
+                table: "idempotency_keys".to_owned(),
+                column: "key".to_owned(),
+                value_class: "idempotency key".to_owned(),
+                reason: "idempotency key must be canonical (without surrounding whitespace)"
+                    .to_owned(),
+            }]
+        );
     }
 
     #[test]

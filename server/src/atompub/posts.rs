@@ -12,6 +12,7 @@ use serde::Deserialize;
 
 use common::atompub::{CollectionFeedTitle, Entry, FeedMeta, entry_to_xml, render_feed};
 use common::etag::{ETag, post_content_etag};
+use common::idempotency_key::IdempotencyKey;
 use common::ids::PostId;
 use common::org::{OrgOperation, OrgStructuredMetadata, Presence, PublicationState, normalize_org};
 use common::pagination::PageSize;
@@ -120,6 +121,15 @@ fn if_match_satisfied(headers: &HeaderMap, etag: &ETag) -> bool {
         None => true,
     }
 }
+
+/// Parses the optional retry key while preserving `AtomPub`'s compatibility policy:
+/// unreadable or blank headers do not opt the request into deduplication.
+fn idempotency_key_from_headers(headers: &HeaderMap) -> Option<IdempotencyKey> {
+    headers
+        .get("idempotency-key")
+        .and_then(|value| value.to_str().ok()?.parse().ok())
+}
+
 fn scalar_presence<T: Clone>(value: Option<&T>) -> Presence<T> {
     value.cloned().map_or(Presence::Absent, Presence::Present)
 }
@@ -478,12 +488,7 @@ pub async fn collection_post(
         Presence::Present(audiences) => audiences,
         Presence::Absent => vec![site_config.get_default_audience().await?.into()],
     };
-    // A client-supplied idempotency key dedups a retried create (duplicate-on-retry).
-    let idem = headers
-        .get("idempotency-key")
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    let idempotency_key = idempotency_key_from_headers(&headers);
 
     let created = storage::perform_post_creation(
         posts,
@@ -497,7 +502,7 @@ pub async fn collection_post(
             max_attempts: 100,
             summary,
             audiences,
-            idempotency_key: idem,
+            idempotency_key: idempotency_key.as_ref(),
             expectations,
         },
     )
@@ -511,7 +516,7 @@ pub async fn collection_post(
     // A reused idempotency key returns the original post as `200` — skipping category
     // re-application (the original already carries its tags).
     if let Err(storage::PerformCreationError::IdempotencyConflict) = &created {
-        let key = idem.ok_or(HandlerError::Invariant)?;
+        let key = idempotency_key.as_ref().ok_or(HandlerError::Invariant)?;
         let post_id = posts
             .post_id_for_idempotency_key(auth_user.user_id, key)
             .await?

@@ -17,6 +17,7 @@ pub mod display_name;
 pub mod email;
 pub mod etag;
 pub mod feed;
+pub mod idempotency_key;
 pub mod ids;
 pub mod invite;
 pub mod list_state;

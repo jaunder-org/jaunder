@@ -10,6 +10,7 @@ use thiserror::Error;
 use crate::InstanceId;
 use common::etag::{ETag, post_content_etag};
 use common::feed::FeedPath;
+use common::idempotency_key::IdempotencyKey;
 use common::ids::{AudienceId, ChannelId, PostId, RevisionId, TagId, UserId};
 use common::media::{MediaRef, MediaReference, MediaReferenceForm, MediaReferenceKind};
 use common::pagination::RowLimit;
@@ -346,7 +347,7 @@ pub struct CreatePostInput {
     /// If `Some`, register this idempotency key against the new post in the
     /// same transaction. A `(user_id, key)` collision maps to
     /// [`CreatePostError::IdempotencyConflict`] and rolls the whole create back.
-    pub idempotency_key: Option<String>,
+    pub idempotency_key: Option<IdempotencyKey>,
 }
 
 /// What an update does to a Post's publication state.
@@ -918,7 +919,7 @@ pub trait PostStorage: Send + Sync {
     async fn post_id_for_idempotency_key(
         &self,
         user_id: UserId,
-        key: &str,
+        key: &IdempotencyKey,
     ) -> Result<Option<PostId>, sqlx::Error>;
 
     /// Fetches a post by its ID, applying the viewer-resolution filter: the post
@@ -1505,6 +1506,7 @@ where
     // bind, forwarded from `write_post_in_tx` (create paths).
     String: sqlx::Type<DB>,
     for<'q> String: sqlx::Encode<'q, DB>,
+    for<'q> &'q IdempotencyKey: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<&'q PostTitle>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `summary` binds as `Option<&PostSummary>` via the ADR-0071 sqlx bridge on
     // the create paths, mirroring the `Option<&PostTitle>` bound above.
@@ -1574,13 +1576,12 @@ where
     async fn post_id_for_idempotency_key(
         &self,
         user_id: UserId,
-        key: &str,
+        key: &IdempotencyKey,
     ) -> Result<Option<PostId>, sqlx::Error> {
         let post_id = sqlx::query_scalar::<_, PostId>(
             "SELECT post_id FROM idempotency_keys WHERE user_id = $1 AND key = $2",
         )
         .bind(user_id)
-        // sqlx-newtype-bind:allow deferred-newtype #1086 — idempotency keys are tracked for a domain value.
         .bind(key)
         .fetch_optional(&self.pool)
         .await?;
@@ -2961,6 +2962,7 @@ where
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<String>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> &'q IdempotencyKey: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<UtcInstant>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // `Slug`/`PostBody` bind as themselves and `PostTitle` as `Option<&PostTitle>`
@@ -3022,7 +3024,7 @@ where
     // an `IdempotencyConflict` (a duplicate create), distinct from the post
     // INSERT's `SlugConflict` above. Attribution is by which statement's
     // `map_err` fires, not by inspecting the constraint name.
-    if let Some(key) = input.idempotency_key.as_deref() {
+    if let Some(key) = input.idempotency_key.as_ref() {
         sqlx::query("INSERT INTO idempotency_keys (user_id, key, post_id) VALUES ($1, $2, $3)")
             .bind(input.user_id)
             .bind(key)

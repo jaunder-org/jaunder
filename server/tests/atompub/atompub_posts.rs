@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    http::{Method, Request, StatusCode, header},
+    http::{HeaderValue, Method, Request, StatusCode, header},
 };
 use common::ids::PostId;
 use common::root_relative_url::RootRelativeUrl;
@@ -2238,12 +2238,29 @@ async fn update_with_explicit_draft_no_preserves_published_instant(#[case] backe
     );
 }
 
-/// POST a create as alice, optionally with an `Idempotency-Key`.
+/// POST a create as `session`, optionally with an `Idempotency-Key`.
 async fn create_post_keyed(
     app: axum::Router,
     session: &SeededSession,
     xml: &str,
     idempotency_key: Option<&str>,
+) -> axum::response::Response {
+    create_post_with_idempotency_header(
+        app,
+        session,
+        xml,
+        idempotency_key.map(|key| HeaderValue::try_from(key).unwrap()),
+    )
+    .await
+}
+
+/// POST a create with a raw idempotency header value so boundary tests exercise
+/// `HeaderValue::to_str`, rather than pre-validating through request strings.
+async fn create_post_with_idempotency_header(
+    app: axum::Router,
+    session: &SeededSession,
+    xml: &str,
+    idempotency_key: Option<HeaderValue>,
 ) -> axum::response::Response {
     let mut builder = atompub(session, Method::POST, "posts")
         .header(header::CONTENT_TYPE, "application/atom+xml");
@@ -2279,7 +2296,8 @@ async fn create_with_same_idempotency_key_dedups(#[case] backend: Backend) {
     let etag1 = etag_of(&first);
     let body1 = body_string(first).await;
 
-    let second = create_post_keyed(app, &session, &xml, Some("idem-1")).await;
+    let retry_xml = entry_xml("Changed", "text", "different retry content");
+    let second = create_post_keyed(app, &session, &retry_xml, Some("idem-1")).await;
     assert_eq!(second.status(), StatusCode::OK);
     assert_eq!(
         location_of(&second),
@@ -2330,6 +2348,52 @@ async fn create_without_idempotency_key_is_201(#[case] backend: Backend) {
 
     let response = create_post_keyed(app, &session, &xml, None).await;
     assert_eq!(response.status(), StatusCode::CREATED);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn unreadable_or_blank_idempotency_keys_do_not_dedup(#[case] backend: Backend) {
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let session = create_user_and_session(&state).await;
+    let app = make_app(&state, &base);
+    let xml = entry_xml("Hello", "text", "the body");
+
+    for header_value in [
+        HeaderValue::from_static(" \t "),
+        HeaderValue::from_bytes("rétry".as_bytes()).unwrap(),
+        HeaderValue::from_bytes(&[0xff]).unwrap(),
+    ] {
+        let first = create_post_with_idempotency_header(
+            app.clone(),
+            &session,
+            &xml,
+            Some(header_value.clone()),
+        )
+        .await;
+        let second =
+            create_post_with_idempotency_header(app.clone(), &session, &xml, Some(header_value))
+                .await;
+        assert_eq!(first.status(), StatusCode::CREATED);
+        assert_eq!(second.status(), StatusCode::CREATED);
+        assert_ne!(location_of(&first), location_of(&second));
+    }
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn idempotency_key_is_scoped_to_the_authenticated_user(#[case] backend: Backend) {
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let alice = create_user_and_session(&state).await;
+    let bob = create_user_and_session(&state).await;
+    let app = make_app(&state, &base);
+    let xml = entry_xml("Hello", "text", "the body");
+
+    let alice_response = create_post_keyed(app.clone(), &alice, &xml, Some("shared-key")).await;
+    let bob_response = create_post_keyed(app, &bob, &xml, Some("shared-key")).await;
+
+    assert_eq!(alice_response.status(), StatusCode::CREATED);
+    assert_eq!(bob_response.status(), StatusCode::CREATED);
+    assert_ne!(location_of(&alice_response), location_of(&bob_response));
 }
 
 #[apply(backends)]
