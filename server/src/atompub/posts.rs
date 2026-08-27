@@ -12,6 +12,7 @@ use serde::Deserialize;
 
 use common::atompub::{CollectionFeedTitle, Entry, FeedMeta, entry_to_xml, render_feed};
 use common::etag::{ETag, post_content_etag};
+use common::idempotency_key::IdempotencyKey;
 use common::ids::PostId;
 use common::org::{OrgOperation, OrgStructuredMetadata, Presence, PublicationState, normalize_org};
 use common::pagination::PageSize;
@@ -479,11 +480,11 @@ pub async fn collection_post(
         Presence::Absent => vec![site_config.get_default_audience().await?.into()],
     };
     // A client-supplied idempotency key dedups a retried create (duplicate-on-retry).
-    let idem = headers
+    // Preserve the historical `HeaderValue::to_str` compatibility boundary:
+    // unreadable or blank values do not opt a request into deduplication.
+    let idempotency_key = headers
         .get("idempotency-key")
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+        .and_then(|value| value.to_str().ok()?.parse::<IdempotencyKey>().ok());
 
     let created = storage::perform_post_creation(
         posts,
@@ -497,7 +498,7 @@ pub async fn collection_post(
             max_attempts: 100,
             summary,
             audiences,
-            idempotency_key: idem,
+            idempotency_key: idempotency_key.as_ref(),
             expectations,
         },
     )
@@ -511,7 +512,7 @@ pub async fn collection_post(
     // A reused idempotency key returns the original post as `200` — skipping category
     // re-application (the original already carries its tags).
     if let Err(storage::PerformCreationError::IdempotencyConflict) = &created {
-        let key = idem.ok_or(HandlerError::Invariant)?;
+        let key = idempotency_key.as_ref().ok_or(HandlerError::Invariant)?;
         let post_id = posts
             .post_id_for_idempotency_key(auth_user.user_id, key)
             .await?

@@ -10,6 +10,7 @@ use crate::{
     CreatePostError, CreatePostInput, PostBookkeepingExpectation, PostFormat, PostRecord,
     PostStorage, PublishUpdate, UpdatePostError, UpdatePostInput,
 };
+use common::idempotency_key::IdempotencyKey;
 use common::ids::{PostId, UserId};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
@@ -44,7 +45,7 @@ pub struct RenderedPostContent {
     /// Audience targeting for the new post.
     pub audiences: Vec<AudienceTarget>,
     /// Owned idempotency key to register with the post, or `None`.
-    pub idempotency_key: Option<String>,
+    pub idempotency_key: Option<IdempotencyKey>,
     /// Non-authoritative Org bookkeeping expected to match the final stored row.
     pub expectations: PostBookkeepingExpectation,
 }
@@ -381,7 +382,7 @@ pub struct PostCreation<'a> {
     pub audiences: Vec<AudienceTarget>,
     /// Client-supplied idempotency key (already trimmed / non-empty), or `None`
     /// to create without deduplication.
-    pub idempotency_key: Option<&'a str>,
+    pub idempotency_key: Option<&'a IdempotencyKey>,
     /// Non-authoritative Org bookkeeping expected to match the collision winner.
     pub expectations: PostBookkeepingExpectation,
 }
@@ -445,7 +446,7 @@ pub async fn perform_post_creation(
                 published_at,
                 summary: summary.clone(),
                 audiences: audiences.clone(),
-                idempotency_key: idempotency_key.map(str::to_owned),
+                idempotency_key: idempotency_key.cloned(),
                 expectations: expectations.clone(),
             },
         )
@@ -492,7 +493,10 @@ pub async fn perform_post_creation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{Backend, SeedUser, backends};
+    use crate::test_support::{
+        Backend, SeedUser, backends, fetch_post_media, media_ref_for, media_url_for, seed_media,
+    };
+    use common::idempotency_key::IdempotencyKey;
     use common::test_support::{parse_post_body, parse_post_title, parse_row_limit, parse_slug};
     use rstest::*;
     use rstest_reuse::*;
@@ -1522,10 +1526,13 @@ mod tests {
     }
 
     // -- idempotency-key tests --
-
     /// Builds a minimal public Markdown [`PostCreation`] carrying `key`, so the
     /// dedup tests vary only the user, body, and key.
-    fn creation_with_key(user_id: UserId, body: PostBody, key: Option<&str>) -> PostCreation<'_> {
+    fn creation_with_key(
+        user_id: UserId,
+        body: PostBody,
+        key: Option<&IdempotencyKey>,
+    ) -> PostCreation<'_> {
         PostCreation {
             user_id,
             body,
@@ -1541,37 +1548,67 @@ mod tests {
         }
     }
 
+    fn parse_idempotency_key(key: &str) -> IdempotencyKey {
+        key.parse().unwrap()
+    }
+
     #[apply(backends)]
     #[tokio::test]
     async fn perform_post_creation_dedups_on_idempotency_key(#[case] backend: Backend) {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let storage = &*env.state.posts;
+        let key = parse_idempotency_key("k");
+        seed_media(&env.state, user_id, "original.jpg").await;
+        seed_media(&env.state, user_id, "attempted.jpg").await;
 
         let first = perform_post_creation(
             storage,
-            creation_with_key(user_id, parse_post_body("First body"), Some("k")),
+            creation_with_key(
+                user_id,
+                parse_post_body(&format!("<img src=\"{}\">", media_url_for("original.jpg"))),
+                Some(&key),
+            ),
         )
         .await
         .unwrap();
 
-        // A second create with the same (user, key) is a duplicate: the DB unique
-        // constraint fires in the create transaction, rolling the whole thing back.
-        let err = perform_post_creation(
-            storage,
-            creation_with_key(user_id, parse_post_body("Second body"), Some("k")),
-        )
-        .await
-        .unwrap_err();
+        // The duplicate reaches the post, audience, and media writes before its
+        // idempotency insert collides; the transaction must roll every attempted row back.
+        let mut replay = creation_with_key(
+            user_id,
+            parse_post_body(&format!("<img src=\"{}\">", media_url_for("attempted.jpg"))),
+            Some(&key),
+        );
+        replay.audiences = vec![AudienceTarget::Subscribers];
+        let err = perform_post_creation(storage, replay).await.unwrap_err();
         assert!(matches!(err, PerformCreationError::IdempotencyConflict));
 
-        // No second post row committed — the user still has exactly one post.
         let posts = storage
             .list_collection_by_user(user_id, None, parse_row_limit("50"))
             .await
             .unwrap();
         assert_eq!(posts.len(), 1);
         assert_eq!(posts[0].post_id, first.post_id);
+        assert_eq!(
+            fetch_post_media(&env.base, first.post_id).await,
+            vec![media_ref_for("original.jpg")]
+        );
+        assert_eq!(
+            storage.get_post_audiences(first.post_id).await.unwrap(),
+            vec![AudienceTarget::Public]
+        );
+        for table in ["posts", "post_audiences", "post_media", "idempotency_keys"] {
+            assert_eq!(
+                env.base
+                    .pool()
+                    .scalar_i64(&format!("SELECT COUNT(*) FROM {table}"))
+                    .await
+                    .unwrap(),
+                1,
+                "the conflicting create left a row in {table}"
+            );
+        }
     }
 
     // -- sanitization (#445) --
@@ -1624,22 +1661,24 @@ mod tests {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let storage = &*env.state.posts;
+        let key = parse_idempotency_key("k");
+        let missing_key = parse_idempotency_key("unknown");
 
         let record = perform_post_creation(
             storage,
-            creation_with_key(user_id, parse_post_body("Body"), Some("k")),
+            creation_with_key(user_id, parse_post_body("Body"), Some(&key)),
         )
         .await
         .unwrap();
 
         let mapped = storage
-            .post_id_for_idempotency_key(user_id, "k")
+            .post_id_for_idempotency_key(user_id, &key)
             .await
             .unwrap();
         assert_eq!(mapped, Some(record.post_id));
 
         let missing = storage
-            .post_id_for_idempotency_key(user_id, "unknown")
+            .post_id_for_idempotency_key(user_id, &missing_key)
             .await
             .unwrap();
         assert_eq!(missing, None);
@@ -1652,17 +1691,18 @@ mod tests {
         let user_a = SeedUser::new().seed(&env.state).await.user_id;
         let user_b = SeedUser::new().seed(&env.state).await.user_id;
         let storage = &*env.state.posts;
+        let key = parse_idempotency_key("k");
 
         // The same key string from two users creates two independent posts.
         let post_a = perform_post_creation(
             storage,
-            creation_with_key(user_a, parse_post_body("A body"), Some("k")),
+            creation_with_key(user_a, parse_post_body("A body"), Some(&key)),
         )
         .await
         .unwrap();
         let post_b = perform_post_creation(
             storage,
-            creation_with_key(user_b, parse_post_body("B body"), Some("k")),
+            creation_with_key(user_b, parse_post_body("B body"), Some(&key)),
         )
         .await
         .unwrap();
@@ -1670,14 +1710,14 @@ mod tests {
 
         assert_eq!(
             storage
-                .post_id_for_idempotency_key(user_a, "k")
+                .post_id_for_idempotency_key(user_a, &key)
                 .await
                 .unwrap(),
             Some(post_a.post_id)
         );
         assert_eq!(
             storage
-                .post_id_for_idempotency_key(user_b, "k")
+                .post_id_for_idempotency_key(user_b, &key)
                 .await
                 .unwrap(),
             Some(post_b.post_id)

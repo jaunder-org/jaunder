@@ -29,7 +29,7 @@ Out:
     arbitrary-string acceptance, empty rejection, serde/owned-borrowed behavior,
     and the repository's standard trailer requirements.
 
-- [ ] Task 2: Carry typed keys from AtomPub through persistence
+- [x] Task 2: Carry typed keys from AtomPub through persistence
   - Depends on: Task 1.
   - Contract: the AtomPub handler preserves `HeaderValue::to_str` compatibility,
     maps missing/whitespace-only/unreadable values to `None`, and parses
