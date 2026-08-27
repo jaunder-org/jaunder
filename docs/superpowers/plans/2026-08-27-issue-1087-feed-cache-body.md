@@ -42,7 +42,7 @@ Out:
     format conflicts with its `FeedPath`; `#[apply(backends)]` coverage proves
     coherent round-trip and replacement on SQLite/PostgreSQL, plus rejection of
     directly inserted mismatched metadata on both backends.
-- [ ] Task 3: Carry the representation through regeneration and HTTP serving
+- [x] Task 3: Carry the representation through regeneration and HTTP serving
   - Depends on: Tasks 1-2 contracts.
   - Contract: regeneration, worker, handler, fixtures, and direct callers use
     the typed row API; valid hits serve the representation's derived

@@ -176,13 +176,15 @@ async fn handler_cache_hit_serves_stored_body_without_regeneration(#[case] backe
     let TestEnv { state, base } = backend.setup().await;
     let app = make_app(&state, &base);
 
-    // Pre-populate the cache with a known body
+    // Pre-populate the cache with a known body and validators.
     let known_body = "known feed body";
+    let etag = "\"known-etag\"";
+    let updated_at = UtcInstant::now();
     let row = cache_row(
         "/~bob/feed.rss",
         known_body,
-        "\"known-etag\"",
-        UtcInstant::now(),
+        etag,
+        updated_at,
         UtcInstant::now(),
     );
     state.feed_cache.upsert(row).await.expect("upsert cache");
@@ -197,6 +199,28 @@ async fn handler_cache_hit_serves_stored_body_without_regeneration(#[case] backe
 
     assert_eq!(resp.status(), StatusCode::OK, "should return 200");
 
+    assert_eq!(
+        resp.headers().get(header::CONTENT_TYPE),
+        Some(&header::HeaderValue::from_static(
+            "application/rss+xml; charset=utf-8"
+        )),
+        "cached representation derives its RSS content type"
+    );
+    assert_eq!(
+        resp.headers()
+            .get(header::ETAG)
+            .and_then(|value| value.to_str().ok()),
+        Some(etag),
+        "cached ETag is preserved"
+    );
+    assert_eq!(
+        resp.headers()
+            .get(header::LAST_MODIFIED)
+            .and_then(|value| value.to_str().ok()),
+        Some(updated_at.value().to_rfc2822().as_str()),
+        "cached Last-Modified is preserved"
+    );
+
     // Assert body is the stored body (not regenerated)
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
@@ -205,6 +229,84 @@ async fn handler_cache_hit_serves_stored_body_without_regeneration(#[case] backe
         String::from_utf8_lossy(&body),
         known_body,
         "should serve the exact cached body"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn handler_rejects_corrupt_cache_hit_without_serving_or_rewriting_it(
+    #[case] backend: Backend,
+) {
+    let TestEnv { state, base } = setup_with_base_url(backend).await;
+    let user = SeedUser::new().seed(&state).await;
+    SeedRawPost::new(user.user_id).seed(&state).await;
+
+    let feed_path = format!("/~{}/feed.rss", user.username);
+    let cached_body = "corrupt-cache-body";
+    let etag = "\"corrupt-cache-etag\"";
+    state
+        .feed_cache
+        .upsert(cache_row(
+            &feed_path,
+            cached_body,
+            etag,
+            UtcInstant::now(),
+            UtcInstant::now(),
+        ))
+        .await
+        .expect("seed coherent cache row");
+
+    // Bypass the invariant-bearing storage API to model a corrupted persisted
+    // metadata column while retaining an otherwise coherent cache row.
+    base.pool()
+        .execute(&format!(
+            "UPDATE feed_cache SET content_type = 'application/atom+xml; charset=utf-8' \
+             WHERE feed_url = '{feed_path}'"
+        ))
+        .await
+        .expect("corrupt stored content type");
+
+    let request = Request::builder()
+        .method("GET")
+        .uri(&feed_path)
+        .body(Body::empty())
+        .expect("build request");
+    let response = make_app(&state, &base)
+        .oneshot(request)
+        .await
+        .expect("request");
+
+    assert_eq!(
+        response.status(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "corrupt cache hits are server failures, not cache misses"
+    );
+    let response_body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    assert!(
+        response_body.is_empty(),
+        "corrupt cache hits must not serve the cached body: {response_body:?}"
+    );
+
+    let raw_rows = base
+        .pool()
+        .string_quintuples(&format!(
+            "SELECT feed_url, body, etag, content_type, CAST(generated_at AS TEXT) \
+             FROM feed_cache WHERE feed_url = '{feed_path}'"
+        ))
+        .await
+        .expect("inspect raw cache row after request");
+    let [(stored_path, stored_body, stored_etag, stored_content_type, _)] = raw_rows.as_slice()
+    else {
+        panic!("expected exactly one raw cache row, got {raw_rows:?}");
+    };
+    assert_eq!(stored_path, &feed_path, "cache key is unchanged");
+    assert_eq!(stored_body, cached_body, "cache body is unchanged");
+    assert_eq!(stored_etag, etag, "cache ETag is unchanged");
+    assert_eq!(
+        stored_content_type, "application/atom+xml; charset=utf-8",
+        "corrupt stored content type is not repaired"
     );
 }
 
