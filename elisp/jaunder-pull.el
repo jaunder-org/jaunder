@@ -37,11 +37,6 @@
         (car values)
       (jaunder--pull-error (format "Member must have at most one %s" description)))))
 
-(defun jaunder--strong-etag-p (etag)
-  "Return non-nil when ETAG is a strong quoted entity tag."
-  (and (stringp etag)
-       (not (string-prefix-p "W/" etag))
-       (string-match-p "\\`\"[^\"\r\n]+\"\\'" etag)))
 
 (defun jaunder--pull-edit-id (uri)
   "Return decimal terminal Post ID from edit URI, or nil."
