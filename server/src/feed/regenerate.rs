@@ -112,7 +112,7 @@ pub async fn regenerate_feed(
 
     let row = FeedCacheRow {
         feed_path: feed_path.clone(),
-        body,
+        body: body.into_body(),
         etag,
         content_type: format.content_type(),
         updated_at: UtcInstant::from(updated_at),

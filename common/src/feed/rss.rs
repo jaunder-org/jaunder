@@ -2,7 +2,7 @@ use atom_syndication::Link as AtomLink;
 use rss::extension::atom::AtomExtension;
 use rss::{ChannelBuilder, GuidBuilder, ItemBuilder};
 
-use crate::feed::metadata::{FeedItem, FeedMetadata};
+use crate::feed::{FeedItem, FeedMetadata, SyndicationFeedRepresentation};
 
 /// Render an RSS 2.0 feed document.
 ///
@@ -13,7 +13,7 @@ use crate::feed::metadata::{FeedItem, FeedMetadata};
 /// `<atom:link rel="hub">` for RSS publishers (there is no RSS-native
 /// alternative for either).
 #[must_use]
-pub fn render_rss(meta: &FeedMetadata, items: &[FeedItem]) -> String {
+pub fn render_rss(meta: &FeedMetadata, items: &[FeedItem]) -> SyndicationFeedRepresentation {
     let rss_items: Vec<rss::Item> = items
         .iter()
         .map(|i| {
@@ -60,7 +60,7 @@ pub fn render_rss(meta: &FeedMetadata, items: &[FeedItem]) -> String {
         .atom_ext(Some(AtomExtension { links: atom_links }))
         .items(rss_items);
 
-    builder.build().to_string()
+    SyndicationFeedRepresentation::from_rss(builder.build().to_string())
 }
 
 #[cfg(test)]
@@ -100,33 +100,41 @@ mod tests {
     #[test]
     fn renders_empty_feed() {
         let out = render_rss(&meta(None, Some("A site")), &[]);
-        assert!(out.contains("<rss"));
-        assert!(out.contains("<title>Site</title>"));
-        assert!(!out.contains("<item>"));
+        assert!(out.body().contains("<rss"));
+        assert!(out.body().contains("<title>Site</title>"));
+        assert!(!out.body().contains("<item>"));
+        assert_eq!(out.format(), crate::feed::FeedFormat::Rss);
+        assert_eq!(
+            out.content_type(),
+            crate::feed::FeedFormat::Rss.content_type()
+        );
     }
     #[test]
     fn serializes_feed_title_and_description_presence() {
         let without = render_rss(&meta(None, None), &[]);
-        let channel = rss::Channel::read_from(without.as_bytes()).unwrap();
+        let channel = rss::Channel::read_from(without.body().as_bytes()).unwrap();
         assert_eq!(channel.title(), "Site");
         assert_eq!(channel.description(), "");
 
         let with = render_rss(&meta(None, Some("A site")), &[]);
-        let channel = rss::Channel::read_from(with.as_bytes()).unwrap();
+        let channel = rss::Channel::read_from(with.body().as_bytes()).unwrap();
         assert_eq!(channel.description(), "A site");
     }
 
     #[test]
     fn renders_post_with_title() {
         let out = render_rss(&meta(None, Some("A site")), &[item(Some("Hello"))]);
-        assert!(out.contains("<title>Hello</title>"));
-        assert!(out.contains("<link>https://example.com/~alice/posts/1</link>"));
+        assert!(out.body().contains("<title>Hello</title>"));
+        assert!(
+            out.body()
+                .contains("<link>https://example.com/~alice/posts/1</link>")
+        );
     }
 
     #[test]
     fn renders_titleless_post() {
         let out = render_rss(&meta(None, Some("A site")), &[item(None)]);
-        let channel = rss::Channel::read_from(out.as_bytes()).unwrap();
+        let channel = rss::Channel::read_from(out.body().as_bytes()).unwrap();
         assert_eq!(channel.items().len(), 1);
         assert!(channel.items()[0].title().is_none());
         assert!(channel.items()[0].description().is_some());
@@ -135,22 +143,25 @@ mod tests {
     #[test]
     fn emits_atom_self_link() {
         let out = render_rss(&meta(None, Some("A site")), &[]);
-        assert!(out.contains("xmlns:atom=\"http://www.w3.org/2005/Atom\""));
-        assert!(out.contains("<atom:link"));
-        assert!(out.contains("rel=\"self\""));
-        assert!(out.contains("href=\"https://example.com/feed.rss\""));
+        assert!(
+            out.body()
+                .contains("xmlns:atom=\"http://www.w3.org/2005/Atom\"")
+        );
+        assert!(out.body().contains("<atom:link"));
+        assert!(out.body().contains("rel=\"self\""));
+        assert!(out.body().contains("href=\"https://example.com/feed.rss\""));
     }
 
     #[test]
     fn emits_atom_hub_link_when_configured() {
         let out = render_rss(&meta(Some("https://hub.example.com/"), Some("A site")), &[]);
-        assert!(out.contains("rel=\"hub\""));
-        assert!(out.contains("href=\"https://hub.example.com/\""));
+        assert!(out.body().contains("rel=\"hub\""));
+        assert!(out.body().contains("href=\"https://hub.example.com/\""));
     }
 
     #[test]
     fn omits_atom_hub_link_when_unset() {
         let out = render_rss(&meta(None, Some("A site")), &[]);
-        assert!(!out.contains("rel=\"hub\""));
+        assert!(!out.body().contains("rel=\"hub\""));
     }
 }
