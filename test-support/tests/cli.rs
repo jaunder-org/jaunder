@@ -11,9 +11,9 @@
 //! These pass `JAUNDER_CAPTURE_DIR` to the spawned child through `Command::env`,
 //! never mutating this process's inherited configuration.
 
+use host::capture::Stream;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt as _;
-use host::capture::Stream;
 use std::process::Command;
 
 /// `reset-mail` derives `<JAUNDER_CAPTURE_DIR>/mail.jsonl`, deletes it, and exits 0 —

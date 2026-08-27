@@ -209,7 +209,10 @@ mod tests {
         assert_eq!(capture.path(Stream::Mail), directory.join("mail.jsonl"));
         assert_eq!(capture.path(Stream::WebSub), directory.join("websub.jsonl"));
         assert_eq!(capture.path(Stream::Diag), directory.join("diag.log"));
-        assert_eq!(capture.path(Stream::Otel), directory.join("otel-traces.jsonl"));
+        assert_eq!(
+            capture.path(Stream::Otel),
+            directory.join("otel-traces.jsonl")
+        );
         assert!(
             !directory.exists(),
             "path() must not recreate the directory"
