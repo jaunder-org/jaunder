@@ -10,6 +10,8 @@ instead of duplicating project policy.
 - `docs/ARCHITECTURE.md`: the authoritative statement of the current
   architecture — the materialized view of the ADR log, covering the workspace
   layout and every subsystem
+- `docs/codebase-audits.md`: the durable method for finding and remediating
+  accumulated design and maintenance cruft
 - `docs/ROADMAP.md`: project roadmap
 
 ## Repository layout

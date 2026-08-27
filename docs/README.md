@@ -12,6 +12,7 @@ definitive working hub for humans and agents.
 | [CONTEXT](../CONTEXT.md)                                      | Domain glossary / ubiquitous language for Jaunder.                                 |
 | [ARCHITECTURE](ARCHITECTURE.md)                               | System architecture (Leptos, single-binary, storage); links the ADRs.              |
 | [DESIGN](DESIGN.md)                                           | High-level design / how an instance runs.                                          |
+| [codebase-audits](codebase-audits.md)                         | Method for finding and remediating accumulated design and maintenance cruft.       |
 | [ROADMAP](ROADMAP.md)                                         | Completed-milestone ledger and direction.                                          |
 | [observability](observability.md)                             | OpenTelemetry tracing for backend + e2e.                                           |
 | [web-style-guide](web-style-guide.md)                         | Conventions for the `web/` Leptos components and widgets.                          |

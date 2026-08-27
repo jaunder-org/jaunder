@@ -5,6 +5,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 mod adr;
 mod adr_readme;
 mod audit_wasm;
+mod census;
 mod compile_cache;
 pub mod coverage;
 mod doc_links;
@@ -142,6 +143,12 @@ pub enum Command {
         #[arg(long)]
         allow_dirty: bool,
     },
+    /// Produce a host-side repository census for manual maintenance audits. The
+    /// report is informational: candidates are neither findings nor gate failures.
+    #[command(after_help = "EXAMPLES:\n  \
+        cargo xtask census\n  \
+        cargo xtask census --json")]
+    Census,
     /// Measure the frontend WASM/JS bundle size — raw, gzip, and brotli.
     ///
     /// Reports the download weight of the deterministic `nix build .#site`
@@ -454,6 +461,7 @@ impl Cli {
             Command::Precommit => "precommit",
             Command::Prepush => "prepush",
             Command::Validate { .. } => "validate",
+            Command::Census => "census",
             Command::AuditWasm { .. } => "audit-wasm",
             Command::E2e { .. } => "e2e",
             Command::E2eLocal { .. } => "e2e-local",
@@ -796,6 +804,25 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
                 // survive the aggregate `e2e-checks` symlink join.
                 steps::nix::e2e(&mut result);
             }
+            finalize(&mut result, start);
+            Ok(result)
+        }
+        Command::Census => {
+            let start = std::time::Instant::now();
+            let mut result = CommandResult::new("census");
+            let report = census::collect(Path::new("."), &[])?;
+            let failed = report.has_failed_cells();
+            let cells = report.cell_count();
+            result.census = Some(report);
+            result.push(
+                if failed {
+                    StepResult::fail("census")
+                        .detail(format!("{cells} cell(s); one or more collectors failed"))
+                } else {
+                    StepResult::ok("census").detail(format!("{cells} cell(s)"))
+                }
+                .with_duration(start.elapsed()),
+            );
             finalize(&mut result, start);
             Ok(result)
         }
@@ -1181,6 +1208,14 @@ mod cli_tests {
             Command::Precommit => {}
             _ => panic!("expected precommit"),
         }
+    }
+
+    #[test]
+    fn census_parses_with_json_and_has_a_stable_command_name() {
+        let cli = Cli::try_parse_from(["xtask", "census", "--json"]).unwrap();
+        assert!(cli.json);
+        assert_eq!(cli.command_name(), "census");
+        assert!(matches!(cli.command, Command::Census));
     }
     #[test]
     fn prepush_parses_as_first_class_subcommand() {
