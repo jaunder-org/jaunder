@@ -137,17 +137,10 @@ mod tests {
     #[test]
     fn renders_explicit_title_for_titled_post() {
         let out = render_atom(&meta(None, Some("A site")), &[item()]);
+        let body = out.body();
 
-        assert!(
-            out.body().contains("<title>Hello</title>"),
-            "out: {}",
-            out.body()
-        );
-        assert!(
-            !out.body().contains("<title></title>"),
-            "out: {}",
-            out.body()
-        );
+        assert!(body.contains("<title>Hello</title>"), "out: {body}");
+        assert!(!body.contains("<title></title>"), "out: {body}");
     }
 
     #[test]
@@ -156,18 +149,10 @@ mod tests {
         item.title = None;
 
         let out = render_atom(&meta(None, Some("A site")), &[item]);
+        let body = out.body();
 
-        assert_eq!(
-            out.body().matches("<title></title>").count(),
-            1,
-            "out: {}",
-            out.body()
-        );
-        assert!(
-            !out.body().contains("<title>hi</title>"),
-            "out: {}",
-            out.body()
-        );
+        assert_eq!(body.matches("<title></title>").count(), 1, "out: {body}");
+        assert!(!body.contains("<title>hi</title>"), "out: {body}");
     }
 
     #[test]
@@ -208,15 +193,14 @@ mod tests {
         // *absolute* permalink — never a relative `/…` atom:id (RFC-4287 requires an
         // absolute IRI).
         let out = render_atom(&meta(None, Some("A site")), &[item()]);
+        let body = out.body();
         assert!(
-            out.body().contains("https://example.com/~alice/posts/1"),
-            "entry permalink should be absolute: {}",
-            out.body()
+            body.contains("https://example.com/~alice/posts/1"),
+            "entry permalink should be absolute: {body}"
         );
         assert!(
-            !out.body().contains("<id>/"),
-            "no entry/feed id should be root-relative: {}",
-            out.body()
+            !body.contains("<id>/"),
+            "no entry/feed id should be root-relative: {body}"
         );
     }
 }

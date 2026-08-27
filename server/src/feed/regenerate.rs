@@ -4,10 +4,7 @@ use common::feed::{
 };
 use common::tagged_url::{BaseUrl, CanonicalUrl, FeedUrl, Permalink, compose};
 use common::time::UtcInstant;
-use storage::{
-    FeedCacheRow, FeedCacheStorage, MismatchedFeedCacheRowFormat, PostRecord, PostStorage,
-    SiteConfigStorage,
-};
+use storage::{FeedCacheRow, FeedCacheStorage, PostRecord, PostStorage, SiteConfigStorage};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -18,8 +15,6 @@ pub enum RegenerateError {
     BaseUrlRequired,
     #[error("storage error: {0}")]
     Storage(#[source] Box<dyn std::error::Error + Send + Sync>),
-    #[error("feed cache row invariant error: {0}")]
-    CacheRow(#[from] MismatchedFeedCacheRowFormat),
 }
 
 /// Regenerates a feed for the given URL by fetching published posts and
@@ -121,7 +116,8 @@ pub async fn regenerate_feed(
         etag,
         UtcInstant::from(updated_at),
         now,
-    )?;
+    )
+    .unwrap_or_else(|_| unreachable!("renderer output and feed path share the parsed format"));
 
     feed_cache.upsert(row.clone()).await.map_err(storage_err)?;
 

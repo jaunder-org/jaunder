@@ -115,8 +115,6 @@ pub enum FeedCacheError {
         #[source]
         source: MismatchedStoredSyndicationFeedMetadata,
     },
-    #[error("stored feed cache row violates its path/representation invariant: {0}")]
-    MismatchedRowFormat(#[from] MismatchedFeedCacheRowFormat),
     #[error("stored feed cache path {0} has no recoverable format")]
     UnrecoverableStoredPath(FeedPath),
 }
@@ -176,7 +174,8 @@ fn row_from_record(row: FeedCacheRowRecord) -> Result<FeedCacheRow, FeedCacheErr
         parts.etag,
         parts.updated_at.value(),
         parts.generated_at.value(),
-    )?)
+    )
+    .unwrap_or_else(|_| unreachable!("stored representation and path share the decoded format")))
 }
 
 /// Generic [`FeedCacheStorage`] backed by any [`Backend`] database.
