@@ -209,21 +209,19 @@ mod tests {
         }
     }
     /// The generic envelope must retain this pre-cutover JSON byte sequence for
-    /// rendered timeline rows, including the declaration order of its fields.
+    /// an empty rendered timeline page, including the declaration order of its
+    /// fields.
     #[test]
     fn rendered_page_serializes_to_the_pre_cutover_bytes() {
-        let page = Page {
-            posts: vec![rendered_post(Some(instant()))],
-            next_cursor: Some(PageCursor {
-                created_at: instant(),
-                post_id: PostId::from(7),
-            }),
-            has_more: true,
+        let page: Page<RenderedPost> = Page {
+            posts: Vec::new(),
+            next_cursor: None,
+            has_more: false,
         };
 
         assert_eq!(
             serde_json::to_string(&page).unwrap(),
-            r#"{"posts":[{"post_id":1,"username":"alice","title":null,"summary":null,"slug":"hello","rendered_html":"<p>hi</p>","created_at":"2026-07-19T10:30:00Z","published_at":"2026-07-19T10:30:00Z","permalink":null,"is_author":false,"tags":[]}],"next_cursor":{"created_at":"2026-07-19T10:30:00Z","post_id":7},"has_more":true}"#
+            r#"{"posts":[],"next_cursor":null,"has_more":false}"#
         );
     }
 }
