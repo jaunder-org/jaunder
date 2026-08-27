@@ -66,6 +66,11 @@ and scheduled included), `xmlns:j` declared only when emitted (mirroring
 `<j:extension version="1" features="format-media-type slug"/>` so a client
 detects support once and degrades gracefully against a vanilla/older Jaunder.
 
+> **Annotation (2026-08-27).** As of #847, the namespace and `j:slug`
+> definitions named above had moved with the rest of AtomPub from `common` to
+> `host`; the `format_wire` seam and every wire contract remained unchanged.
+> Current ownership: [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 ## Consequences
 
 - Good: a blog mixes Org/Markdown/HTML per entry; the slug is always

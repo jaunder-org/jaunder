@@ -94,6 +94,11 @@ delegation can happen.
    document, and RSD are not Atom, are not modeled by `atom_syndication`, and
    keep their `quick-xml` writers. `common` therefore keeps its direct
    `quick-xml` dependency.
+   > **Annotation (2026-08-27).** As of #847, the Service Document, RSD, shared
+   > XML helpers, and the rest of AtomPub had moved from `common` to `host`
+   > because no dual-target consumer reached them. Upstream delegation and
+   > AtomPub protocol behavior remained as decided; only the implementation home
+   > changed. Current ownership: [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 ## Consequences
 

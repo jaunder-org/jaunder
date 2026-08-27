@@ -106,6 +106,11 @@ pre-validation using the same newtype `FromStr` — never a re-implemented rule.
   `Effect`/`Resource`-building helpers. The component's rendering/interaction is
   exercised via e2e.
 
+> **Annotation (2026-08-27).** As of #847, client-reachable validation remained
+> in `common`, while its host-only password counterpart had moved to `host`. The
+> shared client/server `FromStr` validation contract remained unchanged. Current
+> ownership: [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 ## Consequences
 
 - The #404 verticals type their `#[server]` args as newtypes and adopt

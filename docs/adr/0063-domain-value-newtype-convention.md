@@ -452,6 +452,11 @@ with borrowed keys for orchestration and lookup and owned keys for creation
 input and persistence. This type-only adoption needs no schema migration. The
 frozen #697 historical artifacts remain unchanged.
 
+> **Annotation (2026-08-27).** As of #847, the `Password` example had moved to
+> `host`; the dual-target `ProfferedPassword` validation path and common-owned
+> `RenderedHtml` remained. The convention and their validation/trust invariants
+> remained unchanged. Current ownership: [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 ## Consequences
 
 - **One decision surface.** "Does this value deserve a type, and what shape does

@@ -42,6 +42,12 @@ through `url::Url`.
 > `url` remains the sanctioned normalizer, it remains in the `common`/wasm
 > graph, and the chokepoint is still single — only the type carrying it was
 > renamed. Current inventory: [ARCHITECTURE.md](../ARCHITECTURE.md).
+>
+> **Annotation (2026-08-27).** The then-current inventory of heavy AtomPub and
+> Syndication Feed machinery in `common` was historical after #847 moved that
+> host-only machinery to `host`. `url` remained in the `common`/wasm graph for
+> the dual-target URL-normalization consumer; no bundle-size conclusion follows
+> from the relocation. Current inventory: [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 We **accept** that `url` (and its `idna` unicode tables) are compiled for wasm
 and reachable in the client binary. We do **not** hand-roll URL normalization,
