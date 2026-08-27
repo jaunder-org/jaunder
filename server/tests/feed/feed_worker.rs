@@ -2,12 +2,8 @@ use std::sync::Arc;
 
 use crate::helpers::{CapturingWebSubClient, setup_with_base_url};
 use chrono::Utc;
-use common::{
-    feed::{FeedFormat, FeedPath, SyndicationFeedRepresentation},
-    ids::FeedEventId,
-    test_support::parse_etag,
-    time::UtcInstant,
-};
+use common::{feed::FeedFormat, ids::FeedEventId, test_support::parse_etag, time::UtcInstant};
+use host::feed::{FeedPath, SyndicationFeedRepresentation};
 use jaunder::feed::worker::FeedWorker;
 use storage::FeedCacheRow;
 use storage::test_support::{Backend, SeedRawPost, SeedUser, TestEnv, backends, fp};

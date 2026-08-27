@@ -12,7 +12,6 @@ use crate::cli::{AppTarget, BootstrapDb, Commands, SiteConfigAction, StorageArgs
 use crate::mailer::LettreMailSender;
 use crate::runtime_file;
 use common::backup::BackupMode;
-use common::config_key::SiteConfigKey;
 use common::display_name::DisplayName;
 use common::email::Email;
 use common::invite::InviteTtlHours;
@@ -23,6 +22,7 @@ use common::tagged_url::{MailConfirmUrl, compose};
 use common::token::RawToken;
 use common::username::Username;
 use host::password::Password;
+use host::site_config_key::SiteConfigKey;
 use host::smtp_config::SmtpConfig;
 use storage::load_smtp_config;
 use storage::{

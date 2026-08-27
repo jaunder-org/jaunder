@@ -1,9 +1,10 @@
-use common::feed::{
-    FeedFormat, FeedItem, FeedMetadata, FeedPath, FeedSurface, FeedTitle, HybridWindow, parse,
+use common::{
+    feed::{FeedFormat, FeedSurface},
+    tagged_url::{BaseUrl, CanonicalUrl, FeedUrl, Permalink, compose},
+    time::UtcInstant,
 };
-use common::tagged_url::{BaseUrl, CanonicalUrl, FeedUrl, Permalink, compose};
-use common::time::UtcInstant;
 use host::etag::feed_etag;
+use host::feed::{FeedItem, FeedMetadata, FeedPath, FeedTitle, HybridWindow, parse};
 use storage::{FeedCacheRow, FeedCacheStorage, PostRecord, PostStorage, SiteConfigStorage};
 use thiserror::Error;
 
@@ -104,9 +105,9 @@ pub async fn regenerate_feed(
     };
 
     let body = match format {
-        FeedFormat::Rss => common::feed::render_rss(&meta, &items),
-        FeedFormat::Atom => common::feed::render_atom(&meta, &items),
-        FeedFormat::Json => common::feed::render_json(&meta, &items),
+        FeedFormat::Rss => host::feed::render_rss(&meta, &items),
+        FeedFormat::Atom => host::feed::render_atom(&meta, &items),
+        FeedFormat::Json => host::feed::render_json(&meta, &items),
     };
     let etag = feed_etag(&items, now.value());
 
@@ -188,9 +189,9 @@ mod tests {
 
         let mut site_config = storage::MockSiteConfigStorage::new();
         site_config.expect_get_feeds_config().returning(|| {
-            Ok(common::feed::FeedsConfig {
-                min_items: common::test_support::parse_feed_min_items("10"),
-                min_days: common::test_support::parse_feed_min_days("30"),
+            Ok(host::feed::FeedsConfig {
+                min_items: host::test_support::parse_feed_min_items("10"),
+                min_days: host::test_support::parse_feed_min_days("30"),
                 websub_hub_url: None,
             })
         });
@@ -235,9 +236,9 @@ mod tests {
 
         let mut site_config = storage::MockSiteConfigStorage::new();
         site_config.expect_get_feeds_config().returning(|| {
-            Ok(common::feed::FeedsConfig {
-                min_items: common::test_support::parse_feed_min_items("10"),
-                min_days: common::test_support::parse_feed_min_days("30"),
+            Ok(host::feed::FeedsConfig {
+                min_items: host::test_support::parse_feed_min_items("10"),
+                min_days: host::test_support::parse_feed_min_days("30"),
                 websub_hub_url: None,
             })
         });

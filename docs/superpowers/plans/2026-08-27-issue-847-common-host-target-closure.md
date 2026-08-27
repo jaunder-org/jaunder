@@ -68,16 +68,18 @@ Out:
     byte-identical documents, native-source round-trip, extension semantics,
     service discovery, and unchanged error behavior.
 
-- [ ] Task 5: Move the outbound Syndication Feed surface wholesale to `host`.
+- [x] Task 5: Move the host-only outbound Syndication Feed surface to `host`.
   - Contract: this task follows Task 3 and consumes its `host::render` and
-    `host::etag` interfaces. Outbound feed types, URL grammar,
-    configuration/event/window types, representation models, and Atom/RSS/JSON
-    rendering move together; server and storage callers use host-owned types
-    directly. AtomPub Collection serializers remain separate.
-  - Verification: moved unit tests and focused feed/storage/server tests prove
-    byte-identical representations, rendered-HTML items, ETag/cache/event
-    behavior, and unchanged representation selection on both storage backends
-    where the existing contract is backend-parametric.
+    `host::etag` interfaces. `FeedFormat`, `FeedSurface`, and canonical
+    discovery URL construction remain in `common` because CSR consumes them.
+    FeedPath parsing, site-configuration keys, settings/events/windows,
+    representation models, and Atom/RSS/JSON rendering move together; server and
+    storage callers use host-owned types directly. AtomPub Collection
+    serializers remain separate.
+  - Verification: moved unit tests and focused feed/storage/server/web tests
+    prove typed CSR discovery, byte-identical representations, rendered-HTML
+    items, ETag/cache/event behavior, and unchanged representation selection on
+    both storage backends where the existing contract is backend-parametric.
 
 - [ ] Task 6: Reconcile the target boundary and run the branch gate.
   - Contract: remove obsolete common features/dependencies/modules and every old

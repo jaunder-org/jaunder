@@ -7,21 +7,25 @@
 //! serialization below the server routing boundary; [`capture`] owns the
 //! `JAUNDER_CAPTURE_DIR` contract; [`error`] holds the server-side error carrier;
 //! [`auth`] holds host-side HTTP credential parsing and session-cookie construction;
-//! [`etag`] and [`render`] own host-only content construction and sanitization;
-//! [`password`] owns the validated domain secret and Argon2 operations, paired with
-//! the persisted [`stored_password_hash::StoredPasswordHash`]; [`metrics`] and
-//! [`telemetry`] own process observability; and [`smtp_config`] holds the validated
-//! outbound relay aggregate.
+//! [`etag`], [`feed`], and [`render`] own host-only content construction,
+//! Syndication Feed policy/serialization, and sanitization; [`site_config_key`]
+//! owns the validated site-wide configuration registry; [`password`] owns the
+//! validated domain secret and Argon2 operations, paired with the persisted
+//! [`stored_password_hash::StoredPasswordHash`]; [`metrics`] and [`telemetry`] own
+//! process observability; and [`smtp_config`] holds the validated outbound relay
+//! aggregate.
 
 pub mod atompub;
 pub mod auth;
 pub mod capture;
 pub mod error;
 pub mod etag;
+pub mod feed;
 pub mod invite;
 pub mod metrics;
 pub mod password;
 pub mod render;
+pub mod site_config_key;
 pub mod smtp_config;
 pub mod stored_password_hash;
 pub mod telemetry;

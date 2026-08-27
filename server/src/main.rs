@@ -77,8 +77,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::config_key::SiteConfigKey;
     use common::test_support::{parse_email, parse_session_label};
+    use host::site_config_key::SiteConfigKey;
     use jaunder::cli::{
         Cli, CliBackupMode, Commands, PgBootstrapArgs, SiteConfigAction, StorageArgs,
     };

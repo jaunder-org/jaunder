@@ -572,7 +572,6 @@ name = "common"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "atom_syndication",
  "axum",
  "base64 0.22.1",
  "chrono",
@@ -582,7 +581,6 @@ dependencies = [
  "macros",
  "orgize",
  "percent-encoding",
- "rss",
  "rstest",
  "serde",
  "serde_json",
@@ -1553,6 +1551,7 @@ dependencies = [
  "pulldown-cmark",
  "quick-xml",
  "rand 0.9.4",
+ "rss",
  "serde",
  "serde_json",
  "sha2",

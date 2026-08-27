@@ -4,14 +4,16 @@ use chrono::{DateTime, Utc};
 use macros::StrNewtype;
 use thiserror::Error;
 
-use crate::feed::feed_path::FeedSurface;
-use crate::ids::PostId;
-use crate::post_summary::PostSummary;
-use crate::post_title::PostTitle;
-use crate::render::RenderedHtml;
-use crate::site::SiteTitle;
-use crate::tag::TagLabel;
-use crate::tagged_url::{CanonicalUrl, FeedUrl, HubUrl, PermalinkUrl};
+use common::{
+    feed::FeedSurface,
+    ids::PostId,
+    post_summary::PostSummary,
+    post_title::PostTitle,
+    render::RenderedHtml,
+    site::SiteTitle,
+    tag::TagLabel,
+    tagged_url::{CanonicalUrl, FeedUrl, HubUrl, PermalinkUrl},
+};
 
 /// Human-readable title of a public Syndication Feed document.
 #[derive(Clone, Debug, PartialEq, Eq, StrNewtype)]
@@ -77,7 +79,7 @@ impl FromStr for FeedDescription {
 /// rather than a feed that points at itself as its own subject (#875):
 ///
 /// ```compile_fail
-/// # use common::feed::metadata::FeedMetadata;
+/// # use host::feed::metadata::FeedMetadata;
 /// # fn f(a: FeedMetadata, b: FeedMetadata) -> FeedMetadata {
 /// FeedMetadata { canonical_url: b.self_url, self_url: b.canonical_url, ..a }
 /// # }
@@ -87,7 +89,7 @@ impl FromStr for FeedDescription {
 /// failing for the transposition:
 ///
 /// ```
-/// # use common::feed::metadata::FeedMetadata;
+/// # use host::feed::metadata::FeedMetadata;
 /// # fn f(a: FeedMetadata, b: FeedMetadata) -> FeedMetadata {
 /// FeedMetadata { canonical_url: b.canonical_url, self_url: b.self_url, ..a }
 /// # }
@@ -124,10 +126,12 @@ impl crate::feed::window::HasPublishedAt for FeedItem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::feed::FeedSurface;
-    use crate::site::SiteTitle;
-    use crate::test_support::{parse_post_title, parse_url};
     use chrono::TimeZone;
+    use common::feed::FeedSurface;
+    use common::{
+        site::SiteTitle,
+        test_support::{parse_post_title, parse_url},
+    };
 
     #[test]
     fn feed_title_parses_trims_and_rejects_blank() {

@@ -464,8 +464,11 @@ async fn soft_delete_excludes_post_from_lists(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] backend: Backend) {
     use chrono::Duration;
-    use common::feed::{FeedSurface, HybridWindow};
-    use common::test_support::{parse_feed_min_days, parse_feed_min_items};
+    use common::feed::FeedSurface;
+    use host::{
+        feed::HybridWindow,
+        test_support::{parse_feed_min_days, parse_feed_min_items},
+    };
 
     let env = backend.setup().await;
     let state = &env.state;
@@ -857,7 +860,8 @@ async fn list_posts_gone_live_between_returns_only_window_with_tags(#[case] back
 #[tokio::test]
 async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend) {
     use chrono::{Duration, TimeZone};
-    use common::feed::{FeedFormat, FeedPath, FeedSurface, SyndicationFeedRepresentation};
+    use common::feed::{FeedFormat, FeedSurface};
+    use host::feed::{FeedPath, SyndicationFeedRepresentation};
     let env = backend.setup().await;
     let state = &env.state;
     let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();

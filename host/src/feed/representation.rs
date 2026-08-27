@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::{feed::FeedFormat, media::ContentType};
+use common::{feed::FeedFormat, media::ContentType};
 
 /// A rendered public Syndication Feed coupled to the format that produced it.
 ///
@@ -112,7 +112,8 @@ impl SyndicationFeedRepresentation {
 
 #[cfg(test)]
 mod tests {
-    use crate::feed::{FeedFormat, SyndicationFeedRepresentation};
+    use crate::feed::SyndicationFeedRepresentation;
+    use common::feed::FeedFormat;
 
     #[test]
     fn stored_representation_exposes_agreed_metadata_and_exact_body() {

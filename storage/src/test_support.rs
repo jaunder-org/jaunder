@@ -25,7 +25,6 @@ use crate::{
     resolved_postgres_options,
 };
 
-use common::feed::FeedPath;
 use common::ids::{PostId, TagId, UserId};
 use common::mailer::{MailSender, NoopMailSender};
 use common::media::{
@@ -45,6 +44,7 @@ use common::test_support::{
 use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::AudienceTarget;
+use host::feed::FeedPath;
 use host::invite::InviteCode;
 use host::render::render_with_media;
 use sqlx::pool::PoolConnection;

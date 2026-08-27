@@ -6,10 +6,10 @@ use axum::{
     http::{Request, StatusCode},
 };
 use clap::Parser as _;
-use common::config_key::SiteConfigKey;
 use common::test_support::{parse_email, parse_invite_ttl_hours, parse_session_label};
 use common::username::Username;
 use host::password::Password;
+use host::site_config_key::SiteConfigKey;
 use jaunder::cli::{Cli, Commands, StorageArgs};
 use jaunder::commands::{
     ServeCapturePaths, app_password_create, cmd_app_password_create, cmd_backup, cmd_init,

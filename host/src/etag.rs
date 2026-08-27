@@ -2,9 +2,10 @@
 
 use std::str::FromStr;
 
+use crate::feed::FeedItem;
 use chrono::{DateTime, Utc};
 use common::{
-    etag::ETag, feed::FeedItem, media::ContentHash, post_body::PostBody, post_summary::PostSummary,
+    etag::ETag, media::ContentHash, post_body::PostBody, post_summary::PostSummary,
     post_title::PostTitle, render::PostFormat, tag::TagLabel,
 };
 use serde::Serialize;

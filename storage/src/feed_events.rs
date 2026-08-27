@@ -4,17 +4,17 @@
 
 use async_trait::async_trait;
 use chrono::Duration;
-use common::feed::{FeedEventClaimLimit, FeedPath};
 use common::ids::FeedEventId;
 use common::time::UtcInstant;
+use host::feed::{FeedEventClaimLimit, FeedPath};
 use sqlx::{Database, Pool};
 use thiserror::Error;
 
 use crate::backend::Backend;
 
 // Re-exported so `server`'s feed worker keeps importing it from `storage` alongside
-// `FeedEventRecord`; the type itself lives in `common` (#728, see its doc for why).
-pub use common::feed::FeedEventStatus;
+// `FeedEventRecord`; the type itself lives in `host` (#728, see its doc for why).
+pub use host::feed::FeedEventStatus;
 
 #[derive(Debug, Clone, PartialEq, Eq, sqlx::FromRow)]
 pub struct FeedEventRecord {

@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 
-use common::feed::FeedEventClaimLimit;
 use common::ids::FeedEventId;
 use common::time::UtcInstant;
+use host::feed::FeedEventClaimLimit;
 use sqlx::{Pool, Sqlite};
 
 use crate::feed_events::{

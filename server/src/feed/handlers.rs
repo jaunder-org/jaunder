@@ -7,10 +7,11 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use common::{
-    feed::{FeedFormat, FeedPath, FeedSurface},
+    feed::{FeedFormat, FeedSurface},
     tag::Tag,
     username::Username,
 };
+use host::feed::FeedPath;
 use storage::{FeedCacheStorage, PostStorage, SiteConfigStorage};
 
 use super::regenerate::regenerate_feed;
@@ -216,11 +217,8 @@ pub async fn feed_user_tag(
 mod tests {
     use super::*;
     use chrono::{Duration, Utc};
-    use common::{
-        feed::{FeedFormat, SyndicationFeedRepresentation},
-        test_support::parse_etag,
-        time::UtcInstant,
-    };
+    use common::{feed::FeedFormat, test_support::parse_etag, time::UtcInstant};
+    use host::feed::SyndicationFeedRepresentation;
     use storage::{FeedCacheError, FeedCacheRow};
 
     fn sample_row(etag: &str, updated_at: UtcInstant) -> FeedCacheRow {

@@ -5,7 +5,6 @@
 #![expect(clippy::expect_used)]
 
 use crate::backup::{DestinationPath, RetentionCount};
-use crate::feed::{FeedMinDays, FeedMinItems};
 use crate::invite::InviteTtlHours;
 use crate::pagination::{PageOffset, PageSize, RowLimit};
 
@@ -78,28 +77,4 @@ pub fn parse_page_offset(s: &str) -> PageOffset {
 #[must_use]
 pub fn parse_row_limit(s: &str) -> RowLimit {
     s.parse().expect("valid test row limit")
-}
-
-/// Parse `s` into a [`FeedMinItems`] for tests — the single place a test feed-min-items
-/// literal is parsed, so a malformed fixture (e.g. `"0"`) fails loudly and the parse isn't
-/// re-spelled at every `HybridWindow`/`FeedsConfig` construction site.
-///
-/// # Panics
-///
-/// Panics if `s` is not a whole number of at least 1.
-#[must_use]
-pub fn parse_feed_min_items(s: &str) -> FeedMinItems {
-    s.parse().expect("valid test feeds.min_items")
-}
-
-/// Parse `s` into a [`FeedMinDays`] for tests — the single place a test feed-min-days
-/// literal is parsed, so a malformed fixture (e.g. `"0"`) fails loudly and the parse isn't
-/// re-spelled at every `HybridWindow`/`FeedsConfig` construction site.
-///
-/// # Panics
-///
-/// Panics if `s` is not a whole number of at least 1.
-#[must_use]
-pub fn parse_feed_min_days(s: &str) -> FeedMinDays {
-    s.parse().expect("valid test feeds.min_days")
 }

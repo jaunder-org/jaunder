@@ -1,5 +1,5 @@
 use crate::feed::{FeedMinDays, FeedMinItems};
-use crate::tagged_url::HubUrl;
+use common::tagged_url::HubUrl;
 
 /// Aggregate of the feed-generation settings stored in `site_config`
 /// (`feeds.min_items`, `feeds.min_days`, `feeds.websub_hub_url`). Mirrors

@@ -50,11 +50,13 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
-    use crate::ids::PostId;
-    use crate::post_summary::PostSummary;
-    use crate::post_title::PostTitle;
-    use crate::render::RenderedHtml;
-    use crate::test_support::{parse_post_summary, parse_post_title, parse_url};
+    use common::{
+        ids::PostId,
+        post_summary::PostSummary,
+        post_title::PostTitle,
+        render::RenderedHtml,
+        test_support::{parse_post_summary, parse_post_title, parse_url},
+    };
 
     fn meta(hub: Option<&str>, description: Option<&str>) -> FeedMetadata {
         FeedMetadata {

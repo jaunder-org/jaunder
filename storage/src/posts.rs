@@ -9,7 +9,6 @@ use thiserror::Error;
 
 use crate::InstanceId;
 use common::etag::ETag;
-use common::feed::FeedPath;
 use common::idempotency_key::IdempotencyKey;
 use common::ids::{AudienceId, ChannelId, PostId, RevisionId, TagId, UserId};
 use common::media::{MediaRef, MediaReference, MediaReferenceForm, MediaReferenceKind};
@@ -28,6 +27,7 @@ use common::visibility::{
 };
 use host::error::{InternalError, InternalResult};
 use host::etag::post_content_etag;
+use host::feed::FeedPath;
 use host::render::extract_media_refs;
 
 use crate::backend::Backend;
@@ -1155,7 +1155,7 @@ pub trait PostStorage: Send + Sync {
     ) -> sqlx::Result<Vec<TagRecord>>;
 
     /// Lists published posts matching `surface`, applying the
-    /// [`HybridWindow`](common::feed::HybridWindow) selection rule (union of
+    /// [`HybridWindow`](host::feed::HybridWindow) selection rule (union of
     /// "the most recent `min_items` items" and "all items published within the
     /// last `min_days`"). Results are ordered by `published_at DESC`.
     ///
@@ -1164,7 +1164,7 @@ pub trait PostStorage: Send + Sync {
     async fn list_published_in_window(
         &self,
         surface: &common::feed::FeedSurface,
-        window: &common::feed::HybridWindow,
+        window: &host::feed::HybridWindow,
         now: UtcInstant,
         viewer: &ViewerIdentity,
     ) -> sqlx::Result<Vec<PostRecord>>;
@@ -2502,7 +2502,7 @@ where
     async fn list_published_in_window(
         &self,
         surface: &common::feed::FeedSurface,
-        window: &common::feed::HybridWindow,
+        window: &host::feed::HybridWindow,
         now: UtcInstant,
         viewer: &ViewerIdentity,
     ) -> sqlx::Result<Vec<PostRecord>> {
@@ -3207,13 +3207,13 @@ async fn list_published_in_window_rows<DB>(
     surface: &common::feed::FeedSurface,
     now: UtcInstant,
     cutoff: UtcInstant,
-    min_items: common::feed::FeedMinItems,
+    min_items: host::feed::FeedMinItems,
     viewer: &ViewerIdentity,
 ) -> sqlx::Result<Vec<PostRecord>>
 where
     DB: PostDialect,
     PostRecord: for<'r> sqlx::FromRow<'r, DB::Row>,
-    for<'q> common::feed::FeedMinItems: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> host::feed::FeedMinItems: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -3479,12 +3479,12 @@ mod tests {
         update_post_body_via_service,
     };
     use chrono::Utc;
-    use common::feed::SyndicationFeedRepresentation;
     use common::test_support::{
         parse_etag, parse_post_body, parse_post_summary, parse_post_title, parse_row_limit,
         parse_slug, parse_tag, parse_tag_label, parse_username, parse_utc_instant,
     };
     use common::time::UtcInstant;
+    use host::feed::SyndicationFeedRepresentation;
     use rstest::*;
     use rstest_reuse::*;
     use std::{sync::Arc, time::Duration};

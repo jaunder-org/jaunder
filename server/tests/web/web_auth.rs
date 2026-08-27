@@ -1,11 +1,11 @@
 use axum::http::StatusCode;
 use chrono::Utc;
-use common::config_key::SiteConfigKey;
 use common::session_label::MAX_SESSION_LABEL_CHARS;
 use common::time::UtcInstant;
 use common::token::RawToken;
 use common::username::Username;
 use host::password::Password;
+use host::site_config_key::SiteConfigKey;
 use server_fn::ServerFn;
 
 use rstest::*;

@@ -6,7 +6,6 @@ use clap::{Args, Parser, Subcommand};
 use sqlx::postgres::PgConnectOptions;
 
 use common::backup::BackupMode;
-use common::config_key::SiteConfigKey;
 use common::display_name::DisplayName;
 use common::email::Email;
 use common::invite::InviteTtlHours;
@@ -15,6 +14,7 @@ use common::pg_role_password::PgRolePassword;
 use common::session_label::SessionLabel;
 use common::username::Username;
 use host::password::Password;
+use host::site_config_key::SiteConfigKey;
 use storage::DbConnectOptions;
 
 #[derive(Parser, Clone)]
