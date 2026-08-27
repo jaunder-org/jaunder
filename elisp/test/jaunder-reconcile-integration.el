@@ -68,5 +68,56 @@
                                    (should (= (cl-count id server-only-ids :test #'equal) 1))))))
        (delete-directory root t)))))
 
+(ert-deftest jaunder-reconcile-fetches-member-etag-and-pulls-preview-only ()
+  "The live command fetches matched Members and applies its server-only preview."
+  (jaunder-test--with-live-server
+   (let* ((root (make-temp-file "jaunder-reconcile-live-" t))
+          (jaunder-blogs
+           (list (cons (file-name-as-directory root)
+                       (list :base-url jaunder-test-base-url
+                             :username jaunder-test-username))))
+          (token (file-name-nondirectory (directory-file-name root))))
+     (unwind-protect
+         (jaunder--with-blog
+          root
+          (let* ((created
+                  (jaunder--http-request
+                   "POST" (jaunder--collection-url)
+                   (jaunder--atom-entry->xml
+                    (jaunder--make-entry :title (concat "reconcile-" token)
+                                         :content-type "text/org"
+                                         :body "Server-only reconciliation fixture."))
+                   "application/atom+xml"))
+                 (location (jaunder--response-header created "Location")))
+            (should (eq (plist-get created :status) 201))
+            (should (string-match "/\\([0-9]+\\)/?\\'" location))
+            (let* ((id (match-string 1 location))
+                   (preview-inventory (jaunder--inventory-for-root root))
+                   (preview-member
+                    (cl-find id (jaunder-inventory-server-only preview-inventory)
+                             :key #'jaunder-inventory-member-id :test #'equal))
+                   (slug (and preview-member
+                              (jaunder-inventory-member-slug preview-member))))
+              (should preview-member)
+              (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
+                       (jaunder-reconcile root))
+              (let* ((inventory (jaunder--inventory-for-root root))
+                     (match (cl-find id (jaunder-inventory-matched inventory)
+                                     :key (lambda (item)
+                                            (jaunder-inventory-member-id
+                                             (jaunder-inventory-match-member item)))
+                                     :test #'equal))
+                     (report (jaunder--reconcile-build-report root inventory))
+                     (row (car (jaunder-reconcile-report-rows report))))
+                (should match)
+                (should (file-exists-p
+                         (jaunder-inventory-local-path
+                          (jaunder-inventory-match-local match))))
+                (should (memq (jaunder-reconcile-row-state row)
+                              '(unchanged local-ahead)))
+                (with-current-buffer "*Jaunder Reconcile*"
+                  (should (string-match-p (regexp-quote slug) (buffer-string))))))))
+       (delete-directory root t)))))
+
 (provide 'jaunder-reconcile-integration)
 ;;; jaunder-reconcile-integration.el ends here

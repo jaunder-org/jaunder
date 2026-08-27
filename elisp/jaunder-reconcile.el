@@ -1,11 +1,12 @@
-;;; jaunder-reconcile.el --- Side-effect-free Post inventory -*- lexical-binding: t; -*-
+;;; jaunder-reconcile.el --- Post inventory and reconciliation -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Jaunder contributors
 
 ;;; Commentary:
 ;; Enumerate an AtomPub Collection and the directly contained Org files of one
-;; configured root.  The result is a complete, conflict-safe inventory for the
-;; reconcile UI; this module never mutates either the filesystem or the server.
+;; configured root.  Inventory is side-effect-free; reconciliation classifies
+;; it, renders a persistent report, and optionally delegates server-only pulls
+;; to the D2 safe-pull operation.
 
 ;;; Code:
 
@@ -15,6 +16,9 @@
 (require 'jaunder-config)
 (require 'jaunder-org)
 (require 'jaunder-transport)
+(require 'jaunder-datetime)
+
+(declare-function jaunder--pull-member "jaunder-pull")
 
 (cl-defstruct (jaunder-inventory-member
                (:constructor jaunder--make-inventory-member))
@@ -383,6 +387,209 @@ returned."
   (jaunder--with-blog root
                       (jaunder--join-inventory (jaunder--scan-root-locals root)
                                                (jaunder--fetch-collection-members))))
+(cl-defstruct (jaunder-reconcile-row
+               (:constructor jaunder--make-reconcile-row))
+              "One immutable classification in a reconciliation report."
+              state local member reason detail conflict)
+
+(cl-defstruct (jaunder-reconcile-report
+               (:constructor jaunder--make-reconcile-report))
+              "The complete reconciliation result for one configured root."
+              root inventory rows)
+
+(defconst jaunder--reconcile-state-order
+  '(unchanged server-ahead local-ahead conflict unclassifiable
+              orphan local-draft server-only inventory-conflict)
+  "Stable section order for `jaunder-reconcile' reports.")
+
+(defun jaunder--strong-etag-p (etag)
+  "Return non-nil when ETAG is a syntactically strong quoted ETag."
+  (and (stringp etag)
+       (string-match-p "\\`\"[^\"\r\n]+\"\\'" etag)))
+
+(defun jaunder--reconcile-synced-time (value)
+  "Parse VALUE as the canonical UTC sync instant, or return nil."
+  (when (and (stringp value)
+             (string-match-p
+              "\\`[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}T[0-9]\\{2\\}:[0-9]\\{2\\}:[0-9]\\{2\\}Z\\'"
+              value))
+    (condition-case nil
+        (let ((time (date-to-time value)))
+          (and (equal (format-time-string "%Y-%m-%dT%H:%M:%SZ" time t) value) time))
+      (error nil))))
+
+(defun jaunder--reconcile-time-p (value)
+  "Return non-nil when VALUE is accepted by Emacs time arithmetic."
+  (and value
+       (condition-case nil
+           (time-add value 0)
+         (error nil))))
+
+(defun jaunder--classify-match (match outcome stored-etag synced-at mtime)
+  "Classify MATCH using Member OUTCOME and its saved local synchronization state.
+OUTCOME is either `(:error ERROR)' for a transport failure or `(:response
+RESPONSE)'.  Prerequisites are checked in protocol order so each row has one
+stable first failure reason."
+  (let* ((response (plist-get outcome :response))
+         (status (and response (plist-get response :status)))
+         (reason
+          (cond
+           ((plist-get outcome :error) 'member-transport-error)
+           ((not (integerp status)) 'member-http-error)
+           ((= status 404) 'member-not-found)
+           ((not (<= 200 status 299)) 'member-http-error)
+           ((not (jaunder--strong-etag-p
+                  (jaunder--response-header response "ETag"))) 'current-etag-invalid)
+           ((not (jaunder--strong-etag-p stored-etag)) 'stored-etag-invalid)
+           ((not (jaunder--reconcile-synced-time synced-at)) 'synced-at-invalid)
+           ((not (jaunder--reconcile-time-p mtime))
+            'file-mtime-unreadable))))
+    (if reason
+        (jaunder--make-reconcile-row :state 'unclassifiable :local
+                                     (jaunder-inventory-match-local match)
+                                     :member (jaunder-inventory-match-member match)
+                                     :reason reason
+                                     :detail (and (eq reason 'member-http-error) status))
+      (let* ((current (jaunder--response-header response "ETag"))
+             (synced (jaunder--reconcile-synced-time synced-at))
+             (server-changed (not (equal current stored-etag)))
+             (local-changed (time-less-p (time-add synced 2) mtime)))
+        (jaunder--make-reconcile-row
+         :state (cond ((and server-changed local-changed) 'conflict)
+                      (server-changed 'server-ahead)
+                      (local-changed 'local-ahead)
+                      (t 'unchanged))
+         :local (jaunder-inventory-match-local match)
+         :member (jaunder-inventory-match-member match))))))
+
+(defun jaunder--reconcile-local-markers (local)
+  "Return LOCAL's saved ETag, sync instant, and mtime without signalling.
+Marker and mtime reads fail independently so an unreadable timestamp cannot
+hide otherwise valid synchronization markers."
+  (let ((markers
+         (condition-case nil
+             (with-temp-buffer
+               (insert-file-contents (jaunder-inventory-local-path local))
+               (let ((change-major-mode-hook nil) (after-change-major-mode-hook nil))
+                 (delay-mode-hooks (org-mode)))
+               (list (jaunder--buffer-property "JAUNDER_SYNCED")
+                     (jaunder--buffer-property "JAUNDER_SYNCED_AT")))
+           (error (list nil nil)))))
+    (append markers
+            (list
+             (condition-case nil
+                 (file-attribute-modification-time
+                  (file-attributes (jaunder-inventory-local-path local)))
+               (error nil))))))
+
+(defun jaunder--reconcile-member-outcome (member)
+  "Fetch MEMBER once, retaining a transport failure as row-local data."
+  (condition-case err
+      (list :response (jaunder--http-request
+                       "GET" (jaunder-inventory-member-edit-uri member)))
+    (error (list :error err))))
+
+(defun jaunder--reconcile-match-row (match)
+  "Fetch and classify one MATCH without letting its failure hide other rows."
+  (let* ((markers (jaunder--reconcile-local-markers
+                   (jaunder-inventory-match-local match))))
+    (jaunder--classify-match
+     match (jaunder--reconcile-member-outcome (jaunder-inventory-match-member match))
+     (nth 0 markers) (nth 1 markers) (nth 2 markers))))
+
+(defun jaunder--reconcile-build-report (root inventory)
+  "Build a total reconciliation report for ROOT from D1 INVENTORY."
+  (let ((rows
+         (append
+          (mapcar #'jaunder--reconcile-match-row (jaunder-inventory-matched inventory))
+          (mapcar (lambda (local) (jaunder--make-reconcile-row
+                                   :state 'orphan :local local))
+                  (jaunder-inventory-orphans inventory))
+          (mapcar (lambda (local) (jaunder--make-reconcile-row
+                                   :state 'local-draft :local local))
+                  (jaunder-inventory-local-drafts inventory))
+          (mapcar (lambda (member) (jaunder--make-reconcile-row
+                                    :state 'server-only :member member))
+                  (jaunder-inventory-server-only inventory))
+          (mapcar (lambda (conflict) (jaunder--make-reconcile-row
+                                      :state 'inventory-conflict :conflict conflict))
+                  (jaunder-inventory-conflicts inventory)))))
+    (jaunder--make-reconcile-report :root root :inventory inventory :rows rows)))
+
+(defun jaunder--reconcile-row-label (row)
+  "Return the deterministic human label for ROW."
+  (let ((local (jaunder-reconcile-row-local row))
+        (member (jaunder-reconcile-row-member row)))
+    (cond (local (jaunder-inventory-local-path local))
+          (member (format "%s (%s)" (jaunder-inventory-member-slug member)
+                          (jaunder-inventory-member-id member)))
+          (t "conflict group"))))
+
+(defun jaunder--reconcile-render-conflict (conflict)
+  "Insert deterministic details for one inventory CONFLICT."
+  (insert (format "  kinds: %s\n" (mapconcat #'symbol-name
+                                             (jaunder-inventory-conflict-kinds conflict) ", ")))
+  (dolist (local (jaunder-inventory-conflict-locals conflict))
+    (insert (format "  local: %s id=%s\n" (jaunder-inventory-local-path local)
+                    (or (jaunder-inventory-local-id local) ""))))
+  (dolist (member (jaunder-inventory-conflict-members conflict))
+    (insert (format "  Member: %s id=%s slug=%s\n"
+                    (jaunder-inventory-member-edit-uri member)
+                    (jaunder-inventory-member-id member)
+                    (jaunder-inventory-member-slug member)))))
+
+(defun jaunder--render-reconcile-report (report)
+  "Render REPORT into the persistent `*Jaunder Reconcile*' buffer."
+  (let ((buffer (get-buffer-create "*Jaunder Reconcile*")))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert (format "Jaunder reconciliation: %s\n\n"
+                        (jaunder-reconcile-report-root report)))
+        (dolist (state jaunder--reconcile-state-order)
+          (let ((rows (cl-remove-if-not
+                       (lambda (row) (eq (jaunder-reconcile-row-state row) state))
+                       (jaunder-reconcile-report-rows report))))
+            (insert (format "%s (%d)\n" state (length rows)))
+            (dolist (row rows)
+              (insert (format "- %s" (jaunder--reconcile-row-label row)))
+              (when (jaunder-reconcile-row-reason row)
+                (insert (format ": %s" (jaunder-reconcile-row-reason row)))
+                (when (jaunder-reconcile-row-detail row)
+                  (insert (format " (%s)" (jaunder-reconcile-row-detail row)))))
+              (insert "\n")
+              (when (eq state 'inventory-conflict)
+                (jaunder--reconcile-render-conflict
+                 (jaunder-reconcile-row-conflict row))))
+            (when (memq state '(server-ahead local-ahead))
+              (insert (if (eq state 'server-ahead)
+                          "  Pull this Post manually after reviewing server changes.\n"
+                        "  Publish this Post manually after reviewing local changes.\n")))
+            (insert "\n")))
+        (goto-char (point-min))
+        (special-mode)))
+    buffer))
+
+(defun jaunder-reconcile (root)
+  "Reconcile ROOT with its configured AtomPub Collection without resolving it."
+  (interactive (list default-directory))
+  (jaunder--with-blog
+   root
+   (let* ((configured-root (car (jaunder--blog-entry-for root)))
+          (inventory (jaunder--inventory-for-root configured-root))
+          (report (jaunder--reconcile-build-report configured-root inventory))
+          (preview (jaunder-inventory-server-only inventory))
+          (buffer (jaunder--render-reconcile-report report)))
+     (display-buffer buffer)
+     (when (and preview
+                (y-or-n-p (format "Pull %d server-only Post%s? "
+                                  (length preview) (if (= (length preview) 1) "" "s"))))
+       (require 'jaunder-pull)
+       (dolist (member preview)
+         (jaunder--pull-member configured-root member))
+       (jaunder--render-reconcile-report report))
+     report)))
+
 
 (provide 'jaunder-reconcile)
 ;;; jaunder-reconcile.el ends here

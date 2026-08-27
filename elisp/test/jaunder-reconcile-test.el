@@ -325,5 +325,202 @@
     (jaunder-reconcile-test--assert-total-partition
      inventory (list draft invalid match orphan) (list a b c))))
 
+
+(ert-deftest jaunder-reconcile-classifies-all-matched-change-combinations ()
+  "ETag and mtime changes form the four matched reconciliation states."
+  (let ((match (jaunder--make-inventory-match
+                :local (jaunder-reconcile-test--local "/tmp/match.org" "7")
+                :member (jaunder-reconcile-test--member "7" "match"))))
+    (dolist (fixture '((nil nil unchanged) (t nil server-ahead)
+                       (nil t local-ahead) (t t conflict)))
+      (let* ((server (nth 0 fixture))
+             (local (nth 1 fixture))
+             (row (jaunder--classify-match
+                   match
+                   (list :response (list :status 200
+                                         :headers (list (cons "etag"
+                                                              (if server "\"new\"" "\"old\"")))))
+                   "\"old\"" "2026-08-25T12:00:00Z"
+                   (if local (encode-time 3 0 12 25 8 2026 t)
+                     (encode-time 2 0 12 25 8 2026 t)))))
+        (should (eq (jaunder-reconcile-row-state row) (nth 2 fixture)))))))
+
+(ert-deftest jaunder-reconcile-two-second-mtime-boundary-is-not-local-change ()
+  "Only an mtime more than two seconds after sync marks a local change."
+  (let* ((match (jaunder--make-inventory-match
+                 :local (jaunder-reconcile-test--local "/tmp/match.org" "7")
+                 :member (jaunder-reconcile-test--member "7" "match")))
+         (outcome (list :response (list :status 200 :headers '(("etag" . "\"old\"")))))
+         (synced "2026-08-25T12:00:00Z"))
+    (should (eq (jaunder-reconcile-row-state
+                 (jaunder--classify-match match outcome "\"old\"" synced
+                                          (encode-time 2 0 12 25 8 2026 t)))
+                'unchanged))
+    (should (eq (jaunder-reconcile-row-state
+                 (jaunder--classify-match match outcome "\"old\"" synced
+                                          (encode-time 3 0 12 25 8 2026 t)))
+                'local-ahead))))
+
+(ert-deftest jaunder-reconcile-keeps-first-unclassifiable-reason ()
+  "A failed Member prerequisite wins over later local marker failures."
+  (let ((match (jaunder--make-inventory-match
+                :local (jaunder-reconcile-test--local "/tmp/match.org" "7")
+                :member (jaunder-reconcile-test--member "7" "match"))))
+    (dolist (fixture
+             (list
+              (list (list :error '(error "offline")) nil nil nil 'member-transport-error)
+              (list (list :response (list :status 404)) nil nil nil 'member-not-found)
+              (list (list :response (list :status 500)) nil nil nil 'member-http-error)
+              (list (list :response (list :status 200 :headers nil)) nil nil nil
+                    'current-etag-invalid)
+              (list (list :response (list :status 200 :headers '(("etag" . "unquoted"))))
+                    "\"old\"" "2026-08-25T12:00:00Z" (encode-time 2 0 12 25 8 2026 t)
+                    'current-etag-invalid)
+              (list (list :response (list :status 200 :headers '(("etag" . "W/\"new\""))))
+                    "\"old\"" "2026-08-25T12:00:00Z" (encode-time 2 0 12 25 8 2026 t)
+                    'current-etag-invalid)
+              (list (list :response (list :status 200 :headers '(("etag" . "\"new\""))))
+                    nil nil nil 'stored-etag-invalid)
+              (list (list :response (list :status 200 :headers '(("etag" . "\"new\""))))
+                    "unquoted" "2026-08-25T12:00:00Z" (encode-time 2 0 12 25 8 2026 t)
+                    'stored-etag-invalid)
+              (list (list :response (list :status 200 :headers '(("etag" . "\"new\""))))
+                    "W/\"old\"" "2026-08-25T12:00:00Z" (encode-time 2 0 12 25 8 2026 t)
+                    'stored-etag-invalid)
+              (list (list :response (list :status 200 :headers '(("etag" . "W/\"new\""))))
+                    "unquoted" nil nil 'current-etag-invalid)
+              (list (list :response (list :status 200 :headers '(("etag" . "\"new\""))))
+                    "\"old\"" nil nil 'synced-at-invalid)
+              (list (list :response (list :status 200 :headers '(("etag" . "\"new\""))))
+                    "\"old\"" "2026-08-25T12:00:00Z" nil 'file-mtime-unreadable)))
+      (pcase-let ((`(,outcome ,etag ,synced ,mtime ,reason) fixture))
+        (should (eq (jaunder-reconcile-row-reason
+                     (jaunder--classify-match match outcome etag synced mtime))
+                    reason))))))
+
+(ert-deftest jaunder-reconcile-rendering-is-persistent-and-guides-one-sided-states ()
+  "Rendering has stable counts, reasons, and guidance in its report buffer."
+  (let* ((local (jaunder-reconcile-test--local "/tmp/local.org" "7"))
+         (member (jaunder-reconcile-test--member "7" "server"))
+         (report (jaunder--make-reconcile-report
+                  :root "/tmp"
+                  :inventory (jaunder--make-inventory)
+                  :rows (list
+                         (jaunder--make-reconcile-row :state 'server-ahead
+                                                      :local local :member member)
+                         (jaunder--make-reconcile-row :state 'unclassifiable
+                                                      :local local :member member
+                                                      :reason 'stored-etag-invalid)))))
+    (let ((rendered (with-current-buffer (jaunder--render-reconcile-report report)
+                      (buffer-string))))
+      (with-current-buffer (jaunder--render-reconcile-report report)
+        (should (equal (buffer-string) rendered))
+        (should (string-match-p "server-ahead (1)" (buffer-string)))
+        (should (string-match-p "stored-etag-invalid" (buffer-string)))
+        (should (string-match-p "Pull this Post manually" (buffer-string)))))))
+
+(ert-deftest jaunder-reconcile-requires-an-active-blog-before-inventory ()
+  "An unconfigured root fails before filesystem or network reconciliation."
+  (let ((jaunder-blogs nil))
+    (should-error (jaunder-reconcile "/tmp/jaunder-unconfigured-root/"))))
+
+(ert-deftest jaunder-reconcile-applies-only-the-offered-server-only-preview ()
+  "Cancellation pulls nothing; confirmation preserves the preview report."
+  (let* ((root (make-temp-file "jaunder-reconcile-preview-" t))
+         (jaunder-blogs
+          (list (cons (file-name-as-directory root)
+                      (list :base-url "https://example.test" :username "alice"))))
+         (first (jaunder-reconcile-test--member "1" "first"))
+         (second (jaunder-reconcile-test--member "2" "second"))
+         (inventory (jaunder--make-inventory :server-only (list first second)))
+         pulled)
+    (unwind-protect
+        (cl-letf (((symbol-function 'jaunder--inventory-for-root) (lambda (_) inventory))
+                  ((symbol-function 'jaunder--pull-member)
+                   (lambda (_ member) (push member pulled))))
+                 (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) nil)))
+                          (jaunder-reconcile root))
+                 (let ((rendered (with-current-buffer "*Jaunder Reconcile*" (buffer-string))))
+                   (should-not pulled)
+                   (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
+                            (jaunder-reconcile root))
+                   (should (equal (nreverse pulled) (list first second)))
+                   (with-current-buffer "*Jaunder Reconcile*"
+                     (should (equal (buffer-string) rendered)))))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-reconcile-keeps-valid-markers-when-mtime-is-unreadable ()
+  "An mtime failure classifies a valid matched Post as file-mtime-unreadable."
+  (let* ((root (make-temp-file "jaunder-reconcile-markers-" t))
+         (path (expand-file-name "matched.org" root))
+         (local (jaunder-reconcile-test--local path "7"))
+         (match (jaunder--make-inventory-match
+                 :local local :member (jaunder-reconcile-test--member "7" "matched")))
+         (outcome (list :response
+                        (list :status 200 :headers '(("etag" . "\"old\""))))))
+    (unwind-protect
+        (progn
+          (with-temp-file path
+            (insert "#+PROPERTY: JAUNDER_SYNCED \"old\"\n"
+                    "#+PROPERTY: JAUNDER_SYNCED_AT 2026-08-25T12:00:00Z\n"))
+          (cl-letf (((symbol-function 'file-attributes)
+                     (lambda (&rest _) (error "unreadable mtime"))))
+                   (let ((markers (jaunder--reconcile-local-markers local)))
+                     (should (equal (list (nth 0 markers) (nth 1 markers))
+                                    '("\"old\"" "2026-08-25T12:00:00Z")))
+                     (should (eq (jaunder-reconcile-row-reason
+                                  (jaunder--classify-match match outcome
+                                                           (nth 0 markers)
+                                                           (nth 1 markers)
+                                                           (nth 2 markers)))
+                                 'file-mtime-unreadable)))))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-reconcile-selects-the-most-specific-configured-root ()
+  "Nested reconciliation resolves its active blog and inventory root by longest prefix."
+  (let* ((parent (make-temp-file "jaunder-reconcile-parent-" t))
+         (child (expand-file-name "nested/" parent))
+         (descendant (expand-file-name "descendant/" child))
+         (jaunder-blogs
+          (list (cons (file-name-as-directory parent)
+                      (list :base-url "https://parent.test" :username "parent"))
+                (cons child (list :base-url "https://child.test" :username "child"))))
+         observed)
+    (make-directory descendant t)
+    (unwind-protect
+        (cl-letf (((symbol-function 'jaunder--inventory-for-root)
+                   (lambda (root)
+                     (setq observed
+                           (list root (jaunder--active-base-url)
+                                 (jaunder--active-username)))
+                     (jaunder--make-inventory))))
+                 (jaunder-reconcile descendant)
+                 (should (equal observed (list child "https://child.test" "child"))))
+      (delete-directory parent t))))
+
+(ert-deftest jaunder-reconcile-preserves-inventory-only-classes-and-conflict-details ()
+  "D1 classes remain distinct reconciliation rows and groups remain intact."
+  (let* ((draft (jaunder-reconcile-test--local "/tmp/draft.org"))
+         (orphan (jaunder-reconcile-test--local "/tmp/orphan.org" "3"))
+         (server (jaunder-reconcile-test--member "4" "server"))
+         (local (jaunder-reconcile-test--local "/tmp/duplicate.org" "5"))
+         (member (jaunder-reconcile-test--member "5" "duplicate"))
+         (conflict (jaunder--make-inventory-conflict
+                    :kinds '(duplicate-local-id duplicate-target-slug)
+                    :locals (list local) :members (list member)))
+         (inventory (jaunder--make-inventory :local-drafts (list draft)
+                                             :orphans (list orphan)
+                                             :server-only (list server)
+                                             :conflicts (list conflict)))
+         (report (jaunder--reconcile-build-report "/tmp" inventory)))
+    (should (equal (mapcar #'jaunder-reconcile-row-state
+                           (jaunder-reconcile-report-rows report))
+                   '(orphan local-draft server-only inventory-conflict)))
+    (with-current-buffer (jaunder--render-reconcile-report report)
+      (should (string-match-p "inventory-conflict (1)" (buffer-string)))
+      (should (string-match-p "duplicate-local-id, duplicate-target-slug"
+                              (buffer-string)))
+      (should (string-match-p "local: /tmp/duplicate.org id=5" (buffer-string)))
+      (should (string-match-p "slug=duplicate" (buffer-string))))))
 (provide 'jaunder-reconcile-test)
 ;;; jaunder-reconcile-test.el ends here
