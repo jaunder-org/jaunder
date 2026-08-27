@@ -436,6 +436,22 @@ values with no serialization hop and so take the newtype like any other surface
 we define (`CapturedPing`, `server/tests/helpers/websub_capturing.rs`). The
 distinction is whether the double is observing bytes or receiving values.
 
+**2026-08-27 adoption — `IdempotencyKey`.** Issue #1086 adopts `IdempotencyKey`
+as a non-secret string-backed domain value. It prevents a retry key from being
+transposed with another string while it crosses AtomPub, post creation,
+duplicate lookup, and persistence. Its `FromStr` trims outer whitespace, rejects
+an empty result, and preserves every other string; the standard trailer supplies
+the validating serde and SQLx bridges.
+
+AtomPub retains one compatibility seam before that outermost parse:
+`HeaderValue::to_str` may reject a header value (including non-ASCII UTF-8 bytes
+and invalid UTF-8), and missing, rejected, or blank-after-trimming values mean
+no key rather than a `400`. Only readable, non-blank header text becomes an
+owned `IdempotencyKey`; every Jaunder-defined surface thereafter remains typed,
+with borrowed keys for orchestration and lookup and owned keys for creation
+input and persistence. This type-only adoption needs no schema migration. The
+frozen #697 historical artifacts remain unchanged.
+
 ## Consequences
 
 - **One decision surface.** "Does this value deserve a type, and what shape does

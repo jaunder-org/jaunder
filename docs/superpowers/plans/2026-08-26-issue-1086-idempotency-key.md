@@ -45,7 +45,7 @@ Out:
     whitespace-only, non-ASCII UTF-8 bytes, invalid UTF-8 bytes, and no-key
     behavior through real HTTP requests.
 
-- [ ] Task 3: Record the completed domain contract
+- [x] Task 3: Record the completed domain contract
   - Depends on: Tasks 1–2.
   - Contract: ADR-0063 and `docs/ARCHITECTURE.md` describe the type,
     compatibility boundary, per-user persistence, and replay semantics; frozen

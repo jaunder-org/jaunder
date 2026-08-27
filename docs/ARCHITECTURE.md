@@ -266,19 +266,24 @@ not canonicalized across backends
 
 ### Idempotent post creation
 
-Post creation accepts an optional client-supplied idempotency key, so a retried
+Post creation accepts an optional client-supplied
+[`IdempotencyKey`](adr/0063-domain-value-newtype-convention.md), so a retried
 AtomPub POST does not create a duplicate post — the mechanism decided in issue
 [#79](https://github.com/jaunder-org/jaunder/issues/79) as a follow-on to
-ADR-0047, not in an ADR of its own. The `idempotency_keys` table (migration
-`0023_create_idempotency_keys`, `UNIQUE(user_id, key)`) is written in the same
-transaction as the post (`storage/src/posts.rs:2274`); a duplicate key surfaces
-as `CreatePostError::IdempotencyConflict` and is deliberately _not_ retried as a
-slug collision (`storage/src/post_service.rs:466`), and
-`PostStorage::post_id_for_idempotency_key` maps a replayed key back to the post
-it originally created. AtomPub is its only caller
-(`server/src/atompub/posts.rs:366`); the web composer passes
-`idempotency_key: None` (`web/src/posts/api.rs:188`), so the mechanism is a
-machine-client contract, not a browser one.
+ADR-0047. At the AtomPub boundary, a missing header, a value rejected by
+`HeaderValue::to_str` (including non-ASCII UTF-8 bytes and invalid UTF-8), or
+text that is blank after trimming means no key rather than a `400`. A readable,
+non-blank value is parsed once into an owned `IdempotencyKey`; typed borrowed
+keys carry it through post creation and duplicate lookup, and the owned type is
+bound for persistence.
+
+The existing `idempotency_keys` table needs no schema migration: it stores the
+key as `TEXT NOT NULL` and enforces `UNIQUE(user_id, key)`. A fresh keyed create
+writes its post and key row atomically; a uniqueness collision rolls the
+attempted creation back. The fresh keyed create returns `201`; when its original
+post remains available, same-user key reuse returns that original post as `200`,
+even when the new payload differs. Another user may use the same key
+independently, and key rows are retained indefinitely.
 
 ### Testing (summary)
 
