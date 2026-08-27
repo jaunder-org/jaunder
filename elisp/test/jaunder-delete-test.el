@@ -47,6 +47,7 @@
 
 (ert-deftest jaunder-strong-etag-p-accepts-only-http-etagc ()
   "Strong validators exclude whitespace and controls but retain valid etagc."
+  (should (jaunder--strong-etag-p "\"\""))
   (should (jaunder--strong-etag-p "\"!#~\""))
   (should (jaunder--strong-etag-p (concat "\"" (string #x80) "\"")))
   (dolist (etag (list "\"two words\""

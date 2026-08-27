@@ -47,11 +47,11 @@ active blog's Member path."
 
 (defun jaunder--strong-etag-p (etag)
   "Return non-nil when ETAG is a syntactically strong HTTP ETag.
-Its quoted, non-empty interior is HTTP `etagc': ASCII `!', `#' through `~', or
+Its quoted interior is HTTP `etagc': ASCII `!', `#' through `~', or
 an obs-text byte.  This excludes weak validators, quotes, whitespace, controls,
 and DEL before a conditional request can be sent."
   (when (and (stringp etag)
-             (> (length etag) 2)
+             (>= (length etag) 2)
              (= (aref etag 0) ?\")
              (= (aref etag (1- (length etag))) ?\"))
     (let ((index 1)
