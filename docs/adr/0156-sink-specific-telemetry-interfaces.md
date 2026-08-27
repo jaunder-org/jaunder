@@ -1,12 +1,12 @@
-# ADR-DRAFT: Sink-Specific Telemetry Interfaces
+# ADR-0156: Sink-Specific Telemetry Interfaces
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-25
 - Issue: [#1138](https://github.com/jaunder-org/jaunder/issues/1138)
 
 ## Context
 
-[ADR-0011](../0011-unified-observability.md) admitted server-function parameter
+[ADR-0011](0011-unified-observability.md) admitted server-function parameter
 values to tracing on four grounds: intrinsically bounded values, operator
 configuration, already-public permalink values, and `Username`. The
 `server-fn-tracing` gate stored that decision as `RECORDABLE_TYPES`, reducing
@@ -44,7 +44,7 @@ declaration-only-field checks, but performs no type-name classification.
 The four admission grounds and exclusions from ADR-0011 remain unchanged.
 Secrets, email, arbitrary content, request aggregates, and the existing skipped
 parameters gain no tracing interface.
-[ADR-0147](../0147-decision-path-observability.md) still permits decision-path
+[ADR-0147](0147-decision-path-observability.md) still permits decision-path
 fields only as `tracing::field::Empty` declarations recorded later by the span
 owner. Rejecting value expressions plus the generated parameter `skip_all`
 prevents those declarations from bypassing `TraceField`.
