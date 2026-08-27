@@ -28,7 +28,8 @@ async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
     .expect("regenerate feed");
 
     assert_eq!(
-        row.content_type, "application/rss+xml; charset=utf-8",
+        row.representation().content_type(),
+        "application/rss+xml; charset=utf-8",
         "RSS content type"
     );
 
@@ -40,7 +41,8 @@ async fn regenerate_writes_cache_row_for_user_feed(#[case] backend: Backend) {
         .expect("cache entry exists");
 
     assert_eq!(
-        from_cache.body, row.body,
+        from_cache.representation().body(),
+        row.representation().body(),
         "cached body matches returned row"
     );
     assert_eq!(
@@ -67,17 +69,25 @@ async fn regenerate_writes_empty_feed_for_user_with_no_posts(#[case] backend: Ba
     .expect("regenerate feed");
 
     assert_eq!(
-        row.content_type, "application/rss+xml; charset=utf-8",
+        row.representation().content_type(),
+        "application/rss+xml; charset=utf-8",
         "empty feed has correct content type"
     );
-    assert!(!row.body.is_empty(), "empty feed still has valid body");
+    assert!(
+        !row.representation().body().is_empty(),
+        "empty feed still has valid body"
+    );
     let cached = state
         .feed_cache
         .get(&fp(&format!("/~{}/feed.rss", user.username)))
         .await
         .expect("get from cache")
         .expect("cache entry exists");
-    assert_eq!(cached.body, row.body, "cached body matches returned body");
+    assert_eq!(
+        cached.representation().body(),
+        row.representation().body(),
+        "cached body matches returned body"
+    );
 }
 
 #[apply(backends)]
@@ -100,7 +110,8 @@ async fn regenerate_writes_cache_rows_for_tag_surfaces(#[case] backend: Backend)
     .await
     .expect("regenerate site-tag feed");
     assert_eq!(
-        site_tag.content_type, "application/rss+xml; charset=utf-8",
+        site_tag.representation().content_type(),
+        "application/rss+xml; charset=utf-8",
         "site-tag RSS content type"
     );
     assert!(
@@ -124,7 +135,8 @@ async fn regenerate_writes_cache_rows_for_tag_surfaces(#[case] backend: Backend)
     .await
     .expect("regenerate user-tag feed");
     assert_eq!(
-        user_tag.content_type, "application/rss+xml; charset=utf-8",
+        user_tag.representation().content_type(),
+        "application/rss+xml; charset=utf-8",
         "user-tag RSS content type"
     );
     assert!(
@@ -174,10 +186,14 @@ async fn regenerate_writes_each_format(#[case] backend: Backend) {
         .await
         .unwrap_or_else(|_| panic!("regenerate {feed_url}"));
         assert_eq!(
-            row.content_type, *expected_content_type,
+            row.representation().content_type(),
+            *expected_content_type,
             "content_type for {feed_url}"
         );
-        assert!(!row.body.is_empty(), "body not empty for {feed_url}");
+        assert!(
+            !row.representation().body().is_empty(),
+            "body not empty for {feed_url}"
+        );
     }
 }
 
@@ -216,20 +232,18 @@ async fn feed_contains_only_public_posts(#[case] backend: Backend) {
     .await
     .expect("regenerate feed");
 
+    let body = row.representation().body();
     assert!(
-        row.body.contains(public.title.as_ref()),
-        "Public post must appear in the feed: {}",
-        row.body
+        body.contains(public.title.as_ref()),
+        "Public post must appear in the feed: {body}",
     );
     assert!(
-        !row.body.contains(subscribers.title.as_ref()),
-        "Subscribers post must NOT appear in the public feed: {}",
-        row.body
+        !body.contains(subscribers.title.as_ref()),
+        "Subscribers post must NOT appear in the public feed: {body}",
     );
     assert!(
-        !row.body.contains(private.title.as_ref()),
-        "Private post must NOT appear in the public feed: {}",
-        row.body
+        !body.contains(private.title.as_ref()),
+        "Private post must NOT appear in the public feed: {body}",
     );
 }
 
@@ -262,19 +276,18 @@ async fn regenerated_json_feed_carries_slug_ordered_tags(#[case] backend: Backen
     .await
     .expect("regenerate json feed");
 
-    let v: serde_json::Value = serde_json::from_str(&row.body).expect("feed body is JSON");
+    let body = row.representation().body();
+    let v: serde_json::Value = serde_json::from_str(body).expect("feed body is JSON");
     assert_eq!(
         v["items"].as_array().map(Vec::len),
         Some(1),
-        "one published post in the feed: {}",
-        row.body
+        "one published post in the feed: {body}",
     );
     // Ordered by slug (rust < web); the *display* casing the author supplied is
     // what the feed emits.
     assert_eq!(
         v["items"][0]["tags"],
         serde_json::json!(["Rust", "web"]),
-        "tags slug-ordered in the JSON feed body: {}",
-        row.body
+        "tags slug-ordered in the JSON feed body: {body}",
     );
 }

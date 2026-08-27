@@ -98,7 +98,7 @@ async fn serve(
     } // cov:ignore fall-through brace; llvm-cov leaves it unmarked though the row-newer (200, not 304) path is tested
 
     let mut resp_headers = HeaderMap::new();
-    if let Ok(ct) = HeaderValue::from_str(&row.content_type) {
+    if let Ok(ct) = HeaderValue::from_str(&row.representation().content_type()) {
         resp_headers.insert(header::CONTENT_TYPE, ct);
     }
     if let Ok(etag) = HeaderValue::from_str(&row.etag) {
@@ -111,7 +111,12 @@ async fn serve(
         header::CACHE_CONTROL,
         HeaderValue::from_static("public, max-age=300"),
     );
-    (StatusCode::OK, resp_headers, row.body).into_response()
+    (
+        StatusCode::OK,
+        resp_headers,
+        row.into_representation().into_body(),
+    )
+        .into_response()
 }
 
 pub async fn feed_site(
@@ -212,20 +217,26 @@ mod tests {
     use super::*;
     use chrono::{Duration, Utc};
     use common::{
-        test_support::{parse_content_type, parse_etag},
+        feed::{FeedFormat, SyndicationFeedRepresentation},
+        test_support::parse_etag,
         time::UtcInstant,
     };
     use storage::{FeedCacheError, FeedCacheRow};
 
     fn sample_row(etag: &str, updated_at: UtcInstant) -> FeedCacheRow {
-        FeedCacheRow {
-            feed_path: "/feed.rss".parse().expect("valid feed path"),
-            body: "<rss/>".to_owned(),
-            etag: parse_etag(etag),
-            content_type: parse_content_type("application/rss+xml; charset=utf-8"),
+        FeedCacheRow::new(
+            "/feed.rss".parse().expect("valid feed path"),
+            SyndicationFeedRepresentation::try_from_stored(
+                FeedFormat::Rss,
+                FeedFormat::Rss.content_type(),
+                "<rss/>".to_owned(),
+            )
+            .expect("matching stored representation metadata"),
+            parse_etag(etag),
             updated_at,
-            generated_at: updated_at,
-        }
+            updated_at,
+        )
+        .expect("matching cache row formats")
     }
 
     fn empty_site_config() -> Arc<dyn SiteConfigStorage> {

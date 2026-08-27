@@ -4,7 +4,10 @@ use common::feed::{
 };
 use common::tagged_url::{BaseUrl, CanonicalUrl, FeedUrl, Permalink, compose};
 use common::time::UtcInstant;
-use storage::{FeedCacheRow, FeedCacheStorage, PostRecord, PostStorage, SiteConfigStorage};
+use storage::{
+    FeedCacheRow, FeedCacheStorage, MismatchedFeedCacheRowFormat, PostRecord, PostStorage,
+    SiteConfigStorage,
+};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -15,6 +18,8 @@ pub enum RegenerateError {
     BaseUrlRequired,
     #[error("storage error: {0}")]
     Storage(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("feed cache row invariant error: {0}")]
+    CacheRow(#[from] MismatchedFeedCacheRowFormat),
 }
 
 /// Regenerates a feed for the given URL by fetching published posts and
@@ -110,14 +115,13 @@ pub async fn regenerate_feed(
     };
     let etag = feed_etag(&items, now.value());
 
-    let row = FeedCacheRow {
-        feed_path: feed_path.clone(),
-        body: body.into_body(),
+    let row = FeedCacheRow::new(
+        feed_path.clone(),
+        body,
         etag,
-        content_type: format.content_type(),
-        updated_at: UtcInstant::from(updated_at),
-        generated_at: now,
-    };
+        UtcInstant::from(updated_at),
+        now,
+    )?;
 
     feed_cache.upsert(row.clone()).await.map_err(storage_err)?;
 
@@ -219,7 +223,8 @@ mod tests {
         .await
         .expect("user-tag feed regenerates");
 
-        let body: serde_json::Value = serde_json::from_str(&row.body).expect("JSON Feed body");
+        let body: serde_json::Value =
+            serde_json::from_str(row.representation().body()).expect("JSON Feed body");
         assert_eq!(body["title"], "Jaunder — @alice #rust");
         assert_eq!(
             body["home_page_url"],

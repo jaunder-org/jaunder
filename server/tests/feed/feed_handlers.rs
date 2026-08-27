@@ -4,7 +4,8 @@ use axum::{
 };
 use chrono::{Timelike, Utc};
 use common::{
-    test_support::{parse_content_type, parse_etag},
+    feed::{FeedFormat, SyndicationFeedRepresentation},
+    test_support::parse_etag,
     time::UtcInstant,
 };
 use tower::ServiceExt;
@@ -18,6 +19,28 @@ use crate::helpers::{make_app, setup_with_base_url};
 use storage::test_support::{
     Backend, SeedRawPost, SeedUser, TestEnv, backends, backends_matrix, fp,
 };
+
+fn cache_row(
+    feed_path: &str,
+    body: &str,
+    etag: &str,
+    updated_at: UtcInstant,
+    generated_at: UtcInstant,
+) -> storage::FeedCacheRow {
+    storage::FeedCacheRow::new(
+        fp(feed_path),
+        SyndicationFeedRepresentation::try_from_stored(
+            FeedFormat::Rss,
+            FeedFormat::Rss.content_type(),
+            body.to_owned(),
+        )
+        .expect("matching stored representation metadata"),
+        parse_etag(etag),
+        updated_at,
+        generated_at,
+    )
+    .expect("matching cache row formats")
+}
 
 fn with_feed_cache(
     state: &Arc<storage::AppState>,
@@ -109,7 +132,10 @@ async fn handler_cache_miss_lazy_regens_and_returns_200_with_correct_content_typ
         .await
         .expect("get from cache")
         .expect("cache entry should exist");
-    assert!(!cached.body.is_empty(), "cached body should not be empty");
+    assert!(
+        !cached.representation().body().is_empty(),
+        "cached body should not be empty"
+    );
 }
 
 #[apply(backends)]
@@ -152,14 +178,13 @@ async fn handler_cache_hit_serves_stored_body_without_regeneration(#[case] backe
 
     // Pre-populate the cache with a known body
     let known_body = "known feed body";
-    let row = storage::FeedCacheRow {
-        feed_path: fp("/~bob/feed.rss"),
-        body: known_body.to_string(),
-        etag: parse_etag("\"known-etag\""),
-        content_type: parse_content_type("application/rss+xml; charset=utf-8"),
-        updated_at: UtcInstant::now(),
-        generated_at: UtcInstant::now(),
-    };
+    let row = cache_row(
+        "/~bob/feed.rss",
+        known_body,
+        "\"known-etag\"",
+        UtcInstant::now(),
+        UtcInstant::now(),
+    );
     state.feed_cache.upsert(row).await.expect("upsert cache");
 
     let req = Request::builder()
@@ -191,14 +216,13 @@ async fn handler_if_none_match_returns_304(#[case] backend: Backend) {
 
     // The stored ETag and the `If-None-Match` header must be the same quoted string.
     let etag = "\"test-etag-123\"";
-    let row = storage::FeedCacheRow {
-        feed_path: fp("/~charlie/feed.rss"),
-        body: "feed body".to_string(),
-        etag: parse_etag(etag),
-        content_type: parse_content_type("application/rss+xml; charset=utf-8"),
-        updated_at: UtcInstant::now(),
-        generated_at: UtcInstant::now(),
-    };
+    let row = cache_row(
+        "/~charlie/feed.rss",
+        "feed body",
+        etag,
+        UtcInstant::now(),
+        UtcInstant::now(),
+    );
     state.feed_cache.upsert(row).await.expect("upsert cache");
 
     let req = Request::builder()
@@ -227,14 +251,13 @@ async fn handler_if_modified_since_returns_304_when_unchanged(#[case] backend: B
     let update_time = Utc::now()
         .with_nanosecond(0)
         .expect("valid nanosecond value");
-    let row = storage::FeedCacheRow {
-        feed_path: fp("/~dave/feed.rss"),
-        body: "feed body".to_string(),
-        etag: parse_etag("\"test-etag\""),
-        content_type: parse_content_type("application/rss+xml; charset=utf-8"),
-        updated_at: UtcInstant::from(update_time),
-        generated_at: UtcInstant::now(),
-    };
+    let row = cache_row(
+        "/~dave/feed.rss",
+        "feed body",
+        "\"test-etag\"",
+        UtcInstant::from(update_time),
+        UtcInstant::now(),
+    );
     state.feed_cache.upsert(row).await.expect("upsert cache");
 
     // Request with If-Modified-Since set to the same time

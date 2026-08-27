@@ -32,7 +32,7 @@ Out:
     expected format, content type, and unchanged wire body, while
     `try_from_stored` accepts matching metadata and rejects every mismatched
     format/content-type pair.
-- [ ] Task 2: Make feed-cache storage enforce metadata agreement
+- [x] Task 2: Make feed-cache storage enforce metadata agreement
   - Depends on: Task 1's representation contract.
   - Contract: `FeedCacheRow` fields are not independently forgeable;
     construction verifies `FeedPath` format against the representation, while

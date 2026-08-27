@@ -3476,9 +3476,10 @@ mod tests {
         update_post_body_via_service,
     };
     use chrono::Utc;
+    use common::feed::SyndicationFeedRepresentation;
     use common::test_support::{
-        parse_content_type, parse_etag, parse_post_body, parse_post_summary, parse_post_title,
-        parse_row_limit, parse_slug, parse_tag, parse_tag_label, parse_username, parse_utc_instant,
+        parse_etag, parse_post_body, parse_post_summary, parse_post_title, parse_row_limit,
+        parse_slug, parse_tag, parse_tag_label, parse_username, parse_utc_instant,
     };
     use common::time::UtcInstant;
     use rstest::*;
@@ -4239,16 +4240,25 @@ mod tests {
         // catch-up if they were readable.
         let stale = now - chrono::Duration::hours(1);
         for url in ["/feed.rss", "/feed.atom"] {
+            let feed_path = fp(url);
+            let (_, format) = feed_path.parts().expect("valid feed path");
             state
                 .feed_cache
-                .upsert(FeedCacheRow {
-                    feed_path: fp(url),
-                    body: "<rss/>".into(),
-                    etag: parse_etag("\"sha256-deadbeef\""),
-                    content_type: parse_content_type("application/rss+xml"),
-                    updated_at: UtcInstant::from(stale),
-                    generated_at: UtcInstant::from(stale),
-                })
+                .upsert(
+                    FeedCacheRow::new(
+                        feed_path,
+                        SyndicationFeedRepresentation::try_from_stored(
+                            format,
+                            format.content_type(),
+                            "<rss/>".into(),
+                        )
+                        .expect("matching stored representation metadata"),
+                        parse_etag("\"sha256-deadbeef\""),
+                        UtcInstant::from(stale),
+                        UtcInstant::from(stale),
+                    )
+                    .expect("matching cache row formats"),
+                )
                 .await
                 .unwrap();
         }
