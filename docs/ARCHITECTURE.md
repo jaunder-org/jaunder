@@ -357,7 +357,7 @@ foreign-audience, stale, or metadata-only input saves nothing. Recognized
 mutable metadata covers title, tags, summary, lifecycle/date-zone data, and
 audience targets; identity and sync bookkeeping is checked against
 derived/current values, never trusted as input. The full policy is
-[server-side Org metadata block canonicalization](adr/drafts/server-side-org-metadata-block.md),
+[server-side Org metadata block canonicalization](adr/0155-server-side-org-metadata-block.md),
 which evolves [ADR-0024](adr/0024-server-side-org-canonicalization.md). Clients
 synthesize presentation headers on output.
 
@@ -685,7 +685,7 @@ metadata interpretation and canonical metadata-free body as every other Org
 ingress; Atom elements remain structured input, not a competing canonical
 representation. In particular, explicit Atom metadata wins over a header and the
 header can supply only its absence. The authoritative invariant is
-[server-side Org metadata block canonicalization](adr/drafts/server-side-org-metadata-block.md).
+[server-side Org metadata block canonicalization](adr/0155-server-side-org-metadata-block.md).
 
 Two Jaunder wire extensions ride the namespace `https://jaunder.org/ns/atompub`
 (`J_NS`, `common/src/atompub/ns.rs:6`;
@@ -1343,7 +1343,7 @@ permalink, or `Username`—and add no generic string, `Debug`, or `Display`
 fallback. Authors still write `skip(…)` / `skip_all` as explicit opt-outs.
 `server-fn-tracing` now checks source grammar, skip names, pattern-bound
 parameters, and declaration-only fields, but classifies no type names
-([sink-specific telemetry interfaces](adr/drafts/sink-specific-telemetry-interfaces.md)).
+([sink-specific telemetry interfaces](adr/0156-sink-specific-telemetry-interfaces.md)).
 
 Wire parse errors likewise own their sink projections: `user_message` selects
 feedback for the submitter and `telemetry_code` supplies a bounded

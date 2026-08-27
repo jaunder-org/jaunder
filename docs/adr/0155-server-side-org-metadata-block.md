@@ -1,13 +1,13 @@
-# ADR-DRAFT: Server-Side Org Metadata Block Canonicalization
+# ADR-0155: Server-Side Org Metadata Block Canonicalization
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-26
 - Issue: [#77](https://github.com/jaunder-org/jaunder/issues/77)
 
 ## Context
 
-[ADR-0024](../0024-server-side-org-canonicalization.md) established that every
-Org write reaches one metadata-free stored body, but deliberately deferred
+[ADR-0024](0024-server-side-org-canonicalization.md) established that every Org
+write reaches one metadata-free stored body, but deliberately deferred
 full-header parsing. That limit leaves a raw-Org create or update unable to
 express the same structured post metadata as other authoring surfaces, and would
 make each surface responsible for a different interpretation of the same source.

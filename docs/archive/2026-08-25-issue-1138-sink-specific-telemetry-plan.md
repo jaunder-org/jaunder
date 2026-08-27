@@ -83,7 +83,7 @@ Out:
 
 - [x] Task 5: Project and certify the policy replacement
   - Contract: add tracked draft
-    `docs/adr/drafts/sink-specific-telemetry-interfaces.md` with the canonical
+    `docs/adr/0156-sink-specific-telemetry-interfaces.md` with the canonical
     `# ADR-DRAFT` heading and `Status: proposed`. It supersedes ADR-0011's
     `RECORDABLE_TYPES` mechanism while retaining the four admission grounds and
     accounting for ADR-0147. Add only a reciprocal past-tense navigation
