@@ -313,6 +313,8 @@ fn cmd_capture_path(stream: &str, capture: &capture::CaptureConfig) -> anyhow::R
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt as _;
     use storage::test_support::sqlite_url;
     use tempfile::TempDir;
 
@@ -330,6 +332,86 @@ mod tests {
             .await
             .unwrap();
         (dir, db)
+    }
+
+    #[test]
+    fn subprocess_classifies_inherited_configuration_inputs() {
+        const SCENARIO: &str = "JAUNDER_TEST_SUPPORT_CONFIG_SCENARIO";
+        if let Some(scenario) = std::env::var_os(SCENARIO) {
+            let _telemetry = telemetry_config();
+            let db: DbConnectOptions = "postgres://app@localhost/jaunder"
+                .parse()
+                .expect("PostgreSQL URL");
+            let result = storage_runtime_config(&db);
+            match scenario.to_string_lossy().as_ref() {
+                "file" | "password" | "absent" => {
+                    result.expect("valid inherited configuration");
+                }
+                "invalid-file-variable" => {
+                    assert!(matches!(
+                        result,
+                        Err(storage::PostgresPasswordError::FileVariable(_))
+                    ));
+                }
+                _ => unreachable!("parent supplies a closed configuration scenario set"),
+            }
+            return;
+        }
+
+        let dir = TempDir::new().expect("password directory");
+        let password_file = dir.path().join("password");
+        std::fs::write(&password_file, "from-file\n").expect("password fixture");
+        for scenario in ["file", "password", "absent", "invalid-file-variable"] {
+            let mut command =
+                std::process::Command::new(std::env::current_exe().expect("test executable"));
+            command.args([
+                "--exact",
+                "tests::subprocess_classifies_inherited_configuration_inputs",
+                "--nocapture",
+            ]);
+            command.env(SCENARIO, scenario);
+            for name in [
+                "JAUNDER_LOG_FILTER",
+                "RUST_LOG",
+                "JAUNDER_LOG_FORMAT",
+                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
+                "OTEL_EXPORTER_OTLP_ENDPOINT",
+                "JAUNDER_SLOW_OP_MS",
+                "JAUNDER_E2E_SEED_PROCESS",
+                "JAUNDER_SQL_SLOW_MS",
+                "JAUNDER_DB_PASSWORD_FILE",
+                "JAUNDER_DB_PASSWORD",
+            ] {
+                command.env_remove(name);
+            }
+            match scenario {
+                "file" => {
+                    command.env("JAUNDER_DB_PASSWORD_FILE", &password_file);
+                }
+                "password" => {
+                    command.env("JAUNDER_DB_PASSWORD", "from-variable");
+                }
+                "invalid-file-variable" => {
+                    command.env(
+                        "JAUNDER_DB_PASSWORD_FILE",
+                        std::ffi::OsString::from_vec(vec![0xff]),
+                    );
+                    command.env(
+                        "JAUNDER_LOG_FILTER",
+                        std::ffi::OsString::from_vec(vec![0xff]),
+                    );
+                }
+                "absent" => {}
+                _ => unreachable!("closed parent scenario set"),
+            }
+            assert!(
+                command
+                    .status()
+                    .expect("spawn configuration child")
+                    .success(),
+                "configuration child scenario {scenario} must succeed"
+            );
+        }
     }
 
     #[tokio::test]

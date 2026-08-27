@@ -481,7 +481,8 @@ mod tests {
         assert!(
             output.status.success(),
             "CLI parser child failed: {}",
-            String::from_utf8_lossy(&output.stderr)
+            // Parent tests require success; this expression is failure-only diagnostics.
+            String::from_utf8_lossy(&output.stderr) // cov:ignore
         );
         String::from_utf8(output.stdout)
             .expect("child stdout is UTF-8")
@@ -553,7 +554,8 @@ mod tests {
                 };
                 format!("db={}", storage.db)
             }
-            _ => panic!("unknown CLI parser child scenario: {scenario}"),
+            // The parent owns a closed scenario set; this arm indicates a broken harness.
+            _ => panic!("unknown CLI parser child scenario: {scenario}"), // cov:ignore
         };
         println!("CLI_TEST_PROJECTION={projection}");
     }

@@ -77,6 +77,8 @@ mod tests {
     use jaunder::cli::{
         Cli, CliBackupMode, Commands, PgBootstrapArgs, SiteConfigAction, StorageArgs,
     };
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt as _;
     use tempfile::TempDir;
 
     fn test_storage_args(base: &TempDir) -> StorageArgs {
@@ -304,6 +306,10 @@ mod tests {
             .env(CHILD, "1")
             .env(host::capture::DIR_ENV, capture.path())
             .env(
+                "JAUNDER_LOG_FILTER",
+                std::ffi::OsString::from_vec(vec![0xff]),
+            )
+            .env(
                 "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
                 "not a valid endpoint",
             )
@@ -313,12 +319,14 @@ mod tests {
             output.status.success(),
             "child status: {}; stderr: {}",
             output.status,
-            String::from_utf8_lossy(&output.stderr)
+            // The root-wiring contract requires child success; this is diagnostic-only.
+            String::from_utf8_lossy(&output.stderr) // cov:ignore
         );
         assert!(
             String::from_utf8_lossy(&output.stdout).contains("MAIN_TEST_CHILD_COMPLETED"),
             "child did not complete root wiring: {}",
-            String::from_utf8_lossy(&output.stdout)
+            // A successful child always emits the projection; this is diagnostic-only.
+            String::from_utf8_lossy(&output.stdout) // cov:ignore
         );
         assert!(!capture.path().join("diag.log").exists());
     }

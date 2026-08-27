@@ -1135,6 +1135,8 @@ mod tests {
     };
     use rstest::*;
     use rstest_reuse::*;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt as _;
     use storage::{
         DbConnectOptions,
         test_support::{
@@ -1156,6 +1158,84 @@ mod tests {
                 e2e_seed_process: Ok(None),
             },
         )
+    }
+
+    #[test]
+    fn subprocess_classifies_command_configuration_inputs() {
+        const SCENARIO: &str = "JAUNDER_TEST_COMMAND_CONFIG_SCENARIO";
+        if let Some(scenario) = std::env::var_os(SCENARIO) {
+            let database: DbConnectOptions = "postgres://app@localhost/jaunder"
+                .parse()
+                .expect("PostgreSQL URL");
+            let result = storage_runtime_config(&database);
+            match scenario.to_string_lossy().as_ref() {
+                "file" | "password" | "invalid-threshold" => {
+                    result.expect("valid command configuration");
+                }
+                "invalid-file-variable" => {
+                    assert!(matches!(
+                        result,
+                        Err(storage::PostgresPasswordError::FileVariable(_))
+                    ));
+                }
+                _ => unreachable!("parent supplies a closed configuration scenario set"),
+            }
+            return;
+        }
+
+        let dir = TempDir::new().expect("password directory");
+        let password_file = dir.path().join("password");
+        std::fs::write(&password_file, "from-file\n").expect("password fixture");
+        for scenario in [
+            "file",
+            "password",
+            "invalid-threshold",
+            "invalid-file-variable",
+        ] {
+            let mut command =
+                std::process::Command::new(std::env::current_exe().expect("test executable"));
+            command.args([
+                "--exact",
+                "commands::tests::subprocess_classifies_command_configuration_inputs",
+                "--nocapture",
+            ]);
+            command.env(SCENARIO, scenario);
+            for name in [
+                "JAUNDER_SQL_SLOW_MS",
+                "JAUNDER_DB_PASSWORD_FILE",
+                "JAUNDER_DB_PASSWORD",
+            ] {
+                command.env_remove(name);
+            }
+            match scenario {
+                "file" => {
+                    command.env("JAUNDER_DB_PASSWORD_FILE", &password_file);
+                }
+                "password" => {
+                    command.env("JAUNDER_DB_PASSWORD", "from-variable");
+                }
+                "invalid-threshold" => {
+                    command.env(
+                        "JAUNDER_SQL_SLOW_MS",
+                        std::ffi::OsString::from_vec(vec![0xff]),
+                    );
+                }
+                "invalid-file-variable" => {
+                    command.env(
+                        "JAUNDER_DB_PASSWORD_FILE",
+                        std::ffi::OsString::from_vec(vec![0xff]),
+                    );
+                }
+                _ => unreachable!("closed parent scenario set"),
+            }
+            assert!(
+                command
+                    .status()
+                    .expect("spawn configuration child")
+                    .success(),
+                "configuration child scenario {scenario} must succeed"
+            );
+        }
     }
 
     #[test]

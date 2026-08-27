@@ -819,7 +819,8 @@ mod tests {
             otel_exporter_otlp_endpoint(
                 Ok(Some("http://preferred:4317".to_owned())),
                 Ok(Some("http://fallback:4317".to_owned())),
-                || {},
+                // A warning here would violate the valid-preferred-value contract.
+                || unreachable!("a valid preferred endpoint must not emit a fallback"), // cov:ignore
             )
             .as_deref(),
             Some("http://preferred:4317")
@@ -832,7 +833,8 @@ mod tests {
             otel_exporter_otlp_endpoint(
                 Ok(None),
                 Ok(Some("http://fallback:4317".to_owned())),
-                || {},
+                // A warning here would violate the valid-fallback-value contract.
+                || unreachable!("a valid standard endpoint must not emit a fallback"), // cov:ignore
             )
             .as_deref(),
             Some("http://fallback:4317")
@@ -1004,8 +1006,39 @@ mod tests {
     }
 
     #[test]
-    fn telemetry_resource_records_closed_e2e_seed_process_marker() {
-        let resource = telemetry_resource(Some(E2E_SEED_PROCESS_TEST_SUPPORT.to_owned()));
+    fn raw_config_applies_fallbacks_and_preserves_the_recognised_seed_process() {
+        let config = assert_zero_error_metrics(|| {
+            TelemetryConfig::from_raw(
+                false,
+                TelemetryRawConfig {
+                    log_filter: Err(invalid_unicode_env()),
+                    rust_log: Ok(None),
+                    log_format: Err(invalid_unicode_env()),
+                    jaunder_otlp_endpoint: Err(invalid_unicode_env()),
+                    otlp_endpoint: Ok(Some("http://ignored:4317".to_owned())),
+                    slow_op_ms: Err(invalid_unicode_env()),
+                    e2e_seed_process: Ok(Some(E2E_SEED_PROCESS_JAUNDER.to_owned())),
+                },
+            )
+        });
+        assert_eq!(
+            format!("{:?}", config.filter),
+            format!("{:?}", default_filter(false))
+        );
+        assert!(!config.json_format);
+        assert!(!config.otlp_endpoint_configured());
+        assert_eq!(config.slow_op_threshold, Duration::from_secs(5));
+        assert_eq!(
+            config.e2e_seed_process.as_deref(),
+            Some(E2E_SEED_PROCESS_JAUNDER)
+        );
+    }
+
+    #[test]
+    fn telemetry_resource_records_recognised_e2e_seed_process_marker() {
+        let resource = telemetry_resource(e2e_seed_process(Ok(Some(
+            E2E_SEED_PROCESS_TEST_SUPPORT.to_owned(),
+        ))));
         assert_eq!(
             resource.get(&opentelemetry::Key::from_static_str(E2E_SEED_PROCESS_ATTR)),
             Some(Value::from(E2E_SEED_PROCESS_TEST_SUPPORT))

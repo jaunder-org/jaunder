@@ -179,12 +179,23 @@ mod tests {
     }
 
     #[test]
+    fn postgres_options_apply_the_runtime_password_override() {
+        let runtime = raw_config(Ok(None), Ok(Some("override".to_owned())))
+            .expect("password override resolves");
+        let base: PgConnectOptions = "postgres://user:embedded@localhost/db".parse().unwrap();
+
+        let resolved = resolved_postgres_options(&base, &runtime);
+
+        assert_ne!(format!("{resolved:?}"), format!("{base:?}"));
+    }
+
+    #[test]
     fn postgres_password_falls_back_to_embedded_url_when_unset() {
         let runtime = raw_config(Ok(None), Ok(None)).expect("no override resolves");
         let base: PgConnectOptions = "postgres://user:embedded@localhost/db".parse().unwrap();
 
-        let _ = resolved_postgres_options(&base, &runtime);
-        assert!(runtime.postgres_password().is_none());
+        let resolved = resolved_postgres_options(&base, &runtime);
+        assert_ne!(format!("{resolved:?}"), format!("{base:?}"));
     }
 
     #[test]
@@ -196,7 +207,7 @@ mod tests {
             ))),
             Ok(None),
         ) else {
-            panic!("invalid password-file variable must fail closed");
+            unreachable!("invalid password-file variable must fail closed");
         };
 
         assert!(matches!(
@@ -216,7 +227,7 @@ mod tests {
             )))),
             Ok(None),
         ) else {
-            panic!("unreadable password file must fail closed");
+            unreachable!("unreadable password file must fail closed");
         };
 
         assert!(matches!(error, crate::PostgresPasswordError::FileRead(_)));

@@ -612,6 +612,76 @@ mod tests {
     }
 
     #[test]
+    fn invalid_sql_thresholds_warn_and_default_to_five_seconds() {
+        for threshold in [
+            Ok(Some("not-a-duration".to_owned())),
+            Err(std::env::VarError::NotUnicode(std::ffi::OsString::from(
+                "invalid-threshold",
+            ))),
+        ] {
+            let config =
+                StorageRuntimeConfig::from_raw(threshold, Ok(None), Ok(None)).expect("defaults");
+            assert_eq!(config.sql_slow_query_threshold(), Duration::from_secs(5));
+        }
+    }
+
+    #[test]
+    fn password_file_wins_and_trims_trailing_whitespace() {
+        let config = StorageRuntimeConfig::from_raw(
+            Ok(None),
+            Ok(Some(Ok("from-file \n".to_owned()))),
+            Ok(Some("from-variable".to_owned())),
+        )
+        .expect("file password resolves");
+
+        assert_eq!(
+            config
+                .postgres_password()
+                .expect("configured file password")
+                .0,
+            "from-file"
+        );
+    }
+
+    #[test]
+    fn direct_password_is_used_when_no_file_is_configured() {
+        let config = StorageRuntimeConfig::from_raw(
+            Ok(None),
+            Ok(None),
+            Ok(Some("from-variable".to_owned())),
+        )
+        .expect("variable password resolves");
+
+        assert_eq!(
+            config
+                .postgres_password()
+                .expect("configured variable password")
+                .0,
+            "from-variable"
+        );
+    }
+
+    #[test]
+    fn malformed_password_inputs_return_typed_errors_without_their_values() {
+        let invalid = || std::env::VarError::NotUnicode(std::ffi::OsString::from("secret"));
+
+        let Err(variable) = StorageRuntimeConfig::from_raw(Ok(None), Ok(None), Err(invalid()))
+        else {
+            // Reaching this arm would mean invalid Unicode was accepted.
+            panic!("invalid password variable must fail"); // cov:ignore
+        };
+        assert!(matches!(variable, PostgresPasswordError::Variable(_)));
+        assert!(!variable.to_string().contains("secret"));
+
+        let Err(file) = StorageRuntimeConfig::from_raw(Ok(None), Err(invalid()), Ok(None)) else {
+            // Reaching this arm would mean an invalid file variable was accepted.
+            panic!("invalid password-file variable must fail"); // cov:ignore
+        };
+        assert!(matches!(file, PostgresPasswordError::FileVariable(_)));
+        assert!(!file.to_string().contains("secret"));
+    }
+
+    #[test]
     fn test_db_connect_options_parsing() {
         let sqlite = "sqlite:jaunder.db".parse::<DbConnectOptions>().unwrap();
         assert!(matches!(sqlite, DbConnectOptions::Sqlite(_)));
