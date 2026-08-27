@@ -18,8 +18,8 @@ Service Document.
 - Keep the architecture view explicit about the supported inline form and the
   intentionally unsupported out-of-line form.
 - Preserve archived implementation plans as historical records.
-- This retirement does not require an ADR: it removes an unused optional
-  facility and does not establish a hard-to-reverse architecture boundary.
+- Record a narrow proposed ADR superseding only ADR-0089 Decision 6's retention
+  of the Categories Document writer; preserve the rest of ADR-0089.
 
 ## Acceptance
 
@@ -31,6 +31,8 @@ Service Document.
   their terms and `fixed="no"` open-set declaration.
 - The architecture view states that Jaunder uses inline category discovery and
   does not serve an out-of-line Categories Document.
+- The tracked ADR draft, ADR-0089 reciprocal navigation, and architecture
+  citation record the narrow supersession.
 - `cargo xtask test-local -- -p common` and `cargo xtask precommit` pass.
 
 ## Boundaries
