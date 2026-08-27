@@ -286,14 +286,13 @@ async fn list_scheduled_returns_current_user_future_posts_ordered_by_schedule(
     );
 }
 
-// Shape B — invalid-cursor cluster across the five cursor-paginated endpoints.
+// Shape B — invalid-cursor cluster across the cursor-paginated endpoints.
 // Each fires two requests: a half-specified cursor (a `cursor` object carrying a
 // valid instant but no `post_id`) and an unparseable timestamp inside an
 // otherwise complete cursor. Both are rejected at arg-decode, before the
 // handler body: the cursor is one `PageCursor` field (ADR-0065 typing all the
-// way down), so a half cursor is a missing struct field (the pairing rule
-// itself is pinned by a `parse_post_cursor` unit test). We assert the half
-// cursor names the component it is missing, and otherwise only that the
+// way down), so a half cursor is a missing required struct field. We assert the
+// half cursor names the component it is missing, and otherwise only that the
 // request is rejected, rather than pinning the decode-layer wording. Only the
 // endpoint URI and the (username-carrying where required) request bodies vary.
 // An author session is always created and passed — the public endpoints ignore

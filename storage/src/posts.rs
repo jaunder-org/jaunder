@@ -608,28 +608,6 @@ pub fn to_post_cursor(post: &PostRecord) -> PostCursor {
     }
 }
 
-/// Parses the wire cursor pair into a [`PostCursor`]. Both components must be
-/// supplied together (an opaque paging token) or both absent (the first page).
-///
-/// # Errors
-///
-/// Returns a validation error if only one component is present.
-pub fn parse_post_cursor(
-    cursor_created_at: Option<UtcInstant>,
-    cursor_post_id: Option<PostId>,
-) -> InternalResult<Option<PostCursor>> {
-    match (cursor_created_at, cursor_post_id) {
-        (None, None) => Ok(None),
-        (Some(created_at), Some(post_id)) => Ok(Some(PostCursor {
-            created_at,
-            post_id,
-        })),
-        _ => Err(InternalError::validation(
-            "cursor_created_at and cursor_post_id must be provided together",
-        )),
-    }
-}
-
 /// Projects a wire [`PageCursor`] onto the storage-side [`PostCursor`].
 ///
 /// Infallible by construction, not by omission: the boundary parse ADR-0063 §4
@@ -5321,34 +5299,6 @@ mod tests {
     // -- Cursor + effectful helper tests (Cluster C push-down, #334) --
 
     #[test]
-    fn to_post_cursor_round_trips_through_parse() {
-        use chrono::TimeZone;
-        let post = PostRecord {
-            post_id: PostId::from(42),
-            user_id: UserId::from(1),
-            author_username: parse_username("author"),
-            title: None,
-            slug: parse_slug("hello-world"),
-            body: parse_post_body("hello world"),
-            format: PostFormat::Markdown,
-            rendered_html: RenderedHtml::from_trusted("<p>hello world</p>"),
-            created_at: UtcInstant::from(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
-            updated_at: UtcInstant::from(Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap()),
-            published_at: None,
-            deleted_at: None,
-            summary: None,
-            tags: vec![],
-        };
-
-        let cursor = to_post_cursor(&post);
-        let parsed = parse_post_cursor(Some(cursor.created_at), Some(cursor.post_id))
-            .unwrap()
-            .expect("both components present yields a cursor");
-        assert_eq!(parsed.created_at, post.created_at);
-        assert_eq!(parsed.post_id, post.post_id);
-    }
-
-    #[test]
     fn post_cursor_round_trips_through_wire_cursor() {
         let cursor = PostCursor {
             created_at: "2026-04-12T08:30:00.123456Z".parse().unwrap(),
@@ -5375,25 +5325,6 @@ mod tests {
                 .unwrap()
                 .published_at,
             cursor.published_at
-        );
-    }
-
-    #[test]
-    fn parse_post_cursor_accepts_empty_cursor() {
-        assert!(parse_post_cursor(None, None).unwrap().is_none());
-    }
-
-    #[test]
-    fn parse_post_cursor_rejects_half_a_cursor() {
-        use chrono::TimeZone;
-        assert!(
-            parse_post_cursor(
-                Some(UtcInstant::from(
-                    Utc.with_ymd_and_hms(2026, 4, 12, 8, 30, 0).unwrap(),
-                )),
-                None
-            )
-            .is_err()
         );
     }
 
