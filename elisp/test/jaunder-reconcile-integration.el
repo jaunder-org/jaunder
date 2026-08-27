@@ -25,6 +25,7 @@
 (require 'jaunder)
 (require 'jaunder-integration-helper)
 
+
 (ert-deftest jaunder-reconcile-inventory-exhausts-collection-pagination ()
   "Inventory finds each newly-created Member beyond the first Collection page."
   ;; Real authenticated transport crosses the server's 25-Member page boundary.

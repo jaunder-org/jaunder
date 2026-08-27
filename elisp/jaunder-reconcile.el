@@ -45,15 +45,6 @@
               "The exhaustive partition of one root and one Collection."
               local-drafts server-only matched orphans conflicts)
 
-(defun jaunder--canonical-id (value)
-  "Return VALUE as a canonical decimal ID string, or nil when malformed."
-  (when (and (stringp value) (string-match-p "\\`[0-9]+\\'" value))
-    (replace-regexp-in-string "\\`0+" "" value)))
-
-(defun jaunder--canonical-id-or-zero (value)
-  "Return canonical decimal VALUE, retaining zero as the string `0'."
-  (let ((id (jaunder--canonical-id value)))
-    (and id (if (string= id "") "0" id))))
 
 (defun jaunder--inventory-error (invariant)
   "Signal an inventory error naming broken INVARIANT without response details."
@@ -90,7 +81,7 @@
                   (concat "\\`" (regexp-quote collection-path) "/\\([0-9]+\\)\\'")
                   edit-path))
         (let ((id (match-string 1 edit-path)))
-          (and (equal id (jaunder--canonical-id-or-zero id)) id))))))
+          (and (equal id (jaunder--canonical-post-id id)) id))))))
 
 (defun jaunder--parse-collection-member (entry collection-url)
   "Parse one Collection ENTRY beneath COLLECTION-URL into an inventory Member."
@@ -176,7 +167,7 @@ returned."
   (mapcar (lambda (path)
             (let ((raw-id (jaunder--read-local-id path)))
               (jaunder--make-inventory-local
-               :path path :id (and raw-id (or (jaunder--canonical-id-or-zero raw-id)
+               :path path :id (and raw-id (or (jaunder--canonical-post-id raw-id)
                                               raw-id)))))
           (cl-remove-if-not #'file-regular-p
                             (directory-files (expand-file-name root) t "\\.org\\'"))))
@@ -196,7 +187,7 @@ returned."
 (defun jaunder--node-id (node)
   "Return NODE's canonical join ID, or nil when its local ID is invalid."
   (pcase (jaunder--node-kind node)
-    ('local (jaunder--canonical-id-or-zero
+    ('local (jaunder--canonical-post-id
              (jaunder-inventory-local-id (jaunder--node-value node))))
     ('member (jaunder-inventory-member-id (jaunder--node-value node)))))
 
@@ -220,12 +211,12 @@ returned."
    (delq nil
          (mapcar (lambda (local)
                    (let ((id (jaunder-inventory-local-id local)))
-                     (unless (or (null id) (jaunder--canonical-id-or-zero id))
+                     (unless (or (null id) (jaunder--canonical-post-id id))
                        (jaunder--inventory-node 'local local))))
                  locals))
    (delq nil
          (mapcar (lambda (local)
-                   (let* ((id (jaunder--canonical-id-or-zero
+                   (let* ((id (jaunder--canonical-post-id
                                (jaunder-inventory-local-id local)))
                           (bucket (and id (gethash id local-id-index))))
                      (when (and bucket (eq local (car bucket)) (cdr bucket))
@@ -286,7 +277,7 @@ returned."
            (lambda (node)
              (and (eq (jaunder--node-kind node) 'local)
                   (let ((id (jaunder-inventory-local-id (jaunder--node-value node))))
-                    (and id (not (jaunder--canonical-id-or-zero id))))))
+                    (and id (not (jaunder--canonical-post-id id))))))
            nodes)
       (push 'invalid-local-id kinds))
     (when (cl-some
@@ -311,7 +302,7 @@ returned."
   (let* ((local-id-index
           (jaunder--index-by locals
                              (lambda (local)
-                               (jaunder--canonical-id-or-zero
+                               (jaunder--canonical-post-id
                                 (jaunder-inventory-local-id local)))))
          (member-id-index (jaunder--index-by members #'jaunder-inventory-member-id))
          (member-slug-index (jaunder--index-by members #'jaunder-inventory-member-slug))
@@ -344,13 +335,13 @@ returned."
          (local-id-index
           (jaunder--index-by available-locals
                              (lambda (local)
-                               (jaunder--canonical-id-or-zero
+                               (jaunder--canonical-post-id
                                 (jaunder-inventory-local-id local)))))
          (member-id-index
           (jaunder--index-by available-members #'jaunder-inventory-member-id))
          matches orphans server-only)
     (dolist (local available-locals)
-      (let ((id (jaunder--canonical-id-or-zero (jaunder-inventory-local-id local))))
+      (let ((id (jaunder--canonical-post-id (jaunder-inventory-local-id local))))
         (cond
          ((null (jaunder-inventory-local-id local)))
          ((gethash id member-id-index)
@@ -402,10 +393,6 @@ returned."
               orphan local-draft server-only inventory-conflict)
   "Stable section order for `jaunder-reconcile' reports.")
 
-(defun jaunder--strong-etag-p (etag)
-  "Return non-nil when ETAG is a syntactically strong quoted ETag."
-  (and (stringp etag)
-       (string-match-p "\\`\"[^\"\r\n]+\"\\'" etag)))
 
 (defun jaunder--reconcile-synced-time (value)
   "Parse VALUE as the canonical UTC sync instant, or return nil."
@@ -589,6 +576,7 @@ hide otherwise valid synchronization markers."
          (jaunder--pull-member configured-root member))
        (jaunder--render-reconcile-report report))
      report)))
+
 
 
 (provide 'jaunder-reconcile)

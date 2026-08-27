@@ -220,8 +220,7 @@ file pristine."
                                  (resp (if id
                                            (jaunder--http-request
                                             "PUT"
-                                            (jaunder--build-url (jaunder--active-base-url) "atompub"
-                                                                (jaunder--active-username) "posts" id)
+                                            (jaunder--member-url id)
                                             xml jaunder--entry-content-type
                                             (when synced (list (cons "If-Match" synced))))
                                          (jaunder--create-with-retry

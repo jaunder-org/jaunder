@@ -38,6 +38,34 @@ to be massaged."
     (error "jaunder--build-url: BASE must be non-empty"))
   (mapconcat #'identity (cons base segments) "/"))
 
+(defun jaunder--member-url (id)
+  "Return the active blog's AtomPub Member URL for Post ID.
+Commands use this protocol seam rather than independently reconstructing the
+active blog's Member path."
+  (jaunder--build-url (jaunder--active-base-url) "atompub"
+                      (jaunder--active-username) "posts" id))
+
+(defun jaunder--strong-etag-p (etag)
+  "Return non-nil when ETAG is a syntactically strong HTTP ETag.
+Its quoted interior is HTTP `etagc': ASCII `!', `#' through `~', or
+an obs-text byte.  This excludes weak validators, quotes, whitespace, controls,
+and DEL before a conditional request can be sent."
+  (when (and (stringp etag)
+             (>= (length etag) 2)
+             (= (aref etag 0) ?\")
+             (= (aref etag (1- (length etag))) ?\"))
+    (let ((index 1)
+          (end (1- (length etag)))
+          (valid t))
+      (while (and valid (< index end))
+        (let ((character (aref etag index)))
+          (unless (or (= character #x21)
+                      (<= #x23 character #x7e)
+                      (<= #x80 character #xff))
+            (setq valid nil)))
+        (setq index (1+ index)))
+      valid)))
+
 (defun jaunder--basic-auth-header (user password)
   "Return the HTTP Basic Authorization header cons for USER and PASSWORD.
 The value is \"Basic <base64(user:password)>\" with no line breaks.

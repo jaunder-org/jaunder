@@ -123,6 +123,14 @@ touched."
   "Return the #+KEY: value in the current buffer, or nil."
   (cadr (assoc key (org-collect-keywords (list key)))))
 
+(defun jaunder--canonical-post-id (value)
+  "Return VALUE as a canonical decimal Post ID, or nil when malformed.
+The local Org metadata boundary owns this normalization so every command gives
+the same identity to equivalent `JAUNDER_ID' values."
+  (when (and (stringp value) (string-match-p "\\`[0-9]+\\'" value))
+    (let ((id (replace-regexp-in-string "\\`0+" "" value)))
+      (if (string= id "") "0" id))))
+
 (defun jaunder--org->atom ()
   "Map the current org buffer to a `jaunder-entry'.
 Reads the metadata header block via `org-collect-keywords' and carries the
