@@ -35,7 +35,7 @@ use common::media::{
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
-use common::render::{RenderOutput, RenderedHtml};
+use common::render::RenderedHtml;
 use common::slug::Slug;
 use common::tag::TagLabel;
 use common::test_support::{
@@ -46,6 +46,7 @@ use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::AudienceTarget;
 use host::invite::InviteCode;
+use host::render::render_with_media;
 use sqlx::pool::PoolConnection;
 use sqlx::{Connection, PgPool, Postgres, Sqlite, SqlitePool, Transaction};
 use std::{
@@ -1378,7 +1379,7 @@ impl SeedRawPost {
             .slug
             .unwrap_or_else(|| parse_slug(&format!("post-{n}")));
         let title = parse_post_title(&format!("Post {n}"));
-        let rendered = RenderOutput::render(&self.body, &self.format);
+        let rendered = render_with_media(&self.body, &self.format);
         CreatePostInput {
             user_id: self.user_id,
             title: Some(title),
@@ -1454,8 +1455,8 @@ impl SeedRawPost {
 /// no default could be right.
 ///
 /// `rendered` has no setter: [`build`][Self::build] derives it from `body`/`format` with the
-/// production [`RenderOutput::render`], exactly as `SeedRawPost` does, so no call site
-/// re-spells the render and no input can carry a reference set that disagrees with its HTML
+/// production [`host::render::render_with_media`], exactly as `SeedRawPost` does, so no call
+/// site re-spells the render and no input can carry a reference set that disagrees with its HTML
 /// (#711).
 ///
 /// `Clone` is load-bearing: the audience tests vary one field off a shared base via
@@ -1533,7 +1534,7 @@ impl UpdateRawPost {
     /// Resolve into the [`UpdatePostInput`] to hand `update_post`, rendering `body` here.
     #[must_use]
     pub fn build(self) -> UpdatePostInput {
-        let rendered = RenderOutput::render(&self.body, &self.format);
+        let rendered = render_with_media(&self.body, &self.format);
         UpdatePostInput {
             title: self.title,
             slug: self.slug,
@@ -1757,9 +1758,9 @@ mod tests {
 
     // The free renderer, to pin that the builder's HTML is exactly `render(body)` — the
     // half of `RenderOutput` the seeded record carries.
-    use common::render::render;
     use common::test_support::{parse_post_body, parse_row_limit};
     use common::visibility::ViewerIdentity;
+    use host::render::render;
     use rstest::*;
     use rstest_reuse::*;
 

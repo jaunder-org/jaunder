@@ -2,8 +2,8 @@ use axum::{
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{Html, IntoResponse, Response},
 };
-use common::etag::ETag;
 use common::seed::{Page, PageSeed, RenderedPost};
+use host::etag::sha256_of;
 use web::app::{
     GLUE_URL, MODULE_BEFORE_INIT_MARK, PREPAINT_SCRIPT, WASM_URL, render_head, render_shell,
 };
@@ -49,7 +49,7 @@ pub fn document(seed: &PageSeed) -> String {
 /// already matches. Identical `seed` ⇒ identical bytes ⇒ identical `ETag`.
 pub(super) fn cacheable(headers: &HeaderMap, seed: &PageSeed) -> Response {
     let body = document(seed);
-    let etag = ETag::sha256_of(body.as_bytes());
+    let etag = sha256_of(body.as_bytes());
 
     if let Some(inm) = headers.get(header::IF_NONE_MATCH)
         && inm.to_str().ok() == Some(etag.as_ref())

@@ -13,11 +13,11 @@ use thiserror::Error;
 use tokio::fs;
 use tokio_util::io::ReaderStream;
 
-use common::etag::ETag;
 use common::ids::UserId;
 use common::media::{
     ContentHash, ContentType, Filename, MediaSource, detect_content_type, media_path, should_inline,
 };
+use host::etag::from_content_hash;
 use storage::{MediaError, MediaStorage};
 use web::auth;
 use web::error::InternalError;
@@ -184,7 +184,7 @@ async fn serve_response(
     };
 
     // ETag / If-None-Match check.
-    let etag = ETag::from_content_hash(&hash);
+    let etag = from_content_hash(&hash);
     if let Some(if_none_match) = req_headers.get(axum::http::header::IF_NONE_MATCH) {
         // `ETag: PartialEq<&str>` (the reverse `str: PartialEq<ETag>` isn't derived).
         if etag == if_none_match.to_str().unwrap_or("") {
@@ -486,7 +486,7 @@ mod tests {
     async fn serve_response_returns_304_on_matching_if_none_match() {
         let (temp, address) = stored_file("photo.jpg");
         let media = storage::MockMediaStorage::new();
-        let etag = ETag::from_content_hash(&parse_content_hash(SAMPLE_HASH));
+        let etag = from_content_hash(&parse_content_hash(SAMPLE_HASH));
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(
             axum::http::header::IF_NONE_MATCH,

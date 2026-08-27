@@ -5,18 +5,15 @@ edition = "2024"
 license = "GPL-3.0-only"
 
 [dependencies]
-ammonia = { workspace = true, optional = true }
 async-trait.workspace = true
 base64.workspace = true
 email_address.workspace = true
 chrono = { workspace = true, features = ["serde"] }
 chrono-tz.workspace = true
 croner.workspace = true
-html5ever = { workspace = true, optional = true }
 macros = { path = "../macros" }
 orgize.workspace = true
 percent-encoding.workspace = true
-pulldown-cmark = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 sqlx = { workspace = true, optional = true }
 strum.workspace = true
@@ -26,7 +23,6 @@ rss = { version = "2.1", default-features = false, features = ["builders", "atom
 atom_syndication = { version = "0.12.10", default-features = false }
 quick-xml = "0.41"
 serde_json = "1"
-sha2 = "0.10"
 unicode-normalization = "0.1"
 unicode-segmentation = "1"
 
@@ -36,22 +32,6 @@ unicode-segmentation = "1"
 # Decode). Off by default and never enabled for wasm — the CSR/wasm build pulls
 # `common` without it, so `sqlx` is never in the wasm dependency graph.
 sqlx = ["dep:sqlx"]
-# Optional, host-only HTML sanitizer backing `RenderedHtml::sanitize` — the door
-# that mints rendered HTML from untrusted input (#445). Off by default and never
-# enabled for wasm: the CSR build pulls `common` without it, so `ammonia` is never
-# in the wasm dependency graph. Deliberately its own feature rather than riding
-# `sqlx` — rendering is not persistence, and one flag controlling both would make
-# this list misleading. `render()` is gated on it, so with the feature off the fn
-# does not exist rather than existing and silently not sanitizing.
-#
-# `html5ever` rides the same flag: `extract_media_refs` re-parses the sanitized output
-# (#711), so it is meaningless without the sanitizer and must stay out of the wasm graph
-# for the same reason `ammonia` does.
-# `pulldown-cmark` rides this flag (#836): the only code that calls it is
-# `render_markdown` inside the `sanitize`-gated `sanitized` module, so declaring it
-# non-optionally made it a permanent member of every graph that never uses it. Org
-# normalization uses `orgize` independently, so it remains a direct dependency.
-sanitize = ["dep:ammonia", "dep:html5ever", "dep:pulldown-cmark"]
 # Compiles shared test-only helpers such as the capturing mail sender. Password
 # KDF test parameters are host-owned and no longer ride this feature.
 test-utils = []
@@ -64,6 +44,7 @@ axum = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true }
 rstest.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true

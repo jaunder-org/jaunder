@@ -5,11 +5,7 @@ edition = "2024"
 license = "GPL-3.0-only"
 
 [dependencies]
-# `sanitize` gates `common::render::render()`, whose every caller lives in this
-# crate (`post_service`, plus the `test_support` fixtures) — so enabling it here is
-# what puts the sanitizer on the host build (and, via workspace feature
-# unification, in the host test/coverage run).
-common = { workspace = true, features = ["sqlx", "sanitize"] }
+common = { workspace = true, features = ["sqlx"] }
 host = { path = "../host" }
 anyhow.workspace = true
 async-trait.workspace = true

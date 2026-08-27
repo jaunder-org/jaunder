@@ -46,15 +46,16 @@ Out:
     validation, hash/verify success and failures, dummy-hash parity, persisted
     hash handling, and caller migration.
 
-- [ ] Task 3: Move rendering, sanitization, and ETag construction to `host`.
+- [x] Task 3: Move rendering, sanitization, and ETag construction to `host`.
   - Contract: `RenderedHtml`, `PostFormat`, ETag, and Org normalization stay in
     `common`. `host::render` owns `sanitize(&str) -> RenderedHtml`,
     `render(&PostBody, &PostFormat) -> RenderedHtml`,
     `render_with_media(&PostBody, &PostFormat) -> RenderOutput`, and
     `extract_media_refs(&str) -> Vec<MediaReference>`. `host::etag` owns
-    `sha256_of`, `from_sha256`, `from_content_hash`, and `post_content_etag`
-    with their current parameters and ETag results. Host sanitization uses the
-    gate-policed trusted reconstruction door; `common/sanitize` is removed.
+    `sha256_of`, `from_sha256`, `from_content_hash`, `post_content_etag`, and
+    `feed_etag` with their current parameters and ETag results. Host
+    sanitization uses the gate-policed trusted reconstruction door;
+    `common/sanitize` is removed.
   - Verification: focused tests preserve rendered and scrubbed HTML, media
     references, ETag values, Org normalization, SQLx decode behavior, and both
     RenderedHtml construction gates.

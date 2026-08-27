@@ -133,9 +133,9 @@ const GATE: Gate = Gate {
         recovery: "  recovery: `from_trusted` only *inherits* safety — it may reconstruct a value we \
                    already sanitized and round-tripped through our own store or wire. If the HTML \
                    comes from OUTSIDE jaunder (an ingested feed entry, a remote channel, any \
-                   inbound producer), it must go through `RenderedHtml::sanitize`, which \
+                   inbound producer), it must go through `host::render::sanitize`, which \
                    *establishes* safety by scrubbing; for a rendered post body that means \
-                   `render()`. If this is a DIFFERENT type's `from_trusted`, the gate ignores it \
+                   `host::render::render()`. If this is a DIFFERENT type's `from_trusted`, the gate ignores it \
                    once it can see that: name the type so the qualifier resolves (an import, an \
                    in-file definition, or the full path) rather than reaching for a marker. \
                    Otherwise put the reason in a \
@@ -505,7 +505,7 @@ fn sneaky(raw: String) -> RenderedHtml {
     fn an_inbound_shaped_fn_using_from_trusted_is_flagged() {
         // The #445 shape this guard exists to stop: a future inbound producer
         // (feed ingestion, #282) reaching for the *inheriting* door on HTML that
-        // came from a stranger's server. `RenderedHtml::sanitize` is the only
+        // came from a stranger's server. `host::render::sanitize` is the only
         // correct door for outside data, and this is what makes choosing wrong a
         // build failure rather than a silent stored-XSS hole.
         let src = "\

@@ -68,7 +68,7 @@ const DOORS: &[&str] = &["PreEscaped"];
 /// One door today, and the design intends it to stay that way: `Markup` is the
 /// render layer's trusted carrier and composes into `html!` unescaped by
 /// construction, so ordinary markup never needs a door. Only a value whose safety was
-/// *established* elsewhere does — a `RenderedHtml` that `RenderedHtml::sanitize`
+/// *established* elsewhere does — a `RenderedHtml` that `host::render::sanitize`
 /// scrubbed (ADR-0079). `web/src/html.rs`'s `Markup::from_rendered_html` is that
 /// door, and its marker sits beside the `// XSS SAFETY:` prose that explains it.
 const GATE: Gate = Gate {
@@ -86,7 +86,7 @@ const GATE: Gate = Gate {
                    markup already has a carrier — build it with `html!` and wrap it in `Markup`, \
                    which composes unescaped by construction and needs no door. The only value \
                    that legitimately needs the raw door is a `RenderedHtml`, whose safety \
-                   `RenderedHtml::sanitize` established; reach it through \
+                   `host::render::sanitize` established; reach it through \
                    `Markup::from_rendered_html`. If this really is a new door, say why in a \
                    `// raw-html-door:allow <reason>` comment on the line IMMEDIATELY ABOVE it — \
                    not trailing it, which the formatters move. Currently marked:",

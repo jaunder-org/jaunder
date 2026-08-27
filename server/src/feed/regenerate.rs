@@ -1,9 +1,9 @@
 use common::feed::{
-    FeedFormat, FeedItem, FeedMetadata, FeedPath, FeedSurface, FeedTitle, HybridWindow, feed_etag,
-    parse,
+    FeedFormat, FeedItem, FeedMetadata, FeedPath, FeedSurface, FeedTitle, HybridWindow, parse,
 };
 use common::tagged_url::{BaseUrl, CanonicalUrl, FeedUrl, Permalink, compose};
 use common::time::UtcInstant;
+use host::etag::feed_etag;
 use storage::{FeedCacheRow, FeedCacheStorage, PostRecord, PostStorage, SiteConfigStorage};
 use thiserror::Error;
 

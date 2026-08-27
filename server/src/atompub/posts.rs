@@ -11,7 +11,7 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
 use common::atompub::{CollectionFeedTitle, Entry, FeedMeta, entry_to_xml, render_feed};
-use common::etag::{ETag, post_content_etag};
+use common::etag::ETag;
 use common::idempotency_key::IdempotencyKey;
 use common::ids::PostId;
 use common::org::{OrgOperation, OrgStructuredMetadata, Presence, PublicationState, normalize_org};
@@ -24,6 +24,7 @@ use common::tagged_url::{BaseUrl, EditUriUrl, FeedUrl, PaginationUrl, compose};
 use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::{AudienceTarget, ViewerIdentity};
+use host::etag::post_content_etag;
 use storage::{
     AudienceStorage, CollectionCursor, InvalidAudienceTargets, PostRecord, PostStorage,
     SiteConfigStorage, UserConfigStorage, validate_named_audience_targets,

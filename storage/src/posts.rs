@@ -8,7 +8,7 @@ use sqlx::{Database, Pool, QueryBuilder, Row};
 use thiserror::Error;
 
 use crate::InstanceId;
-use common::etag::{ETag, post_content_etag};
+use common::etag::ETag;
 use common::feed::FeedPath;
 use common::idempotency_key::IdempotencyKey;
 use common::ids::{AudienceId, ChannelId, PostId, RevisionId, TagId, UserId};
@@ -27,10 +27,13 @@ use common::visibility::{
     AudienceTarget, SubscriberRef, TargetKind, ViewerIdentity, local_subscriber_ref,
 };
 use host::error::{InternalError, InternalResult};
+use host::etag::post_content_etag;
+use host::render::extract_media_refs;
 
 use crate::backend::Backend;
 use crate::helpers::parse_post_tags_json;
-pub use common::render::{InvalidPostFormat, PostFormat, RenderOutput, RenderedHtml};
+pub use common::render::{InvalidPostFormat, PostFormat, RenderedHtml};
+pub use host::render::RenderOutput;
 
 /// The validated calendar date of a public permalink lookup key. Re-exported from
 /// `common::time` so storage callers and the trait method name the domain type
@@ -3109,7 +3112,7 @@ where
     let candidates: Vec<PostMediaReferenceBackfill> = posts
         .into_iter()
         .map(|(post_id, rendered_html)| PostMediaReferenceBackfill {
-            references: common::render::extract_media_refs(rendered_html.as_ref()),
+            references: extract_media_refs(rendered_html.as_ref()),
             post_id,
             rendered_html: rendered_html.to_string(),
         })
@@ -5631,7 +5634,7 @@ mod tests {
                 slug: parse_slug("no-title"),
                 body: untitled_body.clone(),
                 format: PostFormat::Markdown,
-                rendered: RenderOutput::render(&untitled_body, &PostFormat::Markdown),
+                rendered: host::render::render_with_media(&untitled_body, &PostFormat::Markdown),
                 published_at: None,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],

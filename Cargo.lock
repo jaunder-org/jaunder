@@ -571,7 +571,6 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 name = "common"
 version = "0.1.0"
 dependencies = [
- "ammonia",
  "async-trait",
  "atom_syndication",
  "axum",
@@ -580,11 +579,9 @@ dependencies = [
  "chrono-tz",
  "croner",
  "email_address",
- "html5ever",
  "macros",
  "orgize",
  "percent-encoding",
- "pulldown-cmark",
  "quick-xml",
  "rss",
  "rstest",
@@ -1540,16 +1537,23 @@ dependencies = [
 name = "host"
 version = "0.1.0"
 dependencies = [
+ "ammonia",
  "anyhow",
  "argon2",
  "base64 0.22.1",
+ "chrono",
  "common",
+ "html5ever",
  "http",
  "macros",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "orgize",
+ "pulldown-cmark",
  "rand 0.9.4",
+ "serde",
+ "serde_json",
  "sha2",
  "sqlx",
  "tempfile",

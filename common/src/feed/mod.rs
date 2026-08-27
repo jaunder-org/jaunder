@@ -13,7 +13,7 @@ pub mod window;
 pub use window::{HasPublishedAt, HybridWindow};
 
 pub mod metadata;
-pub use metadata::{FeedDescription, FeedItem, FeedMetadata, FeedTitle, feed_etag};
+pub use metadata::{FeedDescription, FeedItem, FeedMetadata, FeedTitle};
 
 pub mod representation;
 pub use representation::{MismatchedStoredSyndicationFeedMetadata, SyndicationFeedRepresentation};

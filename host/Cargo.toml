@@ -6,16 +6,23 @@ license = "GPL-3.0-only"
 
 [dependencies]
 anyhow.workspace = true
+ammonia.workspace = true
 argon2.workspace = true
 base64.workspace = true
+chrono.workspace = true
 http.workspace = true
+html5ever.workspace = true
 opentelemetry.workspace = true
 rand.workspace = true
 sha2.workspace = true
 sqlx.workspace = true
 tracing.workspace = true
+orgize.workspace = true
+pulldown-cmark.workspace = true
 tracing-log.workspace = true
 tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-error.workspace = true
 opentelemetry_sdk.workspace = true

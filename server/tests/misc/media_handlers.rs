@@ -8,9 +8,9 @@ use tower::ServiceExt;
 use rstest::*;
 use rstest_reuse::*;
 
-use common::etag::ETag;
 use common::ids::UserId;
 use common::test_support::parse_content_hash;
+use host::etag::from_content_hash;
 use server_fn::ServerFn;
 use storage::test_support::{Backend, TestEnv, backends, backends_matrix};
 
@@ -233,7 +233,7 @@ async fn serve_without_database_record_preserves_file_response(#[case] backend: 
     );
     assert_eq!(
         response.headers().get(header::ETAG).unwrap(),
-        &ETag::from_content_hash(&parse_content_hash(HASH)).to_string()
+        &from_content_hash(&parse_content_hash(HASH)).to_string()
     );
     assert_eq!(
         response.headers().get(header::CONTENT_DISPOSITION).unwrap(),
@@ -420,7 +420,7 @@ async fn serve_returns_304_on_if_none_match(#[case] backend: Backend) {
     let sha256 = upload_json["sha256"].as_str().unwrap().to_owned();
     // The ETag the serve handler now emits (sha256-prefixed) — built via the door so the
     // expectation tracks the producer.
-    let etag = ETag::from_content_hash(&parse_content_hash(&sha256));
+    let etag = from_content_hash(&parse_content_hash(&sha256));
 
     let app = make_app(&state, &storage);
     let resp = app
