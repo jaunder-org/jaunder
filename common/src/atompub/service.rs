@@ -181,6 +181,8 @@ mod tests {
         assert!(!media.contains("image/"), "media collection: {media}");
         assert!(posts.contains("app:categories"));
         assert!(posts.contains("fixed=\"no\""));
+        assert!(posts.contains(r#"term="rust""#));
+        assert!(posts.contains(r#"term="leptos""#));
     }
 
     #[test]
