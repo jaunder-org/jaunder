@@ -155,6 +155,7 @@ fn update_input<'a>(
         publish,
         summary: None,
         audiences: vec![AudienceTarget::Public],
+        tags: vec![],
         request_clock: common::time::UtcInstant::now(),
         expectations: PostBookkeepingExpectation::default(),
     }
@@ -511,13 +512,13 @@ async fn soft_delete_then_operations(#[case] backend: Backend) {
 
     state
         .posts
-        .set_post_tags(post_id, &["delete-tag".parse::<TagLabel>().unwrap()])
+        .set_post_tags(post_id, user, &["delete-tag".parse::<TagLabel>().unwrap()])
         .await
         .expect("set_post_tags failed");
 
     state
         .posts
-        .soft_delete_post(post_id)
+        .soft_delete_post(post_id, user)
         .await
         .expect("soft_delete_post failed");
 
@@ -545,7 +546,7 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
 
     state
         .posts
-        .soft_delete_post(post_id)
+        .soft_delete_post(post_id, user)
         .await
         .expect("soft_delete_post failed");
 
@@ -636,6 +637,7 @@ async fn create_rendered_post_markdown_renders_and_stores(#[case] backend: Backe
             published_at: None,
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            tags: vec![],
             idempotency_key: None,
             expectations: PostBookkeepingExpectation::default(),
         },
@@ -678,6 +680,7 @@ async fn create_rendered_post_org_renders_and_stores(#[case] backend: Backend) {
             published_at: None,
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            tags: vec![],
             idempotency_key: None,
             expectations: PostBookkeepingExpectation::default(),
         },
@@ -728,6 +731,7 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
             published_at: Some(now),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            tags: vec![],
             idempotency_key: None,
             expectations: PostBookkeepingExpectation::default(),
         },
@@ -859,6 +863,7 @@ async fn perform_post_update_markdown_renders_and_updates(#[case] backend: Backe
             publish: PublishUpdate::Unpublish,
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            tags: vec![],
             request_clock: common::time::UtcInstant::now(),
             expectations: PostBookkeepingExpectation::default(),
         },
@@ -901,6 +906,7 @@ async fn perform_post_update_org_renders_and_updates(#[case] backend: Backend) {
             publish: PublishUpdate::Unpublish,
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            tags: vec![],
             request_clock: common::time::UtcInstant::now(),
             expectations: PostBookkeepingExpectation::default(),
         },

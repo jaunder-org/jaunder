@@ -304,6 +304,7 @@ pub async fn create(post: PostInputs) -> WebResult<SavedPost> {
             summary,
             audiences,
             idempotency_key: None,
+            tags: validated_tags.clone(),
             expectations,
         },
     )
@@ -320,10 +321,6 @@ pub async fn create(post: PostInputs) -> WebResult<SavedPost> {
         published_at,
         permalink,
     };
-
-    posts
-        .set_post_tags(created.post_id, &validated_tags)
-        .await?;
 
     let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
     // Slugs are known without a read-back: set_post_tags stores exactly
@@ -425,6 +422,15 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost> {
         .as_ref()
         .map(|p| p.tags.iter().map(|t| t.tag_slug.clone()).collect())
         .unwrap_or_default();
+    let old_tags: Vec<TagLabel> = old
+        .as_ref()
+        .map(|post| {
+            post.tags
+                .iter()
+                .map(|tag| tag.tag_display.clone())
+                .collect()
+        })
+        .unwrap_or_default();
 
     // Validate tags up-front so a malformed input rejects before any post
     // mutation lands. `None` preserves the current update surface behavior.
@@ -497,6 +503,7 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost> {
             structured_tags,
         )
     };
+    let new_tags = new_tags.unwrap_or(old_tags);
 
     let record = perform_post_update(
         posts.as_ref(),
@@ -510,6 +517,7 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost> {
             publish,
             summary,
             audiences,
+            tags: new_tags.clone(),
             request_clock,
             expectations,
         },
@@ -520,13 +528,7 @@ pub async fn update(post_id: PostId, post: PostInputs) -> WebResult<SavedPost> {
         error => error.into(),
     })?;
     let mut all_tag_slugs = old_tag_slugs;
-    if let Some(new_tags) = new_tags {
-        posts.set_post_tags(post_id, &new_tags).await?;
-        // Union old with new so both the vacated and the newly-occupied tag
-        // surfaces get regenerated. The new slugs need no read-back:
-        // set_post_tags stores exactly TagLabel::slug() (#771).
-        all_tag_slugs.extend(new_tags.iter().map(TagLabel::slug));
-    }
+    all_tag_slugs.extend(new_tags.iter().map(TagLabel::slug));
 
     let feed_events = expect_context::<Arc<dyn FeedEventStorage>>();
     enqueue_feed_events(feed_events.as_ref(), &auth.username, &all_tag_slugs)
@@ -713,7 +715,7 @@ pub async fn delete(post_id: PostId) -> WebResult<()> {
         return Err(InternalError::not_found("Post"));
     }
 
-    posts.soft_delete_post(post_id).await?;
+    posts.soft_delete_post(post_id, auth.user_id).await?;
 
     if existing.published_at.is_some() {
         let tag_slugs: BTreeSet<Tag> = existing.tags.iter().map(|t| t.tag_slug.clone()).collect();
@@ -1231,21 +1233,16 @@ mod server_tests {
     // guard:no-backend — mock store
     #[tokio::test]
     async fn create_writes_every_tag_in_one_batched_call() {
-        // One `set_post_tags` call per mutation regardless of tag count — the
-        // ADR-0092 acquisition-count property, pinned the way
-        // `web/src/feed_events.rs` pins `enqueue_many` for the feed fan-out.
+        // Tags travel in the creation input, so the storage transaction writes
+        // the complete initial post state atomically.
         let mut posts = MockPostStorage::new();
         posts
             .expect_create_post()
+            .withf(|input| input.tags.len() == 2)
             .returning(|_input| Ok(PostId::from(1)));
         posts
             .expect_get_post_by_id()
             .returning(|_id, _viewer| Ok(Some(owned_post(UserId::from(1)))));
-        posts
-            .expect_set_post_tags()
-            .times(1)
-            .withf(|_post_id, desired| desired.len() == 2)
-            .returning(|_, _| Ok(()));
         let owner = mutation_owner(posts);
         let result = create(post_inputs(Some(vec![
             parse_tag_label("rust"),
@@ -1265,12 +1262,8 @@ mod server_tests {
             .returning(|_id, _viewer| Ok(Some(owned_post(UserId::from(1)))));
         posts
             .expect_update_post()
+            .withf(|_id, _user, input| input.tags.len() == 2)
             .returning(|_id, _user, _input| Ok(owned_post(UserId::from(1))));
-        posts
-            .expect_set_post_tags()
-            .times(1)
-            .withf(|_post_id, desired| desired.len() == 2)
-            .returning(|_, _| Ok(()));
         let owner = mutation_owner(posts);
         let result = update(
             PostId::from(1),
@@ -1283,17 +1276,16 @@ mod server_tests {
 
     // guard:no-backend — mock store
     #[tokio::test]
-    async fn update_with_tags_unset_writes_no_tags_at_all() {
-        // `tags: None` means "leave them alone", so the tag write must not happen —
-        // not even a clearing one.
+    async fn update_with_tags_unset_preserves_current_tags_atomically() {
+        // `tags: None` preserves the current tags in the single update input.
         let mut posts = MockPostStorage::new();
         posts
             .expect_get_post_by_id()
             .returning(|_id, _viewer| Ok(Some(owned_post(UserId::from(1)))));
         posts
             .expect_update_post()
+            .withf(|_id, _user, input| input.tags.is_empty())
             .returning(|_id, _user, _input| Ok(owned_post(UserId::from(1))));
-        posts.expect_set_post_tags().times(0);
 
         let owner = mutation_owner(posts);
         let result = update(PostId::from(1), post_inputs(None)).await;

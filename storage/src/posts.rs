@@ -427,6 +427,9 @@ pub struct CreatePostInput {
     /// Audience targeting for the post. Each entry becomes a `post_audiences`
     /// row; `Private` and an empty vec produce no rows (the post is private).
     pub audiences: Vec<AudienceTarget>,
+    /// Tags attached atomically with the new post. Creation has no prior state,
+    /// so this never creates a revision.
+    pub tags: Vec<TagLabel>,
     /// Non-authoritative Org bookkeeping to compare after the successful row insert.
     pub expectations: PostBookkeepingExpectation,
     /// If `Some`, register this idempotency key against the new post in the
@@ -466,6 +469,8 @@ pub struct UpdatePostInput {
     /// `post_audiences` rows are replaced to match this vec; `Private` and an
     /// empty vec produce no rows (the post is private).
     pub audiences: Vec<AudienceTarget>,
+    /// Tags replacing the current set inside this content mutation transaction.
+    pub tags: Vec<TagLabel>,
     /// The single request clock used when publishing a previously-draft post now.
     pub request_clock: UtcInstant,
     /// Non-authoritative Org bookkeeping to compare under the owner lock.
@@ -557,7 +562,8 @@ pub(crate) const INSERT_COMPLETE_POST_REVISION: &str = "INSERT INTO post_revisio
       created_at, updated_at, published_at, deleted_at, captured_at)
      SELECT post_id, user_id, title, slug, body, format, rendered_html, summary,
             created_at, updated_at, published_at, deleted_at, $1
-     FROM posts WHERE post_id = $2";
+     FROM posts WHERE post_id = $2
+     RETURNING revision_id";
 
 /// The locked pre-write columns needed for final-state and content expectations.
 #[derive(sqlx::FromRow)]
@@ -568,6 +574,8 @@ pub(crate) struct PostBookkeepingRow {
     pub slug: Slug,
     pub body: PostBody,
     pub format: PostFormat,
+    // rendered-html-from-trusted:allow bookkeeping row carries render-sanitized HTML from storage (#1055)
+    pub rendered_html: RenderedHtml,
     pub summary: Option<PostSummary>,
     pub published_at: Option<UtcInstant>,
 }
@@ -654,9 +662,12 @@ pub(crate) fn post_tag_diff<'a>(
 /// Errors that can occur when tagging a post.
 #[derive(Debug, Error)]
 pub enum TaggingError {
-    /// The target post does not exist.
+    /// The target post is absent from the active owner surface.
     #[error("post not found")]
     PostNotFound,
+    /// The post belongs to another owner.
+    #[error("not authorized to tag this post")]
+    Unauthorized,
     /// An unexpected database error occurred.
     #[error(transparent)]
     Internal(#[from] sqlx::Error),
@@ -1066,11 +1077,8 @@ pub trait PostStorage: Send + Sync {
         input: &UpdatePostInput,
     ) -> Result<PostRecord, UpdatePostError>;
 
-    /// Publishes a draft: sets `published_at` to now if it is NULL, leaving an
-    /// already-published post's timestamp untouched. Changes nothing else — not
-    /// the body, rendered HTML, format, slug, summary, audiences or media rows.
-    /// Publication is not an edit, so it does not go through `update_post` and
-    /// records no revision (#711).
+    /// Publishes a draft through the owner-checked revision transaction. A
+    /// post that is already published is returned unchanged.
     ///
     /// # Errors
     ///
@@ -1083,8 +1091,18 @@ pub trait PostStorage: Send + Sync {
         user_id: UserId,
     ) -> Result<PostRecord, UpdatePostError>;
 
-    /// Marks a post as deleted without removing it from the database.
-    async fn soft_delete_post(&self, post_id: PostId) -> sqlx::Result<()>;
+    /// Marks an owned live post as deleted through the revision transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UpdatePostError::NotFound`] if the post does not exist or is
+    /// already soft-deleted, or [`UpdatePostError::Unauthorized`] if `user_id`
+    /// does not own it.
+    async fn soft_delete_post(
+        &self,
+        post_id: PostId,
+        user_id: UserId,
+    ) -> Result<(), UpdatePostError>;
 
     /// Reverts a live post owned by `user_id` to draft status, returning the row
     /// written by the guarded mutation.
@@ -1195,13 +1213,13 @@ pub trait PostStorage: Send + Sync {
     /// no production path can hand this method an unbounded set. A larger set
     /// is executed faithfully; it is simply not reachable outside tests.
     ///
-    /// # Errors
-    ///
-    /// [`TaggingError::PostNotFound`] if the post does not exist. Soft-deleted
-    /// posts are tagged normally.
+    /// [`TaggingError::PostNotFound`] if the post does not exist or is
+    /// soft-deleted, and [`TaggingError::Unauthorized`] if `user_id` does not
+    /// own it.
     async fn set_post_tags(
         &self,
         post_id: PostId,
+        user_id: UserId,
         desired: &[TagLabel],
     ) -> Result<(), TaggingError>;
 
@@ -1356,7 +1374,7 @@ pub trait PostDialect: Backend {
     /// Deletes every `post_media` row for a post. Bind order: `post_id`.
     const DELETE_POST_MEDIA: &'static str;
 
-    /// Update a post and record a revision, returning the updated record.
+    /// Updates a post and records a revision, returning the updated record.
     async fn update_post(
         pool: &Pool<Self>,
         post_id: PostId,
@@ -1364,21 +1382,39 @@ pub trait PostDialect: Backend {
         input: &UpdatePostInput,
     ) -> Result<PostRecord, UpdatePostError>;
 
-    /// Clear a live owner's publication timestamp and return the complete
-    /// `UPDATE ... RETURNING` row. The JSON aggregate is dialect-specific.
+    /// Publishes a live owner's post through the backend's lifecycle revision
+    /// transaction. A matching current state is returned unchanged.
+    async fn publish_post(
+        pool: &Pool<Self>,
+        post_id: PostId,
+        user_id: UserId,
+    ) -> Result<Option<PostRecord>, sqlx::Error>;
+
+    /// Soft-deletes a live owner's row under the backend's lifecycle revision
+    /// transaction. Returns false when ownership or liveness did not match.
+    async fn soft_delete_post(
+        pool: &Pool<Self>,
+        post_id: PostId,
+        user_id: UserId,
+    ) -> Result<bool, sqlx::Error>;
+
+    /// Reverts a live owner's publication state under the backend's lifecycle
+    /// revision transaction. A draft is returned unchanged.
     async fn unpublish_post(
         pool: &Pool<Self>,
         post_id: PostId,
         user_id: UserId,
     ) -> Result<Option<PostRecord>, sqlx::Error>;
 
-    /// Reconcile the post's tags to `desired` in one transaction. Monomorphised
-    /// because the **serialization** differs: `SQLite` opens `BEGIN IMMEDIATE`,
-    /// Postgres locks the post row with `FOR UPDATE` (ADR-0019, ADR-0021). The
-    /// statements it issues are shared, not per-dialect (#876).
+    /// Reconcile an active owner's post tags to `desired` in one transaction.
+    /// Monomorphised because the **serialization** differs: `SQLite` opens
+    /// `BEGIN IMMEDIATE`, `PostgreSQL` locks the post row with `FOR UPDATE`
+    /// (ADR-0019, ADR-0021). The statements it issues are shared, not
+    /// per-dialect (#876).
     async fn set_post_tags(
         pool: &Pool<Self>,
         post_id: PostId,
+        user_id: UserId,
         desired: &[TagLabel],
     ) -> Result<(), TaggingError>;
 
@@ -1562,6 +1598,7 @@ where
     for<'r> FeedPath: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
     for<'r> UtcInstant: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
     for<'r> &'r str: sqlx::ColumnIndex<DB::Row>,
+    usize: sqlx::ColumnIndex<DB::Row>,
     // Every post-media column decodes as its domain type through ADR-0071's
     // bridge; this tuple keeps the reference form typed at the SQL boundary.
     (
@@ -1587,7 +1624,7 @@ where
     for<'q> &'q common::media::Filename: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> MediaReferenceForm: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     // makes every id newtype bind on a generic backend.
-    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> i64: sqlx::Decode<'q, DB> + sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<String>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -1909,59 +1946,20 @@ where
         post_id: PostId,
         user_id: UserId,
     ) -> Result<PostRecord, UpdatePostError> {
-        // No dialect split (ADR-0019): ownership and liveness are the UPDATE's own
-        // predicate rather than a preceding SELECT, so there is no check-then-write
-        // window for `update_post`'s `FOR UPDATE` / `BEGIN IMMEDIATE` locking to
-        // close, and one statement writes the single column publication touches.
-        let published = sqlx::query_scalar::<_, PostId>(
-            "UPDATE posts
-                SET published_at = COALESCE(published_at, $1),
-                    updated_at = $1
-              WHERE post_id = $2 AND user_id = $3 AND deleted_at IS NULL
-          RETURNING post_id",
+        if let Some(row) = DB::publish_post(&self.pool, post_id, user_id).await? {
+            return Ok(row);
+        }
+        let live = sqlx::query_scalar::<_, PostId>(
+            "SELECT post_id FROM posts WHERE post_id = $1 AND deleted_at IS NULL",
         )
-        .bind(UtcInstant::now())
         .bind(post_id)
-        .bind(user_id)
         .fetch_optional(&self.pool)
         .await?;
-
-        if published.is_none() {
-            // Nothing matched, so the post is either gone or someone else's — a live
-            // row here is necessarily another user's, or the UPDATE would have
-            // matched. One pure-existence read (`post_id`, never the owner's
-            // identity) tells the two apart for the caller's error; nothing was
-            // written, so there is no state to unwind. Decoding an id column into
-            // its newtype rather than `i64` is the ADR-0085 convention (#715).
-            let live = sqlx::query_scalar::<_, PostId>(
-                "SELECT post_id FROM posts WHERE post_id = $1 AND deleted_at IS NULL",
-            )
-            .bind(post_id)
-            .fetch_optional(&self.pool)
-            .await?;
-            return Err(if live.is_some() {
-                UpdatePostError::Unauthorized
-            } else {
-                UpdatePostError::NotFound
-            });
-        }
-
-        // Re-read through the record projection so `tags` and `author_username` come
-        // back populated. Owner-only, so no viewer resolution.
-        let sql = format!(
-            "SELECT p.post_id, p.user_id, u.username, p.title, p.slug, p.body, p.format, p.rendered_html,
-                    p.created_at, p.updated_at, p.published_at, p.deleted_at, p.summary,
-                    {tags} AS tags
-             FROM posts p
-             JOIN users u ON p.user_id = u.user_id
-             WHERE p.post_id = $1",
-            tags = DB::TAGS_SUBQUERY,
-        );
-        let row = sqlx::query_as::<_, PostRecord>(&sql)
-            .bind(post_id)
-            .fetch_one(&self.pool)
-            .await?;
-        Ok(row)
+        Err(if live.is_some() {
+            UpdatePostError::Unauthorized
+        } else {
+            UpdatePostError::NotFound
+        })
     }
 
     #[tracing::instrument(
@@ -1969,14 +1967,25 @@ where
         skip(self),
         fields(db.system = DB::DB_SYSTEM)
     )]
-    async fn soft_delete_post(&self, post_id: PostId) -> sqlx::Result<()> {
-        let now = UtcInstant::now();
-        sqlx::query("UPDATE posts SET deleted_at = $1 WHERE post_id = $2")
-            .bind(now)
-            .bind(post_id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
+    async fn soft_delete_post(
+        &self,
+        post_id: PostId,
+        user_id: UserId,
+    ) -> Result<(), UpdatePostError> {
+        if DB::soft_delete_post(&self.pool, post_id, user_id).await? {
+            return Ok(());
+        }
+        let live = sqlx::query_scalar::<_, PostId>(
+            "SELECT post_id FROM posts WHERE post_id = $1 AND deleted_at IS NULL",
+        )
+        .bind(post_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Err(if live.is_some() {
+            UpdatePostError::Unauthorized
+        } else {
+            UpdatePostError::NotFound
+        })
     }
 
     #[tracing::instrument(
@@ -1989,14 +1998,9 @@ where
         post_id: PostId,
         user_id: UserId,
     ) -> Result<PostRecord, UpdatePostError> {
-        let row = DB::unpublish_post(&self.pool, post_id, user_id).await?;
-        if let Some(row) = row {
+        if let Some(row) = DB::unpublish_post(&self.pool, post_id, user_id).await? {
             return Ok(row);
         }
-
-        // The guarded UPDATE wrote nothing. As in publish, a pure existence
-        // read distinguishes a foreign live post without disclosing its owner;
-        // missing and deleted rows intentionally share NotFound.
         let live = sqlx::query_scalar::<_, PostId>(
             "SELECT post_id FROM posts WHERE post_id = $1 AND deleted_at IS NULL",
         )
@@ -2342,9 +2346,10 @@ where
     async fn set_post_tags(
         &self,
         post_id: PostId,
+        user_id: UserId,
         desired: &[TagLabel],
     ) -> Result<(), TaggingError> {
-        DB::set_post_tags(&self.pool, post_id, desired).await
+        DB::set_post_tags(&self.pool, post_id, user_id, desired).await
     }
 
     #[tracing::instrument(
@@ -2989,6 +2994,45 @@ pub(crate) fn media_lock_set(references: &[MediaReference]) -> BTreeSet<MediaRef
         .map(|reference| reference.media().clone())
         .collect()
 }
+/// Whether the requested scalar state would leave the locked Post unchanged.
+///
+/// The caller additionally compares normalized children under the same lock;
+/// keeping the scalar rule here makes the two dialects suppress timestamp-only
+/// writes identically.
+pub(crate) fn update_scalar_is_noop(
+    existing: &PostBookkeepingRow,
+    input: &UpdatePostInput,
+) -> bool {
+    let published_at = match input.publish {
+        PublishUpdate::Unpublish => None,
+        PublishUpdate::Publish { at: Some(at) } => Some(at),
+        PublishUpdate::Publish { at: None } => existing.published_at.or(Some(input.request_clock)),
+    };
+    existing.title == input.title
+        && (existing.published_at.is_some() || existing.slug == input.slug)
+        && existing.body == input.body
+        && existing.format == input.format
+        && existing.rendered_html.as_ref() == input.rendered.html().as_ref()
+        && existing.summary == input.summary
+        && existing.published_at == published_at
+}
+/// Compares audience collections as normalized relation rows, ignoring caller
+/// order, duplicate selections, and `Private`'s deliberate absence of a row.
+pub(crate) fn audiences_are_equal(
+    existing: &[(TargetKind, Option<AudienceId>)],
+    desired: &[AudienceTarget],
+) -> bool {
+    let mut normalized = Vec::new();
+    for target in desired {
+        if let Some(row) = audience_target_row(target)
+            && !normalized.contains(&row)
+        {
+            normalized.push(row);
+        }
+    }
+    existing.len() == normalized.len() && existing.iter().all(|row| normalized.contains(row))
+}
+
 pub(crate) fn update_expectation_error(
     post_id: PostId,
     existing: &PostBookkeepingRow,
@@ -3052,7 +3096,7 @@ pub(crate) async fn write_post_in_tx<DB>(
 ) -> Result<PostId, CreatePostError>
 where
     DB: PostDialect,
-    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> i64: sqlx::Decode<'q, DB> + sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<AudienceId>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> Option<&'q str>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -3070,6 +3114,7 @@ where
     // the create paths, mirroring the `Option<&PostTitle>` bound above.
     for<'q> Option<&'q PostSummary>: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     (PostId,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    usize: sqlx::ColumnIndex<DB::Row>,
     for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
     for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
 {
@@ -3113,6 +3158,7 @@ where
 
     replace_post_audiences::<DB>(conn, post_id, &input.audiences).await?;
     replace_post_media::<DB>(conn, post_id, input.rendered.media()).await?;
+    insert_post_tags::<DB>(conn, post_id, &input.tags).await?;
 
     // Register the idempotency key in the same transaction as the post. This
     // INSERT has its own unique-violation mapping — a `(user_id, key)` clash is
@@ -3167,6 +3213,102 @@ where
     }
     Ok(())
 }
+/// Attaches the requested tags to a newly-created Post in canonical slug order.
+///
+/// Creation has no old child state to reconcile, but tag upserts still lock rows
+/// on `PostgreSQL`. Sorting stably makes overlapping creates acquire those locks
+/// in the same order while retaining the first spelling for duplicate slugs.
+pub(crate) async fn insert_post_tags<DB>(
+    conn: &mut DB::Connection,
+    post_id: PostId,
+    desired: &[TagLabel],
+) -> sqlx::Result<()>
+where
+    DB: Database,
+    for<'q> PostId: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> Tag: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> TagLabel: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> TagId: sqlx::Decode<'q, DB> + sqlx::Type<DB>,
+    for<'q> i64: sqlx::Decode<'q, DB> + sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    usize: sqlx::ColumnIndex<DB::Row>,
+    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+{
+    let mut ordered = desired.to_vec();
+    ordered.sort_by_key(TagLabel::slug);
+    for label in ordered {
+        let slug = label.slug();
+        let tag_id = sqlx::query_scalar::<_, TagId>(UPSERT_TAG_RETURNING_ID)
+            .bind(&slug)
+            .fetch_one(&mut *conn)
+            .await?;
+        sqlx::query(INSERT_POST_TAG)
+            .bind(post_id)
+            .bind(tag_id)
+            .bind(&label)
+            .execute(&mut *conn)
+            .await?;
+    }
+    Ok(())
+}
+/// Captures the locked current state and every normalized child before mutation.
+///
+/// The copies are SQL-to-SQL rather than reconstructed from an application read:
+/// this preserves the exact current media spelling and keeps immutable history
+/// independent of later tag/audience lookup changes.
+pub(crate) async fn capture_complete_post_revision<DB>(
+    conn: &mut DB::Connection,
+    post_id: PostId,
+    captured_at: UtcInstant,
+) -> sqlx::Result<RevisionId>
+where
+    DB: Database,
+    for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> PostId: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> RevisionId: sqlx::Decode<'q, DB> + sqlx::Type<DB>,
+    for<'q> i64: sqlx::Decode<'q, DB> + sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    usize: sqlx::ColumnIndex<DB::Row>,
+    for<'c> &'c mut DB::Connection: sqlx::Executor<'c, Database = DB>,
+    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+{
+    let revision_id = sqlx::query_scalar::<_, RevisionId>(INSERT_COMPLETE_POST_REVISION)
+        .bind(captured_at)
+        .bind(post_id)
+        .fetch_one(&mut *conn)
+        .await?;
+    sqlx::query(
+        "INSERT INTO post_revision_tags (revision_id, tag_slug, tag_display)
+         SELECT $1, t.tag_slug, pt.tag_display
+         FROM post_tags pt JOIN tags t ON t.tag_id = pt.tag_id
+         WHERE pt.post_id = $2",
+    )
+    .bind(revision_id)
+    .bind(post_id)
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query(
+        "INSERT INTO post_revision_audiences (revision_id, target_kind, audience_id)
+         SELECT $1, tk.name, pa.audience_id
+         FROM post_audiences pa JOIN target_kinds tk ON tk.kind_id = pa.target_kind_id
+         WHERE pa.post_id = $2",
+    )
+    .bind(revision_id)
+    .bind(post_id)
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query(
+        "INSERT INTO post_media
+             (post_id, subject_kind, revision_id, source, sha256, filename, reference_kind, reference_form)
+         SELECT post_id, 'revision', $1, source, sha256, filename, reference_kind, reference_form
+         FROM post_media
+         WHERE post_id = $2 AND subject_kind = 'current' AND revision_id = 0",
+    )
+    .bind(revision_id)
+    .bind(post_id)
+    .execute(&mut *conn)
+    .await?;
+    Ok(revision_id)
+}
 
 /// A rendered-HTML snapshot and the references derived from it before a backfill write.
 ///
@@ -3215,7 +3357,10 @@ where
     DB::apply_post_media_reference_backfill(pool, &candidates).await
 }
 
-/// Replaces a post's `post_media` rows to exactly match `media`.
+/// Replaces the current subject's `post_media` rows to exactly match `media`.
+///
+/// Historical subjects are deliberately outside this delete: revisions retain the
+/// exact references captured before a meaningful mutation.
 pub(crate) async fn replace_post_media<DB>(
     conn: &mut DB::Connection,
     post_id: PostId,
@@ -3254,9 +3399,11 @@ where
 {
     sqlx::query(
         "DELETE FROM post_media
-         WHERE post_id IN (
-             SELECT post_id FROM post_media WHERE reference_kind = 'legacy'
-         )",
+         WHERE subject_kind = 'current' AND revision_id = 0
+           AND post_id IN (
+             SELECT post_id FROM post_media
+             WHERE subject_kind = 'current' AND revision_id = 0 AND reference_kind = 'legacy'
+           )",
     )
     .execute(&mut *conn)
     .await?;
@@ -3579,6 +3726,7 @@ mod tests {
     use host::feed::SyndicationFeedRepresentation;
     use rstest::*;
     use rstest_reuse::*;
+    use sqlx::Row;
     use std::{sync::Arc, time::Duration};
     use tokio::sync::Barrier;
 
@@ -3997,6 +4145,214 @@ mod tests {
             .collect()
     }
 
+    async fn owner_slugs_of(
+        posts: &dyn PostStorage,
+        post_id: PostId,
+        user_id: UserId,
+    ) -> Vec<String> {
+        posts
+            .get_post_by_id(post_id, &ViewerIdentity::Local { user_id })
+            .await
+            .expect("read owner post")
+            .expect("owner post exists")
+            .tags
+            .iter()
+            .map(|tag| tag.tag_slug.to_string())
+            .collect()
+    }
+
+    #[derive(sqlx::FromRow)]
+    struct RevisionRow {
+        revision_id: RevisionId,
+        post_id: PostId,
+        user_id: UserId,
+        title: Option<PostTitle>,
+        slug: Slug,
+        body: PostBody,
+        format: PostFormat,
+        // rendered-html-from-trusted:allow revision assertion row carries render-sanitized HTML from storage (#1055)
+        rendered_html: RenderedHtml,
+        summary: Option<PostSummary>,
+        created_at: UtcInstant,
+        updated_at: UtcInstant,
+        published_at: Option<UtcInstant>,
+        deleted_at: Option<UtcInstant>,
+        captured_at: UtcInstant,
+    }
+
+    async fn single_revision(env: &TestEnv, post_id: PostId) -> RevisionRow {
+        macro_rules! decode {
+            ($row:expr) => {{
+                let row = $row;
+                RevisionRow {
+                    revision_id: row.try_get::<RevisionId, _>("revision_id").unwrap(),
+                    post_id: row.try_get::<PostId, _>("post_id").unwrap(),
+                    user_id: row.try_get::<UserId, _>("user_id").unwrap(),
+                    title: row.try_get::<Option<PostTitle>, _>("title").unwrap(),
+                    slug: row.try_get::<Slug, _>("slug").unwrap(),
+                    body: row.try_get::<PostBody, _>("body").unwrap(),
+                    format: row.try_get::<PostFormat, _>("format").unwrap(),
+                    // rendered-html-from-trusted:allow revision test decodes render-sanitized HTML from storage (#1055)
+                    rendered_html: row
+                        .try_get::<RenderedHtml, _>("rendered_html")
+                        .unwrap(),
+                    summary: row
+                        .try_get::<Option<PostSummary>, _>("summary")
+                        .unwrap(),
+                    created_at: row.try_get::<UtcInstant, _>("created_at").unwrap(),
+                    updated_at: row.try_get::<UtcInstant, _>("updated_at").unwrap(),
+                    published_at: row
+                        .try_get::<Option<UtcInstant>, _>("published_at")
+                        .unwrap(),
+                    deleted_at: row
+                        .try_get::<Option<UtcInstant>, _>("deleted_at")
+                        .unwrap(),
+                    captured_at: row.try_get::<UtcInstant, _>("captured_at").unwrap(),
+                }
+            }};
+        }
+        let sql = "SELECT revision_id, post_id, user_id, title, slug, body, format, rendered_html, summary,
+                          created_at, updated_at, published_at, deleted_at, captured_at
+                   FROM post_revisions
+                   WHERE post_id = $1";
+        match env.base.pool() {
+            CloseablePool::Postgres(pool) => decode!(
+                sqlx::query(sql)
+                    .bind(post_id)
+                    .fetch_one(pool)
+                    .await
+                    .expect("read revision")
+            ),
+            CloseablePool::Sqlite(pool) => decode!(
+                sqlx::query(sql)
+                    .bind(post_id)
+                    .fetch_one(pool)
+                    .await
+                    .expect("read revision")
+            ),
+        }
+    }
+
+    async fn media_for_subject(
+        env: &TestEnv,
+        post_id: PostId,
+        subject_kind: &str,
+        revision_id: RevisionId,
+    ) -> Vec<(MediaRef, MediaReferenceKind, MediaReferenceForm)> {
+        env.base
+            .pool()
+            .string_quintuples(&format!(
+                "SELECT source, sha256, filename, reference_kind, reference_form
+                 FROM post_media
+                 WHERE post_id = {post_id} AND subject_kind = '{subject_kind}'
+                   AND revision_id = {revision_id}
+                 ORDER BY source, sha256, filename, reference_kind, reference_form"
+            ))
+            .await
+            .expect("read post media subject")
+            .into_iter()
+            .map(|(source, sha256, filename, kind, form)| {
+                (
+                    MediaRef {
+                        source: source.parse().expect("valid media source"),
+                        sha256: sha256.parse().expect("valid media hash"),
+                        filename: filename.parse().expect("valid media filename"),
+                    },
+                    kind.parse().expect("valid media reference kind"),
+                    form.parse().expect("valid media reference form"),
+                )
+            })
+            .collect()
+    }
+
+    async fn assert_complete_prior_revision(
+        env: &TestEnv,
+        post_id: PostId,
+        prior: &PostRecord,
+        prior_audiences: &[AudienceTarget],
+        prior_media: &[(MediaRef, MediaReferenceKind, MediaReferenceForm)],
+        captured_at: UtcInstant,
+    ) -> RevisionId {
+        assert_eq!(
+            env.base
+                .pool()
+                .scalar_i64(&format!(
+                    "SELECT COUNT(*) FROM post_revisions WHERE post_id = {post_id}"
+                ))
+                .await
+                .expect("count post revisions"),
+            1,
+            "one meaningful mutation creates exactly one revision"
+        );
+        let revision = single_revision(env, post_id).await;
+        let revision_id = revision.revision_id;
+        assert_eq!(revision.post_id, prior.post_id);
+        assert_eq!(revision.user_id, prior.user_id);
+        assert_eq!(revision.title, prior.title);
+        assert_eq!(revision.slug, prior.slug);
+        assert_eq!(revision.body, prior.body);
+        assert_eq!(revision.format, prior.format);
+        assert_eq!(revision.rendered_html, prior.rendered_html);
+        assert_eq!(revision.summary, prior.summary);
+        assert_eq!(revision.created_at, prior.created_at);
+        assert_eq!(revision.updated_at, prior.updated_at);
+        assert_eq!(revision.published_at, prior.published_at);
+        assert_eq!(revision.deleted_at, prior.deleted_at);
+        assert_eq!(revision.captured_at, captured_at);
+
+        let tags = env
+            .base
+            .pool()
+            .string_quintuples(&format!(
+                "SELECT tag_slug, tag_display, '', '', ''
+                 FROM post_revision_tags WHERE revision_id = {revision_id} ORDER BY tag_slug"
+            ))
+            .await
+            .expect("read revision tags");
+        assert_eq!(
+            tags.into_iter()
+                .map(|(slug, display, _, _, _)| (slug, display))
+                .collect::<Vec<_>>(),
+            prior
+                .tags
+                .iter()
+                .map(|tag| (tag.tag_slug.to_string(), tag.tag_display.to_string()))
+                .collect::<Vec<_>>()
+        );
+
+        let audiences = env
+            .base
+            .pool()
+            .string_quintuples(&format!(
+                "SELECT target_kind, COALESCE(CAST(audience_id AS TEXT), ''), '', '', ''
+                 FROM post_revision_audiences
+                 WHERE revision_id = {revision_id} ORDER BY target_kind, audience_id"
+            ))
+            .await
+            .expect("read revision audiences");
+        assert_eq!(
+            audiences
+                .into_iter()
+                .map(|(kind, audience_id, _, _, _)| (kind, audience_id))
+                .collect::<Vec<_>>(),
+            prior_audiences
+                .iter()
+                .map(|audience| match audience {
+                    AudienceTarget::Public => ("public".to_owned(), String::new()),
+                    AudienceTarget::Subscribers => ("subscribers".to_owned(), String::new()),
+                    AudienceTarget::Named(id) => ("named".to_owned(), i64::from(*id).to_string()),
+                    AudienceTarget::Private => unreachable!("private has no audience row"),
+                })
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            media_for_subject(env, post_id, "revision", revision_id).await,
+            prior_media,
+            "a revision copies the exact current media references rather than extracting anew"
+        );
+        revision_id
+    }
+
     #[apply(backends)]
     #[tokio::test]
     async fn set_post_tags_adds_removes_and_clears(#[case] backend: Backend) {
@@ -4006,21 +4362,32 @@ mod tests {
         let posts = &*env.state.posts;
 
         posts
-            .set_post_tags(post, &[parse_tag_label("rust"), parse_tag_label("web")])
+            .set_post_tags(
+                post,
+                user,
+                &[parse_tag_label("rust"), parse_tag_label("web")],
+            )
             .await
             .expect("set initial tags");
         assert_eq!(slugs_of(posts, post).await, vec!["rust", "web"]);
 
         // Reconcile: "web" drops, "nix" arrives, "rust" stays.
         posts
-            .set_post_tags(post, &[parse_tag_label("rust"), parse_tag_label("nix")])
+            .set_post_tags(
+                post,
+                user,
+                &[parse_tag_label("rust"), parse_tag_label("nix")],
+            )
             .await
             .expect("reconcile tags");
         assert_eq!(slugs_of(posts, post).await, vec!["nix", "rust"]);
 
         // An empty desired set clears; it is deliberately NOT a no-op, unlike
         // `enqueue_many`'s empty-input early return (#771).
-        posts.set_post_tags(post, &[]).await.expect("clear tags");
+        posts
+            .set_post_tags(post, user, &[])
+            .await
+            .expect("clear tags");
         assert!(slugs_of(posts, post).await.is_empty());
     }
 
@@ -4033,13 +4400,13 @@ mod tests {
         let posts = &*env.state.posts;
 
         posts
-            .set_post_tags(post, &[parse_tag_label("Rust")])
+            .set_post_tags(post, user, &[parse_tag_label("Rust")])
             .await
             .expect("initial casing");
         // Same slug, different casing: the stored row is left untouched, so the
         // original casing survives.
         posts
-            .set_post_tags(post, &[parse_tag_label("rUsT")])
+            .set_post_tags(post, user, &[parse_tag_label("rUsT")])
             .await
             .expect("re-apply with new casing");
 
@@ -4061,15 +4428,25 @@ mod tests {
         let posts = &*env.state.posts;
 
         let desired = [parse_tag_label("rust"), parse_tag_label("web")];
-        posts.set_post_tags(post, &desired).await.expect("first");
-        posts.set_post_tags(post, &desired).await.expect("second");
+        posts
+            .set_post_tags(post, user, &desired)
+            .await
+            .expect("first");
+        posts
+            .set_post_tags(post, user, &desired)
+            .await
+            .expect("second");
         assert_eq!(slugs_of(posts, post).await, vec!["rust", "web"]);
 
         // `post_tag_diff` does not dedupe its input, so two labels sharing a slug
         // both reach the insert; the conflict-tolerant insert absorbs the second
         // and the first occurrence's casing wins.
         posts
-            .set_post_tags(post, &[parse_tag_label("Nix"), parse_tag_label("nix")])
+            .set_post_tags(
+                post,
+                user,
+                &[parse_tag_label("Nix"), parse_tag_label("nix")],
+            )
             .await
             .expect("duplicate slug in desired");
         let record = posts
@@ -4083,25 +4460,34 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn set_post_tags_rejects_missing_post_but_allows_soft_deleted(#[case] backend: Backend) {
+    async fn set_post_tags_requires_an_active_owner(#[case] backend: Backend) {
         let env = backend.setup().await;
+        let owner = SeedUser::new().seed(&env.state).await.user_id;
+        let other = SeedUser::new().seed(&env.state).await.user_id;
+        let post = SeedRawPost::new(owner).seed(&env.state).await.post_id;
         let posts = &*env.state.posts;
 
-        let err = posts
-            .set_post_tags(PostId::from(999_999), &[parse_tag_label("rust")])
+        let missing = posts
+            .set_post_tags(PostId::from(999_999), owner, &[parse_tag_label("rust")])
             .await
             .expect_err("missing post must be rejected");
-        assert!(matches!(err, TaggingError::PostNotFound));
+        assert!(matches!(missing, TaggingError::PostNotFound));
 
-        // Soft-deleted posts stay taggable: the exists-check deliberately carries
-        // no `deleted_at` filter.
-        let user = SeedUser::new().seed(&env.state).await.user_id;
-        let post = SeedRawPost::new(user).seed(&env.state).await.post_id;
-        posts.soft_delete_post(post).await.expect("soft delete");
-        posts
-            .set_post_tags(post, &[parse_tag_label("rust")])
+        let unauthorized = posts
+            .set_post_tags(post, other, &[parse_tag_label("rust")])
             .await
-            .expect("tagging a soft-deleted post still succeeds");
+            .expect_err("another owner must be rejected");
+        assert!(matches!(unauthorized, TaggingError::Unauthorized));
+
+        posts
+            .soft_delete_post(post, owner)
+            .await
+            .expect("soft delete");
+        let deleted = posts
+            .set_post_tags(post, owner, &[parse_tag_label("rust")])
+            .await
+            .expect_err("deleted post must be masked as absent");
+        assert!(matches!(deleted, TaggingError::PostNotFound));
     }
 
     /// #339: `set_post_tags` must take its write lock **before** snapshotting the
@@ -4120,7 +4506,7 @@ mod tests {
 
         env.state
             .posts
-            .set_post_tags(post, &[parse_tag_label("alpha")])
+            .set_post_tags(post, user, &[parse_tag_label("alpha")])
             .await
             .expect("seed tags");
 
@@ -4144,10 +4530,11 @@ mod tests {
         // defaults to: sqlx-sqlite runs each connection on its own OS thread
         // (docs/adr/0126-sqlx-sqlite-busy-handler-threading.md).
         let posts = Arc::clone(&env.state.posts);
-        let mut racer =
-            tokio::spawn(
-                async move { posts.set_post_tags(post, &[parse_tag_label("gamma")]).await },
-            );
+        let mut racer = tokio::spawn(async move {
+            posts
+                .set_post_tags(post, user, &[parse_tag_label("gamma")])
+                .await
+        });
 
         // PRECONDITION, not the regression guard: this proves mutual exclusion
         // exists at all. A read-then-lock implementation still blocks here on its
@@ -4194,11 +4581,11 @@ mod tests {
         let posts = &*env.state.posts;
 
         posts
-            .set_post_tags(first, &[parse_tag_label("rust")])
+            .set_post_tags(first, user, &[parse_tag_label("rust")])
             .await
             .expect("first post takes the insert path");
         posts
-            .set_post_tags(second, &[parse_tag_label("rust")])
+            .set_post_tags(second, user, &[parse_tag_label("rust")])
             .await
             .expect("second post takes the conflict path");
 
@@ -4216,7 +4603,7 @@ mod tests {
 
         let desired = [parse_tag_label("rust"), parse_tag_label("web")];
         posts
-            .set_post_tags(post, &desired)
+            .set_post_tags(post, user, &desired)
             .await
             .expect("seed tags");
 
@@ -4228,6 +4615,7 @@ mod tests {
         posts
             .set_post_tags(
                 decoy,
+                user,
                 &[parse_tag_label("decoy-a"), parse_tag_label("decoy-b")],
             )
             .await
@@ -4235,7 +4623,7 @@ mod tests {
 
         let before = physical_row_ids(&env, post).await;
         posts
-            .set_post_tags(post, &desired)
+            .set_post_tags(post, user, &desired)
             .await
             .expect("re-apply the identical set");
         let after = physical_row_ids(&env, post).await;
@@ -4243,6 +4631,367 @@ mod tests {
         assert_eq!(
             before, after,
             "rows were rewritten; set_post_tags must leave unchanged tags physically untouched"
+        );
+    }
+    #[apply(backends)]
+    #[tokio::test]
+    async fn update_post_semantic_no_op_keeps_timestamp_and_revision_count(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let owner = SeedUser::new().seed(&env.state).await.user_id;
+        let post = SeedRawPost::new(owner)
+            .draft()
+            .seed(&env.state)
+            .await
+            .post_id;
+        let input = UpdateRawPost::new("semantic-no-op").build();
+
+        let first = env
+            .state
+            .posts
+            .update_post(post, owner, &input)
+            .await
+            .expect("meaningful initial update");
+        let revision_count = env
+            .base
+            .pool()
+            .scalar_i64("SELECT COUNT(*) FROM post_revisions")
+            .await
+            .expect("count revisions");
+
+        let unchanged = env
+            .state
+            .posts
+            .update_post(post, owner, &input)
+            .await
+            .expect("identical update is accepted");
+
+        assert_eq!(unchanged.updated_at, first.updated_at);
+        assert_eq!(
+            env.base
+                .pool()
+                .scalar_i64("SELECT COUNT(*) FROM post_revisions")
+                .await
+                .expect("count revisions after no-op"),
+            revision_count,
+            "a canonical full-state no-op must not create a revision"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn update_post_archives_complete_prior_state_in_single_revision(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let owner = SeedUser::new().seed(&env.state).await.user_id;
+        let old_media = seed_media(&env.state, owner, "revision-prior.jpg").await;
+        let new_media = seed_media(&env.state, owner, "revision-current.jpg").await;
+        let prior_body = parse_post_body(&format!(
+            "<img src=\"{}\">",
+            media_url_for("revision-prior.jpg")
+        ));
+        let mut seed = SeedRawPost::new(owner)
+            .draft()
+            .slug("revision-prior-slug")
+            .body(prior_body)
+            .format(PostFormat::Html)
+            .summary(parse_post_summary("prior summary"))
+            .audiences(vec![AudienceTarget::Subscribers])
+            .tags(["PriorTag", "AnotherTag"])
+            .build();
+        seed.title = Some(parse_post_title("Prior title"));
+        let post_id = env
+            .state
+            .posts
+            .create_post(&seed)
+            .await
+            .expect("seed prior post");
+        let prior = env
+            .state
+            .posts
+            .get_post_by_id(post_id, &ViewerIdentity::Local { user_id: owner })
+            .await
+            .expect("read prior post")
+            .expect("prior post exists");
+        let prior_audiences = env
+            .state
+            .posts
+            .get_post_audiences(post_id)
+            .await
+            .expect("read prior audiences");
+        let prior_media = media_for_subject(&env, post_id, "current", RevisionId::from(0)).await;
+        assert_eq!(
+            prior_media,
+            vec![(
+                old_media.clone(),
+                MediaReferenceKind::Local,
+                media_url_for("revision-prior.jpg")
+                    .parse()
+                    .expect("valid prior media form"),
+            )],
+            "the prior current row retains the exact parsed reference form"
+        );
+        let capture_clock = parse_utc_instant("2026-08-27T12:00:00Z");
+
+        let updated = env
+            .state
+            .posts
+            .update_post(
+                post_id,
+                owner,
+                &UpdateRawPost::new("revision-current-slug")
+                    .title("Current title")
+                    .body(parse_post_body(&format!(
+                        "<p><img src=\"{}\"></p>",
+                        media_url_for("revision-current.jpg")
+                    )))
+                    .format(PostFormat::Markdown)
+                    .summary(parse_post_summary("current summary"))
+                    .audiences(vec![AudienceTarget::Public])
+                    .tags(["CurrentTag"])
+                    .request_clock(capture_clock)
+                    .build(),
+            )
+            .await
+            .expect("update every mutable field");
+
+        let revision_id = assert_complete_prior_revision(
+            &env,
+            post_id,
+            &prior,
+            &prior_audiences,
+            &prior_media,
+            capture_clock,
+        )
+        .await;
+        assert_eq!(
+            media_for_subject(&env, post_id, "current", RevisionId::from(0)).await,
+            vec![(
+                new_media,
+                MediaReferenceKind::Local,
+                media_url_for("revision-current.jpg")
+                    .parse()
+                    .expect("valid current media form"),
+            )],
+            "the current subject is replaced while the revision retains the prior form"
+        );
+        assert_eq!(
+            env.base
+                .pool()
+                .scalar_i64(&format!(
+                    "SELECT COUNT(*) FROM post_media WHERE post_id = {post_id}
+                 AND subject_kind = 'revision' AND revision_id = {revision_id}"
+                ))
+                .await
+                .expect("count revision media"),
+            1,
+            "the copied row carries the revision subject key"
+        );
+        assert_eq!(updated.title, Some(parse_post_title("Current title")));
+        assert_eq!(old_media, media_ref_for("revision-prior.jpg"));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn update_post_with_only_tags_changed_archives_complete_prior_state(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let owner = SeedUser::new().seed(&env.state).await.user_id;
+        seed_media(&env.state, owner, "tag-only.jpg").await;
+        let body = parse_post_body(&format!("<img src=\"{}\">", media_url_for("tag-only.jpg")));
+        let post_id = SeedRawPost::new(owner)
+            .draft()
+            .slug("tag-only")
+            .body(body.clone())
+            .audiences(vec![AudienceTarget::Subscribers])
+            .tags(["OldTag"])
+            .seed(&env.state)
+            .await
+            .post_id;
+        let prior = env
+            .state
+            .posts
+            .get_post_by_id(post_id, &ViewerIdentity::Local { user_id: owner })
+            .await
+            .unwrap()
+            .unwrap();
+        let audiences = env.state.posts.get_post_audiences(post_id).await.unwrap();
+        let media = media_for_subject(&env, post_id, "current", RevisionId::from(0)).await;
+        let clock = parse_utc_instant("2026-08-27T12:01:00Z");
+
+        env.state
+            .posts
+            .update_post(
+                post_id,
+                owner,
+                &UpdateRawPost::new("tag-only")
+                    .title(prior.title.as_ref().unwrap().as_ref())
+                    .body(body)
+                    .format(prior.format)
+                    .summary(prior.summary.clone())
+                    .audiences(audiences.clone())
+                    .tags(["NewTag"])
+                    .request_clock(clock)
+                    .build(),
+            )
+            .await
+            .expect("tag-only full update");
+
+        assert_complete_prior_revision(&env, post_id, &prior, &audiences, &media, clock).await;
+        assert_eq!(
+            owner_slugs_of(&*env.state.posts, post_id, owner).await,
+            vec!["newtag"]
+        );
+        assert_eq!(
+            env.state.posts.get_post_audiences(post_id).await.unwrap(),
+            audiences
+        );
+        assert_eq!(
+            media_for_subject(&env, post_id, "current", RevisionId::from(0)).await,
+            media
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn update_post_with_only_audiences_changed_archives_complete_prior_state(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let owner = SeedUser::new().seed(&env.state).await.user_id;
+        seed_media(&env.state, owner, "audience-only.jpg").await;
+        let body = parse_post_body(&format!(
+            "<img src=\"{}\">",
+            media_url_for("audience-only.jpg")
+        ));
+        let post_id = SeedRawPost::new(owner)
+            .draft()
+            .slug("audience-only")
+            .body(body.clone())
+            .audiences(vec![AudienceTarget::Subscribers])
+            .tags(["KeptTag"])
+            .seed(&env.state)
+            .await
+            .post_id;
+        let prior = env
+            .state
+            .posts
+            .get_post_by_id(post_id, &ViewerIdentity::Local { user_id: owner })
+            .await
+            .unwrap()
+            .unwrap();
+        let audiences = env.state.posts.get_post_audiences(post_id).await.unwrap();
+        let media = media_for_subject(&env, post_id, "current", RevisionId::from(0)).await;
+        let clock = parse_utc_instant("2026-08-27T12:02:00Z");
+
+        env.state
+            .posts
+            .update_post(
+                post_id,
+                owner,
+                &UpdateRawPost::new("audience-only")
+                    .title(prior.title.as_ref().unwrap().as_ref())
+                    .body(body)
+                    .format(prior.format)
+                    .summary(prior.summary.clone())
+                    .audiences(vec![AudienceTarget::Public])
+                    .tags(["KeptTag"])
+                    .request_clock(clock)
+                    .build(),
+            )
+            .await
+            .expect("audience-only full update");
+
+        assert_complete_prior_revision(&env, post_id, &prior, &audiences, &media, clock).await;
+        assert_eq!(
+            owner_slugs_of(&*env.state.posts, post_id, owner).await,
+            vec!["kepttag"]
+        );
+        assert_eq!(
+            env.state.posts.get_post_audiences(post_id).await.unwrap(),
+            vec![AudienceTarget::Public]
+        );
+        assert_eq!(
+            media_for_subject(&env, post_id, "current", RevisionId::from(0)).await,
+            media
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn update_post_with_only_media_changed_archives_complete_prior_state(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let owner = SeedUser::new().seed(&env.state).await.user_id;
+        seed_media(&env.state, owner, "media-only-prior.jpg").await;
+        let current_media = seed_media(&env.state, owner, "media-only-current.jpg").await;
+        let prior_body = parse_post_body(&format!(
+            "<img src=\"{}\">",
+            media_url_for("media-only-prior.jpg")
+        ));
+        let post_id = SeedRawPost::new(owner)
+            .draft()
+            .slug("media-only")
+            .body(prior_body)
+            .audiences(vec![AudienceTarget::Subscribers])
+            .tags(["KeptTag"])
+            .seed(&env.state)
+            .await
+            .post_id;
+        let prior = env
+            .state
+            .posts
+            .get_post_by_id(post_id, &ViewerIdentity::Local { user_id: owner })
+            .await
+            .unwrap()
+            .unwrap();
+        let audiences = env.state.posts.get_post_audiences(post_id).await.unwrap();
+        let media = media_for_subject(&env, post_id, "current", RevisionId::from(0)).await;
+        let clock = parse_utc_instant("2026-08-27T12:03:00Z");
+
+        env.state
+            .posts
+            .update_post(
+                post_id,
+                owner,
+                &UpdateRawPost::new("media-only")
+                    .title(prior.title.as_ref().unwrap().as_ref())
+                    .body(parse_post_body(&format!(
+                        "<img src=\"{}\">",
+                        media_url_for("media-only-current.jpg")
+                    )))
+                    .format(prior.format)
+                    .summary(prior.summary.clone())
+                    .audiences(audiences.clone())
+                    .tags(["KeptTag"])
+                    .request_clock(clock)
+                    .build(),
+            )
+            .await
+            .expect("media-only full update");
+
+        assert_complete_prior_revision(&env, post_id, &prior, &audiences, &media, clock).await;
+        assert_eq!(
+            owner_slugs_of(&*env.state.posts, post_id, owner).await,
+            vec!["kepttag"]
+        );
+        assert_eq!(
+            env.state.posts.get_post_audiences(post_id).await.unwrap(),
+            audiences
+        );
+        assert_eq!(
+            media_for_subject(&env, post_id, "current", RevisionId::from(0)).await,
+            vec![(
+                current_media,
+                MediaReferenceKind::Local,
+                media_url_for("media-only-current.jpg")
+                    .parse()
+                    .expect("valid current media form"),
+            )]
         );
     }
 
@@ -4431,7 +5180,7 @@ mod tests {
         let tags_primary = env
             .state
             .posts
-            .set_post_tags(missing_post, &[parse_tag_label("rust")])
+            .set_post_tags(missing_post, author, &[parse_tag_label("rust")])
             .await;
         assert!(matches!(&tags_primary, Err(TaggingError::PostNotFound)));
         let (tags, trace) = crate::helpers::swallowed_test::capture(|| match backend {
@@ -4692,11 +5441,7 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn publish_post_changes_only_the_publication_timestamp(#[case] backend: Backend) {
-        // Publishing is not an edit (#711): it stamps `published_at` and touches
-        // nothing else — body, rendered HTML, format, slug, title, summary, tags and
-        // audience targeting all survive. Routing publication through `update_post`
-        // would rewrite the whole row and clobber its child rows.
+    async fn publish_post_captures_complete_prior_state(#[case] backend: Backend) {
         let env = backend.setup().await;
         let user = SeedUser::new().seed(&env.state).await;
         let posts = &*env.state.posts;
@@ -4712,14 +5457,19 @@ mod tests {
             .unwrap()
             .unwrap();
         let audiences_before = posts.get_post_audiences(seeded.post_id).await.unwrap();
+        let revisions_before = env
+            .base
+            .pool()
+            .scalar_i64("SELECT COUNT(*) FROM post_revisions")
+            .await
+            .unwrap();
 
         let after = posts
             .publish_post(seeded.post_id, user.user_id)
             .await
             .expect("publish succeeds");
 
-        assert!(after.published_at.is_some(), "the draft is now published");
-        assert_eq!(after.author_username, user.username);
+        assert!(after.published_at.is_some());
         assert_eq!(after.title, before.title);
         assert_eq!(after.slug, before.slug);
         assert_eq!(after.body, before.body);
@@ -4727,12 +5477,29 @@ mod tests {
         assert_eq!(after.rendered_html, before.rendered_html);
         assert_eq!(after.summary, before.summary);
         assert_eq!(after.created_at, before.created_at);
-        assert_eq!(after.tags.len(), 1);
-        assert_eq!(after.tags[0].tag_slug, "rust");
         assert_eq!(
             posts.get_post_audiences(seeded.post_id).await.unwrap(),
             audiences_before
         );
+        assert_eq!(
+            env.base
+                .pool()
+                .scalar_i64("SELECT COUNT(*) FROM post_revisions")
+                .await
+                .unwrap(),
+            revisions_before + 1
+        );
+        let revision = single_revision(&env, seeded.post_id).await;
+        assert_eq!(revision.title, before.title);
+        assert_eq!(revision.slug, before.slug);
+        assert_eq!(revision.body, before.body);
+        assert_eq!(revision.format, before.format);
+        assert_eq!(revision.rendered_html, before.rendered_html);
+        assert_eq!(revision.summary, before.summary);
+        assert_eq!(revision.created_at, before.created_at);
+        assert_eq!(revision.updated_at, before.updated_at);
+        assert_eq!(revision.published_at, before.published_at);
+        assert_eq!(revision.deleted_at, before.deleted_at);
     }
 
     #[apply(backends)]
@@ -4753,9 +5520,16 @@ mod tests {
         let second = posts.publish_post(post_id, user_id).await.unwrap();
 
         assert!(first.published_at.is_some());
+        assert_eq!(first.published_at, second.published_at);
+        assert_eq!(first.updated_at, second.updated_at);
         assert_eq!(
-            first.published_at, second.published_at,
-            "republishing must not restamp"
+            env.base
+                .pool()
+                .scalar_i64("SELECT COUNT(*) FROM post_revisions")
+                .await
+                .unwrap(),
+            1,
+            "repeated publish is a semantic no-op"
         );
     }
 
@@ -4793,7 +5567,7 @@ mod tests {
                 .is_none()
         );
 
-        posts.soft_delete_post(post_id).await.unwrap();
+        posts.soft_delete_post(post_id, owner).await.unwrap();
         assert!(matches!(
             posts.publish_post(post_id, owner).await,
             Err(UpdatePostError::NotFound)
@@ -4802,12 +5576,9 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn unpublish_post_returns_the_complete_draft_row_without_editing_it(
-        #[case] backend: Backend,
-    ) {
-        // Unpublish is a publication-state transition, not an edit: the row returned
-        // by UPDATE RETURNING keeps every persisted field other than published_at,
-        // including the author and the deliberately slug-ordered tag aggregate.
+    async fn unpublish_post_captures_complete_prior_state(#[case] backend: Backend) {
+        // Unpublish changes lifecycle state while preserving current content and
+        // recording that complete prior state.
         let env = backend.setup().await;
         let user = SeedUser::new().seed(&env.state).await;
         let posts = &*env.state.posts;
@@ -4843,7 +5614,7 @@ mod tests {
         assert_eq!(updated.format, before.format);
         assert_eq!(updated.rendered_html, before.rendered_html);
         assert_eq!(updated.created_at, before.created_at);
-        assert_eq!(updated.updated_at, before.updated_at);
+        assert!(updated.updated_at >= before.updated_at);
         assert_eq!(updated.deleted_at, before.deleted_at);
         assert_eq!(updated.summary, before.summary);
         assert!(
@@ -4871,8 +5642,115 @@ mod tests {
                 .scalar_i64("SELECT COUNT(*) FROM post_revisions")
                 .await
                 .unwrap(),
-            revisions_before,
-            "unpublish creates no revision"
+            revisions_before + 1
+        );
+        let revision = single_revision(&env, seeded.post_id).await;
+        assert_eq!(revision.title, before.title);
+        assert_eq!(revision.slug, before.slug);
+        assert_eq!(revision.body, before.body);
+        assert_eq!(revision.format, before.format);
+        assert_eq!(revision.rendered_html, before.rendered_html);
+        assert_eq!(revision.summary, before.summary);
+        assert_eq!(revision.created_at, before.created_at);
+        assert_eq!(revision.updated_at, before.updated_at);
+        assert_eq!(revision.published_at, before.published_at);
+        assert_eq!(revision.deleted_at, before.deleted_at);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn soft_delete_captures_prior_state_and_rejects_repeats(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let [owner, stranger] = seed_users::<2>(&env.state).await;
+        let posts = &*env.state.posts;
+        let post_id = SeedRawPost::new(owner)
+            .draft()
+            .summary(parse_post_summary("the summary"))
+            .tags(["Rust"])
+            .seed(&env.state)
+            .await
+            .post_id;
+        let before = posts
+            .get_post_by_id(post_id, &ViewerIdentity::Local { user_id: owner })
+            .await
+            .unwrap()
+            .unwrap();
+        let revisions_before = env
+            .base
+            .pool()
+            .scalar_i64("SELECT COUNT(*) FROM post_revisions")
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            posts.soft_delete_post(PostId::from(999_999), owner).await,
+            Err(UpdatePostError::NotFound)
+        ));
+        assert!(matches!(
+            posts.soft_delete_post(post_id, stranger).await,
+            Err(UpdatePostError::Unauthorized)
+        ));
+        posts.soft_delete_post(post_id, owner).await.unwrap();
+        assert_eq!(
+            env.base
+                .pool()
+                .scalar_i64("SELECT COUNT(*) FROM post_revisions")
+                .await
+                .unwrap(),
+            revisions_before + 1
+        );
+        let revision = single_revision(&env, post_id).await;
+        assert_eq!(revision.title, before.title);
+        assert_eq!(revision.slug, before.slug);
+        assert_eq!(revision.body, before.body);
+        assert_eq!(revision.format, before.format);
+        assert_eq!(revision.rendered_html, before.rendered_html);
+        assert_eq!(revision.summary, before.summary);
+        assert_eq!(revision.created_at, before.created_at);
+        assert_eq!(revision.updated_at, before.updated_at);
+        assert_eq!(revision.published_at, before.published_at);
+        assert_eq!(revision.deleted_at, before.deleted_at);
+        assert!(matches!(
+            posts.soft_delete_post(post_id, owner).await,
+            Err(UpdatePostError::NotFound)
+        ));
+        assert_eq!(
+            env.base
+                .pool()
+                .scalar_i64("SELECT COUNT(*) FROM post_revisions")
+                .await
+                .unwrap(),
+            revisions_before + 1,
+            "repeated soft-delete is a no-op"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn unpublish_draft_is_a_semantic_no_op(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let owner = SeedUser::new().seed(&env.state).await.user_id;
+        let posts = &*env.state.posts;
+        let post_id = SeedRawPost::new(owner)
+            .draft()
+            .seed(&env.state)
+            .await
+            .post_id;
+        let before = posts
+            .get_post_by_id(post_id, &ViewerIdentity::Local { user_id: owner })
+            .await
+            .unwrap()
+            .unwrap();
+        let after = posts.unpublish_post(post_id, owner).await.unwrap();
+        assert_eq!(after.published_at, None);
+        assert_eq!(after.updated_at, before.updated_at);
+        assert_eq!(
+            env.base
+                .pool()
+                .scalar_i64("SELECT COUNT(*) FROM post_revisions")
+                .await
+                .unwrap(),
+            0
         );
     }
 
@@ -4909,7 +5787,7 @@ mod tests {
             "the foreign rejection must not clear publication"
         );
 
-        posts.soft_delete_post(post_id).await.unwrap();
+        posts.soft_delete_post(post_id, owner).await.unwrap();
         assert!(matches!(
             posts.unpublish_post(post_id, owner).await,
             Err(UpdatePostError::NotFound)
@@ -5111,7 +5989,7 @@ mod tests {
             create_post_via_service(&env.state, owner, parse_post_body("no media")).await;
         env.state
             .posts
-            .soft_delete_post(deleted)
+            .soft_delete_post(deleted, owner)
             .await
             .expect("soft delete succeeds");
 
@@ -5440,7 +6318,7 @@ mod tests {
         let result = env
             .state
             .posts
-            .set_post_tags(post_id, &[parse_tag_label("rust")])
+            .set_post_tags(post_id, uid, &[parse_tag_label("rust")])
             .await;
         assert!(matches!(result, Err(TaggingError::Internal(_))));
     }
@@ -5662,7 +6540,7 @@ mod tests {
         // Tagging with a case-preserving label stores the canonical slug and the
         // author's casing; both read back intact on either backend.
         posts
-            .set_post_tags(post_id, &[parse_tag_label("Rust")])
+            .set_post_tags(post_id, user_id, &[parse_tag_label("Rust")])
             .await
             .unwrap();
 
@@ -5699,7 +6577,7 @@ mod tests {
             .await;
         let post_id = post.post_id;
         posts
-            .set_post_tags(post_id, &[parse_tag_label("Rust")])
+            .set_post_tags(post_id, user_id, &[parse_tag_label("Rust")])
             .await
             .unwrap();
 
@@ -5730,6 +6608,7 @@ mod tests {
                 published_at: None,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
                 expectations: PostBookkeepingExpectation::default(),
                 idempotency_key: None,
             })
@@ -5757,7 +6636,7 @@ mod tests {
             .await
             .post_id;
         posts
-            .set_post_tags(post_id, &[parse_tag_label("Rust")])
+            .set_post_tags(post_id, user_id, &[parse_tag_label("Rust")])
             .await
             .expect("seed tag");
 
@@ -5911,7 +6790,7 @@ mod tests {
             .seed(&env.state)
             .await;
         posts
-            .soft_delete_post(deleted.post_id)
+            .soft_delete_post(deleted.post_id, author)
             .await
             .expect("soft delete");
 

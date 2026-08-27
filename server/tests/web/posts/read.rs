@@ -119,6 +119,7 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
         .posts
         .set_post_tags(
             created.post_id,
+            session.user_id,
             &["Performance".parse::<TagLabel>().unwrap()],
         )
         .await

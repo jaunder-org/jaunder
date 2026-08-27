@@ -54,7 +54,7 @@ AtomPub delete response or per-user Media Record materialization.
     prove nullable fields, all child collections, subject integrity,
     immutability, and backup/restore fidelity.
 
-- [ ] **2. Unify full-state mutation, no-op suppression, and revision capture.**
+- [x] **2. Unify full-state mutation, no-op suppression, and revision capture.**
   - Deepen the Post storage interface around complete desired-state mutation and
     dedicated lifecycle transitions. Callers cannot construct revisions or write
     tags after the transaction.

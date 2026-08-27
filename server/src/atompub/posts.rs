@@ -438,7 +438,10 @@ pub async fn member_delete(
         return Err(HandlerError::PreconditionFailed);
     }
 
-    posts.soft_delete_post(post.post_id).await?;
+    posts
+        .soft_delete_post(post.post_id, auth_user.user_id)
+        .await
+        .map_err(storage::PerformUpdateError::from)?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -503,6 +506,7 @@ pub async fn collection_post(
             max_attempts: 100,
             summary,
             audiences,
+            tags: categories.clone(),
             idempotency_key: idempotency_key.as_ref(),
             expectations,
         },
@@ -533,7 +537,6 @@ pub async fn collection_post(
 
     // Fresh create: a non-conflict error propagates via `?`.
     let created = created?;
-    posts.set_post_tags(created.post_id, &categories).await?;
     let post = posts
         .get_post_by_id(created.post_id, &viewer)
         .await?
@@ -634,11 +637,10 @@ pub async fn member_put(
             expectations,
             summary,
             audiences,
+            tags: categories,
         },
     )
     .await?;
-
-    posts.set_post_tags(post_id, &categories).await?;
 
     let viewer = owner_viewer(&auth_user);
     let post = posts

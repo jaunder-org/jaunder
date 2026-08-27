@@ -726,7 +726,11 @@ async fn update_removes_categories_not_in_new_entry(#[case] backend: Backend) {
 
     state
         .posts
-        .set_post_tags(post.post_id, &["original-tag".parse::<TagLabel>().unwrap()])
+        .set_post_tags(
+            post.post_id,
+            session.user_id,
+            &["original-tag".parse::<TagLabel>().unwrap()],
+        )
         .await
         .unwrap();
 
@@ -1487,7 +1491,11 @@ async fn update_with_over_cap_categories_is_rejected(#[case] backend: Backend) {
 
     state
         .posts
-        .set_post_tags(post.post_id, &["original-tag".parse::<TagLabel>().unwrap()])
+        .set_post_tags(
+            post.post_id,
+            session.user_id,
+            &["original-tag".parse::<TagLabel>().unwrap()],
+        )
         .await
         .unwrap();
 
