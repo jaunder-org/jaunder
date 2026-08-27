@@ -221,6 +221,27 @@ impl PostDialect for Sqlite {
         }
     }
 
+    async fn unpublish_post(
+        pool: &Pool<Sqlite>,
+        post_id: PostId,
+        user_id: UserId,
+    ) -> Result<Option<PostRecord>, sqlx::Error> {
+        sqlx::query_as::<_, PostRecord>(
+            "UPDATE posts
+             SET published_at = NULL
+             WHERE post_id = $1 AND user_id = $2 AND deleted_at IS NULL
+             RETURNING post_id, user_id,
+                       (SELECT username FROM users WHERE user_id = posts.user_id) AS username,
+                       title, slug, body, format, rendered_html,
+                       created_at, updated_at, published_at, deleted_at, summary,
+                       COALESCE((SELECT json_group_array(json_object('tag_id', t.tag_id, 'tag_slug', t.tag_slug, 'tag_display', pt.tag_display) ORDER BY t.tag_slug) FROM post_tags pt JOIN tags t ON pt.tag_id = t.tag_id WHERE pt.post_id = posts.post_id), '[]') AS tags",
+        )
+        .bind(post_id)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+    }
+
     async fn set_post_tags(
         pool: &Pool<Sqlite>,
         post_id: PostId,
