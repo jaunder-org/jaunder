@@ -99,6 +99,12 @@ pub(crate) fn validate_restore_row(
         "media" => validate_typed_restore_row::<MediaRestoreRow>(row, report),
         "password_resets" => validate_typed_restore_row::<PasswordResetsRestoreRow>(row, report),
         "post_media" => validate_typed_restore_row::<PostMediaRestoreRow>(row, report),
+        "post_revision_audiences" => {
+            validate_typed_restore_row::<PostRevisionAudiencesRestoreRow>(row, report);
+        }
+        "post_revision_tags" => {
+            validate_typed_restore_row::<PostRevisionTagsRestoreRow>(row, report);
+        }
         "post_revisions" => validate_typed_restore_row::<PostRevisionsRestoreRow>(row, report),
         "post_tags" => validate_typed_restore_row::<PostTagsRestoreRow>(row, report),
         "posts" => validate_typed_restore_row::<PostsRestoreRow>(row, report),
@@ -322,6 +328,16 @@ typed_restore_row!(PostRevisionsRestoreRow, "post_revisions" {
     slug: Slug => ("slug", "slug"),
     body: PostBody => ("body", "post body"),
     format: PostFormat => ("format", "post format"),
+    summary: PostSummary => ("summary", "post summary"),
+});
+
+typed_restore_row!(PostRevisionAudiencesRestoreRow, "post_revision_audiences" {
+    target_kind: TargetKind => ("target_kind", "audience target kind"),
+});
+
+typed_restore_row!(PostRevisionTagsRestoreRow, "post_revision_tags" {
+    tag_slug: Tag => ("tag_slug", "tag"),
+    tag_display: TagLabel => ("tag_display", "tag label"),
 });
 
 typed_restore_row!(PostTagsRestoreRow, "post_tags" {
@@ -514,6 +530,22 @@ pub(crate) const RESTORE_COLUMN_COVERAGE: &[RestoreColumnCoverage] = &[
     ),
     covered("post_revisions", "title", RestoreBadValue::Text("")),
     covered("post_revisions", "body", RestoreBadValue::Text("   ")),
+    covered("post_revisions", "summary", RestoreBadValue::Text("")),
+    covered(
+        "post_revision_tags",
+        "tag_display",
+        RestoreBadValue::Text(""),
+    ),
+    covered(
+        "post_revision_tags",
+        "tag_slug",
+        RestoreBadValue::Text("Bad Tag!"),
+    ),
+    covered(
+        "post_revision_audiences",
+        "target_kind",
+        RestoreBadValue::Text("private"),
+    ),
     covered("post_tags", "tag_display", RestoreBadValue::Text("")),
     covered("posts", "title", RestoreBadValue::Text("")),
     covered("posts", "slug", RestoreBadValue::Text("!")),
@@ -637,6 +669,10 @@ const BACKED_UP_DOMAIN_COLUMNS: &[(&str, &str)] = &[
     ("post_revisions", "format"),
     ("post_revisions", "rendered_html"),
     ("post_revisions", "title"),
+    ("post_revisions", "summary"),
+    ("post_revision_tags", "tag_display"),
+    ("post_revision_tags", "tag_slug"),
+    ("post_revision_audiences", "target_kind"),
     ("post_tags", "tag_display"),
     ("posts", "body"),
     ("posts", "format"),

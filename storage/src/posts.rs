@@ -179,31 +179,115 @@ where
     }
 }
 
-/// A post revision record returned by [`PostStorage`] queries.
+/// An immutable complete prior-state snapshot of a Post.
 ///
-/// Revisions are created automatically whenever a post is updated.
+/// This read model intentionally has no mutators: product storage creates it as
+/// part of a top-level Post mutation, while backup/restore is the only other
+/// legitimate whole-store writer (ADR-0136).
 #[derive(Clone, Debug)]
 pub struct PostRevisionRecord {
-    /// Unique identifier for this revision.
+    /// Unique identifier for this snapshot.
     pub revision_id: RevisionId,
-    /// ID of the associated post.
+    /// Durable identity of the Post whose prior state was captured.
     pub post_id: PostId,
-    /// ID of the user who made the edit.
+    /// Owner copied from the Post at capture time.
     pub user_id: UserId,
-    /// Title at the time of this revision.
+    /// Authored title at capture time.
     pub title: Option<PostTitle>,
-    /// Slug at the time of this revision.
+    /// Authored permalink slug at capture time.
     pub slug: Slug,
-    /// Raw source body at the time of this revision.
+    /// Authored source at capture time.
     pub body: PostBody,
-    /// Format at the time of this revision.
+    /// Interpretation of the authored source at capture time.
     pub format: PostFormat,
-    /// HTML produced by `render()` at the time of this revision, sanitized at that
-    /// mint point — safe to emit unescaped (#445).
-    // rendered-html-from-trusted:allow revision read model carries render-sanitized HTML from storage (#701)
+    /// Sanitized rendered representation produced from the captured source.
+    // rendered-html-from-trusted:allow revision read model carries render-sanitized HTML from storage (#1055)
     pub rendered_html: RenderedHtml,
-    /// When this revision was created.
-    pub edited_at: UtcInstant,
+    /// Optional authored summary at capture time.
+    pub summary: Option<PostSummary>,
+    /// Original Post creation time, not the capture time.
+    pub created_at: UtcInstant,
+    /// Prior Post modification time.
+    pub updated_at: UtcInstant,
+    /// Prior publication time, if the captured state was published or scheduled.
+    pub published_at: Option<UtcInstant>,
+    /// Prior deletion tombstone time, if the captured state was Deleted.
+    pub deleted_at: Option<UtcInstant>,
+    /// Time this immutable snapshot was captured.
+    pub captured_at: UtcInstant,
+    /// Normalized tag state at capture time.
+    pub tags: Vec<PostRevisionTag>,
+    /// Audience state at capture time.
+    pub audiences: Vec<AudienceTarget>,
+    /// Exact rendered-media references at capture time.
+    pub media: Vec<MediaReference>,
+}
+
+/// One normalized tag value belonging to an immutable Post Revision.
+#[derive(Clone, Debug)]
+pub struct PostRevisionTag {
+    /// Normalized slug copied at capture time rather than linked to mutable tags.
+    pub tag: Tag,
+    /// Display spelling captured with the revision.
+    pub display: TagLabel,
+}
+
+/// Lifecycle derived from a Post state at the supplied clock, never persisted as
+/// a separate mutable flag.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PostLifecycle {
+    Draft,
+    Scheduled,
+    Published,
+    Deleted,
+}
+
+/// One immutable revision row in a history list.
+#[derive(Clone, Debug)]
+pub struct PostRevisionMetadata {
+    pub revision_id: RevisionId,
+    pub post_id: PostId,
+    pub title: Option<PostTitle>,
+    pub slug: Slug,
+    pub captured_at: UtcInstant,
+    /// Lifecycle derived against `captured_at`, so it remains stable.
+    pub snapshot_lifecycle: PostLifecycle,
+    /// Whether the current durable Post is now Deleted.
+    pub current_deleted: bool,
+}
+
+/// The non-revision current state heading a per-Post history page.
+#[derive(Clone, Debug)]
+pub struct CurrentPostRevisionSummary {
+    pub post_id: PostId,
+    pub title: Option<PostTitle>,
+    pub slug: Slug,
+    pub format: PostFormat,
+    pub created_at: UtcInstant,
+    pub updated_at: UtcInstant,
+    pub published_at: Option<UtcInstant>,
+    pub deleted_at: Option<UtcInstant>,
+    /// Lifecycle derived at request time.
+    pub lifecycle: PostLifecycle,
+}
+
+/// Immutable-ID cursor for newest-first revision history pagination.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PostRevisionCursor {
+    pub revision_id: RevisionId,
+}
+
+/// One owner-only history page.
+#[derive(Clone, Debug)]
+pub struct PostRevisionPage {
+    pub revisions: Vec<PostRevisionMetadata>,
+    pub next_cursor: Option<PostRevisionCursor>,
+}
+
+/// An owner-only revision detail with its current Post context where applicable.
+#[derive(Clone, Debug)]
+pub struct PostRevisionDetail {
+    pub revision: PostRevisionRecord,
 }
 
 /// Non-authoritative metadata an Org ingress expects the stored post to match.
@@ -464,6 +548,16 @@ pub(crate) const INSERT_POST_TAG: &str = "INSERT INTO post_tags
 /// the tags read in the same transaction, so "no row deleted" is not an error.
 pub(crate) const DELETE_POST_TAG_BY_SLUG: &str = "DELETE FROM post_tags
      WHERE post_id = $1 AND tag_id = (SELECT tag_id FROM tags WHERE tag_slug = $2)";
+
+/// Captures every scalar field belonging to a complete immutable prior Post
+/// state. Child snapshot writes intentionally remain with Task 2's transaction.
+/// Bind order: `captured_at, post_id`.
+pub(crate) const INSERT_COMPLETE_POST_REVISION: &str = "INSERT INTO post_revisions
+     (post_id, user_id, title, slug, body, format, rendered_html, summary,
+      created_at, updated_at, published_at, deleted_at, captured_at)
+     SELECT post_id, user_id, title, slug, body, format, rendered_html, summary,
+            created_at, updated_at, published_at, deleted_at, $1
+     FROM posts WHERE post_id = $2";
 
 /// The locked pre-write columns needed for final-state and content expectations.
 #[derive(sqlx::FromRow)]

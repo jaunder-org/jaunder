@@ -2,11 +2,11 @@ use async_trait::async_trait;
 use sqlx::{Pool, QueryBuilder, Sqlite, SqliteConnection};
 
 use crate::posts::{
-    DELETE_POST_TAG_BY_SLUG, INSERT_POST_TAG, MediaReferenceEvidence, PostBookkeepingRow,
-    PostMediaReferenceBackfill, PostTagRow, SELECT_POST_TAGS, UPSERT_TAG_RETURNING_ID,
-    post_tag_diff, post_tags_from_rows, push_live_media_reference_predicate,
-    push_media_reference_evidence_cte, push_owner_media_reference_from_where,
-    replace_legacy_post_media, update_expectation_error,
+    DELETE_POST_TAG_BY_SLUG, INSERT_COMPLETE_POST_REVISION, INSERT_POST_TAG,
+    MediaReferenceEvidence, PostBookkeepingRow, PostMediaReferenceBackfill, PostTagRow,
+    SELECT_POST_TAGS, UPSERT_TAG_RETURNING_ID, post_tag_diff, post_tags_from_rows,
+    push_live_media_reference_predicate, push_media_reference_evidence_cte,
+    push_owner_media_reference_from_where, replace_legacy_post_media, update_expectation_error,
 };
 use crate::{
     InstanceId, PostDialect, PostRecord, PostStore, PublishUpdate, RenderedHtml, TaggingError,
@@ -138,11 +138,7 @@ impl PostDialect for Sqlite {
                 return Err(error);
             }
             lock_updated_media(&mut conn, post_id, input).await?;
-            sqlx::query(
-                "INSERT INTO post_revisions (post_id, user_id, title, slug, body, format, rendered_html, edited_at)
-                 SELECT post_id, user_id, title, slug, body, format, rendered_html, $1
-                 FROM posts WHERE post_id = $2",
-            )
+            sqlx::query(INSERT_COMPLETE_POST_REVISION)
             .bind(now)
             .bind(post_id)
             .execute(&mut *conn)

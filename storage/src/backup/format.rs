@@ -26,6 +26,31 @@ pub(crate) fn backup_table_set(live: impl IntoIterator<Item = String>) -> Vec<St
     tables
 }
 
+/// Orders manifest tables for import where SQL constraints cannot be deferred.
+///
+/// The manifest remains alphabetical and reproducible; restore derives this
+/// dependency order so revision-media triggers only observe a completed
+/// `Post → Revision → child` chain. Unlisted tables retain manifest order.
+pub(crate) fn restore_table_order(tables: &[String]) -> Vec<&str> {
+    let mut ordered = tables.iter().map(String::as_str).collect::<Vec<_>>();
+    ordered.sort_by_key(|table| match *table {
+        "users" | "channels" | "subscription_statuses" | "target_kinds" => 1,
+        "audiences" | "subscriptions" | "media" | "posts" | "user_config" => 2,
+        "audience_members"
+        | "email_verifications"
+        | "idempotency_keys"
+        | "password_resets"
+        | "post_audiences"
+        | "post_tags"
+        | "sessions"
+        | "post_revisions" => 3,
+        "post_revision_audiences" | "post_revision_tags" => 4,
+        "post_media" => 5,
+        _ => 0,
+    });
+    ordered
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupManifest {
     pub version: String,

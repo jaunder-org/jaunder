@@ -20,6 +20,6 @@ pub use restore_validation::{
 
 pub(crate) use format::{
     ColumnInfo, backup_table_set, build_manifest, ensure_schema_version, is_pre_identity_backup,
-    json_value_as_restore_text, order_by_clause, read_table_rows,
+    json_value_as_restore_text, order_by_clause, read_table_rows, restore_table_order,
 };
 pub(crate) use restore_validation::{validate_instance_identity_backup, validate_restore_row};

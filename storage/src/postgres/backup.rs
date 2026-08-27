@@ -11,7 +11,8 @@ use sqlx::{PgConnection, PgPool, Row};
 use crate::backup::{
     BackupError, BackupManifest, BackupMode, ColumnInfo, RestoreValidationReport, backup_table_set,
     build_manifest, ensure_schema_version, is_pre_identity_backup, json_value_as_restore_text,
-    order_by_clause, read_table_rows, validate_instance_identity_backup, validate_restore_row,
+    order_by_clause, read_table_rows, restore_table_order, validate_instance_identity_backup,
+    validate_restore_row,
 };
 use crate::sql::quote_identifier;
 
@@ -121,11 +122,11 @@ pub(crate) async fn restore_database(
     if !pre_identity {
         validate_instance_identity_backup(source_path, manifest)?;
     }
-    sqlx::query("BEGIN").execute(&mut *connection).await?;
-    // Defer every foreign key to COMMIT so tables load in any order (the manifest
-    // is sorted alphabetically, not FK-topologically). Every FK is still checked,
-    // once, at COMMIT — a referentially-broken restore fails the whole
-    // transaction, matching SQLite's end-of-import `foreign_key_check`.
+    // Defer foreign keys until COMMIT while preserving a parent-first import
+    // order for constraints that cannot be deferred, such as revision-media
+    // subject triggers. Every FK is still checked once, at COMMIT — a
+    // referentially-broken restore fails the whole transaction, matching
+    // SQLite's end-of-import `foreign_key_check`.
     sqlx::query("SET CONSTRAINTS ALL DEFERRED")
         .execute(&mut *connection)
         .await?;
@@ -146,7 +147,7 @@ pub(crate) async fn restore_database(
                 .await
                 .map_err(map_restore_error)?;
         }
-        for table in &manifest.tables {
+        for table in restore_table_order(&manifest.tables) {
             let columns = columns(&mut connection, table).await?;
             import_table(
                 &mut connection,

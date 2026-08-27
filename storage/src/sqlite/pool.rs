@@ -41,8 +41,11 @@ mod tests {
         let env = backend.setup().await;
         let pool = fk_enforcing_pool(&env.base).await; // FK-enforcing pool (sqlx default)
         let result = sqlx::query(
-            "INSERT INTO post_revisions (post_id, user_id, title, slug, body, format, rendered_html)
-             VALUES (999999, 999999, 't', 's', 'b', 'markdown', '<p>b</p>')",
+            "INSERT INTO post_revisions
+             (post_id, user_id, title, slug, body, format, rendered_html,
+              created_at, updated_at)
+             VALUES (999999, 999999, 't', 's', 'b', 'markdown', '<p>b</p>',
+                     CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
         )
         .execute(&pool)
         .await;

@@ -232,7 +232,7 @@ mod tests {
                 .scalar_i64("SELECT MAX(version) FROM _sqlx_migrations")
                 .await
                 .unwrap(),
-            27
+            28
         );
         assert_eq!(
             db.pool
@@ -263,6 +263,153 @@ mod tests {
             2,
             "absolute and scheme-relative spellings remain distinct exact rows"
         );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn migration_0028_preserves_complete_revision_children_and_exact_media_subjects(
+        #[case] backend: Backend,
+    ) {
+        let db = MigrationDatabase::new(backend).await;
+        db.migrate_current().await.unwrap();
+        db.pool
+            .execute(
+                "INSERT INTO users (username, password_hash, created_at) \
+                 VALUES ('revision-author', 'hash', CURRENT_TIMESTAMP)",
+            )
+            .await
+            .unwrap();
+        db.pool
+            .execute(
+                "INSERT INTO posts \
+                 (user_id, title, slug, body, format, rendered_html, created_at, updated_at) \
+                 VALUES ((SELECT user_id FROM users WHERE username = 'revision-author'), \
+                 NULL, 'revision-post', 'body', 'markdown', '<p>body</p>', \
+                 CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            )
+            .await
+            .unwrap();
+        db.pool
+            .execute(
+                "INSERT INTO post_revisions \
+                 (post_id, user_id, title, slug, body, format, rendered_html, summary, \
+                  created_at, updated_at, published_at, deleted_at) \
+                 SELECT post_id, user_id, NULL, slug, body, format, rendered_html, NULL, \
+                        created_at, updated_at, NULL, NULL \
+                 FROM posts WHERE slug = 'revision-post'",
+            )
+            .await
+            .unwrap();
+        db.pool
+            .execute(
+                "INSERT INTO post_revision_tags (revision_id, tag_slug, tag_display) \
+                 SELECT revision_id, 'immutable-revision-tag', 'Immutable revision tag' \
+                 FROM post_revisions",
+            )
+            .await
+            .unwrap();
+        db.pool
+            .execute(
+                "INSERT INTO post_revision_audiences (revision_id, target_kind, audience_id) \
+                 SELECT revision_id, 'public', NULL FROM post_revisions",
+            )
+            .await
+            .unwrap();
+        db.pool
+            .execute(
+                "INSERT INTO post_revision_audiences (revision_id, target_kind, audience_id) \
+                 SELECT revision_id, 'named', 999999 FROM post_revisions",
+            )
+            .await
+            .unwrap();
+        let duplicate_audience_error = db
+            .pool
+            .execute(
+                "INSERT INTO post_revision_audiences (revision_id, target_kind, audience_id) \
+                 SELECT revision_id, 'public', NULL FROM post_revisions",
+            )
+            .await
+            .expect_err("a built-in audience target occurs at most once per revision");
+        assert!(duplicate_audience_error.as_database_error().is_some());
+        db.pool
+            .execute(
+                "INSERT INTO post_media \
+                 (post_id, subject_kind, revision_id, source, sha256, filename, reference_kind, reference_form) \
+                 SELECT post_id, 'revision', revision_id, 'upload', \
+                 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', \
+                 'revision.jpg', 'local', '/media/upload/revision.jpg' \
+                 FROM post_revisions",
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            db.pool
+                .scalar_i64(
+                    "SELECT COUNT(*) FROM post_revisions WHERE summary IS NULL \
+                 AND published_at IS NULL AND deleted_at IS NULL AND captured_at IS NOT NULL"
+                )
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM post_revision_tags")
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            db.pool
+                .scalar_i64("SELECT COUNT(*) FROM post_revision_audiences")
+                .await
+                .unwrap(),
+            2
+        );
+        let duplicate_current = db.pool.execute(
+            "INSERT INTO post_media \
+             (post_id, subject_kind, revision_id, source, sha256, filename, reference_kind, reference_form) \
+             SELECT post_id, 'current', 0, 'upload', \
+             'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', \
+             'current.jpg', 'local', '/media/upload/current.jpg' FROM posts",
+        );
+        duplicate_current.await.unwrap();
+        let duplicate_error = db
+            .pool
+            .execute(
+                "INSERT INTO post_media \
+                 (post_id, subject_kind, revision_id, source, sha256, filename, reference_kind, reference_form) \
+                 SELECT post_id, 'current', 0, 'upload', \
+                 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', \
+                 'current.jpg', 'local', '/media/upload/current.jpg' FROM posts",
+            )
+            .await
+            .expect_err("one exact current media subject is unique");
+        assert!(duplicate_error.as_database_error().is_some());
+        db.pool
+            .execute(
+                "INSERT INTO posts \
+                 (user_id, title, slug, body, format, rendered_html, created_at, updated_at) \
+                 VALUES ((SELECT user_id FROM users WHERE username = 'revision-author'), \
+                 NULL, 'revision-other-post', 'body', 'markdown', '<p>body</p>', \
+                 CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            )
+            .await
+            .unwrap();
+        let cross_post_error = db
+            .pool
+            .execute(
+                "INSERT INTO post_media \
+                 (post_id, subject_kind, revision_id, source, sha256, filename, reference_kind, reference_form) \
+                 SELECT p.post_id, 'revision', r.revision_id, 'upload', \
+                 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', \
+                 'wrong-post.jpg', 'local', '/media/upload/wrong-post.jpg' \
+                 FROM post_revisions r CROSS JOIN posts p WHERE p.slug = 'revision-other-post'",
+            )
+            .await
+            .expect_err("a revision media subject must name its revision's post");
+        assert!(cross_post_error.as_database_error().is_some());
     }
 
     #[apply(backends)]

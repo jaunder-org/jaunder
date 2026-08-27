@@ -11,7 +11,7 @@ use sqlx::{Row, SqliteConnection, SqlitePool, error::ErrorKind};
 use crate::backup::{
     BackupError, BackupManifest, BackupMode, ColumnInfo, RestoreValidationReport, backup_table_set,
     build_manifest, ensure_schema_version, is_pre_identity_backup, order_by_clause,
-    read_table_rows, validate_instance_identity_backup, validate_restore_row,
+    read_table_rows, restore_table_order, validate_instance_identity_backup, validate_restore_row,
 };
 use crate::sql::{quote_identifier, quote_literal};
 
@@ -163,7 +163,7 @@ pub(crate) async fn restore_database(
                 .await
                 .map_err(map_restore_error)?;
         }
-        for table in &manifest.tables {
+        for table in restore_table_order(&manifest.tables) {
             let columns = columns(&mut connection, table).await?;
             import_table(
                 &mut connection,

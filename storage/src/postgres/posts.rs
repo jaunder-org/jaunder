@@ -2,11 +2,12 @@ use async_trait::async_trait;
 use sqlx::{Pool, Postgres, QueryBuilder};
 
 use crate::posts::{
-    DELETE_POST_TAG_BY_SLUG, INSERT_POST_TAG, MediaReferenceEvidence, PostBookkeepingRow,
-    PostMediaReferenceBackfill, PostTagRow, SELECT_POST_TAGS, UPSERT_TAG_RETURNING_ID,
-    media_advisory_lock_keys, media_lock_set, post_tag_diff, post_tags_from_rows,
-    push_live_media_reference_predicate, push_media_reference_evidence_cte,
-    push_owner_media_reference_from_where, replace_legacy_post_media, update_expectation_error,
+    DELETE_POST_TAG_BY_SLUG, INSERT_COMPLETE_POST_REVISION, INSERT_POST_TAG,
+    MediaReferenceEvidence, PostBookkeepingRow, PostMediaReferenceBackfill, PostTagRow,
+    SELECT_POST_TAGS, UPSERT_TAG_RETURNING_ID, media_advisory_lock_keys, media_lock_set,
+    post_tag_diff, post_tags_from_rows, push_live_media_reference_predicate,
+    push_media_reference_evidence_cte, push_owner_media_reference_from_where,
+    replace_legacy_post_media, update_expectation_error,
 };
 use crate::{
     InstanceId, PostDialect, PostRecord, PostStore, PublishUpdate, RenderedHtml, TaggingError,
@@ -159,15 +160,11 @@ impl PostDialect for Postgres {
         }));
         Self::lock_media_references(&mut *tx, &locked_media).await?;
 
-        sqlx::query(
-            "INSERT INTO post_revisions (post_id, user_id, title, slug, body, format, rendered_html, edited_at)
-             SELECT post_id, user_id, title, slug, body, format, rendered_html, $1
-             FROM posts WHERE post_id = $2",
-        )
-        .bind(now)
-        .bind(post_id)
-        .execute(&mut *tx)
-        .await?;
+        sqlx::query(INSERT_COMPLETE_POST_REVISION)
+            .bind(now)
+            .bind(post_id)
+            .execute(&mut *tx)
+            .await?;
         let (unpublish, explicit_published_at) = match input.publish {
             PublishUpdate::Unpublish => (true, None),
             PublishUpdate::Publish { at } => (false, at),
