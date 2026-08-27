@@ -279,7 +279,22 @@ mod tests {
         }
     }
 
-    fn session(references: serde_json::Value) -> FixtureSession {
+    fn session(language: Language, references: serde_json::Value) -> FixtureSession {
+        let (path, hover) = match language {
+            Language::Rust => (
+                "src/lib.rs",
+                serde_json::json!({
+                    "contents": { "kind": "markdown", "value": "```rust\npub fn public_api()\n```" }
+                }),
+            ),
+            Language::TypeScript => (
+                "end2end/public-api.ts",
+                serde_json::json!({
+                    "contents": { "kind": "markdown", "value": "```typescript\nexport declare function public_api(): void\n```" }
+                }),
+            ),
+            Language::Elisp | Language::Repository => unreachable!("semantic fixture language"),
+        };
         FixtureSession {
             responses: VecDeque::from([
                 (
@@ -287,17 +302,12 @@ mod tests {
                     serde_json::json!([{
                         "name": "public_api",
                         "location": {
-                            "uri": "file:///repo/src/lib.rs",
+                            "uri": format!("file:///repo/{path}"),
                             "range": { "start": { "line": 4, "character": 7 } }
                         }
                     }]),
                 ),
-                (
-                    "textDocument/hover",
-                    serde_json::json!({
-                        "contents": { "kind": "markdown", "value": "```rust\npub fn public_api()\n```" }
-                    }),
-                ),
+                ("textDocument/hover", hover),
                 ("textDocument/references", references),
             ]),
         }
@@ -311,39 +321,85 @@ mod tests {
     }
 
     #[test]
-    fn null_lsp_references_are_an_empty_reference_set_for_both_semantic_signals() {
-        let mut exported = session(serde_json::Value::Null);
-        assert!(matches!(
-            semantic_symbols_with_session(
-                &context(),
-                SignalFamily::ExportedSymbolReferences,
-                Language::Rust,
-                "fixture-lsp",
-                Some("1".into()),
-                &mut exported,
-            )
-            .state,
-            CellState::Clean
-        ));
+    fn semantic_reference_fixtures_cover_positive_and_clean_cells_for_both_languages() {
+        for language in [Language::Rust, Language::TypeScript] {
+            let referenced_path = match language {
+                Language::Rust => "file:///repo/src/consumer.rs",
+                Language::TypeScript => "file:///repo/end2end/consumer.ts",
+                Language::Elisp | Language::Repository => unreachable!("semantic fixture language"),
+            };
+            let references = serde_json::json!([{
+                "uri": referenced_path,
+                "range": { "start": { "line": 1, "character": 0 } }
+            }]);
+            let mut exported = session(language, references.clone());
+            assert!(matches!(
+                semantic_symbols_with_session(
+                    &context(),
+                    SignalFamily::ExportedSymbolReferences,
+                    language,
+                    "fixture-lsp",
+                    Some("1".into()),
+                    &mut exported,
+                )
+                .state,
+                CellState::Candidates { .. }
+            ));
 
-        let mut unreferenced = session(serde_json::Value::Null);
-        assert!(matches!(
-            semantic_symbols_with_session(
-                &context(),
-                SignalFamily::UnusedDependenciesAndSymbols,
-                Language::Rust,
-                "fixture-lsp",
-                Some("1".into()),
-                &mut unreferenced,
-            )
-            .state,
-            CellState::Candidates { .. }
-        ));
+            let mut unreferenced = session(language, references);
+            assert!(matches!(
+                semantic_symbols_with_session(
+                    &context(),
+                    SignalFamily::UnusedDependenciesAndSymbols,
+                    language,
+                    "fixture-lsp",
+                    Some("1".into()),
+                    &mut unreferenced,
+                )
+                .state,
+                CellState::Clean
+            ));
+        }
+    }
+
+    #[test]
+    fn null_and_empty_references_are_clean_exported_references_and_unreferenced_candidates() {
+        for language in [Language::Rust, Language::TypeScript] {
+            for references in [serde_json::Value::Null, serde_json::json!([])] {
+                let mut exported = session(language, references.clone());
+                assert!(matches!(
+                    semantic_symbols_with_session(
+                        &context(),
+                        SignalFamily::ExportedSymbolReferences,
+                        language,
+                        "fixture-lsp",
+                        Some("1".into()),
+                        &mut exported,
+                    )
+                    .state,
+                    CellState::Clean
+                ));
+
+                let mut unreferenced = session(language, references);
+                assert!(matches!(
+                    semantic_symbols_with_session(
+                        &context(),
+                        SignalFamily::UnusedDependenciesAndSymbols,
+                        language,
+                        "fixture-lsp",
+                        Some("1".into()),
+                        &mut unreferenced,
+                    )
+                    .state,
+                    CellState::Candidates { .. }
+                ));
+            }
+        }
     }
 
     #[test]
     fn malformed_non_null_lsp_references_fail_the_cell() {
-        let mut malformed = session(serde_json::json!({}));
+        let mut malformed = session(Language::Rust, serde_json::json!({}));
         assert!(matches!(
             semantic_symbols_with_session(
                 &context(),

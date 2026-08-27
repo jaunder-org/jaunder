@@ -1,7 +1,7 @@
 //! Parsed clone and repeated-shape collectors.
 use std::collections::BTreeMap;
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 
 use oxc_allocator::Allocator;
 use oxc_ast::ast::{ArrowFunctionExpression, Function};
@@ -223,12 +223,14 @@ impl ElispReader for EmacsElispReader {
                     CloneShapeError::Failed(error.to_string())
                 }
             })?;
-        reader
-            .stdin
-            .take()
-            .expect("configured piped stdin")
-            .write_all(source.as_bytes())
-            .map_err(|error| CloneShapeError::Failed(error.to_string()))?;
+        let write_result = match reader.stdin.take() {
+            Some(mut stdin) => stdin.write_all(source.as_bytes()),
+            None => Err(std::io::Error::other("Emacs reader stdin was not piped")),
+        };
+        if let Err(error) = write_result {
+            cleanup_reader_after_stdin_failure(&mut reader);
+            return Err(CloneShapeError::Failed(error.to_string()));
+        }
         let output = reader
             .wait_with_output()
             .map_err(|error| CloneShapeError::Failed(error.to_string()))?;
@@ -241,6 +243,27 @@ impl ElispReader for EmacsElispReader {
             .lines()
             .map(str::to_owned)
             .collect())
+    }
+}
+
+/// Preserve a stdin-write failure while ensuring its spawned reader cannot outlive it.
+fn cleanup_reader_after_stdin_failure(reader: &mut Child) {
+    match reader.try_wait() {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            if let Err(error) = reader.kill() {
+                eprintln!("warning: killing Emacs reader after stdin write failure: {error}");
+            }
+            if let Err(error) = reader.wait() {
+                eprintln!("warning: reaping Emacs reader after stdin write failure: {error}");
+            }
+        }
+        Err(error) => {
+            eprintln!("warning: checking Emacs reader after stdin write failure: {error}");
+            if let Err(error) = reader.wait() {
+                eprintln!("warning: reaping Emacs reader after stdin write failure: {error}");
+            }
+        }
     }
 }
 

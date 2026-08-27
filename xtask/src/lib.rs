@@ -810,8 +810,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         Command::Census => {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("census");
-            let specs = census::specs();
-            let report = census::collect(Path::new("."), &specs)?;
+            let report = census::collect(Path::new("."), census::catalog())?;
             let failed = report.has_failed_cells();
             let cells = report.cell_count();
             result.census = Some(report);
@@ -1219,90 +1218,6 @@ mod cli_tests {
         assert!(matches!(cli.command, Command::Census));
     }
 
-    #[test]
-    fn complete_census_registry_has_one_spec_for_every_required_cell() {
-        let specs = census::specs();
-        let keys = specs
-            .iter()
-            .map(|spec| (spec.signal, spec.language, spec.capability))
-            .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(keys.len(), specs.len());
-        assert_eq!(
-            keys,
-            std::collections::BTreeSet::from([
-                (
-                    census::SignalFamily::DependencyStructure,
-                    census::Language::Rust,
-                    census::CellCapability::Default
-                ),
-                (
-                    census::SignalFamily::DependencyStructure,
-                    census::Language::TypeScript,
-                    census::CellCapability::Default
-                ),
-                (
-                    census::SignalFamily::DependencyStructure,
-                    census::Language::Elisp,
-                    census::CellCapability::Default
-                ),
-                (
-                    census::SignalFamily::ExportedSymbolReferences,
-                    census::Language::Rust,
-                    census::CellCapability::Default
-                ),
-                (
-                    census::SignalFamily::ExportedSymbolReferences,
-                    census::Language::TypeScript,
-                    census::CellCapability::Default
-                ),
-                (
-                    census::SignalFamily::UnusedDependenciesAndSymbols,
-                    census::Language::Rust,
-                    census::CellCapability::UnreferencedExportedSymbol
-                ),
-                (
-                    census::SignalFamily::UnusedDependenciesAndSymbols,
-                    census::Language::TypeScript,
-                    census::CellCapability::UnreferencedExportedSymbol
-                ),
-                (
-                    census::SignalFamily::ClonesAndRepeatedTestShapes,
-                    census::Language::Rust,
-                    census::CellCapability::Default
-                ),
-                (
-                    census::SignalFamily::ClonesAndRepeatedTestShapes,
-                    census::Language::TypeScript,
-                    census::CellCapability::Default
-                ),
-                (
-                    census::SignalFamily::ClonesAndRepeatedTestShapes,
-                    census::Language::Elisp,
-                    census::CellCapability::Default
-                ),
-                (
-                    census::SignalFamily::ConversionAndErrorMapping,
-                    census::Language::Rust,
-                    census::CellCapability::Default
-                ),
-                (
-                    census::SignalFamily::ConversionAndErrorMapping,
-                    census::Language::TypeScript,
-                    census::CellCapability::Default
-                ),
-                (
-                    census::SignalFamily::ChurnAndCochange,
-                    census::Language::Repository,
-                    census::CellCapability::Default
-                ),
-                (
-                    census::SignalFamily::AdapterPaths,
-                    census::Language::Repository,
-                    census::CellCapability::Default
-                ),
-            ])
-        );
-    }
     #[test]
     fn prepush_parses_as_first_class_subcommand() {
         let cli = Cli::try_parse_from(["xtask", "prepush"]).unwrap();

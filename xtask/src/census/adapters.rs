@@ -6,24 +6,14 @@
 
 use std::collections::BTreeSet;
 
-use super::model::{Candidate, CellCapability, CollectorMetadata};
-use super::{CellReport, CollectorContext, CollectorSpec, EvidenceMethod, Language, SignalFamily};
+use super::model::{Candidate, CollectorMetadata};
+use super::{CellReport, CollectorContext, EvidenceMethod, Language, SignalFamily};
 
 const ADAPTER_VERSION: &str = "1";
 const SQLITE_ROOT: &str = "storage/src/sqlite/";
 const POSTGRES_ROOT: &str = "storage/src/postgres/";
 
-/// Registers the repository-wide storage adapter path signal.
-pub(crate) fn specs() -> Vec<CollectorSpec> {
-    vec![CollectorSpec {
-        signal: SignalFamily::AdapterPaths,
-        language: Language::Repository,
-        capability: CellCapability::Default,
-        collect,
-    }]
-}
-
-fn collect(context: &CollectorContext) -> CellReport {
+pub(crate) fn collect(context: &CollectorContext) -> CellReport {
     let sqlite = context
         .snapshot
         .files

@@ -10,9 +10,7 @@ use std::path::Path;
 use anyhow::Result;
 use serde::Serialize;
 
-use super::{
-    CellCapability, CellReport, CellState, CollectorSpec, Language, SignalFamily, SourceSnapshot,
-};
+use super::{CellReport, CellSpec, CellState, Language, SignalFamily, SourceSnapshot};
 
 /// Immutable input shared by every collector for one command invocation.
 pub struct CollectorContext {
@@ -124,40 +122,49 @@ fn aggregate(cells: &[CellReport]) -> SectionState {
     }
 }
 
-/// Collect the registered cells over a fresh Git-tracked working-tree snapshot.
-pub fn collect(repo_root: &Path, specs: &[CollectorSpec]) -> Result<CensusReport> {
+/// Collect the catalogued cells over a fresh Git-tracked working-tree snapshot.
+pub fn collect(repo_root: &Path, catalog: &[CellSpec]) -> Result<CensusReport> {
     let context = CollectorContext::from_repo(repo_root)?;
-    let mut cells = required_cells(&context.snapshot);
-    for spec in specs {
-        let report = validate((spec.collect)(&context));
+    let mut cells = catalog
+        .iter()
+        .map(|spec| unavailable(&context.snapshot, spec))
+        .collect::<Vec<_>>();
+    for spec in catalog {
+        let Some(collect) = spec.collect else {
+            continue;
+        };
+        let report = validate(collect(&context));
         if report.signal != spec.signal
             || report.language != spec.language
             || report.capability != spec.capability
         {
-            cells.retain(|cell| {
-                !(cell.signal == spec.signal
-                    && cell.language == spec.language
-                    && cell.capability == spec.capability)
-            });
-            cells.push(CellReport {
-                signal: spec.signal,
-                language: spec.language,
-                capability: spec.capability,
-                collector: report.collector,
-                state: CellState::Failed {
-                    error: "collector returned a report for a different cell".into(),
+            replace_cell(
+                &mut cells,
+                spec,
+                CellReport {
+                    signal: spec.signal,
+                    language: spec.language,
+                    capability: spec.capability,
+                    collector: report.collector,
+                    state: CellState::Failed {
+                        error: "collector returned a report for a different cell".into(),
+                    },
                 },
-            });
+            );
             continue;
         }
-        cells.retain(|cell| {
-            !(cell.signal == spec.signal
-                && cell.language == spec.language
-                && cell.capability == spec.capability)
-        });
-        cells.push(report);
+        replace_cell(&mut cells, spec, report);
     }
     Ok(CensusReport::from_cells(cells))
+}
+
+fn replace_cell(cells: &mut Vec<CellReport>, spec: &CellSpec, report: CellReport) {
+    cells.retain(|cell| {
+        !(cell.signal == spec.signal
+            && cell.language == spec.language
+            && cell.capability == spec.capability)
+    });
+    cells.push(report);
 }
 
 fn validate(mut report: CellReport) -> CellReport {
@@ -192,84 +199,16 @@ fn validate(mut report: CellReport) -> CellReport {
     report
 }
 
-fn required_cells(snapshot: &SourceSnapshot) -> Vec<CellReport> {
-    let mut cells = Vec::new();
-    for language in [Language::Rust, Language::TypeScript, Language::Elisp] {
-        cells.push(unavailable(
-            snapshot,
-            SignalFamily::DependencyStructure,
-            language,
-            CellCapability::Default,
-            "dependency collector is not available",
-        ));
-        cells.push(unavailable(
-            snapshot,
-            SignalFamily::ClonesAndRepeatedTestShapes,
-            language,
-            CellCapability::Default,
-            "structural clone collector is not available",
-        ));
-        cells.push(unavailable(
-            snapshot,
-            SignalFamily::UnusedDependenciesAndSymbols,
-            language,
-            CellCapability::UnusedDependency,
-            "sound unused-dependency collector is not available",
-        ));
-    }
-    for language in [Language::Rust, Language::TypeScript] {
-        cells.push(unavailable(
-            snapshot,
-            SignalFamily::ExportedSymbolReferences,
-            language,
-            CellCapability::Default,
-            "semantic analyzer is not available",
-        ));
-        cells.push(unavailable(
-            snapshot,
-            SignalFamily::UnusedDependenciesAndSymbols,
-            language,
-            CellCapability::UnreferencedExportedSymbol,
-            "semantic analyzer is not available",
-        ));
-        cells.push(unavailable(
-            snapshot,
-            SignalFamily::ConversionAndErrorMapping,
-            language,
-            CellCapability::Default,
-            "structural conversion collector is not available",
-        ));
-    }
-    cells.push(unavailable(
-        snapshot,
-        SignalFamily::ChurnAndCochange,
-        Language::Repository,
-        CellCapability::Default,
-        "history collector is not available",
-    ));
-    cells.push(unavailable(
-        snapshot,
-        SignalFamily::AdapterPaths,
-        Language::Repository,
-        CellCapability::Default,
-        "SQLite/PostgreSQL adapter-path collector is not available",
-    ));
-    cells
-}
-
-fn unavailable(
-    snapshot: &SourceSnapshot,
-    signal: SignalFamily,
-    language: Language,
-    cell_capability: CellCapability,
-    capability: &str,
-) -> CellReport {
-    let capability = if has_source_inputs(snapshot, language) {
-        capability.to_owned()
+fn unavailable(snapshot: &SourceSnapshot, spec: &CellSpec) -> CellReport {
+    let reason = if has_source_inputs(snapshot, spec.language) {
+        spec.unavailable_reason.to_owned()
     } else {
-        format!("{capability}; no tracked {language:?} source inputs")
+        format!(
+            "{}; no tracked {:?} source inputs",
+            spec.unavailable_reason, spec.language
+        )
     };
-    CellReport::unavailable(signal, language, capability).with_capability(cell_capability)
+    CellReport::unavailable(spec.signal, spec.language, reason).with_capability(spec.capability)
 }
 
 fn has_source_inputs(snapshot: &SourceSnapshot, language: Language) -> bool {
@@ -282,7 +221,8 @@ fn has_source_inputs(snapshot: &SourceSnapshot, language: Language) -> bool {
 #[cfg(test)]
 mod tests {
     use super::super::model::{
-        Candidate, CollectorMetadata, MAX_CANDIDATES_PER_CELL, MAX_PATHS_PER_CANDIDATE,
+        Candidate, CellCapability, CollectorMetadata, MAX_CANDIDATES_PER_CELL,
+        MAX_PATHS_PER_CANDIDATE,
     };
     use super::*;
     use crate::census::EvidenceMethod;
@@ -322,14 +262,14 @@ mod tests {
     }
 
     #[test]
-    fn required_unused_dependency_cells_remain_unavailable_beside_unreferenced_symbol_cells() {
-        let cells = required_cells(&SourceSnapshot::default());
+    fn catalog_keeps_unused_dependency_cells_beside_unreferenced_symbol_cells() {
+        let cells = super::super::registry::catalog();
         for language in [Language::Rust, Language::TypeScript, Language::Elisp] {
             assert!(cells.iter().any(|cell| {
                 cell.signal == SignalFamily::UnusedDependenciesAndSymbols
                     && cell.language == language
                     && cell.capability == CellCapability::UnusedDependency
-                    && matches!(cell.state, CellState::Unavailable { .. })
+                    && cell.collect.is_none()
             }));
         }
         for language in [Language::Rust, Language::TypeScript] {
@@ -337,7 +277,7 @@ mod tests {
                 cell.signal == SignalFamily::UnusedDependenciesAndSymbols
                     && cell.language == language
                     && cell.capability == CellCapability::UnreferencedExportedSymbol
-                    && matches!(cell.state, CellState::Unavailable { .. })
+                    && cell.collect.is_some()
             }));
         }
     }

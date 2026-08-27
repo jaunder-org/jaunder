@@ -8,28 +8,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::model::{Candidate, CellCapability, CollectorMetadata};
+use super::snapshot::is_approved_path;
 use super::source::language_for_path;
-use super::{
-    CellReport, CellState, CollectorContext, CollectorSpec, EvidenceMethod, Language, SignalFamily,
-};
+use super::{CellReport, CellState, CollectorContext, EvidenceMethod, Language, SignalFamily};
 const HISTORY_VERSION: &str = "1";
 const MINIMUM_OBSERVATIONS: usize = 2;
 
-/// Registers one repository-wide history cell so every approved source path participates.
-pub(crate) fn specs() -> Vec<CollectorSpec> {
-    vec![spec(Language::Repository, repository)]
-}
-
-fn spec(language: Language, collect: fn(&CollectorContext) -> CellReport) -> CollectorSpec {
-    CollectorSpec {
-        signal: SignalFamily::ChurnAndCochange,
-        language,
-        capability: CellCapability::Default,
-        collect,
-    }
-}
-
-fn repository(context: &CollectorContext) -> CellReport {
+pub(crate) fn repository(context: &CollectorContext) -> CellReport {
     collect(context, Language::Repository)
 }
 
@@ -86,15 +71,20 @@ type HistoryFacts = (BTreeMap<String, usize>, BTreeMap<(String, String), usize>)
 
 /// Derive current-path churn and co-change facts by walking commits newest-first.
 /// Mapping each historical rename back to its current destination ensures earlier edits retain
-/// the identity users can open in today's checkout.
+/// the identity users can open in today's checkout. HEAD selects the history surface:
+/// working-tree deletions only affect source collectors and must not erase committed churn.
 fn history_facts(context: &CollectorContext, language: Language) -> Result<HistoryFacts, String> {
-    let current_paths = context
-        .snapshot
-        .files
-        .iter()
-        .filter(|file| belongs_to_language(&file.path, language))
-        .map(|file| file.path.clone())
-        .collect::<BTreeSet<_>>();
+    let current_paths = git_output(
+        context,
+        &["ls-tree", "--full-tree", "-r", "-z", "--name-only", "HEAD"],
+    )?
+    .split('\0')
+    .filter(|path| is_approved_path(path))
+    .filter(|path| !path.is_empty())
+    .filter(|path| language_for_path(path).is_some())
+    .filter(|path| belongs_to_language(path, language))
+    .map(str::to_owned)
+    .collect::<BTreeSet<_>>();
     let commits = git_output(context, &["rev-list", "--no-merges", "HEAD"])?;
     let mut names = current_paths
         .iter()
@@ -269,6 +259,32 @@ mod tests {
         commit(root, "initial source");
 
         assert!(matches!(rust(&context(root)).state, CellState::Clean));
+    }
+
+    #[test]
+    fn uncommitted_deletion_does_not_remove_head_history_from_churn() {
+        let temporary = tempfile::tempdir().expect("tempdir");
+        let root = temporary.path();
+        git(root, &["init"]);
+        git(root, &["config", "user.email", "census@example.test"]);
+        git(root, &["config", "user.name", "Census Fixture"]);
+        fs::create_dir_all(root.join("server/src")).expect("source dir");
+        let path = root.join("server/src/a.rs");
+        fs::write(&path, "fn a() {}\n").expect("initial source");
+        commit(root, "initial source");
+        fs::write(&path, "fn a() { changed(); }\n").expect("changed source");
+        commit(root, "changed source");
+        fs::remove_file(path).expect("uncommitted deletion");
+
+        let report = rust(&context(root));
+        let CellState::Candidates { candidates, .. } = report.state else {
+            panic!("committed churn remains represented after a dirty deletion");
+        };
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate.identity == "churn:server/src/a.rs")
+        );
     }
 
     #[test]

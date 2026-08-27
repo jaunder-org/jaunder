@@ -22,9 +22,9 @@ mod snapshot;
 mod source;
 
 pub use model::{
-    CellCapability, CellReport, CellState, CollectorSpec, EvidenceMethod, Language, SignalFamily,
+    CellCapability, CellReport, CellSpec, CellState, EvidenceMethod, Language, SignalFamily,
 };
 pub use orchestrate::{CensusReport, CollectorContext, SignalSection, collect};
-pub(crate) use registry::specs;
+pub(crate) use registry::catalog;
 pub use render::render_human;
 pub use snapshot::SourceSnapshot;

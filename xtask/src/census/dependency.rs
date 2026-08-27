@@ -1,9 +1,12 @@
 //! Dependency-structure collectors.
 use std::collections::{BTreeMap, BTreeSet};
 
+use oxc_allocator::Allocator;
+use oxc_ast::ast::Statement;
+use oxc_parser::{Parser, ParserReturn};
 use syn::visit::Visit;
 
-use super::common::{balanced_elisp, failed, files, parse_typescript, structural};
+use super::common::{balanced_elisp, failed, files, structural};
 use super::model::Candidate;
 use super::{CellReport, CollectorContext, Language, SignalFamily};
 struct RustUses {
@@ -69,15 +72,18 @@ pub(crate) fn rust_dependencies(context: &CollectorContext) -> CellReport {
 pub(crate) fn typescript_dependencies(context: &CollectorContext) -> CellReport {
     let mut imports = BTreeMap::<String, Vec<String>>::new();
     for (path, source) in files(context, Language::TypeScript) {
-        if let Err(error) = parse_typescript(path, source) {
-            return failed(
-                SignalFamily::DependencyStructure,
-                Language::TypeScript,
-                "census-typescript-structural",
-                format!("{path}: {error}"),
-            );
-        }
-        for module in source.lines().filter_map(import_module) {
+        let modules = match typescript_modules(path, source) {
+            Ok(modules) => modules,
+            Err(error) => {
+                return failed(
+                    SignalFamily::DependencyStructure,
+                    Language::TypeScript,
+                    "census-typescript-structural",
+                    format!("{path}: {error}"),
+                );
+            }
+        };
+        for module in modules {
             imports.entry(module).or_default().push(path.into());
         }
     }
@@ -97,27 +103,46 @@ pub(crate) fn typescript_dependencies(context: &CollectorContext) -> CellReport 
     structural(
         SignalFamily::DependencyStructure,
         Language::TypeScript,
-        "imports are parsed before extraction; aliases and runtime resolution are not modeled",
+        "imports and re-exports are extracted from Oxc declarations; aliases and runtime resolution are not modeled",
         candidates,
     )
 }
 
-fn import_module(line: &str) -> Option<String> {
-    let line = line.trim();
-    if !line.starts_with("import ") && !line.starts_with("export ") {
-        return None;
+fn typescript_modules(path: &str, source: &str) -> Result<Vec<String>, String> {
+    let allocator = Allocator::default();
+    let ParserReturn {
+        program,
+        diagnostics,
+        panicked,
+        ..
+    } = Parser::new(
+        &allocator,
+        source,
+        Language::TypeScript
+            .typescript_source_type(path)
+            .expect("TypeScript language has a parser mode"),
+    )
+    .parse();
+    if panicked || !diagnostics.is_empty() {
+        return Err(diagnostics
+            .iter()
+            .map(|error| format!("{error:?}"))
+            .collect::<Vec<_>>()
+            .join("; "));
     }
-    let quoted = line
-        .split_once(" from ")
-        .map(|(_, module)| module.trim())
-        .unwrap_or(line.strip_prefix("import ")?.trim());
-    let quote = quoted.chars().next()?;
-    (quote == '\'' || quote == '"').then_some(())?;
-    quoted[1..]
-        .split(quote)
-        .next()
-        .filter(|module| !module.is_empty())
+    Ok(program
+        .body
+        .iter()
+        .filter_map(|statement| match statement {
+            Statement::ImportDeclaration(declaration) => Some(declaration.source.value.as_str()),
+            Statement::ExportFromDeclaration(declaration) => {
+                Some(declaration.source.value.as_str())
+            }
+            Statement::ExportAllDeclaration(declaration) => Some(declaration.source.value.as_str()),
+            _ => None,
+        })
         .map(str::to_owned)
+        .collect())
 }
 
 pub(crate) fn elisp_dependencies(context: &CollectorContext) -> CellReport {
@@ -183,19 +208,19 @@ mod tests {
         ));
     }
     #[test]
-    fn typescript_dependency_positive_and_negative() {
+    fn typescript_dependency_multiline_imports_and_reexports_are_structural() {
         assert!(matches!(
             typescript_dependencies(&context(&[
-                ("a.ts", "import x from 'pkg';"),
-                ("b.ts", "import y from 'pkg';")
+                ("a.ts", "import {\n  alpha,\n} from 'pkg';"),
+                ("b.ts", "export {\n  beta,\n} from 'pkg';")
             ]))
             .state,
             CellState::Candidates { .. }
         ));
         assert!(matches!(
             typescript_dependencies(&context(&[
-                ("a.ts", "import x from 'a';"),
-                ("b.ts", "import y from 'b';")
+                ("a.ts", "import {\n  alpha,\n} from 'a';"),
+                ("b.ts", "export *\n  from 'b';")
             ]))
             .state,
             CellState::Clean

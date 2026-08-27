@@ -16,12 +16,17 @@ pub fn render_human(report: &CensusReport) -> String {
         for cell in &section.cells {
             writeln!(
                 out,
-                "  {} / {} / {} [{}; {}] — {}",
+                "  {} / {} / {} [{}; {}{}] — {}",
                 signal_name_cell(cell.signal),
                 language_name(cell.language),
                 capability_name(cell.capability),
                 evidence_name(cell.collector.evidence_method),
                 cell.collector.identity,
+                cell.collector
+                    .version
+                    .as_deref()
+                    .map(|version| format!("; version {version}"))
+                    .unwrap_or_default(),
                 state_detail(&cell.state),
             )
             .unwrap();
@@ -137,7 +142,7 @@ mod tests {
             capability: super::super::CellCapability::Default,
             collector: CollectorMetadata {
                 identity: "fixture".into(),
-                version: None,
+                version: Some("1.2.3".into()),
                 evidence_method: EvidenceMethod::Structural,
                 limitation: "no parser".into(),
             },
@@ -148,7 +153,9 @@ mod tests {
         let first = render_human(&report);
         assert_eq!(first, render_human(&report));
         assert!(first.contains("unavailable: rust analyzer"));
-        assert!(first.contains("[structural; fixture]"));
+        assert!(first.contains("[structural; fixture; version 1.2.3]"));
+        let json = serde_json::to_string(&report).expect("serializes report");
+        assert!(json.contains("\"version\":\"1.2.3\""));
     }
 
     #[test]

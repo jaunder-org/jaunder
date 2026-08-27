@@ -208,18 +208,15 @@ impl CellReport {
     }
 }
 
-/// A collector registration. Collectors return data only; rendering and command failure remain
-/// centralized so a failed collector cannot discard reports already collected.
-pub struct CollectorSpec {
+/// One required census cell and its optional implementation.
+///
+/// The catalog is the sole source of required cells: a missing collector becomes
+/// an unavailable report using `unavailable_reason`, rather than removing the
+/// capability from the audit.
+pub struct CellSpec {
     pub signal: SignalFamily,
     pub language: Language,
     pub capability: CellCapability,
-    pub collect: fn(&crate::census::CollectorContext) -> CellReport,
-}
-
-impl CollectorSpec {
-    pub fn with_capability(mut self, capability: CellCapability) -> Self {
-        self.capability = capability;
-        self
-    }
+    pub collect: Option<fn(&crate::census::CollectorContext) -> CellReport>,
+    pub unavailable_reason: &'static str,
 }
