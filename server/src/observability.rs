@@ -1,6 +1,5 @@
 use axum::Router;
 use axum::http::HeaderName;
-use host::capture;
 use opentelemetry::propagation::Extractor;
 use tower::ServiceBuilder;
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
@@ -89,13 +88,9 @@ fn fallback(kind: FallbackKind) {
     let _ = write_fallback(std::io::stderr().lock(), kind);
 }
 
-/// The scoped diagnostic-log path (`<JAUNDER_CAPTURE_DIR>/diag.log`), if capture is on.
-/// When set (e2e only), the server appends a small JSONL file of WARN+ events plus panic
-/// records to it — a purpose-built, low-noise artifact the e2e zero-panic gate
-/// consumes, demoting the kernel-laden journal to a fallback (issue #144). Unset in
-/// production, so the whole feature is inert there (see the `host` crate).
-fn diag_log_file() -> Option<std::path::PathBuf> {
-    capture::file(capture::Stream::Diag)
+/// The scoped diagnostic-log path, if capture is on.
+fn diag_log_file(capture: &host::capture::CaptureConfig) -> Option<std::path::PathBuf> {
+    capture.file(host::capture::Stream::Diag)
 }
 
 fn open_diag_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
@@ -255,20 +250,19 @@ fn install_diag_panic_hook(path: Option<std::path::PathBuf>) {
     install_diag_panic_hook_with(path, open_diag_file, write_panic_diag, fallback);
 }
 
-fn init_tracing_impl(verbose: bool) -> host::telemetry::TelemetryGuard {
-    // Scoped diagnostic capture (issue #144): when JAUNDER_CAPTURE_DIR is set,
-    // append WARN+ events as JSONL to it via a synchronous `Arc<File>` sink —
-    // deliberately not a buffered/non-blocking writer, so a `panic = abort`
-    // cannot drop the very lines the feature exists to keep. An open failure
-    // disables the sink (non-fatal) rather than taking down startup. The path is
-    // resolved once here and reused for the panic hook installed below.
-    let diag_path = diag_log_file();
+fn init_tracing_impl(
+    telemetry: &host::telemetry::TelemetryConfig,
+    capture: &host::capture::CaptureConfig,
+) -> host::telemetry::TelemetryGuard {
+    // Scoped diagnostic capture resolves one root-owned directory once and reuses
+    // its path for both the layer and the panic hook.
+    let diag_path = diag_log_file(capture);
     let diag_log_layer = diag_path.as_ref().and_then(|path| {
         open_diag_file_with(path, open_diag_file, || fallback(FallbackKind::DiagLogOpen))
             .map(|file| diag_layer(std::sync::Arc::new(file)).boxed())
     });
 
-    let guard = host::telemetry::init_tracing_with_layer(verbose, diag_log_layer);
+    let guard = host::telemetry::init_tracing_with_layer(telemetry, diag_log_layer);
 
     // Install the scoped-diag panic hook (a no-op when disabled). It is
     // independent of the subscriber above and deliberately does not route
@@ -280,8 +274,11 @@ fn init_tracing_impl(verbose: bool) -> host::telemetry::TelemetryGuard {
 }
 
 #[must_use]
-pub fn init_server_tracing(verbose: bool) -> host::telemetry::TelemetryGuard {
-    init_tracing_impl(verbose)
+pub fn init_server_tracing(
+    telemetry: &host::telemetry::TelemetryConfig,
+    capture: &host::capture::CaptureConfig,
+) -> host::telemetry::TelemetryGuard {
+    init_tracing_impl(telemetry, capture)
 }
 
 /// Trace context extracted from inbound request headers (W3C `traceparent`),
@@ -368,6 +365,20 @@ mod tests {
     use tracing_subscriber::EnvFilter;
     use tracing_subscriber::prelude::*;
 
+    fn test_telemetry() -> host::telemetry::TelemetryConfig {
+        host::telemetry::TelemetryConfig::from_raw(
+            false,
+            host::telemetry::TelemetryRawConfig {
+                log_filter: Ok(None),
+                rust_log: Ok(None),
+                log_format: Ok(None),
+                jaunder_otlp_endpoint: Ok(None),
+                otlp_endpoint: Ok(None),
+                slow_op_ms: Ok(None),
+                e2e_seed_process: Ok(None),
+            },
+        )
+    }
     /// An in-memory `MakeWriter` capturing every write into a shared buffer, so a
     /// layer's output can be asserted on. `Arc<Mutex<Vec<u8>>>` is not itself a
     /// `MakeWriter`, and `fmt::TestWriter` targets std{out,err} (uncapturable), so a
@@ -507,11 +518,8 @@ mod tests {
     }
 
     #[test]
-    fn diag_log_file_is_none_when_env_unset() {
-        with_env(|env| {
-            env.remove(host::capture::DIR_ENV);
-            assert!(diag_log_file().is_none());
-        });
+    fn diag_log_file_is_none_without_capture_configuration() {
+        assert!(diag_log_file(&host::capture::CaptureConfig::default()).is_none());
     }
 
     #[test]
@@ -639,24 +647,25 @@ mod tests {
     }
 
     #[test]
-    fn init_tracing_impl_creates_diag_file_when_env_set() {
-        with_env(|env| {
-            let dir = tempfile::TempDir::new().expect("tempdir");
-            env.set(host::capture::DIR_ENV, dir.path());
-            let path = dir.path().join("diag.log");
-            let previous = std::panic::take_hook();
-            init_tracing_impl(false);
-            std::panic::set_hook(previous);
-            assert!(path.exists(), "diag file should be created when env is set");
-        });
+    fn init_tracing_impl_creates_diag_file_when_capture_is_configured() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let capture =
+            host::capture::CaptureConfig::from_raw(Some(dir.path().to_path_buf().into_os_string()));
+        let path = dir.path().join("diag.log");
+        let previous = std::panic::take_hook();
+        init_tracing_impl(&test_telemetry(), &capture);
+        std::panic::set_hook(previous);
+        assert!(path.exists(), "diag file should be created when configured");
     }
 
     #[test]
     fn init_tracing_impl_survives_unopenable_diag_path() {
         const CHILD: &str = "JAUNDER_TEST_DIAG_OPEN_CHILD";
         if std::env::var_os(CHILD).is_some() {
+            let capture =
+                host::capture::CaptureConfig::from_raw(std::env::var_os(host::capture::DIR_ENV));
             assert_error_metric_count(1, || {
-                let guard = init_tracing_impl(false);
+                let guard = init_tracing_impl(&test_telemetry(), &capture);
                 drop(guard);
             });
             return;

@@ -33,6 +33,27 @@ use storage::test_support::{
     raw_media_filename_exists, rewrite_media_filename_in_backup, sqlite_url, unique_postgres_url,
 };
 
+fn default_host_config() -> (
+    host::telemetry::TelemetryConfig,
+    host::capture::CaptureConfig,
+) {
+    (
+        host::telemetry::TelemetryConfig::from_raw(
+            false,
+            host::telemetry::TelemetryRawConfig {
+                log_filter: Ok(None),
+                rust_log: Ok(None),
+                log_format: Ok(None),
+                jaunder_otlp_endpoint: Ok(None),
+                otlp_endpoint: Ok(None),
+                slow_op_ms: Ok(None),
+                e2e_seed_process: Ok(None),
+            },
+        ),
+        host::capture::CaptureConfig::default(),
+    )
+}
+
 async fn storage_args(backend: Backend, base: &TempDir) -> (StorageArgs, Option<PostgresDbGuard>) {
     let storage_path = base.path().join("storage");
     let (db, guard) = match backend {
@@ -121,7 +142,8 @@ async fn cmd_serve_fails_when_not_initialized(#[case] backend: Backend) {
     let args = uninitialized_storage_args(backend, &base);
     let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
 
-    let result = cmd_serve(&args, bind, true, None).await;
+    let (telemetry, capture) = default_host_config();
+    let result = cmd_serve(&args, bind, true, None, &telemetry, &capture).await;
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(
@@ -309,7 +331,8 @@ async fn prepare_server_binds_and_builds_serving_router(#[case] backend: Backend
     let bind = probe.local_addr().unwrap();
     drop(probe);
 
-    let prepared = prepare_server(&args, bind, true, None)
+    let (telemetry, capture) = default_host_config();
+    let prepared = prepare_server(&args, bind, true, None, &telemetry, &capture)
         .await
         .expect("prepare_server should succeed after init");
     assert_eq!(
@@ -341,9 +364,17 @@ async fn prepare_server_writes_then_removes_runtime_file(#[case] backend: Backen
     drop(probe);
 
     let rt_path = base.path().join("runtime.json");
-    let prepared = prepare_server(&args, bind, true, Some(rt_path.clone()))
-        .await
-        .expect("prepare_server should succeed after init");
+    let (telemetry, capture) = default_host_config();
+    let prepared = prepare_server(
+        &args,
+        bind,
+        true,
+        Some(rt_path.clone()),
+        &telemetry,
+        &capture,
+    )
+    .await
+    .expect("prepare_server should succeed after init");
 
     assert!(
         rt_path.exists(),

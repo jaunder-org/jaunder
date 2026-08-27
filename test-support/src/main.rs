@@ -107,6 +107,29 @@ enum Commands {
     },
 }
 
+fn inherited(name: &str) -> Result<Option<String>, std::env::VarError> {
+    match std::env::var(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn telemetry_config() -> host::telemetry::TelemetryConfig {
+    host::telemetry::TelemetryConfig::from_raw(
+        false,
+        host::telemetry::TelemetryRawConfig {
+            log_filter: inherited("JAUNDER_LOG_FILTER"),
+            rust_log: inherited("RUST_LOG"),
+            log_format: inherited("JAUNDER_LOG_FORMAT"),
+            jaunder_otlp_endpoint: inherited("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT"),
+            otlp_endpoint: inherited("OTEL_EXPORTER_OTLP_ENDPOINT"),
+            slow_op_ms: inherited("JAUNDER_SLOW_OP_MS"),
+            e2e_seed_process: inherited("JAUNDER_E2E_SEED_PROCESS"),
+        },
+    )
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     run(Cli::parse()).await
@@ -116,8 +139,9 @@ async fn main() -> anyhow::Result<()> {
 /// evaluates to the handler's `Result<()>`, so `main` stays a thin shell and each
 /// command is a small, individually-covered unit (#232).
 async fn run(cli: Cli) -> anyhow::Result<()> {
-    let _telemetry = host::telemetry::init_tracing(false);
-
+    let telemetry = telemetry_config();
+    let capture = capture::CaptureConfig::from_raw(std::env::var_os(capture::DIR_ENV));
+    let _telemetry = host::telemetry::init_tracing(&telemetry);
     match cli.command {
         Commands::SeedPosts {
             db,
@@ -133,7 +157,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             display_name,
             operator,
         } => cmd_create_user(&db, &username, &password, display_name.as_ref(), operator).await,
-        Commands::ResetMail => cmd_reset_mail(),
+        Commands::ResetMail => cmd_reset_mail(&capture),
         Commands::SeedUser {
             db,
             username,
@@ -145,7 +169,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             username,
             label,
         } => cmd_create_session(&db, &username, label.as_deref()).await,
-        Commands::CapturePath { stream } => cmd_capture_path(&stream),
+        Commands::CapturePath { stream } => cmd_capture_path(&stream, &capture),
         Commands::VerifyNoPanics {
             capture_dir,
             server_log,
@@ -207,8 +231,9 @@ async fn cmd_create_session(
 }
 
 /// Reset the mail-capture file (delete it; missing is fine).
-fn cmd_reset_mail() -> anyhow::Result<()> {
-    let path = capture::file(capture::Stream::Mail)
+fn cmd_reset_mail(capture: &capture::CaptureConfig) -> anyhow::Result<()> {
+    let path = capture
+        .file(capture::Stream::Mail)
         .ok_or_else(|| anyhow::anyhow!("JAUNDER_CAPTURE_DIR is not set"))?;
     reset_mail(&path)?;
     eprintln!("reset mail-capture file {}", path.display());
@@ -216,11 +241,12 @@ fn cmd_reset_mail() -> anyhow::Result<()> {
 }
 
 /// Print the resolved capture-file path for a stream (`mail`/`websub`/`diag`).
-fn cmd_capture_path(stream: &str) -> anyhow::Result<()> {
+fn cmd_capture_path(stream: &str, capture: &capture::CaptureConfig) -> anyhow::Result<()> {
     let stream = capture::Stream::parse(stream)
         .ok_or_else(|| anyhow::anyhow!("unknown capture stream {stream:?}"))?;
-    let path =
-        capture::file(stream).ok_or_else(|| anyhow::anyhow!("JAUNDER_CAPTURE_DIR is not set"))?;
+    let path = capture
+        .file(stream)
+        .ok_or_else(|| anyhow::anyhow!("JAUNDER_CAPTURE_DIR is not set"))?;
     println!("{}", path.display());
     Ok(())
 }

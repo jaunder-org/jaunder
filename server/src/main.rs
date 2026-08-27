@@ -1,6 +1,29 @@
 use clap::Parser;
 use jaunder::cli::Cli;
 
+fn inherited(name: &str) -> Result<Option<String>, std::env::VarError> {
+    match std::env::var(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn telemetry_config(verbose: bool) -> host::telemetry::TelemetryConfig {
+    host::telemetry::TelemetryConfig::from_raw(
+        verbose,
+        host::telemetry::TelemetryRawConfig {
+            log_filter: inherited("JAUNDER_LOG_FILTER"),
+            rust_log: inherited("RUST_LOG"),
+            log_format: inherited("JAUNDER_LOG_FORMAT"),
+            jaunder_otlp_endpoint: inherited("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT"),
+            otlp_endpoint: inherited("OTEL_EXPORTER_OTLP_ENDPOINT"),
+            slow_op_ms: inherited("JAUNDER_SLOW_OP_MS"),
+            e2e_seed_process: inherited("JAUNDER_E2E_SEED_PROCESS"),
+        },
+    )
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Fail-closed: a production binary must never link a `common` compiled with
@@ -34,18 +57,16 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         // cov:ignore-stop
         unreachable!("Cli::parse_from([\"jaunder\", \"--help\"]) prints help and exits the process")
     };
-    // `run` owns telemetry for *every* command after clap has resolved a runnable
-    // subcommand. `serve` goes through `server::observability` because the server
-    // owns scoped diagnostics (the diag JSONL layer and panic hook) and that
-    // initializer delegates process OTLP to the shared host guard. One-shot CLI
-    // commands call `host::telemetry` directly so `JAUNDER_CAPTURE_DIR` does not
-    // make them write `diag.log` or depend on server-only diagnostics.
+    let telemetry = telemetry_config(cli.verbose);
+    let capture = host::capture::CaptureConfig::from_raw(std::env::var_os(host::capture::DIR_ENV));
+    // `run` owns telemetry for every command after clap has resolved a runnable
+    // subcommand. Serve additionally installs server-owned diagnostics.
     let _telemetry = if command.is_serve() {
-        jaunder::observability::init_server_tracing(cli.verbose)
+        jaunder::observability::init_server_tracing(&telemetry, &capture)
     } else {
-        host::telemetry::init_tracing(cli.verbose)
+        host::telemetry::init_tracing(&telemetry)
     };
-    command.execute().await.map(drop)
+    command.execute(&telemetry, &capture).await.map(drop)
 }
 
 #[cfg(test)]

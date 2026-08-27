@@ -4,7 +4,8 @@
 //! writes the streams) and `test-support` (which resets/queries them) agree without
 //! restating any path.
 
-use std::path::PathBuf;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 /// The single env var naming the e2e capture directory. Unset in production ⇒ every
 /// capture stream is inert.
@@ -20,9 +21,65 @@ pub enum Stream {
     Diag,
 }
 
-type CreateDirOperation = fn(&std::path::Path) -> std::io::Result<()>;
+/// Immutable capture configuration resolved by an executable composition root.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CaptureConfig {
+    directory: Option<PathBuf>,
+}
 
-fn create_capture_dir(path: &std::path::Path) -> std::io::Result<()> {
+impl CaptureConfig {
+    /// Resolves a raw inherited capture directory. A missing, blank, or non-Unicode
+    /// value disables capture; non-Unicode input is reported without exposing it.
+    #[must_use]
+    pub fn from_raw(raw: Option<OsString>) -> Self {
+        let Some(raw) = raw else {
+            return Self::default();
+        };
+        let Ok(raw) = raw.into_string() else {
+            crate::error::report_swallowed(
+                crate::error::ErrorKind::Internal,
+                crate::error::ErrorClass::Bug,
+                "host.capture.directory_config",
+                crate::error::SwallowedSource::Redacted,
+            );
+            return Self::default();
+        };
+        let directory = PathBuf::from(raw.trim());
+        if directory.as_os_str().is_empty() {
+            Self::default()
+        } else {
+            Self {
+                directory: Some(directory),
+            }
+        }
+    }
+
+    /// Returns the conventional capture path, creating the configured directory.
+    ///
+    /// Directory creation failure is intentionally non-fatal and reported once; the
+    /// conventional path is still returned so the stream writer surfaces its error.
+    #[must_use]
+    pub fn file(&self, stream: Stream) -> Option<PathBuf> {
+        self.file_with(stream, create_capture_dir)
+    }
+
+    fn file_with(&self, stream: Stream, create_dir: CreateDirOperation) -> Option<PathBuf> {
+        let dir = self.directory.as_ref()?;
+        if let Err(error) = create_dir(dir) {
+            crate::error::report_swallowed(
+                crate::error::ErrorKind::Internal,
+                crate::error::ErrorClass::Transient,
+                "host.capture.create_directory",
+                crate::error::SwallowedSource::Error(&error),
+            );
+        }
+        Some(dir.join(stream.filename()))
+    }
+}
+
+type CreateDirOperation = fn(&Path) -> std::io::Result<()>;
+
+fn create_capture_dir(path: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(path)
 }
 
@@ -50,50 +107,9 @@ impl Stream {
     }
 }
 
-/// Returns the conventional capture path, creating the configured directory.
-///
-/// A missing or blank `JAUNDER_CAPTURE_DIR` disables capture. Directory
-/// creation failure is intentionally non-fatal and reported once; the
-/// conventional path is still returned so the stream writer surfaces its error.
-#[must_use]
-pub fn file(stream: Stream) -> Option<PathBuf> {
-    file_with(stream, create_capture_dir)
-}
-
-fn file_with(stream: Stream, create_dir: CreateDirOperation) -> Option<PathBuf> {
-    let raw = match std::env::var(DIR_ENV) {
-        Ok(raw) => raw,
-        Err(std::env::VarError::NotPresent) => return None,
-        Err(std::env::VarError::NotUnicode(_)) => {
-            crate::error::report_swallowed(
-                crate::error::ErrorKind::Internal,
-                crate::error::ErrorClass::Bug,
-                "host.capture.directory_config",
-                crate::error::SwallowedSource::Redacted,
-            );
-            return None;
-        }
-    };
-    let configured = raw.trim();
-    if configured.is_empty() {
-        return None;
-    }
-    let dir = PathBuf::from(configured);
-    if let Err(error) = create_dir(&dir) {
-        crate::error::report_swallowed(
-            crate::error::ErrorKind::Internal,
-            crate::error::ErrorClass::Transient,
-            "host.capture.create_directory",
-            crate::error::SwallowedSource::Error(&error),
-        );
-    }
-    Some(dir.join(stream.filename()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::test_support::with_env;
 
     #[derive(Clone)]
     struct SharedWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
@@ -143,20 +159,18 @@ mod tests {
 
     #[test]
     fn directory_creation_failure_preserves_path_and_reports_once() {
-        with_env(|env| {
-            env.set(DIR_ENV, "/private/capture");
-            let (result, trace) = capture(|| file_with(Stream::WebSub, denied_create));
-            assert_eq!(result, Some(PathBuf::from("/private/capture/websub.jsonl")));
-            assert_eq!(
-                trace.matches(r#""error.disposition":"swallowed""#).count(),
-                1,
-                "trace: {trace}"
-            );
-            assert!(
-                trace.contains(r#""error.context":"host.capture.create_directory""#),
-                "trace: {trace}"
-            );
-        });
+        let config = CaptureConfig::from_raw(Some("/private/capture".into()));
+        let (result, trace) = capture(|| config.file_with(Stream::WebSub, denied_create));
+        assert_eq!(result, Some(PathBuf::from("/private/capture/websub.jsonl")));
+        assert_eq!(
+            trace.matches(r#""error.disposition":"swallowed""#).count(),
+            1,
+            "trace: {trace}"
+        );
+        assert!(
+            trace.contains(r#""error.context":"host.capture.create_directory""#),
+            "trace: {trace}"
+        );
     }
 
     #[cfg(unix)]
@@ -164,23 +178,18 @@ mod tests {
     fn invalid_unicode_capture_directory_disables_capture_and_reports_redacted_once() {
         use std::os::unix::ffi::OsStringExt;
 
-        with_env(|env| {
-            env.set(
-                DIR_ENV,
-                std::ffi::OsString::from_vec(b"capture-secret-\xff".to_vec()),
-            );
-            let (result, trace) = capture(|| file(Stream::WebSub));
-            assert_eq!(result, None);
-            assert_eq!(
-                trace
-                    .matches(r#""error.context":"host.capture.directory_config""#)
-                    .count(),
-                1,
-                "trace: {trace}"
-            );
-            assert!(trace.contains(r#""error.source":"redacted""#));
-            assert!(!trace.contains("capture-secret"));
-        });
+        let raw = std::ffi::OsString::from_vec(b"capture-secret-\xff".to_vec());
+        let (config, trace) = capture(|| CaptureConfig::from_raw(Some(raw)));
+        assert_eq!(config.file(Stream::WebSub), None);
+        assert_eq!(
+            trace
+                .matches(r#""error.context":"host.capture.directory_config""#)
+                .count(),
+            1,
+            "trace: {trace}"
+        );
+        assert!(trace.contains(r#""error.source":"redacted""#));
+        assert!(!trace.contains("capture-secret"));
     }
 
     #[test]
@@ -200,27 +209,22 @@ mod tests {
     }
 
     #[test]
-    fn file_joins_and_creates_dir_when_set() {
+    fn file_joins_and_creates_dir_when_configured() {
         let tmp = tempfile::tempdir().unwrap();
-        let d = tmp.path().join("capture"); // does not exist yet
-        with_env(|env| {
-            env.set(DIR_ENV, &d);
-            let p = file(Stream::Mail).expect("Some when set");
-            assert_eq!(p, d.join("mail.jsonl"));
-            assert!(d.is_dir(), "file() must create the capture dir");
-        });
+        let directory = tmp.path().join("capture"); // does not exist yet
+        let config = CaptureConfig::from_raw(Some(directory.clone().into_os_string()));
+        let path = config.file(Stream::Mail).expect("configured capture");
+        assert_eq!(path, directory.join("mail.jsonl"));
+        assert!(directory.is_dir(), "file() must create the capture dir");
     }
 
     #[test]
-    fn file_is_none_when_unset_or_blank() {
-        // Two env states with an assertion between them, in one critical section:
-        // splitting this into two `with_env` calls would reopen the window the single
-        // lock closes.
-        with_env(|env| {
-            env.remove(DIR_ENV);
-            assert_eq!(file(Stream::Diag), None);
-            env.set(DIR_ENV, "   ");
-            assert_eq!(file(Stream::Diag), None, "blank ⇒ None");
-        });
+    fn file_is_none_when_missing_or_blank() {
+        assert_eq!(CaptureConfig::default().file(Stream::Diag), None);
+        assert_eq!(
+            CaptureConfig::from_raw(Some("   ".into())).file(Stream::Diag),
+            None,
+            "blank ⇒ None"
+        );
     }
 }

@@ -31,16 +31,56 @@ fn default_filter(verbose: bool) -> EnvFilter {
     }
 }
 
-const E2E_SEED_PROCESS_ENV: &str = "JAUNDER_E2E_SEED_PROCESS";
 const E2E_SEED_PROCESS_ATTR: &str = "jaunder.e2e.seed_process";
 const E2E_SEED_PROCESS_JAUNDER: &str = "e2e.seed.jaunder";
 const E2E_SEED_PROCESS_TEST_SUPPORT: &str = "e2e.seed.test-support";
 
-fn read_env(name: &str) -> Result<Option<String>, std::env::VarError> {
-    match std::env::var(name) {
-        Ok(value) => Ok(Some(value)),
-        Err(std::env::VarError::NotPresent) => Ok(None),
-        Err(error @ std::env::VarError::NotUnicode(_)) => Err(error),
+/// Raw inherited values collected by an executable composition root.
+pub struct TelemetryRawConfig {
+    pub log_filter: Result<Option<String>, std::env::VarError>,
+    pub rust_log: Result<Option<String>, std::env::VarError>,
+    pub log_format: Result<Option<String>, std::env::VarError>,
+    pub jaunder_otlp_endpoint: Result<Option<String>, std::env::VarError>,
+    pub otlp_endpoint: Result<Option<String>, std::env::VarError>,
+    pub slow_op_ms: Result<Option<String>, std::env::VarError>,
+    pub e2e_seed_process: Result<Option<String>, std::env::VarError>,
+}
+
+/// Immutable telemetry policy resolved before asynchronous work begins.
+pub struct TelemetryConfig {
+    filter: EnvFilter,
+    json_format: bool,
+    otlp_endpoint: Option<String>,
+    slow_op_threshold: Duration,
+    e2e_seed_process: Option<String>,
+}
+
+impl TelemetryConfig {
+    /// Resolves inherited telemetry values while preserving their established
+    /// precedence and malformed-value fallback policy.
+    #[must_use]
+    pub fn from_raw(verbose: bool, raw: TelemetryRawConfig) -> Self {
+        Self {
+            filter: resolved_filter(verbose, raw.log_filter, raw.rust_log, || {
+                fallback(FallbackKind::LogFilter);
+            }),
+            json_format: use_json_format(raw.log_format, || fallback(FallbackKind::LogFormat)),
+            otlp_endpoint: otel_exporter_otlp_endpoint(
+                raw.jaunder_otlp_endpoint,
+                raw.otlp_endpoint,
+                || fallback(FallbackKind::OtlpEndpoint),
+            ),
+            slow_op_threshold: slow_op_threshold(raw.slow_op_ms, || {
+                fallback(FallbackKind::SlowThreshold);
+            }),
+            e2e_seed_process: e2e_seed_process(raw.e2e_seed_process),
+        }
+    }
+
+    /// Whether the resolved endpoint enables OTLP-dependent services.
+    #[must_use]
+    pub fn otlp_endpoint_configured(&self) -> bool {
+        self.otlp_endpoint.is_some()
     }
 }
 
@@ -165,13 +205,14 @@ fn exporter_fallback(kind: FallbackKind, error: &anyhow::Error) {
     let _ = write_exporter_fallback(std::io::stderr().lock(), kind, error);
 }
 
-fn resolved_filter_with(
+fn resolved_filter(
     verbose: bool,
-    mut read: impl FnMut(&str) -> Result<Option<String>, std::env::VarError>,
+    values: Result<Option<String>, std::env::VarError>,
+    fallback: Result<Option<String>, std::env::VarError>,
     mut warn: impl FnMut(),
 ) -> EnvFilter {
-    for name in ["JAUNDER_LOG_FILTER", "RUST_LOG"] {
-        match read(name) {
+    for value in [values, fallback] {
+        match value {
             Ok(Some(value)) if value.trim().is_empty() => warn(),
             Ok(Some(value)) => match EnvFilter::try_new(&value) {
                 Ok(filter) => return filter,
@@ -184,15 +225,11 @@ fn resolved_filter_with(
     default_filter(verbose)
 }
 
-fn resolved_filter(verbose: bool) -> EnvFilter {
-    resolved_filter_with(verbose, read_env, || fallback(FallbackKind::LogFilter))
-}
-
-fn use_json_format_with(
-    mut read: impl FnMut(&str) -> Result<Option<String>, std::env::VarError>,
+fn use_json_format(
+    value: Result<Option<String>, std::env::VarError>,
     mut warn: impl FnMut(),
 ) -> bool {
-    match read("JAUNDER_LOG_FORMAT") {
+    match value {
         Ok(Some(value)) if matches!(value.as_str(), "json" | "JSON") => true,
         Ok(Some(value)) if value == "pretty" => false,
         Ok(Some(_)) | Err(_) => {
@@ -201,10 +238,6 @@ fn use_json_format_with(
         }
         Ok(None) => false,
     }
-}
-
-fn use_json_format() -> bool {
-    use_json_format_with(read_env, || fallback(FallbackKind::LogFormat))
 }
 
 /// Trim an optional env value and drop it if it is empty (or whitespace-only) —
@@ -216,11 +249,12 @@ fn trimmed_non_empty(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn otel_exporter_otlp_endpoint_with(
-    mut read: impl FnMut(&str) -> Result<Option<String>, std::env::VarError>,
+fn otel_exporter_otlp_endpoint(
+    preferred: Result<Option<String>, std::env::VarError>,
+    fallback: Result<Option<String>, std::env::VarError>,
     mut warn: impl FnMut(),
 ) -> Option<String> {
-    match read("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT") {
+    match preferred {
         Ok(Some(value)) => {
             return if let Some(value) = trimmed_non_empty(Some(value)) {
                 Some(value)
@@ -236,7 +270,7 @@ fn otel_exporter_otlp_endpoint_with(
         Ok(None) => {}
     }
 
-    match read("OTEL_EXPORTER_OTLP_ENDPOINT") {
+    match fallback {
         Ok(Some(value)) => {
             if let Some(value) = trimmed_non_empty(Some(value)) {
                 Some(value)
@@ -253,42 +287,24 @@ fn otel_exporter_otlp_endpoint_with(
     }
 }
 
-fn otel_exporter_otlp_endpoint() -> Option<String> {
-    otel_exporter_otlp_endpoint_with(read_env, || fallback(FallbackKind::OtlpEndpoint))
-}
-
-#[must_use]
-pub fn otlp_endpoint_configured() -> bool {
-    otel_exporter_otlp_endpoint().is_some()
-}
-
-fn e2e_seed_process_attribute_with(
-    mut read: impl FnMut(&str) -> Result<Option<String>, std::env::VarError>,
-) -> Option<KeyValue> {
-    let value = trimmed_non_empty(read(E2E_SEED_PROCESS_ENV).ok()?)?;
-    if matches!(
+fn e2e_seed_process(value: Result<Option<String>, std::env::VarError>) -> Option<String> {
+    let value = trimmed_non_empty(value.ok()?)?;
+    matches!(
         value.as_str(),
         E2E_SEED_PROCESS_JAUNDER | E2E_SEED_PROCESS_TEST_SUPPORT
-    ) {
-        Some(KeyValue::new(E2E_SEED_PROCESS_ATTR, value))
-    } else {
-        None
-    }
+    )
+    .then_some(value)
 }
 
-fn telemetry_resource_with(
-    read: impl FnMut(&str) -> Result<Option<String>, std::env::VarError>,
-) -> Resource {
+fn telemetry_resource(seed_process: Option<String>) -> Resource {
     let builder = Resource::builder();
-    if let Some(attribute) = e2e_seed_process_attribute_with(read) {
-        builder.with_attribute(attribute).build()
+    if let Some(value) = seed_process {
+        builder
+            .with_attribute(KeyValue::new(E2E_SEED_PROCESS_ATTR, value))
+            .build()
     } else {
         builder.build()
     }
-}
-
-fn telemetry_resource() -> Resource {
-    telemetry_resource_with(read_env)
 }
 
 fn build_otel_tracer(
@@ -352,11 +368,11 @@ fn setup_otel_meter_with<T>(
     }
 }
 
-fn slow_op_threshold_with(
-    mut read: impl FnMut(&str) -> Result<Option<String>, std::env::VarError>,
+fn slow_op_threshold(
+    value: Result<Option<String>, std::env::VarError>,
     mut warn: impl FnMut(),
 ) -> Duration {
-    match read("JAUNDER_SLOW_OP_MS") {
+    match value {
         Ok(Some(value)) => {
             if let Ok(value) = value.parse::<u64>() {
                 Duration::from_millis(value)
@@ -371,10 +387,6 @@ fn slow_op_threshold_with(
             Duration::from_secs(5)
         }
     }
-}
-
-fn slow_op_threshold() -> Duration {
-    slow_op_threshold_with(read_env, || fallback(FallbackKind::SlowThreshold))
 }
 
 #[derive(Clone, Copy)]
@@ -458,7 +470,10 @@ fn install_subscriber_with<E>(install: impl FnOnce() -> Result<(), E>, mut warn:
     }
 }
 
-fn init_tracing_impl_with_layer<L>(verbose: bool, extra_layer: Option<L>) -> TelemetryGuard
+fn init_tracing_impl_with_layer<L>(
+    config: &TelemetryConfig,
+    extra_layer: Option<L>,
+) -> TelemetryGuard
 where
     L: Layer<tracing_subscriber::Registry> + Send + Sync + 'static,
 {
@@ -473,24 +488,20 @@ where
         opentelemetry_sdk::propagation::TraceContextPropagator::new(),
     );
 
-    let slow_span_layer = SlowSpanLayer::new(slow_op_threshold());
+    let slow_span_layer = SlowSpanLayer::new(config.slow_op_threshold);
 
     // Box the fmt layer so the json/pretty variants share one type, and carry
-    // OTel as an `Option` layer (absent or failed setup is a no-op). This lets
-    // every {OTel present/failed/none} × {json/pretty} combination flow through
-    // a single registry-build chain.
-    let env_filter = resolved_filter(verbose);
-    let fmt_layer = if use_json_format() {
+    // OTel as an `Option` layer (absent or failed setup is a no-op).
+    let env_filter = config.filter.clone();
+    let fmt_layer = if config.json_format {
         fmt::layer().json().boxed()
     } else {
         fmt::layer().boxed()
     };
 
-    // Resolve the endpoint once; traces and metrics share it. The provider
-    // handles are retained in the returned guard so a one-shot process can flush
-    // them before exit.
-    let endpoint = otel_exporter_otlp_endpoint();
-    let resource = telemetry_resource();
+    // Traces and metrics share the endpoint resolved at the process root.
+    let endpoint = config.otlp_endpoint.clone();
+    let resource = telemetry_resource(config.e2e_seed_process.clone());
 
     let tracer = endpoint.as_deref().and_then(|endpoint| {
         setup_otel_tracer_with(
@@ -539,34 +550,29 @@ where
     }
 }
 
-fn init_tracing_impl(verbose: bool) -> TelemetryGuard {
-    init_tracing_impl_with_layer::<tracing_subscriber::layer::Identity>(verbose, None)
+fn init_tracing_impl(config: &TelemetryConfig) -> TelemetryGuard {
+    init_tracing_impl_with_layer::<tracing_subscriber::layer::Identity>(config, None)
 }
 
 /// Install the process-wide tracing/logging/metrics subscriber and return its
 /// shutdown guard.
 ///
-/// The setup is intentionally best-effort: malformed OTLP endpoints, exporter
-/// construction failures, and duplicate subscriber installs are recorded through
-/// local diagnostics but do not prevent the command from running.
+/// The setup is intentionally best-effort: exporter construction failures and
+/// duplicate subscriber installs are recorded through local diagnostics but do
+/// not prevent the command from running.
 #[must_use]
-pub fn init_tracing(verbose: bool) -> TelemetryGuard {
-    // Called once per process from `run` (production), for every command —
-    // `serve` included. No `Once` guard: returning an owned guard is incompatible
-    // with `call_once`, and repeat installs (only seen in tests that dispatch twice
-    // in one process) are already reported non-fatally by
-    // `try_init`/`LogTracer::init`.
-    init_tracing_impl(verbose)
+pub fn init_tracing(config: &TelemetryConfig) -> TelemetryGuard {
+    init_tracing_impl(config)
 }
 
 /// Install tracing with a caller-owned extra subscriber layer and return the
 /// same shutdown guard as [`init_tracing`].
 #[must_use]
-pub fn init_tracing_with_layer<L>(verbose: bool, layer: Option<L>) -> TelemetryGuard
+pub fn init_tracing_with_layer<L>(config: &TelemetryConfig, layer: Option<L>) -> TelemetryGuard
 where
     L: Layer<tracing_subscriber::Registry> + Send + Sync + 'static,
 {
-    init_tracing_impl_with_layer(verbose, layer)
+    init_tracing_impl_with_layer(config, layer)
 }
 
 type MeterShutdownOperation =
@@ -612,6 +618,21 @@ fn finish_meter_shutdown(
     }
 }
 
+#[cfg(test)]
+fn default_telemetry_config() -> TelemetryConfig {
+    TelemetryConfig::from_raw(
+        false,
+        TelemetryRawConfig {
+            log_filter: Ok(None),
+            rust_log: Ok(None),
+            log_format: Ok(None),
+            jaunder_otlp_endpoint: Ok(None),
+            otlp_endpoint: Ok(None),
+            slow_op_ms: Ok(None),
+            e2e_seed_process: Ok(None),
+        },
+    )
+}
 fn finish_tracer_shutdown(
     provider: &opentelemetry_sdk::trace::SdkTracerProvider,
     operation: TracerShutdownOperation,
@@ -635,7 +656,6 @@ impl Drop for TelemetryGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::test_support::with_env;
     use opentelemetry::Value;
     use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
     use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
@@ -713,15 +733,14 @@ mod tests {
     }
 
     #[test]
-    fn process_telemetry_does_not_create_diag_file_when_capture_dir_is_set() {
-        with_env(|env| {
-            let dir = tempfile::TempDir::new().expect("tempdir");
-            env.set(crate::capture::DIR_ENV, dir.path());
-            env.remove("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
-            env.remove("OTEL_EXPORTER_OTLP_ENDPOINT");
-            let _guard = init_tracing(false);
-            assert!(!dir.path().join("diag.log").exists());
-        });
+    fn process_telemetry_does_not_create_diag_file_when_capture_dir_is_configured() {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let capture = crate::capture::CaptureConfig::from_raw(Some(
+            dir.path().to_path_buf().into_os_string(),
+        ));
+        let _guard = init_tracing(&default_telemetry_config());
+        assert!(capture.file(crate::capture::Stream::Diag).is_some());
+        assert!(!dir.path().join("diag.log").exists());
     }
     #[test]
     fn slow_span_values_returns_none_when_below_threshold() {
@@ -754,31 +773,24 @@ mod tests {
 
     #[test]
     fn slow_op_threshold_defaults_to_five_seconds() {
-        with_env(|env| {
-            env.remove("JAUNDER_SLOW_OP_MS");
-            assert_eq!(slow_op_threshold(), Duration::from_secs(5));
-        });
+        assert_eq!(slow_op_threshold(Ok(None), || {}), Duration::from_secs(5));
     }
 
     #[test]
-    fn slow_op_threshold_reads_environment_override() {
-        with_env(|env| {
-            env.set("JAUNDER_SLOW_OP_MS", "1234");
-            assert_eq!(slow_op_threshold(), Duration::from_millis(1234));
-        });
+    fn slow_op_threshold_reads_typed_override() {
+        assert_eq!(
+            slow_op_threshold(Ok(Some("1234".to_owned())), || {}),
+            Duration::from_millis(1234)
+        );
     }
 
     #[test]
     fn nonnumeric_slow_threshold_uses_default_with_one_fixed_fallback_and_zero_metrics() {
         let mut output = Vec::new();
         let threshold = assert_zero_error_metrics(|| {
-            slow_op_threshold_with(
-                |name| {
-                    assert_eq!(name, "JAUNDER_SLOW_OP_MS");
-                    Ok(Some("not-a-number".to_owned()))
-                },
-                || push_fallback(&mut output, FallbackKind::SlowThreshold),
-            )
+            slow_op_threshold(Ok(Some("not-a-number".to_owned())), || {
+                push_fallback(&mut output, FallbackKind::SlowThreshold);
+            })
         });
         assert_eq!(threshold, Duration::from_secs(5));
         assert_fixed_fallback(
@@ -791,13 +803,9 @@ mod tests {
     fn invalid_unicode_slow_threshold_uses_default_with_one_redacted_fallback_and_zero_metrics() {
         let mut output = Vec::new();
         let threshold = assert_zero_error_metrics(|| {
-            slow_op_threshold_with(
-                |name| {
-                    assert_eq!(name, "JAUNDER_SLOW_OP_MS");
-                    Err(invalid_unicode_env())
-                },
-                || push_fallback(&mut output, FallbackKind::SlowThreshold),
-            )
+            slow_op_threshold(Err(invalid_unicode_env()), || {
+                push_fallback(&mut output, FallbackKind::SlowThreshold);
+            })
         });
         assert_eq!(threshold, Duration::from_secs(5));
         assert_fixed_fallback(
@@ -807,42 +815,36 @@ mod tests {
     }
     #[test]
     fn otlp_endpoint_prefers_jaunder_specific_setting() {
-        with_env(|env| {
-            env.set("OTEL_EXPORTER_OTLP_ENDPOINT", "http://fallback:4317");
-            env.set(
-                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
-                "http://preferred:4317",
-            );
-            assert_eq!(
-                otel_exporter_otlp_endpoint().as_deref(),
-                Some("http://preferred:4317")
-            );
-        });
+        assert_eq!(
+            otel_exporter_otlp_endpoint(
+                Ok(Some("http://preferred:4317".to_owned())),
+                Ok(Some("http://fallback:4317".to_owned())),
+                || {},
+            )
+            .as_deref(),
+            Some("http://preferred:4317")
+        );
     }
 
     #[test]
-    fn otlp_endpoint_falls_back_to_standard_env_var() {
-        with_env(|env| {
-            env.remove("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
-            env.set("OTEL_EXPORTER_OTLP_ENDPOINT", "http://fallback:4317");
-            assert_eq!(
-                otel_exporter_otlp_endpoint().as_deref(),
-                Some("http://fallback:4317")
-            );
-        });
+    fn otlp_endpoint_falls_back_to_standard_value() {
+        assert_eq!(
+            otel_exporter_otlp_endpoint(
+                Ok(None),
+                Ok(Some("http://fallback:4317".to_owned())),
+                || {},
+            )
+            .as_deref(),
+            Some("http://fallback:4317")
+        );
     }
 
     #[test]
     fn blank_primary_endpoint_disables_export_with_one_fixed_fallback() {
         let mut output = Vec::new();
-        let endpoint = otel_exporter_otlp_endpoint_with(
-            |name| {
-                assert_eq!(
-                    name, "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
-                    "blank primary endpoint must stop precedence resolution"
-                );
-                Ok(Some("   ".to_owned()))
-            },
+        let endpoint = otel_exporter_otlp_endpoint(
+            Ok(Some("   ".to_owned())),
+            Ok(Some("http://ignored:4317".to_owned())),
             || push_fallback(&mut output, FallbackKind::OtlpEndpoint),
         );
         assert!(endpoint.is_none());
@@ -855,14 +857,9 @@ mod tests {
     #[test]
     fn blank_secondary_endpoint_disables_export_with_one_fixed_fallback() {
         let mut output = Vec::new();
-        let endpoint = otel_exporter_otlp_endpoint_with(
-            |name| match name {
-                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT" => Ok(None),
-                "OTEL_EXPORTER_OTLP_ENDPOINT" => Ok(Some("   ".to_owned())),
-                _ => unreachable!("the endpoint reader receives only the two known names"),
-            },
-            || push_fallback(&mut output, FallbackKind::OtlpEndpoint),
-        );
+        let endpoint = otel_exporter_otlp_endpoint(Ok(None), Ok(Some("   ".to_owned())), || {
+            push_fallback(&mut output, FallbackKind::OtlpEndpoint);
+        });
         assert!(endpoint.is_none());
         assert_fixed_fallback(
             &String::from_utf8(output).expect("fallback utf8"),
@@ -874,14 +871,9 @@ mod tests {
     fn invalid_unicode_primary_endpoint_does_not_select_secondary_and_records_zero_metrics() {
         let mut output = Vec::new();
         let endpoint = assert_zero_error_metrics(|| {
-            otel_exporter_otlp_endpoint_with(
-                |name| {
-                    assert_eq!(
-                        name, "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
-                        "invalid primary endpoint must stop precedence resolution"
-                    );
-                    Err(invalid_unicode_env())
-                },
+            otel_exporter_otlp_endpoint(
+                Err(invalid_unicode_env()),
+                Ok(Some("http://ignored:4317".to_owned())),
                 || push_fallback(&mut output, FallbackKind::OtlpEndpoint),
             )
         });
@@ -896,14 +888,9 @@ mod tests {
     fn invalid_unicode_secondary_endpoint_disables_export_and_records_zero_metrics() {
         let mut output = Vec::new();
         let endpoint = assert_zero_error_metrics(|| {
-            otel_exporter_otlp_endpoint_with(
-                |name| match name {
-                    "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT" => Ok(None),
-                    "OTEL_EXPORTER_OTLP_ENDPOINT" => Err(invalid_unicode_env()),
-                    _ => unreachable!("the endpoint reader receives only the two known names"),
-                },
-                || push_fallback(&mut output, FallbackKind::OtlpEndpoint),
-            )
+            otel_exporter_otlp_endpoint(Ok(None), Err(invalid_unicode_env()), || {
+                push_fallback(&mut output, FallbackKind::OtlpEndpoint);
+            })
         });
         assert!(endpoint.is_none(), "invalid secondary disables export");
         assert_fixed_fallback(
@@ -914,53 +901,31 @@ mod tests {
 
     #[test]
     fn use_json_format_defaults_to_pretty() {
-        with_env(|env| {
-            env.remove("JAUNDER_LOG_FORMAT");
-            assert!(!use_json_format());
-        });
+        assert!(!use_json_format(Ok(None), || {}));
     }
 
     #[test]
     fn use_json_format_accepts_json() {
-        with_env(|env| {
-            env.set("JAUNDER_LOG_FORMAT", "json");
-            assert!(use_json_format());
-        });
+        assert!(use_json_format(Ok(Some("json".to_owned())), || {}));
     }
 
     #[test]
     fn use_json_format_accepts_pretty() {
-        with_env(|env| {
-            env.set("JAUNDER_LOG_FORMAT", "pretty");
-            assert!(!use_json_format());
-        });
+        assert!(!use_json_format(Ok(Some("pretty".to_owned())), || {}));
     }
 
-    #[cfg(unix)]
     #[test]
-    fn production_env_reader_rejects_invalid_unicode() {
-        use std::os::unix::ffi::OsStringExt as _;
-
-        with_env(|env| {
-            env.set(
-                "JAUNDER_LOG_FORMAT",
-                std::ffi::OsString::from_vec(vec![0xff]),
-            );
-            assert!(!use_json_format());
-        });
+    fn invalid_unicode_log_format_uses_pretty() {
+        assert!(!use_json_format(Err(invalid_unicode_env()), || {}));
     }
 
     #[test]
     fn invalid_unicode_log_format_uses_pretty_with_one_redacted_fallback_and_zero_metrics() {
         let mut output = Vec::new();
         let use_json = assert_zero_error_metrics(|| {
-            use_json_format_with(
-                |name| {
-                    assert_eq!(name, "JAUNDER_LOG_FORMAT");
-                    Err(invalid_unicode_env())
-                },
-                || push_fallback(&mut output, FallbackKind::LogFormat),
-            )
+            use_json_format(Err(invalid_unicode_env()), || {
+                push_fallback(&mut output, FallbackKind::LogFormat);
+            })
         });
         assert!(!use_json, "pretty format remains the invalid-value default");
         assert_fixed_fallback(
@@ -971,27 +936,23 @@ mod tests {
 
     #[test]
     fn resolved_filter_accepts_valid_jaunder_directive() {
-        with_env(|env| {
-            env.set("JAUNDER_LOG_FILTER", "jaunder=info");
-            env.remove("RUST_LOG");
-            assert_eq!(
-                format!("{:?}", resolved_filter(false)),
-                format!("{:?}", EnvFilter::new("jaunder=info"))
-            );
-        });
+        assert_eq!(
+            format!(
+                "{:?}",
+                resolved_filter(false, Ok(Some("jaunder=info".to_owned())), Ok(None), || {},)
+            ),
+            format!("{:?}", EnvFilter::new("jaunder=info"))
+        );
     }
 
     #[test]
     fn invalid_log_filter_directive_uses_default_with_one_fixed_fallback_and_zero_metrics() {
         let mut output = Vec::new();
         let filter = assert_zero_error_metrics(|| {
-            resolved_filter_with(
+            resolved_filter(
                 false,
-                |name| match name {
-                    "JAUNDER_LOG_FILTER" => Ok(Some("[not-a-directive".to_owned())),
-                    "RUST_LOG" => Ok(None),
-                    _ => unreachable!("the filter reader receives only the two known names"),
-                },
+                Ok(Some("[not-a-directive".to_owned())),
+                Ok(None),
                 || push_fallback(&mut output, FallbackKind::LogFilter),
             )
         });
@@ -1010,15 +971,9 @@ mod tests {
     {
         let mut output = Vec::new();
         let filter = assert_zero_error_metrics(|| {
-            resolved_filter_with(
-                false,
-                |name| match name {
-                    "JAUNDER_LOG_FILTER" => Err(invalid_unicode_env()),
-                    "RUST_LOG" => Ok(None),
-                    _ => unreachable!("the filter reader receives only the two known names"),
-                },
-                || push_fallback(&mut output, FallbackKind::LogFilter),
-            )
+            resolved_filter(false, Err(invalid_unicode_env()), Ok(None), || {
+                push_fallback(&mut output, FallbackKind::LogFilter);
+            })
         });
         assert_eq!(
             format!("{filter:?}"),
@@ -1034,15 +989,9 @@ mod tests {
     fn invalid_unicode_rust_log_uses_default_with_one_redacted_fallback_and_zero_metrics() {
         let mut output = Vec::new();
         let filter = assert_zero_error_metrics(|| {
-            resolved_filter_with(
-                false,
-                |name| match name {
-                    "JAUNDER_LOG_FILTER" => Ok(None),
-                    "RUST_LOG" => Err(invalid_unicode_env()),
-                    _ => unreachable!("the filter reader receives only the two known names"),
-                },
-                || push_fallback(&mut output, FallbackKind::LogFilter),
-            )
+            resolved_filter(false, Ok(None), Err(invalid_unicode_env()), || {
+                push_fallback(&mut output, FallbackKind::LogFilter);
+            })
         });
         assert_eq!(
             format!("{filter:?}"),
@@ -1056,10 +1005,7 @@ mod tests {
 
     #[test]
     fn telemetry_resource_records_closed_e2e_seed_process_marker() {
-        let resource = telemetry_resource_with(|name| {
-            assert_eq!(name, E2E_SEED_PROCESS_ENV);
-            Ok(Some(E2E_SEED_PROCESS_TEST_SUPPORT.to_owned()))
-        });
+        let resource = telemetry_resource(Some(E2E_SEED_PROCESS_TEST_SUPPORT.to_owned()));
         assert_eq!(
             resource.get(&opentelemetry::Key::from_static_str(E2E_SEED_PROCESS_ATTR)),
             Some(Value::from(E2E_SEED_PROCESS_TEST_SUPPORT))
@@ -1068,10 +1014,7 @@ mod tests {
 
     #[test]
     fn telemetry_resource_ignores_unrecognised_e2e_seed_process_marker() {
-        let resource = telemetry_resource_with(|name| {
-            assert_eq!(name, E2E_SEED_PROCESS_ENV);
-            Ok(Some("user-controlled".to_owned()))
-        });
+        let resource = telemetry_resource(e2e_seed_process(Ok(Some("user-controlled".to_owned()))));
         assert!(
             resource
                 .get(&opentelemetry::Key::from_static_str(E2E_SEED_PROCESS_ATTR))
@@ -1162,76 +1105,53 @@ mod tests {
 
     #[tokio::test]
     async fn build_otel_meter_with_endpoint_is_wired_by_init() {
-        with_env(|env| {
-            env.set(
-                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
-                "http://127.0.0.1:4317",
-            );
-            // The returned TelemetryGuard is an unbound temporary that drops here,
-            // so this (and the other valid-endpoint init_tracing_impl tests below)
-            // performs a real shutdown()/force-flush against 127.0.0.1:4317. It
-            // returns promptly because the connection is refused — if one of these
-            // ever hangs in CI, an unreachable-but-not-refused endpoint is the place
-            // to look.
-            init_tracing_impl(false);
-        });
+        let config = TelemetryConfig::from_raw(
+            false,
+            TelemetryRawConfig {
+                log_filter: Ok(None),
+                rust_log: Ok(None),
+                log_format: Ok(None),
+                jaunder_otlp_endpoint: Ok(Some("http://127.0.0.1:4317".to_owned())),
+                otlp_endpoint: Ok(None),
+                slow_op_ms: Ok(None),
+                e2e_seed_process: Ok(None),
+            },
+        );
+        init_tracing_impl(&config);
     }
 
     #[test]
     fn init_tracing_impl_handles_invalid_otel_endpoint() {
-        with_env(|env| {
-            env.set(
-                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
-                "not a valid endpoint",
-            );
-            init_tracing_impl(false);
-        });
+        let config = TelemetryConfig::from_raw(
+            false,
+            TelemetryRawConfig {
+                log_filter: Ok(None),
+                rust_log: Ok(None),
+                log_format: Ok(None),
+                jaunder_otlp_endpoint: Ok(Some("not a valid endpoint".to_owned())),
+                otlp_endpoint: Ok(None),
+                slow_op_ms: Ok(None),
+                e2e_seed_process: Ok(None),
+            },
+        );
+        init_tracing_impl(&config);
     }
 
     #[test]
-    fn init_tracing_impl_handles_invalid_otel_endpoint_with_json_output() {
-        with_env(|env| {
-            env.set(
-                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
-                "still not a valid endpoint",
-            );
-            env.set("JAUNDER_LOG_FORMAT", "json");
-            init_tracing_impl(false);
-        });
-    }
-
-    #[test]
-    fn init_tracing_impl_handles_no_otel_endpoint_with_json_output() {
-        with_env(|env| {
-            env.remove("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
-            env.remove("OTEL_EXPORTER_OTLP_ENDPOINT");
-            env.set("JAUNDER_LOG_FORMAT", "json");
-            init_tracing_impl(false);
-        });
-    }
-
-    #[tokio::test]
-    async fn init_tracing_impl_handles_valid_otel_endpoint_with_pretty_output() {
-        with_env(|env| {
-            env.set(
-                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
-                "http://127.0.0.1:4317",
-            );
-            env.remove("JAUNDER_LOG_FORMAT");
-            init_tracing_impl(false);
-        });
-    }
-
-    #[tokio::test]
-    async fn init_tracing_impl_handles_valid_otel_endpoint_with_json_output() {
-        with_env(|env| {
-            env.set(
-                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
-                "http://127.0.0.1:4317",
-            );
-            env.set("JAUNDER_LOG_FORMAT", "json");
-            init_tracing_impl(false);
-        });
+    fn init_tracing_impl_handles_json_output() {
+        let config = TelemetryConfig::from_raw(
+            false,
+            TelemetryRawConfig {
+                log_filter: Ok(None),
+                rust_log: Ok(None),
+                log_format: Ok(Some("json".to_owned())),
+                jaunder_otlp_endpoint: Ok(None),
+                otlp_endpoint: Ok(None),
+                slow_op_ms: Ok(None),
+                e2e_seed_process: Ok(None),
+            },
+        );
+        init_tracing_impl(&config);
     }
 
     #[test]
@@ -1241,7 +1161,7 @@ mod tests {
             tracing::subscriber::set_global_default(tracing_subscriber::registry())
                 .expect("install test subscriber");
             assert_zero_error_metrics(|| {
-                let guard = init_tracing_impl(false);
+                let guard = init_tracing_impl(&default_telemetry_config());
                 drop(guard);
             });
             return;

@@ -1664,13 +1664,17 @@ process-shape variables are `JAUNDER_BIND` (listen address, `:267`),
 `JAUNDER_STORAGE_PATH` (the data directory, default `./data`, `:33`),
 `JAUNDER_ENV` (`dev` | `prod`, `:271`), `JAUNDER_RUNTIME_FILE` (`:276`) and
 `JAUNDER_VERBOSE` (`:25`). PostgreSQL takes its secret by either
-`JAUNDER_DB_PASSWORD` or `JAUNDER_DB_PASSWORD_FILE` (`:39-40`, read at
-`storage/src/postgres/open.rs:40,44`); the file source wins over the variable,
-and either wins over an embedded URL password. The observability variables are
-covered under [Observability](#observability). `prod` is load-bearing in two
-places: it sets the `secure_cookies` flag passed to `create_router`
-(`server/src/commands.rs:546`, `server/src/lib.rs:32`), and it disables the
-dev-only auto-initialization of a missing database on `serve`
+`JAUNDER_DB_PASSWORD` or `JAUNDER_DB_PASSWORD_FILE`; the file source wins over
+the variable, and either wins over an embedded URL password. All runtime
+environment inputs — including the observability variables covered under
+[Observability](#observability) — are resolved once at an executable, command,
+or test-harness composition root into narrow typed configuration, then injected
+into the subsystems that own them. Library modules neither reread ambient
+configuration nor receive a general environment reader or process-config bundle
+([peripheral process configuration](adr/drafts/peripheral-process-configuration.md)).
+`prod` is load-bearing in two places: it sets the `secure_cookies` flag passed
+to `create_router` (`server/src/commands.rs:546`, `server/src/lib.rs:32`), and
+it disables the dev-only auto-initialization of a missing database on `serve`
 (`server/src/commands.rs:501-512`).
 
 **What the flake ships.** `flake.nix` exports `packages.jaunder` (the deployable
@@ -2725,19 +2729,21 @@ stock one by `--version`: only behaviour tells them apart, which is one more
 reason to invoke the devShell's binary rather than re-resolving one. Remove the
 override once a release later than 0.1.33 exists.
 
-**Rust edition and the one `unsafe` seam.** All workspace crates are on edition
-2024 ([ADR-0104](adr/0104-edition-2024-unsafe-env-and-precise-capturing.md)).
-Two consequences are load-bearing for tooling:
+**Rust edition and exception-free unsafe code.** All workspace crates are on
+edition 2024
+([ADR-0104](adr/0104-edition-2024-unsafe-env-and-precise-capturing.md)). Two
+consequences are load-bearing for tooling:
 
-- Edition 2024 made `std::env::set_var` / `remove_var` `unsafe` (RFC 3543). The
-  workspace answer is a single audited seam: `common::test_support::with_env`
-  (`common/src/test_support/env.rs`) is the **only** place that names either
-  function, and the only env-related `unsafe` block — verified by grep across
-  all `.rs` sources. It takes one process-global lock for the whole closure,
-  restores prior values on exit including on panic, and ignores lock poisoning.
-  It is deliberately not reentrant.
-- Return-position `impl Trait` now captures every in-scope lifetime (RFC 3498).
-  View helpers that borrow a parameter return `impl IntoView + use<>` — precise
+- Edition 2024 made `std::env::set_var` / `remove_var` unsafe (RFC 3543). The
+  repository performs no in-process environment mutation: executable, command,
+  or test-harness composition roots resolve inherited inputs into typed
+  configuration, while child environments are configured before spawn through
+  `std::process::Command`. Cargo lint configuration forbids unsafe Rust without
+  suppression at every package boundary in the root, `xtask`, and `tools`
+  workspaces
+  ([peripheral process configuration](adr/drafts/peripheral-process-configuration.md)).
+- Return-position `impl Trait` captures every in-scope lifetime (RFC 3498). View
+  helpers that borrow a parameter return `impl IntoView + use<>` — precise
   capturing (RFC 3617) — so the returned opaque type captures nothing (14 sites
   across `web/src/*/component.rs`).
 

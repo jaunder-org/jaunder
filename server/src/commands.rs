@@ -61,7 +61,11 @@ impl Commands {
     /// # Errors
     ///
     /// Propagates the selected command's failure.
-    pub async fn execute(self) -> anyhow::Result<CommandOutput> {
+    pub async fn execute(
+        self,
+        telemetry: &host::telemetry::TelemetryConfig,
+        capture: &capture::CaptureConfig,
+    ) -> anyhow::Result<CommandOutput> {
         match self {
             Commands::Init {
                 storage,
@@ -79,9 +83,16 @@ impl Commands {
                 bind,
                 environment,
                 runtime_file,
-            } => cmd_serve(&storage, bind, environment.is_prod(), runtime_file)
-                .await
-                .map(|()| CommandOutput::None),
+            } => cmd_serve(
+                &storage,
+                bind,
+                environment.is_prod(),
+                runtime_file,
+                telemetry,
+                capture,
+            )
+            .await
+            .map(|()| CommandOutput::None),
             Commands::UserCreate {
                 storage,
                 username,
@@ -692,8 +703,9 @@ async fn prepare_saturation_metrics(
     db: Arc<storage::AppState>,
     pool_observer: storage::DbPoolObserver,
     media_root: PathBuf,
+    telemetry: &host::telemetry::TelemetryConfig,
 ) -> anyhow::Result<Option<PreparedSaturationMetrics>> {
-    if !host::telemetry::otlp_endpoint_configured() {
+    if !telemetry.otlp_endpoint_configured() {
         return Ok(None);
     }
     let backup_config = db
@@ -737,6 +749,8 @@ pub async fn prepare_server(
     bind: SocketAddr,
     prod: bool,
     runtime_file: Option<std::path::PathBuf>,
+    telemetry: &host::telemetry::TelemetryConfig,
+    capture: &capture::CaptureConfig,
 ) -> anyhow::Result<PreparedServer> {
     // Establish our own start-time up front (before opening the DB): if `/proc` is
     // unusable we cannot enforce the start-up mutex, so refuse rather than serve with
@@ -765,6 +779,7 @@ pub async fn prepare_server(
         db.clone(),
         pool_observer,
         storage.storage_path.join("media"),
+        telemetry,
     )
     .await?;
     let backup_scheduler = crate::backup::start_backup_worker(
@@ -776,7 +791,7 @@ pub async fn prepare_server(
     // The `WebSub` publisher is a service, not storage: it is constructed at the
     // composition root and injected into the feed worker (ADR-0016). Capture mode
     // also selects the shorter e2e cadence without changing the production policy.
-    let websub_capture = capture::file(capture::Stream::WebSub);
+    let websub_capture = capture.file(capture::Stream::WebSub);
     let feed_interval = feed_worker_interval(websub_capture.is_some());
     let websub = crate::websub::default_client(websub_capture);
     let feed_scheduler = crate::feed::worker::FeedWorker::new(
@@ -789,7 +804,7 @@ pub async fn prepare_server(
     .start(feed_interval)
     .await?;
     let mailer =
-        crate::mailer::build_mailer(db.site_config(), capture::file(capture::Stream::Mail)).await?;
+        crate::mailer::build_mailer(db.site_config(), capture.file(capture::Stream::Mail)).await?;
     let router = crate::create_router(db, instance_id, mailer, prod, storage.storage_path.clone())?;
     let listener = tokio::net::TcpListener::bind(bind).await?;
     // `local_addr` cannot fail on a just-bound listener; fall back to the
@@ -892,6 +907,8 @@ pub async fn cmd_serve(
     bind: SocketAddr,
     prod: bool,
     runtime_file: Option<std::path::PathBuf>,
+    telemetry: &host::telemetry::TelemetryConfig,
+    capture: &capture::CaptureConfig,
 ) -> anyhow::Result<()> {
     // Telemetry is owned by `run`, which holds the TelemetryGuard across this
     // call (see `server/src/main.rs`); `cmd_serve` does not init it, matching
@@ -910,7 +927,7 @@ pub async fn cmd_serve(
         feed_scheduler,
         runtime_guard,
         saturation_metrics,
-    } = prepare_server(storage, bind, prod, runtime_file).await?;
+    } = prepare_server(storage, bind, prod, runtime_file, telemetry, capture).await?;
 
     tracing::info!(bind = %bind, prod, "starting HTTP server");
     // Keep the worker schedulers alive for the lifetime of the serve loop.
@@ -1037,6 +1054,21 @@ mod tests {
     };
     use tempfile::TempDir;
 
+    fn test_telemetry(otlp_endpoint: Option<&str>) -> host::telemetry::TelemetryConfig {
+        host::telemetry::TelemetryConfig::from_raw(
+            false,
+            host::telemetry::TelemetryRawConfig {
+                log_filter: Ok(None),
+                rust_log: Ok(None),
+                log_format: Ok(None),
+                jaunder_otlp_endpoint: Ok(otlp_endpoint.map(str::to_owned)),
+                otlp_endpoint: Ok(None),
+                slow_op_ms: Ok(None),
+                e2e_seed_process: Ok(None),
+            },
+        )
+    }
+
     #[test]
     fn feed_worker_interval_is_250_ms_for_capture() {
         assert_eq!(feed_worker_interval(true), Duration::from_millis(250));
@@ -1056,7 +1088,8 @@ mod tests {
         let (db, guard) = match backend {
             Backend::Sqlite => (sqlite_url(base), None),
             Backend::Postgres => {
-                let (db, guard) = unique_postgres_url().await;
+                let config = storage::test_support::PostgresTestConfig::from_env();
+                let (db, guard) = unique_postgres_url(&config).await;
                 (db, Some(guard))
             }
         };
@@ -1803,7 +1836,9 @@ mod tests {
         );
 
         let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
-        let prepared = prepare_server(&storage, bind, false, None)
+        let telemetry = test_telemetry(None);
+        let capture = capture::CaptureConfig::default();
+        let prepared = prepare_server(&storage, bind, false, None, &telemetry, &capture)
             .await
             .expect("dev-mode prepare_server must auto-initialize");
 
@@ -1827,7 +1862,9 @@ mod tests {
                 storage::open_database(&storage.db).await.expect("open db");
                 let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
 
-                let prepared = prepare_server(&storage, bind, false, None)
+                let telemetry = test_telemetry(Some("http://127.0.0.1:4318"));
+                let capture = capture::CaptureConfig::default();
+                let prepared = prepare_server(&storage, bind, false, None, &telemetry, &capture)
                     .await
                     .expect("prepare server");
 
@@ -1848,7 +1885,9 @@ mod tests {
                 storage::open_database(&storage.db).await.expect("open db");
                 let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
 
-                let prepared = prepare_server(&storage, bind, false, None)
+                let telemetry = test_telemetry(None);
+                let capture = capture::CaptureConfig::default();
+                let prepared = prepare_server(&storage, bind, false, None, &telemetry, &capture)
                     .await
                     .expect("prepare server");
 
@@ -1881,7 +1920,11 @@ mod tests {
         let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
         // `.err()` discards the Ok(PreparedServer) (which isn't Debug) and keeps the
         // error, so the whole check is one covered assertion (no standalone panic line).
-        let err = prepare_server(&storage, bind, false, None).await.err();
+        let telemetry = test_telemetry(None);
+        let capture = capture::CaptureConfig::default();
+        let err = prepare_server(&storage, bind, false, None, &telemetry, &capture)
+            .await
+            .err();
         assert!(
             err.is_some_and(|e| e.to_string().contains("already running")),
             "prepare_server must refuse when a live writer holds runtime.json"
