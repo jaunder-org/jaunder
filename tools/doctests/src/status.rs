@@ -81,7 +81,7 @@ mod tests {
     fn violation(kind: Kind) -> Violation {
         Violation {
             file: "a.rs".to_string(),
-            line: 7,
+            line: Some(7),
             kind,
             detail: "d".to_string(),
         }
@@ -100,11 +100,33 @@ mod tests {
     }
 
     #[test]
-    fn violation_kind_serializes_kebab_case() {
+    fn violation_kind_and_line_serialize_for_gate_consumers() {
         // The gate derivation's jq prints `\(.kind)` straight into the failure
         // message, and the host renderer matches on the same spelling.
-        let s = DoctestStatus::from_violations(vec![violation(Kind::NotRun)]);
-        assert!(s.to_json().contains("\"not-run\""), "{}", s.to_json());
+        let located = DoctestStatus::from_violations(vec![violation(Kind::Duplicate)]);
+        assert!(
+            located.to_json().contains("\"duplicate\""),
+            "{}",
+            located.to_json()
+        );
+        assert!(
+            located.to_json().contains("\"line\": 7"),
+            "{}",
+            located.to_json()
+        );
+
+        let mut unreadable = violation(Kind::Unreadable);
+        unreadable.line = None;
+        let unreadable = DoctestStatus::from_violations(vec![unreadable]);
+        assert!(
+            unreadable.to_json().contains("\"line\": null"),
+            "{}",
+            unreadable.to_json()
+        );
+        assert_eq!(
+            DoctestStatus::from_json(&unreadable.to_json()).unwrap(),
+            unreadable
+        );
     }
 
     #[test]
