@@ -100,6 +100,10 @@ impl ServerProcess {
     pub(super) fn stop(&mut self) -> anyhow::Result<()> {
         self.0.shutdown(PROCESS_SHUTDOWN_TIMEOUT).map(|_| ())
     }
+
+    pub(super) fn stopped(&self) -> bool {
+        self.0.is_stopped()
+    }
 }
 
 /// One collector and its temporary capture directory. Endpoint allocation and
@@ -117,6 +121,7 @@ pub(super) struct CollectorStartError {
     pub(super) error: anyhow::Error,
     pub(super) capture_dir: tempfile::TempDir,
     pub(super) stopped: bool,
+    pub(super) retryable_bind_collision: bool,
 }
 
 impl CollectorGuard {
@@ -135,6 +140,7 @@ impl CollectorGuard {
                     error,
                     capture_dir,
                     stopped: true,
+                    retryable_bind_collision: false,
                 });
             }
         };
@@ -157,38 +163,25 @@ impl CollectorGuard {
                     error,
                     capture_dir,
                     stopped: true,
+                    retryable_bind_collision: false,
                 });
             }
         };
         if let Err(error) = process.wait_for_port(grpc_endpoint, COLLECTOR_READINESS_TIMEOUT) {
-            let cleanup = process.shutdown(Duration::ZERO).err();
-            let stopped = cleanup.is_none();
-            let error = match cleanup {
-                Some(cleanup) => {
-                    anyhow::anyhow!("{error}; failed to clean up collector: {cleanup}")
-                }
-                None => error,
-            };
-            return Err(CollectorStartError {
+            return Err(collector_readiness_failure(
+                process,
                 error,
                 capture_dir,
-                stopped,
-            });
+                &stderr_path,
+            ));
         }
         if let Err(error) = process.wait_for_port(http_endpoint, COLLECTOR_READINESS_TIMEOUT) {
-            let cleanup = process.shutdown(Duration::ZERO).err();
-            let stopped = cleanup.is_none();
-            let error = match cleanup {
-                Some(cleanup) => {
-                    anyhow::anyhow!("{error}; failed to clean up collector: {cleanup}")
-                }
-                None => error,
-            };
-            return Err(CollectorStartError {
+            return Err(collector_readiness_failure(
+                process,
                 error,
                 capture_dir,
-                stopped,
-            });
+                &stderr_path,
+            ));
         }
         Ok(Self {
             process,
@@ -240,5 +233,45 @@ impl CollectorGuard {
         } else {
             text
         })
+    }
+}
+
+fn collector_readiness_failure(
+    mut process: Process,
+    readiness: anyhow::Error,
+    capture_dir: tempfile::TempDir,
+    stderr_path: &Path,
+) -> CollectorStartError {
+    let cleanup = process.shutdown(Duration::ZERO).err();
+    let stopped = process.is_stopped();
+    let diagnostics = std::fs::read_to_string(stderr_path)
+        .unwrap_or_else(|error| format!("<collector stderr unavailable: {error}>"));
+    let retryable_bind_collision = is_bind_collision(&diagnostics);
+    let error = match cleanup {
+        Some(cleanup) => anyhow::anyhow!(
+            "{readiness}; collector stderr: {diagnostics}; failed to clean up collector: {cleanup}"
+        ),
+        None => anyhow::anyhow!("{readiness}; collector stderr: {diagnostics}"),
+    };
+    CollectorStartError {
+        error,
+        capture_dir,
+        stopped,
+        retryable_bind_collision,
+    }
+}
+
+fn is_bind_collision(diagnostics: &str) -> bool {
+    diagnostics.contains("address already in use")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_bind_collision;
+
+    #[test]
+    fn only_bind_diagnostics_are_retryable() {
+        assert!(is_bind_collision("listen tcp: address already in use"));
+        assert!(!is_bind_collision("collector configuration is invalid"));
     }
 }

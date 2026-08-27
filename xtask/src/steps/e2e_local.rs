@@ -78,6 +78,7 @@ fn start_collector(
                     error,
                     capture_dir,
                     stopped: true,
+                    retryable_bind_collision: false,
                 });
             }
         };
@@ -90,7 +91,7 @@ fn start_collector(
             Ok(collector) => return Ok(collector),
             Err(failure)
                 if failure.stopped
-                    && failure.error.to_string().contains("address already in use")
+                    && failure.retryable_bind_collision
                     && attempt + 1 < COLLECTOR_PORT_ATTEMPTS =>
             {
                 capture_dir = failure.capture_dir;
@@ -400,15 +401,20 @@ fn record_capture_finalization(
     }
 }
 
+fn capture_writers_stopped(collector: bool, server: bool) -> bool {
+    collector && server
+}
+
 fn stop_and_finalize_collector(
     result: &mut CommandResult,
     browser: &str,
     retained: &RetainedCapture,
     collector: &mut CollectorGuard,
+    other_writers_stopped: bool,
 ) -> Option<PathBuf> {
     let stopped = shutdown_collector(result, browser, collector);
     let source = collector.take_capture_dir();
-    if stopped {
+    if capture_writers_stopped(stopped, other_writers_stopped) {
         Some(record_capture_finalization(
             result, browser, retained, source,
         ))
@@ -416,7 +422,7 @@ fn stop_and_finalize_collector(
         let source = source.keep();
         result.push(
             StepResult::fail(&step_name(browser, "capture")).detail(format!(
-                "collector could not be stopped; live capture source retained without copying at {}",
+                "capture writers could not be stopped; live capture source retained without copying at {}",
                 source.display()
             )),
         );
@@ -483,7 +489,7 @@ fn finish_server_setup_failure(
     retained: &RetainedCapture,
     collector: &mut CollectorGuard,
 ) {
-    stop_and_finalize_collector(result, browser, retained, collector);
+    stop_and_finalize_collector(result, browser, retained, collector, true);
 }
 
 fn finish_lifecycle(
@@ -496,14 +502,24 @@ fn finish_lifecycle(
     playwright_result: Option<(Result<(), String>, Duration)>,
 ) {
     let server_log_step = step_name(verification.browser, "server-log");
-    if let Err(error) = server.stop() {
-        result.push(
-            StepResult::fail(&server_log_step)
-                .detail(format!("failed to finalize server stderr capture: {error}")),
-        );
-    }
+    let server_stopped = match server.stop() {
+        Ok(()) => true,
+        Err(error) => {
+            result.push(
+                StepResult::fail(&server_log_step)
+                    .detail(format!("failed to finalize server stderr capture: {error}")),
+            );
+            server.stopped()
+        }
+    };
 
-    let capture = stop_and_finalize_collector(result, verification.browser, retained, collector);
+    let capture = stop_and_finalize_collector(
+        result,
+        verification.browser,
+        retained,
+        collector,
+        server_stopped,
+    );
 
     let panic_gate_start = Instant::now();
     let panic_gate_result = if let Some(capture) = capture {
@@ -516,7 +532,10 @@ fn finish_lifecycle(
         .run()
         .map_err(|_| "shared zero-panic verifier failed".to_owned())
     } else {
-        Err("zero-panic verification skipped because the collector could not be stopped".to_owned())
+        Err(
+            "zero-panic verification skipped because capture writers could not be stopped"
+                .to_owned(),
+        )
     };
     let panic_gate_duration = panic_gate_start.elapsed();
     if let Some(playwright_result) = playwright_result {
@@ -891,5 +910,13 @@ mod tests {
         let encoded = serde_json::to_string(&result).expect("result serialization");
         assert!(encoded.contains("playwright failed"));
         assert!(encoded.contains("panic verifier failed"));
+    }
+
+    #[test]
+    fn capture_copy_requires_every_writer_to_stop() {
+        assert!(capture_writers_stopped(true, true));
+        assert!(!capture_writers_stopped(false, true));
+        assert!(!capture_writers_stopped(true, false));
+        assert!(!capture_writers_stopped(false, false));
     }
 }
