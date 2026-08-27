@@ -540,10 +540,21 @@ impl CollectorGuard {
 
 impl Drop for CollectorGuard {
     fn drop(&mut self) {
-        self.cleanup_for_drop_with(
-            |collector| collector.kill_and_reap(),
-            &mut std::io::stderr(),
-        );
+        while self.child.is_some() {
+            self.cleanup_for_drop_with(
+                |collector| collector.kill_and_reap(),
+                &mut std::io::stderr(),
+            );
+            if self.child.is_some() {
+                sleep(Duration::from_millis(25));
+            }
+        }
+        if self.stderr_mirror.is_some() {
+            self.cleanup_for_drop_with(
+                |collector| collector.join_stderr_mirror(),
+                &mut std::io::stderr(),
+            );
+        }
     }
 }
 
