@@ -99,6 +99,22 @@ through the #714 placement rule (`web/src/<vertical>/api.rs`) plus the
 enumeration-independent `ServerFn::PATH` pairwise-distinctness test in
 `server/tests/web/server_fn_wire.rs`.
 
+_Amended by #848 (2026-08-27)._ The workspace now forbids unsafe Rust without
+exceptions. `linkme`'s distributed-slice expansion emits an unsafe
+`link_section`, so #731's generated registration thunk cannot coexist with that
+rule. Its amendment is superseded: the explicit `register_explicit` registrar
+and its `server-fn-registrar` `syn` gate are restored. The integration helper
+keeps the stable `ensure_server_fns_registered()` interface; the gate proves its
+list is complete, while the runtime wire suite remains the independent
+`ServerFn::PATH` uniqueness backstop.
+
+The restored gate enumerates every `web` `#[macros::server]` fn, maps its ident
+to the generated PascalCase type, parses only
+`register_explicit::<web::<vertical>::<Type>>()` calls from the registrar, and
+fails loudly for an omitted entry, malformed registrar path, source parse
+failure, or duplicate `(vertical, leaf)`. A real-tree unit test asserts that the
+non-empty enumeration count equals the registrar's deduplicated entry count.
+
 ## Consequences
 
 - A new `#[server]` fn in `web` that is not registered fails `cargo xtask check`
@@ -108,12 +124,19 @@ enumeration-independent `ServerFn::PATH` pairwise-distinctness test in
   `#[macros::server]` expansion itself. The omission is unrepresentable rather
   than reported by `cargo xtask check`.
 
+  _Amended by #848 (2026-08-27)._ Registration is explicit again: omitting a
+  `web` server fn from the sole registrar fails the restored host-side
+  `server-fn-registrar` gate with its source location.
+
 - The second registrar list and its independent rot risk are gone.
 
   _Amended by #731._ The remaining hand-maintained registrar list and the
   `server-fn-registrar` gate are gone too. `#[macros::server]` emits the
   registration thunk, so there is no registrar list to keep in sync and no
   PascalCase mapping rule left to police.
+
+  _Amended by #848 (2026-08-27)._ The single registrar list and its completeness
+  gate are restored together; neither is permitted to land without the other.
 
 - **Two server fns with the same ident in one vertical remain a hard failure,
   but no longer through this ADR's deleted gate.** After #714, the placement
@@ -129,6 +152,10 @@ enumeration-independent `ServerFn::PATH` pairwise-distinctness test in
   this gate catches it." That gate is deleted (ADR-0082); after #731 the
   remaining duplicate-name backstop is the compiler plus the runtime
   `ServerFn::PATH` distinctness assertion.
+
+  _Amended by #848 (2026-08-27)._ The restored registrar gate also again rejects
+  a duplicate `(vertical, leaf)`. The placement rule and pairwise
+  `ServerFn::PATH` assertion remain independent protections.
 
   _Amended by #684._ This bullet previously called leaf collision an "accepted
   limitation … benign", describing it as something that could let an

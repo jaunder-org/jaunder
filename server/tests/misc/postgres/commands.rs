@@ -1,11 +1,27 @@
+use host::telemetry::{TelemetryConfig, TelemetryRawConfig};
+
 use jaunder::cli::StorageArgs;
-use jaunder::commands::{cmd_create_pg_db, cmd_init, prepare_server};
+use jaunder::commands::{ServeCapturePaths, cmd_create_pg_db, cmd_init, prepare_server};
 use sqlx::Connection;
 use tempfile::TempDir;
 
-use storage::test_support::{
-    nonexistent_postgres_url, postgres_bootstrap_url, postgres_test_authority,
-};
+use storage::test_support::{PostgresTestConfig, nonexistent_postgres_url};
+
+fn test_host_config() -> (TelemetryConfig, Option<ServeCapturePaths>) {
+    let telemetry = TelemetryConfig::from_raw(
+        false,
+        TelemetryRawConfig {
+            log_filter: Ok(None),
+            rust_log: Ok(None),
+            log_format: Ok(None),
+            jaunder_otlp_endpoint: Ok(None),
+            otlp_endpoint: Ok(None),
+            slow_op_ms: Ok(None),
+            e2e_seed_process: Ok(None),
+        },
+    );
+    (telemetry, None)
+}
 
 // guard:low-level-db — provisions a Postgres role/database via bootstrap admin; no standard backend fixture
 #[tokio::test]
@@ -17,11 +33,12 @@ async fn cmd_create_pg_db_provisions_role_and_database() {
     let role_name = format!("jaunder_role_{suffix}");
     let db_name = format!("jaunder_db_{suffix}");
 
-    let bootstrap = postgres_bootstrap_url();
-    let authority = postgres_test_authority();
+    let config = PostgresTestConfig::from_env();
+    let bootstrap = config.bootstrap_url();
+    let authority = config.bootstrap_authority();
     let app = format!("postgres://{role_name}@{authority}/{db_name}");
 
-    let mut admin_conn = sqlx::PgConnection::connect(&bootstrap).await.unwrap();
+    let mut admin_conn = sqlx::PgConnection::connect(bootstrap).await.unwrap();
     sqlx::query(&format!("DROP DATABASE IF EXISTS \"{db_name}\""))
         .execute(&mut admin_conn)
         .await
@@ -87,11 +104,12 @@ async fn cmd_create_pg_db_fails_if_role_already_exists() {
     let role_name = format!("jaunder_role_{suffix}");
     let db_name = format!("jaunder_db_{suffix}");
 
-    let bootstrap = postgres_bootstrap_url();
-    let authority = postgres_test_authority();
+    let config = PostgresTestConfig::from_env();
+    let bootstrap = config.bootstrap_url();
+    let authority = config.bootstrap_authority();
     let app = format!("postgres://{role_name}@{authority}/{db_name}");
 
-    let mut admin_conn = sqlx::PgConnection::connect(&bootstrap).await.unwrap();
+    let mut admin_conn = sqlx::PgConnection::connect(bootstrap).await.unwrap();
     sqlx::query(&format!("DROP DATABASE IF EXISTS \"{db_name}\""))
         .execute(&mut admin_conn)
         .await
@@ -136,11 +154,15 @@ async fn prepare_server_postgres_missing_database_preserves_3d000_guidance() {
     let storage_path = base.path().join("storage");
     let args = StorageArgs {
         storage_path: storage_path.clone(),
-        db: nonexistent_postgres_url(),
+        db: {
+            let config = PostgresTestConfig::from_env();
+            nonexistent_postgres_url(&config)
+        },
     };
     let bind = "127.0.0.1:0".parse().expect("bind address");
 
-    let error = prepare_server(&args, bind, false, None)
+    let (telemetry, capture) = test_host_config();
+    let error = prepare_server(&args, bind, false, None, &telemetry, capture.as_ref())
         .await
         .err()
         .expect("missing PostgreSQL database must fail");

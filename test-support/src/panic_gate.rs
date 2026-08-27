@@ -17,23 +17,22 @@ struct PanicReport {
     line: Vec<u8>,
 }
 
-/// Fail if either the scoped diagnostic stream or required server log records
-/// a Rust panic.
+/// Fail if either the optional scoped diagnostic log or required server log records a Rust
+/// panic.
 ///
-/// `capture_dir` is the ADR-0057 directory, not a diagnostic-file path: this
-/// module resolves [`host::capture::Stream::Diag`] so its filename remains
-/// defined in one place. The diagnostic stream is optional because the panic
-/// hook may not have installed yet; the server log is the required fallback.
+/// The command boundary resolves the diagnostic leaf using
+/// [`host::capture::Stream::Diag`], keeping this verifier independent of capture-directory
+/// configuration. The diagnostic stream is optional because the panic hook may not have
+/// installed yet; the server log is the required fallback.
 ///
 /// # Errors
 ///
-/// Returns an infrastructure error when a present diagnostic stream or the
-/// required server log cannot be read. Returns a zero-panic-gate error naming
-/// every distinct report when either input contains the raw panic marker.
-pub fn verify_no_panics(capture_dir: &Path, server_log: &Path) -> anyhow::Result<()> {
-    let diag_path = capture_dir.join(host::capture::Stream::Diag.filename());
+/// Returns an infrastructure error when a present diagnostic stream or the required server
+/// log cannot be read. Returns a zero-panic-gate error naming every distinct report when
+/// either input contains the raw panic marker.
+pub fn verify_no_panics(diag_path: &Path, server_log: &Path) -> anyhow::Result<()> {
     let mut reports = Vec::new();
-    match File::open(&diag_path) {
+    match File::open(diag_path) {
         Ok(file) => collect_reports(BufReader::new(file), &mut reports)
             .with_context(|| format!("failed to read diagnostic log {}", diag_path.display()))?,
         Err(error) if error.kind() == ErrorKind::NotFound => {}
@@ -141,14 +140,18 @@ mod tests {
 
     fn verify(diag: Option<&[u8]>, server: &[u8]) -> anyhow::Result<()> {
         let dir = tempfile::tempdir().expect("tempdir");
-        let capture = dir.path().join("capture");
-        std::fs::create_dir_all(&capture).expect("capture dir");
+        let diag_path = dir
+            .path()
+            .join("capture")
+            .join(host::capture::Stream::Diag.filename());
+        std::fs::create_dir_all(diag_path.parent().expect("diagnostic parent"))
+            .expect("capture dir");
         if let Some(bytes) = diag {
-            write(&capture.join(host::capture::Stream::Diag.filename()), bytes);
+            write(&diag_path, bytes);
         }
         let server_log = dir.path().join("server.log");
         write(&server_log, server);
-        verify_no_panics(&capture, &server_log)
+        verify_no_panics(&diag_path, &server_log)
     }
 
     #[test]
@@ -235,7 +238,7 @@ mod tests {
         let server = dir.path().join("server.log");
         write(&server, b"clean\n");
 
-        let error = verify_no_panics(&capture, &server)
+        let error = verify_no_panics(&diag, &server)
             .expect_err("present diagnostic stream must be readable")
             .to_string();
         assert!(error.contains("diagnostic log"), "{error}");
@@ -247,8 +250,8 @@ mod tests {
 
     #[test]
     fn diagnostic_open_failure_is_infrastructure_error() {
-        let capture = std::path::PathBuf::from("/").join("x".repeat(5000));
-        let error = verify_no_panics(&capture, Path::new("/unused-server.log"))
+        let diag_path = std::path::PathBuf::from("/").join("x".repeat(5000));
+        let error = verify_no_panics(&diag_path, Path::new("/unused-server.log"))
             .expect_err("invalid diagnostic path must fail")
             .to_string();
         assert!(error.contains("diagnostic log"), "{error}");
@@ -257,10 +260,9 @@ mod tests {
     #[test]
     fn required_server_log_read_failure_is_infrastructure_error() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let capture = dir.path().join("capture");
-        std::fs::create_dir_all(&capture).expect("capture dir");
+        let diag_path = dir.path().join("capture").join("diag.log");
         let missing = dir.path().join("missing-server.log");
-        let error = verify_no_panics(&capture, &missing)
+        let error = verify_no_panics(&diag_path, &missing)
             .expect_err("required server log must be readable")
             .to_string();
         assert!(error.contains("server log"), "{error}");
@@ -270,12 +272,11 @@ mod tests {
     #[test]
     fn required_server_log_stream_failure_is_infrastructure_error() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let capture = dir.path().join("capture");
-        std::fs::create_dir_all(&capture).expect("capture dir");
+        let diag_path = dir.path().join("capture").join("diag.log");
         let server_directory = dir.path().join("server-log-directory");
         std::fs::create_dir(&server_directory).expect("server log directory");
 
-        let error = verify_no_panics(&capture, &server_directory)
+        let error = verify_no_panics(&diag_path, &server_directory)
             .expect_err("unreadable server stream must fail")
             .to_string();
         assert!(error.contains("server log"), "{error}");

@@ -7,7 +7,8 @@ mod tests {
 
     use crate::DbConnectOptions;
     use crate::test_support::{
-        Backend, CloseablePool, PostgresDbGuard, backends, sqlite_url, unique_postgres_url,
+        Backend, CloseablePool, PostgresDbGuard, PostgresTestConfig, backends, sqlite_url,
+        unique_postgres_url,
     };
 
     use rstest::*;
@@ -56,7 +57,8 @@ mod tests {
                     }
                 }
                 Backend::Postgres => {
-                    let (options, guard) = unique_postgres_url().await;
+                    let config = PostgresTestConfig::from_env();
+                    let (options, guard) = unique_postgres_url(&config).await;
                     let DbConnectOptions::Postgres { options, .. } = options else {
                         unreachable!("unique_postgres_url always yields PostgreSQL options")
                     };

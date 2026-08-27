@@ -13,7 +13,7 @@
 //! "untestable" would mean "unshippable".
 
 use proc_macro2::TokenTree;
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::parse::{Parse, ParseStream, Parser};
 use syn::{Expr, Token};
 
@@ -235,21 +235,6 @@ pub(crate) fn derive(
     }
     Ok(derived)
 }
-/// `snake_case` fn ident → the generated server-fn type name (`list_mine` → `ListMine`).
-fn server_fn_type_ident(ident: &syn::Ident) -> syn::Ident {
-    let mut out = String::new();
-    for part in ident.to_string().split('_') {
-        if part.is_empty() {
-            continue;
-        }
-        let mut chars = part.chars();
-        if let Some(first) = chars.next() {
-            out.extend(first.to_uppercase());
-            out.push_str(chars.as_str());
-        }
-    }
-    format_ident!("{out}", span = ident.span())
-}
 
 /// The full expansion: both attributes, and the body wrapped in the error boundary.
 ///
@@ -315,13 +300,6 @@ pub(crate) fn expand(
         }
     };
 
-    let type_ident = server_fn_type_ident(&f.sig.ident);
-    let register_ident = format_ident!(
-        "__jaunder_register_server_fn_{}",
-        f.sig.ident,
-        span = f.sig.ident.span()
-    );
-
     let body = &f.block;
     *f.block = syn::parse_quote!({
         crate::error::server_boundary(async move #body).await
@@ -338,20 +316,12 @@ pub(crate) fn expand(
         #[::tracing::instrument(name = #span_name, skip_all #fields_arg)]
         #vis #sig #block
 
-        #[cfg(feature = "server")]
-        #[::linkme::distributed_slice(crate::server_fn_registration::SERVER_FN_REGISTRATIONS)]
-        fn #register_ident() {
-        // Keep the explicit type registration host-only: `server_fn::axum` is not a
-        // client-side API, and the web crate's wasm build must not grow a live
-        // registration path.
-            ::server_fn::axum::register_explicit::<#type_ident>();
-        }
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Derived, derive, expand, server_fn_type_ident};
+    use super::{Derived, derive, expand};
     use syn::parse_quote;
 
     fn ident(s: &str) -> syn::Ident {
@@ -481,21 +451,6 @@ mod tests {
         let args: Vec<syn::Meta> = vec![parse_quote!(name = "web.x.y")];
         let e = expect_err(derive("web/src/audiences/api.rs", &ident("rename"), &args));
         assert!(e.to_string().contains("name"), "{e}");
-    }
-    #[test]
-    fn derives_generated_type_ident_for_registration() {
-        assert_eq!(
-            server_fn_type_ident(&ident("get_session")).to_string(),
-            "GetSession"
-        );
-        assert_eq!(
-            server_fn_type_ident(&ident("list_by_user_and_tag")).to_string(),
-            "ListByUserAndTag"
-        );
-        assert_eq!(
-            server_fn_type_ident(&ident("list__mine")).to_string(),
-            "ListMine"
-        );
     }
 
     #[test]
@@ -657,20 +612,8 @@ mod tests {
         assert!(out.contains("crate :: error :: server_boundary"), "{out}");
         assert!(out.contains("async move"), "{out}");
         assert!(
-            out.contains(":: linkme :: distributed_slice"),
-            "emits linkme registration: {out}"
-        );
-        assert!(
-            out.contains("crate :: server_fn_registration :: SERVER_FN_REGISTRATIONS"),
-            "uses the web crate's local registration slice: {out}"
-        );
-        assert!(
-            out.contains(":: server_fn :: axum :: register_explicit :: < Rename >"),
-            "registers the generated server-fn type: {out}"
-        );
-        assert!(
-            out.contains("# [cfg (feature = \"server\")]"),
-            "registration thunk is host-only: {out}"
+            !out.contains("register_explicit"),
+            "registration belongs to the integration-test registrar: {out}"
         );
     }
 

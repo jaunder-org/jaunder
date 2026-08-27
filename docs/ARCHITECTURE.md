@@ -1151,20 +1151,20 @@ Server fns get their dependencies via per-trait Leptos context, never a bundle �
 `expect_context::<Arc<dyn FooStorage>>()`
 ([ADR-0016](adr/0016-dependency-injection-and-appstate.md)), e.g.
 `web/src/audiences/api.rs:66`. The macro also wraps each body in
-`crate::error::server_boundary` (`macros/src/server_fn.rs:166`); there is no
+`crate::error::server_boundary` (`macros/src/server_fn.rs:304`); there is no
 hand-written `boundary!` call. Server integration/router tests call
-`server/tests/helpers/registrar.rs::ensure_server_fns_registered`, which
-iterates a host-only `linkme` distributed slice owned by `web` and populated by
-`#[macros::server]` registration thunks
-([ADR-0066](adr/0066-server-fn-test-registrar-guard.md)). There is no
-hand-maintained test registrar and no registrar-completeness xtask gate; the
-registration omission is made unrepresentable by macro expansion. ADR-0016's
-SSR-era owner-pinning addenda have been retired: the sole server-fn invocation
-path, `leptos_axum`'s `/api` handler, holds the owner strong for the whole call,
-so no `ScopedFuture` wrapper and no sanctioned `Resource` constructor exist —
-components call `Resource::new` directly (13 files across `web/src`), and no
-clippy `disallowed-methods` entry bans it — `clippy.toml` has no
-`disallowed-methods` entry at all; it only _relaxes_ `unwrap`/`expect` for
+`server/tests/helpers/registrar.rs::ensure_server_fns_registered()`, which
+initializes the sole explicit list of
+`server_fn::axum::register_explicit::<web::…>()` calls
+([ADR-0066](adr/0066-server-fn-test-registrar-guard.md), amended #848). The
+host-side `server-fn-registrar` gate parses both the `web` server-fn inventory
+and that list, so an omitted registration fails before it can silently 404.
+ADR-0016's SSR-era owner-pinning addenda have been retired: the sole server-fn
+invocation path, `leptos_axum`'s `/api` handler, holds the owner strong for the
+whole call, so no `ScopedFuture` wrapper and no sanctioned `Resource`
+constructor exist — components call `Resource::new` directly (13 files across
+`web/src`), and no clippy `disallowed-methods` entry bans it — `clippy.toml` has
+no `disallowed-methods` entry at all; it only _relaxes_ `unwrap`/`expect` for
 tests, which the workspace otherwise denies (`Cargo.toml:141`).
 
 `web/` is a **thin shell**
@@ -1550,20 +1550,29 @@ All client data remains untrusted operational evidence.
 
 ### Scoped server diagnostics (e2e capture)
 
-The single env var `JAUNDER_CAPTURE_DIR` enables app-driven capture
+`JAUNDER_CAPTURE_DIR` controls app-driven capture
 ([ADR-0049](adr/0049-app-driven-scoped-server-diagnostics.md),
-[ADR-0057](adr/0057-e2e-capture-dir-contract.md)); production leaves it unset
-(fully inert). Each stream writes a filename defined once in `host::capture`
-(`mail.jsonl`, `websub.jsonl`, `diag.log`), resolved at a composition root. The
-diag stream is a WARN+-filtered JSON `tracing` layer plus a panic hook appending
-`kind: "panic"` JSONL records through its own `O_APPEND` handle (bypassing
-`tracing` to avoid deadlock). The shared `test_support::panic_gate` verifier
-([ADR-0032](adr/0032-e2e-zero-panic-gate.md)) resolves the diagnostic filename
-through `host::capture`, scans raw bytes from the union of that stream and a
-required server log, and de-duplicates by panic location with the scoped record
-winning. Per combo the e2e harness tars the directory out as
-`capture-<backend>.tar.gz` — those three files plus `otel-traces.jsonl` — into
-the [ADR-0037](adr/0037-e2e-failure-diagnostics-capture.md) artifact set.
+[ADR-0057](adr/0057-e2e-capture-dir-contract.md)). At the relevant executable or
+command root, its raw value is resolved once into an optional, valid-only
+`CaptureDirectory`: absent or trim-blank input disables server capture, while a
+configured non-Unicode or uncreatable directory is an error that aborts `serve`
+or the `test-support` capture command. Construction prepares the directory once;
+the constructed value is thereafter usable. `reset-mail` and `capture-path`
+require that value and fail loudly when capture is disabled.
+
+Each stream receives only its pure, infallibly projected leaf path; downstream
+code neither reads `JAUNDER_CAPTURE_DIR` nor performs capture-directory lookup
+or preparation. The filenames are defined once in `host::capture` (`mail.jsonl`,
+`websub.jsonl`, `diag.log`). The diag stream is a WARN+-filtered JSON `tracing`
+layer plus a panic hook appending `kind: "panic"` JSONL records through its own
+`O_APPEND` handle (bypassing `tracing` to avoid deadlock). The shared
+`test_support::panic_gate` verifier
+([ADR-0032](adr/0032-e2e-zero-panic-gate.md)) receives the diagnostic leaf path,
+scans raw bytes from the union of that stream and a required server log, and
+de-duplicates by panic location with the scoped record winning. Per combo the
+e2e harness tars the directory out as `capture-<backend>.tar.gz` — those three
+files plus `otel-traces.jsonl` — into the
+[ADR-0037](adr/0037-e2e-failure-diagnostics-capture.md) artifact set.
 
 ### Committed direction
 
@@ -1664,13 +1673,17 @@ process-shape variables are `JAUNDER_BIND` (listen address, `:267`),
 `JAUNDER_STORAGE_PATH` (the data directory, default `./data`, `:33`),
 `JAUNDER_ENV` (`dev` | `prod`, `:271`), `JAUNDER_RUNTIME_FILE` (`:276`) and
 `JAUNDER_VERBOSE` (`:25`). PostgreSQL takes its secret by either
-`JAUNDER_DB_PASSWORD` or `JAUNDER_DB_PASSWORD_FILE` (`:39-40`, read at
-`storage/src/postgres/open.rs:40,44`); the file source wins over the variable,
-and either wins over an embedded URL password. The observability variables are
-covered under [Observability](#observability). `prod` is load-bearing in two
-places: it sets the `secure_cookies` flag passed to `create_router`
-(`server/src/commands.rs:546`, `server/src/lib.rs:32`), and it disables the
-dev-only auto-initialization of a missing database on `serve`
+`JAUNDER_DB_PASSWORD` or `JAUNDER_DB_PASSWORD_FILE`; the file source wins over
+the variable, and either wins over an embedded URL password. All runtime
+environment inputs — including the observability variables covered under
+[Observability](#observability) — are resolved once at an executable, command,
+or test-harness composition root into narrow typed configuration, then injected
+into the subsystems that own them. Library modules neither reread ambient
+configuration nor receive a general environment reader or process-config bundle
+([peripheral process configuration](adr/drafts/peripheral-process-configuration.md)).
+`prod` is load-bearing in two places: it sets the `secure_cookies` flag passed
+to `create_router` (`server/src/commands.rs:546`, `server/src/lib.rs:32`), and
+it disables the dev-only auto-initialization of a missing database on `serve`
 (`server/src/commands.rs:501-512`).
 
 **What the flake ships.** `flake.nix` exports `packages.jaunder` (the deployable
@@ -2420,6 +2433,7 @@ native host checks because `xtask/` is excluded from the flake source.
 | `doc-links`                                                | intra-doc link targets                                                                                                                                           |
 | `flow-docs`                                                | typed CSR route/endpoint/matrix declarations in `docs/flows/`; one flow owner per endpoint; checked snapshot status                                              |
 | `test-backend-pattern`                                     | dual-backend storage test shape                                                                                                                                  |
+| `server-fn-registrar`                                      | every `web` `#[server]` fn is in the explicit test registrar                                                                                                     |
 | `server-fn-tracing`                                        | each server fn's instrumentation                                                                                                                                 |
 | `server-fn-coverage`                                       | static lane of the flow-coverage snapshot                                                                                                                        |
 | `traced-context`                                           | context propagation                                                                                                                                              |
@@ -2537,17 +2551,20 @@ instrumentation.
 
 ### Server-fn gates
 
-One host gate directly guards server-fn flow evidence, while macro expansion and
-runtime tests own the guarantees that used to need source-list gates.
+Host gates and an enumeration-independent runtime suite protect the server-fn
+surface. `server-fn-registrar`
+([ADR-0066](adr/0066-server-fn-test-registrar-guard.md), amended #848) parses
+the `#[macros::server]` inventory and the sole explicit
+`register_explicit::<web::<vertical>::<Type>>()` list in
+`ensure_server_fns_registered()`. It rejects missing entries, malformed
+registrar paths, and duplicate `(vertical, leaf)` type keys; its real-tree test
+also proves the non-empty inventory count equals the deduplicated registrar
+count. The helper still initializes that list once for integration tests.
 
-`#[macros::server]` emits a host-only `linkme` registration thunk for every
-server fn into a `web`-owned distributed slice
-([ADR-0066](adr/0066-server-fn-test-registrar-guard.md)). Integration tests keep
-the stable harness call `ensure_server_fns_registered()`, but it now iterates
-the slice instead of maintaining `register_explicit::<web::…>()` calls by hand.
-Server-fn wire uniqueness rests on the placement rule and the generated-type
-wire assertions in `server/tests/web/server_fn_wire.rs`, including pairwise
-`ServerFn::PATH` distinctness.
+The generated-type wire assertions in `server/tests/web/server_fn_wire.rs`
+remain an enumeration-independent backstop: they assert each derived
+`ServerFn::PATH` and pairwise distinctness, and their table count agrees with
+the registrar count.
 
 `server-fn-coverage` ([ADR-0081](adr/0081-empirical-server-fn-flow-coverage.md))
 answers a question line coverage cannot: which server entry points a real
@@ -2725,19 +2742,21 @@ stock one by `--version`: only behaviour tells them apart, which is one more
 reason to invoke the devShell's binary rather than re-resolving one. Remove the
 override once a release later than 0.1.33 exists.
 
-**Rust edition and the one `unsafe` seam.** All workspace crates are on edition
-2024 ([ADR-0104](adr/0104-edition-2024-unsafe-env-and-precise-capturing.md)).
-Two consequences are load-bearing for tooling:
+**Rust edition and exception-free unsafe code.** All workspace crates are on
+edition 2024
+([ADR-0104](adr/0104-edition-2024-unsafe-env-and-precise-capturing.md)). Two
+consequences are load-bearing for tooling:
 
-- Edition 2024 made `std::env::set_var` / `remove_var` `unsafe` (RFC 3543). The
-  workspace answer is a single audited seam: `common::test_support::with_env`
-  (`common/src/test_support/env.rs`) is the **only** place that names either
-  function, and the only env-related `unsafe` block — verified by grep across
-  all `.rs` sources. It takes one process-global lock for the whole closure,
-  restores prior values on exit including on panic, and ignores lock poisoning.
-  It is deliberately not reentrant.
-- Return-position `impl Trait` now captures every in-scope lifetime (RFC 3498).
-  View helpers that borrow a parameter return `impl IntoView + use<>` — precise
+- Edition 2024 made `std::env::set_var` / `remove_var` unsafe (RFC 3543). The
+  repository performs no in-process environment mutation: executable, command,
+  or test-harness composition roots resolve inherited inputs into typed
+  configuration, while child environments are configured before spawn through
+  `std::process::Command`. Cargo lint configuration forbids unsafe Rust without
+  suppression at every package boundary in the root, `xtask`, and `tools`
+  workspaces
+  ([peripheral process configuration](adr/drafts/peripheral-process-configuration.md)).
+- Return-position `impl Trait` captures every in-scope lifetime (RFC 3498). View
+  helpers that borrow a parameter return `impl IntoView + use<>` — precise
   capturing (RFC 3617) — so the returned opaque type captures nothing (14 sites
   across `web/src/*/component.rs`).
 

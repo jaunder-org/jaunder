@@ -4,6 +4,7 @@
 //! and constructing the [`AppState`] with all storage implementations.
 
 use std::io;
+use std::io::Write as _;
 use std::path::Path;
 use std::{fmt, str::FromStr, sync::Arc};
 
@@ -226,51 +227,117 @@ pub fn init_storage(path: &Path) -> io::Result<()> {
 // Database helpers
 // ---------------------------------------------------------------------------
 
-fn read_sql_slow_threshold_env() -> Result<Option<String>, std::env::VarError> {
-    match std::env::var("JAUNDER_SQL_SLOW_MS") {
-        Ok(value) => Ok(Some(value)),
-        Err(std::env::VarError::NotPresent) => Ok(None),
-        Err(error @ std::env::VarError::NotUnicode(_)) => Err(error),
-    }
-}
-
-fn write_sql_threshold_fallback(mut writer: impl std::io::Write) -> std::io::Result<()> {
-    writeln!(
-        writer,
-        "storage.observability.sql_slow_threshold: invalid configured value; using 5s"
-    )
-}
-
 fn warn_sql_threshold() {
-    let _ = write_sql_threshold_fallback(std::io::stderr().lock());
+    let _ = writeln!(
+        std::io::stderr().lock(),
+        "storage.observability.sql_slow_threshold: invalid configured value; using 5s"
+    );
 }
 
-fn sql_slow_query_threshold_with(
-    mut read: impl FnMut() -> Result<Option<String>, std::env::VarError>,
-    mut warn: impl FnMut(),
-) -> std::time::Duration {
-    match read() {
-        Ok(Some(value)) => {
-            if let Ok(value) = value.parse::<u64>() {
-                std::time::Duration::from_millis(value)
-            } else {
-                warn();
+/// Application connection settings resolved once by a command composition root.
+///
+/// It deliberately contains only values every application connection needs: the
+/// shared slow-query threshold and the optional `PostgreSQL` password override.
+/// Administrative bootstrap connections do not receive this configuration.
+#[derive(Clone)]
+pub struct StorageRuntimeConfig {
+    sql_slow_query_threshold: std::time::Duration,
+    postgres_password: Option<PostgresPassword>,
+}
+
+/// Redacted application `PostgreSQL` password override.
+///
+/// The bytes are intentionally private and this type has no `Debug` or
+/// `Display` implementation, so wiring configuration cannot accidentally expose
+/// a credential in diagnostics.
+#[derive(Clone)]
+pub struct PostgresPassword(pub(crate) String);
+
+/// A typed failure while resolving the `PostgreSQL` application password.
+#[derive(Debug, thiserror::Error)]
+pub enum PostgresPasswordError {
+    #[error("JAUNDER_DB_PASSWORD_FILE is not valid Unicode")]
+    FileVariable(#[source] std::env::VarError),
+    #[error("JAUNDER_DB_PASSWORD is not valid Unicode")]
+    Variable(#[source] std::env::VarError),
+    #[error("configured PostgreSQL password file could not be read")]
+    FileRead(#[source] io::Error),
+}
+
+impl StorageRuntimeConfig {
+    /// Resolves application connection settings from already-read command inputs.
+    ///
+    /// A password file value, when configured, takes precedence over the direct
+    /// password variable and retains the historical trailing-whitespace trim.
+    /// Invalid threshold input remains a warning plus the five-second fallback.
+    /// # Errors
+    ///
+    /// Returns a typed error if a configured `PostgreSQL` password input is
+    /// invalid Unicode or its password file cannot be read.
+    pub fn from_raw(
+        sql_slow_ms: Result<Option<String>, std::env::VarError>,
+        password_file: Result<Option<io::Result<String>>, std::env::VarError>,
+        password: Result<Option<String>, std::env::VarError>,
+    ) -> Result<Self, PostgresPasswordError> {
+        let sql_slow_query_threshold = match sql_slow_ms {
+            Ok(Some(value)) => {
+                if let Ok(value) = value.parse::<u64>() {
+                    std::time::Duration::from_millis(value)
+                } else {
+                    warn_sql_threshold();
+                    std::time::Duration::from_secs(5)
+                }
+            }
+            Ok(None) => std::time::Duration::from_secs(5),
+            Err(_) => {
+                warn_sql_threshold();
                 std::time::Duration::from_secs(5)
             }
+        };
+        let postgres_password = match password_file {
+            Ok(Some(Ok(value))) => Some(PostgresPassword(value.trim_end().to_owned())),
+            Ok(Some(Err(error))) => return Err(PostgresPasswordError::FileRead(error)),
+            Ok(None) | Err(std::env::VarError::NotPresent) => match password {
+                Ok(Some(value)) => Some(PostgresPassword(value)),
+                Ok(None) | Err(std::env::VarError::NotPresent) => None,
+                Err(error @ std::env::VarError::NotUnicode(_)) => {
+                    return Err(PostgresPasswordError::Variable(error));
+                }
+            },
+            Err(error @ std::env::VarError::NotUnicode(_)) => {
+                return Err(PostgresPasswordError::FileVariable(error));
+            }
+        };
+        Ok(Self {
+            sql_slow_query_threshold,
+            postgres_password,
+        })
+    }
+
+    /// Constructs a configuration for typed callers that have no password
+    /// override (for example SQLite-focused tests).
+    #[must_use]
+    pub fn with_sql_slow_query_threshold(sql_slow_query_threshold: std::time::Duration) -> Self {
+        Self {
+            sql_slow_query_threshold,
+            postgres_password: None,
         }
-        Ok(None) => std::time::Duration::from_secs(5),
-        Err(_) => {
-            warn();
-            std::time::Duration::from_secs(5)
-        }
+    }
+
+    #[must_use]
+    pub fn sql_slow_query_threshold(&self) -> std::time::Duration {
+        self.sql_slow_query_threshold
+    }
+
+    pub(crate) fn postgres_password(&self) -> Option<&PostgresPassword> {
+        self.postgres_password.as_ref()
     }
 }
 
-/// Slow-query log threshold shared by both `SQLite` and Postgres backends.
-///
-/// Reads `JAUNDER_SQL_SLOW_MS` (milliseconds), defaulting to five seconds.
-pub(crate) fn sql_slow_query_threshold() -> std::time::Duration {
-    sql_slow_query_threshold_with(read_sql_slow_threshold_env, warn_sql_threshold)
+impl Default for StorageRuntimeConfig {
+    fn default() -> Self {
+        Self::with_sql_slow_query_threshold(std::time::Duration::from_secs(5))
+    }
 }
 
 #[derive(Clone)]
@@ -324,9 +391,12 @@ fn pool_snapshot<DB: sqlx::Database>(pool: &sqlx::Pool<DB>) -> DbPoolSnapshot {
 /// # Errors
 ///
 /// Returns `Err` if the database connection pool cannot be established.
-#[tracing::instrument(name = "storage.open_database", skip(opts))]
-pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
-    Ok(open_database_with_observer(opts).await?.state)
+#[tracing::instrument(name = "storage.open_database", skip(opts, runtime))]
+pub async fn open_database(
+    opts: &DbConnectOptions,
+    runtime: &StorageRuntimeConfig,
+) -> sqlx::Result<Arc<AppState>> {
+    Ok(open_database_with_observer(opts, runtime).await?.state)
 }
 
 /// Opens (or creates) a database and returns its storage state plus a pool observer.
@@ -334,11 +404,15 @@ pub async fn open_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState
 /// # Errors
 ///
 /// Returns `Err` if the database connection pool cannot be established.
-#[tracing::instrument(name = "storage.open_database_with_observer", skip(opts))]
-pub async fn open_database_with_observer(opts: &DbConnectOptions) -> sqlx::Result<OpenedDatabase> {
+#[tracing::instrument(name = "storage.open_database_with_observer", skip(opts, runtime))]
+pub async fn open_database_with_observer(
+    opts: &DbConnectOptions,
+    runtime: &StorageRuntimeConfig,
+) -> sqlx::Result<OpenedDatabase> {
     match opts {
         DbConnectOptions::Sqlite(options) => {
-            let (state, pool, instance_id) = open_sqlite_database_with_pool(options, true).await?;
+            let (state, pool, instance_id) =
+                open_sqlite_database_with_pool(options, true, runtime).await?;
             Ok(OpenedDatabase {
                 state,
                 instance_id,
@@ -348,7 +422,8 @@ pub async fn open_database_with_observer(opts: &DbConnectOptions) -> sqlx::Resul
             })
         }
         DbConnectOptions::Postgres { options, .. } => {
-            let (state, pool, instance_id) = open_postgres_database_with_pool(options).await?;
+            let (state, pool, instance_id) =
+                open_postgres_database_with_pool(options, runtime).await?;
             Ok(OpenedDatabase {
                 state,
                 instance_id,
@@ -367,9 +442,14 @@ pub async fn open_database_with_observer(opts: &DbConnectOptions) -> sqlx::Resul
 /// # Errors
 ///
 /// Returns `Err` if the database connection pool cannot be established.
-#[tracing::instrument(name = "storage.open_existing_database", skip(opts))]
-pub async fn open_existing_database(opts: &DbConnectOptions) -> sqlx::Result<Arc<AppState>> {
-    Ok(open_existing_database_with_observer(opts).await?.state)
+#[tracing::instrument(name = "storage.open_existing_database", skip(opts, runtime))]
+pub async fn open_existing_database(
+    opts: &DbConnectOptions,
+    runtime: &StorageRuntimeConfig,
+) -> sqlx::Result<Arc<AppState>> {
+    Ok(open_existing_database_with_observer(opts, runtime)
+        .await?
+        .state)
 }
 
 /// Opens an existing database and returns its storage state plus a pool observer.
@@ -377,13 +457,18 @@ pub async fn open_existing_database(opts: &DbConnectOptions) -> sqlx::Result<Arc
 /// # Errors
 ///
 /// Returns `Err` if the database connection pool cannot be established.
-#[tracing::instrument(name = "storage.open_existing_database_with_observer", skip(opts))]
+#[tracing::instrument(
+    name = "storage.open_existing_database_with_observer",
+    skip(opts, runtime)
+)]
 pub async fn open_existing_database_with_observer(
     opts: &DbConnectOptions,
+    runtime: &StorageRuntimeConfig,
 ) -> sqlx::Result<OpenedDatabase> {
     match opts {
         DbConnectOptions::Sqlite(options) => {
-            let (state, pool, instance_id) = open_sqlite_database_with_pool(options, false).await?;
+            let (state, pool, instance_id) =
+                open_sqlite_database_with_pool(options, false, runtime).await?;
             Ok(OpenedDatabase {
                 state,
                 instance_id,
@@ -393,7 +478,8 @@ pub async fn open_existing_database_with_observer(
             })
         }
         DbConnectOptions::Postgres { options, .. } => {
-            let (state, pool, instance_id) = open_postgres_database_with_pool(options).await?;
+            let (state, pool, instance_id) =
+                open_postgres_database_with_pool(options, runtime).await?;
             Ok(OpenedDatabase {
                 state,
                 instance_id,
@@ -426,11 +512,16 @@ pub(crate) const MIGRATION_SEEDED_TABLES: &[&str] = &[
 ///
 /// Returns the underlying [`sqlx::Error`] if the database cannot be reached or a
 /// query fails.
-pub async fn database_is_empty(options: &DbConnectOptions) -> sqlx::Result<bool> {
+pub async fn database_is_empty(
+    options: &DbConnectOptions,
+    runtime: &StorageRuntimeConfig,
+) -> sqlx::Result<bool> {
     match options {
-        DbConnectOptions::Sqlite(options) => crate::sqlite::database_is_empty(options).await,
+        DbConnectOptions::Sqlite(options) => {
+            crate::sqlite::database_is_empty(options, runtime).await
+        }
         DbConnectOptions::Postgres { options, .. } => {
-            crate::postgres::database_is_empty(options).await
+            crate::postgres::database_is_empty(options, runtime).await
         }
     }
 }
@@ -439,9 +530,9 @@ pub async fn database_is_empty(options: &DbConnectOptions) -> sqlx::Result<bool>
 mod tests {
     use super::*;
     use crate::test_support::{
-        Backend, backends, recorded_postgres_url, sqlite_url, template_postgres_url,
+        Backend, PostgresTestConfig, backends, recorded_postgres_url, sqlite_url,
+        template_postgres_url,
     };
-    use common::test_support::with_env;
     use rstest::*;
     use rstest_reuse::*;
     use std::time::Duration;
@@ -490,9 +581,10 @@ mod tests {
                 .parse()
                 .expect("recorded postgres URL"),
         };
-        let opened = open_existing_database_with_observer(&options)
-            .await
-            .expect("open existing database with observer");
+        let opened =
+            open_existing_database_with_observer(&options, &StorageRuntimeConfig::default())
+                .await
+                .expect("open existing database with observer");
 
         let snapshot = opened.pool_observer.snapshot();
 
@@ -503,65 +595,121 @@ mod tests {
     }
 
     #[test]
-    fn sql_slow_query_threshold_defaults_to_five_seconds() {
-        with_env(|env| {
-            env.remove("JAUNDER_SQL_SLOW_MS");
-            assert_eq!(sql_slow_query_threshold(), Duration::from_secs(5));
-        });
+    fn storage_runtime_config_defaults_threshold_to_five_seconds() {
+        let config = StorageRuntimeConfig::from_raw(Ok(None), Ok(None), Ok(None))
+            .expect("empty inputs resolve");
+
+        assert_eq!(config.sql_slow_query_threshold(), Duration::from_secs(5));
     }
 
     #[test]
-    fn sql_slow_query_threshold_uses_env_override() {
-        with_env(|env| {
-            env.set("JAUNDER_SQL_SLOW_MS", "250");
-            assert_eq!(sql_slow_query_threshold(), Duration::from_millis(250));
-        });
-    }
+    fn storage_runtime_config_parses_sql_threshold() {
+        let config = StorageRuntimeConfig::from_raw(Ok(Some("250".to_owned())), Ok(None), Ok(None))
+            .expect("valid threshold resolves");
 
-    #[test]
-    fn nonnumeric_sql_slow_threshold_uses_default_with_one_fixed_nonrecursive_fallback() {
-        let mut output = Vec::new();
-        let threshold = sql_slow_query_threshold_with(
-            || Ok(Some("not-a-number".to_owned())),
-            || write_sql_threshold_fallback(&mut output).expect("write fallback"),
-        );
-        assert_eq!(threshold, Duration::from_secs(5));
         assert_eq!(
-            String::from_utf8(output).expect("fallback utf8"),
-            "storage.observability.sql_slow_threshold: invalid configured value; using 5s\n"
+            config.sql_slow_query_threshold(),
+            Duration::from_millis(250)
         );
     }
 
     #[test]
-    fn invalid_unicode_sql_slow_threshold_uses_default_with_one_redacted_nonrecursive_fallback() {
-        let mut output = Vec::new();
-        let threshold = sql_slow_query_threshold_with(
-            || {
-                Err(std::env::VarError::NotUnicode(std::ffi::OsString::from(
-                    "injected invalid unicode",
-                )))
-            },
-            || write_sql_threshold_fallback(&mut output).expect("write fallback"),
-        );
-        assert_eq!(threshold, Duration::from_secs(5));
-        assert_eq!(
-            String::from_utf8(output).expect("fallback utf8"),
-            "storage.observability.sql_slow_threshold: invalid configured value; using 5s\n"
-        );
-    }
+    fn sqlite_and_postgres_resolve_the_same_slow_query_threshold() {
+        let runtime =
+            StorageRuntimeConfig::with_sql_slow_query_threshold(Duration::from_millis(250));
+        let sqlite: DbConnectOptions = "sqlite:jaunder.db".parse().expect("valid SQLite URL");
+        let postgres: DbConnectOptions = "postgres://localhost/jaunder"
+            .parse()
+            .expect("valid PostgreSQL URL");
+        let DbConnectOptions::Sqlite(sqlite) = sqlite else {
+            unreachable!("SQLite URL must parse as SQLite options");
+        };
+        let DbConnectOptions::Postgres {
+            options: postgres, ..
+        } = postgres
+        else {
+            unreachable!("PostgreSQL URL must parse as PostgreSQL options");
+        };
 
-    #[cfg(unix)]
-    #[test]
-    fn production_sql_threshold_reader_warns_for_invalid_unicode() {
-        use std::os::unix::ffi::OsStringExt as _;
+        let sqlite = crate::sqlite::resolved_sqlite_options(&sqlite, &runtime);
+        let postgres = crate::resolved_postgres_options(&postgres, &runtime);
 
-        with_env(|env| {
-            env.set(
-                "JAUNDER_SQL_SLOW_MS",
-                std::ffi::OsString::from_vec(vec![0xff]),
+        for options in [format!("{sqlite:?}"), format!("{postgres:?}")] {
+            assert!(
+                options.contains("slow_statements_duration: 250ms"),
+                "runtime threshold was not applied: {options}"
             );
-            assert_eq!(sql_slow_query_threshold(), Duration::from_secs(5));
-        });
+        }
+    }
+
+    #[test]
+    fn invalid_sql_thresholds_warn_and_default_to_five_seconds() {
+        for threshold in [
+            Ok(Some("not-a-duration".to_owned())),
+            Err(std::env::VarError::NotUnicode(std::ffi::OsString::from(
+                "invalid-threshold",
+            ))),
+        ] {
+            let config =
+                StorageRuntimeConfig::from_raw(threshold, Ok(None), Ok(None)).expect("defaults");
+            assert_eq!(config.sql_slow_query_threshold(), Duration::from_secs(5));
+        }
+    }
+
+    #[test]
+    fn password_file_wins_and_trims_trailing_whitespace() {
+        let config = StorageRuntimeConfig::from_raw(
+            Ok(None),
+            Ok(Some(Ok("from-file \n".to_owned()))),
+            Ok(Some("from-variable".to_owned())),
+        )
+        .expect("file password resolves");
+
+        assert_eq!(
+            config
+                .postgres_password()
+                .expect("configured file password")
+                .0,
+            "from-file"
+        );
+    }
+
+    #[test]
+    fn direct_password_is_used_when_no_file_is_configured() {
+        let config = StorageRuntimeConfig::from_raw(
+            Ok(None),
+            Ok(None),
+            Ok(Some("from-variable".to_owned())),
+        )
+        .expect("variable password resolves");
+
+        assert_eq!(
+            config
+                .postgres_password()
+                .expect("configured variable password")
+                .0,
+            "from-variable"
+        );
+    }
+
+    #[test]
+    fn malformed_password_inputs_return_typed_errors_without_their_values() {
+        let invalid = || std::env::VarError::NotUnicode(std::ffi::OsString::from("secret"));
+
+        let Err(variable) = StorageRuntimeConfig::from_raw(Ok(None), Ok(None), Err(invalid()))
+        else {
+            // Reaching this arm would mean invalid Unicode was accepted.
+            panic!("invalid password variable must fail"); // cov:ignore
+        };
+        assert!(matches!(variable, PostgresPasswordError::Variable(_)));
+        assert!(!variable.to_string().contains("secret"));
+
+        let Err(file) = StorageRuntimeConfig::from_raw(Ok(None), Err(invalid()), Ok(None)) else {
+            // Reaching this arm would mean an invalid file variable was accepted.
+            panic!("invalid password-file variable must fail"); // cov:ignore
+        };
+        assert!(matches!(file, PostgresPasswordError::FileVariable(_)));
+        assert!(!file.to_string().contains("secret"));
     }
 
     #[test]
@@ -751,8 +899,11 @@ mod tests {
         let opts = "postgres://localhost:1/db"
             .parse::<DbConnectOptions>()
             .unwrap();
-        let _ =
-            tokio::time::timeout(std::time::Duration::from_millis(50), open_database(&opts)).await;
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            open_database(&opts, &StorageRuntimeConfig::default()),
+        )
+        .await;
     }
 
     #[apply(backends)]
@@ -762,17 +913,19 @@ mod tests {
         let (options, _guard) = match backend {
             Backend::Sqlite => (sqlite_url(&temp), None),
             Backend::Postgres => {
-                let (options, guard) = template_postgres_url().await;
+                let config = PostgresTestConfig::from_env();
+                let (options, guard) = template_postgres_url(&config).await;
                 (options, Some(guard))
             }
         };
-        let initial = open_database_with_observer(&options)
+        let runtime = StorageRuntimeConfig::default();
+        let initial = open_database_with_observer(&options, &runtime)
             .await
             .expect("initial open migrates the database");
         let expected = initial.instance_id;
         let (first, second) = tokio::join!(
-            open_database_with_observer(&options),
-            open_database_with_observer(&options)
+            open_database_with_observer(&options, &runtime),
+            open_database_with_observer(&options, &runtime)
         );
         let first = first.expect("first concurrent open succeeds");
         let second = second.expect("second concurrent open succeeds");
@@ -788,7 +941,7 @@ mod tests {
             .unwrap();
         let _ = tokio::time::timeout(
             std::time::Duration::from_millis(50),
-            open_existing_database(&opts),
+            open_existing_database(&opts, &StorageRuntimeConfig::default()),
         )
         .await;
     }
@@ -801,7 +954,7 @@ mod tests {
             .unwrap();
         let _ = tokio::time::timeout(
             std::time::Duration::from_millis(50),
-            database_is_empty(&opts),
+            database_is_empty(&opts, &StorageRuntimeConfig::default()),
         )
         .await;
     }

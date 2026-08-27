@@ -20,7 +20,10 @@ use crate::posts::{
     UPSERT_TAG_RETURNING_ID, UpdatePostInput,
 };
 use crate::sql::quote_identifier;
-use crate::{AppState, DbConnectOptions, PostFormat, PostRecord, resolved_postgres_options};
+use crate::{
+    AppState, DbConnectOptions, PostFormat, PostRecord, StorageRuntimeConfig,
+    resolved_postgres_options,
+};
 
 use common::feed::FeedPath;
 use common::ids::{PostId, TagId, UserId};
@@ -147,7 +150,7 @@ pub async fn raw_media_filename_exists(db: &DbConnectOptions, filename: &str) ->
             exists != 0
         }
         DbConnectOptions::Postgres { options, .. } => {
-            let options = resolved_postgres_options(options).expect("resolve postgres options");
+            let options = resolved_postgres_options(options, &StorageRuntimeConfig::default());
             let pool = PgPool::connect_with(options)
                 .await
                 .expect("connect postgres");
@@ -544,25 +547,27 @@ impl Backend {
     /// or `JAUNDER_PG_TEST_URL` is misconfigured) — a setup failure fails the test.
     pub async fn setup(self) -> TestEnv {
         let dir = TempDir::new().unwrap();
+        let runtime = StorageRuntimeConfig::default();
         let (state, base) = match self {
             Backend::Sqlite => {
                 let DbConnectOptions::Sqlite(options) = sqlite_url(&dir) else {
                     unreachable!("sqlite_url always yields Sqlite")
                 };
                 let (state, pool, instance_id) =
-                    crate::sqlite::open_sqlite_database_with_pool(&options, true)
+                    crate::sqlite::open_sqlite_database_with_pool(&options, true, &runtime)
                         .await
                         .unwrap();
                 (state, TestBase::sqlite(dir, pool, instance_id))
             }
             Backend::Postgres => {
-                let (url, guard) = template_postgres_url().await;
+                let config = PostgresTestConfig::from_env();
+                let (url, guard) = template_postgres_url(&config).await;
                 // template_postgres_url() always yields Postgres, so unreachable.
                 let DbConnectOptions::Postgres { options, .. } = &url else {
                     unreachable!("template_postgres_url always yields Postgres")
                 };
                 let (state, pool, instance_id) =
-                    crate::postgres::open_postgres_database_with_pool(options)
+                    crate::postgres::open_postgres_database_with_pool(options, &runtime)
                         .await
                         .unwrap();
                 // Record the per-test DB URL so raw-SQL helpers reuse this exact
@@ -576,6 +581,53 @@ impl Backend {
             }
         };
         TestEnv { state, base }
+    }
+}
+
+/// Resolved `PostgreSQL` test-harness inputs. Construct this once at a test setup
+/// boundary and pass it through provisioning and teardown.
+#[derive(Clone)]
+pub struct PostgresTestConfig {
+    test_url: String,
+    bootstrap_url: String,
+}
+
+impl PostgresTestConfig {
+    /// Resolves the inherited `PostgreSQL` test URLs before asynchronous setup.
+    #[must_use]
+    pub fn from_env() -> Self {
+        let test_url = std::env::var("JAUNDER_PG_TEST_URL")
+            .unwrap_or_else(|_| "postgres://jaunder@127.0.0.1:55432/jaunder".to_owned());
+        Self::from_raw(
+            test_url,
+            std::env::var("JAUNDER_PG_BOOTSTRAP_TEST_URL").ok(),
+        )
+    }
+
+    fn from_raw(test_url: String, explicit_bootstrap_url: Option<String>) -> Self {
+        let bootstrap_url = bootstrap_url(explicit_bootstrap_url, &test_url);
+        Self {
+            test_url,
+            bootstrap_url,
+        }
+    }
+
+    /// The application-role URL used to create per-test databases.
+    #[must_use]
+    pub fn test_url(&self) -> &str {
+        &self.test_url
+    }
+
+    /// The superuser URL used to create and remove per-test databases.
+    #[must_use]
+    pub fn bootstrap_url(&self) -> &str {
+        &self.bootstrap_url
+    }
+
+    /// The bootstrap connection's `host:port` authority.
+    #[must_use]
+    pub fn bootstrap_authority(&self) -> String {
+        postgres_url_authority(&self.bootstrap_url)
     }
 }
 
@@ -623,35 +675,13 @@ pub fn sqlite_url(base: &TempDir) -> DbConnectOptions {
         .unwrap()
 }
 
-pub(crate) fn postgres_url() -> DbConnectOptions {
-    postgres_url_string().parse().unwrap()
-}
-
-/// The superuser bootstrap URL used to create/drop per-test databases —
-/// `JAUNDER_PG_BOOTSTRAP_TEST_URL` if set, else a `postgres` URL derived from the
-/// test URL's authority.
-#[must_use]
-pub fn postgres_bootstrap_url() -> String {
-    bootstrap_url(
-        std::env::var("JAUNDER_PG_BOOTSTRAP_TEST_URL").ok(),
-        &postgres_url_string(),
-    )
-}
-
-/// Pure core of [`postgres_bootstrap_url`]: the `explicit` bootstrap URL when set,
-/// else a `postgres` superuser URL on the same authority as `test_url`. Split out
-/// from the env read so both arms are unit-testable (the env read itself is
-/// covered whenever the suite provisions Postgres).
+/// Pure core of [`PostgresTestConfig::from_env`]: the `explicit` bootstrap URL
+/// when set, else a `postgres` superuser URL on the same authority as `test_url`.
 fn bootstrap_url(explicit: Option<String>, test_url: &str) -> String {
     explicit.unwrap_or_else(|| {
         let authority = postgres_url_authority(test_url);
         format!("postgres://postgres@{authority}/postgres")
     })
-}
-
-pub(crate) fn postgres_url_string() -> String {
-    std::env::var("JAUNDER_PG_TEST_URL")
-        .unwrap_or_else(|_| "postgres://jaunder@127.0.0.1:55432/jaunder".to_owned())
 }
 
 fn postgres_url_authority(url: &str) -> String {
@@ -669,19 +699,13 @@ fn postgres_url_authority(url: &str) -> String {
         .to_owned()
 }
 
-/// The `host:port` authority of the bootstrap connection (for raw cluster ops).
-#[must_use]
-pub fn postgres_test_authority() -> String {
-    postgres_url_authority(&postgres_bootstrap_url())
-}
-
-fn postgres_url_with_db_name(db_name: &str) -> String {
-    splice_db_name(&postgres_url_string(), db_name)
+fn postgres_url_with_db_name(config: &PostgresTestConfig, db_name: &str) -> String {
+    splice_db_name(config.test_url(), db_name)
 }
 
 /// Pure core of [`postgres_url_with_db_name`]: replace the database segment of
-/// `template` with `db_name`, preserving any `?query`. Split out from the env read
-/// so the with-query and without-query arms are unit-testable.
+/// `template` with `db_name`, preserving any `?query`. Kept separate so the
+/// with-query and without-query arms are unit-testable.
 fn splice_db_name(template: &str, db_name: &str) -> String {
     let (base, query) = template
         .split_once('?')
@@ -724,8 +748,7 @@ fn unique_postgres_db_name() -> String {
 /// runs inside `Drop`); a failed or timed-out drop is logged to stderr rather
 /// than returned mutely, since a silently leaking clone is the disk-creep
 /// regression this guards against.
-fn drop_test_database(db_name: &str) {
-    let bootstrap = postgres_bootstrap_url();
+fn drop_test_database(db_name: &str, bootstrap_url: &str) {
     let statement = format!("DROP DATABASE {} WITH (FORCE)", quote_identifier(db_name));
     std::thread::scope(|scope| {
         scope.spawn(|| {
@@ -736,7 +759,7 @@ fn drop_test_database(db_name: &str) {
                 return; // cov:ignore — current-thread runtime build only fails under OOM
             };
             runtime.block_on(async {
-                let Ok(options) = bootstrap.parse::<sqlx::postgres::PgConnectOptions>() else {
+                let Ok(options) = bootstrap_url.parse::<sqlx::postgres::PgConnectOptions>() else {
                     return; // cov:ignore — bootstrap URL is always a valid Postgres URL
                 };
                 let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), async {
@@ -773,11 +796,12 @@ fn report_drop_outcome(
 /// the suite. This is the single teardown primitive; [`TestBase`] composes it.
 pub struct PostgresDbGuard {
     db_name: String,
+    bootstrap_url: String,
 }
 
 impl Drop for PostgresDbGuard {
     fn drop(&mut self) {
-        drop_test_database(&self.db_name);
+        drop_test_database(&self.db_name, &self.bootstrap_url);
     }
 }
 
@@ -788,8 +812,8 @@ impl Drop for PostgresDbGuard {
 ///
 /// If the constructed URL fails to parse.
 #[must_use]
-pub fn nonexistent_postgres_url() -> DbConnectOptions {
-    postgres_url_with_db_name(&unique_postgres_db_name())
+pub fn nonexistent_postgres_url(config: &PostgresTestConfig) -> DbConnectOptions {
+    postgres_url_with_db_name(config, &unique_postgres_db_name())
         .parse()
         .unwrap()
 }
@@ -800,12 +824,14 @@ pub fn nonexistent_postgres_url() -> DbConnectOptions {
 ///
 /// If the test URL lacks a username, or the admin connection / `CREATE DATABASE`
 /// fails.
-pub async fn unique_postgres_url() -> (DbConnectOptions, PostgresDbGuard) {
+pub async fn unique_postgres_url(
+    config: &PostgresTestConfig,
+) -> (DbConnectOptions, PostgresDbGuard) {
     let db_name = unique_postgres_db_name();
 
-    let bootstrap: sqlx::postgres::PgConnectOptions = postgres_bootstrap_url().parse().unwrap();
-    let DbConnectOptions::Postgres { options, .. } = postgres_url() else {
-        unreachable!("postgres_url always yields Postgres")
+    let bootstrap: sqlx::postgres::PgConnectOptions = config.bootstrap_url().parse().unwrap();
+    let DbConnectOptions::Postgres { options, .. } = config.test_url().parse().unwrap() else {
+        unreachable!("PostgreSQL test URL always yields PostgreSQL options")
     };
     let owner = options.get_username();
     assert!(
@@ -823,8 +849,14 @@ pub async fn unique_postgres_url() -> (DbConnectOptions, PostgresDbGuard) {
     .await
     .unwrap();
 
-    let options = postgres_url_with_db_name(&db_name).parse().unwrap();
-    (options, PostgresDbGuard { db_name })
+    let options = postgres_url_with_db_name(config, &db_name).parse().unwrap();
+    (
+        options,
+        PostgresDbGuard {
+            db_name,
+            bootstrap_url: config.bootstrap_url().to_owned(),
+        },
+    )
 }
 
 /// Name of the once-migrated template database that per-test databases are
@@ -841,8 +873,8 @@ const TEMPLATE_LOCK_KEY: i64 = 78_316_621;
 /// Ensures [`TEMPLATE_DB`] exists and is fully migrated. Safe to call
 /// concurrently from many processes: creation is guarded by a session-level
 /// advisory lock taken on the bootstrap connection.
-async fn ensure_template_db() {
-    let bootstrap: sqlx::postgres::PgConnectOptions = postgres_bootstrap_url().parse().unwrap();
+async fn ensure_template_db(config: &PostgresTestConfig) {
+    let bootstrap: sqlx::postgres::PgConnectOptions = config.bootstrap_url().parse().unwrap();
     let mut admin = sqlx::PgConnection::connect_with(&bootstrap).await.unwrap();
 
     sqlx::query("SELECT pg_advisory_lock($1)")
@@ -859,8 +891,8 @@ async fn ensure_template_db() {
             .unwrap();
 
     if !exists {
-        let DbConnectOptions::Postgres { options, .. } = postgres_url() else {
-            unreachable!("postgres_url always yields Postgres")
+        let DbConnectOptions::Postgres { options, .. } = config.test_url().parse().unwrap() else {
+            unreachable!("PostgreSQL test URL always yields PostgreSQL options")
         };
         let owner = options.get_username();
         sqlx::query(&format!(
@@ -875,7 +907,7 @@ async fn ensure_template_db() {
         // Migrate the template through its own pool, then close it: a database
         // can only serve as a CREATE DATABASE template when nobody is connected
         // to it.
-        let pool = sqlx::PgPool::connect(&postgres_url_with_db_name(TEMPLATE_DB))
+        let pool = sqlx::PgPool::connect(&postgres_url_with_db_name(config, TEMPLATE_DB))
             .await
             .unwrap();
         sqlx::migrate!("../storage/migrations/postgres")
@@ -899,16 +931,18 @@ async fn ensure_template_db() {
 /// # Panics
 ///
 /// If template setup, the admin connection, or the `CREATE DATABASE` clone fails.
-pub async fn template_postgres_url() -> (DbConnectOptions, PostgresDbGuard) {
-    ensure_template_db().await;
+pub async fn template_postgres_url(
+    config: &PostgresTestConfig,
+) -> (DbConnectOptions, PostgresDbGuard) {
+    ensure_template_db(config).await;
 
-    let DbConnectOptions::Postgres { options, .. } = postgres_url() else {
-        unreachable!("postgres_url always yields Postgres")
+    let DbConnectOptions::Postgres { options, .. } = config.test_url().parse().unwrap() else {
+        unreachable!("PostgreSQL test URL always yields PostgreSQL options")
     };
     let owner = options.get_username();
     let db_name = unique_postgres_db_name();
 
-    let bootstrap: sqlx::postgres::PgConnectOptions = postgres_bootstrap_url().parse().unwrap();
+    let bootstrap: sqlx::postgres::PgConnectOptions = config.bootstrap_url().parse().unwrap();
     let mut admin = sqlx::PgConnection::connect_with(&bootstrap).await.unwrap();
     sqlx::query(&format!(
         "CREATE DATABASE {} OWNER {} TEMPLATE {}",
@@ -920,8 +954,14 @@ pub async fn template_postgres_url() -> (DbConnectOptions, PostgresDbGuard) {
     .await
     .unwrap();
 
-    let options = postgres_url_with_db_name(&db_name).parse().unwrap();
-    (options, PostgresDbGuard { db_name })
+    let options = postgres_url_with_db_name(config, &db_name).parse().unwrap();
+    (
+        options,
+        PostgresDbGuard {
+            db_name,
+            bootstrap_url: config.bootstrap_url().to_owned(),
+        },
+    )
 }
 
 /// Default mailer for tests that don't care about email sending.
@@ -1673,7 +1713,6 @@ async fn create_via_service(
     .expect("post creation via the service path should succeed")
     .post_id
 }
-
 /// Edits a post's body through [`perform_post_update`](crate::perform_post_update) —
 /// the service-layer twin of [`create_post_via_service`], so an edit's re-render and
 /// re-extraction run exactly as the product runs them. Publication state is left
@@ -1711,9 +1750,9 @@ pub async fn update_post_body_via_service(
 #[cfg(test)]
 mod tests {
     use super::{
-        AudienceTarget, Backend, CreatePostError, PostFormat, PostSummary, SeedPost, SeedRawPost,
-        SeedUser, UtcInstant, backends, bootstrap_url, parse_password, parse_post_title,
-        report_drop_outcome, splice_db_name,
+        AudienceTarget, Backend, CreatePostError, PostFormat, PostSummary, PostgresDbGuard,
+        PostgresTestConfig, SeedPost, SeedRawPost, SeedUser, UtcInstant, backends, bootstrap_url,
+        parse_password, parse_post_title, report_drop_outcome, splice_db_name,
     };
 
     // The free renderer, to pin that the builder's HTML is exactly `render(body)` — the
@@ -1845,6 +1884,49 @@ mod tests {
         let a = SeedPost::new(user.user_id).seed(state).await;
         let b = SeedPost::new(user.user_id).seed(state).await;
         assert_ne!(a.slug, b.slug, "bare seeds should get distinct slugs");
+    }
+
+    #[test]
+    fn postgres_test_config_preserves_explicit_bootstrap_url() {
+        let config = PostgresTestConfig::from_raw(
+            "postgres://jaunder@db:5432/jaunder".to_owned(),
+            Some("postgres://admin@bootstrap:5432/postgres".to_owned()),
+        );
+
+        assert_eq!(config.test_url(), "postgres://jaunder@db:5432/jaunder");
+        assert_eq!(
+            config.bootstrap_url(),
+            "postgres://admin@bootstrap:5432/postgres"
+        );
+        assert_eq!(config.bootstrap_authority(), "bootstrap:5432");
+    }
+
+    #[test]
+    fn postgres_test_config_derives_bootstrap_url_from_test_authority() {
+        let config =
+            PostgresTestConfig::from_raw("postgres://jaunder@db:5432/jaunder".to_owned(), None);
+
+        assert_eq!(
+            config.bootstrap_url(),
+            "postgres://postgres@db:5432/postgres"
+        );
+    }
+
+    #[test]
+    fn postgres_db_guard_owns_the_resolved_teardown_url() {
+        let config = PostgresTestConfig::from_raw(
+            "postgres://jaunder@db:5432/jaunder".to_owned(),
+            Some("postgres://admin@bootstrap:5432/postgres".to_owned()),
+        );
+        let guard = std::mem::ManuallyDrop::new(PostgresDbGuard {
+            db_name: "test_db".to_owned(),
+            bootstrap_url: config.bootstrap_url().to_owned(),
+        });
+
+        assert_eq!(
+            guard.bootstrap_url,
+            "postgres://admin@bootstrap:5432/postgres"
+        );
     }
 
     // guard:no-backend — harness type-guard on the SQLite CloseablePool variant; no database ops

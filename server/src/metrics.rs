@@ -986,9 +986,12 @@ mod tests {
                 unreachable!("sqlite_only supplies only SQLite")
             }
         };
-        let opened = storage::open_database_with_observer(&options)
-            .await
-            .expect("open database");
+        let opened = storage::open_database_with_observer(
+            &options,
+            &storage::StorageRuntimeConfig::default(),
+        )
+        .await
+        .expect("open database");
         opened
             .state
             .feed_events
@@ -1049,9 +1052,12 @@ mod tests {
                 unreachable!("sqlite_only supplies only SQLite")
             }
         };
-        let opened = storage::open_database_with_observer(&options)
-            .await
-            .expect("open database");
+        let opened = storage::open_database_with_observer(
+            &options,
+            &storage::StorageRuntimeConfig::default(),
+        )
+        .await
+        .expect("open database");
         let media_root = base.path().join("media");
         std::fs::create_dir(&media_root).expect("media directory");
         let sources = SaturationSources::real(

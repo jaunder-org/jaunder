@@ -7,7 +7,7 @@ use tempfile::TempDir;
 
 use crate::misc::backup_fixture::{assert_backup_fixture_restored, populate_backup_fixture};
 
-use storage::test_support::{PostgresDbGuard, unique_postgres_url};
+use storage::test_support::{PostgresDbGuard, PostgresTestConfig, unique_postgres_url};
 
 fn sqlite_storage_args(base: &TempDir, name: &str) -> StorageArgs {
     StorageArgs {
@@ -22,7 +22,8 @@ fn sqlite_storage_args(base: &TempDir, name: &str) -> StorageArgs {
 }
 
 async fn postgres_storage_args(base: &TempDir, name: &str) -> (StorageArgs, PostgresDbGuard) {
-    let (db, guard) = unique_postgres_url().await;
+    let config = PostgresTestConfig::from_env();
+    let (db, guard) = unique_postgres_url(&config).await;
     (
         StorageArgs {
             storage_path: base.path().join(format!("{name}-storage")),

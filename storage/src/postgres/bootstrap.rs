@@ -139,7 +139,7 @@ fn pg_error_code_matches(code: Option<&str>, expected: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::postgres_bootstrap_url;
+    use crate::test_support::PostgresTestConfig;
     use std::time::Duration;
 
     /// A process-unique suffix for admin-created role/database identifiers, so
@@ -179,7 +179,8 @@ mod tests {
     // DDL via a bootstrap admin connection, below the backend fixture; no SQLite analog.
     #[tokio::test]
     async fn create_postgres_database_and_role_reports_existing_database() {
-        let bootstrap: PgConnectOptions = postgres_bootstrap_url().parse().expect("bootstrap url");
+        let config = PostgresTestConfig::from_env();
+        let bootstrap: PgConnectOptions = config.bootstrap_url().parse().expect("bootstrap url");
         let mut admin = PgConnection::connect_with(&bootstrap)
             .await
             .expect("admin connect");
@@ -218,7 +219,8 @@ mod tests {
     // over admin DDL via a bootstrap admin connection, below the backend fixture; no SQLite analog.
     #[tokio::test]
     async fn execute_utility_propagates_unexpected_errors() {
-        let bootstrap: PgConnectOptions = postgres_bootstrap_url().parse().expect("bootstrap url");
+        let config = PostgresTestConfig::from_env();
+        let bootstrap: PgConnectOptions = config.bootstrap_url().parse().expect("bootstrap url");
         let mut admin = PgConnection::connect_with(&bootstrap)
             .await
             .expect("admin connect");

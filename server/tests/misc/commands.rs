@@ -12,8 +12,8 @@ use common::test_support::{parse_email, parse_invite_ttl_hours, parse_session_la
 use common::username::Username;
 use jaunder::cli::{Cli, Commands, StorageArgs};
 use jaunder::commands::{
-    app_password_create, cmd_app_password_create, cmd_backup, cmd_init, cmd_restore, cmd_serve,
-    cmd_smtp_test, cmd_user_create, cmd_user_invite, prepare_server,
+    ServeCapturePaths, app_password_create, cmd_app_password_create, cmd_backup, cmd_init,
+    cmd_restore, cmd_serve, cmd_smtp_test, cmd_user_create, cmd_user_invite, prepare_server,
 };
 use storage::{
     BackupError, BackupMode, OpenedDatabase, open_database, open_existing_database,
@@ -29,16 +29,36 @@ use crate::misc::backup_fixture::{
     assert_backup_fixture_restored, assert_target_unmodified, populate_backup_fixture,
 };
 use storage::test_support::{
-    Backend, PostgresDbGuard, SeedUser, backends, nonexistent_postgres_url, noop_mailer,
-    raw_media_filename_exists, rewrite_media_filename_in_backup, sqlite_url, unique_postgres_url,
+    Backend, PostgresDbGuard, PostgresTestConfig, SeedUser, backends, nonexistent_postgres_url,
+    noop_mailer, raw_media_filename_exists, rewrite_media_filename_in_backup, sqlite_url,
+    unique_postgres_url,
 };
+
+fn default_host_config() -> (host::telemetry::TelemetryConfig, Option<ServeCapturePaths>) {
+    (
+        host::telemetry::TelemetryConfig::from_raw(
+            false,
+            host::telemetry::TelemetryRawConfig {
+                log_filter: Ok(None),
+                rust_log: Ok(None),
+                log_format: Ok(None),
+                jaunder_otlp_endpoint: Ok(None),
+                otlp_endpoint: Ok(None),
+                slow_op_ms: Ok(None),
+                e2e_seed_process: Ok(None),
+            },
+        ),
+        None,
+    )
+}
 
 async fn storage_args(backend: Backend, base: &TempDir) -> (StorageArgs, Option<PostgresDbGuard>) {
     let storage_path = base.path().join("storage");
     let (db, guard) = match backend {
         Backend::Sqlite => (sqlite_url(base), None),
         Backend::Postgres => {
-            let (db, guard) = unique_postgres_url().await;
+            let config = PostgresTestConfig::from_env();
+            let (db, guard) = unique_postgres_url(&config).await;
             (db, Some(guard))
         }
     };
@@ -49,7 +69,10 @@ fn uninitialized_storage_args(backend: Backend, base: &TempDir) -> StorageArgs {
     let storage_path = base.path().join("storage");
     let db = match backend {
         Backend::Sqlite => sqlite_url(base),
-        Backend::Postgres => nonexistent_postgres_url(),
+        Backend::Postgres => {
+            let config = PostgresTestConfig::from_env();
+            nonexistent_postgres_url(&config)
+        }
     };
     StorageArgs { storage_path, db }
 }
@@ -65,7 +88,9 @@ async fn cmd_init_on_fresh_dir_creates_structure_and_valid_db(#[case] backend: B
     assert!(args.storage_path.is_dir());
     assert!(args.storage_path.join("media").is_dir());
     assert!(args.storage_path.join("backups").is_dir());
-    open_database(&args.db).await.unwrap();
+    open_database(&args.db, &storage::StorageRuntimeConfig::default())
+        .await
+        .unwrap();
 }
 
 #[apply(backends)]
@@ -121,7 +146,8 @@ async fn cmd_serve_fails_when_not_initialized(#[case] backend: Backend) {
     let args = uninitialized_storage_args(backend, &base);
     let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
 
-    let result = cmd_serve(&args, bind, true, None).await;
+    let (telemetry, capture) = default_host_config();
+    let result = cmd_serve(&args, bind, true, None, &telemetry, capture.as_ref()).await;
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(
@@ -202,7 +228,9 @@ async fn command_source_chain_cmd_smtp_test_quoted_sender_reaches_send(#[case] b
     let base = TempDir::new().expect("temp dir");
     let (args, _pg) = storage_args(backend, &base).await;
     cmd_init(&args, false).await.expect("initialize");
-    let state = open_existing_database(&args.db).await.expect("open");
+    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+        .await
+        .expect("open");
     state
         .site_config
         .set(SiteConfigKey::SmtpHost, "mail.example.com")
@@ -233,7 +261,9 @@ async fn command_source_chain_cmd_smtp_test_send(#[case] backend: Backend) {
     let base = TempDir::new().expect("temp dir");
     let (args, _pg) = storage_args(backend, &base).await;
     cmd_init(&args, false).await.expect("initialize");
-    let state = open_existing_database(&args.db).await.expect("open");
+    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+        .await
+        .expect("open");
     for (key, value) in [
         (SiteConfigKey::SmtpHost, "127.0.0.1"),
         (SiteConfigKey::SmtpPort, "1"),
@@ -271,7 +301,7 @@ async fn after_init_server_responds_to_health_check(#[case] backend: Backend) {
 
     let OpenedDatabase {
         state, instance_id, ..
-    } = open_existing_database_with_observer(&args.db)
+    } = open_existing_database_with_observer(&args.db, &storage::StorageRuntimeConfig::default())
         .await
         .unwrap();
     let router = jaunder::create_router(
@@ -309,7 +339,8 @@ async fn prepare_server_binds_and_builds_serving_router(#[case] backend: Backend
     let bind = probe.local_addr().unwrap();
     drop(probe);
 
-    let prepared = prepare_server(&args, bind, true, None)
+    let (telemetry, capture) = default_host_config();
+    let prepared = prepare_server(&args, bind, true, None, &telemetry, capture.as_ref())
         .await
         .expect("prepare_server should succeed after init");
     assert_eq!(
@@ -341,9 +372,17 @@ async fn prepare_server_writes_then_removes_runtime_file(#[case] backend: Backen
     drop(probe);
 
     let rt_path = base.path().join("runtime.json");
-    let prepared = prepare_server(&args, bind, true, Some(rt_path.clone()))
-        .await
-        .expect("prepare_server should succeed after init");
+    let (telemetry, capture) = default_host_config();
+    let prepared = prepare_server(
+        &args,
+        bind,
+        true,
+        Some(rt_path.clone()),
+        &telemetry,
+        capture.as_ref(),
+    )
+    .await
+    .expect("prepare_server should succeed after init");
 
     assert!(
         rt_path.exists(),
@@ -407,7 +446,9 @@ async fn app_password_create_records_the_default_label(#[case] backend: Backend)
         .await
         .expect("minting with the default label should succeed");
 
-    let state = open_existing_database(&args.db).await.expect("reopen");
+    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+        .await
+        .expect("reopen");
     let user = state
         .users
         .get_user_by_username(&username)
@@ -491,7 +532,9 @@ async fn cmd_user_create_creates_retrievable_user(#[case] backend: Backend) {
         .await
         .expect("user create");
 
-    let state = open_existing_database(&args.db).await.expect("open db");
+    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+        .await
+        .expect("open db");
     let user = state
         .users
         .get_user_by_username(&username)
@@ -539,7 +582,9 @@ async fn cmd_user_create_with_operator_flag_sets_is_operator(#[case] backend: Ba
         .await
         .expect("user create");
 
-    let state = open_existing_database(&args.db).await.expect("open db");
+    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+        .await
+        .expect("open db");
     let user = state
         .users
         .get_user_by_username(&username)
@@ -563,7 +608,9 @@ async fn cmd_user_invite_creates_retrievable_invite(#[case] backend: Backend) {
         .await
         .expect("user invite");
 
-    let state = open_existing_database(&args.db).await.expect("open db");
+    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+        .await
+        .expect("open db");
     let invites = state.invites.list_invites().await.expect("list invites");
     assert_eq!(invites.len(), 1, "exactly one invite should exist");
 }
@@ -577,7 +624,9 @@ async fn cmd_user_invite_default_expires_in(#[case] backend: Backend) {
 
     cmd_user_invite(&args, None).await.expect("user invite");
 
-    let state = open_existing_database(&args.db).await.expect("open db");
+    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+        .await
+        .expect("open db");
     let invites = state.invites.list_invites().await.expect("list invites");
     assert_eq!(invites.len(), 1, "exactly one invite should exist");
 }
@@ -1044,7 +1093,9 @@ async fn cmd_smtp_test_succeeds_with_mock_server(#[case] backend: Backend) {
     let (args, _pg) = storage_args(backend, &base).await;
     cmd_init(&args, false).await.expect("init");
 
-    let state = open_existing_database(&args.db).await.expect("open db");
+    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+        .await
+        .expect("open db");
     state
         .site_config
         .set(SiteConfigKey::SmtpHost, &server.host().to_string())

@@ -51,6 +51,7 @@ mod steps {
     pub mod scan;
     pub mod sequence_check;
     pub mod server_fn_coverage_check;
+    pub mod server_fn_registrar_check;
     pub mod server_fn_tracing_check;
     pub mod server_fn_wire_arg_error_check;
     pub mod sqlx_newtype_bind_check;
@@ -575,6 +576,10 @@ const HOST_GATE_NON_TEST_STEPS: &[HostGateStep] = &[
     HostGateStep::ResultOnly {
         name: "test-patterns",
         run: steps::test_pattern_check::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "server-fn-registrar",
+        run: steps::server_fn_registrar_check::run,
     },
     HostGateStep::ResultOnly {
         name: "server-fn-tracing",

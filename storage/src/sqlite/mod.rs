@@ -41,8 +41,7 @@ pub(crate) mod atomic;
 pub use atomic::SqliteAtomicOps;
 
 mod open;
-pub(crate) use open::database_is_empty;
-pub(crate) use open::open_sqlite_database_with_pool;
+pub(crate) use open::{database_is_empty, open_sqlite_database_with_pool, resolved_sqlite_options};
 
 pub(crate) mod backup;
 

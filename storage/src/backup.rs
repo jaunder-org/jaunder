@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::{DbConnectOptions, resolved_postgres_options};
+use crate::sqlite::resolved_sqlite_options;
+use crate::{DbConnectOptions, StorageRuntimeConfig, resolved_postgres_options};
 use common::time::UtcInstant;
 mod restore_validation;
 
@@ -58,17 +59,19 @@ pub struct BackupManifest {
     pub tables: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct BackupExportOptions<'a> {
     pub database: &'a DbConnectOptions,
+    pub runtime: &'a StorageRuntimeConfig,
     pub media_path: &'a Path,
     pub destination_path: &'a Path,
     pub mode: BackupMode,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct BackupRestoreOptions<'a> {
     pub database: &'a DbConnectOptions,
+    pub runtime: &'a StorageRuntimeConfig,
     pub media_path: &'a Path,
     pub source_path: &'a Path,
 }
@@ -146,6 +149,7 @@ pub async fn restore_backup(
             restore_directory_backup(
                 BackupRestoreOptions {
                     database: options.database,
+                    runtime: options.runtime,
                     media_path: options.media_path,
                     source_path,
                 },
@@ -169,6 +173,7 @@ async fn export_archive_backup(
     let staging = TemporaryBackupDirectory::near(options.destination_path)?;
     let manifest = export_directory_backup(BackupExportOptions {
         database: options.database,
+        runtime: options.runtime,
         media_path: options.media_path,
         destination_path: staging.path(),
         mode: BackupMode::Archive,
@@ -186,7 +191,8 @@ async fn export_directory_backup(
 
     let manifest = match options.database {
         DbConnectOptions::Sqlite(connect_options) => {
-            let pool = sqlx::SqlitePool::connect_with(connect_options.clone()).await?;
+            let resolved = resolved_sqlite_options(connect_options, options.runtime);
+            let pool = sqlx::SqlitePool::connect_with(resolved).await?;
             crate::sqlite::backup::export_database(&pool, options.destination_path, options.mode)
                 .await?
         }
@@ -194,7 +200,7 @@ async fn export_directory_backup(
             options: pg_options,
             ..
         } => {
-            let resolved = resolved_postgres_options(pg_options)?;
+            let resolved = resolved_postgres_options(pg_options, options.runtime);
             let pool = sqlx::PgPool::connect_with(resolved).await?;
             crate::postgres::backup::export_database(&pool, options.destination_path, options.mode)
                 .await?
@@ -225,14 +231,15 @@ async fn restore_directory_backup(
 
     match options.database {
         DbConnectOptions::Sqlite(connect_options) => {
-            let pool = sqlx::SqlitePool::connect_with(connect_options.clone()).await?;
+            let resolved = resolved_sqlite_options(connect_options, options.runtime);
+            let pool = sqlx::SqlitePool::connect_with(resolved).await?;
             crate::sqlite::backup::restore_database(&pool, options.source_path, manifest).await
         }
         DbConnectOptions::Postgres {
             options: pg_options,
             ..
         } => {
-            let resolved = resolved_postgres_options(pg_options)?;
+            let resolved = resolved_postgres_options(pg_options, options.runtime);
             let pool = sqlx::PgPool::connect_with(resolved).await?;
             crate::postgres::backup::restore_database(&pool, options.source_path, manifest).await
         }
@@ -738,6 +745,7 @@ mod tests {
         let db = backup_db_options(backend, &env.base)?;
         let manifest = export_backup(BackupExportOptions {
             database: &db,
+            runtime: &StorageRuntimeConfig::default(),
             media_path: &media,
             destination_path: &temp.path().join("backup"),
             mode: BackupMode::Directory,
@@ -818,7 +826,7 @@ mod tests {
         let db = backup_db_options(backend, &env.base)?;
 
         assert!(
-            crate::database_is_empty(&db).await?,
+            crate::database_is_empty(&db, &StorageRuntimeConfig::default()).await?,
             "a freshly-initialized database must count as empty"
         );
         for table in [
@@ -838,7 +846,7 @@ mod tests {
         // A single non-seeded row (a user) makes the database non-empty.
         SeedUser::new().seed(&env.state).await;
         assert!(
-            !crate::database_is_empty(&db).await?,
+            !crate::database_is_empty(&db, &StorageRuntimeConfig::default()).await?,
             "a database holding a user must not count as empty"
         );
         Ok(())
@@ -858,6 +866,7 @@ mod tests {
         let source_db = backup_db_options(backend, &source.base)?;
         export_backup(BackupExportOptions {
             database: &source_db,
+            runtime: &StorageRuntimeConfig::default(),
             media_path: &media,
             destination_path: &backup,
             mode: BackupMode::Directory,
@@ -870,6 +879,7 @@ mod tests {
         let target_db = backup_db_options(backend, &target.base)?;
         restore_backup(BackupRestoreOptions {
             database: &target_db,
+            runtime: &StorageRuntimeConfig::default(),
             media_path: &temp.path().join("restored-media"),
             source_path: &backup,
         })
@@ -1082,6 +1092,7 @@ mod tests {
 
         let error = export_backup(BackupExportOptions {
             database: &source_db,
+            runtime: &StorageRuntimeConfig::default(),
             media_path: &media,
             destination_path: &backup,
             mode: BackupMode::Directory,
@@ -1299,6 +1310,7 @@ mod tests {
         let source_db = backup_db_options(backend, &source.base)?;
         export_backup(BackupExportOptions {
             database: &source_db,
+            runtime: &StorageRuntimeConfig::default(),
             media_path: &media,
             destination_path: &backup,
             mode: BackupMode::Directory,
@@ -1309,6 +1321,7 @@ mod tests {
         let target_db = backup_db_options(backend, &target.base)?;
         restore_backup(BackupRestoreOptions {
             database: &target_db,
+            runtime: &StorageRuntimeConfig::default(),
             media_path: &temp.path().join("restored-media"),
             source_path: &backup,
         })
@@ -1369,6 +1382,7 @@ mod tests {
         let source_db = backup_db_options(backend, &source.base)?;
         export_backup(BackupExportOptions {
             database: &source_db,
+            runtime: &StorageRuntimeConfig::default(),
             media_path: &media,
             destination_path: &backup,
             mode: BackupMode::Directory,
@@ -1404,6 +1418,7 @@ mod tests {
         let target_db = backup_db_options(backend, &target.base)?;
         let error = restore_backup(BackupRestoreOptions {
             database: &target_db,
+            runtime: &StorageRuntimeConfig::default(),
             media_path: &temp.path().join("restored-media"),
             source_path: &backup,
         })
@@ -1435,6 +1450,7 @@ mod tests {
         let source_db = backup_db_options(backend, &source.base)?;
         export_backup(BackupExportOptions {
             database: &source_db,
+            runtime: &StorageRuntimeConfig::default(),
             media_path: &temp.path().join("source-media"),
             destination_path: &backup,
             mode: BackupMode::Directory,
@@ -1454,6 +1470,7 @@ mod tests {
         let target_db = backup_db_options(backend, &target.base)?;
         restore_backup(BackupRestoreOptions {
             database: &target_db,
+            runtime: &StorageRuntimeConfig::default(),
             media_path: &temp.path().join("restored-media"),
             source_path: &backup,
         })

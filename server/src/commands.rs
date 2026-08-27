@@ -23,7 +23,6 @@ use common::session_label::SessionLabel;
 use common::tagged_url::{MailConfirmUrl, compose};
 use common::token::RawToken;
 use common::username::Username;
-use host::capture;
 use host::smtp_config::SmtpConfig;
 use storage::load_smtp_config;
 use storage::{
@@ -31,7 +30,8 @@ use storage::{
     export_backup, restore_backup,
 };
 use storage::{
-    init_storage, open_database, open_existing_database, open_existing_database_with_observer,
+    StorageRuntimeConfig, init_storage, open_database, open_existing_database,
+    open_existing_database_with_observer,
 };
 
 const INIT_FIRST_CONTEXT: &str = "database could not be opened; run `jaunder init` first";
@@ -46,10 +46,70 @@ fn feed_worker_interval(capture_enabled: bool) -> Duration {
     }
 }
 
+fn inherited(name: &str) -> Result<Option<String>, std::env::VarError> {
+    match std::env::var(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Resolves the application connection snapshot at the command boundary.
+///
+/// Bootstrap commands intentionally do not call this: their credentials are
+/// explicit administrative inputs, never application password overrides.
+/// `SQLite` has no `PostgreSQL` credential path, so it must not observe a broken
+/// `PostgreSQL` password file or variable.
+fn storage_runtime_config_from_raw(
+    database: &storage::DbConnectOptions,
+    sql_slow_ms: Result<Option<String>, std::env::VarError>,
+    password_file: Result<Option<io::Result<String>>, std::env::VarError>,
+    password: Result<Option<String>, std::env::VarError>,
+) -> Result<StorageRuntimeConfig, storage::PostgresPasswordError> {
+    match database {
+        storage::DbConnectOptions::Sqlite(_) => {
+            StorageRuntimeConfig::from_raw(sql_slow_ms, Ok(None), Ok(None))
+        }
+        storage::DbConnectOptions::Postgres { .. } => {
+            StorageRuntimeConfig::from_raw(sql_slow_ms, password_file, password)
+        }
+    }
+}
+
+fn storage_runtime_config(
+    database: &storage::DbConnectOptions,
+) -> Result<StorageRuntimeConfig, storage::PostgresPasswordError> {
+    let sql_slow_ms = inherited("JAUNDER_SQL_SLOW_MS");
+    match database {
+        storage::DbConnectOptions::Sqlite(_) => {
+            storage_runtime_config_from_raw(database, sql_slow_ms, Ok(None), Ok(None))
+        }
+        storage::DbConnectOptions::Postgres { .. } => {
+            let password_file = match std::env::var("JAUNDER_DB_PASSWORD_FILE") {
+                Ok(path) => Ok(Some(fs::read_to_string(path))),
+                Err(std::env::VarError::NotPresent) => Ok(None),
+                Err(error) => Err(error),
+            };
+            storage_runtime_config_from_raw(
+                database,
+                sql_slow_ms,
+                password_file,
+                inherited("JAUNDER_DB_PASSWORD"),
+            )
+        }
+    }
+}
+
 pub enum CommandOutput {
     None,
     Backup(PathBuf),
     Restore(BackupRestoreOutcome),
+}
+
+/// Capture leaf paths resolved by the serve composition root.
+pub struct ServeCapturePaths {
+    pub mail: PathBuf,
+    pub websub: PathBuf,
 }
 
 impl Commands {
@@ -61,7 +121,11 @@ impl Commands {
     /// # Errors
     ///
     /// Propagates the selected command's failure.
-    pub async fn execute(self) -> anyhow::Result<CommandOutput> {
+    pub async fn execute(
+        self,
+        telemetry: &host::telemetry::TelemetryConfig,
+        capture: Option<ServeCapturePaths>,
+    ) -> anyhow::Result<CommandOutput> {
         match self {
             Commands::Init {
                 storage,
@@ -79,9 +143,16 @@ impl Commands {
                 bind,
                 environment,
                 runtime_file,
-            } => cmd_serve(&storage, bind, environment.is_prod(), runtime_file)
-                .await
-                .map(|()| CommandOutput::None),
+            } => cmd_serve(
+                &storage,
+                bind,
+                environment.is_prod(),
+                runtime_file,
+                telemetry,
+                capture.as_ref(),
+            )
+            .await
+            .map(|()| CommandOutput::None),
             Commands::UserCreate {
                 storage,
                 username,
@@ -163,7 +234,8 @@ pub async fn cmd_init(storage: &StorageArgs, skip_if_exists: bool) -> anyhow::Re
         Err(e) if skip_if_exists && e.kind() == io::ErrorKind::AlreadyExists => {}
         Err(e) => return Err(e.into()),
     }
-    open_database(&storage.db).await?;
+    let runtime = storage_runtime_config(&storage.db)?;
+    open_database(&storage.db, &runtime).await?;
     println!(
         "Initialized: storage={} db={}",
         storage.storage_path.display(),
@@ -242,7 +314,8 @@ pub async fn cmd_user_create(
     display_name: Option<&DisplayName>,
     is_operator: bool,
 ) -> anyhow::Result<()> {
-    let state = open_existing_database(&storage.db)
+    let runtime = storage_runtime_config(&storage.db)?;
+    let state = open_existing_database(&storage.db, &runtime)
         .await
         .context(INIT_FIRST_CONTEXT)?;
 
@@ -322,7 +395,8 @@ pub async fn cmd_app_password_create(
     username: &Username,
     label: &SessionLabel,
 ) -> anyhow::Result<()> {
-    let state = open_existing_database(&storage.db)
+    let runtime = storage_runtime_config(&storage.db)?;
+    let state = open_existing_database(&storage.db, &runtime)
         .await
         .context(INIT_FIRST_CONTEXT)?;
     let token = app_password_create(&state, username, label).await?;
@@ -340,7 +414,8 @@ pub async fn cmd_user_invite(
     storage: &StorageArgs,
     expires_in: Option<InviteTtlHours>,
 ) -> anyhow::Result<()> {
-    let state = open_existing_database(&storage.db)
+    let runtime = storage_runtime_config(&storage.db)?;
+    let state = open_existing_database(&storage.db, &runtime)
         .await
         .context(INIT_FIRST_CONTEXT)?;
 
@@ -371,7 +446,8 @@ pub async fn cmd_user_invite(
 /// Returns an error if SMTP is not configured, or if the test email cannot be
 /// sent.
 pub async fn cmd_smtp_test(storage: &StorageArgs, to: &Email) -> anyhow::Result<()> {
-    let state = open_existing_database(&storage.db)
+    let runtime = storage_runtime_config(&storage.db)?;
+    let state = open_existing_database(&storage.db, &runtime)
         .await
         .context(INIT_FIRST_CONTEXT)?;
 
@@ -421,9 +497,11 @@ pub async fn cmd_backup(
     mode: BackupMode,
     path: Option<PathBuf>,
 ) -> anyhow::Result<PathBuf> {
+    let runtime = storage_runtime_config(&storage.db)?;
     let destination_path = path.unwrap_or_else(|| default_backup_path(storage, mode));
     let manifest = export_backup(BackupExportOptions {
         database: &storage.db,
+        runtime: &runtime,
         media_path: &storage.storage_path.join("media"),
         destination_path: &destination_path,
         mode,
@@ -454,14 +532,15 @@ pub async fn cmd_restore(
             path.display()
         ));
     }
-    ensure_restore_target_empty(storage).await?;
+    let runtime = storage_runtime_config(&storage.db)?;
+    ensure_restore_target_empty(storage, &runtime).await?;
     let outcome = restore_backup(BackupRestoreOptions {
         database: &storage.db,
+        runtime: &runtime,
         media_path: &storage.storage_path.join("media"),
         source_path: path,
     })
     .await?;
-
     println!(
         "Restore complete: path={} tables={}",
         path.display(),
@@ -494,8 +573,11 @@ fn default_backup_path(storage: &StorageArgs, mode: BackupMode) -> PathBuf {
     storage.storage_path.join("backups").join(name)
 }
 
-async fn ensure_restore_target_empty(storage: &StorageArgs) -> anyhow::Result<()> {
-    if !storage::database_is_empty(&storage.db).await? {
+async fn ensure_restore_target_empty(
+    storage: &StorageArgs,
+    runtime: &StorageRuntimeConfig,
+) -> anyhow::Result<()> {
+    if !storage::database_is_empty(&storage.db, runtime).await? {
         return Err(anyhow::anyhow!(
             "refusing to restore into a non-empty database"
         ));
@@ -532,9 +614,14 @@ trait StartupDatabaseOperations: Sync {
     async fn open_existing(
         &self,
         options: &storage::DbConnectOptions,
+        runtime: &StorageRuntimeConfig,
     ) -> sqlx::Result<StartupDatabase>;
 
-    async fn init(&self, storage: &StorageArgs) -> anyhow::Result<()>;
+    async fn init(
+        &self,
+        storage: &StorageArgs,
+        runtime: &StorageRuntimeConfig,
+    ) -> anyhow::Result<()>;
 
     fn metadata(&self, path: &Path) -> io::Result<fs::Metadata>;
 }
@@ -552,8 +639,9 @@ impl StartupDatabaseOperations for RealStartupDatabaseOperations {
     async fn open_existing(
         &self,
         options: &storage::DbConnectOptions,
+        runtime: &StorageRuntimeConfig,
     ) -> sqlx::Result<StartupDatabase> {
-        let opened = open_existing_database_with_observer(options).await?;
+        let opened = open_existing_database_with_observer(options, runtime).await?;
         Ok(StartupDatabase {
             state: opened.state,
             instance_id: opened.instance_id,
@@ -561,8 +649,18 @@ impl StartupDatabaseOperations for RealStartupDatabaseOperations {
         })
     }
 
-    async fn init(&self, storage: &StorageArgs) -> anyhow::Result<()> {
-        cmd_init(storage, true).await
+    async fn init(
+        &self,
+        storage: &StorageArgs,
+        runtime: &StorageRuntimeConfig,
+    ) -> anyhow::Result<()> {
+        match init_storage(&storage.storage_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
+        open_database(&storage.db, runtime).await?;
+        Ok(())
     }
 
     fn metadata(&self, path: &Path) -> io::Result<fs::Metadata> {
@@ -614,10 +712,11 @@ fn startup_database_error_context(
 
 async fn open_server_database_with(
     storage: &StorageArgs,
+    runtime: &StorageRuntimeConfig,
     prod: bool,
     operations: &impl StartupDatabaseOperations,
 ) -> anyhow::Result<StartupDatabase> {
-    let open_error = match operations.open_existing(&storage.db).await {
+    let open_error = match operations.open_existing(&storage.db, runtime).await {
         Ok(database) => return Ok(database),
         Err(error) => error,
     };
@@ -648,18 +747,19 @@ async fn open_server_database_with(
         storage_path,
         storage.db,
     );
-    operations.init(storage).await?;
+    operations.init(storage, runtime).await?;
     operations
-        .open_existing(&storage.db)
+        .open_existing(&storage.db, runtime)
         .await
         .context("auto-init failed while reopening database")
 }
 
 async fn open_server_database(
     storage: &StorageArgs,
+    runtime: &StorageRuntimeConfig,
     prod: bool,
 ) -> anyhow::Result<StartupDatabase> {
-    open_server_database_with(storage, prod, &RealStartupDatabaseOperations).await
+    open_server_database_with(storage, runtime, prod, &RealStartupDatabaseOperations).await
 }
 
 /// A bound listener and router ready to serve, plus the live background-worker
@@ -692,8 +792,9 @@ async fn prepare_saturation_metrics(
     db: Arc<storage::AppState>,
     pool_observer: storage::DbPoolObserver,
     media_root: PathBuf,
+    telemetry: &host::telemetry::TelemetryConfig,
 ) -> anyhow::Result<Option<PreparedSaturationMetrics>> {
-    if !host::telemetry::otlp_endpoint_configured() {
+    if !telemetry.otlp_endpoint_configured() {
         return Ok(None);
     }
     let backup_config = db
@@ -737,6 +838,8 @@ pub async fn prepare_server(
     bind: SocketAddr,
     prod: bool,
     runtime_file: Option<std::path::PathBuf>,
+    telemetry: &host::telemetry::TelemetryConfig,
+    capture: Option<&ServeCapturePaths>,
 ) -> anyhow::Result<PreparedServer> {
     // Establish our own start-time up front (before opening the DB): if `/proc` is
     // unusable we cannot enforce the start-up mutex, so refuse rather than serve with
@@ -754,29 +857,31 @@ pub async fn prepare_server(
         ),
         runtime_file::StartupCheck::Stale | runtime_file::StartupCheck::Proceed => {}
     }
-
+    let runtime = storage_runtime_config(&storage.db)?;
     let StartupDatabase {
         state: db,
         instance_id,
         pool_observer,
-    } = open_server_database(storage, prod).await?;
+    } = open_server_database(storage, &runtime, prod).await?;
 
     let saturation_metrics = prepare_saturation_metrics(
         db.clone(),
         pool_observer,
         storage.storage_path.join("media"),
+        telemetry,
     )
     .await?;
     let backup_scheduler = crate::backup::start_backup_worker(
         db.site_config.clone(),
         storage.db.clone(),
+        runtime,
         storage.storage_path.clone(),
     )
     .await?;
     // The `WebSub` publisher is a service, not storage: it is constructed at the
     // composition root and injected into the feed worker (ADR-0016). Capture mode
     // also selects the shorter e2e cadence without changing the production policy.
-    let websub_capture = capture::file(capture::Stream::WebSub);
+    let websub_capture = capture.map(|paths| paths.websub.clone());
     let feed_interval = feed_worker_interval(websub_capture.is_some());
     let websub = crate::websub::default_client(websub_capture);
     let feed_scheduler = crate::feed::worker::FeedWorker::new(
@@ -789,7 +894,8 @@ pub async fn prepare_server(
     .start(feed_interval)
     .await?;
     let mailer =
-        crate::mailer::build_mailer(db.site_config(), capture::file(capture::Stream::Mail)).await?;
+        crate::mailer::build_mailer(db.site_config(), capture.map(|paths| paths.mail.clone()))
+            .await?;
     let router = crate::create_router(db, instance_id, mailer, prod, storage.storage_path.clone())?;
     let listener = tokio::net::TcpListener::bind(bind).await?;
     // `local_addr` cannot fail on a just-bound listener; fall back to the
@@ -892,6 +998,8 @@ pub async fn cmd_serve(
     bind: SocketAddr,
     prod: bool,
     runtime_file: Option<std::path::PathBuf>,
+    telemetry: &host::telemetry::TelemetryConfig,
+    capture: Option<&ServeCapturePaths>,
 ) -> anyhow::Result<()> {
     // Telemetry is owned by `run`, which holds the TelemetryGuard across this
     // call (see `server/src/main.rs`); `cmd_serve` does not init it, matching
@@ -910,7 +1018,7 @@ pub async fn cmd_serve(
         feed_scheduler,
         runtime_guard,
         saturation_metrics,
-    } = prepare_server(storage, bind, prod, runtime_file).await?;
+    } = prepare_server(storage, bind, prod, runtime_file, telemetry, capture).await?;
 
     tracing::info!(bind = %bind, prod, "starting HTTP server");
     // Keep the worker schedulers alive for the lifetime of the serve loop.
@@ -953,7 +1061,8 @@ async fn cmd_site_config_set(
     value: &str,
 ) -> anyhow::Result<()> {
     key.validate(value)?;
-    let state = open_existing_database(&storage.db).await?;
+    let runtime = storage_runtime_config(&storage.db)?;
+    let state = open_existing_database(&storage.db, &runtime).await?;
     state.site_config.set(key, value).await?;
     eprintln!("set site_config {key} = {value}");
     Ok(())
@@ -962,7 +1071,8 @@ async fn cmd_site_config_set(
 /// Print the value for `key` to stdout; error (→ non-zero exit) if it is unset,
 /// so a caller can distinguish an unset key from an empty value.
 async fn cmd_site_config_get(storage: &StorageArgs, key: SiteConfigKey) -> anyhow::Result<()> {
-    let state = open_existing_database(&storage.db).await?;
+    let runtime = storage_runtime_config(&storage.db)?;
+    let state = open_existing_database(&storage.db, &runtime).await?;
     match state.site_config.get_raw(key).await? {
         Some(value) => {
             println!("{value}");
@@ -974,7 +1084,8 @@ async fn cmd_site_config_get(storage: &StorageArgs, key: SiteConfigKey) -> anyho
 
 /// Print all `site_config` entries as `key=value`, one per line, ordered by key.
 async fn cmd_site_config_list(storage: &StorageArgs) -> anyhow::Result<()> {
-    let state = open_existing_database(&storage.db).await?;
+    let runtime = storage_runtime_config(&storage.db)?;
+    let state = open_existing_database(&storage.db, &runtime).await?;
     let entries = state.site_config.list().await?;
     print!("{}", format_entries(&entries));
     Ok(())
@@ -983,7 +1094,8 @@ async fn cmd_site_config_list(storage: &StorageArgs) -> anyhow::Result<()> {
 /// Delete a `site_config` key. Idempotent (exit 0 whether or not a row existed);
 /// stderr notes which happened.
 async fn cmd_site_config_unset(storage: &StorageArgs, key: SiteConfigKey) -> anyhow::Result<()> {
-    let state = open_existing_database(&storage.db).await?;
+    let runtime = storage_runtime_config(&storage.db)?;
+    let state = open_existing_database(&storage.db, &runtime).await?;
     if state.site_config.delete(key).await? {
         eprintln!("unset site_config {key}");
     } else {
@@ -1029,6 +1141,8 @@ mod tests {
     };
     use rstest::*;
     use rstest_reuse::*;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt as _;
     use storage::{
         DbConnectOptions,
         test_support::{
@@ -1036,6 +1150,121 @@ mod tests {
         },
     };
     use tempfile::TempDir;
+
+    fn test_telemetry(otlp_endpoint: Option<&str>) -> host::telemetry::TelemetryConfig {
+        host::telemetry::TelemetryConfig::from_raw(
+            false,
+            host::telemetry::TelemetryRawConfig {
+                log_filter: Ok(None),
+                rust_log: Ok(None),
+                log_format: Ok(None),
+                jaunder_otlp_endpoint: Ok(otlp_endpoint.map(str::to_owned)),
+                otlp_endpoint: Ok(None),
+                slow_op_ms: Ok(None),
+                e2e_seed_process: Ok(None),
+            },
+        )
+    }
+
+    #[test]
+    fn subprocess_classifies_command_configuration_inputs() {
+        const SCENARIO: &str = "JAUNDER_TEST_COMMAND_CONFIG_SCENARIO";
+        if let Some(scenario) = std::env::var_os(SCENARIO) {
+            let database: DbConnectOptions = "postgres://app@localhost/jaunder"
+                .parse()
+                .expect("PostgreSQL URL");
+            let result = storage_runtime_config(&database);
+            match scenario.to_string_lossy().as_ref() {
+                "file" | "password" | "invalid-threshold" => {
+                    result.expect("valid command configuration");
+                }
+                "invalid-file-variable" => {
+                    assert!(matches!(
+                        result,
+                        Err(storage::PostgresPasswordError::FileVariable(_))
+                    ));
+                }
+                _ => unreachable!("parent supplies a closed configuration scenario set"),
+            }
+            return;
+        }
+
+        let dir = TempDir::new().expect("password directory");
+        let password_file = dir.path().join("password");
+        std::fs::write(&password_file, "from-file\n").expect("password fixture");
+        for scenario in [
+            "file",
+            "password",
+            "invalid-threshold",
+            "invalid-file-variable",
+        ] {
+            let mut command =
+                std::process::Command::new(std::env::current_exe().expect("test executable"));
+            command.args([
+                "--exact",
+                "commands::tests::subprocess_classifies_command_configuration_inputs",
+                "--nocapture",
+            ]);
+            command.env(SCENARIO, scenario);
+            for name in [
+                "JAUNDER_SQL_SLOW_MS",
+                "JAUNDER_DB_PASSWORD_FILE",
+                "JAUNDER_DB_PASSWORD",
+            ] {
+                command.env_remove(name);
+            }
+            match scenario {
+                "file" => {
+                    command.env("JAUNDER_DB_PASSWORD_FILE", &password_file);
+                }
+                "password" => {
+                    command.env("JAUNDER_DB_PASSWORD", "from-variable");
+                }
+                "invalid-threshold" => {
+                    command.env(
+                        "JAUNDER_SQL_SLOW_MS",
+                        std::ffi::OsString::from_vec(vec![0xff]),
+                    );
+                }
+                "invalid-file-variable" => {
+                    command.env(
+                        "JAUNDER_DB_PASSWORD_FILE",
+                        std::ffi::OsString::from_vec(vec![0xff]),
+                    );
+                }
+                _ => unreachable!("closed parent scenario set"),
+            }
+            assert!(
+                command
+                    .status()
+                    .expect("spawn configuration child")
+                    .success(),
+                "configuration child scenario {scenario} must succeed"
+            );
+        }
+    }
+
+    #[test]
+    fn sqlite_runtime_config_ignores_broken_postgres_credential_inputs() {
+        let database: DbConnectOptions = "sqlite:/tmp/jaunder.db".parse().expect("SQLite URL");
+        let runtime = storage_runtime_config_from_raw(
+            &database,
+            Ok(None),
+            Err(std::env::VarError::NotUnicode(std::ffi::OsString::from(
+                "invalid-password-file-variable",
+            ))),
+            Err(std::env::VarError::NotUnicode(std::ffi::OsString::from(
+                "invalid-password-variable",
+            ))),
+        )
+        .expect("SQLite does not resolve PostgreSQL credentials");
+
+        assert_eq!(
+            runtime.sql_slow_query_threshold(),
+            Duration::from_secs(5),
+            "SQLite retains the shared threshold default"
+        );
+    }
 
     #[test]
     fn feed_worker_interval_is_250_ms_for_capture() {
@@ -1056,11 +1285,14 @@ mod tests {
         let (db, guard) = match backend {
             Backend::Sqlite => (sqlite_url(base), None),
             Backend::Postgres => {
-                let (db, guard) = unique_postgres_url().await;
+                let config = storage::test_support::PostgresTestConfig::from_env();
+                let (db, guard) = unique_postgres_url(&config).await;
                 (db, Some(guard))
             }
         };
-        storage::open_database(&db).await.expect("open db");
+        storage::open_database(&db, &StorageRuntimeConfig::default())
+            .await
+            .expect("open db");
         (
             StorageArgs {
                 storage_path: base.path().to_path_buf(),
@@ -1223,7 +1455,7 @@ mod tests {
     }
 
     async fn missing_sqlite_open_error(database: &DbConnectOptions) -> sqlx::Error {
-        storage::open_existing_database(database)
+        storage::open_existing_database(database, &StorageRuntimeConfig::default())
             .await
             .err()
             .expect("missing SQLite filename must fail")
@@ -1306,6 +1538,7 @@ mod tests {
         async fn open_existing(
             &self,
             _options: &DbConnectOptions,
+            _runtime: &StorageRuntimeConfig,
         ) -> sqlx::Result<StartupDatabase> {
             Err(self
                 .errors
@@ -1315,7 +1548,11 @@ mod tests {
                 .expect("an injected open error"))
         }
 
-        async fn init(&self, _storage: &StorageArgs) -> anyhow::Result<()> {
+        async fn init(
+            &self,
+            _storage: &StorageArgs,
+            _runtime: &StorageRuntimeConfig,
+        ) -> anyhow::Result<()> {
             self.init_calls
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok(())
@@ -1349,10 +1586,15 @@ mod tests {
             db: database,
         };
 
-        let error = open_server_database_with(&storage, false, &operations)
-            .await
-            .err()
-            .expect("reopen failure must propagate");
+        let error = open_server_database_with(
+            &storage,
+            &StorageRuntimeConfig::default(),
+            false,
+            &operations,
+        )
+        .await
+        .err()
+        .expect("reopen failure must propagate");
 
         assert_command_source::<sqlx::Error>(&error, "auto-init failed while reopening database");
         assert_eq!(
@@ -1381,10 +1623,15 @@ mod tests {
             db: database,
         };
 
-        let error = open_server_database_with(&storage, false, &operations)
-            .await
-            .err()
-            .expect("metadata failure must propagate");
+        let error = open_server_database_with(
+            &storage,
+            &StorageRuntimeConfig::default(),
+            false,
+            &operations,
+        )
+        .await
+        .err()
+        .expect("metadata failure must propagate");
 
         assert_command_source::<io::Error>(
             &error,
@@ -1414,10 +1661,15 @@ mod tests {
             db: database,
         };
 
-        let error = open_server_database_with(&storage, false, &operations)
-            .await
-            .err()
-            .expect("connection failure must propagate");
+        let error = open_server_database_with(
+            &storage,
+            &StorageRuntimeConfig::default(),
+            false,
+            &operations,
+        )
+        .await
+        .err()
+        .expect("connection failure must propagate");
 
         assert_command_source::<sqlx::Error>(&error, INIT_FIRST_CONTEXT);
         assert!(
@@ -1595,7 +1847,9 @@ mod tests {
     async fn site_config_set_rejects_an_invalid_value(#[case] backend: Backend) {
         let base = TempDir::new().expect("temp dir");
         let (args, _pg) = site_config_args(backend, &base).await;
-        let state = open_existing_database(&args.db).await.expect("reopen");
+        let state = open_existing_database(&args.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("reopen");
         let before = state.site_config.list().await.unwrap().len();
 
         cmd_site_config_set(&args, SiteConfigKey::SiteBaseUrl, "nonsense://x")
@@ -1620,7 +1874,9 @@ mod tests {
             .await
             .expect("empty means unset on an optional key");
 
-        let state = open_existing_database(&args.db).await.expect("reopen");
+        let state = open_existing_database(&args.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("reopen");
         assert_eq!(
             state
                 .site_config
@@ -1679,7 +1935,7 @@ mod tests {
         let temp = TempDir::new().expect("temp dir");
         let storage_args = sqlite_storage_args(&temp);
         // Handlers use open_existing_database, so the DB must already exist.
-        storage::open_database(&storage_args.db)
+        storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
             .await
             .expect("open db");
 
@@ -1699,7 +1955,7 @@ mod tests {
         .await
         .expect("upsert ok");
 
-        let state = open_existing_database(&storage_args.db)
+        let state = open_existing_database(&storage_args.db, &StorageRuntimeConfig::default())
             .await
             .expect("reopen");
         assert_eq!(
@@ -1730,7 +1986,7 @@ mod tests {
     async fn cmd_user_invite_creates_invite_expiring_in_the_future() {
         let temp = TempDir::new().expect("temp dir");
         let storage_args = sqlite_storage_args(&temp);
-        let state = storage::open_database(&storage_args.db)
+        let state = storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
             .await
             .expect("open db");
 
@@ -1754,7 +2010,7 @@ mod tests {
         // command prints a ready-to-send invitation link rather than the bare code.
         let temp = TempDir::new().expect("temp dir");
         let storage_args = sqlite_storage_args(&temp);
-        let state = storage::open_database(&storage_args.db)
+        let state = storage::open_database(&storage_args.db, &StorageRuntimeConfig::default())
             .await
             .expect("open db");
         state
@@ -1775,9 +2031,11 @@ mod tests {
     async fn open_server_database_carries_pool_observer() {
         let temp = TempDir::new().expect("temp dir");
         let storage = sqlite_storage_args(&temp);
-        storage::open_database(&storage.db).await.expect("open db");
+        storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+            .await
+            .expect("open db");
 
-        let database = open_server_database(&storage, false)
+        let database = open_server_database(&storage, &StorageRuntimeConfig::default(), false)
             .await
             .expect("open server database");
         let snapshot = database.pool_observer.snapshot();
@@ -1803,7 +2061,8 @@ mod tests {
         );
 
         let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
-        let prepared = prepare_server(&storage, bind, false, None)
+        let telemetry = test_telemetry(None);
+        let prepared = prepare_server(&storage, bind, false, None, &telemetry, None)
             .await
             .expect("dev-mode prepare_server must auto-initialize");
 
@@ -1814,46 +2073,41 @@ mod tests {
 
     #[test]
     fn prepare_server_registers_saturation_sampler_when_otel_endpoint_is_set() {
-        common::test_support::with_env(|env| {
-            env.set(
-                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
-                "http://127.0.0.1:4318",
-            );
-            env.remove("OTEL_EXPORTER_OTLP_ENDPOINT");
-            let runtime = tokio::runtime::Runtime::new().expect("runtime");
-            runtime.block_on(async {
-                let temp = TempDir::new().expect("temp dir");
-                let storage = sqlite_storage_args(&temp);
-                storage::open_database(&storage.db).await.expect("open db");
-                let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        runtime.block_on(async {
+            let temp = TempDir::new().expect("temp dir");
+            let storage = sqlite_storage_args(&temp);
+            storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+                .await
+                .expect("open db");
+            let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
 
-                let prepared = prepare_server(&storage, bind, false, None)
-                    .await
-                    .expect("prepare server");
+            let telemetry = test_telemetry(Some("http://127.0.0.1:4318"));
+            let prepared = prepare_server(&storage, bind, false, None, &telemetry, None)
+                .await
+                .expect("prepare server");
 
-                assert!(prepared.saturation_metrics.is_some());
-            });
+            assert!(prepared.saturation_metrics.is_some());
         });
     }
 
     #[test]
     fn prepare_server_does_not_start_saturation_sampler_without_otel_endpoint() {
-        common::test_support::with_env(|env| {
-            env.remove("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
-            env.remove("OTEL_EXPORTER_OTLP_ENDPOINT");
-            let runtime = tokio::runtime::Runtime::new().expect("runtime");
-            runtime.block_on(async {
-                let temp = TempDir::new().expect("temp dir");
-                let storage = sqlite_storage_args(&temp);
-                storage::open_database(&storage.db).await.expect("open db");
-                let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        runtime.block_on(async {
+            let temp = TempDir::new().expect("temp dir");
+            let storage = sqlite_storage_args(&temp);
+            storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+                .await
+                .expect("open db");
+            let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
 
-                let prepared = prepare_server(&storage, bind, false, None)
-                    .await
-                    .expect("prepare server");
+            let telemetry = test_telemetry(None);
+            let prepared = prepare_server(&storage, bind, false, None, &telemetry, None)
+                .await
+                .expect("prepare server");
 
-                assert!(prepared.saturation_metrics.is_none());
-            });
+            assert!(prepared.saturation_metrics.is_none());
         });
     }
 
@@ -1881,7 +2135,10 @@ mod tests {
         let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
         // `.err()` discards the Ok(PreparedServer) (which isn't Debug) and keeps the
         // error, so the whole check is one covered assertion (no standalone panic line).
-        let err = prepare_server(&storage, bind, false, None).await.err();
+        let telemetry = test_telemetry(None);
+        let err = prepare_server(&storage, bind, false, None, &telemetry, None)
+            .await
+            .err();
         assert!(
             err.is_some_and(|e| e.to_string().contains("already running")),
             "prepare_server must refuse when a live writer holds runtime.json"
