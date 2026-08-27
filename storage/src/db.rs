@@ -439,7 +439,8 @@ pub async fn database_is_empty(options: &DbConnectOptions) -> sqlx::Result<bool>
 mod tests {
     use super::*;
     use crate::test_support::{
-        Backend, backends, recorded_postgres_url, sqlite_url, template_postgres_url,
+        Backend, PostgresTestConfig, backends, recorded_postgres_url, sqlite_url,
+        template_postgres_url,
     };
     use common::test_support::with_env;
     use rstest::*;
@@ -762,7 +763,8 @@ mod tests {
         let (options, _guard) = match backend {
             Backend::Sqlite => (sqlite_url(&temp), None),
             Backend::Postgres => {
-                let (options, guard) = template_postgres_url().await;
+                let config = PostgresTestConfig::from_env();
+                let (options, guard) = template_postgres_url(&config).await;
                 (options, Some(guard))
             }
         };

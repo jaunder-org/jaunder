@@ -2,12 +2,15 @@ use common::visibility::{Channel, SubscriptionStatus, TargetKind};
 use rstest::*;
 use rstest_reuse::*;
 use sqlx::PgPool;
-use storage::test_support::{Backend, PostgresDbGuard, TestEnv, backends, template_postgres_url};
+use storage::test_support::{
+    Backend, PostgresDbGuard, PostgresTestConfig, TestEnv, backends, template_postgres_url,
+};
 
 use super::fixtures::open_pool;
 
 async fn open_pg_pool() -> (PgPool, PostgresDbGuard) {
-    let (url, guard) = template_postgres_url().await;
+    let config = PostgresTestConfig::from_env();
+    let (url, guard) = template_postgres_url(&config).await;
     // `expose_url`, not `to_string`: we are connecting, so the password must survive.
     let pool = PgPool::connect(&url.expose_url()).await.unwrap();
     (pool, guard)

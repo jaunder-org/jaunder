@@ -29,8 +29,9 @@ use crate::misc::backup_fixture::{
     assert_backup_fixture_restored, assert_target_unmodified, populate_backup_fixture,
 };
 use storage::test_support::{
-    Backend, PostgresDbGuard, SeedUser, backends, nonexistent_postgres_url, noop_mailer,
-    raw_media_filename_exists, rewrite_media_filename_in_backup, sqlite_url, unique_postgres_url,
+    Backend, PostgresDbGuard, PostgresTestConfig, SeedUser, backends, nonexistent_postgres_url,
+    noop_mailer, raw_media_filename_exists, rewrite_media_filename_in_backup, sqlite_url,
+    unique_postgres_url,
 };
 
 fn default_host_config() -> (
@@ -59,7 +60,8 @@ async fn storage_args(backend: Backend, base: &TempDir) -> (StorageArgs, Option<
     let (db, guard) = match backend {
         Backend::Sqlite => (sqlite_url(base), None),
         Backend::Postgres => {
-            let (db, guard) = unique_postgres_url().await;
+            let config = PostgresTestConfig::from_env();
+            let (db, guard) = unique_postgres_url(&config).await;
             (db, Some(guard))
         }
     };
@@ -70,7 +72,10 @@ fn uninitialized_storage_args(backend: Backend, base: &TempDir) -> StorageArgs {
     let storage_path = base.path().join("storage");
     let db = match backend {
         Backend::Sqlite => sqlite_url(base),
-        Backend::Postgres => nonexistent_postgres_url(),
+        Backend::Postgres => {
+            let config = PostgresTestConfig::from_env();
+            nonexistent_postgres_url(&config)
+        }
     };
     StorageArgs { storage_path, db }
 }

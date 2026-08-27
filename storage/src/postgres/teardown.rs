@@ -5,7 +5,7 @@
 #[cfg(test)]
 mod tests {
     use crate::test_support::{
-        Backend, postgres_bootstrap_url, postgres_only, recorded_postgres_url, unique_postgres_url,
+        Backend, PostgresTestConfig, postgres_only, recorded_postgres_url, unique_postgres_url,
     };
     use sqlx::Connection;
 
@@ -23,8 +23,9 @@ mod tests {
     }
 
     /// True if `db_name` currently exists in the ephemeral cluster.
-    async fn database_exists(db_name: &str) -> bool {
-        let options: sqlx::postgres::PgConnectOptions = postgres_bootstrap_url()
+    async fn database_exists(config: &PostgresTestConfig, db_name: &str) -> bool {
+        let options: sqlx::postgres::PgConnectOptions = config
+            .bootstrap_url()
             .parse()
             .expect("bootstrap URL parses");
         let mut conn = sqlx::PgConnection::connect_with(&options)
@@ -46,18 +47,19 @@ mod tests {
     // dropped when the TestEnv is gone) via pg_database — SQLite has no such cluster.
     #[tokio::test]
     async fn per_test_database_is_dropped_on_teardown(#[case] backend: Backend) {
+        let config = PostgresTestConfig::from_env();
         let env = backend.setup().await;
         let db_name = db_name_from_url(&recorded_postgres_url(&env.base));
 
         assert!(
-            database_exists(&db_name).await,
+            database_exists(&config, &db_name).await,
             "per-test database {db_name} should exist while the TestEnv is alive"
         );
 
         drop(env);
 
         assert!(
-            !database_exists(&db_name).await,
+            !database_exists(&config, &db_name).await,
             "per-test database {db_name} should be dropped once the TestEnv is gone"
         );
     }
@@ -65,18 +67,19 @@ mod tests {
     // guard:low-level-db — drives unique_postgres_url()/PostgresDbGuard directly, not the backend fixture
     #[tokio::test]
     async fn unique_postgres_database_is_dropped_on_guard_drop() {
-        let (options, guard) = unique_postgres_url().await;
+        let config = PostgresTestConfig::from_env();
+        let (options, guard) = unique_postgres_url(&config).await;
         let db_name = db_name_from_url(&options.expose_url());
 
         assert!(
-            database_exists(&db_name).await,
+            database_exists(&config, &db_name).await,
             "unique_postgres_url() database {db_name} should exist while its guard is held"
         );
 
         drop(guard);
 
         assert!(
-            !database_exists(&db_name).await,
+            !database_exists(&config, &db_name).await,
             "unique_postgres_url() database {db_name} should be dropped once its guard is gone"
         );
     }

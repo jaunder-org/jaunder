@@ -53,7 +53,7 @@ Out:
     threshold parity, valid-empty passwords, file trimming, error sources,
     embedded-URL fallback, reconnect reuse, and scheduled backup ownership.
 
-- [ ] Task 3: Make PostgreSQL test provisioning own its configuration
+- [x] Task 3: Make PostgreSQL test provisioning own its configuration
   - Contract: an owned PostgreSQL test configuration is resolved at each harness
     setup boundary and passed through template creation, database provisioning,
     helpers, and teardown. `PostgresDbGuard` owns everything its asynchronous
