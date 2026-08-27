@@ -4,7 +4,7 @@
 //! like `MarsEdit` and external blog editors. This module provides [`render_rsd_document`]
 //! to generate an `RSD` document pointing to the `AtomPub` service and home page.
 
-use crate::tagged_url::{HomepageUrl, ServiceDocUrl};
+use common::tagged_url::{HomepageUrl, ServiceDocUrl};
 use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 
@@ -17,7 +17,7 @@ use super::xml::{write_empty_element, write_text_element};
 /// Document endpoint; the homepage URL is the site's public-facing home.
 ///
 /// URL text and attributes are XML-escaped by `quick-xml`. Typing them as
-/// [`TaggedUrl`](crate::tagged_url::TaggedUrl)s does not make that escaping
+/// [`TaggedUrl`](common::tagged_url::TaggedUrl)s does not make that escaping
 /// redundant: `&` is legal in a query string and survives URL normalization, so
 /// an unescaped hub or homepage URL carrying one would emit malformed XML.
 ///
@@ -26,7 +26,7 @@ use super::xml::{write_empty_element, write_text_element};
 /// (#875):
 ///
 /// ```compile_fail
-/// # use common::atompub::rsd::render_rsd_document;
+/// # use host::atompub::rsd::render_rsd_document;
 /// # use common::tagged_url::{HomepageUrl, ServiceDocUrl};
 /// # fn f(service: &ServiceDocUrl, homepage: &HomepageUrl) {
 /// let _ = render_rsd_document(homepage, service);
@@ -37,7 +37,7 @@ use super::xml::{write_empty_element, write_text_element};
 /// failing for the transposition:
 ///
 /// ```
-/// # use common::atompub::rsd::render_rsd_document;
+/// # use host::atompub::rsd::render_rsd_document;
 /// # use common::tagged_url::{HomepageUrl, ServiceDocUrl};
 /// # fn f(service: &ServiceDocUrl, homepage: &HomepageUrl) {
 /// let _ = render_rsd_document(service, homepage);
@@ -83,7 +83,7 @@ pub fn render_rsd_document(service_url: &ServiceDocUrl, homepage_url: &HomepageU
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::parse_url;
+    use common::test_support::parse_url;
 
     #[test]
     fn rsd_document_contains_engine_name_and_urls() {

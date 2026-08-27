@@ -6,12 +6,12 @@ use axum::Extension;
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
 
-use common::atompub::{
+use common::pagination::RowLimit;
+use common::tagged_url::{CollectionHref, compose};
+use host::atompub::{
     CollectionAccept, CollectionDecl, CollectionTitle, ServiceDocument, WorkspaceTitle,
     render_service_document,
 };
-use common::pagination::RowLimit;
-use common::tagged_url::{CollectionHref, compose};
 use storage::{PostStorage, SiteConfigStorage};
 use web::auth;
 

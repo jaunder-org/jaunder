@@ -3,7 +3,7 @@ use std::str::FromStr;
 use macros::StrNewtype;
 use thiserror::Error;
 
-use crate::username::Username;
+use common::username::Username;
 
 /// Human-readable title of an `AtomPub` Workspace.
 #[derive(Clone, Debug, PartialEq, Eq, StrNewtype)]

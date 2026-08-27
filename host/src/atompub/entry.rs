@@ -29,12 +29,12 @@ use atom_syndication::{Content, Entry, Feed, Link, Text};
 
 use super::title::CollectionFeedTitle;
 use super::{APP_NS, AtomPubError, J_NS};
-use crate::media::{ContentType, Filename};
-use crate::tagged_url::{
+use common::media::{ContentType, Filename};
+use common::tagged_url::{
     ContentSrcUrl, EditMediaUriUrl, EditUriUrl, EntryIdUrl, FeedUrl, PaginationUrl, TaggedUrl,
     UrlRole,
 };
-use crate::time::UtcInstant;
+use common::time::UtcInstant;
 
 // ---------------------------------------------------------------------------
 // Namespace bookkeeping
@@ -436,7 +436,7 @@ pub fn render_feed(meta: &FeedMeta, entries: &[Entry]) -> Result<String, AtomPub
 /// the binary (#875):
 ///
 /// ```compile_fail
-/// # use common::atompub::entry::MediaLinkEntry;
+/// # use host::atompub::entry::MediaLinkEntry;
 /// # fn f(a: MediaLinkEntry, b: MediaLinkEntry) -> MediaLinkEntry {
 /// MediaLinkEntry { edit_uri: b.edit_media_uri, edit_media_uri: b.edit_uri, ..a }
 /// # }
@@ -446,7 +446,7 @@ pub fn render_feed(meta: &FeedMeta, entries: &[Entry]) -> Result<String, AtomPub
 /// failing for the transposition:
 ///
 /// ```
-/// # use common::atompub::entry::MediaLinkEntry;
+/// # use host::atompub::entry::MediaLinkEntry;
 /// # fn f(a: MediaLinkEntry, b: MediaLinkEntry) -> MediaLinkEntry {
 /// MediaLinkEntry { edit_uri: b.edit_uri, edit_media_uri: b.edit_media_uri, ..a }
 /// # }
@@ -521,7 +521,7 @@ mod tests {
     use super::*;
     use atom_syndication::Category;
 
-    use crate::test_support::{parse_content_type, parse_filename, parse_url, parse_utc_instant};
+    use common::test_support::{parse_content_type, parse_filename, parse_url, parse_utc_instant};
 
     /// The `(type, value)` of an entry's `<content>`. Every caller supplies one, so
     /// an absent element is a broken test rather than a case to report.

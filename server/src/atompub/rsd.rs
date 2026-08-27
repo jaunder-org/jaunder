@@ -10,9 +10,9 @@ use axum::extract::Path;
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
 
-use common::atompub::render_rsd_document;
 use common::tagged_url::{HomepageUrl, ServiceDocUrl, compose};
 use common::username::Username;
+use host::atompub::render_rsd_document;
 use storage::SiteConfigStorage;
 
 use super::{HandlerError, required_base_url};

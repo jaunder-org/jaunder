@@ -60,7 +60,7 @@ Out:
     references, ETag values, Org normalization, SQLx decode behavior, and both
     RenderedHtml construction gates.
 
-- [ ] Task 4: Move AtomPub implementation ownership wholesale to `host`.
+- [x] Task 4: Move AtomPub implementation ownership wholesale to `host`.
   - Contract: AtomPub models, parsing, extensions, Service Document/RSD/XML
     machinery, and serializers move as one deep host module; Axum routing
     remains in `server`. Server adapters import the host surface directly.

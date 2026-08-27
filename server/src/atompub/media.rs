@@ -11,11 +11,11 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use common::atompub::{MediaLinkEntry, render_media_link_entry};
 use common::media::{ContentHash, Filename, MediaRef, MediaSource, media_url};
 use common::root_relative_url::RootRelativeUrl;
 use common::tagged_url::{BaseUrl, EditMediaUriUrl, EditUriUrl, compose};
 use common::username::Username;
+use host::atompub::{MediaLinkEntry, render_media_link_entry};
 use storage::{
     InstanceId, MediaManager, MediaRecord, MediaReferenceOwnershipResolver, MediaStorage,
     PostStorage, SiteConfigStorage, resolve_media_reference_ownership,

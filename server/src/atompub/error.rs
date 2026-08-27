@@ -85,19 +85,19 @@ impl From<StatusCode> for HandlerError {
     }
 }
 
-impl From<common::atompub::AtomError> for HandlerError {
+impl From<host::atompub::AtomError> for HandlerError {
     /// A document the client sent that `atom_syndication` will not parse is a `400`.
     /// This is the whole read-side mapping: handlers call `body.parse::<Entry>()?`
     /// and land here.
-    fn from(_: common::atompub::AtomError) -> Self {
+    fn from(_: host::atompub::AtomError) -> Self {
         HandlerError::BadRequest
     }
 }
 
-impl From<common::atompub::AtomPubError> for HandlerError {
+impl From<host::atompub::AtomPubError> for HandlerError {
     /// Failing to *write* a document we composed is ours, not the request's, so it
     /// retains its source and becomes a `500` rather than blaming the client.
-    fn from(err: common::atompub::AtomPubError) -> Self {
+    fn from(err: host::atompub::AtomPubError) -> Self {
         internal(err)
     }
 }
@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn an_unparseable_document_is_a_bad_request() {
-        let err = common::atompub::AtomError::InvalidStartTag;
+        let err = host::atompub::AtomError::InvalidStartTag;
         assert_eq!(status(err.into()), StatusCode::BAD_REQUEST);
     }
 
@@ -204,7 +204,7 @@ mod tests {
     fn a_serialization_failure_is_internal_not_a_bad_request() {
         // Writing a document is the server's job, so a failure there must not be
         // reported as the client having sent something wrong.
-        let err = common::atompub::AtomPubError::Utf8(
+        let err = host::atompub::AtomPubError::Utf8(
             String::from_utf8(vec![0xff]).expect_err("invalid UTF-8"),
         );
         assert_eq!(status(err.into()), StatusCode::INTERNAL_SERVER_ERROR);
@@ -244,7 +244,7 @@ mod tests {
             StatusCode::INTERNAL_SERVER_ERROR
         );
         assert_eq!(
-            status(common::atompub::AtomError::InvalidStartTag.into()),
+            status(host::atompub::AtomError::InvalidStartTag.into()),
             StatusCode::BAD_REQUEST
         );
         assert_eq!(

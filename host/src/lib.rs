@@ -3,16 +3,17 @@
 //! never compiles to wasm, so it may use `std::fs`/`std::env` freely without the
 //! `#[cfg(not(target_arch = "wasm32"))]` gating `common` would demand (ADR-0058).
 //!
-//! Tenants live in their own modules. [`capture`] owns the `JAUNDER_CAPTURE_DIR`
-//! contract (issue #227, ADR-0057); [`error`] holds the server-side error carrier
-//! (issue #334, ADR-0058 as clarified); [`auth`] holds host-side HTTP credential
-//! parsing and session-cookie construction; [`etag`] and [`render`] own
-//! host-only content construction and sanitization; [`password`] owns the validated
-//! domain secret and Argon2 operations, paired with the persisted
-//! [`stored_password_hash::StoredPasswordHash`]; [`metrics`] and [`telemetry`] own
-//! process observability; and [`smtp_config`] holds the validated outbound relay
-//! aggregate.
+//! Tenants live in their own modules. [`atompub`] owns protocol models and
+//! serialization below the server routing boundary; [`capture`] owns the
+//! `JAUNDER_CAPTURE_DIR` contract; [`error`] holds the server-side error carrier;
+//! [`auth`] holds host-side HTTP credential parsing and session-cookie construction;
+//! [`etag`] and [`render`] own host-only content construction and sanitization;
+//! [`password`] owns the validated domain secret and Argon2 operations, paired with
+//! the persisted [`stored_password_hash::StoredPasswordHash`]; [`metrics`] and
+//! [`telemetry`] own process observability; and [`smtp_config`] holds the validated
+//! outbound relay aggregate.
 
+pub mod atompub;
 pub mod auth;
 pub mod capture;
 pub mod error;
