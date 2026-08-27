@@ -23,7 +23,6 @@ use common::session_label::SessionLabel;
 use common::tagged_url::{MailConfirmUrl, compose};
 use common::token::RawToken;
 use common::username::Username;
-use host::capture;
 use host::smtp_config::SmtpConfig;
 use storage::load_smtp_config;
 use storage::{
@@ -107,6 +106,12 @@ pub enum CommandOutput {
     Restore(BackupRestoreOutcome),
 }
 
+/// Capture leaf paths resolved by the serve composition root.
+pub struct ServeCapturePaths {
+    pub mail: PathBuf,
+    pub websub: PathBuf,
+}
+
 impl Commands {
     /// Dispatch this parsed subcommand to its handler. A flat match-expression:
     /// each arm evaluates to the command's `Result<CommandOutput>`, so there is no `?` on
@@ -119,7 +124,7 @@ impl Commands {
     pub async fn execute(
         self,
         telemetry: &host::telemetry::TelemetryConfig,
-        capture: &capture::CaptureConfig,
+        capture: Option<ServeCapturePaths>,
     ) -> anyhow::Result<CommandOutput> {
         match self {
             Commands::Init {
@@ -144,7 +149,7 @@ impl Commands {
                 environment.is_prod(),
                 runtime_file,
                 telemetry,
-                capture,
+                capture.as_ref(),
             )
             .await
             .map(|()| CommandOutput::None),
@@ -834,7 +839,7 @@ pub async fn prepare_server(
     prod: bool,
     runtime_file: Option<std::path::PathBuf>,
     telemetry: &host::telemetry::TelemetryConfig,
-    capture: &capture::CaptureConfig,
+    capture: Option<&ServeCapturePaths>,
 ) -> anyhow::Result<PreparedServer> {
     // Establish our own start-time up front (before opening the DB): if `/proc` is
     // unusable we cannot enforce the start-up mutex, so refuse rather than serve with
@@ -876,7 +881,7 @@ pub async fn prepare_server(
     // The `WebSub` publisher is a service, not storage: it is constructed at the
     // composition root and injected into the feed worker (ADR-0016). Capture mode
     // also selects the shorter e2e cadence without changing the production policy.
-    let websub_capture = capture.file(capture::Stream::WebSub);
+    let websub_capture = capture.map(|paths| paths.websub.clone());
     let feed_interval = feed_worker_interval(websub_capture.is_some());
     let websub = crate::websub::default_client(websub_capture);
     let feed_scheduler = crate::feed::worker::FeedWorker::new(
@@ -889,7 +894,8 @@ pub async fn prepare_server(
     .start(feed_interval)
     .await?;
     let mailer =
-        crate::mailer::build_mailer(db.site_config(), capture.file(capture::Stream::Mail)).await?;
+        crate::mailer::build_mailer(db.site_config(), capture.map(|paths| paths.mail.clone()))
+            .await?;
     let router = crate::create_router(db, instance_id, mailer, prod, storage.storage_path.clone())?;
     let listener = tokio::net::TcpListener::bind(bind).await?;
     // `local_addr` cannot fail on a just-bound listener; fall back to the
@@ -993,7 +999,7 @@ pub async fn cmd_serve(
     prod: bool,
     runtime_file: Option<std::path::PathBuf>,
     telemetry: &host::telemetry::TelemetryConfig,
-    capture: &capture::CaptureConfig,
+    capture: Option<&ServeCapturePaths>,
 ) -> anyhow::Result<()> {
     // Telemetry is owned by `run`, which holds the TelemetryGuard across this
     // call (see `server/src/main.rs`); `cmd_serve` does not init it, matching
@@ -2056,8 +2062,7 @@ mod tests {
 
         let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
         let telemetry = test_telemetry(None);
-        let capture = capture::CaptureConfig::default();
-        let prepared = prepare_server(&storage, bind, false, None, &telemetry, &capture)
+        let prepared = prepare_server(&storage, bind, false, None, &telemetry, None)
             .await
             .expect("dev-mode prepare_server must auto-initialize");
 
@@ -2078,8 +2083,7 @@ mod tests {
             let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
 
             let telemetry = test_telemetry(Some("http://127.0.0.1:4318"));
-            let capture = capture::CaptureConfig::default();
-            let prepared = prepare_server(&storage, bind, false, None, &telemetry, &capture)
+            let prepared = prepare_server(&storage, bind, false, None, &telemetry, None)
                 .await
                 .expect("prepare server");
 
@@ -2099,8 +2103,7 @@ mod tests {
             let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
 
             let telemetry = test_telemetry(None);
-            let capture = capture::CaptureConfig::default();
-            let prepared = prepare_server(&storage, bind, false, None, &telemetry, &capture)
+            let prepared = prepare_server(&storage, bind, false, None, &telemetry, None)
                 .await
                 .expect("prepare server");
 
@@ -2133,8 +2136,7 @@ mod tests {
         // `.err()` discards the Ok(PreparedServer) (which isn't Debug) and keeps the
         // error, so the whole check is one covered assertion (no standalone panic line).
         let telemetry = test_telemetry(None);
-        let capture = capture::CaptureConfig::default();
-        let err = prepare_server(&storage, bind, false, None, &telemetry, &capture)
+        let err = prepare_server(&storage, bind, false, None, &telemetry, None)
             .await
             .err();
         assert!(

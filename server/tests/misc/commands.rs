@@ -12,8 +12,8 @@ use common::test_support::{parse_email, parse_invite_ttl_hours, parse_session_la
 use common::username::Username;
 use jaunder::cli::{Cli, Commands, StorageArgs};
 use jaunder::commands::{
-    app_password_create, cmd_app_password_create, cmd_backup, cmd_init, cmd_restore, cmd_serve,
-    cmd_smtp_test, cmd_user_create, cmd_user_invite, prepare_server,
+    ServeCapturePaths, app_password_create, cmd_app_password_create, cmd_backup, cmd_init,
+    cmd_restore, cmd_serve, cmd_smtp_test, cmd_user_create, cmd_user_invite, prepare_server,
 };
 use storage::{
     BackupError, BackupMode, OpenedDatabase, open_database, open_existing_database,
@@ -34,10 +34,7 @@ use storage::test_support::{
     unique_postgres_url,
 };
 
-fn default_host_config() -> (
-    host::telemetry::TelemetryConfig,
-    host::capture::CaptureConfig,
-) {
+fn default_host_config() -> (host::telemetry::TelemetryConfig, Option<ServeCapturePaths>) {
     (
         host::telemetry::TelemetryConfig::from_raw(
             false,
@@ -51,7 +48,7 @@ fn default_host_config() -> (
                 e2e_seed_process: Ok(None),
             },
         ),
-        host::capture::CaptureConfig::default(),
+        None,
     )
 }
 
@@ -150,7 +147,7 @@ async fn cmd_serve_fails_when_not_initialized(#[case] backend: Backend) {
     let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
 
     let (telemetry, capture) = default_host_config();
-    let result = cmd_serve(&args, bind, true, None, &telemetry, &capture).await;
+    let result = cmd_serve(&args, bind, true, None, &telemetry, capture.as_ref()).await;
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(
@@ -343,7 +340,7 @@ async fn prepare_server_binds_and_builds_serving_router(#[case] backend: Backend
     drop(probe);
 
     let (telemetry, capture) = default_host_config();
-    let prepared = prepare_server(&args, bind, true, None, &telemetry, &capture)
+    let prepared = prepare_server(&args, bind, true, None, &telemetry, capture.as_ref())
         .await
         .expect("prepare_server should succeed after init");
     assert_eq!(
@@ -382,7 +379,7 @@ async fn prepare_server_writes_then_removes_runtime_file(#[case] backend: Backen
         true,
         Some(rt_path.clone()),
         &telemetry,
-        &capture,
+        capture.as_ref(),
     )
     .await
     .expect("prepare_server should succeed after init");

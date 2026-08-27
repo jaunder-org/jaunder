@@ -69,3 +69,21 @@ Adding a new capture stream now needs **zero** new env-var or copy-out plumbing
   so the separate otel copy-out and xtask lift filter are gone.
 - Realizes the direction ADR-0049 flagged and matches #153's convention-over-env
   ethos.
+
+## Addendum (2026-08-27, #848): valid-only capture-directory preparation
+
+The original decision established one environment variable and the shared
+filename convention. Issue #848 corrected when that directory is validated and
+prepared without changing the convention: the relevant executable or command
+root resolves `JAUNDER_CAPTURE_DIR` once into an optional `CaptureDirectory`.
+
+Absent or trim-blank input means capture is disabled. A configured value must be
+Unicode and name a nonempty directory that can be created; non-Unicode or
+directory-creation failures are reported as typed errors and abort `serve` or
+the `test-support` capture command. Construction prepares the directory once, so
+a constructed `CaptureDirectory` is usable.
+
+Path projection is pure and infallible: `CaptureDirectory::path(Stream)` returns
+the stream's leaf path without I/O or reporting. Downstream writers and
+verifiers receive that leaf path rather than a capture-directory configuration,
+so they cannot reread the environment or perform deferred directory lookup.

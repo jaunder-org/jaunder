@@ -98,7 +98,8 @@ enum Commands {
     },
     /// Fail if the scoped diagnostic stream or required server log records a Rust panic.
     VerifyNoPanics {
-        /// E2E capture directory; the diagnostic filename is resolved by `host::capture`.
+        /// E2E capture directory; the command projects its diagnostic leaf using
+        /// `host::capture`'s canonical stream filename.
         #[arg(long)]
         capture_dir: std::path::PathBuf,
         /// Required VM-journal or host-stderr capture.
@@ -161,7 +162,6 @@ async fn main() -> anyhow::Result<()> {
 /// command is a small, individually-covered unit (#232).
 async fn run(cli: Cli) -> anyhow::Result<()> {
     let telemetry = telemetry_config();
-    let capture = capture::CaptureConfig::from_raw(std::env::var_os(capture::DIR_ENV));
     let _telemetry = host::telemetry::init_tracing(&telemetry);
     match cli.command {
         Commands::SeedPosts {
@@ -200,7 +200,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             )
             .await
         }
-        Commands::ResetMail => cmd_reset_mail(&capture),
+        Commands::ResetMail => {
+            let mail_path = capture_directory()?.path(capture::Stream::Mail);
+            cmd_reset_mail(&mail_path)
+        }
         Commands::SeedUser {
             db,
             username,
@@ -225,12 +228,27 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             let storage_runtime = storage_runtime_config(&db)?;
             cmd_create_session(&db, &storage_runtime, &username, label.as_deref()).await
         }
-        Commands::CapturePath { stream } => cmd_capture_path(&stream, &capture),
+        Commands::CapturePath { stream } => {
+            let stream = capture::Stream::parse(&stream)
+                .ok_or_else(|| anyhow::anyhow!("unknown capture stream {stream:?}"))?;
+            let path = capture_directory()?.path(stream);
+            cmd_capture_path(&path);
+            Ok(())
+        }
         Commands::VerifyNoPanics {
             capture_dir,
             server_log,
-        } => test_support::panic_gate::verify_no_panics(&capture_dir, &server_log),
+        } => {
+            let diag_path = capture_dir.join(capture::Stream::Diag.filename());
+            test_support::panic_gate::verify_no_panics(&diag_path, &server_log)
+        }
     }
+}
+
+/// Resolves the capture directory only for commands that consume capture paths.
+fn capture_directory() -> anyhow::Result<capture::CaptureDirectory> {
+    capture::CaptureDirectory::from_raw(std::env::var_os(capture::DIR_ENV))?
+        .ok_or_else(|| anyhow::anyhow!("JAUNDER_CAPTURE_DIR is not set"))
 }
 
 /// Seed `count` posts for `username` through the real storage path.
@@ -290,24 +308,15 @@ async fn cmd_create_session(
 }
 
 /// Reset the mail-capture file (delete it; missing is fine).
-fn cmd_reset_mail(capture: &capture::CaptureConfig) -> anyhow::Result<()> {
-    let path = capture
-        .file(capture::Stream::Mail)
-        .ok_or_else(|| anyhow::anyhow!("JAUNDER_CAPTURE_DIR is not set"))?;
-    reset_mail(&path)?;
-    eprintln!("reset mail-capture file {}", path.display());
+fn cmd_reset_mail(mail_path: &std::path::Path) -> anyhow::Result<()> {
+    reset_mail(mail_path)?;
+    eprintln!("reset mail-capture file {}", mail_path.display());
     Ok(())
 }
 
-/// Print the resolved capture-file path for a stream (`mail`/`websub`/`diag`).
-fn cmd_capture_path(stream: &str, capture: &capture::CaptureConfig) -> anyhow::Result<()> {
-    let stream = capture::Stream::parse(stream)
-        .ok_or_else(|| anyhow::anyhow!("unknown capture stream {stream:?}"))?;
-    let path = capture
-        .file(stream)
-        .ok_or_else(|| anyhow::anyhow!("JAUNDER_CAPTURE_DIR is not set"))?;
+/// Print a resolved capture-file path.
+fn cmd_capture_path(path: &std::path::Path) {
     println!("{}", path.display());
-    Ok(())
 }
 
 #[cfg(test)]
@@ -412,6 +421,96 @@ mod tests {
                 "configuration child scenario {scenario} must succeed"
             );
         }
+    }
+
+    /// Capture setup belongs only to the two commands that consume its paths.
+    /// A child process supplies an impossible directory so this test never
+    /// mutates the test runner's inherited environment.
+    #[test]
+    fn subprocess_scopes_broken_capture_configuration_to_capture_commands() {
+        const SCENARIO: &str = "JAUNDER_TEST_SUPPORT_CAPTURE_SCOPE_SCENARIO";
+        if std::env::var_os(SCENARIO).is_some() {
+            let runtime = tokio::runtime::Runtime::new().expect("test runtime");
+            runtime.block_on(async {
+                let (_dir, db) = temp_db().await;
+                run(cli(Commands::CreateUser {
+                    db: db.clone(),
+                    username: "alice".to_owned(),
+                    password: "password123".to_owned(),
+                    display_name: None,
+                    operator: false,
+                }))
+                .await
+                .expect("create-user ignores capture configuration");
+                run(cli(Commands::SeedPosts {
+                    db: db.clone(),
+                    username: "alice".to_owned(),
+                    count: 1,
+                    body_prefix: "Post".to_owned(),
+                    published: true,
+                }))
+                .await
+                .expect("seed-posts ignores capture configuration");
+                run(cli(Commands::SeedUser {
+                    db: db.clone(),
+                    username: "bob".to_owned(),
+                    password: "password123".to_owned(),
+                    label: None,
+                }))
+                .await
+                .expect("seed-user ignores capture configuration");
+                run(cli(Commands::CreateSession {
+                    db,
+                    username: "bob".to_owned(),
+                    label: None,
+                }))
+                .await
+                .expect("create-session ignores capture configuration");
+
+                let capture_dir = TempDir::new().expect("panic-gate capture directory");
+                let server_log = capture_dir.path().join("server.log");
+                std::fs::write(&server_log, b"clean stderr\n").expect("server log");
+                run(cli(Commands::VerifyNoPanics {
+                    capture_dir: capture_dir.path().to_owned(),
+                    server_log,
+                }))
+                .await
+                .expect("verify-no-panics ignores capture configuration");
+
+                let diag_path = capture_dir.path().join(capture::Stream::Diag.filename());
+                std::fs::write(&diag_path, b"thread panicked at src/diag.rs:1:1\n")
+                    .expect("diagnostic log");
+                let server_log = capture_dir.path().join("server-after-diag.log");
+                std::fs::write(&server_log, b"clean stderr\n").expect("server log");
+                let error = run(cli(Commands::VerifyNoPanics {
+                    capture_dir: capture_dir.path().to_owned(),
+                    server_log,
+                }))
+                .await
+                .expect_err("verify-no-panics reads the conventional diagnostic leaf");
+                assert!(error.to_string().contains("src/diag.rs:1:1"), "{error}");
+            });
+            return;
+        }
+
+        let dir = TempDir::new().expect("capture configuration directory");
+        let blocking_file = dir.path().join("not-a-directory");
+        std::fs::write(&blocking_file, b"file").expect("blocking file");
+        let status = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "tests::subprocess_scopes_broken_capture_configuration_to_capture_commands",
+                "--nocapture",
+            ])
+            .env(SCENARIO, "1")
+            .env(capture::DIR_ENV, blocking_file.join("capture"))
+            .status()
+            .expect("spawn capture-scope child");
+
+        assert!(
+            status.success(),
+            "unrelated commands must ignore a broken capture directory"
+        );
     }
 
     #[tokio::test]

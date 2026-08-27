@@ -735,12 +735,11 @@ mod tests {
     #[test]
     fn process_telemetry_does_not_create_diag_file_when_capture_dir_is_configured() {
         let dir = tempfile::TempDir::new().expect("tempdir");
-        let capture = crate::capture::CaptureConfig::from_raw(Some(
-            dir.path().to_path_buf().into_os_string(),
-        ));
+        let capture = crate::capture::CaptureDirectory::new(dir.path().to_path_buf())
+            .expect("prepare capture directory");
+        let diag_path = capture.path(crate::capture::Stream::Diag);
         let _guard = init_tracing(&default_telemetry_config());
-        assert!(capture.file(crate::capture::Stream::Diag).is_some());
-        assert!(!dir.path().join("diag.log").exists());
+        assert!(!diag_path.exists());
     }
     #[test]
     fn slow_span_values_returns_none_when_below_threshold() {

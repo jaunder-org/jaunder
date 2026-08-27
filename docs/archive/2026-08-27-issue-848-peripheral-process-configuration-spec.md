@@ -72,6 +72,13 @@ The repository's Rust code forbids unsafe Rust without exceptions.
   are removed with no compatibility path.
 - Telemetry, capture, storage opening, backup/restore, scheduled backup, server
   startup, and PostgreSQL test teardown all reuse one resolved snapshot.
+- `CaptureDirectory` construction and directory preparation occur once at the
+  `serve` root and at the `test-support` `reset-mail` / `capture-path` roots.
+  Absent or trim-blank `JAUNDER_CAPTURE_DIR` disables capture; configured
+  non-Unicode or uncreatable directories return a typed error and abort the
+  relevant server startup or capture command. A constructed value is usable;
+  stream-path projection is pure and infallible, and downstream receives only
+  the projected leaf path.
 - Focused unit tests cover typed parsing and subsystem policy without ambient
   mutation. Focused subprocess tests prove representative Clap and process
   environment wiring.
@@ -88,7 +95,11 @@ The repository's Rust code forbids unsafe Rust without exceptions.
 
 ## Boundaries
 
-- No environment variable is renamed or removed, and no user-facing
+- `JAUNDER_CAPTURE_DIR` retains its name and absent/blank-disabled meaning. The
+  intentional user-facing correction is that an explicitly configured
+  non-Unicode or uncreatable capture directory fails fast instead of reaching a
+  deferred lookup or side effect.
+- No other environment variable is renamed or removed, and no other user-facing
   configuration precedence changes.
 - Compile-time environment access, build-script inputs, shell/service-manager
   provisioning, and non-configuration process queries such as `temp_dir`,

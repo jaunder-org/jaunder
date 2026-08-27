@@ -1550,20 +1550,29 @@ All client data remains untrusted operational evidence.
 
 ### Scoped server diagnostics (e2e capture)
 
-The single env var `JAUNDER_CAPTURE_DIR` enables app-driven capture
+`JAUNDER_CAPTURE_DIR` controls app-driven capture
 ([ADR-0049](adr/0049-app-driven-scoped-server-diagnostics.md),
-[ADR-0057](adr/0057-e2e-capture-dir-contract.md)); production leaves it unset
-(fully inert). Each stream writes a filename defined once in `host::capture`
-(`mail.jsonl`, `websub.jsonl`, `diag.log`), resolved at a composition root. The
-diag stream is a WARN+-filtered JSON `tracing` layer plus a panic hook appending
-`kind: "panic"` JSONL records through its own `O_APPEND` handle (bypassing
-`tracing` to avoid deadlock). The shared `test_support::panic_gate` verifier
-([ADR-0032](adr/0032-e2e-zero-panic-gate.md)) resolves the diagnostic filename
-through `host::capture`, scans raw bytes from the union of that stream and a
-required server log, and de-duplicates by panic location with the scoped record
-winning. Per combo the e2e harness tars the directory out as
-`capture-<backend>.tar.gz` — those three files plus `otel-traces.jsonl` — into
-the [ADR-0037](adr/0037-e2e-failure-diagnostics-capture.md) artifact set.
+[ADR-0057](adr/0057-e2e-capture-dir-contract.md)). At the relevant executable or
+command root, its raw value is resolved once into an optional, valid-only
+`CaptureDirectory`: absent or trim-blank input disables server capture, while a
+configured non-Unicode or uncreatable directory is an error that aborts `serve`
+or the `test-support` capture command. Construction prepares the directory once;
+the constructed value is thereafter usable. `reset-mail` and `capture-path`
+require that value and fail loudly when capture is disabled.
+
+Each stream receives only its pure, infallibly projected leaf path; downstream
+code neither reads `JAUNDER_CAPTURE_DIR` nor performs capture-directory lookup
+or preparation. The filenames are defined once in `host::capture` (`mail.jsonl`,
+`websub.jsonl`, `diag.log`). The diag stream is a WARN+-filtered JSON `tracing`
+layer plus a panic hook appending `kind: "panic"` JSONL records through its own
+`O_APPEND` handle (bypassing `tracing` to avoid deadlock). The shared
+`test_support::panic_gate` verifier
+([ADR-0032](adr/0032-e2e-zero-panic-gate.md)) receives the diagnostic leaf path,
+scans raw bytes from the union of that stream and a required server log, and
+de-duplicates by panic location with the scoped record winning. Per combo the
+e2e harness tars the directory out as `capture-<backend>.tar.gz` — those three
+files plus `otel-traces.jsonl` — into the
+[ADR-0037](adr/0037-e2e-failure-diagnostics-capture.md) artifact set.
 
 ### Committed direction
 

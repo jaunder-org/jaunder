@@ -1,14 +1,13 @@
-use host::capture::CaptureConfig;
 use host::telemetry::{TelemetryConfig, TelemetryRawConfig};
 
 use jaunder::cli::StorageArgs;
-use jaunder::commands::{cmd_create_pg_db, cmd_init, prepare_server};
+use jaunder::commands::{ServeCapturePaths, cmd_create_pg_db, cmd_init, prepare_server};
 use sqlx::Connection;
 use tempfile::TempDir;
 
 use storage::test_support::{PostgresTestConfig, nonexistent_postgres_url};
 
-fn test_host_config() -> (TelemetryConfig, CaptureConfig) {
+fn test_host_config() -> (TelemetryConfig, Option<ServeCapturePaths>) {
     let telemetry = TelemetryConfig::from_raw(
         false,
         TelemetryRawConfig {
@@ -21,7 +20,7 @@ fn test_host_config() -> (TelemetryConfig, CaptureConfig) {
             e2e_seed_process: Ok(None),
         },
     );
-    (telemetry, CaptureConfig::default())
+    (telemetry, None)
 }
 
 // guard:low-level-db — provisions a Postgres role/database via bootstrap admin; no standard backend fixture
@@ -163,7 +162,7 @@ async fn prepare_server_postgres_missing_database_preserves_3d000_guidance() {
     let bind = "127.0.0.1:0".parse().expect("bind address");
 
     let (telemetry, capture) = test_host_config();
-    let error = prepare_server(&args, bind, false, None, &telemetry, &capture)
+    let error = prepare_server(&args, bind, false, None, &telemetry, capture.as_ref())
         .await
         .err()
         .expect("missing PostgreSQL database must fail");

@@ -71,6 +71,12 @@ remain current.
   and secret-handling behavior remain part of the interface.
 - Storage open, backup/restore, scheduled work, telemetry, capture, server
   startup, and test provisioning interfaces gain explicit typed inputs.
+- Capture follows the same boundary: its owning root constructs an optional,
+  valid-only `CaptureDirectory` once. Absent or trim-blank input disables
+  capture; configured non-Unicode or uncreatable directories fail fast before
+  work begins. A constructed directory is usable, and downstream code receives
+  only an infallibly projected leaf path, never an ambient capture setting or a
+  directory lookup capability.
 - Child-process tests remain necessary for the small integration surface where
   the inherited environment itself is the behavior under test.
 - `common::test_support::{with_env, Env}` and its unsafe operations disappear.

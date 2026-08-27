@@ -58,15 +58,22 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         unreachable!("Cli::parse_from([\"jaunder\", \"--help\"]) prints help and exits the process")
     };
     let telemetry = telemetry_config(cli.verbose);
-    let capture = host::capture::CaptureConfig::from_raw(std::env::var_os(host::capture::DIR_ENV));
-    // `run` owns telemetry for every command after clap has resolved a runnable
-    // subcommand. Serve additionally installs server-owned diagnostics.
-    let _telemetry = if command.is_serve() {
-        jaunder::observability::init_server_tracing(&telemetry, &capture)
+    if command.is_serve() {
+        let capture =
+            host::capture::CaptureDirectory::from_raw(std::env::var_os(host::capture::DIR_ENV))?;
+        let diag_path = capture
+            .as_ref()
+            .map(|directory| directory.path(host::capture::Stream::Diag));
+        let capture_paths = capture.map(|directory| jaunder::commands::ServeCapturePaths {
+            mail: directory.path(host::capture::Stream::Mail),
+            websub: directory.path(host::capture::Stream::WebSub),
+        });
+        let _telemetry = jaunder::observability::init_server_tracing(&telemetry, diag_path);
+        command.execute(&telemetry, capture_paths).await.map(drop)
     } else {
-        host::telemetry::init_tracing(&telemetry)
-    };
-    command.execute(&telemetry, &capture).await.map(drop)
+        let _telemetry = host::telemetry::init_tracing(&telemetry);
+        command.execute(&telemetry, None).await.map(drop)
+    }
 }
 
 #[cfg(test)]
@@ -262,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn run_site_config_uses_process_telemetry_without_diag_log() {
+    fn run_site_config_ignores_broken_capture_configuration() {
         const CHILD: &str = "JAUNDER_TEST_SITE_CONFIG_TELEMETRY_CHILD";
         if std::env::var_os(CHILD).is_some() {
             let base = TempDir::new().expect("db dir");
@@ -296,15 +303,17 @@ mod tests {
             return;
         }
 
-        let capture = TempDir::new().expect("capture dir");
         let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
             .args([
                 "--exact",
-                "tests::run_site_config_uses_process_telemetry_without_diag_log",
+                "tests::run_site_config_ignores_broken_capture_configuration",
                 "--nocapture",
             ])
             .env(CHILD, "1")
-            .env(host::capture::DIR_ENV, capture.path())
+            .env(
+                host::capture::DIR_ENV,
+                std::ffi::OsString::from_vec(vec![0xff]),
+            )
             .env(
                 "JAUNDER_LOG_FILTER",
                 std::ffi::OsString::from_vec(vec![0xff]),
@@ -328,8 +337,88 @@ mod tests {
             // A successful child always emits the projection; this is diagnostic-only.
             String::from_utf8_lossy(&output.stdout) // cov:ignore
         );
-        assert!(!capture.path().join("diag.log").exists());
     }
+    #[cfg(unix)]
+    #[test]
+    fn run_resolves_capture_only_for_serve_and_fails_fast_when_configured() {
+        const CHILD: &str = "JAUNDER_TEST_SERVE_CAPTURE_CHILD";
+        if let Some(scenario) = std::env::var_os(CHILD) {
+            let base = TempDir::new().expect("storage dir");
+            let storage = test_storage_args(&base);
+            let result = tokio::runtime::Runtime::new()
+                .expect("runtime")
+                .block_on(run(Cli {
+                    command: Some(Commands::Serve {
+                        storage,
+                        bind: "127.0.0.1:0".parse().expect("bind"),
+                        environment: jaunder::cli::DeploymentEnv::Prod,
+                        runtime_file: None,
+                    }),
+                    verbose: false,
+                }));
+            match scenario.to_string_lossy().as_ref() {
+                "absent" | "valid" => assert!(
+                    result
+                        .is_err_and(|error| error.to_string().contains("run `jaunder init` first")),
+                    "capture must reach ordinary server startup"
+                ),
+                "nonunicode" | "file" => assert!(
+                    result.is_err_and(|error| error.to_string().contains("capture directory")),
+                    "configured capture must fail before server startup"
+                ),
+                _ => unreachable!("parent supplies a closed capture scenario set"),
+            }
+            return;
+        }
+
+        let file = tempfile::NamedTempFile::new().expect("capture file");
+        let capture_root = TempDir::new().expect("capture root");
+        let valid_capture = capture_root.path().join("capture");
+        for scenario in ["absent", "nonunicode", "file", "valid"] {
+            let mut command =
+                std::process::Command::new(std::env::current_exe().expect("test executable"));
+            command.args([
+                "--exact",
+                "tests::run_resolves_capture_only_for_serve_and_fails_fast_when_configured",
+                "--nocapture",
+            ]);
+            command
+                .env(CHILD, scenario)
+                .env_remove(host::capture::DIR_ENV);
+            match scenario {
+                "nonunicode" => {
+                    command.env(
+                        host::capture::DIR_ENV,
+                        std::ffi::OsString::from_vec(vec![0xff]),
+                    );
+                }
+                "file" => {
+                    command.env(host::capture::DIR_ENV, file.path());
+                }
+                "absent" => {}
+                "valid" => {
+                    command.env(host::capture::DIR_ENV, &valid_capture);
+                }
+                _ => unreachable!("closed capture scenario set"),
+            }
+            assert!(
+                command
+                    .status()
+                    .expect("spawn capture configuration child")
+                    .success(),
+                "capture child scenario {scenario} must succeed"
+            );
+        }
+        assert!(
+            valid_capture.is_dir(),
+            "valid capture directory must be prepared"
+        );
+        assert!(
+            valid_capture.join("diag.log").is_file(),
+            "serve must project the diagnostic capture leaf"
+        );
+    }
+
     #[tokio::test]
     async fn run_smtp_test_fails_when_smtp_not_configured() {
         let base = TempDir::new().unwrap();

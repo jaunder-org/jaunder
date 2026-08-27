@@ -94,6 +94,19 @@ Out:
     The registrar gate and macro/wire tests, manifest/document checks, and the
     relevant focused Rust lanes pass.
 
+- [x] Task 6 (late correction): Make capture-directory configuration valid-only
+  and fail-fast
+  - Contract: the applicable `serve` and `test-support` capture-command roots
+    resolve `JAUNDER_CAPTURE_DIR` once. Absent or trim-blank input disables
+    capture; explicitly configured non-Unicode or uncreatable directories
+    return a typed error and abort the root. Construction prepares the directory
+    once, after which the value is usable. Stream-path projection is pure and
+    infallible, and downstream receives projected leaf paths rather than a
+    capture-directory setting or deferred lookup capability.
+  - Completion: this records the intentional user-facing correction for #848;
+    invalid configured capture directories no longer defer failure to a later
+    lookup or side effect.
+
 ## Ordering and contracts
 
 - Tasks 1 and 2 establish the production typed interfaces before Task 4 removes

@@ -88,11 +88,6 @@ fn fallback(kind: FallbackKind) {
     let _ = write_fallback(std::io::stderr().lock(), kind);
 }
 
-/// The scoped diagnostic-log path, if capture is on.
-fn diag_log_file(capture: &host::capture::CaptureConfig) -> Option<std::path::PathBuf> {
-    capture.file(host::capture::Stream::Diag)
-}
-
 fn open_diag_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
     std::fs::OpenOptions::new()
         .create(true)
@@ -252,11 +247,10 @@ fn install_diag_panic_hook(path: Option<std::path::PathBuf>) {
 
 fn init_tracing_impl(
     telemetry: &host::telemetry::TelemetryConfig,
-    capture: &host::capture::CaptureConfig,
+    diag_path: Option<std::path::PathBuf>,
 ) -> host::telemetry::TelemetryGuard {
-    // Scoped diagnostic capture resolves one root-owned directory once and reuses
-    // its path for both the layer and the panic hook.
-    let diag_path = diag_log_file(capture);
+    // The composition root resolves capture once, then injects this leaf path into
+    // the diagnostic layer and panic hook.
     let diag_log_layer = diag_path.as_ref().and_then(|path| {
         open_diag_file_with(path, open_diag_file, || fallback(FallbackKind::DiagLogOpen))
             .map(|file| diag_layer(std::sync::Arc::new(file)).boxed())
@@ -273,12 +267,11 @@ fn init_tracing_impl(
     guard
 }
 
-#[must_use]
 pub fn init_server_tracing(
     telemetry: &host::telemetry::TelemetryConfig,
-    capture: &host::capture::CaptureConfig,
+    diag_path: Option<std::path::PathBuf>,
 ) -> host::telemetry::TelemetryGuard {
-    init_tracing_impl(telemetry, capture)
+    init_tracing_impl(telemetry, diag_path)
 }
 
 /// Trace context extracted from inbound request headers (W3C `traceparent`),
@@ -531,11 +524,6 @@ mod tests {
     }
 
     #[test]
-    fn diag_log_file_is_none_without_capture_configuration() {
-        assert!(diag_log_file(&host::capture::CaptureConfig::default()).is_none());
-    }
-
-    #[test]
     fn diag_panic_record_is_one_json_line_with_panicked_at() {
         // A newline-bearing payload must stay a single physical JSONL line (serde
         // escapes the embedded newline), and the record must carry the gate's
@@ -663,11 +651,9 @@ mod tests {
     fn init_tracing_impl_creates_diag_file_when_capture_is_configured() {
         let dir = tempfile::TempDir::new().expect("tempdir");
         let _globals = lock_process_globals();
-        let capture =
-            host::capture::CaptureConfig::from_raw(Some(dir.path().to_path_buf().into_os_string()));
         let path = dir.path().join("diag.log");
         let previous = std::panic::take_hook();
-        init_tracing_impl(&test_telemetry(), &capture);
+        init_tracing_impl(&test_telemetry(), Some(path.clone()));
         std::panic::set_hook(previous);
         assert!(path.exists(), "diag file should be created when configured");
     }
@@ -676,27 +662,36 @@ mod tests {
     fn init_tracing_impl_survives_unopenable_diag_path() {
         const CHILD: &str = "JAUNDER_TEST_DIAG_OPEN_CHILD";
         if std::env::var_os(CHILD).is_some() {
-            let capture =
-                host::capture::CaptureConfig::from_raw(std::env::var_os(host::capture::DIR_ENV));
-            assert_error_metric_count(1, || {
-                let guard = init_tracing_impl(&test_telemetry(), &capture);
+            let diag_path =
+                host::capture::CaptureDirectory::from_raw(std::env::var_os(host::capture::DIR_ENV))
+                    .expect("prepared capture directory")
+                    .map(|directory| directory.path(host::capture::Stream::Diag));
+            assert_zero_error_metrics(|| {
+                let guard = init_tracing_impl(&test_telemetry(), diag_path);
                 drop(guard);
             });
             return;
         }
 
-        let file = tempfile::NamedTempFile::new().expect("temp file");
+        let capture = tempfile::TempDir::new().expect("capture directory");
+        std::fs::create_dir(capture.path().join("diag.log")).expect("diagnostic directory");
         let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
             .arg("--exact")
             .arg("observability::tests::init_tracing_impl_survives_unopenable_diag_path")
             .arg("--nocapture")
             .env(CHILD, "1")
-            .env(host::capture::DIR_ENV, file.path())
+            .env(host::capture::DIR_ENV, capture.path())
             .env_remove("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT")
             .env_remove("OTEL_EXPORTER_OTLP_ENDPOINT")
             .output()
             .expect("run isolated diag-open test");
-        assert!(output.status.success(), "child status: {}", output.status);
+        assert!(
+            output.status.success(),
+            "child status: {}; stdout: {}; stderr: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout), // cov:ignore
+            String::from_utf8_lossy(&output.stderr)  // cov:ignore
+        );
         let stderr = String::from_utf8(output.stderr).expect("stderr utf8");
         assert_eq!(
             stderr.matches("server.observability.diag_log_open").count(),

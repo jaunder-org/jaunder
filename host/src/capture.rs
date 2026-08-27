@@ -5,7 +5,7 @@
 //! restating any path.
 
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// The single env var naming the e2e capture directory. Unset in production ⇒ every
 /// capture stream is inert.
@@ -21,66 +21,95 @@ pub enum Stream {
     Diag,
 }
 
-/// Immutable capture configuration resolved by an executable composition root.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct CaptureConfig {
-    directory: Option<PathBuf>,
+/// A directory supplied for capture output could not be made ready.
+#[derive(Debug)]
+pub enum CaptureDirectoryError {
+    /// A configured directory must name a location.
+    Empty,
+    /// The inherited directory cannot be converted without exposing its bytes.
+    NonUnicode,
+    /// The configured directory could not be prepared for stream writers.
+    CreateDirectory {
+        /// The filesystem failure returned while creating the directory.
+        source: std::io::Error,
+    },
 }
 
-impl CaptureConfig {
-    /// Resolves a raw inherited capture directory. A missing, blank, or non-Unicode
-    /// value disables capture; non-Unicode input is reported without exposing it.
-    #[must_use]
-    pub fn from_raw(raw: Option<OsString>) -> Self {
-        let Some(raw) = raw else {
-            return Self::default();
-        };
-        let Ok(raw) = raw.into_string() else {
-            crate::error::report_swallowed(
-                crate::error::ErrorKind::Internal,
-                crate::error::ErrorClass::Bug,
-                "host.capture.directory_config",
-                crate::error::SwallowedSource::Redacted,
-            );
-            return Self::default();
-        };
-        let directory = PathBuf::from(raw.trim());
-        if directory.as_os_str().is_empty() {
-            Self::default()
-        } else {
-            Self {
-                directory: Some(directory),
+impl std::fmt::Display for CaptureDirectoryError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => formatter.write_str("capture directory is empty"),
+            Self::NonUnicode => formatter.write_str("capture directory is not valid Unicode"),
+            Self::CreateDirectory { .. } => {
+                formatter.write_str("could not create capture directory")
             }
         }
     }
+}
 
-    /// Returns the conventional capture path, creating the configured directory.
-    ///
-    /// Directory creation failure is intentionally non-fatal and reported once; the
-    /// conventional path is still returned so the stream writer surfaces its error.
-    #[must_use]
-    pub fn file(&self, stream: Stream) -> Option<PathBuf> {
-        self.file_with(stream, create_capture_dir)
-    }
-
-    fn file_with(&self, stream: Stream, create_dir: CreateDirOperation) -> Option<PathBuf> {
-        let dir = self.directory.as_ref()?;
-        if let Err(error) = create_dir(dir) {
-            crate::error::report_swallowed(
-                crate::error::ErrorKind::Internal,
-                crate::error::ErrorClass::Transient,
-                "host.capture.create_directory",
-                crate::error::SwallowedSource::Error(&error),
-            );
+impl std::error::Error for CaptureDirectoryError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::CreateDirectory { source } => Some(source),
+            Self::Empty | Self::NonUnicode => None,
         }
-        Some(dir.join(stream.filename()))
     }
 }
 
-type CreateDirOperation = fn(&Path) -> std::io::Result<()>;
+/// A prepared, nonempty directory used for capture output.
+///
+/// Construction creates the directory once at the executable boundary, so stream writers
+/// receive only ordinary leaf paths and never perform deferred configuration I/O.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CaptureDirectory(PathBuf);
 
-fn create_capture_dir(path: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(path)
+impl CaptureDirectory {
+    /// Prepares a host-internal programmatic capture directory for stream writers.
+    ///
+    /// External inputs must use [`Self::from_raw`] so non-Unicode values are rejected
+    /// without exposing their bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CaptureDirectoryError::Empty`] when `directory` names no location, or
+    /// [`CaptureDirectoryError::CreateDirectory`] when it cannot be created.
+    pub(crate) fn new(directory: PathBuf) -> Result<Self, CaptureDirectoryError> {
+        if directory.as_os_str().is_empty() {
+            return Err(CaptureDirectoryError::Empty);
+        }
+        std::fs::create_dir_all(&directory)
+            .map_err(|source| CaptureDirectoryError::CreateDirectory { source })?;
+        Ok(Self(directory))
+    }
+
+    /// Resolves an inherited capture directory. This is the sole public constructor:
+    /// missing or whitespace-only inputs disable capture; every explicit value is prepared
+    /// before it reaches a stream writer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CaptureDirectoryError::NonUnicode`] without exposing invalid input, or
+    /// [`CaptureDirectoryError::CreateDirectory`] when a configured directory cannot be
+    /// created.
+    pub fn from_raw(raw: Option<OsString>) -> Result<Option<Self>, CaptureDirectoryError> {
+        let Some(raw) = raw else {
+            return Ok(None);
+        };
+        let raw = raw
+            .into_string()
+            .map_err(|_| CaptureDirectoryError::NonUnicode)?;
+        let directory = PathBuf::from(raw.trim());
+        if directory.as_os_str().is_empty() {
+            return Ok(None);
+        }
+        Self::new(directory).map(Some)
+    }
+
+    /// Returns the conventional capture file for a stream without touching the filesystem.
+    #[must_use]
+    pub fn path(&self, stream: Stream) -> PathBuf {
+        self.0.join(stream.filename())
+    }
 }
 
 impl Stream {
@@ -111,92 +140,76 @@ impl Stream {
 mod tests {
     use super::*;
 
-    #[derive(Clone)]
-    struct SharedWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-
-    impl std::io::Write for SharedWriter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0
-                .lock()
-                .expect("capture lock")
-                .extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for SharedWriter {
-        type Writer = Self;
-
-        fn make_writer(&'writer self) -> Self::Writer {
-            self.clone()
-        }
-    }
-
-    fn capture<T>(operation: impl FnOnce() -> T) -> (T, String) {
-        let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::fmt()
-            .json()
-            .with_ansi(false)
-            .with_writer(SharedWriter(output.clone()))
-            .finish();
-        let value = tracing::subscriber::with_default(subscriber, operation);
-        std::io::Write::flush(&mut SharedWriter(output.clone())).expect("flush trace");
-        let text =
-            String::from_utf8(output.lock().expect("capture lock").clone()).expect("utf8 trace");
-        (value, text)
-    }
-
-    fn denied_create(_: &std::path::Path) -> std::io::Result<()> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "capture directory denied",
-        ))
-    }
-
     #[test]
-    fn directory_creation_failure_preserves_path_and_reports_once() {
-        let config = CaptureConfig::from_raw(Some("/private/capture".into()));
-        let (result, trace) = capture(|| config.file_with(Stream::WebSub, denied_create));
-        assert_eq!(result, Some(PathBuf::from("/private/capture/websub.jsonl")));
+    fn absent_or_blank_raw_directory_disables_capture() {
+        assert_eq!(CaptureDirectory::from_raw(None).expect("absent"), None);
         assert_eq!(
-            trace.matches(r#""error.disposition":"swallowed""#).count(),
-            1,
-            "trace: {trace}"
-        );
-        assert!(
-            trace.contains(r#""error.context":"host.capture.create_directory""#),
-            "trace: {trace}"
+            CaptureDirectory::from_raw(Some("  \t ".into())).expect("blank"),
+            None
         );
     }
 
     #[cfg(unix)]
     #[test]
-    fn invalid_unicode_capture_directory_disables_capture_and_reports_redacted_once() {
+    fn non_unicode_raw_directory_is_rejected_without_exposing_its_bytes() {
         use std::os::unix::ffi::OsStringExt;
 
-        let raw = std::ffi::OsString::from_vec(b"capture-secret-\xff".to_vec());
-        let (config, trace) = capture(|| CaptureConfig::from_raw(Some(raw)));
-        assert_eq!(config.file(Stream::WebSub), None);
-        assert_eq!(
-            trace
-                .matches(r#""error.context":"host.capture.directory_config""#)
-                .count(),
-            1,
-            "trace: {trace}"
-        );
-        assert!(trace.contains(r#""error.source":"redacted""#));
-        assert!(!trace.contains("capture-secret"));
+        let secret = "capture-secret";
+        let mut raw = secret.as_bytes().to_vec();
+        raw.extend_from_slice(b"-\xff");
+        let error = CaptureDirectory::from_raw(Some(std::ffi::OsString::from_vec(raw)))
+            .expect_err("non-Unicode directory");
+        assert!(matches!(error, CaptureDirectoryError::NonUnicode));
+        assert!(!format!("{error:?}").contains(secret));
+        assert!(!error.to_string().contains(secret));
     }
 
     #[test]
-    fn stream_filenames_are_the_convention() {
-        assert_eq!(Stream::Mail.filename(), "mail.jsonl");
-        assert_eq!(Stream::WebSub.filename(), "websub.jsonl");
-        assert_eq!(Stream::Diag.filename(), "diag.log");
+    fn empty_directory_is_rejected() {
+        let error = CaptureDirectory::new(PathBuf::new()).expect_err("empty directory");
+        assert!(matches!(error, CaptureDirectoryError::Empty));
+        assert_eq!(error.to_string(), "capture directory is empty");
+    }
+
+    #[test]
+    fn construction_creates_a_missing_directory() {
+        let temporary = tempfile::tempdir().expect("tempdir");
+        let directory = temporary.path().join("capture");
+
+        let capture = CaptureDirectory::new(directory.clone()).expect("create capture directory");
+
+        assert!(directory.is_dir());
+        assert_eq!(capture.path(Stream::Mail), directory.join("mail.jsonl"));
+    }
+
+    #[test]
+    fn existing_file_is_a_create_error_with_its_io_source() {
+        let temporary = tempfile::tempdir().expect("tempdir");
+        let file = temporary.path().join("not-a-directory");
+        std::fs::write(&file, "not a directory").expect("write file");
+
+        let error = CaptureDirectory::new(file).expect_err("file cannot be a directory");
+
+        let CaptureDirectoryError::CreateDirectory { source } = error else {
+            unreachable!("existing file must fail directory creation");
+        };
+        assert_eq!(source.kind(), std::io::ErrorKind::AlreadyExists);
+    }
+
+    #[test]
+    fn path_maps_each_stream_without_filesystem_io() {
+        let temporary = tempfile::tempdir().expect("tempdir");
+        let directory = temporary.path().join("capture");
+        let capture = CaptureDirectory::new(directory.clone()).expect("create capture directory");
+        std::fs::remove_dir(&directory).expect("remove prepared directory");
+
+        assert_eq!(capture.path(Stream::Mail), directory.join("mail.jsonl"));
+        assert_eq!(capture.path(Stream::WebSub), directory.join("websub.jsonl"));
+        assert_eq!(capture.path(Stream::Diag), directory.join("diag.log"));
+        assert!(
+            !directory.exists(),
+            "path() must not recreate the directory"
+        );
     }
 
     #[test]
@@ -206,25 +219,5 @@ mod tests {
         assert_eq!(Stream::parse("diag"), Some(Stream::Diag));
         assert_eq!(Stream::parse("bogus"), None);
         assert_eq!(Stream::parse(""), None);
-    }
-
-    #[test]
-    fn file_joins_and_creates_dir_when_configured() {
-        let tmp = tempfile::tempdir().unwrap();
-        let directory = tmp.path().join("capture"); // does not exist yet
-        let config = CaptureConfig::from_raw(Some(directory.clone().into_os_string()));
-        let path = config.file(Stream::Mail).expect("configured capture");
-        assert_eq!(path, directory.join("mail.jsonl"));
-        assert!(directory.is_dir(), "file() must create the capture dir");
-    }
-
-    #[test]
-    fn file_is_none_when_missing_or_blank() {
-        assert_eq!(CaptureConfig::default().file(Stream::Diag), None);
-        assert_eq!(
-            CaptureConfig::from_raw(Some("   ".into())).file(Stream::Diag),
-            None,
-            "blank ⇒ None"
-        );
     }
 }

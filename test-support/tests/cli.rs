@@ -11,6 +11,8 @@
 //! These pass `JAUNDER_CAPTURE_DIR` to the spawned child through `Command::env`,
 //! never mutating this process's inherited configuration.
 
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt as _;
 use std::process::Command;
 
 /// `reset-mail` derives `<JAUNDER_CAPTURE_DIR>/mail.jsonl`, deletes it, and exits 0 —
@@ -33,6 +35,70 @@ fn reset_mail_removes_the_derived_capture_file_and_exits_ok() {
     assert!(
         !mail.exists(),
         "reset-mail should have deleted <dir>/mail.jsonl"
+    );
+}
+
+/// Both capture commands construct the configured directory before deriving a
+/// leaf path, so a path below a regular file fails before any path is used.
+#[test]
+fn capture_commands_fail_for_an_uncreatable_capture_directory() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let not_a_directory = dir.path().join("not-a-directory");
+    std::fs::write(&not_a_directory, b"file").expect("blocking file");
+    let blocked_capture_dir = not_a_directory.join("capture");
+
+    for args in [
+        ["reset-mail"].as_slice(),
+        ["capture-path", "mail"].as_slice(),
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_test-support"))
+            .args(args)
+            .env("JAUNDER_CAPTURE_DIR", &blocked_capture_dir)
+            .output()
+            .expect("spawn test-support binary");
+
+        assert!(
+            !out.status.success(),
+            "{args:?} must reject an uncreatable capture directory"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("could not create capture directory"),
+            "{args:?} must name the capture setup failure, got: {stderr}"
+        );
+        assert!(
+            out.stdout.is_empty(),
+            "{args:?} must not advertise a path after capture setup fails"
+        );
+        assert!(
+            !String::from_utf8_lossy(&out.stderr).contains("reset mail-capture file"),
+            "{args:?} must not use a path after capture setup fails"
+        );
+    }
+}
+
+/// An explicitly configured non-Unicode directory is invalid rather than a
+/// disabled capture setting, and the child must fail without echoing its bytes.
+#[cfg(unix)]
+#[test]
+fn capture_path_rejects_a_non_unicode_capture_directory() {
+    let out = Command::new(env!("CARGO_BIN_EXE_test-support"))
+        .args(["capture-path", "mail"])
+        .env(
+            "JAUNDER_CAPTURE_DIR",
+            std::ffi::OsString::from_vec(vec![0xff]),
+        )
+        .output()
+        .expect("spawn test-support binary");
+
+    assert!(
+        !out.status.success(),
+        "capture-path must exit non-zero for a non-Unicode capture directory"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("capture directory is not valid Unicode"),
+        "stderr should name the redacted invalid-directory failure, got: {stderr}"
     );
 }
 
