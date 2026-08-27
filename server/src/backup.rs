@@ -14,7 +14,7 @@ use common::backup::BackupConfig;
 use common::time::UtcInstant;
 use storage::{
     BackupExportOptions, BackupManifest, BackupMode, DbConnectOptions, SiteConfigStorage,
-    export_backup,
+    StorageRuntimeConfig, export_backup,
 };
 
 /// Starts the background backup worker if configured.
@@ -26,6 +26,7 @@ use storage::{
 pub async fn start_backup_worker(
     site_config: Arc<dyn SiteConfigStorage>,
     database: DbConnectOptions,
+    runtime: StorageRuntimeConfig,
     storage_path: PathBuf,
 ) -> anyhow::Result<Option<JobScheduler>> {
     let config = site_config.get_backup_config().await?;
@@ -38,11 +39,19 @@ pub async fn start_backup_worker(
     let schedule = config.schedule.to_string();
     let job = Job::new_async(schedule.as_str(), move |_uuid, _lock| {
         let database = database.clone();
+        let runtime = runtime.clone();
         let media_path = storage_path.join("media");
         let destination_root = destination_root.clone();
         let config = config.clone();
         Box::pin(async move {
-            run_scheduled_backup_logged(&database, &media_path, &destination_root, &config).await;
+            run_scheduled_backup_logged(
+                &database,
+                &runtime,
+                &media_path,
+                &destination_root,
+                &config,
+            )
+            .await;
         })
     })?;
     scheduler.add(job).await?;
@@ -52,6 +61,7 @@ pub async fn start_backup_worker(
 
 async fn run_scheduled_backup(
     database: &DbConnectOptions,
+    runtime: &StorageRuntimeConfig,
     media_path: &Path,
     destination_root: &Path,
     config: &BackupConfig,
@@ -60,6 +70,7 @@ async fn run_scheduled_backup(
     let destination_path = backup_path_for_mode(destination_root, config.mode);
     export_backup(BackupExportOptions {
         database,
+        runtime,
         media_path,
         destination_path: &destination_path,
         mode: config.mode,
@@ -164,12 +175,14 @@ fn finish_backup_size(size: u64, error: Option<std::io::Error>) -> u64 {
 /// background-thread execution is awkward to observe under coverage).
 async fn run_scheduled_backup_logged(
     database: &DbConnectOptions,
+    runtime: &StorageRuntimeConfig,
     media_path: &Path,
     destination_root: &Path,
     config: &BackupConfig,
 ) {
     let started = std::time::Instant::now();
-    let result = run_scheduled_backup(database, media_path, destination_root, config).await;
+    let result =
+        run_scheduled_backup(database, runtime, media_path, destination_root, config).await;
     let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     host::metrics::backup_duration_ms(elapsed_ms);
     host::metrics::backup_run(backup_result_metric(result.is_ok()));
@@ -536,9 +549,14 @@ mod tests {
     async fn backup_worker_disabled_without_destination_path() {
         let storage = TempDir::new().expect("temp dir");
         let (db, pool) = migrated_sqlite_db(storage.path()).await;
-        let scheduler = start_backup_worker(site_config(&pool), db, storage.path().to_path_buf())
-            .await
-            .expect("worker start");
+        let scheduler = start_backup_worker(
+            site_config(&pool),
+            db,
+            StorageRuntimeConfig::default(),
+            storage.path().to_path_buf(),
+        )
+        .await
+        .expect("worker start");
 
         assert!(scheduler.is_none());
     }
@@ -558,9 +576,14 @@ mod tests {
             .await
             .expect("set schedule");
 
-        let scheduler = start_backup_worker(cfg, db, storage.path().to_path_buf())
-            .await
-            .expect("worker start");
+        let scheduler = start_backup_worker(
+            cfg,
+            db,
+            StorageRuntimeConfig::default(),
+            storage.path().to_path_buf(),
+        )
+        .await
+        .expect("worker start");
 
         assert!(scheduler.is_some());
     }
@@ -585,10 +608,11 @@ mod tests {
             .await
             .expect("set schedule");
 
-        let mut scheduler = start_backup_worker(cfg, db, storage_path)
-            .await
-            .expect("worker start")
-            .expect("scheduler enabled");
+        let mut scheduler =
+            start_backup_worker(cfg, db, StorageRuntimeConfig::default(), storage_path)
+                .await
+                .expect("worker start")
+                .expect("scheduler enabled");
 
         let mut found_manifest = false;
         for _ in 0..30 {
@@ -632,9 +656,15 @@ mod tests {
             retention_count: parse_retention_count("1"),
             mode: BackupMode::Directory,
         };
-        let written = run_scheduled_backup(&db, &media, &destination_root, &config)
-            .await
-            .expect("scheduled backup");
+        let written = run_scheduled_backup(
+            &db,
+            &StorageRuntimeConfig::default(),
+            &media,
+            &destination_root,
+            &config,
+        )
+        .await
+        .expect("scheduled backup");
 
         assert!(written.join("manifest.json").is_file());
         assert!(written.join("media").join("file.txt").is_file());
@@ -657,7 +687,14 @@ mod tests {
             retention_count: parse_retention_count("1"),
             mode: BackupMode::Directory,
         };
-        run_scheduled_backup_logged(&db, &media, &ok_root, &ok_config).await;
+        run_scheduled_backup_logged(
+            &db,
+            &StorageRuntimeConfig::default(),
+            &media,
+            &ok_root,
+            &ok_config,
+        )
+        .await;
         assert!(
             ok_root.exists(),
             "successful scheduled backup should create the destination"
@@ -673,7 +710,14 @@ mod tests {
             ..ok_config
         };
         let (guard, output) = trace_capture();
-        run_scheduled_backup_logged(&db, &media, &bad_root, &bad_config).await;
+        run_scheduled_backup_logged(
+            &db,
+            &StorageRuntimeConfig::default(),
+            &media,
+            &bad_root,
+            &bad_config,
+        )
+        .await;
         drop(guard);
         assert!(!bad_root.exists(), "failed scheduled backup writes nothing");
         assert_one_report(&trace_text(&output), "server.backup.scheduled_run");

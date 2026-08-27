@@ -20,7 +20,10 @@ use crate::posts::{
     UPSERT_TAG_RETURNING_ID, UpdatePostInput,
 };
 use crate::sql::quote_identifier;
-use crate::{AppState, DbConnectOptions, PostFormat, PostRecord, resolved_postgres_options};
+use crate::{
+    AppState, DbConnectOptions, PostFormat, PostRecord, StorageRuntimeConfig,
+    resolved_postgres_options,
+};
 
 use common::feed::FeedPath;
 use common::ids::{PostId, TagId, UserId};
@@ -147,7 +150,7 @@ pub async fn raw_media_filename_exists(db: &DbConnectOptions, filename: &str) ->
             exists != 0
         }
         DbConnectOptions::Postgres { options, .. } => {
-            let options = resolved_postgres_options(options).expect("resolve postgres options");
+            let options = resolved_postgres_options(options, &StorageRuntimeConfig::default());
             let pool = PgPool::connect_with(options)
                 .await
                 .expect("connect postgres");
@@ -544,13 +547,14 @@ impl Backend {
     /// or `JAUNDER_PG_TEST_URL` is misconfigured) — a setup failure fails the test.
     pub async fn setup(self) -> TestEnv {
         let dir = TempDir::new().unwrap();
+        let runtime = StorageRuntimeConfig::default();
         let (state, base) = match self {
             Backend::Sqlite => {
                 let DbConnectOptions::Sqlite(options) = sqlite_url(&dir) else {
                     unreachable!("sqlite_url always yields Sqlite")
                 };
                 let (state, pool, instance_id) =
-                    crate::sqlite::open_sqlite_database_with_pool(&options, true)
+                    crate::sqlite::open_sqlite_database_with_pool(&options, true, &runtime)
                         .await
                         .unwrap();
                 (state, TestBase::sqlite(dir, pool, instance_id))
@@ -563,7 +567,7 @@ impl Backend {
                     unreachable!("template_postgres_url always yields Postgres")
                 };
                 let (state, pool, instance_id) =
-                    crate::postgres::open_postgres_database_with_pool(options)
+                    crate::postgres::open_postgres_database_with_pool(options, &runtime)
                         .await
                         .unwrap();
                 // Record the per-test DB URL so raw-SQL helpers reuse this exact

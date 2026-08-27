@@ -15,7 +15,9 @@ async fn second_open_on_migrated_database_succeeds(#[case] backend: Backend) {
         Backend::Sqlite => sqlite_url(&env.base),
         Backend::Postgres => recorded_postgres_url(&env.base).parse().unwrap(),
     };
-    open_database(&opts).await.unwrap();
+    open_database(&opts, &storage::StorageRuntimeConfig::default())
+        .await
+        .unwrap();
 }
 
 #[test]

@@ -40,7 +40,7 @@ Out:
     tests prove existing fallback, malformed-input, global-initialization, and
     capture behavior without parent-process mutation.
 
-- [ ] Task 2: Thread one storage runtime snapshot through every connection path
+- [x] Task 2: Thread one storage runtime snapshot through every connection path
   - Contract: storage owns a narrow immutable runtime configuration containing
     the shared SQL slow threshold and an optional redacted PostgreSQL
     application password. The command boundary preserves

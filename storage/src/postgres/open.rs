@@ -1,12 +1,9 @@
-use std::env::VarError;
-use std::io;
 use std::sync::Arc;
 
 use log::LevelFilter;
 use sqlx::ConnectOptions;
 use sqlx::PgPool;
 use sqlx::postgres::PgConnectOptions;
-use thiserror::Error;
 
 use super::{
     PostgresAtomicOps, PostgresAudienceStorage, PostgresEmailVerificationStorage,
@@ -40,78 +37,25 @@ fn make_postgres_app_state(pool: PgPool) -> Arc<crate::AppState> {
     })
 }
 
-#[derive(Debug, Error)]
-enum PostgresPasswordError {
-    #[error("JAUNDER_DB_PASSWORD_FILE is not valid Unicode")]
-    FileVariable(#[source] VarError),
-    #[error("JAUNDER_DB_PASSWORD is not valid Unicode")]
-    Variable(#[source] VarError),
-    #[error("configured PostgreSQL password file could not be read")]
-    FileRead(#[source] io::Error),
-}
-
-fn postgres_password_from_ops(
-    mut read_variable: impl FnMut(&str) -> Result<String, VarError>,
-    mut read_file: impl FnMut(&str) -> io::Result<String>,
-) -> Result<Option<String>, PostgresPasswordError> {
-    match read_variable("JAUNDER_DB_PASSWORD_FILE") {
-        Ok(path) => {
-            let password = read_file(&path).map_err(PostgresPasswordError::FileRead)?;
-            return Ok(Some(password.trim_end().to_owned()));
-        }
-        Err(VarError::NotPresent) => {}
-        Err(error @ VarError::NotUnicode(_)) => {
-            return Err(PostgresPasswordError::FileVariable(error));
-        }
-    }
-
-    match read_variable("JAUNDER_DB_PASSWORD") {
-        Ok(password) => Ok(Some(password)),
-        Err(VarError::NotPresent) => Ok(None),
-        Err(error @ VarError::NotUnicode(_)) => Err(PostgresPasswordError::Variable(error)),
-    }
-}
-
-fn read_password_variable(name: &str) -> Result<String, VarError> {
-    std::env::var(name)
-}
-
-fn read_password_file(path: &str) -> io::Result<String> {
-    std::fs::read_to_string(path)
-}
-
-fn postgres_password_from_env() -> Result<Option<String>, PostgresPasswordError> {
-    postgres_password_from_ops(read_password_variable, read_password_file)
-}
-
-fn apply_postgres_password(
+/// Resolve final Postgres options from the application connection snapshot.
+#[must_use]
+pub fn resolved_postgres_options(
     options: &PgConnectOptions,
-    password: Result<Option<String>, PostgresPasswordError>,
-) -> sqlx::Result<PgConnectOptions> {
+    runtime: &crate::StorageRuntimeConfig,
+) -> PgConnectOptions {
     let mut options = options.clone();
-    if let Some(password) = password.map_err(|error| sqlx::Error::Configuration(Box::new(error)))? {
-        options = options.password(&password);
+    if let Some(password) = runtime.postgres_password() {
+        options = options.password(&password.0);
     }
-    Ok(options)
+    options.log_slow_statements(LevelFilter::Warn, runtime.sql_slow_query_threshold())
 }
 
-/// Resolve final Postgres options, applying password overrides from env
-/// and the slow-query log threshold.
-///
-/// # Errors
-///
-/// Returns a configuration error retaining the typed environment or file source
-/// when a configured password input cannot be read.
-pub fn resolved_postgres_options(options: &PgConnectOptions) -> sqlx::Result<PgConnectOptions> {
-    let options = apply_postgres_password(options, postgres_password_from_env())?;
-    Ok(options.log_slow_statements(LevelFilter::Warn, crate::db::sql_slow_query_threshold()))
-}
-
-#[tracing::instrument(name = "storage.postgres.open_database", skip(options))]
+#[tracing::instrument(name = "storage.postgres.open_database", skip(options, runtime))]
 pub(crate) async fn open_postgres_database_with_pool(
     options: &PgConnectOptions,
+    runtime: &crate::StorageRuntimeConfig,
 ) -> sqlx::Result<(Arc<crate::AppState>, PgPool, crate::InstanceId)> {
-    let options = resolved_postgres_options(options)?;
+    let options = resolved_postgres_options(options, runtime);
     let pool = PgPool::connect_with(options).await?;
     sqlx::migrate!("./migrations/postgres").run(&pool).await?;
     let instance_id = ensure_instance_identity(&pool).await?;
@@ -121,8 +65,11 @@ pub(crate) async fn open_postgres_database_with_pool(
 
 /// Returns `true` if the `PostgreSQL` database holds no user data — every table
 /// except the migration-seeded lookups is empty.
-pub(crate) async fn database_is_empty(options: &PgConnectOptions) -> sqlx::Result<bool> {
-    let options = resolved_postgres_options(options)?;
+pub(crate) async fn database_is_empty(
+    options: &PgConnectOptions,
+    runtime: &crate::StorageRuntimeConfig,
+) -> sqlx::Result<bool> {
+    let options = resolved_postgres_options(options, runtime);
     let pool = PgPool::connect_with(options).await?;
     let tables = sqlx::query_scalar::<_, String>(
         "SELECT table_name FROM information_schema.tables \
@@ -153,7 +100,7 @@ mod tests {
     use super::*;
     use crate::test_support::{Backend, CloseablePool, postgres_only};
     use common::tag::Tag;
-    use common::test_support::{parse_tag, with_env};
+    use common::test_support::parse_tag;
     use rstest::*;
     use rstest_reuse::*;
 
@@ -192,128 +139,87 @@ mod tests {
         assert_eq!(found, wanted);
     }
 
-    fn assert_configuration_source<T: std::error::Error + 'static>(
-        result: sqlx::Result<PgConnectOptions>,
-        forbidden: &str,
-    ) {
-        let error = result.expect_err("option resolution must fail");
-        assert!(
-            matches!(&error, sqlx::Error::Configuration(_)),
-            "credential input failures are configuration failures"
+    fn raw_config(
+        password_file: Result<Option<std::io::Result<String>>, std::env::VarError>,
+        password: Result<Option<String>, std::env::VarError>,
+    ) -> Result<crate::StorageRuntimeConfig, crate::PostgresPasswordError> {
+        crate::StorageRuntimeConfig::from_raw(Ok(None), password_file, password)
+    }
+
+    #[test]
+    fn postgres_password_prefers_trimmed_file_value_over_variable() {
+        let runtime = raw_config(
+            Ok(Some(Ok("from-file\n".to_owned()))),
+            Ok(Some("from-variable".to_owned())),
+        )
+        .expect("file password resolves");
+
+        assert_eq!(
+            runtime
+                .postgres_password()
+                .map(|password| password.0.as_str()),
+            Some("from-file")
         );
-        assert!(
-            !error.to_string().contains(forbidden),
-            "configuration context must not render credential bytes"
+    }
+
+    #[test]
+    fn postgres_password_allows_empty_file_override() {
+        let runtime = raw_config(
+            Ok(Some(Ok("\n".to_owned()))),
+            Ok(Some("fallback".to_owned())),
+        )
+        .expect("empty file password is a valid override");
+
+        assert_eq!(
+            runtime
+                .postgres_password()
+                .map(|password| password.0.as_str()),
+            Some("")
         );
-
-        let mut source: &(dyn std::error::Error + 'static) = &error;
-        let mut found = false;
-        while let Some(next) = source.source() {
-            if next.downcast_ref::<T>().is_some() {
-                found = true;
-                break;
-            }
-            source = next;
-        }
-        assert!(found, "typed source must remain downcastable");
     }
 
     #[test]
-    fn postgres_password_prefers_file_over_env() {
-        with_env(|env| {
-            env.set("JAUNDER_DB_PASSWORD", "from-env");
-            let dir = tempfile::TempDir::new().unwrap();
-            let path = dir.path().join("db-password");
-            std::fs::write(&path, "from-file\n").unwrap();
-            env.set("JAUNDER_DB_PASSWORD_FILE", &path);
+    fn postgres_password_falls_back_to_embedded_url_when_unset() {
+        let runtime = raw_config(Ok(None), Ok(None)).expect("no override resolves");
+        let base: PgConnectOptions = "postgres://user:embedded@localhost/db".parse().unwrap();
 
-            let password = postgres_password_from_env().unwrap();
-
-            assert_eq!(password.as_deref(), Some("from-file"));
-        });
+        let _ = resolved_postgres_options(&base, &runtime);
+        assert!(runtime.postgres_password().is_none());
     }
 
     #[test]
-    fn postgres_password_uses_env_when_file_unset() {
-        with_env(|env| {
-            env.remove("JAUNDER_DB_PASSWORD_FILE");
-            env.set("JAUNDER_DB_PASSWORD", "from-env");
+    fn postgres_password_invalid_variable_retains_typed_source_without_secret() {
+        let marker = "credential-byte-marker";
+        let Err(error) = raw_config(
+            Err(std::env::VarError::NotUnicode(std::ffi::OsString::from(
+                marker,
+            ))),
+            Ok(None),
+        ) else {
+            panic!("invalid password-file variable must fail closed");
+        };
 
-            let password = postgres_password_from_env().unwrap();
-
-            assert_eq!(password.as_deref(), Some("from-env"));
-        });
+        assert!(matches!(
+            error,
+            crate::PostgresPasswordError::FileVariable(_)
+        ));
+        assert!(!error.to_string().contains(marker));
     }
 
     #[test]
-    fn postgres_password_returns_none_when_unset() {
-        with_env(|env| {
-            env.remove("JAUNDER_DB_PASSWORD");
-            env.remove("JAUNDER_DB_PASSWORD_FILE");
+    fn postgres_password_unreadable_file_retains_typed_source_without_path() {
+        let path = "/private/password-file";
+        let Err(error) = raw_config(
+            Ok(Some(Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                path,
+            )))),
+            Ok(None),
+        ) else {
+            panic!("unreadable password file must fail closed");
+        };
 
-            let password = postgres_password_from_env().unwrap();
-
-            assert_eq!(password, None);
-        });
-    }
-
-    #[test]
-    fn resolved_postgres_options_applies_password_override_when_env_set() {
-        with_env(|env| {
-            env.set("JAUNDER_DB_PASSWORD", "secret");
-            env.remove("JAUNDER_DB_PASSWORD_FILE");
-
-            let base: PgConnectOptions = "postgres://user@localhost/db".parse().unwrap();
-            let resolved = resolved_postgres_options(&base);
-
-            assert!(resolved.is_ok());
-        });
-    }
-
-    #[test]
-    fn postgres_password_from_env_invalid_file_variable_fails_closed() {
-        let marker = "file-credential-byte-marker";
-        let password = postgres_password_from_ops(
-            |key| {
-                assert_eq!(key, "JAUNDER_DB_PASSWORD_FILE");
-                Err(VarError::NotUnicode(std::ffi::OsString::from(marker)))
-            },
-            |_| unreachable!("an invalid file variable cannot name a file"),
-        );
-        let base: PgConnectOptions = "postgres://user@localhost/db".parse().unwrap();
-
-        assert_configuration_source::<VarError>(apply_postgres_password(&base, password), marker);
-    }
-
-    #[test]
-    fn postgres_password_from_env_invalid_direct_variable_fails_closed() {
-        let marker = "direct-credential-byte-marker";
-        let password = postgres_password_from_ops(
-            |key| match key {
-                "JAUNDER_DB_PASSWORD_FILE" => Err(VarError::NotPresent),
-                "JAUNDER_DB_PASSWORD" => {
-                    Err(VarError::NotUnicode(std::ffi::OsString::from(marker)))
-                }
-                _ => unreachable!("only the two credential variables are read"),
-            },
-            |_| unreachable!("an absent file variable cannot cause a file read"),
-        );
-        let base: PgConnectOptions = "postgres://user@localhost/db".parse().unwrap();
-
-        assert_configuration_source::<VarError>(apply_postgres_password(&base, password), marker);
-    }
-
-    #[test]
-    fn resolved_postgres_options_retains_io_source_when_password_file_unreadable() {
-        with_env(|env| {
-            env.remove("JAUNDER_DB_PASSWORD");
-            let missing_path = "/nonexistent/path/to/db-password";
-            env.set("JAUNDER_DB_PASSWORD_FILE", missing_path);
-
-            let base: PgConnectOptions = "postgres://user@localhost/db".parse().unwrap();
-            let result = resolved_postgres_options(&base);
-
-            assert_configuration_source::<io::Error>(result, missing_path);
-        });
+        assert!(matches!(error, crate::PostgresPasswordError::FileRead(_)));
+        assert!(!error.to_string().contains(path));
     }
 }

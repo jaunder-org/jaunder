@@ -130,6 +130,27 @@ fn telemetry_config() -> host::telemetry::TelemetryConfig {
     )
 }
 
+fn storage_runtime_config(
+    db: &DbConnectOptions,
+) -> Result<storage::StorageRuntimeConfig, storage::PostgresPasswordError> {
+    let (password_file, password) = match db {
+        DbConnectOptions::Sqlite(_) => (Ok(None), Ok(None)),
+        DbConnectOptions::Postgres { .. } => {
+            let password_file = match std::env::var("JAUNDER_DB_PASSWORD_FILE") {
+                Ok(path) => Ok(Some(std::fs::read_to_string(path))),
+                Err(std::env::VarError::NotPresent) => Ok(None),
+                Err(error) => Err(error),
+            };
+            (password_file, inherited("JAUNDER_DB_PASSWORD"))
+        }
+    };
+    storage::StorageRuntimeConfig::from_raw(
+        inherited("JAUNDER_SQL_SLOW_MS"),
+        password_file,
+        password,
+    )
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     run(Cli::parse()).await
@@ -149,26 +170,61 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             count,
             body_prefix,
             published,
-        } => cmd_seed_posts(&db, &username, count, &body_prefix, published).await,
+        } => {
+            let storage_runtime = storage_runtime_config(&db)?;
+            cmd_seed_posts(
+                &db,
+                &storage_runtime,
+                &username,
+                count,
+                &body_prefix,
+                published,
+            )
+            .await
+        }
         Commands::CreateUser {
             db,
             username,
             password,
             display_name,
             operator,
-        } => cmd_create_user(&db, &username, &password, display_name.as_ref(), operator).await,
+        } => {
+            let storage_runtime = storage_runtime_config(&db)?;
+            cmd_create_user(
+                &db,
+                &storage_runtime,
+                &username,
+                &password,
+                display_name.as_ref(),
+                operator,
+            )
+            .await
+        }
         Commands::ResetMail => cmd_reset_mail(&capture),
         Commands::SeedUser {
             db,
             username,
             password,
             label,
-        } => cmd_seed_user(&db, &username, &password, label.as_deref()).await,
+        } => {
+            let storage_runtime = storage_runtime_config(&db)?;
+            cmd_seed_user(
+                &db,
+                &storage_runtime,
+                &username,
+                &password,
+                label.as_deref(),
+            )
+            .await
+        }
         Commands::CreateSession {
             db,
             username,
             label,
-        } => cmd_create_session(&db, &username, label.as_deref()).await,
+        } => {
+            let storage_runtime = storage_runtime_config(&db)?;
+            cmd_create_session(&db, &storage_runtime, &username, label.as_deref()).await
+        }
         Commands::CapturePath { stream } => cmd_capture_path(&stream, &capture),
         Commands::VerifyNoPanics {
             capture_dir,
@@ -180,12 +236,13 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
 /// Seed `count` posts for `username` through the real storage path.
 async fn cmd_seed_posts(
     db: &DbConnectOptions,
+    runtime: &storage::StorageRuntimeConfig,
     username: &str,
     count: usize,
     body_prefix: &str,
     published: bool,
 ) -> anyhow::Result<()> {
-    let state = storage::open_existing_database(db).await?;
+    let state = storage::open_existing_database(db, runtime).await?;
     let ids = seed_posts_for_user(&state, username, count, published, body_prefix).await?;
     eprintln!("seeded {} posts for {username}", ids.len());
     Ok(())
@@ -194,12 +251,13 @@ async fn cmd_seed_posts(
 /// Create a fixture user through the real storage path.
 async fn cmd_create_user(
     db: &DbConnectOptions,
+    runtime: &storage::StorageRuntimeConfig,
     username: &str,
     password: &str,
     display_name: Option<&DisplayName>,
     operator: bool,
 ) -> anyhow::Result<()> {
-    let state = storage::open_existing_database(db).await?;
+    let state = storage::open_existing_database(db, runtime).await?;
     let id = create_user(&state, username, password, display_name, operator).await?;
     eprintln!("created user {username} with id {}", i64::from(id));
     Ok(())
@@ -208,23 +266,24 @@ async fn cmd_create_user(
 /// Create a fixture user and a session; print the seed record as JSON.
 async fn cmd_seed_user(
     db: &DbConnectOptions,
+    runtime: &storage::StorageRuntimeConfig,
     username: &str,
     password: &str,
     label: Option<&str>,
 ) -> anyhow::Result<()> {
-    let state = storage::open_existing_database(db).await?;
+    let state = storage::open_existing_database(db, runtime).await?;
     let record = seed_user(&state, username, password, label).await?;
     println!("{}", serde_json::to_string(&record)?);
     Ok(())
 }
 
-/// Create a session for an existing user; print the seed record as JSON.
 async fn cmd_create_session(
     db: &DbConnectOptions,
+    runtime: &storage::StorageRuntimeConfig,
     username: &str,
     label: Option<&str>,
 ) -> anyhow::Result<()> {
-    let state = storage::open_existing_database(db).await?;
+    let state = storage::open_existing_database(db, runtime).await?;
     let record = create_session_for_user(&state, username, label).await?;
     println!("{}", serde_json::to_string(&record)?);
     Ok(())
@@ -267,7 +326,9 @@ mod tests {
     async fn temp_db() -> (TempDir, DbConnectOptions) {
         let dir = TempDir::new().unwrap();
         let db = sqlite_url(&dir);
-        storage::open_database(&db).await.unwrap();
+        storage::open_database(&db, &storage::StorageRuntimeConfig::default())
+            .await
+            .unwrap();
         (dir, db)
     }
 
@@ -315,7 +376,9 @@ mod tests {
         // Read back through a fresh connection to prove the dispatch wired each
         // command's arguments through to storage (not merely returned Ok): the
         // seeded post is published and attributed to alice.
-        let state = storage::open_existing_database(&db).await.unwrap();
+        let state = storage::open_existing_database(&db, &storage::StorageRuntimeConfig::default())
+            .await
+            .unwrap();
         let published = state
             .posts
             .list_published_by_user(

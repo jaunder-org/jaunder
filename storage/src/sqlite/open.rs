@@ -13,7 +13,7 @@ use super::{
     SqliteUserConfigStorage, SqliteUserStorage,
 };
 use crate::AppState;
-use crate::db::sql_slow_query_threshold;
+use crate::db::StorageRuntimeConfig;
 use crate::instance_identity::ensure_instance_identity;
 use crate::posts::backfill_post_media_references;
 
@@ -41,12 +41,13 @@ fn make_sqlite_app_state(pool: SqlitePool) -> Arc<AppState> {
 
 #[tracing::instrument(
     name = "storage.sqlite.open_database",
-    skip(options),
+    skip(options, runtime),
     fields(create_if_missing)
 )]
 pub(crate) async fn open_sqlite_database_with_pool(
     options: &SqliteConnectOptions,
     create_if_missing: bool,
+    runtime: &StorageRuntimeConfig,
 ) -> sqlx::Result<(Arc<AppState>, SqlitePool, crate::InstanceId)> {
     let mut options = options.clone();
     if create_if_missing {
@@ -58,8 +59,7 @@ pub(crate) async fn open_sqlite_database_with_pool(
     options = options
         .journal_mode(SqliteJournalMode::Wal)
         .busy_timeout(Duration::from_secs(5))
-        .log_slow_statements(LevelFilter::Warn, sql_slow_query_threshold());
-
+        .log_slow_statements(LevelFilter::Warn, runtime.sql_slow_query_threshold());
     let pool = sqlx::SqlitePool::connect_with(options).await?;
 
     // Increase cache size to 32MB. SQLite page size is 4KB by default (usually),

@@ -50,7 +50,7 @@ pub fn fixture_published_at() -> UtcInstant {
 }
 
 pub async fn populate_backup_fixture(args: &StorageArgs) -> BackupFixtureIds {
-    let state = open_existing_database(&args.db)
+    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
         .expect("open database");
     let username: Username = "backupuser".parse().expect("valid username");
@@ -165,7 +165,7 @@ async fn seed_side_tables(state: &AppState, author: UserId) {
 }
 
 pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixtureIds) {
-    let state = open_existing_database(&args.db)
+    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
         .await
         .expect("open restored database");
     let username: Username = "backupuser".parse().expect("valid username");
@@ -253,7 +253,9 @@ pub async fn assert_backup_fixture_restored(args: &StorageArgs, ids: &BackupFixt
 /// Assert a restore target is untouched — the fixture's operator user is absent —
 /// after a rejected restore rolled back.
 pub async fn assert_target_unmodified(args: &StorageArgs) {
-    let state = open_existing_database(&args.db).await.expect("open target");
+    let state = open_existing_database(&args.db, &storage::StorageRuntimeConfig::default())
+        .await
+        .expect("open target");
     let username: Username = "backupuser".parse().expect("valid username");
     assert!(
         state
