@@ -1937,6 +1937,118 @@ Corpus: `~/measurements/jaunder/issue-867-navcount/`. Deciding-set files are
 unprefixed, confirming-set files carry a `gate-` prefix, and the README opens
 with a table naming both sets and stating that they must not be pooled.
 
+## #801 — CSR mount-cost baseline found no eligible experiment (2026-08-26)
+
+**Verdict: the frozen candidate list is empty.** The current issue contract
+requires a change to clear both an affected-navigation floor and unchanged-suite
+wall-clock floor on Firefox. Fresh data leaves no issue-local, Jaunder-owned
+candidate with a defensible suite ceiling above the Firefox floor. No
+under-noise change or measurement-boundary shift was attempted.
+
+### Protocol and certification
+
+The deciding corpus is SQLite, single-worker, five runs per browser on a
+reserved host. Each pair used a distinct `e2eSalt`; browser order was
+counterbalanced run-by-run:
+
+1. Firefox → Chromium
+2. Chromium → Firefox
+3. Firefox → Chromium
+4. Chromium → Firefox
+5. Firefox → Chromium
+
+The first, mistakenly concurrent dry pair is not part of the corpus. Every
+included browser/run has the same census: **241 navigation records** (215
+`e2e.test` default-page plus 26 `e2e.page` secondary-page), **234 complete
+document-frame boot-mark sets**, **11 `mountToSettledMs` values**, and
+`e2e.navigation_top_dropped = 0`.
+
+Corpus: `~/measurements/jaunder/issue-801-csr-mount/baseline/`.
+`playwright-report-*.json` supplies suite wall clock; the extracted JSONL traces
+supply navigation metrics. The salt was restored to the committed empty value
+after capture.
+
+### Suite floor
+
+The pass rule uses unpaired run-level arm means. Before a candidate exists, the
+eligibility proxy is three times the baseline standard error:
+
+| browser  | Playwright suite durations (ms)        | mean (ms) | sample SD (ms) | baseline 3×SE (ms) |
+| -------- | -------------------------------------- | --------- | -------------- | ------------------ |
+| Firefox  | 722332, 628740, 642650, 653065, 645312 | 658420    | 36793          | **49363**          |
+| Chromium | 410158, 407728, 409880, 415436, 415027 | 411646    | 3409           | **4573**           |
+
+The high first Firefox observation remains in the registered population; there
+is no post-hoc outlier exclusion. Increasing from three to five runs reduced the
+Firefox eligibility floor from 87.5 s to 49.4 s, but did not make an issue-local
+candidate eligible.
+
+### What the two measurement frames say
+
+`/app` has 15 navigation records per browser/run: 14 cold and one warm. Only 13
+cold records per run are mounted with a complete document boot total and all
+three Rust boot phases; the remaining cold record and the warm record have no
+mounted timing. **No `/app` record has `mountToSettledMs` in any of the ten
+browser runs.** The post-mount request graph therefore cannot be sized from this
+corpus without inventing missing values.
+
+The run-level `/app` means keep the measurement frames separate. The 3×SE
+columns are baseline-only eligibility proxies, not candidate pass floors:
+
+| browser  | warmth | navigations/run | complete/run | `commitToMountMs` mean / 3×SE | document boot mean / 3×SE | settled/run |
+| -------- | ------ | --------------- | ------------ | ----------------------------- | ------------------------- | ----------- |
+| Firefox  | cold   | 14              | 13           | 1091.9 / 85.0 ms              | 832.9 / 79.7 ms           | 0           |
+| Firefox  | warm   | 1               | 0            | —                             | —                         | 0           |
+| Chromium | cold   | 14              | 13           | 800.3 / 39.7 ms               | 411.8 / 8.3 ms            | 0           |
+| Chromium | warm   | 1               | 0            | —                             | —                         | 0           |
+
+`commitToMountMs` is reported but not decomposed: it is Node-frame wall time,
+while document boot and its phases are document-frame values (ADR-0100).
+
+The complete `mountToSettledMs` population is limited to these route/warmth
+groups, pooled across five runs per browser:
+
+| route        | warmth | n/browser | Firefox mean | Chromium mean |
+| ------------ | ------ | --------- | ------------ | ------------- |
+| `/profile`   | cold   | 25        | 273.7 ms     | 300.3 ms      |
+| `/profile`   | warm   | 15        | 271.7 ms     | 298.6 ms      |
+| `/login`     | cold   | 5         | 357.2 ms     | 318.4 ms      |
+| `/posts/new` | cold   | 5         | 255.0 ms     | 148.0 ms      |
+| `/admin/*`   | warm   | 5         | 294.2 ms     | 302.0 ms      |
+
+Those 11 values per run sum to only 3.09 s/run on Firefox (3.17 s on Chromium);
+even deleting that entire measured quantity cannot clear the 49.4 s Firefox
+suite floor.
+
+The `/app` document-frame boot total averages 832.9 ms on Firefox. Its Rust-side
+phase objects exist on all 75 `/app` records and are not the cost: entry→seed
+parsed averages 0.04 ms, seed parsed→render start 0.17 ms, and render
+start→mount done 2.39 ms. The material boot phases are already disposed or owned
+elsewhere:
+
+| phase or lever                            | observed or historical suite ceiling | disposition                         |
+| ----------------------------------------- | ------------------------------------ | ----------------------------------- |
+| raw wasm-size reduction                   | ~14.5 s Firefox                      | #836 completed; ADR-0106 budget     |
+| Firefox size-independent initialization   | engine floor                         | #864 completed                      |
+| navigation-count reduction                | ~65 s Firefox                        | #867 completed                      |
+| content-hashed `/pkg/*` caching           | ~11.8 s Firefox                      | #869 open, separately owned         |
+| stylesheet/pre-fetch window               | ~54.4 s Firefox                      | #870 completed                      |
+| wasm preload                              | prior trial missed its floor         | rejected by ADR-0121                |
+| warning/session/timeline post-mount graph | incomplete population; no ceiling    | cannot be admitted from this corpus |
+
+The two levers whose historical ceilings exceed 49.4 s are #867 and #870; both
+already landed under their own issues. The remaining issue-local request graph
+has neither a complete deciding population nor a ceiling capable of satisfying
+the dual threshold.
+
+### Disposition
+
+The pre-registered eligibility rule admits **no candidate**, so there is no
+first experiment and no behavior change to test. The approved scope disposition
+closes #801 as no actionable win rather than absorbing separately owned work,
+weakening authentication, delaying operator warnings, or landing a change the
+suite clock cannot resolve.
+
 ## #792 — the per-test warmup A/B (findings, 2026-08-04)
 
 **Verdict: delete the warmup, both browsers.** It costs 113 s/combo (chromium)
