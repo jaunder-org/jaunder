@@ -287,7 +287,6 @@ pub(crate) mod test_fixtures {
                 published_at: Some(parse_utc_instant("2026-01-02T03:04:05Z")),
                 permalink: Some(parse_root_relative_url("/~alice/2026/01/02/hello")),
                 is_author: false,
-                is_draft: false,
                 tags: vec![TagSummary {
                     slug: "rust".parse().unwrap(),
                     display: "Rust".parse().unwrap(),
@@ -310,7 +309,6 @@ pub(crate) mod test_fixtures {
             published_at: Some(parse_utc_instant("2026-01-01T00:00:00Z")),
             permalink: Some(parse_root_relative_url("/~bob/2026/01/01/first")),
             is_author: false,
-            is_draft: false,
             tags: vec![],
         }
     }

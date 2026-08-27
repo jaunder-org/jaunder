@@ -318,7 +318,7 @@ pub fn PostCard<'a>(
     // A draft rendered at its permalink gets a Publish affordance instead of
     // Unpublish (#23): an Unpublish column would be a no-op on an already-
     // unpublished post.
-    let is_draft = post.is_draft;
+    let is_draft = post.is_draft();
     let edit_url = crate::posts::render::edit_post_url(post_id);
     let delete_action = ServerAction::<Delete>::new();
     let unpublish_action = ServerAction::<Unpublish>::new();
@@ -1043,7 +1043,7 @@ pub fn PostPage() -> impl IntoView {
                             Ok(fetched) => {
                                 let banner = fetched
                                     .post
-                                    .is_draft
+                                    .is_draft()
                                     .then_some("Draft - visible only to you".to_string());
                                 let tag_context = TagContext::ForUser(
                                     fetched.post.username.clone(),

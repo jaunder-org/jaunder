@@ -167,7 +167,7 @@ draft",
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
-    assert!(body.contains("\"is_draft\":true"), "body: {body}");
+    assert!(!body.contains("\"is_draft\""), "body: {body}");
     assert!(body.contains("Draft"), "body: {body}");
 
     let (status, body) = get_post_preview_form(&state, created.post_id, Some(&author_cookie)).await;
