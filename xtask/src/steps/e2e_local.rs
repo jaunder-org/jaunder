@@ -964,6 +964,7 @@ fn run_lifecycle(
         .env("JAUNDER_DB", &db)
         .env("JAUNDER_RUNTIME_FILE", &runtime)
         .env("JAUNDER_CAPTURE_DIR", &capture)
+        .env("RUST_LOG", "info")
         .env(
             "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
             collector.grpc_exporter_url(),

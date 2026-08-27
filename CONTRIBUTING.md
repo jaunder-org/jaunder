@@ -262,11 +262,14 @@ The host and the CI VM load the **same** `end2end/playwright.config.ts`, so
 invoke it.
 
 - **Fast local loop** — `cargo xtask e2e-local` owns the whole loop: it builds
-  the CSR bundle + server, starts its own `jaunder serve` on an ephemeral port
-  with a fresh per-run SQLite temp DB, seeds fixtures, and runs the local
-  Chromium lifecycle, tearing the server down after. No pre-existing server
-  needed. Use this while iterating on the web UI; it uses the HTML reporter for
-  interactive debugging.
+  the CSR bundle + server, starts its own `jaunder serve` and OTLP collector on
+  ephemeral ports with a fresh per-run SQLite temp DB, seeds fixtures, and runs
+  the local Chromium lifecycle, tearing both processes down after. The collector
+  captures correlated browser and server spans, then the command retains the
+  complete capture under `.xtask/e2e-local/<run-id>/<browser>/capture/` and
+  prints the exact `otel-traces.jsonl` path. No pre-existing server or collector
+  is needed. Use this while iterating on the web UI; it uses the HTML reporter
+  for interactive debugging.
 - **Focused browser-flow proof** — `cargo xtask e2e-local <spec-or-file:line>`
   scopes the local loop to one Playwright positional filter when that spec or
   line covers the changed behavior:
@@ -524,8 +527,11 @@ Jaunder uses OpenTelemetry for deep performance analysis (see
   artifacts (JSONL) from VM runs or local tests.
 
   ```bash
-  # each otel-traces.jsonl is extracted from an e2e capture-<backend>.tar.gz bundle
-  # (member path capture/otel-traces.jsonl); `cargo xtask traces run` does this for you.
+  # Local e2e-local capture; use the exact path printed by the command.
+  cargo xtask traces analyze \
+    .xtask/e2e-local/<run-id>/chromium/capture/otel-traces.jsonl
+
+  # VM captures are extracted from capture-<backend>.tar.gz; traces run does this.
   cargo xtask traces analyze \
     /path/to/sqlite-otel-traces.jsonl \
     /path/to/postgres-otel-traces.jsonl

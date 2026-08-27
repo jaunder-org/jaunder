@@ -82,7 +82,7 @@ Out:
     missing trace output, copy/finalization failure, fallback source retention,
     unique destinations, and multi-failure reporting.
 
-- [ ] Task 5: Prove and document the local trace workflow.
+- [x] Task 5: Prove and document the local trace workflow.
   - Verification: the real `cargo xtask e2e-local feeds.spec.ts` path retains
     and prints each artifact; `cargo xtask traces analyze <printed-path>` parses
     it; inspection proves an `e2e.test` and its server `request` share a trace

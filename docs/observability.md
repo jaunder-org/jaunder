@@ -18,6 +18,13 @@ processes, and end-to-end test runner.
   - `/var/lib/jaunder/capture/otel-traces.jsonl` (inside the VM)
   - lifted per combo inside `capture-<backend>.tar.gz` (the same bundle that
     carries `diag.log` and the mail/websub JSONL — see below)
+- `cargo xtask e2e-local` supervises the same collector pipeline on the host,
+  using per-lifecycle ephemeral OTLP receivers. After Jaunder and Playwright
+  finish, it flushes the collector, retains the complete capture at
+  `.xtask/e2e-local/<run-id>/<browser>/capture/`, and prints the exact
+  `otel-traces.jsonl` path. These local artifacts contain correlated
+  `e2e.test`/server `request` spans for iteration; the VM matrix remains the
+  authoritative gate.
 - Branch determinants are span attributes, not span-name suffixes. A span name
   identifies an operation; fields such as `registration.policy`,
   `registration.invite_present`, and `registration.outcome` explain the decision
@@ -475,8 +482,11 @@ app-driven scoped-capture decision.
 Use `cargo xtask traces analyze` on one or more artifact files, for example:
 
 ```bash
-# each otel-traces.jsonl is extracted from an e2e capture-<backend>.tar.gz bundle
-# (member path capture/otel-traces.jsonl); `cargo xtask traces run` does this for you.
+# Local e2e-local capture; use the exact path printed by the command.
+cargo xtask traces analyze \
+  .xtask/e2e-local/<run-id>/chromium/capture/otel-traces.jsonl
+
+# VM captures are extracted from capture-<backend>.tar.gz; traces run does this.
 cargo xtask traces analyze \
   sqlite-otel-traces.jsonl \
   postgres-otel-traces.jsonl
