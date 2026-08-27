@@ -335,7 +335,7 @@ mod tests {
     use super::*;
     use crate::test_support::{migrated_sqlite_db, site_config};
     use common::test_support::{parse_destination_path, parse_retention_count};
-    use storage::SiteConfigKey;
+    use host::config_key::SiteConfigKey;
     use tempfile::TempDir;
     #[derive(Clone)]
     struct SharedWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);

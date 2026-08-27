@@ -30,9 +30,10 @@ surface's bytes, audience, nor behavior.
 - AtomPub moves wholesale from `common` to `host`: Collection-facing types,
   serializers, parsing, and protocol machinery. AtomPub routing remains in
   `server`, and no AtomPub compatibility surface remains in `common`.
-- Outbound Syndication Feed types and rendering move wholesale to `host`,
-  including Atom, RSS, and JSON Feed representation machinery; their
-  rendered-HTML contract remains unchanged.
+- Host-only outbound Syndication Feed types, settings, path parsing, events,
+  windows, representation models, and Atom/RSS/JSON rendering move to `host`.
+  `FeedFormat`, `FeedSurface`, and `canonicalize` remain in `common` because CSR
+  reaches that grammar; the rendered-HTML contract remains unchanged.
 - `RenderOutput` and the sanitizer-gated module and machinery move to `host`.
   Qualified `host` rendering and sanitization free functions establish
   `RenderedHtml` from scrubbed output.
@@ -41,8 +42,10 @@ surface's bytes, audience, nor behavior.
 - Password, password-hashing errors, and `StoredPasswordHash` move to `host`.
   `ProfferedPassword` and its validation remain in `common` for dual-target
   supplied-password consumers.
-- `RenderedHtml`, `PostFormat`, ETag, Org normalization, `croner`, and
-  `BackupSchedule` remain in `common` for CSR or other dual-target consumers.
+- `RenderedHtml`, `PostFormat`, ETag, Org normalization, `croner`,
+  `BackupSchedule`, `FeedFormat`, `FeedSurface`, and `canonicalize` remain in
+  `common` for CSR or other dual-target consumers. Both closed configuration
+  registries, `SiteConfigKey` and `UserConfigKey`, move to `host`.
 - ETag construction, rendering, and password hash and verify operations become
   qualified `host` module free functions, not inherent `Password` methods.
   Shared values acquire no host behavior through `common` methods or traits.
@@ -68,17 +71,20 @@ surface's bytes, audience, nor behavior.
 - `common` contains no AtomPub Collection types, serializers, parsing, or
   protocol machinery. Callers use the `host` ownership surface directly, while
   AtomPub routing remains in `server`.
-- `common` contains no outbound Syndication Feed types or rendering machinery.
-  Feed producers and callers use `host` directly.
+- `common` contains no host-only outbound Syndication Feed types, settings,
+  parsing, events, windows, representation models, or rendering machinery.
+  `FeedFormat`, `FeedSurface`, and `canonicalize` remain as its CSR-reached
+  grammar; Feed producers and callers use the host-owned surface directly.
 - `RenderOutput`, the sanitizer-gated module and machinery, Password,
   password-hashing errors, and `StoredPasswordHash` are absent from `common`'s
   public and internal module surface, and every caller is cut over.
 - The `common/sanitize` feature and its now-unused dependencies are removed.
 - `ProfferedPassword`, supplied-password validation, `RenderedHtml`,
-  `PostFormat`, ETag, Org normalization, `croner`, and `BackupSchedule` remain
-  available to existing CSR or dual-target consumers. Client and server share
-  the one `BackupSchedule::FromStr`; trusted `RenderedHtml` reconstruction is
-  the gate-policed cross-crate minting seam.
+  `PostFormat`, ETag, Org normalization, `croner`, `BackupSchedule`,
+  `FeedFormat`, `FeedSurface`, and `canonicalize` remain available to existing
+  CSR or dual-target consumers. Both `SiteConfigKey` and `UserConfigKey` are
+  host-owned. Client and server share the one `BackupSchedule::FromStr`; trusted
+  `RenderedHtml` reconstruction is the gate-policed cross-crate minting seam.
 - ETag construction, rendering, and password hash and verify operations use
   qualified `host` module free functions, not inherent `Password` methods. No
   moved operation, including protocol rendering, remains a `common` method,
@@ -100,10 +106,11 @@ surface's bytes, audience, nor behavior.
   normalization, and rendering/sanitization behavior—including scrubbed
   `RenderedHtml` output—remain unchanged for the same inputs.
 - The new draft and `docs/ARCHITECTURE.md` agree on the target boundary,
-  excluded `common/sqlx` bridge, wholesale AtomPub and Syndication Feed moves,
+  excluded `common/sqlx` bridge, wholesale AtomPub move, host-only Syndication
+  Feed move, CSR-reached feed grammar, both host-owned configuration registries,
   and #847's subsumption of #855. Dated ownership/call-shape notes truthfully
   annotate ADR-0018, ADR-0023, ADR-0058, ADR-0063, ADR-0065, ADR-0072, ADR-0073,
-  ADR-0079, ADR-0089, ADR-0090, ADR-0095, and ADR-0112.
+  ADR-0079, ADR-0089, ADR-0090, ADR-0095, ADR-0102, and ADR-0112.
 - `cargo xtask validate` passes with the metadata gate and existing wasm
   compilation proof enabled.
 

@@ -486,7 +486,8 @@ mod tests {
     use super::*;
     use crate::websub::NoopWebSubClient;
     use common::site::SiteIdentity;
-    use storage::{FeedEventError, FeedEventRecord, FeedEventStatus};
+    use host::feed::FeedEventStatus;
+    use storage::{FeedEventError, FeedEventRecord};
 
     fn event(id: i64, feed_url: &str, attempts: i32) -> FeedEventRecord {
         let now = UtcInstant::now();

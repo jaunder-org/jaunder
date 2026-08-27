@@ -3,6 +3,7 @@ use common::mailer::test_utils::CapturingMailSender;
 use common::test_support::parse_session_label;
 use common::token::RawToken;
 use common::username::Username;
+use host::config_key::SiteConfigKey;
 use std::sync::Arc;
 
 use storage::test_support::{Backend, TestEnv};
@@ -142,7 +143,7 @@ pub fn basic_header(username: &str, token: &RawToken) -> String {
 pub async fn seed_base_url(state: &Arc<storage::AppState>) {
     state
         .site_config
-        .set(storage::SiteConfigKey::SiteBaseUrl, "https://example.com/")
+        .set(SiteConfigKey::SiteBaseUrl, "https://example.com/")
         .await
         .unwrap();
 }

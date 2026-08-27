@@ -135,6 +135,7 @@ mod tests {
     use super::*;
     use crate::test_support::{Backend, CloseablePool, SeedUser, backends, parse_invite_code};
     use common::test_support::{parse_display_name, parse_username};
+    use host::config_key::SiteConfigKey;
     use rstest::*;
     use rstest_reuse::*;
 
@@ -217,14 +218,14 @@ mod tests {
         assert!(
             env.state
                 .site_config
-                .get_raw(crate::SiteConfigKey::SiteRegistrationPolicy)
+                .get_raw(SiteConfigKey::SiteRegistrationPolicy)
                 .await
                 .is_err()
         );
         assert!(
             env.state
                 .site_config
-                .set(crate::SiteConfigKey::SiteRegistrationPolicy, "open")
+                .set(SiteConfigKey::SiteRegistrationPolicy, "open")
                 .await
                 .is_err()
         );

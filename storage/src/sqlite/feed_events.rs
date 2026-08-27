@@ -179,9 +179,10 @@ mod tests {
 
     use super::finish_purge;
     use crate::test_support::{Backend, fp, sqlite_only};
-    use crate::{FeedEventError, FeedEventRecord, FeedEventStatus};
+    use crate::{FeedEventError, FeedEventRecord};
     use chrono::Duration;
     use common::{ids::FeedEventId, time::UtcInstant};
+    use host::feed::FeedEventStatus;
 
     use rstest::*;
     use rstest_reuse::*;

@@ -21,8 +21,8 @@ use common::session_label::SessionLabel;
 use common::tagged_url::{MailConfirmUrl, compose};
 use common::token::RawToken;
 use common::username::Username;
+use host::config_key::SiteConfigKey;
 use host::password::Password;
-use host::site_config_key::SiteConfigKey;
 use host::smtp_config::SmtpConfig;
 use storage::load_smtp_config;
 use storage::{

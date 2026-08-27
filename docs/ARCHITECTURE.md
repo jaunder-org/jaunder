@@ -47,17 +47,17 @@ application domain types. `web` and `csr` depend on `client`, never the reverse
 from all three, in `macros`
 ([ADR-0062](adr/0062-macros-crate-proc-macro-home.md)).
 
-| Crate          | Target      | Responsibility                                                                                                                                                                                                           |
-| -------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `common`       | host + wasm | Dual-target domain types and operations reached by CSR or another dual-target consumer: validated newtypes, `RenderedHtml`, `PostFormat`, ETag, Org normalization, croner, and `BackupSchedule`.                         |
-| `storage`      | host        | Storage traits, record types, SQL migrations, and the SQLite/PostgreSQL backends ([ADR-0019](adr/0019-generic-storage-backend-via-dialect.md)).                                                                          |
-| `server`       | host        | The `jaunder` binary: Axum router, CLI, background workers, integration tests.                                                                                                                                           |
-| `web`          | host + wasm | Leptos components and `#[server]` functions — the UI and its server halves, split host/wasm at the file level ([ADR-0070](adr/0070-web-vertical-wasm-only-component-files.md)).                                          |
-| `csr`          | wasm        | The client-side-rendering entry point: mounts `web` in the browser ([ADR-0041](adr/0041-public-projector-and-csr-client.md)).                                                                                            |
-| `host`         | host        | Strictly-host-focused shared code: error carrier, capture dir, auth/token parsing, password hashing, AtomPub, Syndication Feed types/model/rendering, invites, process telemetry, metrics, and SMTP relay configuration. |
-| `client`       | host + wasm | Browser infrastructure: `localStorage`, dialogs, DOM/file-upload glue, reactive revalidation, CSR performance marks, and bounded client telemetry ([ADR-0069](adr/0069-client-crate-wasm-only-home.md)).                 |
-| `macros`       | build-time  | The workspace's proc-macro home: newtype, `text_enum`, sqlx-bridge and server-fn derives ([ADR-0062](adr/0062-macros-crate-proc-macro-home.md)).                                                                         |
-| `test-support` | host        | A seed binary linking `storage` for out-of-process e2e seeding ([ADR-0046](adr/0046-test-support-seed-binary.md)).                                                                                                       |
+| Crate          | Target      | Responsibility                                                                                                                                                                                                                                                                                                                                                          |
+| -------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `common`       | host + wasm | Dual-target domain types and operations reached by CSR or another dual-target consumer: validated newtypes including `ProfferedPassword`, `RenderedHtml`, `PostFormat`, ETag, Org normalization, croner, `BackupSchedule`, and the Syndication Feed grammar (`FeedFormat`, `FeedSurface`, `canonicalize`).                                                              |
+| `storage`      | host        | Storage traits, record types, SQL migrations, and the SQLite/PostgreSQL backends ([ADR-0019](adr/0019-generic-storage-backend-via-dialect.md)).                                                                                                                                                                                                                         |
+| `server`       | host        | The `jaunder` binary: Axum router, CLI, background workers, integration tests.                                                                                                                                                                                                                                                                                          |
+| `web`          | host + wasm | Leptos components and `#[server]` functions — the UI and its server halves, split host/wasm at the file level ([ADR-0070](adr/0070-web-vertical-wasm-only-component-files.md)).                                                                                                                                                                                         |
+| `csr`          | wasm        | The client-side-rendering entry point: mounts `web` in the browser ([ADR-0041](adr/0041-public-projector-and-csr-client.md)).                                                                                                                                                                                                                                           |
+| `host`         | host        | Strictly-host-focused shared code: error carrier, capture dir, auth/token parsing, `Password`/`StoredPasswordHash` and hash operations, render/sanitize/`RenderOutput`/media extraction/ETag construction, AtomPub wholesale, host-only Syndication Feed machinery, `SiteConfigKey`/`UserConfigKey`, invites, process telemetry, metrics, and SMTP relay configuration. |
+| `client`       | host + wasm | Browser infrastructure: `localStorage`, dialogs, DOM/file-upload glue, reactive revalidation, CSR performance marks, and bounded client telemetry ([ADR-0069](adr/0069-client-crate-wasm-only-home.md)).                                                                                                                                                                |
+| `macros`       | build-time  | The workspace's proc-macro home: newtype, `text_enum`, sqlx-bridge and server-fn derives ([ADR-0062](adr/0062-macros-crate-proc-macro-home.md)).                                                                                                                                                                                                                        |
+| `test-support` | host        | A seed binary linking `storage` for out-of-process e2e seeding ([ADR-0046](adr/0046-test-support-seed-binary.md)).                                                                                                                                                                                                                                                      |
 
 Every `client` module that touches the browser carries
 `#[cfg(target_arch = "wasm32")]`, so a host build of the crate is an
@@ -607,12 +607,13 @@ roles existed.
 
 Public read-only feeds serve arbitrary feed readers, so every item carries the
 post's `rendered_html` — Atom `type="html"` and the RSS/JSON Feed equivalents
-([ADR-0015](adr/0015-atompub-serialization-surfaces.md)). Syndication Feed
-types, URL grammar, and qualified host rendering operations live in `host`;
-`server/src/feed/handlers.rs` serves the cached bytes and `regenerate_feed`
-rebuilds them. Scheduled posts reach feeds via `FeedWorker::go_live_pass`
-(`server/src/feed/worker.rs:84`), which enqueues regeneration for feeds whose
-posts crossed their publish time
+([ADR-0015](adr/0015-atompub-serialization-surfaces.md)). The CSR-reached
+`common::feed` grammar is exactly `FeedFormat`, `FeedSurface`, and
+`canonicalize`; the remaining Syndication Feed types and qualified rendering
+operations live in `host`. `server/src/feed/handlers.rs` serves the cached
+bytes, and `regenerate_feed` rebuilds them. Scheduled posts reach feeds via
+`FeedWorker::go_live_pass` (`server/src/feed/worker.rs:84`), which enqueues
+regeneration for feeds whose posts crossed their publish time
 ([ADR-0027](adr/0027-scheduled-publishing-time-gated-visibility.md)).
 
 **Accepted membership target.** Cached membership is to apply anonymous/Public
@@ -1624,11 +1625,11 @@ storage configuration ([ADR-0064](adr/0064-backup-target-auto-derivation.md),
 [ADR-0054](adr/0054-backup-test-homing-and-uniform-restore-failure.md)); and
 `site-config set/get/list/unset` reads and writes site settings.
 
-`site-config` is not a free-form door. Its `key` argument is the `SiteConfigKey`
-enum, so clap rejects an unknown key at parse time, and each key carries the
-validator that `set` runs before any row is written
+`site-config` is not a free-form door. Its `key` argument is host-owned
+`SiteConfigKey`, so clap rejects an unknown key at parse time, and each key
+carries the validator that `set` runs before any row is written
 ([ADR-0102](adr/0102-config-key-closed-registry.md); the registry macro is
-`common/src/config_key.rs:85,158`). `list` is the deliberate exception: it dumps
+`host/src/config_key.rs:58,139`). `list` is the deliberate exception: it dumps
 every stored row, flagging keys outside the registry as `UNKNOWN KEY` and
 recognised keys holding unparseable values as `INVALID`, so legacy rows stay
 visible.
@@ -1915,8 +1916,9 @@ the item's first attribute, since an attribute macro sees only what is written
 below it. Fourteen enums adopt it, eight of them with `sqlx`: `PostFormat`
 (`common/src/render.rs:26`), `TargetKind` and `DefaultAudience`
 (`common/src/visibility.rs:43,180`), `MediaSource` (`common/src/media.rs:601`),
-`SmtpTlsMode` (`common/src/smtp_tls_mode.rs:18`), the two config-key enums
-(`common/src/config_key.rs:103,221`), and host-owned `FeedEventStatus`.
+`SmtpTlsMode` (`common/src/smtp_tls_mode.rs:18`), the host-owned `UserConfigKey`
+and `SiteConfigKey` (`host/src/config_key.rs:206,91`), and host-owned
+`FeedEventStatus`.
 
 The attribute owns the _convention_; `strum` owns the _engine_ — token mapping,
 `Display`, `FromStr`, `VariantArray`, `EnumMessage`
@@ -2656,10 +2658,12 @@ virtual manifests would otherwise default to resolver 1
 **Workspace layering.** The root workspace's shared crates are target-scoped
 ([ADR-0058](adr/0058-host-crate-layering.md),
 [common/host target-reachability closure](adr/drafts/common-host-target-closure.md)):
-for items currently in `common`, `common` owns types and operations reached by
-CSR or another dual-target consumer, while `host` owns the unconsumed `common`
-machinery; this does not make all server- or storage-only code `host` code.
-`client` is the browser-infrastructure peer
+[#847](https://github.com/jaunder-org/jaunder/issues/847) subsumes
+[#855](https://github.com/jaunder-org/jaunder/issues/855) at this target
+boundary. For items currently in `common`, `common` owns types and operations
+reached by CSR or another dual-target consumer, while `host` owns the unconsumed
+`common` machinery; this does not make all server- or storage-only code `host`
+code. `client` is the browser-infrastructure peer
 ([ADR-0069](adr/0069-client-crate-wasm-only-home.md)). `host` has no runtime
 workspace dependency other than `common`; `macros` is its existing build-time
 exception. The optional `common/sqlx` bridge is instead the sole

@@ -9,11 +9,12 @@
 
 `common` is a dual-target crate, yet it has accumulated machinery that reaches
 only host consumers. That makes the crate boundary describe historical
-convenience rather than the target graph. It also keeps AtomPub and Syndication
-Feed implementation dependencies in the CSR closure despite neither protocol
-surface being a CSR consumer. `host` already exists as the host-focused sibling
-under [ADR-0058](../0058-host-crate-layering.md), but its ownership rule needs a
-mechanical dependency-floor check and a precise exception for the `sqlx` bridge.
+convenience rather than the target graph. CSR does reach the narrow Syndication
+Feed grammar — `FeedFormat`, `FeedSurface`, and `canonicalize` — but it reaches
+neither protocol's implementation surface. `host` already exists as the
+host-focused sibling under [ADR-0058](../0058-host-crate-layering.md), but its
+ownership rule needs a mechanical dependency-floor check and a precise exception
+for the `sqlx` bridge.
 
 The move must not blur the two protocol surfaces: an authenticated AtomPub
 Collection serializes native source for editors, while a public Syndication Feed
@@ -31,21 +32,24 @@ belongs in `host`, nor that semantic classification can be inferred
 mechanically.
 
 Move AtomPub wholesale to `host`, including its document, Service Document, RSD,
-namespace, extension, XML, and serialization machinery. Move outbound
-Syndication Feed types and rendering wholesale to `host`. Move `RenderOutput`,
-`Password`, password-hashing errors, and `StoredPasswordHash` to `host`.
-Rendering, ETag construction, and Password hash/verify become module-qualified
-`host` free functions rather than inherent methods or unqualified imports.
+namespace, extension, XML, and serialization machinery. Move host-only outbound
+Syndication Feed path parsing, both closed configuration registries, settings,
+events, windows, representation models, and rendering to `host`; retain its
+CSR-reached `FeedFormat`, `FeedSurface`, and `canonicalize` grammar in `common`.
+Move `RenderOutput`, `Password`, password-hashing errors, and
+`StoredPasswordHash` to `host`. Rendering, ETag construction, and Password
+hash/verify become module-qualified `host` free functions rather than inherent
+methods or unqualified imports.
 
 Keep `ProfferedPassword` and its validation, `RenderedHtml`, `PostFormat`, ETag,
-Org normalization, croner, and `BackupSchedule` in `common`: client and server
-share their one `FromStr` validation path. Host-owned module-qualified rendering
-and sanitization free functions use ammonia to establish the `RenderedHtml`
-invariant, then use the existing gate-policed trusted reconstruction seam to
-mint the common-owned value. `common/sqlx` is the sole ownership-forced optional
-host bridge: orphan-rule trait ownership requires it despite `common`'s
-otherwise dual-target dependency purity, and it does not make its bridged domain
-types host-only.
+Org normalization, croner, `BackupSchedule`, and the feed grammar in `common`:
+client and server share their one `FromStr` validation path where applicable.
+Host-owned module-qualified rendering and sanitization free functions use
+ammonia to establish the `RenderedHtml` invariant, then use the existing
+gate-policed trusted reconstruction seam to mint the common-owned value.
+`common/sqlx` is the sole ownership-forced optional host bridge: orphan-rule
+trait ownership requires it despite `common`'s otherwise dual-target dependency
+purity, and it does not make its bridged domain types host-only.
 
 There are no compatibility aliases, re-exports, or deprecated paths. Every
 caller migrates to the new qualified home in one cutover.
@@ -74,7 +78,8 @@ decision claims no bundle-size benefit.
   [ADR-0079](../0079-rendered-html-sanitization.md),
   [ADR-0089](../0089-upstream-atom-document-io.md),
   [ADR-0090](../0090-media-references-extracted-at-render.md),
-  [ADR-0095](../0095-doctest-gate-enumerates-the-fence-population.md), and
+  [ADR-0095](../0095-doctest-gate-enumerates-the-fence-population.md),
+  [ADR-0102](../0102-config-key-closed-registry.md), and
   [ADR-0112](../0112-role-tagged-site-urls.md) remain historical records; their
   dated notes identify the current ownership. The current view is
   [ARCHITECTURE.md](../../ARCHITECTURE.md).

@@ -4,8 +4,8 @@ use common::session_label::MAX_SESSION_LABEL_CHARS;
 use common::time::UtcInstant;
 use common::token::RawToken;
 use common::username::Username;
+use host::config_key::SiteConfigKey;
 use host::password::Password;
-use host::site_config_key::SiteConfigKey;
 use server_fn::ServerFn;
 
 use rstest::*;

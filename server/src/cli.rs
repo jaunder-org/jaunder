@@ -13,8 +13,8 @@ use common::pg_identifier::{InvalidPgDatabaseName, InvalidPgRoleName, PgDatabase
 use common::pg_role_password::PgRolePassword;
 use common::session_label::SessionLabel;
 use common::username::Username;
+use host::config_key::SiteConfigKey;
 use host::password::Password;
-use host::site_config_key::SiteConfigKey;
 use storage::DbConnectOptions;
 
 #[derive(Parser, Clone)]

@@ -5,7 +5,7 @@ use common::mailer::test_utils::CapturingMailSender;
 use common::test_support::{
     parse_bio, parse_display_name, parse_email, parse_invite_ttl_hours, parse_session_label,
 };
-use host::site_config_key::SiteConfigKey;
+use host::config_key::SiteConfigKey;
 use server_fn::ServerFn;
 use storage::ProfileUpdate;
 

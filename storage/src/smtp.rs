@@ -1,4 +1,4 @@
-use host::site_config_key::SiteConfigKey;
+use host::config_key::SiteConfigKey;
 use host::smtp_config::SmtpConfig;
 use thiserror::Error;
 

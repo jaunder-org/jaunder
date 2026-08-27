@@ -44,19 +44,21 @@ through `url::Url`.
 > renamed. Current inventory: [ARCHITECTURE.md](../ARCHITECTURE.md).
 >
 > **Annotation (2026-08-27).** The then-current inventory of heavy AtomPub and
-> Syndication Feed machinery in `common` was historical after #847 moved that
-> host-only machinery to `host`. `url` remained in the `common`/wasm graph for
-> the dual-target URL-normalization consumer; no bundle-size conclusion follows
-> from the relocation. Current inventory: [ARCHITECTURE.md](../ARCHITECTURE.md).
+> host-only Syndication Feed machinery in `common` was historical after #847
+> moved it to `host`. `FeedFormat`, `FeedSurface`, and `canonicalize` remained
+> in `common` as CSR-reached feed grammar. `url` also remained in the
+> `common`/wasm graph for the dual-target URL-normalization consumer; no
+> bundle-size conclusion follows from the relocation. Current inventory:
+> [ARCHITECTURE.md](../ARCHITECTURE.md).
 
 We **accept** that `url` (and its `idna` unicode tables) are compiled for wasm
 and reachable in the client binary. We do **not** hand-roll URL normalization,
-and we do **not** repurpose `urlencoding` for parsing. The bundle cost is judged
-acceptable because `common` already ships heavier machinery to wasm (`rss`,
-`atom_syndication`, `quick-xml`, `serde_json`,
-`unicode-normalization`/`unicode-segmentation`), and a single correct
-normalization chokepoint is worth more than avoiding one more unicode
-dependency.
+and we do **not** repurpose `urlencoding` for parsing. At this decision's time,
+the bundle-cost rationale also counted `rss`, `atom_syndication`, `quick-xml`,
+`serde_json`, and `unicode-normalization`/`unicode-segmentation` as heavier
+`common` machinery; #847's annotation above records the later relocation of the
+host-only entries. A single correct normalization chokepoint remains worth more
+than avoiding one more unicode dependency.
 
 ## Consequences
 

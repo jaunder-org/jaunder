@@ -53,7 +53,7 @@ mod tests {
     use super::*;
     use common::smtp_port::SmtpPort;
     use common::smtp_tls_mode::SmtpTlsMode;
-    use storage::SiteConfigKey;
+    use host::config_key::SiteConfigKey;
     use storage::test_support::{Backend, backends};
 
     // guard:no-backend — builds a mailer over a mockall SiteConfigStorage whose reads

@@ -1,6 +1,6 @@
+use host::config_key::UserConfigKey;
 use rstest::*;
 use rstest_reuse::*;
-use storage::UserConfigKey;
 use storage::test_support::{Backend, SeedUser, backends};
 
 // ── UserConfigStorage tests ───────────────────────────────────────────────────

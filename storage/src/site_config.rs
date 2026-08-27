@@ -3,11 +3,10 @@
 use crate::backend::Backend;
 use async_trait::async_trait;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, DestinationPath, RetentionCount};
-use host::smtp_config::SmtpConfig;
-// Re-exported so `storage::SiteConfigKey` resolves for storage trait consumers.
 use common::media::{MaxFileSize, UserQuota};
+use host::config_key::SiteConfigKey;
 use host::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
-pub use host::site_config_key::SiteConfigKey;
+use host::smtp_config::SmtpConfig;
 // Re-exported so `storage::RegistrationPolicy` keeps resolving for call sites, and
 // used by `get_registration_policy` below (the typed config accessor, #607).
 pub use common::registration::RegistrationPolicy;

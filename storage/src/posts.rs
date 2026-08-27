@@ -8,6 +8,8 @@ use sqlx::{Database, Pool, QueryBuilder, Row};
 use thiserror::Error;
 
 use crate::InstanceId;
+use crate::backend::Backend;
+use crate::helpers::parse_post_tags_json;
 use common::etag::ETag;
 use common::idempotency_key::IdempotencyKey;
 use common::ids::{AudienceId, ChannelId, PostId, RevisionId, TagId, UserId};
@@ -16,6 +18,7 @@ use common::pagination::RowLimit;
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
+pub use common::render::{InvalidPostFormat, PostFormat, RenderedHtml};
 use common::root_relative_url::RootRelativeUrl;
 use common::seed::PageCursor;
 use common::slug::Slug;
@@ -28,12 +31,7 @@ use common::visibility::{
 use host::error::{InternalError, InternalResult};
 use host::etag::post_content_etag;
 use host::feed::FeedPath;
-use host::render::extract_media_refs;
-
-use crate::backend::Backend;
-use crate::helpers::parse_post_tags_json;
-pub use common::render::{InvalidPostFormat, PostFormat, RenderedHtml};
-pub use host::render::RenderOutput;
+use host::render::{RenderOutput, extract_media_refs};
 
 /// The validated calendar date of a public permalink lookup key. Re-exported from
 /// `common::time` so storage callers and the trait method name the domain type

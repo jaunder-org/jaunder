@@ -70,26 +70,28 @@ Out:
 
 - [x] Task 5: Move the host-only outbound Syndication Feed surface to `host`.
   - Contract: this task follows Task 3 and consumes its `host::render` and
-    `host::etag` interfaces. `FeedFormat`, `FeedSurface`, and canonical
-    discovery URL construction remain in `common` because CSR consumes them.
-    FeedPath parsing, site-configuration keys, settings/events/windows,
-    representation models, and Atom/RSS/JSON rendering move together; server and
-    storage callers use host-owned types directly. AtomPub Collection
-    serializers remain separate.
+    `host::etag` interfaces. `FeedFormat`, `FeedSurface`, and `canonicalize`
+    remain in `common` because CSR consumes that grammar. FeedPath parsing, both
+    closed configuration registries, settings/events/windows, representation
+    models, and Atom/RSS/JSON rendering move together. Server and storage
+    callers use host-owned types directly. AtomPub Collection serializers remain
+    separate.
   - Verification: moved unit tests and focused feed/storage/server/web tests
     prove typed CSR discovery, byte-identical representations, rendered-HTML
     items, ETag/cache/event behavior, and unchanged representation selection on
     both storage backends where the existing contract is backend-parametric.
 
-- [ ] Task 6: Reconcile the target boundary and run the branch gate.
+- [x] Task 6: Reconcile the target boundary and run the branch gate.
   - Contract: remove obsolete common features/dependencies/modules and every old
     import; retain only `common/sqlx` as the ownership-forced optional host
-    bridge. Keep `croner` and `BackupSchedule` in `common`, with client and
-    server sharing `BackupSchedule::FromStr`. Reconcile the ADR draft,
-    architecture view, and dated ownership/call-shape annotations in ADR-0018,
-    ADR-0023, ADR-0058, ADR-0063, ADR-0065, ADR-0072, ADR-0073, ADR-0079,
-    ADR-0089, ADR-0090, ADR-0095, and ADR-0112 against delivered code; leave
-    `CONTEXT.md` and generated `docs/README.md` unchanged.
+    bridge. Keep `croner`, `BackupSchedule`, and CSR-reached `FeedFormat`,
+    `FeedSurface`, and `canonicalize` in `common`, with client and server
+    sharing `BackupSchedule::FromStr`; move both closed configuration registries
+    to `host`. Reconcile the ADR draft, architecture view, and dated
+    ownership/call-shape annotations in ADR-0018, ADR-0023, ADR-0058, ADR-0063,
+    ADR-0065, ADR-0072, ADR-0073, ADR-0079, ADR-0089, ADR-0090, ADR-0095,
+    ADR-0102, and ADR-0112 against delivered code; leave `CONTEXT.md` and
+    generated `docs/README.md` unchanged.
   - Verification: focused shared-parser tests prove the client/server schedule
     contract; source/reference checks find no legacy ownership path; a final
     document review checks every named projection and annotation against the
@@ -99,8 +101,9 @@ Out:
 ## Risk checks
 
 - `common` retains every CSR-reachable validation/value path: ProfferedPassword,
-  RenderedHtml, PostFormat, ETag, Org normalization, croner, and BackupSchedule.
-- Client and server continue to share exactly one `BackupSchedule::FromStr`.
+  RenderedHtml, PostFormat, ETag, Org normalization, croner, BackupSchedule,
+  FeedFormat, FeedSurface, and canonicalize; host owns both closed configuration
+  registries.
 - The SQLx orphan-rule bridge remains excluded from the exact CSR closure and
   does not broaden into a second host feature.
 - Host-floor dependency direction remains acyclic; `host` does not learn

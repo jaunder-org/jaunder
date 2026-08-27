@@ -11,7 +11,6 @@ pub mod auth;
 pub mod backup;
 pub mod bio;
 pub mod client_telemetry;
-pub mod config_key;
 pub mod display_name;
 pub mod email;
 pub mod etag;
