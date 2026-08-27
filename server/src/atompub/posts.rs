@@ -121,6 +121,15 @@ fn if_match_satisfied(headers: &HeaderMap, etag: &ETag) -> bool {
         None => true,
     }
 }
+
+/// Parses the optional retry key while preserving `AtomPub`'s compatibility policy:
+/// unreadable or blank headers do not opt the request into deduplication.
+fn idempotency_key_from_headers(headers: &HeaderMap) -> Option<IdempotencyKey> {
+    headers
+        .get("idempotency-key")
+        .and_then(|value| value.to_str().ok()?.parse().ok())
+}
+
 fn scalar_presence<T: Clone>(value: Option<&T>) -> Presence<T> {
     value.cloned().map_or(Presence::Absent, Presence::Present)
 }
@@ -479,12 +488,7 @@ pub async fn collection_post(
         Presence::Present(audiences) => audiences,
         Presence::Absent => vec![site_config.get_default_audience().await?.into()],
     };
-    // A client-supplied idempotency key dedups a retried create (duplicate-on-retry).
-    // Preserve the historical `HeaderValue::to_str` compatibility boundary:
-    // unreadable or blank values do not opt a request into deduplication.
-    let idempotency_key = headers
-        .get("idempotency-key")
-        .and_then(|value| value.to_str().ok()?.parse::<IdempotencyKey>().ok());
+    let idempotency_key = idempotency_key_from_headers(&headers);
 
     let created = storage::perform_post_creation(
         posts,
