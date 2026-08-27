@@ -579,29 +579,6 @@
               devtool csr-bundle --wasm ${csrWasm}/lib/csr.wasm --out $out${pkgs.lib.optionalString (wasmExperimentArm != "") " --wasm-experiment-arm ${wasmExperimentArm}"}${pkgs.lib.optionalString (wasmShapeSection != "") " --wasm-shape-section ${wasmShapeSection} --wasm-shape-section-count ${toString wasmShapeSectionCount}"}
             '';
 
-        e2eOtelCollectorConfig = pkgs.writeText "jaunder-otel-collector.yaml" ''
-          receivers:
-            otlp:
-              protocols:
-                grpc:
-                  endpoint: 127.0.0.1:4317
-                http:
-                  endpoint: 127.0.0.1:4318
-          processors:
-            batch: {}
-          exporters:
-            file:
-              # The doubled-apostrophe prefix below is the Nix indented-string escape,
-              # so the env-var reference reaches otelcol verbatim and its env provider
-              # expands it at runtime, rather than Nix antiquoting it at eval time.
-              path: ''${env:JAUNDER_CAPTURE_DIR}/otel-traces.jsonl
-          service:
-            pipelines:
-              traces:
-                receivers: [otlp]
-                processors: [batch]
-                exporters: [file]
-        '';
 
         e2ePackage = pkgs.buildNpmPackage {
           name = "jaunder-e2e";
@@ -837,15 +814,19 @@
                   # `jaunder site-config set` seed steps resolve bare `jaunder` here.
                   jaunderBin
                 ];
-                environment.etc."jaunder-otel-collector.yaml".source = e2eOtelCollectorConfig;
+                environment.etc."jaunder-otel-collector.yaml".source = ./end2end/otel-collector.yaml;
 
                 systemd.tmpfiles.rules = [ "d /var/lib/jaunder/capture 0755 jaunder jaunder -" ];
                 systemd.services.otel-collector = {
                   description = "Jaunder e2e OTel Collector";
                   wantedBy = [ "multi-user.target" ];
                   after = [ "network.target" ];
-                  # ${env:JAUNDER_CAPTURE_DIR} in the exporter config expands from this.
-                  environment = captureEnv;
+                  # The collector configuration reads these runtime endpoints and capture
+                  # directory through its environment providers.
+                  environment = captureEnv // {
+                    OTELCOL_GRPC_ENDPOINT = "127.0.0.1:4317";
+                    OTELCOL_HTTP_ENDPOINT = "127.0.0.1:4318";
+                  };
                   serviceConfig = {
                     ExecStart = "${pkgs.opentelemetry-collector-contrib}/bin/otelcol-contrib --config /etc/jaunder-otel-collector.yaml";
                     Restart = "on-failure";
@@ -945,15 +926,19 @@
                   # `jaunder site-config set` seed steps resolve bare `jaunder` here.
                   jaunderBin
                 ];
-                environment.etc."jaunder-otel-collector.yaml".source = e2eOtelCollectorConfig;
+                environment.etc."jaunder-otel-collector.yaml".source = ./end2end/otel-collector.yaml;
 
                 systemd.tmpfiles.rules = [ "d /var/lib/jaunder/capture 0755 jaunder jaunder -" ];
                 systemd.services.otel-collector = {
                   description = "Jaunder e2e OTel Collector";
                   wantedBy = [ "multi-user.target" ];
                   after = [ "network.target" ];
-                  # ${env:JAUNDER_CAPTURE_DIR} in the exporter config expands from this.
-                  environment = captureEnv;
+                  # The collector configuration reads these runtime endpoints and capture
+                  # directory through its environment providers.
+                  environment = captureEnv // {
+                    OTELCOL_GRPC_ENDPOINT = "127.0.0.1:4317";
+                    OTELCOL_HTTP_ENDPOINT = "127.0.0.1:4318";
+                  };
                   serviceConfig = {
                     ExecStart = "${pkgs.opentelemetry-collector-contrib}/bin/otelcol-contrib --config /etc/jaunder-otel-collector.yaml";
                     Restart = "on-failure";
@@ -1527,6 +1512,9 @@
               pkgs.pkg-config
               pkgs.playwright-test
               pkgs.postgresql_16
+              # `cargo xtask e2e-local` supervises this pinned collector for its
+              # shared VM/host JSONL trace pipeline.
+              pkgs.opentelemetry-collector-contrib
               pkgs.prettier
               pkgs.sqlite
               pkgs.typescript
