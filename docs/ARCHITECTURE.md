@@ -723,7 +723,7 @@ writes itself: the Service Document, RSD, and the shared XML helpers
 applicable Collection declares its open-set `app:categories` terms with
 `fixed="no"` in the Service Document. Jaunder does not advertise an
 `app:categories href` or serve an out-of-line Categories Document
-([inline-only AtomPub category discovery decision](adr/drafts/inline-only-atompub-category-discovery.md)).
+([inline-only AtomPub category discovery decision](adr/0157-inline-only-atompub-category-discovery.md)).
 
 The crates come from the registry — `atom_syndication` 0.12.10 and `rss` 2.1
 (`common/Cargo.toml:25-27`). Earlier,

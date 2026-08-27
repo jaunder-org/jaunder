@@ -1,6 +1,6 @@
-# ADR-DRAFT: Keep AtomPub category discovery inline
+# ADR-0157: Keep AtomPub category discovery inline
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-27
 - Issue: [#928](https://github.com/jaunder-org/jaunder/issues/928)
 
@@ -17,10 +17,9 @@ Serving the second form without a Protocol Client requirement would add another
 resource and protocol contract while duplicating discovery information already
 available inline.
 
-[ADR-0089](../0089-upstream-atom-document-io.md) Decision 6 retained the
-Categories Document writer alongside the Service Document and RSD writers. That
-inventory became a decision-log commitment even though the renderer remained
-unreachable.
+[ADR-0089](0089-upstream-atom-document-io.md) Decision 6 retained the Categories
+Document writer alongside the Service Document and RSD writers. That inventory
+became a decision-log commitment even though the renderer remained unreachable.
 
 ## Decision
 
@@ -32,11 +31,10 @@ Jaunder does not advertise an `app:categories href` reference and does not serve
 an out-of-line Categories Document. The unused standalone renderer and its
 public module surface are removed.
 
-This decision narrowly supersedes
-[ADR-0089](../0089-upstream-atom-document-io.md) Decision 6 only where it says
-the Categories Document keeps its `quick-xml` writer. ADR-0089's upstream Atom
-I/O decision and its retention of the Service Document and RSD writers remain
-accepted.
+This decision narrowly supersedes [ADR-0089](0089-upstream-atom-document-io.md)
+Decision 6 only where it says the Categories Document keeps its `quick-xml`
+writer. ADR-0089's upstream Atom I/O decision and its retention of the Service
+Document and RSD writers remain accepted.
 
 ## Consequences
 

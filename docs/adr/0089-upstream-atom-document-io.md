@@ -6,7 +6,7 @@
   [#199](https://github.com/jaunder-org/jaunder/issues/199)
 - Note: Decision 6's retention of the Categories Document writer is superseded
   by the
-  [inline-only AtomPub category discovery decision](drafts/inline-only-atompub-category-discovery.md);
+  [inline-only AtomPub category discovery decision](0157-inline-only-atompub-category-discovery.md);
   its Service Document and RSD writer decisions remain accepted.
 
 ## Context
