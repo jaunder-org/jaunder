@@ -606,7 +606,7 @@
         e2ePackage = pkgs.buildNpmPackage {
           name = "jaunder-e2e";
           src = ./end2end;
-          npmDepsHash = "sha256-z4BCkyRqFaBc2YpPjUNpAPer1SVKLvv0XLxVhrzJI90=";
+          npmDepsHash = "sha256-9rjRjO+430wgKWPJnFM0t2rRcZyeE3pipyTTPIZvD8U=";
           dontNpmBuild = true;
           installPhase = ''
             mkdir -p $out
@@ -653,9 +653,10 @@
         # than restating the diagnostic filename defined by `host::capture`.
         e2ePanicGate = backend: ''
           machine.succeed("journalctl -u jaunder.service --no-pager -o cat > /tmp/jaunder-journal-${backend}.log")
-          # copy_from_vm's 2nd arg is a target *directory*; "" lands the file flat at
-          # $out/jaunder-journal-${backend}.log (the per-backend name comes from the source).
-          machine.copy_from_vm("/tmp/jaunder-journal-${backend}.log", "")
+          # copy_from_machine's 2nd arg is a target *directory*; "" lands the file
+          # flat at $out/jaunder-journal-${backend}.log (the per-backend name comes
+          # from the source).
+          machine.copy_from_machine("/tmp/jaunder-journal-${backend}.log", "")
           machine.succeed(
               "test-support verify-no-panics"
               + " --capture-dir /var/lib/jaunder/capture"
@@ -763,12 +764,12 @@
             machine.execute("systemctl stop otel-collector.service")
 
             # Copy every diagnostic UNCONDITIONALLY, each guarded so a missing file
-            # (e.g. an early crash) never aborts the remaining copies. copy_from_vm's
-            # 2nd arg is a target *dir*; "" lands the file flat under the per-backend
-            # name carried by the source.
+            # (e.g. an early crash) never aborts the remaining copies.
+            # copy_from_machine's 2nd arg is a target *dir*; "" lands the file flat
+            # under the per-backend name carried by the source.
             def _grab(path):
                 if machine.execute("test -e " + path)[0] == 0:
-                    machine.copy_from_vm(path, "")
+                    machine.copy_from_machine(path, "")
 
             machine.execute("test -s /tmp/e2e/test-results/results.json && cp /tmp/e2e/test-results/results.json /tmp/playwright-report-${backend}.json")
             _grab("/tmp/playwright-report-${backend}.json")
@@ -783,7 +784,7 @@
 
             # Capture-dir contract (#227, #332): tar the whole capture dir out per combo as
             # capture-${backend}.tar.gz — a file copy mirroring the playwright-artifacts
-            # tarball (the proven copy_from_vm shape). Holds diag.log, the collector's
+            # tarball (the proven copy_from_machine shape). Holds diag.log, the collector's
             # otel-traces.jsonl (#332 — the collector is stopped above, so its file export is
             # flushed), plus any written mail.jsonl/websub.jsonl. The in-VM zero-panic gate
             # reads diag.log directly, so it does not depend on this lift.
