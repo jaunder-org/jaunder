@@ -771,6 +771,16 @@ mod tests {
     }
 
     #[test]
+    fn idempotency_key_restore_row_allows_missing_key_for_structural_validation() {
+        let row = serde_json::Map::new();
+        let mut report = RestoreValidationReport::default();
+
+        validate_restore_row("idempotency_keys", &row, &mut report);
+
+        assert!(report.is_empty(), "missing key produced {report:?}");
+    }
+
+    #[test]
     fn idempotency_key_restore_row_accepts_valid_key() {
         let mut row = serde_json::Map::new();
         row.insert("key".to_owned(), serde_json::json!("retry-key"));
