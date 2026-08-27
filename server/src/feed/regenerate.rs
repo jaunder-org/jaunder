@@ -110,14 +110,15 @@ pub async fn regenerate_feed(
     };
     let etag = feed_etag(&items, now.value());
 
-    let row = FeedCacheRow::new(
+    let Ok(row) = FeedCacheRow::new(
         feed_path.clone(),
         body,
         etag,
         UtcInstant::from(updated_at),
         now,
-    )
-    .unwrap_or_else(|_| unreachable!("renderer output and feed path share the parsed format"));
+    ) else {
+        unreachable!("renderer output and feed path share the parsed format")
+    };
 
     feed_cache.upsert(row.clone()).await.map_err(storage_err)?;
 

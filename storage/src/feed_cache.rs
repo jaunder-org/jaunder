@@ -168,14 +168,16 @@ fn row_from_record(row: FeedCacheRowRecord) -> Result<FeedCacheRow, FeedCacheErr
                 feed_path: parts.feed_path.clone(),
                 source,
             })?;
-    Ok(FeedCacheRow::new(
+    let Ok(row) = FeedCacheRow::new(
         parts.feed_path,
         representation,
         parts.etag,
         parts.updated_at.value(),
         parts.generated_at.value(),
-    )
-    .unwrap_or_else(|_| unreachable!("stored representation and path share the decoded format")))
+    ) else {
+        unreachable!("stored representation and path share the decoded format")
+    };
+    Ok(row)
 }
 
 /// Generic [`FeedCacheStorage`] backed by any [`Backend`] database.
