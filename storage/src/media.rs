@@ -485,11 +485,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::posts::{PersistedMediaReference, ProvenForeignReference};
     use crate::test_support::{
         Backend, MEDIA_TEST_SHA256, SeedUser, TestEnv, backends, create_post_via_service,
         media_ref_for, media_row_exists, media_url_for, seed_media, seed_users,
     };
+    use crate::{PersistedMediaReference, PersistedMediaSubject, ProvenForeignReference};
     use common::media::{MediaReferenceForm, MediaReferenceKind};
     use common::test_support::{
         parse_byte_size, parse_content_hash, parse_content_type, parse_filename, parse_page_offset,
@@ -1066,11 +1066,134 @@ mod tests {
                 .expect("exact foreign evidence makes row reclaimable")
         );
     }
+    /// A foreign result for a current row cannot authorize deleting an unseen
+    /// retained revision of the same Post. The exact revision proof may.
     #[apply(backends)]
     #[tokio::test]
-    async fn try_delete_media_refuses_force_that_would_leave_rowless_reference(
-        #[case] backend: Backend,
-    ) {
+    async fn revision_subject_requires_its_own_exact_foreign_evidence(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let [owner] = seed_users::<1>(&env.state).await;
+        let media = seed_media(&env.state, owner, "revision-evidence.jpg").await;
+        let form: MediaReferenceForm = media_url_for("revision-evidence.jpg")
+            .parse()
+            .expect("valid media reference form");
+        let post_id = create_post_via_service(
+            &env.state,
+            owner,
+            parse_post_body(&format!("<img src=\"{form}\">")),
+        )
+        .await;
+        env.state
+            .posts
+            .soft_delete_post(post_id, owner)
+            .await
+            .expect("deletion captures the prior media subject");
+
+        let references = env
+            .state
+            .posts
+            .list_media_references(&media)
+            .await
+            .expect("retained references load");
+        let current = references
+            .references()
+            .iter()
+            .find(|reference| matches!(reference.subject(), PersistedMediaSubject::Current))
+            .expect("deleted current subject remains retained")
+            .clone();
+        let revision = references
+            .references()
+            .iter()
+            .find(|reference| matches!(reference.subject(), PersistedMediaSubject::Revision(_)))
+            .expect("captured revision subject remains retained")
+            .clone();
+
+        assert_eq!(
+            env.state
+                .posts
+                .list_posts_referencing_media(
+                    owner,
+                    &media,
+                    env.base.instance_id(),
+                    &MediaReferenceEvidence::new(env.base.instance_id().clone()),
+                )
+                .await
+                .expect("owner advisory query succeeds"),
+            vec![post_id],
+            "current and revision subjects report their Post only once"
+        );
+
+        let mut current_evidence = MediaReferenceEvidence::new(env.base.instance_id().clone());
+        assert!(current_evidence.insert(ProvenForeignReference::new(
+            current.clone(),
+            env.base.instance_id().clone(),
+        )));
+        assert_eq!(
+            env.state
+                .media
+                .try_delete_media(
+                    owner,
+                    &media,
+                    env.base.instance_id(),
+                    &current_evidence,
+                    false,
+                )
+                .await
+                .expect("guard query succeeds"),
+            TryDeleteOutcome::RefusedReferenced,
+            "current evidence cannot exempt a retained revision subject"
+        );
+
+        let mut revision_evidence = MediaReferenceEvidence::new(env.base.instance_id().clone());
+        assert!(revision_evidence.insert(ProvenForeignReference::new(
+            revision.clone(),
+            env.base.instance_id().clone(),
+        )));
+        assert_eq!(
+            env.state
+                .media
+                .try_delete_media(
+                    owner,
+                    &media,
+                    env.base.instance_id(),
+                    &revision_evidence,
+                    false,
+                )
+                .await
+                .expect("guard query succeeds"),
+            TryDeleteOutcome::RefusedReferenced,
+            "the unexamined deleted-current subject remains protected"
+        );
+
+        let mut complete_evidence = MediaReferenceEvidence::new(env.base.instance_id().clone());
+        assert!(complete_evidence.insert(ProvenForeignReference::new(
+            current,
+            env.base.instance_id().clone(),
+        )));
+        assert!(complete_evidence.insert(ProvenForeignReference::new(
+            revision,
+            env.base.instance_id().clone(),
+        )));
+        assert_eq!(
+            env.state
+                .media
+                .try_delete_media(
+                    owner,
+                    &media,
+                    env.base.instance_id(),
+                    &complete_evidence,
+                    false,
+                )
+                .await
+                .expect("guard query succeeds"),
+            TryDeleteOutcome::Deleted,
+            "every retained subject needs and accepts its own exact foreign proof"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn try_delete_media_force_overrides_own_retained_reference(#[case] backend: Backend) {
         let env = backend.setup().await;
         let [user] = seed_users::<1>(&env.state).await;
         let media = seed_media(&env.state, user, "photo.jpg").await;
@@ -1089,11 +1212,11 @@ mod tests {
                 )
                 .await
                 .expect("the forced delete succeeds as a query"),
-            TryDeleteOutcome::RefusedReferenced
+            TryDeleteOutcome::Deleted
         );
         assert!(
-            media_row_exists(&env.state, user, &media).await,
-            "refusal leaves the only accounting row"
+            !media_row_exists(&env.state, user, &media).await,
+            "force deliberately permits losing the owner's reconstruction"
         );
     }
 

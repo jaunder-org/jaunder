@@ -75,7 +75,7 @@ AtomPub delete response or per-user Media Record materialization.
     including unchanged `updated_at`, authorization, stale-write behavior, and
     reversed tag/media order deadlock resistance.
 
-- [ ] **3. Retain Revision media references in the ordinary guard.**
+- [x] **3. Retain Revision media references in the ordinary guard.**
   - Consume the revision-qualified subjects established by Task 2 throughout
     persisted reference keys, resolver evidence, global snapshots, conditional
     delete/reclaim predicates, and owner reporting. Treat concurrent unseen

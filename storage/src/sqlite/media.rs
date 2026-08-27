@@ -8,7 +8,7 @@ use crate::media::{MediaDialect, MediaStore};
 use crate::posts::{
     MediaReferenceEvidence, push_any_media_reference_from_where,
     push_live_media_reference_predicate, push_media_reference_evidence_cte,
-    push_owner_media_reference_from_where,
+    push_other_owner_media_reference_from_where, push_owner_media_reference_from_where,
 };
 
 /// SQLite-backed media storage.
@@ -72,7 +72,7 @@ impl MediaDialect for Sqlite {
         push_owner_media_reference_from_where(&mut query, user_id, media);
         push_live_media_reference_predicate(&mut query, current_instance_id);
         query.push(")) AND (NOT EXISTS (SELECT 1");
-        push_any_media_reference_from_where(&mut query, media);
+        push_other_owner_media_reference_from_where(&mut query, user_id, media);
         push_live_media_reference_predicate(&mut query, current_instance_id);
         query.push(") OR EXISTS (SELECT 1 FROM media m2 WHERE m2.source = ");
         query

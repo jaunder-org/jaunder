@@ -831,17 +831,45 @@ pub fn list_by_tag_rows(
     }
 }
 
-/// Async operations on the `posts` and `post_revisions` tables.
+/// Exact retained state that names a media reference.
 ///
-/// This trait manages the lifecycle of posts, including versioned edits,
-/// draft/publish status, soft-deletion, and tagging.
-/// The exact persisted spelling of one media reference in one post.
+/// A revision identity is part of the persisted key: treating it as merely
+/// another copy of a Post's current references would let current-row evidence
+/// authorize deletion while a concurrent historical row remains protected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PersistedMediaSubject {
+    /// The current durable Post state.
+    Current,
+    /// One immutable prior state of the Post.
+    Revision(RevisionId),
+}
+
+impl PersistedMediaSubject {
+    #[must_use]
+    pub(crate) const fn kind(self) -> &'static str {
+        match self {
+            Self::Current => "current",
+            Self::Revision(_) => "revision",
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn revision_id(self) -> RevisionId {
+        match self {
+            Self::Current => RevisionId::from(0),
+            Self::Revision(revision_id) => revision_id,
+        }
+    }
+}
+
+/// The exact persisted spelling of one media reference in one retained Post subject.
 ///
 /// This is deliberately the database key, rather than a lossy media identity:
 /// foreign ownership evidence must not authorize a similarly named row.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PersistedMediaReference {
     post_id: PostId,
+    subject: PersistedMediaSubject,
     owner_id: Option<UserId>,
     media: MediaRef,
     kind: MediaReferenceKind,
@@ -849,6 +877,7 @@ pub struct PersistedMediaReference {
 }
 
 impl PersistedMediaReference {
+    /// Constructs an exact reference for the current Post subject.
     #[must_use]
     pub fn new(
         post_id: PostId,
@@ -856,8 +885,27 @@ impl PersistedMediaReference {
         kind: MediaReferenceKind,
         reference_form: MediaReferenceForm,
     ) -> Self {
+        Self::for_subject(
+            post_id,
+            PersistedMediaSubject::Current,
+            media,
+            kind,
+            reference_form,
+        )
+    }
+
+    /// Constructs an exact reference for either retained subject.
+    #[must_use]
+    pub fn for_subject(
+        post_id: PostId,
+        subject: PersistedMediaSubject,
+        media: MediaRef,
+        kind: MediaReferenceKind,
+        reference_form: MediaReferenceForm,
+    ) -> Self {
         Self {
             post_id,
+            subject,
             owner_id: None,
             media,
             kind,
@@ -868,6 +916,11 @@ impl PersistedMediaReference {
     #[must_use]
     pub fn post_id(&self) -> PostId {
         self.post_id
+    }
+
+    #[must_use]
+    pub fn subject(&self) -> PersistedMediaSubject {
+        self.subject
     }
 
     #[must_use]
@@ -1432,7 +1485,7 @@ pub trait PostDialect: Backend {
         conn: &mut Self::Connection,
         rows: BTreeSet<(PostId, MediaRef, MediaReferenceKind, MediaReferenceForm)>,
     ) -> sqlx::Result<()>;
-    /// Lists the owner's live references after excluding evidence proved foreign for
+    /// Lists the owner's retained references after excluding evidence proved foreign for
     /// `current_instance_id`. Dynamic evidence binds require a concrete `SQLx` dialect.
     async fn list_posts_referencing_media(
         pool: &Pool<Self>,
@@ -1461,15 +1514,15 @@ pub(crate) fn push_media_reference_evidence_cte<DB>(
 {
     query.push(
         "WITH foreign_evidence \
-         (post_id, source, sha256, filename, reference_kind, reference_form, expected_instance_id) AS (",
+         (post_id, subject_kind, revision_id, source, sha256, filename, reference_kind, reference_form, expected_instance_id) AS (",
     );
     if evidence.references.is_empty() {
         // Explicit types keep the empty CTE valid on Postgres while SQLite accepts
         // the same portable spelling.
         query.push(
-            "SELECT CAST(NULL AS BIGINT), CAST(NULL AS TEXT), CAST(NULL AS TEXT), \
-             CAST(NULL AS TEXT), CAST(NULL AS TEXT), CAST(NULL AS TEXT), CAST(NULL AS TEXT) \
-             WHERE FALSE",
+            "SELECT CAST(NULL AS BIGINT), CAST(NULL AS TEXT), CAST(NULL AS BIGINT), \
+             CAST(NULL AS TEXT), CAST(NULL AS TEXT), CAST(NULL AS TEXT), CAST(NULL AS TEXT), \
+             CAST(NULL AS TEXT), CAST(NULL AS TEXT) WHERE FALSE",
         );
     } else {
         query.push("VALUES ");
@@ -1481,6 +1534,10 @@ pub(crate) fn push_media_reference_evidence_cte<DB>(
             query
                 .push("(")
                 .push_bind(reference.post_id())
+                .push(", ")
+                .push_bind(reference.subject().kind())
+                .push(", ")
+                .push_bind(reference.subject().revision_id())
                 .push(", ")
                 .push_bind(reference.media().source)
                 .push(", ")
@@ -1513,6 +1570,8 @@ pub(crate) fn push_live_media_reference_predicate<DB>(
         " AND NOT EXISTS (\
            SELECT 1 FROM foreign_evidence evidence \
            WHERE evidence.post_id = pm.post_id \
+             AND evidence.subject_kind = pm.subject_kind \
+             AND evidence.revision_id = pm.revision_id \
              AND evidence.source = pm.source \
              AND evidence.sha256 = pm.sha256 \
              AND evidence.filename = pm.filename \
@@ -1539,7 +1598,7 @@ pub(crate) fn push_owner_media_reference_from_where<DB>(
     query
         .push(" FROM post_media pm JOIN posts p ON p.post_id = pm.post_id WHERE p.user_id = ")
         .push_bind(user_id)
-        .push(" AND p.deleted_at IS NULL AND pm.source = ")
+        .push(" AND pm.source = ")
         .push_bind(media.source)
         .push(" AND pm.sha256 = ")
         .push_bind(media.sha256.clone())
@@ -1556,7 +1615,34 @@ pub(crate) fn push_any_media_reference_from_where<DB>(
     for<'q> String: sqlx::Encode<'q, DB>,
 {
     query
-        .push(" FROM post_media pm JOIN posts p ON p.post_id = pm.post_id WHERE p.deleted_at IS NULL AND pm.source = ")
+        .push(" FROM post_media pm JOIN posts p ON p.post_id = pm.post_id WHERE pm.source = ")
+        .push_bind(media.source)
+        .push(" AND pm.sha256 = ")
+        .push_bind(media.sha256.clone())
+        .push(" AND pm.filename = ")
+        .push_bind(media.filename.clone());
+}
+
+/// Appends a non-owner reference lookup for the global accounting safeguard.
+///
+/// Web force may break the request owner's retained reconstruction, but it
+/// never deletes the only accounting row while another owner's retained subject
+/// still names the entry.
+pub(crate) fn push_other_owner_media_reference_from_where<DB>(
+    query: &mut QueryBuilder<'_, DB>,
+    user_id: UserId,
+    media: &MediaRef,
+) where
+    DB: Database,
+    for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    String: sqlx::Type<DB>,
+    for<'q> String: sqlx::Encode<'q, DB>,
+{
+    query
+        .push(" FROM post_media pm JOIN posts p ON p.post_id = pm.post_id WHERE p.user_id <> ")
+        .push_bind(user_id)
+        .push(" AND pm.source = ")
         .push_bind(media.source)
         .push(" AND pm.sha256 = ")
         .push_bind(media.sha256.clone())
@@ -1612,6 +1698,16 @@ where
     (
         PostId,
         UserId,
+        common::media::MediaSource,
+        common::media::ContentHash,
+        common::media::Filename,
+        MediaReferenceKind,
+        MediaReferenceForm,
+    ): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (
+        PostId,
+        UserId,
+        RevisionId,
         common::media::MediaSource,
         common::media::ContentHash,
         common::media::Filename,
@@ -1781,18 +1877,19 @@ where
         let mut rows: Vec<(
             PostId,
             UserId,
+            RevisionId,
             common::media::MediaSource,
             common::media::ContentHash,
             common::media::Filename,
             MediaReferenceKind,
             MediaReferenceForm,
         )> = sqlx::query_as(
-            "SELECT pm.post_id, p.user_id, pm.source, pm.sha256, pm.filename, \
+            "SELECT pm.post_id, p.user_id, pm.revision_id, pm.source, pm.sha256, pm.filename, \
                     pm.reference_kind, pm.reference_form
              FROM post_media pm
              JOIN posts p ON p.post_id = pm.post_id
              WHERE pm.source = $1 AND pm.sha256 = $2 AND pm.filename = $3
-             ORDER BY pm.post_id, pm.reference_kind, pm.reference_form
+             ORDER BY pm.post_id, pm.subject_kind, pm.revision_id, pm.reference_kind, pm.reference_form
              LIMIT $4",
         )
         .bind(media.source)
@@ -1806,9 +1903,24 @@ where
         Ok(MediaReferenceSnapshot::new(
             rows.into_iter()
                 .map(
-                    |(post_id, owner_id, source, sha256, filename, kind, reference_form)| {
-                        PersistedMediaReference::new(
+                    |(
+                        post_id,
+                        owner_id,
+                        revision_id,
+                        source,
+                        sha256,
+                        filename,
+                        kind,
+                        reference_form,
+                    )| {
+                        let subject = if revision_id == RevisionId::from(0) {
+                            PersistedMediaSubject::Current
+                        } else {
+                            PersistedMediaSubject::Revision(revision_id)
+                        };
+                        PersistedMediaReference::for_subject(
                             post_id,
+                            subject,
                             MediaRef {
                                 source,
                                 sha256,
