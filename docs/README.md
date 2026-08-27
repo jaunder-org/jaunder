@@ -181,6 +181,7 @@ convention). See the Status column below for each ADR's current status.
 | [0154](adr/0154-media-reference-live-ownership.md)                  | Verify media-reference ownership through instance identity                                                   | accepted   |
 | [0155](adr/0155-server-side-org-metadata-block.md)                  | Server-Side Org Metadata Block Canonicalization                                                              | accepted   |
 | [0156](adr/0156-sink-specific-telemetry-interfaces.md)              | Sink-Specific Telemetry Interfaces                                                                           | accepted   |
+| [0157](adr/0157-inline-only-atompub-category-discovery.md)          | Keep AtomPub category discovery inline                                                                       | accepted   |
 
 <!-- adr-table:end -->
 
