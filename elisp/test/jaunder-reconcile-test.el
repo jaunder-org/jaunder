@@ -522,5 +522,136 @@
                               (buffer-string)))
       (should (string-match-p "local: /tmp/duplicate.org id=5" (buffer-string)))
       (should (string-match-p "slug=duplicate" (buffer-string))))))
+(defmacro jaunder-reconcile-test--with-visited-post (contents &rest body)
+  "Run BODY in a visited post containing CONTENTS."
+  (declare (indent 1) (debug t))
+  `(let* ((root (make-temp-file "jaunder-delete-post-" t))
+          (path (expand-file-name "post.org" root))
+          (jaunder-blogs
+           (list (cons (file-name-as-directory root)
+                       (list :base-url "https://example.test" :username "alice"))))
+          buffer)
+     (unwind-protect
+         (progn
+           (with-temp-file path (insert ,contents))
+           (setq buffer (find-file-noselect path))
+           (with-current-buffer buffer
+             (org-mode)
+             ,@body))
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer (set-buffer-modified-p nil))
+         (kill-buffer buffer))
+       (when (file-exists-p root)
+         (delete-directory root t)))))
+
+(defun jaunder-reconcile-test--assert-post-preserved (path buffer contents)
+  "Assert PATH and BUFFER still contain CONTENTS."
+  (should (file-exists-p path))
+  (should (buffer-live-p buffer))
+  (should (equal (with-temp-buffer
+                   (insert-file-contents path)
+                   (buffer-string))
+                 contents))
+  (with-current-buffer buffer
+    (should (equal (buffer-string) contents))))
+
+(ert-deftest jaunder-delete-post-rejects-unvisited-buffer-before-prompt-or-network ()
+  "A deletion must originate from a visited Org buffer."
+  (let (prompted requested)
+    (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) (setq prompted t)))
+              ((symbol-function 'jaunder--http-request)
+               (lambda (&rest _) (setq requested t))))
+             (with-temp-buffer
+               (should-error (jaunder-delete-post))))
+    (should-not prompted)
+    (should-not requested)))
+
+(ert-deftest jaunder-delete-post-validates-id-and-etag-before-prompt-or-network ()
+  "Malformed local deletion markers never reach confirmation or transport."
+  (dolist (markers '("#+PROPERTY: JAUNDER_SYNCED \"etag\"\n"
+                     "#+PROPERTY: JAUNDER_ID nope\n#+PROPERTY: JAUNDER_SYNCED \"etag\"\n"
+                     "#+PROPERTY: JAUNDER_ID 7\n"
+                     "#+PROPERTY: JAUNDER_ID 7\n#+PROPERTY: JAUNDER_SYNCED \"etag\n"
+                     "#+PROPERTY: JAUNDER_ID 7\n#+PROPERTY: JAUNDER_SYNCED W/\"etag\"\n"
+                     "#+PROPERTY: JAUNDER_ID 7\n#+PROPERTY: JAUNDER_SYNCED etag\n"))
+    (let ((contents (concat markers "\nBody\n"))
+          prompted requested)
+      (jaunder-reconcile-test--with-visited-post contents
+                                                 (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) (setq prompted t)))
+                                                           ((symbol-function 'jaunder--http-request)
+                                                            (lambda (&rest _) (setq requested t))))
+                                                          (should-error (jaunder-delete-post)))
+                                                 (should-not prompted)
+                                                 (should-not requested)
+                                                 (jaunder-reconcile-test--assert-post-preserved path buffer contents)))))
+
+(ert-deftest jaunder-delete-post-cancellation-preserves-local-post-without-request ()
+  "Cancellation leaves the visited file and buffer untouched."
+  (let ((contents "#+PROPERTY: JAUNDER_ID 7\n#+PROPERTY: JAUNDER_SYNCED \"etag\"\n\nBody\n")
+        requested)
+    (jaunder-reconcile-test--with-visited-post contents
+                                               (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) nil))
+                                                         ((symbol-function 'jaunder--http-request)
+                                                          (lambda (&rest _) (setq requested t))))
+                                                        (jaunder-delete-post))
+                                               (should-not requested)
+                                               (jaunder-reconcile-test--assert-post-preserved path buffer contents))))
+
+(ert-deftest jaunder-delete-post-sends-conditional-member-delete-and-removes-local-post-on-204 ()
+  "A confirmed 204 removes only the corresponding local file and buffer."
+  (let ((contents "#+PROPERTY: JAUNDER_ID 0007\n#+PROPERTY: JAUNDER_SYNCED \"etag\"\n\nBody\n")
+        request)
+    (jaunder-reconcile-test--with-visited-post contents
+                                               (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
+                                                         ((symbol-function 'jaunder--http-request)
+                                                          (lambda (&rest args)
+                                                            (setq request args)
+                                                            '(:status 204))))
+                                                        (jaunder-delete-post))
+                                               (should (equal request
+                                                              '("DELETE" "https://example.test/atompub/alice/posts/7"
+                                                                nil nil (("If-Match" . "\"etag\"")))))
+                                               (should-not (file-exists-p path))
+                                               (should-not (buffer-live-p buffer)))))
+
+(ert-deftest jaunder-delete-post-preserves-local-post-on-404 ()
+  "A missing remote Member does not authorize local deletion."
+  (let ((contents "#+PROPERTY: JAUNDER_ID 7\n#+PROPERTY: JAUNDER_SYNCED \"etag\"\n\nBody\n"))
+    (jaunder-reconcile-test--with-visited-post contents
+                                               (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
+                                                         ((symbol-function 'jaunder--http-request)
+                                                          (lambda (&rest _) '(:status 404))))
+                                                        (should-error (jaunder-delete-post)))
+                                               (jaunder-reconcile-test--assert-post-preserved path buffer contents))))
+
+(ert-deftest jaunder-delete-post-preserves-local-post-on-412 ()
+  "A stale ETag leaves the local post intact."
+  (let ((contents "#+PROPERTY: JAUNDER_ID 7\n#+PROPERTY: JAUNDER_SYNCED \"etag\"\n\nBody\n"))
+    (jaunder-reconcile-test--with-visited-post contents
+                                               (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
+                                                         ((symbol-function 'jaunder--http-request)
+                                                          (lambda (&rest _) '(:status 412))))
+                                                        (should-error (jaunder-delete-post)))
+                                               (jaunder-reconcile-test--assert-post-preserved path buffer contents))))
+
+(ert-deftest jaunder-delete-post-preserves-local-post-on-other-http-failure ()
+  "Only 204, not another successful-looking status, permits local deletion."
+  (let ((contents "#+PROPERTY: JAUNDER_ID 7\n#+PROPERTY: JAUNDER_SYNCED \"etag\"\n\nBody\n"))
+    (jaunder-reconcile-test--with-visited-post contents
+                                               (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
+                                                         ((symbol-function 'jaunder--http-request)
+                                                          (lambda (&rest _) '(:status 200))))
+                                                        (should-error (jaunder-delete-post)))
+                                               (jaunder-reconcile-test--assert-post-preserved path buffer contents))))
+
+(ert-deftest jaunder-delete-post-preserves-local-post-on-transport-failure ()
+  "A transport error leaves the file and its visited buffer untouched."
+  (let ((contents "#+PROPERTY: JAUNDER_ID 7\n#+PROPERTY: JAUNDER_SYNCED \"etag\"\n\nBody\n"))
+    (jaunder-reconcile-test--with-visited-post contents
+                                               (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
+                                                         ((symbol-function 'jaunder--http-request)
+                                                          (lambda (&rest _) (error "offline"))))
+                                                        (should-error (jaunder-delete-post)))
+                                               (jaunder-reconcile-test--assert-post-preserved path buffer contents))))
 (provide 'jaunder-reconcile-test)
 ;;; jaunder-reconcile-test.el ends here

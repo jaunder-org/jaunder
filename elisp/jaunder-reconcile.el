@@ -590,6 +590,37 @@ hide otherwise valid synchronization markers."
        (jaunder--render-reconcile-report report))
      report)))
 
+(defun jaunder-delete-post ()
+  "Conditionally delete the current buffer's AtomPub Post.
+The visited Org file must identify a synchronized Post with a numeric
+`JAUNDER_ID' and strong `JAUNDER_SYNCED' ETag.  Local state is removed only
+after the server answers the confirmed conditional DELETE with HTTP 204."
+  (interactive)
+  (let ((file (or (buffer-file-name)
+                  (error "jaunder: buffer is not visiting a file"))))
+    (let* ((id (jaunder--canonical-id-or-zero
+                (jaunder--buffer-property "JAUNDER_ID")))
+           (etag (jaunder--buffer-property "JAUNDER_SYNCED")))
+      (unless id
+        (error "jaunder: JAUNDER_ID must be numeric"))
+      (unless (jaunder--strong-etag-p etag)
+        (error "jaunder: JAUNDER_SYNCED must be a strong ETag"))
+      (jaunder--with-blog
+       file
+       (when (y-or-n-p (format "Delete Post %s? " id))
+         (let ((response
+                (jaunder--http-request
+                 "DELETE"
+                 (jaunder--build-url (jaunder--active-base-url) "atompub"
+                                     (jaunder--active-username) "posts" id)
+                 nil nil (list (cons "If-Match" etag)))))
+           (unless (equal (plist-get response :status) 204)
+             (error "jaunder: delete failed (HTTP %s)"
+                    (plist-get response :status)))
+           (delete-file file)
+           (set-buffer-modified-p nil)
+           (kill-buffer (current-buffer))))))))
+
 
 (provide 'jaunder-reconcile)
 ;;; jaunder-reconcile.el ends here
