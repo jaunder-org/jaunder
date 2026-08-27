@@ -40,6 +40,13 @@ permalink; a Deleted Post releases that public identity while retaining its
 internal Post ID. _Avoid_: Article, entry (reserve "Entry" for the AtomPub wire
 object), note.
 
+**Media Record**: One persistent per-user record for one exact stored media
+identity, representing media its user controls in their library. A qualifying
+Post reference may materialize its author's independent record from an existing
+source row; it never pins or transfers control of another user's record. It
+persists until its owner explicitly deletes it. _Avoid_: treating a Post
+reference as ownership of another user's Media Record.
+
 **Default Post Format**: A per-user preference naming the authoring format
 (`Markdown`, `Org`, or `Html`) used as the web composer's default and as the
 interpretation for AtomPub `type="text"` content. Real HTML

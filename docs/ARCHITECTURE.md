@@ -551,6 +551,36 @@ HTML, and the rows land in the Post's own transaction. Publication uses the same
 atomic revision/mutation discipline; rendering remains the sole reference
 constructor.
 
+**Media Records make retained bytes per-user rather than reference-owned.** An
+active Post content write (including draft/scheduled) resolves only
+`RenderOutput`-derived `MediaReference` forms before storage locks into the
+capability-only `ProvenLocalMediaRefs`; relative references are local, while
+absolute and scheme-relative references require live-instance proof. Post
+service carries that capability—not caller-supplied references,
+`PersistedMediaReference`, or `PostId` evidence—through
+`perform_post_creation`/`perform_post_update` into both `PostStorage`
+transactions. Each exact proven-local `MediaRef` materializes one persistent
+Media Record by idempotently copying the canonical matching source row—earliest
+`created_at`, then lowest `user_id`—and its `source`, `content_type`,
+`size_bytes`, `source_url`, and `created_at` in the same Post transaction. A
+missing source, foreign reference, or unknown proof leaves the write successful
+but does not materialize; publication-only writes and pre-existing Posts are
+excluded. The record survives reference/Post deletion until explicit owner
+deletion, so a qualifying cross-user record does not pin or transfer control of
+its source owner's record. Foreign/unknown/legacy cross-user rows without a
+record remain nondisclosing global safety. Post writes, delete, and reclaim take
+the same ordered media locks; reclaim holds its storage-owned `ReclaimGuard`
+transaction/media-lock lease while the manager, not storage, unlinks the file
+(SQLite's immediate transaction has the same lifetime). If delete/reclaim
+removes the last source before the writer acquires its lock, delete wins: the
+write succeeds with a broken link and no record; otherwise a matching source
+under that lock materializes before unlock. After a conditional delete refuses,
+classification and its unique ascending owner current/Deleted Post/Revision IDs
+come from that same locked decision. The
+[per-user Media Record policy](adr/drafts/per-user-media-records-from-local-post-references.md)
+retains ADR-0136's owner history guard: web force may knowingly delete the
+owner's final record past it, but never overrides global safety.
+
 **Media is content-addressed, and the layout is spelled once.**
 `common::media::path` (storage-owned in `common/src/media/storage.rs`) is the
 single definition of `<source>/<p1>/<p2>/<sha256>/<filename>`, and
@@ -639,7 +669,17 @@ prior modification time, and publication/deletion timestamps; child values are
 copied rather than linked to mutable tag or audience lookup rows. A semantic
 no-op writes neither a Revision nor an updated timestamp. Creation is
 revision-free because it has no prior state
-([ADR-0136](adr/0136-local-post-lifecycle.md)).
+([ADR-0136](adr/0136-local-post-lifecycle.md)). Media referenced by an owner's
+retained current Post or revision participates in the ordinary reference guard,
+including Deleted Posts; web force is the explicit override and may knowingly
+delete the final Media Record, breaking retained history. This does not make
+foreign/unknown/legacy global safety overridable, and qualifying cross-user
+references use independent records rather than pinning the owner's record. A
+Media Record survives removal of its references and Post deletion until
+explicit owner deletion
+([per-user Media Record policy](adr/drafts/per-user-media-records-from-local-post-references.md)).
+A future purge remains deliberately undecided and requires its own decision
+([local Post lifecycle decision](adr/0136-local-post-lifecycle.md)).
 
 Revision records have no product mutators: only top-level Post mutation and
 whole-store backup/restore write them. Authenticated owners can list global

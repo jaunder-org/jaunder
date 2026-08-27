@@ -2,76 +2,138 @@
 
 ## Outcome
 
-Deleting an AtomPub media Member refuses with a clear conflict response when the
-authenticated user's live Posts reference the media. That response directs the
-user to Jaunder's web media library; safety refusals that the web force action
-cannot bypass instead explain that deletion remains blocked.
+AtomPub media Member deletion follows the same guarded storage decision as the
+web library. It never offers force. A refusal identifies only the authenticated
+owner's retained Posts and revisions when that is safe; otherwise it discloses
+nothing. Web force is the explicit override for an owner retained-history guard,
+not for global safety.
 
-## Load-bearing decisions
+## Domain and lifecycle
 
-- A bare AtomPub media Member `DELETE` is always guarded. AtomPub exposes no
-  force query parameter, request header, retry-confirmation behavior, or other
-  Jaunder-specific override.
-- This deliberately changes referenced-media deletion from unconditional
-  deletion to refusal. Existing Protocol Clients need no extension knowledge:
-  unreferenced deletion remains successful, while referenced deletion produces
-  an actionable error they can display.
-- A guarded refusal returns `409 Conflict` with an `application/problem+json`
-  representation whose stable members are:
-  - `type`: `https://jaunder.org/problems/media-delete-conflict`
-  - `title`: `Media deletion refused`
-  - `status`: the JSON number `409`
-  - `detail`: one of the two exact conflict explanations below
-  - `post_ids`: a unique, ascending JSON array of numeric Post IDs
-- An owner-reference conflict uses the detail
-  `Media is referenced by live Posts. Use Jaunder's web media library to review references and force deletion.`
-  Its `post_ids` contains only the authenticated owner's live Posts that
-  reference the media. Deleted Posts and Posts owned by other users are neither
-  reported nor disclosed.
-- A global rowless-reference safety conflict uses the detail
-  `Media deletion is blocked because Jaunder cannot prove that removing this record would preserve media referenced by a live Post.`
-  Its `post_ids` is empty, and it does not promise that the web force action can
-  succeed.
-- The web media library remains the sole force-delete surface. Its current
-  confirmation and force behavior is unchanged.
-- Forced web deletion continues to bypass only the owner's live-Post guard. It
-  cannot bypass the global rowless-reference safety invariant from ADR-0154.
-- Successful deletion remains `204 No Content`; a missing media Member remains
-  `404 Not Found`.
-- Unexpected storage and serialization failures retain typed internal sources
-  and cross the public boundary masked, consistent with ADR-0017. Ownership
-  probe failures, malformed responses, and ambiguous responses are ordinary
-  fail-closed evidence uncertainty under ADR-0154 and produce the applicable
-  guarded conflict rather than an internal error.
+- A **Media Record** is one persistent, per-user record for one exact
+  `MediaRef`, created by upload or qualifying active-Post content writes. It is
+  not a cache of current references and survives reference/Post deletion until
+  its owner explicitly deletes it.
+- Every active content create/update (draft and scheduled states included) sends
+  the `RenderOutput`-derived `MediaReference` forms to a new pre-write resolver
+  before storage locks. Its only constructible result is the capability
+  `ProvenLocalMediaRefs`, carrying exact local identities: relative forms
+  qualify intrinsically; absolute and scheme-relative forms qualify only after
+  exact live-instance proof. Foreign, unknown, malformed, ambiguous, and
+  otherwise unproven forms do not enter the capability.
+- Post service carries that capability—not caller-supplied references, reused
+  `PersistedMediaReference` rows, or `PostId` evidence—through
+  `perform_post_creation`/`perform_post_update` into both `PostStorage`
+  transactions. A qualifying identity idempotently creates the Post author's
+  record only by copying a canonical exact source row in the same Post
+  transaction. Canonical means earliest `created_at`, breaking ties by lowest
+  `user_id`. The copied record preserves that row's `source`, `content_type`,
+  `size_bytes`, `source_url`, and `created_at`; tests must observe equality of
+  every field. An absent source succeeds without a record. No fetch or invented
+  metadata.
+- Publication-only writes do not resolve or materialize. This change neither
+  backfills nor migrates existing Posts/reference rows.
+- A cross-user qualifying reference gets its author's independent record and
+  never pins, claims, or blocks deletion of the source owner's record.
+
+## Delete semantics
+
+- AtomPub `DELETE /atompub/{username}/media/{sha}/{filename}` is guarded. It
+  accepts no force query/header/retry confirmation/other override.
+- Storage makes deletion and safety one conditional delete, then—on failure—
+  classifies missing, owner retained-history, or global safety under the same
+  transaction and target media lock. Reclaim obtains a storage-owned
+  `ReclaimGuard` lease before it unlinks: its transaction and media lock remain
+  live until the manager finishes the unlink and releases/finalizes the guard.
+  The manager owns filesystem unlink, never storage; SQLite provides the same
+  lifetime with its immediate/single-writer transaction.
+- Owner retained history is the authenticated owner's current active Post,
+  Deleted Post, or Post Revision reference. It returns the unique ascending IDs
+  of those Posts (an ID appears once even if current and revisions reference
+  it). Cross-user qualifying references have independent records and do not pin.
+- Global safety has no reportable IDs. It covers local, legacy, owned, unknown,
+  ambiguous, near-match, concurrent, and foreign/unrecorded cross-user
+  references that cannot safely be exempted. Proven foreign evidence alone does
+  not refuse.
+- AtomPub success is `204 No Content`; missing is `404 Not Found`. The web
+  library's force action may delete past only an owner retained-history refusal,
+  including the owner's final Media Record, knowingly breaking retained history.
+  It never overrides global safety.
+
+## AtomPub conflict representation
+
+Every guarded refusal is `409 Conflict`,
+`Content-Type: application/problem+json`, with exactly:
+
+- `type`: `https://jaunder.org/problems/media-delete-conflict`
+- `title`: `Media deletion refused`
+- `status`: JSON number `409`
+- `detail`: one exact string below
+- `post_ids`: unique ascending JSON array of numeric Post IDs
+
+Owner retained-history refusal:
+
+```text
+Media is referenced by retained Posts or revisions. Use Jaunder's web media library to review references before deleting.
+```
+
+`post_ids` contains only the authenticated owner's current/revision Post IDs.
+
+Global-safety refusal:
+
+```text
+Media deletion is blocked because Jaunder cannot prove that removing this record would preserve referenced media.
+```
+
+`post_ids` is `[]`. This does not promise web force success.
+
+Unexpected storage/serialization failures retain typed internal causes and use
+the existing masked AtomPub internal-error path. Evidence uncertainty is a
+normal fail-closed refusal.
+
+## Backend and concurrency contract
+
+- SQLite and PostgreSQL have identical observable materialization, copied
+  metadata, deletion, refusal-reason, and Post-ID results.
+- Ownership proof completes before locks. PostgreSQL uses one shared per-media
+  namespace and stable global order; SQLite uses immediate/single-writer
+  discipline. Post create locks proposed identities; content update locks
+  old/new union; delete and `ReclaimGuard` lock their targets in that same
+  order. The Post write transaction includes reference persistence and
+  materialization.
+- The serialized result is deliberately delete-wins: if delete or reclaim
+  removes the last matching source before the writer acquires that media lock,
+  the Post write still succeeds with its broken link and creates no Media
+  Record. If a matching source exists under the writer's lock, the write
+  materializes its record before releasing that lock.
 
 ## Acceptance
 
-- Deleting unreferenced media through AtomPub returns `204 No Content`, and a
-  subsequent lookup observes that the Member is absent.
-- Deleting media referenced by an owner live Post returns `409 Conflict`, does
-  not delete the media, and returns `application/problem+json` with the exact
-  stable values above and that Post's numeric ID.
-- The owner-reference detail explicitly directs the user to Jaunder's web media
-  library to review references and force deletion.
-- Multiple owner live-Post references are reported as unique, ascending numeric
-  IDs in `post_ids`.
-- Deleted Posts do not cause owner-reference refusal and never appear in
-  `post_ids`.
-- Proven foreign references do not cause owner-reference refusal. Unknown or
-  ambiguous ownership continues to fail closed under ADR-0154 without disclosing
-  another user's Post IDs; a resulting global safety refusal returns the
-  specified global-conflict detail and an empty `post_ids`.
-- Both SQLite and PostgreSQL preserve identical guarded deletion behavior.
-- AtomPub exposes no force override, and the existing web confirmation path can
-  still force owner-reference deletion subject to global rowless-reference
-  safety.
+- Upload and qualifying active content creates/updates materialize persistent
+  per-user records from an existing exact source and visibly preserve all five
+  copied metadata fields; absent source succeeds without a record.
+- Relative/local-proof cases materialize; foreign/uncertain cases do not.
+  Publication-only writes no-op; no historical backfill occurs.
+- AtomPub unreferenced/missing deletion is `204`/`404`. Retained current,
+  Deleted Post, and Revision owner references yield the exact owner `409`,
+  preserve the record, and report unique ascending IDs. Global safety yields the
+  exact global `409` and `[]`.
+- AtomPub has no override. Web force can knowingly delete past owner retained
+  history (including a final record), but global safety remains non-overridable.
+- Both backends prove the two allowed concurrent Post write/delete and Post
+  write/reclaim results: delete-wins is a successful broken-link write with no
+  Media Record when no matching source remains under the writer lock;
+  writer-wins materializes the record when one does. Reclaim's storage guard
+  remains live across unlink, and unexpected storage/serialization failures
+  preserve their typed internal causes through AtomPub's masked internal-error
+  path.
 
 ## Boundaries
 
-- This change does not add media deletion to the Emacs client or alter any
-  Protocol Client.
-- It does not establish a general problem-details conversion for every AtomPub
-  error; the representation is the contract for referenced-media conflicts.
-- It does not change media-reference extraction, ownership probing, retention,
-  or physical reclamation policy.
-- It does not change Post Member deletion or other AtomPub resources.
+In scope: the lifecycle/materialization, guarded deletion and AtomPub wire
+contract, truthful web force, both backends, and their tests. Not in scope:
+reference extraction/proof semantics, a protocol force extension, the Emacs
+client, Post Member deletion, generic problem details, retention policy, or
+backfill. Post Revision media references are supplied by issue #1055; this issue
+is blocked until that prerequisite lands and does not implement revision
+history.
