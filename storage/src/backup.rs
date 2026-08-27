@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::sqlite::resolved_sqlite_options;
 use crate::{DbConnectOptions, StorageRuntimeConfig, resolved_postgres_options};
 use common::time::UtcInstant;
 mod restore_validation;
@@ -190,7 +191,8 @@ async fn export_directory_backup(
 
     let manifest = match options.database {
         DbConnectOptions::Sqlite(connect_options) => {
-            let pool = sqlx::SqlitePool::connect_with(connect_options.clone()).await?;
+            let resolved = resolved_sqlite_options(connect_options, options.runtime);
+            let pool = sqlx::SqlitePool::connect_with(resolved).await?;
             crate::sqlite::backup::export_database(&pool, options.destination_path, options.mode)
                 .await?
         }
@@ -229,7 +231,8 @@ async fn restore_directory_backup(
 
     match options.database {
         DbConnectOptions::Sqlite(connect_options) => {
-            let pool = sqlx::SqlitePool::connect_with(connect_options.clone()).await?;
+            let resolved = resolved_sqlite_options(connect_options, options.runtime);
+            let pool = sqlx::SqlitePool::connect_with(resolved).await?;
             crate::sqlite::backup::restore_database(&pool, options.source_path, manifest).await
         }
         DbConnectOptions::Postgres {

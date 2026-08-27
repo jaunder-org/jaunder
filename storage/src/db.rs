@@ -517,7 +517,9 @@ pub async fn database_is_empty(
     runtime: &StorageRuntimeConfig,
 ) -> sqlx::Result<bool> {
     match options {
-        DbConnectOptions::Sqlite(options) => crate::sqlite::database_is_empty(options).await,
+        DbConnectOptions::Sqlite(options) => {
+            crate::sqlite::database_is_empty(options, runtime).await
+        }
         DbConnectOptions::Postgres { options, .. } => {
             crate::postgres::database_is_empty(options, runtime).await
         }
@@ -609,6 +611,35 @@ mod tests {
             config.sql_slow_query_threshold(),
             Duration::from_millis(250)
         );
+    }
+
+    #[test]
+    fn sqlite_and_postgres_resolve_the_same_slow_query_threshold() {
+        let runtime =
+            StorageRuntimeConfig::with_sql_slow_query_threshold(Duration::from_millis(250));
+        let sqlite: DbConnectOptions = "sqlite:jaunder.db".parse().expect("valid SQLite URL");
+        let postgres: DbConnectOptions = "postgres://localhost/jaunder"
+            .parse()
+            .expect("valid PostgreSQL URL");
+        let DbConnectOptions::Sqlite(sqlite) = sqlite else {
+            unreachable!("SQLite URL must parse as SQLite options");
+        };
+        let DbConnectOptions::Postgres {
+            options: postgres, ..
+        } = postgres
+        else {
+            unreachable!("PostgreSQL URL must parse as PostgreSQL options");
+        };
+
+        let sqlite = crate::sqlite::resolved_sqlite_options(&sqlite, &runtime);
+        let postgres = crate::resolved_postgres_options(&postgres, &runtime);
+
+        for options in [format!("{sqlite:?}"), format!("{postgres:?}")] {
+            assert!(
+                options.contains("slow_statements_duration: 250ms"),
+                "runtime threshold was not applied: {options}"
+            );
+        }
     }
 
     #[test]
