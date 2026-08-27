@@ -184,6 +184,54 @@ fn visible_code(trimmed: &str) -> &str {
     }
 }
 
+/// The delimiter that opened a fenced code block.
+struct OpenFence {
+    fence: Fence,
+    marker: char,
+    marker_len: usize,
+}
+
+/// A CommonMark fence marker after at most three leading spaces.
+fn marker(line: &str) -> Option<(char, usize, &str)> {
+    let indent = line.bytes().take_while(|byte| *byte == b' ').count();
+    if indent > 3 {
+        return None;
+    }
+
+    let line = &line[indent..];
+    let marker = line.chars().next()?;
+    if marker != '`' && marker != '~' {
+        return None;
+    }
+
+    let marker_len = line
+        .bytes()
+        .take_while(|byte| *byte == marker as u8)
+        .count();
+    if marker_len < 3 {
+        return None;
+    }
+
+    Some((marker, marker_len, &line[marker_len..]))
+}
+
+/// A CommonMark fence opener. Backtick info strings cannot contain backticks.
+fn opener(line: &str) -> Option<(char, usize, &str)> {
+    let (marker, marker_len, info) = marker(line)?;
+    (marker != '`' || !info.contains('`')).then_some((marker, marker_len, info))
+}
+
+/// Whether `line` is a valid closer for a given opener.
+fn is_closer(line: &str, opener: &OpenFence) -> bool {
+    let Some((marker, marker_len, suffix)) = marker(line) else {
+        return false;
+    };
+
+    marker == opener.marker
+        && marker_len >= opener.marker_len
+        && suffix.bytes().all(|byte| byte == b' ' || byte == b'\t')
+}
+
 /// Every fence in `source`, or a message describing why it is not readable Rust.
 ///
 /// A file that will not parse is **not** silently skipped: an unparsed file is a
@@ -202,43 +250,43 @@ pub fn fences(source: &str) -> Result<Scan, String> {
     scan.multiline_doc_attrs.dedup();
 
     for (doc_block, block) in collector.blocks.iter().enumerate() {
-        let mut open: Option<Fence> = None;
+        let mut open: Option<OpenFence> = None;
         for doc in block {
-            let trimmed = undent(&doc.text).trim();
-            // `~~~` is a fence marker too (pulldown-cmark honours it), and one whose
-            // info string this gate has no vocabulary for. Treating it as an opener
-            // means a `~~~text` block cannot hide from the population in BOTH
-            // directions — uncollected by rustdoc and unseen by the scanner.
-            let marker = trimmed
-                .strip_prefix("```")
-                .or_else(|| trimmed.strip_prefix("~~~"));
-            match (marker, open.as_mut()) {
-                // Closing markers end the fence regardless of what follows them.
-                (Some(_), Some(_)) => {
-                    if let Some(fence) = open.take() {
-                        scan.fences.push(fence);
-                    }
+            let line = undent(&doc.text);
+            if open.as_ref().is_some_and(|fence| is_closer(line, fence)) {
+                if let Some(fence) = open.take() {
+                    scan.fences.push(fence.fence);
                 }
-                (Some(info), None) => {
-                    open = Some(Fence {
+                continue;
+            }
+
+            if let Some(fence) = open.as_mut() {
+                let trimmed = line.trim();
+                match hidden_code(trimmed) {
+                    Some(code) => fence.fence.hidden.push(code.to_string()),
+                    None => fence
+                        .fence
+                        .visible
+                        .push(visible_code(trimmed).trim().to_string()),
+                }
+            } else if let Some((marker, marker_len, info)) = opener(line) {
+                open = Some(OpenFence {
+                    fence: Fence {
                         line: doc.line,
                         info: info.trim().to_string(),
                         hidden: Vec::new(),
                         visible: Vec::new(),
                         doc_block,
-                    })
-                }
-                (None, Some(fence)) => match hidden_code(trimmed) {
-                    Some(code) => fence.hidden.push(code.to_string()),
-                    None => fence.visible.push(visible_code(trimmed).trim().to_string()),
-                },
-                (None, None) => {}
+                    },
+                    marker,
+                    marker_len,
+                });
             }
         }
         // An unterminated fence still names a real block; keep it so the vocabulary
         // and companion rules can speak about it rather than dropping it.
         if let Some(fence) = open.take() {
-            scan.fences.push(fence);
+            scan.fences.push(fence.fence);
         }
     }
     scan.fences.sort_by_key(|f| f.line);
@@ -342,6 +390,66 @@ mod tests {
     fn fences_inside_nested_items_are_found() {
         let src = "mod m {\n    /// ```\n    /// let x = 1;\n    /// ```\n    pub fn f() {}\n}\n";
         assert_eq!(scan(src).fences.len(), 1);
+    }
+
+    #[test]
+    fn two_marker_lines_do_not_open_fences() {
+        let src = "\n/// ``\n/// let x = 1;\n/// ~~\npub struct A;\n";
+        assert!(scan(src).fences.is_empty());
+    }
+
+    #[test]
+    fn three_spaces_indent_an_opener_but_four_do_not() {
+        let src = "\n///    ```\n///    let x = 1;\n///    ```\npub struct A;\n\n///     ```\n/// let y = 2;\n///     ```\npub struct B;\n";
+        let s = scan(src);
+        assert_eq!(s.fences.len(), 1, "{:?}", s.fences);
+        assert_eq!(s.fences[0].line, 2);
+        assert_eq!(s.fences[0].visible, vec!["let x = 1;"]);
+    }
+
+    #[test]
+    fn only_a_long_enough_matching_closer_ends_a_fence() {
+        let src =
+            "\n/// ``````\n/// `````\n/// ~~~~~~\n/// let x = 1;\n/// ```````\npub struct A;\n";
+        let f = &scan(src).fences[0];
+        assert_eq!(f.visible, vec!["`````", "~~~~~~", "let x = 1;"]);
+    }
+
+    #[test]
+    fn trailing_text_does_not_close_but_tab_suffix_does() {
+        let src = "\n/// ```\n/// ``` not a closer\n/// let x = 1;\n/// ```\t\n/// after\npub struct A;\n";
+        let f = &scan(src).fences[0];
+        assert_eq!(f.visible, vec!["``` not a closer", "let x = 1;"]);
+    }
+
+    #[test]
+    fn backtick_info_with_a_backtick_does_not_open_a_fence() {
+        let src = "\n/// ```rust`bad\n/// let x = 1;\npub struct A;\n";
+        assert!(scan(src).fences.is_empty());
+    }
+
+    #[test]
+    fn tilde_info_may_contain_backticks() {
+        let src = "\n/// ~~~rust`example\n/// let x = 1;\n/// ~~~\npub struct A;\n";
+        let f = &scan(src).fences[0];
+        assert_eq!(f.info, "rust`example");
+        assert_eq!(f.visible, vec!["let x = 1;"]);
+    }
+
+    #[test]
+    fn nested_looking_markers_remain_content_until_a_valid_closer() {
+        let src = "\n/// ~~~~~\n/// ```\n/// ~~~\n/// let x = 1;\n/// ~~~~~\npub struct A;\n";
+        let f = &scan(src).fences[0];
+        assert_eq!(f.visible, vec!["```", "~~~", "let x = 1;"]);
+    }
+
+    #[test]
+    fn an_unclosed_fence_extends_to_the_doc_block_end() {
+        let src = "\n/// ```compile_fail\n/// # use foo::Bar;\n/// let _ = Bar;\npub struct A;\n";
+        let f = &scan(src).fences[0];
+        assert_eq!(f.info, "compile_fail");
+        assert_eq!(f.hidden, vec!["use foo::Bar;"]);
+        assert_eq!(f.visible, vec!["let _ = Bar;"]);
     }
 
     #[test]

@@ -61,6 +61,8 @@
 //! whether the fence population was evaluated. This module is the only thing that
 //! answers the latter.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use serde::{Deserialize, Serialize};
 
 use crate::fence::{Scan, fences};
@@ -78,8 +80,9 @@ pub const TEXT: &str = "text";
 pub struct Violation {
     /// Repo-relative path.
     pub file: String,
-    /// 1-based line of the fence, or of the offending attribute.
-    pub line: usize,
+    /// 1-based line of the fence, or of the offending attribute. `None` means
+    /// the file could not be read or parsed.
+    pub line: Option<usize>,
     pub kind: Kind,
     /// Human detail, ending in the recovery instruction.
     pub detail: String,
@@ -95,6 +98,8 @@ pub enum Kind {
     /// A `compile_fail` with no hidden prelude, or a hidden line no companion in
     /// the same doc comment carries.
     MissingCompanion,
+    /// More than one runner entry reported the same `(file, line)` key.
+    Duplicate,
     /// Scanned in the tree, absent from the run.
     NotRun,
     /// The run reported this doctest as FAILED.
@@ -119,7 +124,7 @@ pub fn fence_violations(file: &str, scan: &Scan) -> Vec<Violation> {
     for line in &scan.multiline_doc_attrs {
         out.push(Violation {
             file: file.to_string(),
-            line: *line,
+            line: Some(*line),
             kind: Kind::MultilineDocAttr,
             detail: "a multi-line `#[doc = \"…\"]` value cannot be keyed to a fence's source \
                      line: the runner reports the attribute's line plus a markdown offset. \
@@ -133,7 +138,7 @@ pub fn fence_violations(file: &str, scan: &Scan) -> Vec<Violation> {
         if info != PLAIN && info != COMPILE_FAIL && info != TEXT {
             out.push(Violation {
                 file: file.to_string(),
-                line: fence.line,
+                line: Some(fence.line),
                 kind: Kind::BannedAttribute,
                 detail: format!(
                     "fence attribute `{}` is outside the accepted vocabulary \
@@ -156,7 +161,7 @@ pub fn fence_violations(file: &str, scan: &Scan) -> Vec<Violation> {
         if !fence.hidden.iter().any(|h| !h.is_empty()) {
             out.push(Violation {
                 file: file.to_string(),
-                line: fence.line,
+                line: Some(fence.line),
                 kind: Kind::MissingCompanion,
                 detail: "a `compile_fail` carries no non-empty `#`-hidden prelude, so nothing \
                          ties it to a positive companion and it would still pass if its paths \
@@ -179,7 +184,7 @@ pub fn fence_violations(file: &str, scan: &Scan) -> Vec<Violation> {
             }
             out.push(Violation {
                 file: file.to_string(),
-                line: fence.line,
+                line: Some(fence.line),
                 kind: Kind::MissingCompanion,
                 detail: format!(
                     "hidden prelude line `{needed}` appears in no plain fence in this doc \
@@ -217,16 +222,44 @@ pub struct ScannedFile {
 ///   scanner bug or an unhandled doc form shrinks the gate's **own** population
 ///   silently, which is ADR-0085 principle 6 turned on the gate itself.
 ///
-/// A fence counts as run only when an entry with the same `(run_path, line)` is
-/// present and is neither ignored nor failed — `ignore` blocks are reported by
-/// libtest, so presence alone is not evidence a proof was evaluated.
+/// A fence counts as run only when its entry group contains no failures and at
+/// least one non-ignored result — `ignore` blocks are reported by libtest, so
+/// presence alone is not evidence a proof was evaluated.
 ///
 /// Pure given `(scanned, output)`, so it is unit-tested directly.
 pub fn problems(scanned: &[ScannedFile], output: &str) -> Vec<Violation> {
     let entries = run_entries(output);
-    let mut out = Vec::new();
+    let mut groups: BTreeMap<(&str, usize), Vec<_>> = BTreeMap::new();
+    for entry in &entries {
+        groups
+            .entry((&entry.file, entry.line))
+            .or_default()
+            .push(entry);
+    }
+
     // `run_path` is the join key; `path` is what the report says.
-    let mut matched: Vec<(String, usize)> = Vec::new();
+    let scanned_paths: BTreeMap<_, _> = scanned
+        .iter()
+        .map(|file| (file.run_path.as_str(), file.path.as_str()))
+        .collect();
+    let mut out = Vec::new();
+    let mut matched = BTreeSet::new();
+
+    for ((run_path, line), group) in &groups {
+        let Some(path) = scanned_paths.get(run_path) else {
+            continue;
+        };
+        if group.len() > 1 {
+            out.push(Violation {
+                file: (*path).to_string(),
+                line: Some(*line),
+                kind: Kind::Duplicate,
+                detail: "the runner reported more than one doctest for this source key, so its \
+                         result is ambiguous. recovery: fix the duplicate runner output."
+                    .to_string(),
+            });
+        }
+    }
 
     for file in scanned {
         let scan = match fences(&file.source) {
@@ -234,7 +267,7 @@ pub fn problems(scanned: &[ScannedFile], output: &str) -> Vec<Violation> {
             Err(e) => {
                 out.push(Violation {
                     file: file.path.clone(),
-                    line: 0,
+                    line: None,
                     kind: Kind::Unreadable,
                     detail: format!(
                         "{e} — an unparsed file is invisible to this gate, so it fails rather \
@@ -247,33 +280,36 @@ pub fn problems(scanned: &[ScannedFile], output: &str) -> Vec<Violation> {
         out.extend(fence_violations(&file.path, &scan));
 
         for fence in &scan.fences {
-            let entry = entries
-                .iter()
-                .find(|e| e.file == file.run_path && e.line == fence.line);
-            if entry.is_some() {
-                matched.push((file.run_path.clone(), fence.line));
+            let group = groups.get(&(file.run_path.as_str(), fence.line));
+            if group.is_some() {
+                matched.insert((file.run_path.as_str(), fence.line));
             }
             let expected_to_run = normalized(&fence.info) != TEXT;
-            match (expected_to_run, entry) {
-                (true, Some(e)) if e.failed => out.push(Violation {
-                    file: file.path.clone(),
-                    line: fence.line,
-                    kind: Kind::Failed,
-                    detail: "the runner reported this doctest as FAILED. recovery: read the \
-                             run log for the compiler output."
-                        .to_string(),
-                }),
-                (true, Some(e)) if e.ignored => out.push(Violation {
-                    file: file.path.clone(),
-                    line: fence.line,
-                    kind: Kind::NotRun,
-                    detail: "the runner collected this fence but skipped it, so the proof was \
-                             not evaluated. recovery: make it a real test, or mark it ```text."
-                        .to_string(),
-                }),
+            match (expected_to_run, group) {
+                (true, Some(group)) if group.iter().any(|entry| entry.failed) => {
+                    out.push(Violation {
+                        file: file.path.clone(),
+                        line: Some(fence.line),
+                        kind: Kind::Failed,
+                        detail: "the runner reported this doctest as FAILED. recovery: read the \
+                                 run log for the compiler output."
+                            .to_string(),
+                    });
+                }
+                (true, Some(group)) if group.iter().all(|entry| entry.ignored) => {
+                    out.push(Violation {
+                        file: file.path.clone(),
+                        line: Some(fence.line),
+                        kind: Kind::NotRun,
+                        detail: "the runner collected this fence but skipped it, so the proof \
+                                 was not evaluated. recovery: make it a real test, or mark it \
+                                 ```text."
+                            .to_string(),
+                    });
+                }
                 (true, None) => out.push(Violation {
                     file: file.path.clone(),
-                    line: fence.line,
+                    line: Some(fence.line),
                     kind: Kind::NotRun,
                     detail: "this fence is in the tree but absent from the run, so whatever it \
                              asserts was never checked — a cfg gate, an unrecognized info \
@@ -283,7 +319,7 @@ pub fn problems(scanned: &[ScannedFile], output: &str) -> Vec<Violation> {
                 }),
                 (false, Some(_)) => out.push(Violation {
                     file: file.path.clone(),
-                    line: fence.line,
+                    line: Some(fence.line),
                     kind: Kind::Orphan,
                     detail: "a ```text fence must not be collected, but the runner reported it. \
                              recovery: the marker and the content disagree — fix one."
@@ -296,24 +332,16 @@ pub fn problems(scanned: &[ScannedFile], output: &str) -> Vec<Violation> {
 
     // run → tree. Only files we actually scanned are in scope: a run may legitimately
     // report entries from paths outside this half's roots (the other half gates those).
-    let scanned_run_paths: Vec<&String> = scanned.iter().map(|f| &f.run_path).collect();
-    for entry in &entries {
-        if !scanned_run_paths.contains(&&entry.file) {
+    for ((run_path, line), _) in groups {
+        let Some(path) = scanned_paths.get(run_path) else {
+            continue;
+        };
+        if matched.contains(&(run_path, line)) {
             continue;
         }
-        if matched
-            .iter()
-            .any(|(p, l)| *p == entry.file && *l == entry.line)
-        {
-            continue;
-        }
-        let path = scanned
-            .iter()
-            .find(|f| f.run_path == entry.file)
-            .map_or(entry.file.clone(), |f| f.path.clone());
         out.push(Violation {
-            file: path,
-            line: entry.line,
+            file: (*path).to_string(),
+            line: Some(line),
             kind: Kind::Orphan,
             detail: "the runner reported a doctest here that the scanner did not find, so the \
                      gate cannot see part of its own population. recovery: this is a scanner \
@@ -500,7 +528,7 @@ mod tests {
         let v = problems(&[file("a.rs", "a.rs", OK_SRC)], out);
         assert_eq!(v.len(), 1, "{v:?}");
         assert_eq!(v[0].kind, Kind::NotRun);
-        assert_eq!(v[0].line, 7);
+        assert_eq!(v[0].line, Some(7));
     }
 
     #[test]
@@ -510,7 +538,7 @@ mod tests {
         let v = problems(&[file("a.rs", "a.rs", OK_SRC)], out);
         assert_eq!(v.len(), 1, "{v:?}");
         assert_eq!(v[0].kind, Kind::Orphan);
-        assert_eq!(v[0].line, 99);
+        assert_eq!(v[0].line, Some(99));
     }
 
     #[test]
@@ -546,7 +574,88 @@ mod tests {
         let v = problems(&[file("a.rs", "a.rs", OK_SRC)], out);
         assert_eq!(v.len(), 1, "{v:?}");
         assert_eq!(v[0].kind, Kind::Failed);
-        assert_eq!(v[0].line, 7);
+        assert_eq!(v[0].line, Some(7));
+    }
+
+    #[test]
+    fn duplicate_run_keys_are_order_independent_including_identical_entries() {
+        let forward = "test a.rs - a::A (line 2) ... ok\n\
+                       test a.rs - a::A (line 7) ... ok\n\
+                       test a.rs - a::A (line 7) ... FAILED\n";
+        let reverse = "test a.rs - a::A (line 7) ... FAILED\n\
+                       test a.rs - a::A (line 2) ... ok\n\
+                       test a.rs - a::A (line 7) ... ok\n";
+        let forward_violations = problems(&[file("a.rs", "a.rs", OK_SRC)], forward);
+        let reverse_violations = problems(&[file("a.rs", "a.rs", OK_SRC)], reverse);
+        assert_eq!(forward_violations, reverse_violations);
+        assert_eq!(
+            forward_violations
+                .into_iter()
+                .map(|violation| violation.kind)
+                .collect::<Vec<_>>(),
+            vec![Kind::Duplicate, Kind::Failed]
+        );
+
+        let identical = "test a.rs - a::A (line 2) ... ok\n\
+                         test a.rs - a::A (line 7) ... ok\n\
+                         test a.rs - a::A (line 7) ... ok\n";
+        let violations = problems(&[file("a.rs", "a.rs", OK_SRC)], identical);
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert_eq!(violations[0].kind, Kind::Duplicate);
+        assert_eq!(violations[0].line, Some(7));
+    }
+
+    #[test]
+    fn duplicate_run_keys_fold_mixed_results() {
+        let cases = [
+            (
+                "test a.rs - a::A (line 2) ... ok\n\
+                 test a.rs - a::A (line 7) ... ok\n\
+                 test a.rs - a::A (line 7) ... ignored\n",
+                vec![Kind::Duplicate],
+            ),
+            (
+                "test a.rs - a::A (line 2) ... ok\n\
+                 test a.rs - a::A (line 7) ... ok\n\
+                 test a.rs - a::A (line 7) ... FAILED\n",
+                vec![Kind::Duplicate, Kind::Failed],
+            ),
+            (
+                "test a.rs - a::A (line 2) ... ok\n\
+                 test a.rs - a::A (line 7) ... ignored\n\
+                 test a.rs - a::A (line 7) ... FAILED\n",
+                vec![Kind::Duplicate, Kind::Failed],
+            ),
+        ];
+        for (output, expected) in cases {
+            let kinds = problems(&[file("a.rs", "a.rs", OK_SRC)], output)
+                .into_iter()
+                .map(|violation| violation.kind)
+                .collect::<Vec<_>>();
+            assert_eq!(kinds, expected);
+        }
+    }
+
+    #[test]
+    fn duplicate_run_keys_emit_one_orphan_per_missing_or_text_key() {
+        let missing = "test a.rs - a::A (line 2) ... ok\n\
+                       test a.rs - a::A (line 7) ... ok\n\
+                       test a.rs - a::A (line 99) ... ok\n\
+                       test a.rs - a::A (line 99) ... FAILED\n";
+        let missing_kinds = problems(&[file("a.rs", "a.rs", OK_SRC)], missing)
+            .into_iter()
+            .map(|violation| violation.kind)
+            .collect::<Vec<_>>();
+        assert_eq!(missing_kinds, vec![Kind::Duplicate, Kind::Orphan]);
+
+        let text = "\n/// ```text\n/// prose\n/// ```\npub struct A;\n";
+        let text_output =
+            "test a.rs - a::A (line 2) ... ok\ntest a.rs - a::A (line 2) ... FAILED\n";
+        let text_kinds = problems(&[file("a.rs", "a.rs", text)], text_output)
+            .into_iter()
+            .map(|violation| violation.kind)
+            .collect::<Vec<_>>();
+        assert_eq!(text_kinds, vec![Kind::Duplicate, Kind::Orphan]);
     }
 
     #[test]
@@ -569,6 +678,7 @@ mod tests {
         let v = problems(&[file("a.rs", "a.rs", "fn f( {")], "");
         assert_eq!(v.len(), 1, "{v:?}");
         assert_eq!(v[0].kind, Kind::Unreadable);
+        assert_eq!(v[0].line, None);
     }
 
     #[test]

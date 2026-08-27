@@ -211,11 +211,10 @@ fn failed_status_detail<T>(
     }
 }
 
-/// Render the in-sandbox doctest sentinel into a human detail. Pure + tested.
-///
-/// Each violation renders as `file:line [kind] detail`, with `kind` serde-rendered
-/// (kebab-case) rather than `Debug`-printed, so this message and the gate
-/// derivation's `jq` output read identically.
+/// Each located violation renders as `file:line [kind] detail`; an unreadable
+/// input has no source line and renders as `file [kind] detail`. `kind` is
+/// serde-rendered (kebab-case) rather than `Debug`-printed, so this message and
+/// the gate derivation's `jq` output read identically.
 fn doctest_sentinel_detail(status: &doctests::status::DoctestStatus) -> String {
     use doctests::status::StatusCategory::{Infra, Ok, Violations};
     match status.category {
@@ -233,7 +232,10 @@ fn doctest_sentinel_detail(status: &doctests::status::DoctestStatus) -> String {
                         .unwrap_or_default()
                         .trim_matches('"')
                         .to_string();
-                    format!("{}:{} [{}] {}", v.file, v.line, kind, v.detail)
+                    let location = v
+                        .line
+                        .map_or_else(|| v.file.clone(), |line| format!("{}:{line}", v.file));
+                    format!("{location} [{kind}] {}", v.detail)
                 })
                 .collect();
             format!("{} violation(s):\n{}", lines.len(), lines.join("\n"))
@@ -955,15 +957,28 @@ mod tests {
     }
 
     #[test]
-    fn doctest_sentinel_detail_names_each_violation() {
-        let s = DoctestStatus::from_violations(vec![Violation {
-            file: "common/src/token.rs".to_string(),
-            line: 56,
-            kind: Kind::NotRun,
-            detail: "scanned but never evaluated".to_string(),
-        }]);
+    fn doctest_sentinel_detail_names_located_and_unreadable_violations() {
+        let s = DoctestStatus::from_violations(vec![
+            Violation {
+                file: "common/src/token.rs".to_string(),
+                line: Some(56),
+                kind: Kind::NotRun,
+                detail: "scanned but never evaluated".to_string(),
+            },
+            Violation {
+                file: "common/src/broken.rs".to_string(),
+                line: None,
+                kind: Kind::NotRun,
+                detail: "cannot read".to_string(),
+            },
+        ]);
         let d = doctest_sentinel_detail(&s);
         assert!(d.contains("common/src/token.rs:56"), "{d}");
+        assert!(
+            d.contains("common/src/broken.rs [not-run] cannot read"),
+            "{d}"
+        );
+        assert!(!d.contains("common/src/broken.rs:"), "{d}");
         // The kebab-case spelling, so this reads the same as the gate's jq output.
         assert!(d.contains("[not-run]"), "{d}");
         assert!(d.contains("scanned but never evaluated"), "{d}");

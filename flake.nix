@@ -1493,7 +1493,7 @@
                   cat=$(jq -r .category ${self.checks.${system}.doctests}/status.json)
                   if [ "$cat" != "ok" ]; then
                     echo "doctest gate failed: category=$cat" >&2
-                    jq -r '.infra_detail // (.violations[] | "\(.file):\(.line) [\(.kind)] \(.detail)")' \
+                    jq -r '.infra_detail // (.violations[] | if .line == null then "\(.file) [\(.kind)] \(.detail)" else "\(.file):\(.line) [\(.kind)] \(.detail)" end)' \
                       ${self.checks.${system}.doctests}/status.json >&2
                     exit 1
                   fi

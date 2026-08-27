@@ -74,7 +74,7 @@ fn collect(roots: &[&str]) -> Result<(Vec<ScannedFile>, Vec<Violation>)> {
             }),
             Err(e) => unreadable.push(Violation {
                 file: path,
-                line: 0,
+                line: None,
                 kind: Kind::Unreadable,
                 detail: format!(
                     "cannot read: {e} — an unread file is invisible to this gate, so it fails \
