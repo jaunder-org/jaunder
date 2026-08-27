@@ -1988,54 +1988,43 @@ mod tests {
 
     #[test]
     fn prepare_server_registers_saturation_sampler_when_otel_endpoint_is_set() {
-        common::test_support::with_env(|env| {
-            env.set(
-                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
-                "http://127.0.0.1:4318",
-            );
-            env.remove("OTEL_EXPORTER_OTLP_ENDPOINT");
-            let runtime = tokio::runtime::Runtime::new().expect("runtime");
-            runtime.block_on(async {
-                let temp = TempDir::new().expect("temp dir");
-                let storage = sqlite_storage_args(&temp);
-                storage::open_database(&storage.db, &StorageRuntimeConfig::default())
-                    .await
-                    .expect("open db");
-                let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        runtime.block_on(async {
+            let temp = TempDir::new().expect("temp dir");
+            let storage = sqlite_storage_args(&temp);
+            storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+                .await
+                .expect("open db");
+            let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
 
-                let telemetry = test_telemetry(Some("http://127.0.0.1:4318"));
-                let capture = capture::CaptureConfig::default();
-                let prepared = prepare_server(&storage, bind, false, None, &telemetry, &capture)
-                    .await
-                    .expect("prepare server");
+            let telemetry = test_telemetry(Some("http://127.0.0.1:4318"));
+            let capture = capture::CaptureConfig::default();
+            let prepared = prepare_server(&storage, bind, false, None, &telemetry, &capture)
+                .await
+                .expect("prepare server");
 
-                assert!(prepared.saturation_metrics.is_some());
-            });
+            assert!(prepared.saturation_metrics.is_some());
         });
     }
 
     #[test]
     fn prepare_server_does_not_start_saturation_sampler_without_otel_endpoint() {
-        common::test_support::with_env(|env| {
-            env.remove("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT");
-            env.remove("OTEL_EXPORTER_OTLP_ENDPOINT");
-            let runtime = tokio::runtime::Runtime::new().expect("runtime");
-            runtime.block_on(async {
-                let temp = TempDir::new().expect("temp dir");
-                let storage = sqlite_storage_args(&temp);
-                storage::open_database(&storage.db, &StorageRuntimeConfig::default())
-                    .await
-                    .expect("open db");
-                let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime");
+        runtime.block_on(async {
+            let temp = TempDir::new().expect("temp dir");
+            let storage = sqlite_storage_args(&temp);
+            storage::open_database(&storage.db, &StorageRuntimeConfig::default())
+                .await
+                .expect("open db");
+            let bind: std::net::SocketAddr = "127.0.0.1:0".parse().expect("bind addr");
 
-                let telemetry = test_telemetry(None);
-                let capture = capture::CaptureConfig::default();
-                let prepared = prepare_server(&storage, bind, false, None, &telemetry, &capture)
-                    .await
-                    .expect("prepare server");
+            let telemetry = test_telemetry(None);
+            let capture = capture::CaptureConfig::default();
+            let prepared = prepare_server(&storage, bind, false, None, &telemetry, &capture)
+                .await
+                .expect("prepare server");
 
-                assert!(prepared.saturation_metrics.is_none());
-            });
+            assert!(prepared.saturation_metrics.is_none());
         });
     }
 

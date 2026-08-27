@@ -9,8 +9,7 @@
 //! subprocess can't reach them without a live DB).
 //!
 //! These pass `JAUNDER_CAPTURE_DIR` to the spawned child through `Command::env`,
-//! never mutating this process's own environment — so they need no serialization
-//! and stay outside `common::test_support::with_env` (#826).
+//! never mutating this process's inherited configuration.
 
 use std::process::Command;
 

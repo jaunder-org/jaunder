@@ -3,10 +3,6 @@
 //! own tests reach it under `cfg(test)`; `storage`, `server`, and `web` reach it via
 //! the `test-support` feature. Kept out of shipped binaries.
 
-mod env;
-
-pub use env::{Env, with_env};
-
 mod identity;
 
 pub use identity::{

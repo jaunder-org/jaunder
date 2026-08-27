@@ -261,15 +261,10 @@ mod tests {
 
     #[test]
     fn run_site_config_uses_process_telemetry_without_diag_log() {
-        common::test_support::with_env(|env| {
-            let capture = TempDir::new().expect("capture dir");
+        const CHILD: &str = "JAUNDER_TEST_SITE_CONFIG_TELEMETRY_CHILD";
+        if std::env::var_os(CHILD).is_some() {
             let base = TempDir::new().expect("db dir");
             let storage = test_storage_args(&base);
-            env.set(host::capture::DIR_ENV, capture.path());
-            env.set(
-                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
-                "not a valid endpoint",
-            );
             tokio::runtime::Runtime::new()
                 .expect("runtime")
                 .block_on(async {
@@ -295,8 +290,37 @@ mod tests {
                     .await
                     .expect("site-config set");
                 });
-            assert!(!capture.path().join("diag.log").exists());
-        });
+            println!("MAIN_TEST_CHILD_COMPLETED");
+            return;
+        }
+
+        let capture = TempDir::new().expect("capture dir");
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "tests::run_site_config_uses_process_telemetry_without_diag_log",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env(host::capture::DIR_ENV, capture.path())
+            .env(
+                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT",
+                "not a valid endpoint",
+            )
+            .output()
+            .expect("run isolated root-wiring test");
+        assert!(
+            output.status.success(),
+            "child status: {}; stderr: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("MAIN_TEST_CHILD_COMPLETED"),
+            "child did not complete root wiring: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(!capture.path().join("diag.log").exists());
     }
     #[tokio::test]
     async fn run_smtp_test_fails_when_smtp_not_configured() {

@@ -357,13 +357,25 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{HeaderMap, Request, StatusCode};
-    use common::test_support::with_env;
     use opentelemetry_sdk::metrics::{InMemoryMetricExporter, PeriodicReader, SdkMeterProvider};
     use std::io::Write as _;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
     use tower::ServiceExt;
     use tracing_subscriber::EnvFilter;
     use tracing_subscriber::prelude::*;
+
+    static PROCESS_GLOBALS_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_process_globals() -> MutexGuard<'static, ()> {
+        PROCESS_GLOBALS_LOCK
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn with_process_globals<R>(operation: impl FnOnce() -> R) -> R {
+        let _guard = lock_process_globals();
+        operation()
+    }
 
     fn test_telemetry() -> host::telemetry::TelemetryConfig {
         host::telemetry::TelemetryConfig::from_raw(
@@ -456,6 +468,7 @@ mod tests {
 
     #[test]
     fn diagnostic_open_failure_continues_with_one_fixed_fallback_and_zero_metrics() {
+        let _globals = lock_process_globals();
         let mut output = Vec::new();
         let opened = assert_zero_error_metrics(|| {
             open_diag_file_with(
@@ -481,7 +494,7 @@ mod tests {
         // The load-bearing AND-gate check: the diag layer's per-layer WARN filter must
         // narrow only its own sink, under the same global `info` filter e2e uses — INFO
         // stays out of the diag file but still reaches the other layers.
-        with_env(|_env| {
+        with_process_globals(|| {
             let diag_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
             let other_buf = Arc::new(Mutex::new(Vec::<u8>::new()));
             let subscriber = tracing_subscriber::registry()
@@ -558,7 +571,7 @@ mod tests {
 
     #[test]
     fn installed_diag_panic_hook_appends_record_and_restores() {
-        with_env(|_env| {
+        with_process_globals(|| {
             let dir = tempfile::TempDir::new().expect("tempdir");
             let path = dir.path().join("diag.log");
             // Save/restore the process-global hook so it can't fire on a later test
@@ -596,7 +609,7 @@ mod tests {
 
     #[test]
     fn panic_diagnostic_writer_failure_chains_hook_once_with_fixed_fallback_and_zero_metrics() {
-        with_env(|_env| {
+        with_process_globals(|| {
             let original = std::panic::take_hook();
             let chained_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let chained_calls_in_hook = chained_calls.clone();
@@ -627,7 +640,7 @@ mod tests {
 
     #[test]
     fn panic_diagnostic_open_failure_uses_fixed_fallback_and_zero_metrics() {
-        with_env(|_env| {
+        with_process_globals(|| {
             let original = std::panic::take_hook();
             std::panic::set_hook(Box::new(|_| {}));
             install_diag_panic_hook_with(
@@ -649,6 +662,7 @@ mod tests {
     #[test]
     fn init_tracing_impl_creates_diag_file_when_capture_is_configured() {
         let dir = tempfile::TempDir::new().expect("tempdir");
+        let _globals = lock_process_globals();
         let capture =
             host::capture::CaptureConfig::from_raw(Some(dir.path().to_path_buf().into_os_string()));
         let path = dir.path().join("diag.log");

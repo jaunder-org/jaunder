@@ -445,11 +445,117 @@ pub enum SiteConfigAction {
 mod tests {
     use super::*;
     use common::session_label::MAX_SESSION_LABEL_CHARS;
-    use common::test_support::{parse_display_name, parse_email, parse_invite_ttl_hours, with_env};
+    use common::test_support::{parse_display_name, parse_email, parse_invite_ttl_hours};
 
     fn parse(args: &[&str]) -> Cli {
         Cli::try_parse_from(std::iter::once("jaunder").chain(args.iter().copied()))
             .expect("parse failed")
+    }
+
+    const CLI_ENV_NAMES: &[&str] = &[
+        "JAUNDER_VERBOSE",
+        "JAUNDER_STORAGE_PATH",
+        "JAUNDER_DB",
+        "JAUNDER_BIND",
+        "JAUNDER_ENV",
+        "JAUNDER_RUNTIME_FILE",
+    ];
+
+    fn parse_in_child(scenario: &str, environment: &[(&str, &str)]) -> String {
+        let mut command =
+            std::process::Command::new(std::env::current_exe().expect("test executable"));
+        command.args([
+            "--exact",
+            "cli::tests::clap_environment_child",
+            "--nocapture",
+        ]);
+        command.env("JAUNDER_TEST_CLI_SCENARIO", scenario);
+        for name in CLI_ENV_NAMES {
+            command.env_remove(name);
+        }
+        for (name, value) in environment {
+            command.env(name, value);
+        }
+
+        let output = command.output().expect("spawn CLI parser child");
+        assert!(
+            output.status.success(),
+            "CLI parser child failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout)
+            .expect("child stdout is UTF-8")
+            .lines()
+            .find_map(|line| line.strip_prefix("CLI_TEST_PROJECTION="))
+            .expect("child emitted CLI projection")
+            .to_owned()
+    }
+
+    #[test]
+    fn clap_environment_child() {
+        let Ok(scenario) = std::env::var("JAUNDER_TEST_CLI_SCENARIO") else {
+            return;
+        };
+        let projection = match scenario.as_str() {
+            "storage-default" => {
+                let Commands::Init { storage, .. } = parse(&["init"]).command.expect("subcommand")
+                else {
+                    unreachable!("parse yields Commands::Init")
+                };
+                format!("storage_path={}", storage.storage_path.display())
+            }
+            "storage-env" => {
+                let Commands::Init { storage, .. } = parse(&["init"]).command.expect("subcommand")
+                else {
+                    unreachable!("parse yields Commands::Init")
+                };
+                format!("storage_path={}", storage.storage_path.display())
+            }
+            "storage-flag" => {
+                let Commands::Init { storage, .. } =
+                    parse(&["init", "--storage-path", "/tmp/from_flag"])
+                        .command
+                        .expect("subcommand")
+                else {
+                    unreachable!("parse yields Commands::Init")
+                };
+                format!("storage_path={}", storage.storage_path.display())
+            }
+            "bind-env" => {
+                let Commands::Serve { bind, .. } = parse(&["serve"]).command.expect("subcommand")
+                else {
+                    unreachable!("parse yields Commands::Serve")
+                };
+                format!("bind={bind}")
+            }
+            "environment-env" => {
+                let Commands::Serve { environment, .. } =
+                    parse(&["serve"]).command.expect("subcommand")
+                else {
+                    unreachable!("parse yields Commands::Serve")
+                };
+                format!("environment={environment}")
+            }
+            "db-flag" => {
+                let Commands::Init { storage, .. } =
+                    parse(&["init", "--db", "sqlite:/tmp/from_flag.db"])
+                        .command
+                        .expect("subcommand")
+                else {
+                    unreachable!("parse yields Commands::Init")
+                };
+                format!("db={}", storage.db)
+            }
+            "db-env" => {
+                let Commands::Init { storage, .. } = parse(&["init"]).command.expect("subcommand")
+                else {
+                    unreachable!("parse yields Commands::Init")
+                };
+                format!("db={}", storage.db)
+            }
+            _ => panic!("unknown CLI parser child scenario: {scenario}"),
+        };
+        println!("CLI_TEST_PROJECTION={projection}");
     }
 
     // --- storage_path precedence ---
@@ -544,132 +650,69 @@ mod tests {
 
     #[test]
     fn storage_path_default() {
-        with_env(|env| {
-            env.remove("JAUNDER_STORAGE_PATH");
-            let cli = parse(&["init"]);
-            let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::Init")
-            };
-            assert_eq!(storage.storage_path, PathBuf::from("./data"));
-        });
+        assert_eq!(
+            parse_in_child("storage-default", &[]),
+            "storage_path=./data"
+        );
     }
 
     #[test]
     fn storage_path_from_flag() {
-        with_env(|_env| {
-            let cli = parse(&["init", "--storage-path", "/tmp/mydata"]);
-            let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::Init")
-            };
-            assert_eq!(storage.storage_path, PathBuf::from("/tmp/mydata"));
-        });
+        let cli = parse(&["init", "--storage-path", "/tmp/mydata"]);
+        let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
+            unreachable!("parse yields Commands::Init")
+        };
+        assert_eq!(storage.storage_path, PathBuf::from("/tmp/mydata"));
     }
 
     #[test]
     fn storage_path_flag_beats_env() {
-        with_env(|env| {
-            env.set("JAUNDER_STORAGE_PATH", "/tmp/from_env");
-            let cli = parse(&["init", "--storage-path", "/tmp/from_flag"]);
-            let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::Init")
-            };
-            assert_eq!(storage.storage_path, PathBuf::from("/tmp/from_flag"));
-        });
+        assert_eq!(
+            parse_in_child("storage-flag", &[("JAUNDER_STORAGE_PATH", "/tmp/from_env")]),
+            "storage_path=/tmp/from_flag"
+        );
     }
 
     #[test]
     fn storage_path_env_beats_default() {
-        with_env(|env| {
-            env.set("JAUNDER_STORAGE_PATH", "/tmp/from_env");
-            let cli = parse(&["init"]);
-            let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::Init")
-            };
-            assert_eq!(storage.storage_path, PathBuf::from("/tmp/from_env"));
-        });
-    }
-
-    // --- bind precedence ---
-
-    #[test]
-    fn bind_default() {
-        with_env(|env| {
-            env.remove("JAUNDER_BIND");
-            let cli = parse(&["serve"]);
-            let Commands::Serve { bind, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::Serve")
-            };
-            assert_eq!(bind, "127.0.0.1:3000".parse::<SocketAddr>().unwrap());
-        });
+        assert_eq!(
+            parse_in_child("storage-env", &[("JAUNDER_STORAGE_PATH", "/tmp/from_env")]),
+            "storage_path=/tmp/from_env"
+        );
     }
 
     #[test]
     fn bind_from_flag() {
-        with_env(|_env| {
-            let cli = parse(&["serve", "--bind", "0.0.0.0:8080"]);
-            let Commands::Serve { bind, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::Serve")
-            };
-            assert_eq!(bind, "0.0.0.0:8080".parse::<SocketAddr>().unwrap());
-        });
-    }
-
-    #[test]
-    fn bind_flag_beats_env() {
-        with_env(|env| {
-            env.set("JAUNDER_BIND", "0.0.0.0:9000");
-            let cli = parse(&["serve", "--bind", "0.0.0.0:8080"]);
-            let Commands::Serve { bind, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::Serve")
-            };
-            assert_eq!(bind, "0.0.0.0:8080".parse::<SocketAddr>().unwrap());
-        });
+        let cli = parse(&["serve", "--bind", "0.0.0.0:8080"]);
+        let Commands::Serve { bind, .. } = cli.command.expect("subcommand") else {
+            unreachable!("parse yields Commands::Serve")
+        };
+        assert_eq!(bind, "0.0.0.0:8080".parse::<SocketAddr>().unwrap());
     }
 
     #[test]
     fn bind_env_beats_default() {
-        with_env(|env| {
-            env.set("JAUNDER_BIND", "0.0.0.0:9000");
-            let cli = parse(&["serve"]);
-            let Commands::Serve { bind, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::Serve")
-            };
-            assert_eq!(bind, "0.0.0.0:9000".parse::<SocketAddr>().unwrap());
-        });
-    }
-
-    #[test]
-    fn environment_defaults_dev() {
-        with_env(|_env| {
-            let cli = parse(&["serve"]);
-            let Commands::Serve { environment, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::Serve")
-            };
-            assert_eq!(environment, DeploymentEnv::Dev);
-        });
+        assert_eq!(
+            parse_in_child("bind-env", &[("JAUNDER_BIND", "0.0.0.0:9000")]),
+            "bind=0.0.0.0:9000"
+        );
     }
 
     #[test]
     fn environment_from_flag() {
-        with_env(|_env| {
-            let cli = parse(&["serve", "--environment", "prod"]);
-            let Commands::Serve { environment, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::Serve")
-            };
-            assert_eq!(environment, DeploymentEnv::Prod);
-        });
+        let cli = parse(&["serve", "--environment", "prod"]);
+        let Commands::Serve { environment, .. } = cli.command.expect("subcommand") else {
+            unreachable!("parse yields Commands::Serve")
+        };
+        assert_eq!(environment, DeploymentEnv::Prod);
     }
 
     #[test]
     fn environment_env_beats_default() {
-        with_env(|env| {
-            env.set("JAUNDER_ENV", "prod");
-            let cli = parse(&["serve"]);
-            let Commands::Serve { environment, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::Serve")
-            };
-            assert_eq!(environment, DeploymentEnv::Prod);
-        });
+        assert_eq!(
+            parse_in_child("environment-env", &[("JAUNDER_ENV", "prod")]),
+            "environment=prod"
+        );
     }
 
     // --- skip_if_exists flag ---
@@ -696,324 +739,269 @@ mod tests {
 
     #[test]
     fn db_default() {
-        with_env(|env| {
-            env.remove("JAUNDER_DB");
-            let cli = parse(&["init"]);
-            let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::Init")
-            };
-            assert_eq!(storage.db.to_string(), "sqlite:./data/jaunder.db");
-        });
+        assert_eq!(parse_in_child("db-env", &[]), "db=sqlite:./data/jaunder.db");
     }
 
     #[test]
     fn db_from_flag() {
-        with_env(|_env| {
-            let cli = parse(&["init", "--db", "sqlite:/tmp/test.db"]);
-            let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::Init")
-            };
-            assert_eq!(storage.db.to_string(), "sqlite:/tmp/test.db");
-        });
+        let cli = parse(&["init", "--db", "sqlite:/tmp/test.db"]);
+        let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
+            unreachable!("parse yields Commands::Init")
+        };
+        assert_eq!(storage.db.to_string(), "sqlite:/tmp/test.db");
     }
 
     #[test]
     fn postgres_db_from_flag() {
-        with_env(|_env| {
-            let cli = parse(&["init", "--db", "postgres://jaunder@localhost/testdb"]);
-            let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::Init")
-            };
-            assert_eq!(
-                storage.db.to_string(),
-                "postgres://jaunder@localhost/testdb"
-            );
-        });
+        let cli = parse(&["init", "--db", "postgres://jaunder@localhost/testdb"]);
+        let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
+            unreachable!("parse yields Commands::Init")
+        };
+        assert_eq!(
+            storage.db.to_string(),
+            "postgres://jaunder@localhost/testdb"
+        );
     }
 
     #[test]
     fn db_flag_beats_env() {
-        with_env(|env| {
-            env.set("JAUNDER_DB", "sqlite:/tmp/from_env.db");
-            let cli = parse(&["init", "--db", "sqlite:/tmp/from_flag.db"]);
-            let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::Init")
-            };
-            assert_eq!(storage.db.to_string(), "sqlite:/tmp/from_flag.db");
-        });
+        assert_eq!(
+            parse_in_child("db-flag", &[("JAUNDER_DB", "sqlite:/tmp/from_env.db")]),
+            "db=sqlite:/tmp/from_flag.db"
+        );
     }
 
     #[test]
     fn db_env_beats_default() {
-        with_env(|env| {
-            env.set("JAUNDER_DB", "sqlite:/tmp/from_env.db");
-            let cli = parse(&["init"]);
-            let Commands::Init { storage, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::Init")
-            };
-            assert_eq!(storage.db.to_string(), "sqlite:/tmp/from_env.db");
-        });
+        assert_eq!(
+            parse_in_child("db-env", &[("JAUNDER_DB", "sqlite:/tmp/from_env.db")]),
+            "db=sqlite:/tmp/from_env.db"
+        );
     }
 
     // --- user-create ---
 
     #[test]
     fn user_create_parses_username_and_password() {
-        with_env(|_env| {
-            let cli = parse(&[
-                "user-create",
-                "--username",
-                "alice",
-                "--password",
-                "secret123",
-            ]);
-            let Commands::UserCreate {
-                username,
-                password,
-                display_name,
-                ..
-            } = cli.command.expect("subcommand")
-            else {
-                unreachable!("parse yields Commands::UserCreate")
-            };
-            assert_eq!(username, "alice");
-            assert_eq!(password.as_ref().map(Password::as_ref), Some("secret123"));
-            assert_eq!(display_name, None);
-        });
+        let cli = parse(&[
+            "user-create",
+            "--username",
+            "alice",
+            "--password",
+            "secret123",
+        ]);
+        let Commands::UserCreate {
+            username,
+            password,
+            display_name,
+            ..
+        } = cli.command.expect("subcommand")
+        else {
+            unreachable!("parse yields Commands::UserCreate")
+        };
+        assert_eq!(username, "alice");
+        assert_eq!(password.as_ref().map(Password::as_ref), Some("secret123"));
+        assert_eq!(display_name, None);
     }
 
     #[test]
     fn user_create_parses_display_name() {
-        with_env(|_env| {
-            let cli = parse(&[
-                "user-create",
-                "--username",
-                "alice",
-                "--password",
-                "secret123",
-                "--display-name",
-                "Alice Smith",
-            ]);
-            let Commands::UserCreate { display_name, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::UserCreate")
-            };
-            assert_eq!(display_name, Some(parse_display_name("Alice Smith")));
-        });
+        let cli = parse(&[
+            "user-create",
+            "--username",
+            "alice",
+            "--password",
+            "secret123",
+            "--display-name",
+            "Alice Smith",
+        ]);
+        let Commands::UserCreate { display_name, .. } = cli.command.expect("subcommand") else {
+            unreachable!("parse yields Commands::UserCreate")
+        };
+        assert_eq!(display_name, Some(parse_display_name("Alice Smith")));
     }
 
     #[test]
     fn user_create_password_optional() {
-        with_env(|_env| {
-            let cli = parse(&["user-create", "--username", "alice"]);
-            let Commands::UserCreate { password, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::UserCreate")
-            };
-            assert!(password.is_none());
-        });
+        let cli = parse(&["user-create", "--username", "alice"]);
+        let Commands::UserCreate { password, .. } = cli.command.expect("subcommand") else {
+            unreachable!("parse yields Commands::UserCreate")
+        };
+        assert!(password.is_none());
     }
 
     #[test]
     fn user_create_missing_username_is_clap_error() {
-        with_env(|_env| {
-            let result = Cli::try_parse_from(["jaunder", "user-create", "--password", "secret123"]);
-            assert!(result.is_err());
-        });
+        let result = Cli::try_parse_from(["jaunder", "user-create", "--password", "secret123"]);
+        assert!(result.is_err());
     }
 
     #[test]
     fn user_create_malformed_username_is_clap_error() {
-        with_env(|_env| {
-            // The `Username` value parser rejects a bad username at parse time, before
-            // any handler runs, rather than surfacing it as a later runtime error.
-            let result = Cli::try_parse_from(["jaunder", "user-create", "--username", "bad name"]);
-            assert!(result.is_err());
-        });
+        // The `Username` value parser rejects a bad username at parse time, before
+        // any handler runs, rather than surfacing it as a later runtime error.
+        let result = Cli::try_parse_from(["jaunder", "user-create", "--username", "bad name"]);
+        assert!(result.is_err());
     }
 
     #[test]
     fn user_create_malformed_password_is_clap_error() {
-        with_env(|_env| {
-            let result = Cli::try_parse_from([
-                "jaunder",
-                "user-create",
-                "--username",
-                "alice",
-                "--password",
-                "short",
-            ]);
-            let Err(err) = result else {
-                unreachable!("an invalid password is rejected at parse")
-            };
-            assert!(
-                err.to_string().contains("at least 8 characters"),
-                "the clap error must name the password constraint; got: {err}"
-            );
-        });
+        let result = Cli::try_parse_from([
+            "jaunder",
+            "user-create",
+            "--username",
+            "alice",
+            "--password",
+            "short",
+        ]);
+        let Err(err) = result else {
+            unreachable!("an invalid password is rejected at parse")
+        };
+        assert!(
+            err.to_string().contains("at least 8 characters"),
+            "the clap error must name the password constraint; got: {err}"
+        );
     }
 
     // --- app-password-create ---
 
     #[test]
     fn app_password_create_malformed_label_is_clap_error() {
-        with_env(|_env| {
-            // The `SessionLabel` value parser rejects at parse time, before any handler
-            // opens the database — a typo'd label must not pay a database connection
-            // before being told it is invalid (#690).
-            let over = "a".repeat(MAX_SESSION_LABEL_CHARS + 1);
-            for bad in ["", over.as_str()] {
-                let result = Cli::try_parse_from([
-                    "jaunder",
-                    "app-password-create",
-                    "--username",
-                    "alice",
-                    "--label",
-                    bad,
-                ]);
-                let Err(err) = result else {
-                    unreachable!("an invalid label is rejected at parse")
-                };
-                // The error must *name the constraint*: "invalid value" alone leaves an
-                // operator with no idea what the rule is.
-                assert!(
-                    err.to_string().contains("non-empty and at most"),
-                    "the clap error must name the constraint; got: {err}"
-                );
-            }
-        });
+        // The `SessionLabel` value parser rejects at parse time, before any handler
+        // opens the database — a typo'd label must not pay a database connection
+        // before being told it is invalid (#690).
+        let over = "a".repeat(MAX_SESSION_LABEL_CHARS + 1);
+        for bad in ["", over.as_str()] {
+            let result = Cli::try_parse_from([
+                "jaunder",
+                "app-password-create",
+                "--username",
+                "alice",
+                "--label",
+                bad,
+            ]);
+            let Err(err) = result else {
+                unreachable!("an invalid label is rejected at parse")
+            };
+            // The error must *name the constraint*: "invalid value" alone leaves an
+            // operator with no idea what the rule is.
+            assert!(
+                err.to_string().contains("non-empty and at most"),
+                "the clap error must name the constraint; got: {err}"
+            );
+        }
     }
 
     /// The `default_value` literal is itself parsed by `SessionLabel`, so a typo in it
     /// would otherwise fail only at runtime, on every invocation that omits `--label`.
     #[test]
     fn app_password_create_label_defaults_to_app_password() {
-        with_env(|_env| {
-            let cli = parse(&["app-password-create", "--username", "alice"]);
-            let Commands::AppPasswordCreate { label, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::AppPasswordCreate")
-            };
-            assert_eq!(label, "app-password");
-        });
+        let cli = parse(&["app-password-create", "--username", "alice"]);
+        let Commands::AppPasswordCreate { label, .. } = cli.command.expect("subcommand") else {
+            unreachable!("parse yields Commands::AppPasswordCreate")
+        };
+        assert_eq!(label, "app-password");
     }
 
     // --- user-invite ---
 
     #[test]
     fn user_invite_parses_expires_in() {
-        with_env(|_env| {
-            let cli = parse(&["user-invite", "--expires-in", "48"]);
-            let Commands::UserInvite { expires_in, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::UserInvite")
-            };
-            assert_eq!(expires_in, Some(parse_invite_ttl_hours("48")));
-        });
+        let cli = parse(&["user-invite", "--expires-in", "48"]);
+        let Commands::UserInvite { expires_in, .. } = cli.command.expect("subcommand") else {
+            unreachable!("parse yields Commands::UserInvite")
+        };
+        assert_eq!(expires_in, Some(parse_invite_ttl_hours("48")));
     }
 
     #[test]
     fn user_invite_expires_in_optional() {
-        with_env(|_env| {
-            let cli = parse(&["user-invite"]);
-            let Commands::UserInvite { expires_in, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::UserInvite")
-            };
-            assert_eq!(expires_in, None);
-        });
+        let cli = parse(&["user-invite"]);
+        let Commands::UserInvite { expires_in, .. } = cli.command.expect("subcommand") else {
+            unreachable!("parse yields Commands::UserInvite")
+        };
+        assert_eq!(expires_in, None);
     }
 
     // --- smtp-test ---
 
     #[test]
     fn smtp_test_parses_to() {
-        with_env(|_env| {
-            let cli = parse(&["smtp-test", "--to", "alice@example.com"]);
-            let Commands::SmtpTest { to, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::SmtpTest")
-            };
-            assert_eq!(to, parse_email("alice@example.com"));
-        });
+        let cli = parse(&["smtp-test", "--to", "alice@example.com"]);
+        let Commands::SmtpTest { to, .. } = cli.command.expect("subcommand") else {
+            unreachable!("parse yields Commands::SmtpTest")
+        };
+        assert_eq!(to, parse_email("alice@example.com"));
     }
 
     #[test]
     fn smtp_test_missing_to_is_clap_error() {
-        with_env(|_env| {
-            let result = Cli::try_parse_from(["jaunder", "smtp-test"]);
-            assert!(result.is_err());
-        });
+        let result = Cli::try_parse_from(["jaunder", "smtp-test"]);
+        assert!(result.is_err());
     }
 
     #[test]
     fn smtp_test_malformed_to_is_clap_error() {
-        with_env(|_env| {
-            let result = Cli::try_parse_from(["jaunder", "smtp-test", "--to", "not-an-email"]);
-            let Err(err) = result else {
-                unreachable!("an invalid email is rejected at parse")
-            };
-            assert!(
-                err.to_string().contains("invalid email address"),
-                "the clap error must name the email constraint; got: {err}"
-            );
-        });
+        let result = Cli::try_parse_from(["jaunder", "smtp-test", "--to", "not-an-email"]);
+        let Err(err) = result else {
+            unreachable!("an invalid email is rejected at parse")
+        };
+        assert!(
+            err.to_string().contains("invalid email address"),
+            "the clap error must name the email constraint; got: {err}"
+        );
     }
 
     // --- backup / restore ---
 
     #[test]
     fn backup_path_optional() {
-        with_env(|_env| {
-            let cli = parse(&["backup"]);
-            let Commands::Backup { mode, path, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::Backup")
-            };
-            assert_eq!(mode, CliBackupMode::Directory);
-            assert_eq!(path, None);
-        });
+        let cli = parse(&["backup"]);
+        let Commands::Backup { mode, path, .. } = cli.command.expect("subcommand") else {
+            unreachable!("parse yields Commands::Backup")
+        };
+        assert_eq!(mode, CliBackupMode::Directory);
+        assert_eq!(path, None);
     }
 
     #[test]
     fn backup_parses_path() {
-        with_env(|_env| {
-            let cli = parse(&["backup", "--path", "/tmp/backup"]);
-            let Commands::Backup { path, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::Backup")
-            };
-            assert_eq!(path, Some(PathBuf::from("/tmp/backup")));
-        });
+        let cli = parse(&["backup", "--path", "/tmp/backup"]);
+        let Commands::Backup { path, .. } = cli.command.expect("subcommand") else {
+            unreachable!("parse yields Commands::Backup")
+        };
+        assert_eq!(path, Some(PathBuf::from("/tmp/backup")));
     }
 
     #[test]
     fn backup_parses_archive_mode() {
-        with_env(|_env| {
-            let cli = parse(&[
-                "backup",
-                "--mode",
-                "archive",
-                "--path",
-                "/tmp/backup.tar.gz",
-            ]);
-            let Commands::Backup { mode, path, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::Backup")
-            };
-            assert_eq!(mode, CliBackupMode::Archive);
-            assert_eq!(path, Some(PathBuf::from("/tmp/backup.tar.gz")));
-        });
+        let cli = parse(&[
+            "backup",
+            "--mode",
+            "archive",
+            "--path",
+            "/tmp/backup.tar.gz",
+        ]);
+        let Commands::Backup { mode, path, .. } = cli.command.expect("subcommand") else {
+            unreachable!("parse yields Commands::Backup")
+        };
+        assert_eq!(mode, CliBackupMode::Archive);
+        assert_eq!(path, Some(PathBuf::from("/tmp/backup.tar.gz")));
     }
 
     #[test]
     fn restore_parses_required_path() {
-        with_env(|_env| {
-            let cli = parse(&["restore", "/tmp/backup"]);
-            let Commands::Restore { path, .. } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields Commands::Restore")
-            };
-            assert_eq!(path, PathBuf::from("/tmp/backup"));
-        });
+        let cli = parse(&["restore", "/tmp/backup"]);
+        let Commands::Restore { path, .. } = cli.command.expect("subcommand") else {
+            unreachable!("parse yields Commands::Restore")
+        };
+        assert_eq!(path, PathBuf::from("/tmp/backup"));
     }
 
     #[test]
     fn restore_missing_path_is_clap_error() {
-        with_env(|_env| {
-            let result = Cli::try_parse_from(["jaunder", "restore"]);
-            assert!(result.is_err());
-        });
+        let result = Cli::try_parse_from(["jaunder", "restore"]);
+        assert!(result.is_err());
     }
 
     // --- site-config ---
@@ -1046,23 +1034,21 @@ mod tests {
     #[test]
     fn site_config_set_accepts_db_flag_after_positionals() {
         // The allow_hyphen_values value must not swallow the flattened --db flag.
-        with_env(|_env| {
-            let cli = parse(&[
-                "site-config",
-                "set",
-                "site.title",
-                "val",
-                "--db",
-                "sqlite:./x.db",
-            ]);
-            let Commands::SiteConfig { action } = cli.command.expect("subcommand") else {
-                unreachable!("parse yields site-config")
-            };
-            let SiteConfigAction::Set { key, value, .. } = action else {
-                unreachable!("parse yields set")
-            };
-            assert_eq!((key, value.as_str()), (SiteConfigKey::SiteTitle, "val"));
-        });
+        let cli = parse(&[
+            "site-config",
+            "set",
+            "site.title",
+            "val",
+            "--db",
+            "sqlite:./x.db",
+        ]);
+        let Commands::SiteConfig { action } = cli.command.expect("subcommand") else {
+            unreachable!("parse yields site-config")
+        };
+        let SiteConfigAction::Set { key, value, .. } = action else {
+            unreachable!("parse yields set")
+        };
+        assert_eq!((key, value.as_str()), (SiteConfigKey::SiteTitle, "val"));
     }
 
     #[test]
@@ -1113,9 +1099,7 @@ mod tests {
 
     #[test]
     fn site_config_set_missing_value_is_clap_error() {
-        with_env(|_env| {
-            assert!(Cli::try_parse_from(["jaunder", "site-config", "set", "site.title"]).is_err());
-        });
+        assert!(Cli::try_parse_from(["jaunder", "site-config", "set", "site.title"]).is_err());
     }
 
     /// The registry is closed at the CLI door (#687): a key it does not know is a clap
@@ -1123,24 +1107,22 @@ mod tests {
     /// names the offending key so the operator can see which one it was.
     #[test]
     fn site_config_rejects_an_unknown_key() {
-        with_env(|_env| {
-            for argv in [
-                vec!["jaunder", "site-config", "set", "site.nope", "v"],
-                vec!["jaunder", "site-config", "get", "site.nope"],
-                vec!["jaunder", "site-config", "unset", "site.nope"],
-            ] {
-                // `.err()` rather than `unwrap_err()`: `Cli` is not `Debug`, so the `Ok`
-                // side cannot be formatted for a panic message.
-                let rendered = Cli::try_parse_from(&argv)
-                    .err()
-                    .expect("an unknown key must not parse")
-                    .to_string();
-                assert!(
-                    rendered.contains("site.nope"),
-                    "the parse error must name the offending key: {rendered}"
-                );
-            }
-        });
+        for argv in [
+            vec!["jaunder", "site-config", "set", "site.nope", "v"],
+            vec!["jaunder", "site-config", "get", "site.nope"],
+            vec!["jaunder", "site-config", "unset", "site.nope"],
+        ] {
+            // `.err()` rather than `unwrap_err()`: `Cli` is not `Debug`, so the `Ok`
+            // side cannot be formatted for a panic message.
+            let rendered = Cli::try_parse_from(&argv)
+                .err()
+                .expect("an unknown key must not parse")
+                .to_string();
+            assert!(
+                rendered.contains("site.nope"),
+                "the parse error must name the offending key: {rendered}"
+            );
+        }
     }
 
     #[test]

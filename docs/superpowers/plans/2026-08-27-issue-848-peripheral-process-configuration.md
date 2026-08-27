@@ -62,7 +62,7 @@ Out:
     and dual-backend integration tests prove setup/teardown use one snapshot;
     backend-parity cases continue to use `#[apply(backends)]` where applicable.
 
-- [ ] Task 4: Replace ambient environment tests and delete the mutation seam
+- [x] Task 4: Replace ambient environment tests and delete the mutation seam
   - Contract: unit tests construct typed configuration directly. Representative
     Clap flag/environment/default precedence runs in a self-reexecuting server
     test-binary child: the parent uses `current_exe`, selects one sentinel test,
