@@ -1680,7 +1680,7 @@ environment inputs — including the observability variables covered under
 or test-harness composition root into narrow typed configuration, then injected
 into the subsystems that own them. Library modules neither reread ambient
 configuration nor receive a general environment reader or process-config bundle
-([peripheral process configuration](adr/drafts/peripheral-process-configuration.md)).
+([peripheral process configuration](adr/0158-peripheral-process-configuration.md)).
 `prod` is load-bearing in two places: it sets the `secure_cookies` flag passed
 to `create_router` (`server/src/commands.rs:546`, `server/src/lib.rs:32`), and
 it disables the dev-only auto-initialization of a missing database on `serve`
@@ -2754,7 +2754,7 @@ consequences are load-bearing for tooling:
   `std::process::Command`. Cargo lint configuration forbids unsafe Rust without
   suppression at every package boundary in the root, `xtask`, and `tools`
   workspaces
-  ([peripheral process configuration](adr/drafts/peripheral-process-configuration.md)).
+  ([peripheral process configuration](adr/0158-peripheral-process-configuration.md)).
 - Return-position `impl Trait` captures every in-scope lifetime (RFC 3498). View
   helpers that borrow a parameter return `impl IntoView + use<>` — precise
   capturing (RFC 3617) — so the returned opaque type captures nothing (14 sites
