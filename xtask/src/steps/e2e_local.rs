@@ -179,6 +179,7 @@ struct CollectorGuard {
 struct CollectorStartError {
     error: anyhow::Error,
     capture_dir: tempfile::TempDir,
+    stopped: bool,
 }
 
 impl CollectorGuard {
@@ -191,13 +192,25 @@ impl CollectorGuard {
         for attempt in 0..COLLECTOR_PORT_ATTEMPTS {
             let (grpc_endpoint, http_endpoint) = match collector_endpoints() {
                 Ok(endpoints) => endpoints,
-                Err(error) => return Err(CollectorStartError { error, capture_dir }),
+                Err(error) => {
+                    return Err(CollectorStartError {
+                        error,
+                        capture_dir,
+                        stopped: true,
+                    });
+                }
             };
             let stderr_path = capture_dir.path().join("otelcol-contrib.stderr.log");
             let stderr =
                 match File::create(&stderr_path).context("creating collector stderr capture") {
                     Ok(stderr) => stderr,
-                    Err(error) => return Err(CollectorStartError { error, capture_dir }),
+                    Err(error) => {
+                        return Err(CollectorStartError {
+                            error,
+                            capture_dir,
+                            stopped: true,
+                        });
+                    }
                 };
             let mut command = Command::new("otelcol-contrib");
             command
@@ -214,7 +227,13 @@ impl CollectorGuard {
                 .with_context(|| format!("starting otelcol-contrib with {}", config.display()))
             {
                 Ok(child) => child,
-                Err(error) => return Err(CollectorStartError { error, capture_dir }),
+                Err(error) => {
+                    return Err(CollectorStartError {
+                        error,
+                        capture_dir,
+                        stopped: true,
+                    });
+                }
             };
             let mut guard = Self::from_child(
                 child,
@@ -232,11 +251,13 @@ impl CollectorGuard {
                     }) && attempt + 1 < COLLECTOR_PORT_ATTEMPTS =>
                 {
                     if let Err(cleanup) = guard.kill_and_reap() {
+                        let stopped = guard.child.is_none();
                         return Err(CollectorStartError {
                             error: anyhow::anyhow!(
                                 "{error}; failed to clean up collector before retry: {cleanup}"
                             ),
                             capture_dir: guard.take_capture_dir(),
+                            stopped,
                         });
                     }
                     capture_dir = guard.take_capture_dir();
@@ -246,6 +267,7 @@ impl CollectorGuard {
                         .stderr_diagnostics()
                         .unwrap_or_else(|_| "<unavailable>".to_owned());
                     let cleanup = guard.kill_and_reap().err();
+                    let stopped = guard.child.is_none();
                     let error = match cleanup {
                         Some(cleanup) => anyhow::anyhow!(
                             "{error}; collector stderr: {diagnostics}; cleanup failed: {cleanup}"
@@ -255,6 +277,7 @@ impl CollectorGuard {
                     return Err(CollectorStartError {
                         error,
                         capture_dir: guard.take_capture_dir(),
+                        stopped,
                     });
                 }
             }
@@ -264,6 +287,7 @@ impl CollectorGuard {
                 "otelcol-contrib could not acquire distinct loopback OTLP receiver endpoints"
             ),
             capture_dir,
+            stopped: true,
         })
     }
 
@@ -952,11 +976,13 @@ fn stop_and_finalize_collector(
     browser: &str,
     retained: &RetainedCapture,
     collector: &mut CollectorGuard,
-) -> PathBuf {
+) -> Option<PathBuf> {
     let stopped = shutdown_collector(result, browser, collector);
     let source = collector.take_capture_dir();
     if stopped {
-        record_capture_finalization(result, browser, retained, source)
+        Some(record_capture_finalization(
+            result, browser, retained, source,
+        ))
     } else {
         let source = source.keep();
         result.push(
@@ -965,7 +991,7 @@ fn stop_and_finalize_collector(
                 source.display()
             )),
         );
-        source
+        None
     }
 }
 
@@ -1009,7 +1035,17 @@ fn record_collector_start_failure(
             ))
             .with_duration(duration),
     );
-    record_capture_finalization(result, browser, retained, failure.capture_dir);
+    if failure.stopped {
+        record_capture_finalization(result, browser, retained, failure.capture_dir);
+    } else {
+        let source = failure.capture_dir.keep();
+        result.push(
+            StepResult::fail(&step_name(browser, "capture")).detail(format!(
+                "collector could not be stopped after startup failure; live capture source retained without copying at {}",
+                source.display()
+            )),
+        );
+    }
 }
 
 fn finish_server_setup_failure(
@@ -1040,15 +1076,19 @@ fn finish_lifecycle(
 
     let capture = stop_and_finalize_collector(result, verification.browser, retained, collector);
 
-    let test_support = verification.test_support;
-    let server_stderr = capture.join("server-stderr.log");
     let panic_gate_start = Instant::now();
-    let panic_gate_result = cmd!(
-        sh,
-        "{test_support} verify-no-panics --capture-dir {capture} --server-log {server_stderr}"
-    )
-    .run()
-    .map_err(|_| "shared zero-panic verifier failed".to_owned());
+    let panic_gate_result = if let Some(capture) = capture {
+        let test_support = verification.test_support;
+        let server_stderr = capture.join("server-stderr.log");
+        cmd!(
+            sh,
+            "{test_support} verify-no-panics --capture-dir {capture} --server-log {server_stderr}"
+        )
+        .run()
+        .map_err(|_| "shared zero-panic verifier failed".to_owned())
+    } else {
+        Err("zero-panic verification skipped because the collector could not be stopped".to_owned())
+    };
     let panic_gate_duration = panic_gate_start.elapsed();
     if let Some(playwright_result) = playwright_result {
         let (playwright_result, playwright_duration) = playwright_result;
@@ -2120,6 +2160,7 @@ int main(int argc, char **argv) {
             CollectorStartError {
                 error: anyhow::anyhow!("collector exited before readiness"),
                 capture_dir: capture,
+                stopped: true,
             },
             Duration::from_millis(1),
         );
@@ -2139,6 +2180,38 @@ int main(int argc, char **argv) {
         let detail = capture.detail.as_deref().expect("capture detail");
         assert!(detail.contains(retained.run_dir.to_str().unwrap()));
         assert!(detail.contains(retained.trace_path.to_str().unwrap()));
+    }
+
+    #[test]
+    fn unstopped_startup_failure_keeps_source_without_copying() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let retained = retained_capture(&workspace, "run-live", "chromium", "trace.jsonl");
+        let capture = tempfile::tempdir().expect("capture");
+        fs::write(capture.path().join("trace.jsonl"), "live\n").expect("live trace");
+        let source = capture.path().to_owned();
+        let mut result = CommandResult::new("e2e-local");
+
+        record_collector_start_failure(
+            &mut result,
+            "chromium",
+            &retained,
+            CollectorStartError {
+                error: anyhow::anyhow!("collector cleanup failed"),
+                capture_dir: capture,
+                stopped: false,
+            },
+            Duration::from_millis(1),
+        );
+
+        assert!(source.exists());
+        assert!(!retained.trace_path.exists());
+        let detail = result
+            .steps
+            .iter()
+            .find(|step| step.name == "e2e-local-chromium-capture")
+            .and_then(|step| step.detail.as_deref())
+            .expect("capture failure");
+        assert!(detail.contains("live capture source retained without copying"));
     }
 
     #[test]
