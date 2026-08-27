@@ -810,9 +810,7 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
         Command::Census => {
             let start = std::time::Instant::now();
             let mut result = CommandResult::new("census");
-            let mut specs = census::collectors::specs();
-            specs.extend(census::history::specs());
-            specs.extend(census::adapters::specs());
+            let specs = census::specs();
             let report = census::collect(Path::new("."), &specs)?;
             let failed = report.has_failed_cells();
             let cells = report.cell_count();
@@ -1223,9 +1221,7 @@ mod cli_tests {
 
     #[test]
     fn complete_census_registry_has_one_spec_for_every_required_cell() {
-        let mut specs = census::collectors::specs();
-        specs.extend(census::history::specs());
-        specs.extend(census::adapters::specs());
+        let specs = census::specs();
         let keys = specs
             .iter()
             .map(|spec| (spec.signal, spec.language, spec.capability))
