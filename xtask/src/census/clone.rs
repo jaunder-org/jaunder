@@ -10,10 +10,14 @@
 
 use std::collections::BTreeMap;
 use std::io::Write;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 
 use oxc_allocator::Allocator;
-use oxc_ast::ast::{ArrowFunctionExpression, Function};
+use oxc_ast::ast::{
+    ArrowFunctionExpression, BigIntLiteral, BindingIdentifier, BooleanLiteral, Function,
+    IdentifierName, IdentifierReference, LabelIdentifier, NullLiteral, NumericLiteral,
+    PrivateIdentifier, RegExpLiteral, StringLiteral, TemplateElement,
+};
 use oxc_ast_visit::{Visit as OxcVisit, walk as oxc_walk};
 use oxc_parser::{Parser, ParserReturn};
 use oxc_span::Span;
@@ -23,7 +27,7 @@ use syn::visit::Visit;
 
 use super::common::{STRUCTURAL_VERSION, failed, files, structural};
 use super::model::{Candidate, CollectorMetadata};
-use super::process::{StderrDrain, terminate_and_reap};
+use super::process::{StderrDrain, StdoutDrain, terminate_and_reap};
 use super::{CellReport, CollectorContext, EvidenceMethod, Language, SignalFamily};
 
 pub(crate) fn rust_clones(context: &CollectorContext) -> CellReport {
@@ -147,13 +151,13 @@ fn typescript_function_shapes(path: &str, source: &str) -> Result<Vec<String>, C
     impl<'a> OxcVisit<'a> for Functions<'_> {
         fn visit_function(&mut self, function: &Function<'a>, flags: ScopeFlags) {
             self.shapes
-                .push(normalize_typescript_span(self.source, function.span));
+                .push(normalize_typescript_function(self.source, function, flags));
             oxc_walk::walk_function(self, function, flags);
         }
 
         fn visit_arrow_function_expression(&mut self, function: &ArrowFunctionExpression<'a>) {
             self.shapes
-                .push(normalize_typescript_span(self.source, function.span));
+                .push(normalize_typescript_arrow_function(self.source, function));
             oxc_walk::walk_arrow_function_expression(self, function);
         }
     }
@@ -188,8 +192,123 @@ fn typescript_function_shapes(path: &str, source: &str) -> Result<Vec<String>, C
     Ok(functions.shapes)
 }
 
-fn normalize_typescript_span(source: &str, span: Span) -> String {
-    normalize_shape(&source[span.start as usize..span.end as usize])
+fn normalize_typescript_function(
+    source: &str,
+    function: &Function<'_>,
+    flags: ScopeFlags,
+) -> String {
+    let mut roles = TypeScriptRoles::default();
+    roles.visit_function(function, flags);
+    normalize_typescript_span(source, function.span, roles.spans)
+}
+
+fn normalize_typescript_arrow_function(
+    source: &str,
+    function: &ArrowFunctionExpression<'_>,
+) -> String {
+    let mut roles = TypeScriptRoles::default();
+    roles.visit_arrow_function_expression(function);
+    normalize_typescript_span(source, function.span, roles.spans)
+}
+
+#[derive(Default)]
+struct TypeScriptRoles {
+    spans: Vec<(Span, &'static str)>,
+}
+
+impl TypeScriptRoles {
+    fn identifier(&mut self, span: Span) {
+        self.spans.push((span, "id"));
+    }
+
+    fn literal(&mut self, span: Span) {
+        self.spans.push((span, "literal"));
+    }
+}
+
+impl<'a> OxcVisit<'a> for TypeScriptRoles {
+    fn visit_identifier_name(&mut self, identifier: &IdentifierName<'a>) {
+        self.identifier(identifier.span);
+        oxc_walk::walk_identifier_name(self, identifier);
+    }
+
+    fn visit_identifier_reference(&mut self, identifier: &IdentifierReference<'a>) {
+        self.identifier(identifier.span);
+        oxc_walk::walk_identifier_reference(self, identifier);
+    }
+
+    fn visit_binding_identifier(&mut self, identifier: &BindingIdentifier<'a>) {
+        self.identifier(identifier.span);
+        oxc_walk::walk_binding_identifier(self, identifier);
+    }
+
+    fn visit_label_identifier(&mut self, identifier: &LabelIdentifier<'a>) {
+        self.identifier(identifier.span);
+        oxc_walk::walk_label_identifier(self, identifier);
+    }
+
+    fn visit_null_literal(&mut self, literal: &NullLiteral) {
+        self.literal(literal.span);
+        oxc_walk::walk_null_literal(self, literal);
+    }
+    fn visit_private_identifier(&mut self, identifier: &PrivateIdentifier<'a>) {
+        self.identifier(identifier.span);
+        oxc_walk::walk_private_identifier(self, identifier);
+    }
+
+    fn visit_boolean_literal(&mut self, literal: &BooleanLiteral) {
+        self.literal(literal.span);
+        oxc_walk::walk_boolean_literal(self, literal);
+    }
+
+    fn visit_numeric_literal(&mut self, literal: &NumericLiteral<'a>) {
+        self.literal(literal.span);
+        oxc_walk::walk_numeric_literal(self, literal);
+    }
+
+    fn visit_string_literal(&mut self, literal: &StringLiteral<'a>) {
+        self.literal(literal.span);
+        oxc_walk::walk_string_literal(self, literal);
+    }
+
+    fn visit_big_int_literal(&mut self, literal: &BigIntLiteral<'a>) {
+        self.literal(literal.span);
+        oxc_walk::walk_big_int_literal(self, literal);
+    }
+
+    fn visit_reg_exp_literal(&mut self, literal: &RegExpLiteral<'a>) {
+        self.literal(literal.span);
+        oxc_walk::walk_reg_exp_literal(self, literal);
+    }
+
+    fn visit_template_element(&mut self, literal: &TemplateElement<'a>) {
+        self.literal(literal.span);
+        oxc_walk::walk_template_element(self, literal);
+    }
+}
+
+fn normalize_typescript_span(
+    source: &str,
+    span: Span,
+    mut roles: Vec<(Span, &'static str)>,
+) -> String {
+    let start = span.start as usize;
+    let end = span.end as usize;
+    roles.sort_unstable_by_key(|(span, _)| span.start);
+    let mut cursor = start;
+    let mut normalized = String::new();
+    for (role, replacement) in roles {
+        let role_start = role.start as usize;
+        let role_end = role.end as usize;
+        if role_start < cursor || role_end > end {
+            continue;
+        }
+        normalized.push_str(&normalize_typescript_syntax(&source[cursor..role_start]));
+        normalized.push_str(replacement);
+        cursor = role_end;
+    }
+    normalized.push_str(&normalize_typescript_syntax(&source[cursor..end]));
+    normalized
 }
 
 trait ElispReader {
@@ -201,9 +320,6 @@ struct EmacsElispReader;
 impl ElispReader for EmacsElispReader {
     fn function_shapes(&mut self, source: &str) -> Result<Vec<String>, CloneShapeError> {
         const READER: &str = r#"(progn
-(defun census-syntax-head-p (value)
-  (memq value '(defun ert-deftest if while let let* lambda progn cond when unless
-                and or not setq setf quote function catch throw unwind-protect)))
 (defun census-normalize-tail (value)
   (cond ((consp value) (cons (census-normalize (car value))
                               (census-normalize-tail (cdr value))))
@@ -212,10 +328,15 @@ impl ElispReader for EmacsElispReader {
 (defun census-normalize (value &optional head)
   (cond ((consp value) (cons (census-normalize (car value) t)
                               (census-normalize-tail (cdr value))))
-        ((symbolp value) (if (and head (census-syntax-head-p value)) value 'id))
+        ((symbolp value) (if head value 'id))
         ((numberp value) 'number)
         ((stringp value) 'string)
         (t 'literal)))
+(defun census-normalize-definition (form)
+  (append (list (car form)
+                'id
+                (mapcar (lambda (_argument) 'id) (nth 2 form)))
+          (mapcar #'census-normalize (cdddr form))))
 (with-temp-buffer
   (insert-file-contents "/dev/stdin")
   (emacs-lisp-mode)
@@ -225,7 +346,7 @@ impl ElispReader for EmacsElispReader {
       (while t
         (let ((form (read (current-buffer))))
           (when (memq (car-safe form) '(defun ert-deftest))
-            (princ (prin1-to-string (census-normalize form)))
+            (princ (prin1-to-string (census-normalize-definition form)))
             (princ "\n"))))
     (end-of-file nil))))"#;
         let mut reader = Command::new("emacs")
@@ -251,38 +372,72 @@ impl ElispReader for EmacsElispReader {
             }
         };
         let mut stderr = StderrDrain::start(stderr);
+        let stdout = match reader.stdout.take() {
+            Some(stdout) => stdout,
+            None => {
+                terminate_and_reap(&mut reader, "Emacs reader");
+                let diagnostics = stderr.finish("Emacs reader");
+                return Err(CloneShapeError::Failed(with_diagnostics(
+                    "Emacs reader stdout was not piped".into(),
+                    diagnostics,
+                )));
+            }
+        };
+        let mut stdout = StdoutDrain::start(stdout);
         let write_result = match reader.stdin.take() {
             Some(mut stdin) => stdin.write_all(source.as_bytes()),
             None => Err(std::io::Error::other("Emacs reader stdin was not piped")),
         };
         if let Err(error) = write_result {
-            cleanup_reader_after_stdin_failure(&mut reader);
+            terminate_and_reap(&mut reader, "Emacs reader");
+            finish_stdout_after_failure(&mut stdout);
             let diagnostics = stderr.finish("Emacs reader");
             return Err(CloneShapeError::Failed(with_diagnostics(
                 error.to_string(),
                 diagnostics,
             )));
         }
-        let output = reader
-            .wait_with_output()
-            .map_err(|error| CloneShapeError::Failed(error.to_string()))?;
+        let status = match reader.wait() {
+            Ok(status) => status,
+            Err(error) => {
+                terminate_and_reap(&mut reader, "Emacs reader");
+                finish_stdout_after_failure(&mut stdout);
+                let diagnostics = stderr.finish("Emacs reader");
+                return Err(CloneShapeError::Failed(with_diagnostics(
+                    error.to_string(),
+                    diagnostics,
+                )));
+            }
+        };
+        let output = match stdout.finish() {
+            Ok(output) => output,
+            Err(error) => {
+                terminate_and_reap(&mut reader, "Emacs reader");
+                let diagnostics = stderr.finish("Emacs reader");
+                return Err(CloneShapeError::Failed(with_diagnostics(
+                    error,
+                    diagnostics,
+                )));
+            }
+        };
         let diagnostics = stderr.finish("Emacs reader");
-        if !output.status.success() {
+        if !status.success() {
             return Err(CloneShapeError::Failed(with_diagnostics(
-                String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+                format!("Emacs reader exited with {status}"),
                 diagnostics,
             )));
         }
-        Ok(String::from_utf8_lossy(&output.stdout)
+        Ok(String::from_utf8_lossy(&output)
             .lines()
             .map(str::to_owned)
             .collect())
     }
 }
 
-/// Preserve a stdin-write failure while ensuring its spawned reader cannot outlive it.
-fn cleanup_reader_after_stdin_failure(reader: &mut Child) {
-    terminate_and_reap(reader, "Emacs reader");
+fn finish_stdout_after_failure(stdout: &mut StdoutDrain) {
+    if let Err(error) = stdout.finish() {
+        eprintln!("warning: draining census Emacs reader stdout failed: {error}");
+    }
 }
 
 fn with_diagnostics(error: String, diagnostics: String) -> String {
@@ -320,157 +475,40 @@ fn normalize_rust_shape(tokens: TokenStream) -> String {
     out
 }
 
-fn normalize_shape(source: &str) -> String {
+fn normalize_typescript_syntax(source: &str) -> String {
     enum State {
         Code,
         LineComment,
-        BlockComment(usize),
-        String(char),
+        BlockComment,
     }
+
     let mut state = State::Code;
-    let mut out = String::new();
-    let mut token = String::new();
+    let mut normalized = String::new();
     let mut characters = source.chars().peekable();
     while let Some(character) = characters.next() {
-        match &mut state {
+        match state {
             State::Code if character == '/' && characters.peek() == Some(&'/') => {
                 characters.next();
                 state = State::LineComment;
             }
             State::Code if character == '/' && characters.peek() == Some(&'*') => {
                 characters.next();
-                state = State::BlockComment(1);
-            }
-            State::Code if matches!(character, '"' | '\'' | '`') => {
-                normalize_typescript_token(&mut out, &mut token);
-                out.push_str("str");
-                state = State::String(character);
-            }
-            State::Code if character.is_ascii_alphanumeric() || character == '_' => {
-                token.push(character)
+                state = State::BlockComment;
             }
             State::Code => {
-                normalize_typescript_token(&mut out, &mut token);
                 if !character.is_whitespace() {
-                    out.push(character);
+                    normalized.push(character);
                 }
             }
             State::LineComment if character == '\n' => state = State::Code,
-            State::BlockComment(depth) if character == '*' && characters.peek() == Some(&'/') => {
+            State::BlockComment if character == '*' && characters.peek() == Some(&'/') => {
                 characters.next();
-                *depth -= 1;
-                if *depth == 0 {
-                    state = State::Code;
-                }
+                state = State::Code;
             }
-            State::String(_) if character == '\\' => {
-                characters.next();
-            }
-            State::String(delimiter) if character == *delimiter => state = State::Code,
             _ => {}
         }
     }
-    normalize_typescript_token(&mut out, &mut token);
-    out
-}
-
-fn normalize_typescript_token(out: &mut String, token: &mut String) {
-    if token.is_empty() {
-        return;
-    }
-    if token
-        .chars()
-        .next()
-        .is_some_and(|character| character.is_ascii_digit())
-    {
-        out.push('#');
-    } else if typescript_syntax_word(token) {
-        out.push_str(token);
-    } else {
-        out.push_str("id");
-    }
-    token.clear();
-}
-
-fn typescript_syntax_word(token: &str) -> bool {
-    matches!(
-        token,
-        "abstract"
-            | "any"
-            | "as"
-            | "asserts"
-            | "async"
-            | "await"
-            | "bigint"
-            | "boolean"
-            | "break"
-            | "case"
-            | "catch"
-            | "class"
-            | "const"
-            | "continue"
-            | "debugger"
-            | "declare"
-            | "default"
-            | "delete"
-            | "do"
-            | "else"
-            | "enum"
-            | "export"
-            | "extends"
-            | "false"
-            | "finally"
-            | "for"
-            | "from"
-            | "function"
-            | "get"
-            | "if"
-            | "implements"
-            | "import"
-            | "in"
-            | "infer"
-            | "instanceof"
-            | "interface"
-            | "is"
-            | "keyof"
-            | "let"
-            | "module"
-            | "namespace"
-            | "new"
-            | "never"
-            | "null"
-            | "number"
-            | "object"
-            | "of"
-            | "override"
-            | "package"
-            | "private"
-            | "protected"
-            | "public"
-            | "readonly"
-            | "return"
-            | "satisfies"
-            | "set"
-            | "static"
-            | "string"
-            | "super"
-            | "switch"
-            | "symbol"
-            | "this"
-            | "throw"
-            | "true"
-            | "try"
-            | "type"
-            | "typeof"
-            | "undefined"
-            | "unique"
-            | "unknown"
-            | "var"
-            | "void"
-            | "while"
-            | "with"
-            | "yield"
-    )
+    normalized
 }
 fn stable_hash(value: &str) -> u64 {
     value.bytes().fold(0xcbf29ce484222325, |hash, byte| {
@@ -479,7 +517,6 @@ fn stable_hash(value: &str) -> u64 {
 }
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
 
     use super::super::common::context;
     use super::super::{CellState, EvidenceMethod};
@@ -505,36 +542,52 @@ mod tests {
     }
 
     #[test]
-    fn typescript_normalization_preserves_syntax_words_and_operators() {
-        assert_eq!(
-            normalize_shape("function alpha(x) { if (x) return 1; }"),
-            normalize_shape("function beta(y) { if (y) return 2; }")
-        );
-        assert_ne!(
-            normalize_shape("function alpha(x) { if (x) return 1; }"),
-            normalize_shape("function beta(y) { while (y) throw 2; }")
-        );
+    fn typescript_normalization_uses_identifier_and_literal_roles() {
+        let clones = typescript_clones(&context(&[
+            (
+                "a.ts",
+                "function get(from: string) { const of = true; return { set: from, type: null, module: `a ${of}`, undefined: 1n }; }",
+            ),
+            (
+                "b.ts",
+                "function setter(value: string) { const count = false; return { field: value, kind: null, namespace: `b ${count}`, absent: 2n }; }",
+            ),
+        ]));
+        assert!(matches!(clones.state, CellState::Candidates { .. }));
+
+        let syntax_distinct = typescript_clones(&context(&[
+            ("a.ts", "function alpha(x) { if (x) return 1; }"),
+            ("b.ts", "function beta(y) { while (y) throw 2; }"),
+        ]));
+        assert!(matches!(syntax_distinct.state, CellState::Clean));
     }
 
     #[test]
-    fn elisp_fixture_shapes_keep_distinct_equal_arity_heads_clean() {
-        let mut reader = FixtureReader {
-            responses: VecDeque::from([
-                Ok(vec!["(defun id (id) (if id number number))".into()]),
-                Ok(vec!["(defun id (id) (while id number))".into()]),
+    fn elisp_normalization_uses_actual_reader_and_preserves_heads() {
+        let mut reader = EmacsElispReader;
+        let clones = clones_with_elisp_reader(
+            &context(&[
+                ("a.el", "(defun alpha (x) (+ x 1))"),
+                ("b.el", "(defun beta (y) (+ y 2))"),
             ]),
-        };
-        assert!(matches!(
-            clones_with_elisp_reader(
-                &context(&[
-                    ("a.el", "(defun a (x) (if x 1 2))"),
-                    ("b.el", "(defun b (y) (while y 3))")
-                ]),
-                &mut reader,
-            )
-            .state,
-            CellState::Clean
-        ));
+            &mut reader,
+        );
+        assert!(matches!(clones.state, CellState::Candidates { .. }));
+
+        let clean = clones_with_elisp_reader(
+            &context(&[
+                ("a.el", "(defun alpha (x) (+ x 1))"),
+                ("b.el", "(defun beta (y) (- y 2))"),
+                ("c.el", "(defun gamma (z) (if z 1 2))"),
+                ("d.el", "(defun delta (w) (while w (let ((n 3)) n)))"),
+                ("e.el", "(defun epsilon (a b) (= a b))"),
+                ("f.el", "(defun zeta (c d) (equal c d))"),
+                ("g.el", "(defun eta (q) (custom-call q 4))"),
+                ("h.el", "(defun theta (r) (other-call r 5))"),
+            ]),
+            &mut reader,
+        );
+        assert!(matches!(clean.state, CellState::Clean));
     }
     #[test]
     fn clone_collectors_use_parsed_function_shapes_and_ignore_markers_in_comments_and_strings() {
@@ -573,56 +626,17 @@ mod tests {
         assert!(matches!(syntax_distinct.state, CellState::Clean));
     }
 
-    struct FixtureReader {
-        responses: VecDeque<Result<Vec<String>, CloneShapeError>>,
-    }
+    struct UnavailableReader;
 
-    impl ElispReader for FixtureReader {
+    impl ElispReader for UnavailableReader {
         fn function_shapes(&mut self, _: &str) -> Result<Vec<String>, CloneShapeError> {
-            self.responses
-                .pop_front()
-                .expect("one fixture response per source")
+            Err(CloneShapeError::ReaderUnavailable)
         }
     }
 
     #[test]
-    fn elisp_clone_forms_are_testable_without_emacs() {
-        let mut reader = FixtureReader {
-            responses: VecDeque::from([
-                Ok(vec!["(defun id () (id string))".into()]),
-                Ok(vec!["(defun id () (id string))".into()]),
-            ]),
-        };
-        assert!(matches!(
-            clones_with_elisp_reader(
-                &context(&[("a.el", "(defun a ())"), ("b.el", "(defun b ())")]),
-                &mut reader,
-            )
-            .state,
-            CellState::Candidates { .. }
-        ));
-
-        let mut clean_reader = FixtureReader {
-            responses: VecDeque::from([
-                Ok(vec!["(defun id () literal)".into()]),
-                Ok(vec!["(ert-deftest id () literal)".into()]),
-            ]),
-        };
-        assert!(matches!(
-            clones_with_elisp_reader(
-                &context(&[("a.el", "(defun a ())"), ("b.el", "(ert-deftest b ())")]),
-                &mut clean_reader,
-            )
-            .state,
-            CellState::Clean
-        ));
-    }
-
-    #[test]
     fn unavailable_elisp_reader_remains_unavailable() {
-        let mut reader = FixtureReader {
-            responses: VecDeque::from([Err(CloneShapeError::ReaderUnavailable)]),
-        };
+        let mut reader = UnavailableReader;
         assert!(matches!(
             clones_with_elisp_reader(&context(&[("a.el", "(defun a ())")]), &mut reader).state,
             CellState::Unavailable { .. }

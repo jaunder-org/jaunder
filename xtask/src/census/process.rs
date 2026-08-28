@@ -9,7 +9,7 @@
 //! warnings so they never replace the collector's primary evidence failure.
 
 use std::io::Read;
-use std::process::{Child, ChildStderr};
+use std::process::{Child, ChildStderr, ChildStdout};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
@@ -68,6 +68,36 @@ impl StderrDrain {
             }
         }
         self.diagnostics()
+    }
+}
+
+/// A concurrent stdout drain that retains the reader output until the child exits.
+pub(crate) struct StdoutDrain {
+    task: Option<JoinHandle<Result<Vec<u8>, std::io::Error>>>,
+}
+
+impl StdoutDrain {
+    /// Start consuming a child's stdout immediately so it cannot backpressure the child.
+    pub(crate) fn start(stdout: ChildStdout) -> Self {
+        let task = std::thread::spawn(move || {
+            let mut stdout = stdout;
+            let mut output = Vec::new();
+            stdout.read_to_end(&mut output)?;
+            Ok(output)
+        });
+        Self { task: Some(task) }
+    }
+
+    /// Join the drain and return its output, preserving a read failure as caller evidence.
+    pub(crate) fn finish(&mut self) -> Result<Vec<u8>, String> {
+        match self.task.take() {
+            Some(task) => match task.join() {
+                Ok(Ok(output)) => Ok(output),
+                Ok(Err(error)) => Err(error.to_string()),
+                Err(_) => Err("census stdout drain panicked".into()),
+            },
+            None => Err("census stdout drain was already joined".into()),
+        }
     }
 }
 
