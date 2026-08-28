@@ -793,6 +793,35 @@
       (should (equal (plist-get http-rec :type) "https"))
       (should (null (plist-get http-rec :file))))))
 
+(ert-deftest jaunder-org-link-file-unescapes-local-target-once ()
+  ;; Local Media Copies retain decoded leaves, while their native Org links use
+  ;; percent encoding.  Keep the raw spelling for rewriting and decode only the
+  ;; filesystem lookup (not `%2525' twice).
+  (let* ((directory (make-temp-file "jt-org-link-" t))
+         (names '("source image.png" "literal%25.png" "画像.png"))
+         (targets '("source%20image.png" "literal%2525.png"
+                    "%E7%94%BB%E5%83%8F.png")))
+    (unwind-protect
+        (progn
+          (dolist (name names)
+            (with-temp-file (expand-file-name name directory) (insert name)))
+          (with-temp-buffer
+            (setq default-directory directory)
+            (insert (mapconcat (lambda (target) (format "[[file:%s]]" target))
+                               targets " "))
+            (org-mode)
+            (let ((records (mapcar #'jaunder--org-link->record
+                                   (org-element-map (org-element-parse-buffer)
+                                                    'link #'identity))))
+              (should (equal (mapcar (lambda (record) (plist-get record :path))
+                                     records)
+                             targets))
+              (should (equal (mapcar (lambda (record) (plist-get record :file))
+                                     records)
+                             (mapcar (lambda (name) (expand-file-name name directory))
+                                     names))))))
+      (delete-directory directory t))))
+
 (ert-deftest jaunder-org-body-links-returns-body-records-in-order ()
   ;; Links after the header block come back as neutral records, in document
   ;; order; header-block keyword lines contribute none.

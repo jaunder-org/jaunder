@@ -232,6 +232,124 @@
     (should (equal (jaunder-pulled-member-org member)
                    (jaunder-pull-test--org xml)))))
 
+(ert-deftest jaunder-pull-render-pulled-member-replaces-only-native-body ()
+  ;; The parsed Member owns the established byte-exact header projection, so
+  ;; localization never needs a second XML parse or a parallel renderer.
+  (let* ((xml (jaunder-pull-test--response-entry))
+         (member (jaunder--parse-pulled-member
+                  xml "\"sha256-test\"" jaunder-pull-test--captured-at "UTC")))
+    (should (equal (jaunder--render-pulled-member member "Local body")
+                   (concat (jaunder-pulled-member-org-prefix member)
+                           "Local body")))))
+
+(ert-deftest jaunder-pull-member-localizes-before-post-install ()
+  ;; Planning, acquisition, and rewriting complete before the only Post claim;
+  ;; each injected late failure therefore leaves a server-only destination.
+  (dolist (failure '(nil plan materialize apply install))
+    (let* ((root (make-temp-file "jaunder-pull-" t))
+           (path (expand-file-name "untitled-note.org" root))
+           (jaunder-blogs
+            (list (cons (file-name-as-directory root)
+                        '(:base-url "https://h" :username "alice"))))
+           trace)
+      (unwind-protect
+          (cl-letf (((symbol-function 'jaunder--http-request)
+                     (lambda (&rest _)
+                       (list :status 200
+                             :headers '(("etag" . "\"sha256-test\"")
+                                        ("x-jaunder-instance" . "12345678-1234-1234-1234-123456789abc"))
+                             :body (jaunder-pull-test--response-entry))))
+                    ((symbol-function 'jaunder--pull-media-plan)
+                     (lambda (&rest _)
+                       (push 'plan trace)
+                       (if (eq failure 'plan) (error "plan") 'plan)))
+                    ((symbol-function 'jaunder--pull-media-materialize)
+                     (lambda (&rest _)
+                       (push 'materialize trace)
+                       (if (eq failure 'materialize) (error "materialize"))))
+                    ((symbol-function 'jaunder--pull-media-apply-plan)
+                     (lambda (&rest _)
+                       (push 'apply trace)
+                       (if (eq failure 'apply) (error "apply") "Local body")))
+                    ((symbol-function 'jaunder--install-pulled-bytes)
+                     (lambda (destination bytes)
+                       (push 'install trace)
+                       (if (eq failure 'install) (error "install")
+                         (write-region bytes nil destination nil 'silent)
+                         (jaunder--make-pull-result :status 'pulled :path destination)))))
+                   (if failure
+                       (should-error (jaunder--pull-member root (jaunder-pull-test--member)))
+                     (should (eq (jaunder-pull-result-status
+                                  (jaunder--pull-member root (jaunder-pull-test--member)))
+                                 'pulled))
+                     (should (string-suffix-p "\n\nLocal body"
+                                              (with-temp-buffer
+                                                (insert-file-contents path)
+                                                (buffer-string)))))
+                   (should-not (and failure (file-exists-p path)))
+                   (should (equal (nreverse trace)
+                                  (pcase failure
+                                    ('plan '(plan))
+                                    ('materialize '(plan materialize))
+                                    ('apply '(plan materialize apply))
+                                    (_ '(plan materialize apply install))))))
+        (delete-directory root t)))))
+
+(ert-deftest jaunder-pull-member-requires-one-canonical-instance-header ()
+  ;; The authenticated Member identity anchors every anonymous media response.
+  (dolist (headers
+           '(nil
+             (("x-jaunder-instance" . "not-a-uuid"))
+             (("x-jaunder-instance" . "12345678-1234-1234-1234-123456789abc")
+              ("X-Jaunder-Instance" . "12345678-1234-1234-1234-123456789abc"))))
+    (let ((response (list :headers headers)))
+      (should-error (jaunder--pull-member-instance-id response))))
+  (should (equal
+           (jaunder--pull-member-instance-id
+            '(:headers (("X-Jaunder-Instance" . "12345678-1234-1234-1234-123456789abc"))))
+           "12345678-1234-1234-1234-123456789abc")))
+
+(ert-deftest jaunder-pull-member-retry-reuses-materialized-copy-before-post-claim ()
+  ;; A failed final claim leaves verified copies available to the next
+  ;; server-only attempt; the materializer owns the no-second-GET reuse check.
+  (let* ((root (make-temp-file "jaunder-pull-" t))
+         (path (expand-file-name "untitled-note.org" root))
+         (jaunder-blogs
+          (list (cons (file-name-as-directory root)
+                      '(:base-url "https://h" :username "alice"))))
+         (materializations 0)
+         (attempt 0))
+    (unwind-protect
+        (cl-letf (((symbol-function 'jaunder--http-request)
+                   (lambda (&rest _)
+                     (list :status 200
+                           :headers '(("etag" . "\"sha256-test\"")
+                                      ("x-jaunder-instance" . "12345678-1234-1234-1234-123456789abc"))
+                           :body (jaunder-pull-test--response-entry))))
+                  ((symbol-function 'jaunder--pull-media-plan) (lambda (&rest _) 'plan))
+                  ((symbol-function 'jaunder--pull-media-materialize)
+                   (lambda (&rest _) (setq materializations (1+ materializations))))
+                  ((symbol-function 'jaunder--pull-media-apply-plan)
+                   (lambda (&rest _) "Localized"))
+                  ((symbol-function 'jaunder--install-pulled-bytes)
+                   (lambda (destination bytes)
+                     (setq attempt (1+ attempt))
+                     (if (= attempt 1)
+                         (error "final install")
+                       (write-region bytes nil destination nil 'silent)
+                       (jaunder--make-pull-result :status 'pulled :path destination)))))
+                 (should-error (jaunder--pull-member root (jaunder-pull-test--member)))
+                 (should-not (file-exists-p path))
+                 (should (eq (jaunder-pull-result-status
+                              (jaunder--pull-member root (jaunder-pull-test--member)))
+                             'pulled))
+                 (should (= materializations 2))
+                 (should (string-suffix-p "\n\nLocalized"
+                                          (with-temp-buffer
+                                            (insert-file-contents path)
+                                            (buffer-string)))))
+      (delete-directory root t))))
+
 (defun jaunder-pull-test--member (&optional id slug)
   "Return a D1 Member fixture with optional ID and SLUG."
   (jaunder--make-inventory-member
@@ -291,7 +409,8 @@
                            (list method url (jaunder--active-base-url)
                                  (jaunder--active-username)))
                      (list :status 200
-                           :headers '(("etag" . "\"sha256-test\""))
+                           :headers '(("etag" . "\"sha256-test\"")
+                                      ("x-jaunder-instance" . "12345678-1234-1234-1234-123456789abc"))
                            :body (jaunder-pull-test--response-entry))))
                   ((symbol-function 'current-time)
                    (lambda () jaunder-pull-test--captured-at))
@@ -345,7 +464,8 @@
           (cl-letf (((symbol-function 'jaunder--http-request)
                      (lambda (&rest _)
                        (list :status 200
-                             :headers '(("etag" . "\"sha256-test\""))
+                             :headers '(("etag" . "\"sha256-test\"")
+                                        ("x-jaunder-instance" . "12345678-1234-1234-1234-123456789abc"))
                              :body response))))
                    (should-error (jaunder--pull-member root
                                                        (jaunder-pull-test--member)))
@@ -370,11 +490,13 @@
                          ('http '(:status 503 :headers nil :body "no"))
                          ('transport (error "transport"))
                          ('mapping
-                          (list :status 200 :headers '(("etag" . "W/\"weak\""))
+                          (list :status 200 :headers '(("etag" . "W/\"weak\"")
+                                                       ("x-jaunder-instance" . "12345678-1234-1234-1234-123456789abc"))
                                 :body (jaunder-pull-test--response-entry)))
                          (_
                           (list :status 200
-                                :headers '(("etag" . "\"sha256-test\""))
+                                :headers '(("etag" . "\"sha256-test\"")
+                                           ("x-jaunder-instance" . "12345678-1234-1234-1234-123456789abc"))
                                 :body (jaunder-pull-test--response-entry))))))
                     ((symbol-function 'write-region)
                      (lambda (&rest args)
@@ -405,7 +527,8 @@
         (cl-letf (((symbol-function 'jaunder--http-request)
                    (lambda (&rest _)
                      (list :status 200
-                           :headers '(("etag" . "\"sha256-test\""))
+                           :headers '(("etag" . "\"sha256-test\"")
+                                      ("x-jaunder-instance" . "12345678-1234-1234-1234-123456789abc"))
                            :body (jaunder-pull-test--response-entry))))
                   ((symbol-function 'add-name-to-file)
                    (lambda (_temp destination &optional _ok)

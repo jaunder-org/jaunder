@@ -43,8 +43,9 @@ Out:
     direct `200`, and preserves response bytes exactly.
   - Contract: exactly one canonical `X-Jaunder-Instance` UUID must match the
     Member identity; computed SHA-256 must match the canonical URL hash and
-    strong response ETag. Install at `local-media/<sha256>/<decoded-filename>`
-    without symlink traversal or overwrite; verify existing bytes before reuse.
+    strong `"sha256-<hash>"` response ETag. Install at
+    `local-media/<sha256>/<decoded-filename>` without symlink traversal or
+    overwrite; verify existing bytes before reuse.
   - Contract: stage all distinct downloads, retain verified copies after any
     late failure, and clean temporaries. Reuse remains internal; tests count
     calls at the binary-adapter seam without adding production-only evidence.
@@ -52,7 +53,7 @@ Out:
     transport, header cardinality/syntax, hash, path, race, corruption,
     temporary cleanup, retained-copy, and reuse behavior.
 
-- [ ] Task 3: Integrate fail-closed localization into server-only pull
+- [x] Task 3: Integrate fail-closed localization into server-only pull
   - Contract: occupied `<slug>.org` remains the first preflight. After the
     authenticated Member GET and identity validation, build the localization
     plan, materialize every Local Media Copy, render the rewritten native body,

@@ -38,9 +38,9 @@ non-link text remain source-faithful.
 The authenticated Member response and every media response must carry exactly
 one canonical `X-Jaunder-Instance` UUID, and the values must match. Each media
 GET is anonymous and direct; redirects are not followed. A media response is
-accepted only on `200` with a strong hash ETag and bytes whose computed SHA-256
-equals both the ETag and canonical URL hash. The App Password is never sent to a
-media URL.
+accepted only on `200` with a strong `"sha256-<64-lowercase-hex>"` ETag and
+bytes whose computed SHA-256 equals both the ETag's hash and canonical URL hash.
+The App Password is never sent to a media URL.
 
 Verified bytes become a **Local Media Copy** under the configured root at
 `local-media/<sha256>/<decoded-filename>`. The server's canonical

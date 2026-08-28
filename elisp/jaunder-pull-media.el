@@ -338,7 +338,7 @@ public media identity and URL hash are valid only for the direct response."
       (error "jaunder pull media: media response has invalid instance identity"))
     (unless (and (= (length etags) 1)
                  (string-match
-                  (concat "\\`\"" "\\([0-9a-f]\\{64\\}\\)" "\"\\'") (car etags))
+                  (concat "\\`\"sha256-" "\\([0-9a-f]\\{64\\}\\)" "\"\\'") (car etags))
                  (equal (match-string 1 (car etags)) hash))
       (error "jaunder pull media: media response ETag disagrees with URL hash")))
   (unless (equal (jaunder--pull-media-file-sha256 temporary) hash)

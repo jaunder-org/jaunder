@@ -31,6 +31,7 @@
 (require 'org)
 (require 'org-element)
 (require 'org-attach)
+(require 'url-util)
 (require 'jaunder-entry)
 (require 'jaunder-datetime)
 
@@ -180,8 +181,11 @@ later machine.  Idempotent: an existing value is preserved verbatim."
 (defun jaunder--org-link-file (link)
   "Resolve `org-element' LINK's local target to an absolute file path.
 A `file:' path resolves against `default-directory'; an `attachment:' path via
-`org-attach-expand' at the link's heading."
-  (let ((path (org-element-property :path link)))
+`org-attach-expand' at the link's heading.  Org stores local path spelling
+percent-escaped, so unescape it once only for filesystem resolution; callers
+retain the raw path for source rewriting."
+  (let ((path (decode-coding-string
+               (url-unhex-string (org-element-property :path link)) 'utf-8)))
     (if (string= (org-element-property :type link) "attachment")
         (save-excursion
           (goto-char (org-element-property :begin link))

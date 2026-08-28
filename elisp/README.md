@@ -56,3 +56,15 @@ under `cargo xtask validate` (not the fast `check --no-test` loop). See
 elisp is interim-exempt from the Rust coverage gate (follow-on #82); write an
 ERT test for every pure mapping/transform function. See
 [`docs/adr/0031-elisp-separately-tested-subproject.md`](../docs/adr/0031-elisp-separately-tested-subproject.md).
+
+## Pulled media
+
+When a server-only Post is pulled, eligible same-instance media links are
+rewritten to relative files under `local-media/<sha256>/` and their verified
+bytes are retained there. These **Local Media Copies** are durable blog content,
+not a cache: include `local-media/` in backups and do not expect automatic
+eviction or repair.
+
+The Post file is installed only after its media verifies. If a pull fails, its
+Post remains server-only while already verified Local Media Copies remain safe;
+rerun `jaunder-reconcile` to retry and reuse those copies.

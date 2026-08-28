@@ -1851,8 +1851,8 @@ destinations that name canonical public media on the active Jaunder origin and
 contain no user information or query. Media GETs are anonymous and do not follow
 redirects. The authenticated Member response and every media response must carry
 exactly one canonical `X-Jaunder-Instance` UUID, and all values must match.
-Computed bytes, the strong response ETag, and the canonical URL hash must agree.
-External links and non-link URL text remain unchanged
+Computed bytes, the strong `"sha256-<hash>"` response ETag, and the canonical
+URL hash must agree. External links and non-link URL text remain unchanged
 ([Local Media Copies](adr/drafts/emacs-pulled-media-local-copies.md)).
 
 Verified bytes become durable **Local Media Copies** at

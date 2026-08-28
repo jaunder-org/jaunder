@@ -100,7 +100,7 @@
   "Return the accepted media response metadata for INSTANCE and HASH."
   (list :status 200
         :headers (list (cons "x-jaunder-instance" instance)
-                       (cons "etag" (format "\"%s\"" hash)))))
+                       (cons "etag" (format "\"sha256-%s\"" hash)))))
 
 (defmacro jaunder-pull-media-test--with-root (root &rest body)
   "Evaluate BODY with ROOT bound to a newly-created temporary directory."
@@ -180,19 +180,19 @@
 (ert-deftest jaunder-pull-media-materialization-rejects-response-trust-failures ()
   ;; Every trust-chain failure is loud rather than becoming an absent reference.
   (dolist (case
-           `((missing-instance . (:headers (("etag" . "\"%s\""))))
+           `((missing-instance . (:headers (("etag" . "\"sha256-%s\""))))
              (duplicate-instance . (:headers (("x-jaunder-instance" . ,jaunder-pull-media-test--instance)
                                               ("x-jaunder-instance" . ,jaunder-pull-media-test--instance)
-                                              ("etag" . "\"%s\""))))
+                                              ("etag" . "\"sha256-%s\""))))
              (malformed-instance . (:headers (("x-jaunder-instance" . "not-a-uuid")
-                                              ("etag" . "\"%s\""))))
+                                              ("etag" . "\"sha256-%s\""))))
              (mismatched-instance . (:headers (("x-jaunder-instance" . "123e4567-e89b-12d3-a456-426614174001")
-                                               ("etag" . "\"%s\""))))
+                                               ("etag" . "\"sha256-%s\""))))
              (missing-etag . (:headers (("x-jaunder-instance" . ,jaunder-pull-media-test--instance))))
              (malformed-etag . (:headers (("x-jaunder-instance" . ,jaunder-pull-media-test--instance)
-                                          ("etag" . "W/\"%s\""))))
+                                          ("etag" . "W/\"sha256-%s\""))))
              (mismatched-etag . (:headers (("x-jaunder-instance" . ,jaunder-pull-media-test--instance)
-                                           ("etag" . "\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""))))))
+                                           ("etag" . "\"sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""))))))
     (let* ((bytes (string-as-unibyte "trusted bytes"))
            (hash (secure-hash 'sha256 bytes))
            (metadata (cdr case)))

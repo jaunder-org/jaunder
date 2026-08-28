@@ -17,7 +17,7 @@
 (require 'jaunder-datetime)
 (require 'jaunder-config)
 (require 'jaunder-reconcile)
-(require 'jaunder-transport)
+(require 'jaunder-pull-media)
 
 (defun jaunder--pull-error (invariant)
   "Signal a pull mapping error naming broken INVARIANT."
@@ -164,8 +164,8 @@ KIND is `text' or `xhtml'."
             (split-string value "\n" nil))))
 
 (cl-defstruct (jaunder-pulled-member (:constructor jaunder--make-pulled-member))
-              "Validated native Member data shared by rendering and pull localization."
-              org format body)
+              "Validated Member data shared by rendering and pull localization."
+              org-prefix org format body)
 
 (defun jaunder--parse-pulled-member (entry-xml etag captured-at zone)
   "Parse Member ENTRY-XML once into exact Org bytes and native source fields.
@@ -229,15 +229,23 @@ as `jaunder--atom->org'.  This function performs no network or filesystem I/O."
                         (format "#+PROPERTY: JAUNDER_SYNCED_AT %s"
                                 (format-time-string "%Y-%m-%dT%H:%M:%SZ"
                                                     captured-at t))))))
-      (jaunder--make-pulled-member
-       :org (concat (mapconcat #'identity lines "\n") "\n\n" body)
-       :format format
-       :body body))))
+      (let ((org-prefix (concat (mapconcat #'identity lines "\n") "\n\n")))
+        (jaunder--make-pulled-member
+         :org-prefix org-prefix
+         :org (concat org-prefix body)
+         :format format
+         :body body)))))
 
 (defun jaunder--atom->org (entry-xml etag captured-at zone)
   "Map Member ENTRY-XML to exact Org bytes using ETAG, CAPTURED-AT, and ZONE."
   (jaunder-pulled-member-org
    (jaunder--parse-pulled-member entry-xml etag captured-at zone)))
+
+(defun jaunder--render-pulled-member (member body)
+  "Render MEMBER's exact Org header bytes with replacement native BODY."
+  (unless (stringp body)
+    (jaunder--pull-error "localized Member body must be a string"))
+  (concat (jaunder-pulled-member-org-prefix member) body))
 
 
 (cl-defstruct (jaunder-pull-result (:constructor jaunder--make-pull-result))
@@ -268,6 +276,16 @@ as `jaunder--atom->org'.  This function performs no network or filesystem I/O."
       (jaunder--pull-error "Member edit URI must end in a decimal Post ID"))
     (cons id slug)))
 
+(defun jaunder--pull-member-instance-id (response)
+  "Return RESPONSE's sole canonical Jaunder instance UUID."
+  (let ((instances (jaunder--pull-media-header-values response "x-jaunder-instance")))
+    (unless (and (= (length instances) 1)
+                 (string-match-p jaunder--pull-media-instance-id-regexp
+                                 (car instances)))
+      (jaunder--pull-error
+       "Member response must carry exactly one canonical X-Jaunder-Instance UUID"))
+    (car instances)))
+
 (defun jaunder--install-pulled-bytes (path bytes)
   "Install BYTES at PATH without overwrite; return a pull result.
 Writes a complete same-directory temporary file, then claims PATH by hard-link
@@ -297,32 +315,43 @@ creation, which is atomic and fails if another directory entry won the race."
 
 (defun jaunder--pull-member (root member)
   "Pull D1 inventory MEMBER into ROOT, returning `jaunder-pull-result'.
-An existing destination blocks before network I/O.  The current Member response
-must retain MEMBER's Post ID and slug.  Every other failure signals without
-changing the destination."
+An existing destination blocks before any Member or media I/O.  A complete
+localized Post is installed only after every Local Media Copy verifies."
   (unless (jaunder-inventory-member-p member)
     (jaunder--pull-error "pull input must be a D1 inventory Member"))
   (let* ((slug (jaunder-inventory-member-slug member))
          (path (jaunder--pull-destination root slug)))
     (if (jaunder--pull-destination-exists-p path)
         (jaunder--make-pull-result :status 'blocked :path path)
-      (let ((response
-             (jaunder--with-blog root
+      (jaunder--with-blog root
+                          (let ((response
                                  (jaunder--http-request
-                                  "GET" (jaunder-inventory-member-edit-uri member)))))
-        (unless (and (integerp (plist-get response :status))
-                     (<= 200 (plist-get response :status) 299))
-          (jaunder--pull-error "Member GET returned non-2xx status"))
-        (let* ((entry-xml (plist-get response :body))
-               (identity (jaunder--pull-response-identity entry-xml)))
-          (unless (and (equal (car identity)
-                              (jaunder-inventory-member-id member))
-                       (equal (cdr identity) slug))
-            (jaunder--pull-error "Member response identity changed since inventory"))
-          (let* ((captured-at (current-time))
-                 (zone (jaunder--current-zone-name))
-                 (etag (jaunder--response-header response "ETag"))
-                 (bytes (jaunder--atom->org entry-xml etag captured-at zone)))
-            (jaunder--install-pulled-bytes path bytes)))))))
+                                  "GET" (jaunder-inventory-member-edit-uri member))))
+                            (unless (and (integerp (plist-get response :status))
+                                         (<= 200 (plist-get response :status) 299))
+                              (jaunder--pull-error "Member GET returned non-2xx status"))
+                            (let* ((entry-xml (plist-get response :body))
+                                   (identity (jaunder--pull-response-identity entry-xml))
+                                   (instance-id (jaunder--pull-member-instance-id response)))
+                              (unless (and (equal (car identity) (jaunder-inventory-member-id member))
+                                           (equal (cdr identity) slug))
+                                (jaunder--pull-error "Member response identity changed since inventory"))
+                              (let* ((captured-at (current-time))
+                                     (zone (jaunder--current-zone-name))
+                                     (etag (jaunder--response-header response "ETag"))
+                                     (pulled-member
+                                      (jaunder--parse-pulled-member entry-xml etag captured-at zone))
+                                     (plan
+                                      (jaunder--pull-media-plan
+                                       (jaunder-pulled-member-format pulled-member)
+                                       (jaunder-pulled-member-body pulled-member)
+                                       (jaunder--active-base-url))))
+                                ;; A Post is the final durable claim: verified copies can safely
+                                ;; survive a late failure and make the next reconcile retry cheaper.
+                                (jaunder--pull-media-materialize root instance-id plan)
+                                (jaunder--install-pulled-bytes
+                                 path
+                                 (jaunder--render-pulled-member
+                                  pulled-member (jaunder--pull-media-apply-plan plan))))))))))
 (provide 'jaunder-pull)
 ;;; jaunder-pull.el ends here

@@ -35,7 +35,7 @@ pulled Post.
   remains confined to the Member request.
 - The client preserves response bytes exactly. It computes SHA-256 and requires
   it to equal both the canonical media URL's content hash and the response's
-  strong hash ETag.
+  strong `"sha256-<64-lowercase-hex>"` ETag.
 - Decode the server's canonical percent-encoded filename once and validate the
   result as a safe local leaf. The Local Media Copy is stored at
   `local-media/<sha256>/<decoded-filename>` under the configured root.
@@ -80,12 +80,14 @@ pulled Post.
 - Duplicate references and separate Posts with the same hash and filename use
   one verified local file; a retry reuses it without another binary GET.
 - A real-server pull downloads the uploaded media anonymously, verifies the
-  instance identity, response ETag, URL hash, and bytes, installs the native
-  Post last, and remains previewable after the server becomes unavailable.
+  instance identity, `"sha256-<hash>"` response ETag, URL hash, and bytes,
+  installs the native Post last, and remains previewable after the server
+  becomes unavailable.
 - Republish of a pulled Org Post uploads its Local Media Copies through the
   existing publish path, server-deduplicates them to the authoritative URLs, and
-  leaves the local source and files unchanged. Markdown and HTML republish
-  behavior is unchanged and is not acceptance for this issue.
+  leaves the relative native body links and Local Media Copy bytes/path
+  unchanged. Ordinary publish metadata writeback remains allowed. Markdown and
+  HTML republish behavior is unchanged and is not acceptance for this issue.
 - Redirect, non-`200`, transport failure, missing, duplicate, malformed, or
   mismatched instance identity, malformed canonical filename, URL/ETag/body-hash
   mismatch, unwritable path, symlink path, and existing-byte mismatch each
