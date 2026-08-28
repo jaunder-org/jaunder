@@ -306,7 +306,9 @@ direct_ identification than the current href match.
 
 - **Reducing** the firefox gap. #818 asks where it lives; acting on it is #801's
   territory or a new issue, per AC15.
-- The postgres axis. #792 established sqlite ≈ postgres across all six runs.
+- The postgres axis. #792's current-gate arm-B suite medians differ by no more
+  than ±1.5%; it did not establish that bound for every run or establish
+  server/storage performance parity (see #817).
 - `e2e.context_mint` (firefox ~5× chromium) — that is #819, and it sits outside
   `commit_to_mount` entirely; this cycle neither measures nor unblocks it.
 - Long-task comparison. Gecko implements no `longtask` PerformanceObserver, so
