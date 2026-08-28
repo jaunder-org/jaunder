@@ -43,6 +43,11 @@ is one line.
 physically stored. Typing it would hide the orphan rows an operator most needs
 to see.
 
+> **Annotation (2026-08-27).** As of #847, both closed configuration registries,
+> `SiteConfigKey` and `UserConfigKey`, moved to `host`. Their closed-registry,
+> validator, and SQLx-binding contracts remained unchanged. Current ownership:
+> [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 ## Consequences
 
 - **The registry lives in `common`, not `storage`.** `#[text_enum]` needs

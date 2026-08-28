@@ -24,7 +24,7 @@
 //! - **A turbofish mint** (`compose::<Permalink>(…)`) spells the *tag*, for the case
 //!   where the value is consumed inline and there is no binding to ascribe.
 //! - **A signature generic over `UrlRole`** spells `TaggedUrl<T>` because it serves
-//!   every role at once — `atompub::entry::rel_link` renders four, and
+//!   every role at once — `host::atompub::entry::rel_link` renders four, and
 //!   `test_support::parse_url` mints any. Writing an alias there would be wrong, not
 //!   merely unidiomatic.
 

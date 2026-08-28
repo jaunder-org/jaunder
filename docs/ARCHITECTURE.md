@@ -34,29 +34,30 @@ client-side-rendered [Leptos] frontend
 storage layer ([ADR-0001](adr/0001-storage-backends.md)), with an Emacs blogging
 client and an AtomPub API as first-class publishing surfaces.
 
-Shared code is split by compile target, not by convenience: `common` is the
-target-agnostic domain crate, `host` is its host-only sibling, and `client` is
-the symmetric browser-infrastructure peer. `host` never compiles to wasm, so it
-uses `std::fs`/`std::env` without the `#[cfg]` gating `common` would demand
-([ADR-0058](adr/0058-host-crate-layering.md)). `client` holds raw browser glue
-(`web_sys`/`js_sys`/`wasm_bindgen` and wasm-side Leptos plumbing), plus two
-host-testable browser contracts; it contains no application domain types. `web`
-and `csr` depend on `client`, never the reverse
+Shared code is split by compile target and target reachability, not convenience:
+`common` is the dual-target domain crate, `host` is its strictly host-focused
+sibling, and `client` is the browser-infrastructure peer. `host` never compiles
+to wasm, so it uses host facilities without the `#[cfg]` gating `common` would
+demand ([ADR-0058](adr/0058-host-crate-layering.md),
+[common/host target-reachability closure](adr/drafts/common-host-target-closure.md)).
+`client` holds raw browser glue (`web_sys`/`js_sys`/`wasm_bindgen` and wasm-side
+Leptos plumbing), plus two host-testable browser contracts; it contains no
+application domain types. `web` and `csr` depend on `client`, never the reverse
 ([ADR-0069](adr/0069-client-crate-wasm-only-home.md)). Proc-macros live apart
 from all three, in `macros`
 ([ADR-0062](adr/0062-macros-crate-proc-macro-home.md)).
 
-| Crate          | Target      | Responsibility                                                                                                                                                                                           |
-| -------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `common`       | host + wasm | Shared domain logic and types: validated newtypes, rendering, visibility, feed/AtomPub serialization.                                                                                                    |
-| `storage`      | host        | Storage traits, record types, SQL migrations, and the SQLite/PostgreSQL backends ([ADR-0019](adr/0019-generic-storage-backend-via-dialect.md)).                                                          |
-| `server`       | host        | The `jaunder` binary: Axum router, CLI, background workers, integration tests.                                                                                                                           |
-| `web`          | host + wasm | Leptos components and `#[server]` functions — the UI and its server halves, split host/wasm at the file level ([ADR-0070](adr/0070-web-vertical-wasm-only-component-files.md)).                          |
-| `csr`          | wasm        | The client-side-rendering entry point: mounts `web` in the browser ([ADR-0041](adr/0041-public-projector-and-csr-client.md)).                                                                            |
-| `host`         | host        | Strictly-host-focused shared code: error carrier, capture dir, auth/token parsing, invites, process telemetry, metrics, and SMTP relay configuration ([ADR-0058](adr/0058-host-crate-layering.md)).      |
-| `client`       | host + wasm | Browser infrastructure: `localStorage`, dialogs, DOM/file-upload glue, reactive revalidation, CSR performance marks, and bounded client telemetry ([ADR-0069](adr/0069-client-crate-wasm-only-home.md)). |
-| `macros`       | build-time  | The workspace's proc-macro home: newtype, `text_enum`, sqlx-bridge and server-fn derives ([ADR-0062](adr/0062-macros-crate-proc-macro-home.md)).                                                         |
-| `test-support` | host        | A seed binary linking `storage` for out-of-process e2e seeding ([ADR-0046](adr/0046-test-support-seed-binary.md)).                                                                                       |
+| Crate          | Target      | Responsibility                                                                                                                                                                                                                                                                                                                                                          |
+| -------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `common`       | host + wasm | Dual-target domain types and operations reached by CSR or another dual-target consumer: validated newtypes including `ProfferedPassword`, `RenderedHtml`, `PostFormat`, ETag, Org normalization, croner, `BackupSchedule`, and the Syndication Feed grammar (`FeedFormat`, `FeedSurface`, `canonicalize`).                                                              |
+| `storage`      | host        | Storage traits, record types, SQL migrations, and the SQLite/PostgreSQL backends ([ADR-0019](adr/0019-generic-storage-backend-via-dialect.md)).                                                                                                                                                                                                                         |
+| `server`       | host        | The `jaunder` binary: Axum router, CLI, background workers, integration tests.                                                                                                                                                                                                                                                                                          |
+| `web`          | host + wasm | Leptos components and `#[server]` functions — the UI and its server halves, split host/wasm at the file level ([ADR-0070](adr/0070-web-vertical-wasm-only-component-files.md)).                                                                                                                                                                                         |
+| `csr`          | wasm        | The client-side-rendering entry point: mounts `web` in the browser ([ADR-0041](adr/0041-public-projector-and-csr-client.md)).                                                                                                                                                                                                                                           |
+| `host`         | host        | Strictly-host-focused shared code: error carrier, capture dir, auth/token parsing, `Password`/`StoredPasswordHash` and hash operations, render/sanitize/`RenderOutput`/media extraction/ETag construction, AtomPub wholesale, host-only Syndication Feed machinery, `SiteConfigKey`/`UserConfigKey`, invites, process telemetry, metrics, and SMTP relay configuration. |
+| `client`       | host + wasm | Browser infrastructure: `localStorage`, dialogs, DOM/file-upload glue, reactive revalidation, CSR performance marks, and bounded client telemetry ([ADR-0069](adr/0069-client-crate-wasm-only-home.md)).                                                                                                                                                                |
+| `macros`       | build-time  | The workspace's proc-macro home: newtype, `text_enum`, sqlx-bridge and server-fn derives ([ADR-0062](adr/0062-macros-crate-proc-macro-home.md)).                                                                                                                                                                                                                        |
+| `test-support` | host        | A seed binary linking `storage` for out-of-process e2e seeding ([ADR-0046](adr/0046-test-support-seed-binary.md)).                                                                                                                                                                                                                                                      |
 
 Every `client` module that touches the browser carries
 `#[cfg(target_arch = "wasm32")]`, so a host build of the crate is an
@@ -320,10 +321,11 @@ Details in the testing section.
 ## Content model
 
 A post stores its **source**: a `PostBody` in an author-chosen `PostFormat`
-(`Markdown` | `Org` | `Html`, `common/src/render.rs:35`), from which
-`common::render::render` derives the stored `rendered_html`. The two forms feed
-two deliberately separate serialization surfaces — syndication feeds emit HTML,
-the AtomPub Collection the native source — detailed in the Protocols section
+(`Markdown` | `Org` | `Html`, `common/src/render.rs:35`), from which a
+module-qualified `host::render` free function derives the stored
+`rendered_html`. The two forms feed two deliberately separate serialization
+surfaces — Syndication Feeds emit HTML, the AtomPub Collection native source —
+detailed in the Protocols section
 ([ADR-0015](adr/0015-atompub-serialization-surfaces.md)).
 `storage/src/posts.rs:42::PostRecord` carries both plus title, `Slug`, summary,
 tags, and `created_at`/`updated_at`/`published_at`/`deleted_at`.
@@ -371,46 +373,37 @@ Org element boundary, typed metadata parsing, field/lifecycle precedence, date
 conversion, and canonical stripping, and returns effective metadata plus
 non-authoritative bookkeeping. Web and AtomPub adapters map their wire presence
 into that interface; `perform_post_creation`/`perform_post_update` then persist
-its canonical result, with SQLite/PostgreSQL checking final slug/format/time and
-the pre-write content `ETag` inside the write transaction before commit or
-revision creation.
+its canonical result, with module-qualified host free-function ETag construction
+and SQLite/PostgreSQL checking final slug/format/time inside the write
+transaction before commit or revision creation.
 
-**`RenderedHtml` guarantees "contains no active markup", through two named
-doors** ([ADR-0079](adr/0079-rendered-html-sanitization.md)).
-`RenderedHtml::sanitize` **establishes** the invariant by scrubbing through a
-single module-level `ammonia` `SANITIZER` (`common/src/render.rs:274,311`);
-`RenderedHtml::from_trusted` (`:112`) only **inherits** it from an earlier
-sanitize, and the `rendered-html-from-trusted` static check fails the build on
-any new use — its allowlist is down to one production call site, the seed-DTO
-wire rebuild. The field is private, so nothing outside the module can mint one:
-there is no `Deserialize` (seed DTOs go through `deserialize_with`), no
-`From<String>` (compile-fail-pinned at `:90`), no `Default`, no `pub(crate)`
+**`RenderedHtml` guarantees "contains no active markup", through a host
+sanitization boundary** ([ADR-0079](adr/0079-rendered-html-sanitization.md)).
+Host-owned module-qualified rendering and sanitization free functions establish
+the invariant with one module-level `ammonia` `SANITIZER`. The private field
+prevents direct construction: the host sanitizer is the establishment door, and
+outside-module minting is possible only through the explicitly gate-policed
+trusted reconstruction door. There is no `Deserialize` (seed DTOs go through
+`deserialize_with`), no `From<String>`, no `Default`, and no `pub(crate)`
 constructor. The `sqlx::Decode` from the derived `#[derive(SqlxBridge)]` bridge
-(`common/src/render.rs:93`) is the one in-module path that fills the field
-without passing a door: a `rendered_html` column decodes straight into the type,
-like every other domain column, and deliberately does **not** sanitize on read
-([ADR-0123](adr/0123-rendered-html-storage-decode.md)). That is a decision, not
-an oversight — this is not new outside data, and routing it through
-`from_trusted` would put a gate-policed door on a path the gate cannot inspect.
-Its **blessing risk is real and accepted**: decoding some other text column into
-this type would bless it too. The decision rests on one argument — typing a
-field as `RenderedHtml` is a deliberate, reviewable act — and #701 made that
-mechanical: the `rendered-html-from-trusted` check covers both `from_trusted`
+is the one in-module path that fills the field without a public construction
+door: a `rendered_html` column decodes straight into the type, like every other
+domain column, and deliberately does **not** sanitize on read
+([ADR-0123](adr/0123-rendered-html-storage-decode.md)). Its **blessing risk is
+real and accepted**: decoding some other text column into this type would bless
+it too. The `rendered-html-from-trusted` check covers trusted reconstruction
 uses and direct production struct fields typed `RenderedHtml`, including
 `FromRow` decode fields, each requiring a local
 `rendered-html-from-trusted:allow <reason>` marker
-([ADR-0123](adr/0123-rendered-html-storage-decode.md)). `ammonia` sits behind a
-`sanitize` feature on `common`, off for wasm, enabled by `storage`, and `render`
-itself does not _exist_ without it (`common/src/render.rs:241,605`) — absence
-rather than a weaker guarantee. The allowlist is ammonia's audited default
-widened only to keep a `language-*` `class` on `<pre>`/`<code>`.
+([ADR-0123](adr/0123-rendered-html-storage-decode.md)). `RenderedHtml` stays
+common because dual-target consumers reach it; ammonia stays host-only.
 
 **A Post's media references are derived from that sanitized HTML, never
 supplied** ([ADR-0090](adr/0090-media-references-extracted-at-render.md)).
-`RenderOutput` holds the HTML and a `Vec<MediaReference>` with both fields
-private and `RenderOutput::render` as its only constructor, so a value whose
-reference set disagrees with its HTML is unrepresentable; `into_html` consumes
-the pair. Each reference retains its canonical stored-media identity plus its
+`RenderOutput` lives in `host`: its private HTML and `Vec<MediaReference>`
+fields and module-qualified `host::render` free function make a value whose
+reference set disagrees with its HTML unrepresentable; `into_html` consumes the
+pair. Each reference retains its canonical stored-media identity plus its
 complete local, absolute HTTP(S), or scheme-relative URL form while rendering
 and extraction remain configuration-free
 ([the live media-reference ownership decision](adr/0154-media-reference-live-ownership.md)).
@@ -532,9 +525,9 @@ remain implementation debt, not alternate lifecycle policy.
 reach these local rows.
 
 Cross-cutting values are validated newtypes whose `FromStr` is the single
-chokepoint: `Username`, `Slug`, `Tag`, `Password`
-(`common/src/{username,slug,tag,password}.rs`). Tagging is keyed on the `Tag`
-slug (`PostTag`, `post_tag_diff` in `storage/src/posts.rs`).
+chokepoint: `Username`, `Slug`, and `Tag` live in `common`; `Password` lives in
+`host`. Tagging is keyed on the `Tag` slug (`PostTag`, `post_tag_diff` in
+`storage/src/posts.rs`).
 
 **Post-shaped wire types are named for the content weight they carry**, not for
 the transaction that produced them
@@ -579,9 +572,10 @@ holds fetched remote content.
   sources", "when an update is received" — so the local `post_revisions`
   snapshot above implements nothing it decided, despite the resemblance.
 - **Sanitization of foreign HTML** on arrival
-  ([ADR-0079](adr/0079-rendered-html-sanitization.md)): `RenderedHtml::sanitize`
-  is already the door any future inbound producer must use, and the static check
-  enforces that, but no inbound producer exists yet.
+  ([ADR-0079](adr/0079-rendered-html-sanitization.md)): host-owned
+  module-qualified sanitization establishes the invariant before the existing
+  gate-policed trusted reconstruction seam mints `RenderedHtml`; no inbound
+  producer exists yet.
 - **Visibility Layers B/C**
   ([ADR-0020](adr/0020-content-visibility-and-subscription-model.md)):
   federation/email delivery channels and authenticated browsing for non-local
@@ -602,28 +596,24 @@ user-agent sniffing ([ADR-0015](adr/0015-atompub-serialization-surfaces.md)).
 
 Every URL that crosses a protocol boundary carries a **role** in its type —
 `FeedUrl`, `HubUrl`, `CanonicalUrl`, `ServiceDocUrl`, `HomepageUrl`,
-`PermalinkUrl`, … , each a `TaggedUrl<Role>` alias in `common/src/tagged_url.rs`
-(roles at `tagged_url.rs:212-287`;
-[ADR-0112](adr/0112-role-tagged-site-urls.md)). This is what stops two adjacent
+`PermalinkUrl`, … , each a `TaggedUrl<Role>` alias
+([ADR-0112](adr/0112-role-tagged-site-urls.md)). This is what stops two adjacent
 same-typed URLs being transposed: `send_publish(hub, feed)`,
 `render_rsd_document(service, homepage)`, and the `FeedMetadata`
-`canonical_url`/`self_url`/`hub_url` fields
-(`common/src/feed/metadata.rs:38-40`) were all live hazards before the roles
-existed.
+`canonical_url`/`self_url`/`hub_url` fields were all live hazards before the
+roles existed.
 
 ### Syndication feeds
 
 Public read-only feeds serve arbitrary feed readers, so every item carries the
 post's `rendered_html` — Atom `type="html"` and the RSS/JSON Feed equivalents
-([ADR-0015](adr/0015-atompub-serialization-surfaces.md)). Rendering lives in
-`common/src/feed/`: `render_atom` (`atom.rs:6`), `render_rss` (`rss.rs:16`), and
-`render_json` (`json.rs:6`). The URL grammar is `common/src/feed/feed_path.rs` —
-`FeedSurface::{Site, SiteTag, User, UserTag}` (`feed_path.rs:102-107`)
-canonicalized against three `FeedFormat`s. `server/src/feed/handlers.rs` serves
-the cached bytes; `regenerate_feed` (`server/src/feed/regenerate.rs:35`)
-rebuilds them. Scheduled posts reach feeds via `FeedWorker::go_live_pass`
-(`server/src/feed/worker.rs:84`), which enqueues regeneration for feeds whose
-posts crossed their publish time
+([ADR-0015](adr/0015-atompub-serialization-surfaces.md)). The CSR-reached
+`common::feed` grammar is exactly `FeedFormat`, `FeedSurface`, and
+`canonicalize`; the remaining Syndication Feed types and qualified rendering
+operations live in `host`. `server/src/feed/handlers.rs` serves the cached
+bytes, and `regenerate_feed` rebuilds them. Scheduled posts reach feeds via
+`FeedWorker::go_live_pass` (`server/src/feed/worker.rs:84`), which enqueues
+regeneration for feeds whose posts crossed their publish time
 ([ADR-0027](adr/0027-scheduled-publishing-time-gated-visibility.md)).
 
 **Accepted membership target.** Cached membership is to apply anonymous/Public
@@ -655,12 +645,9 @@ revalidation policy, not a regeneration promise
 [Current tuple completeness, item-derived timestamp, 304 metadata, and conditional parsing](https://github.com/jaunder-org/jaunder/issues/1054)
 remain implementation debt.
 
-The Atom feed document is built by upstream `atom_syndication` — `render_atom`
-assembles an `atom_syndication::Feed` and lets the crate emit the XML
-([ADR-0089](adr/0089-upstream-atom-document-io.md)). RSS goes through the `rss`
-crate the same way.
-
-### AtomPub editing interface
+The Atom feed document is built by upstream `atom_syndication` through the
+host-owned Syndication Feed renderer; RSS goes through the `rss` crate the same
+way ([ADR-0089](adr/0089-upstream-atom-document-io.md)).
 
 The authenticated Collection (`server/src/atompub/router.rs:16-33`:
 `/atompub/service`, the per-user post collection and member routes, the media
@@ -679,11 +666,10 @@ Format travels in the standard `atom:content` `type` attribute as a media type
 Markdown is `text/markdown`, Html is the `html` token. Reading is lenient — a
 bare `text`, an unrecognized type, or an absent one falls back to the account
 `default_post_format`, and `xhtml`/`text/html` defensively map to Html. The
-whole policy is the `format_wire` seam: the two private pure functions
-`format_to_wire` (`server/src/atompub/mapping.rs:41`) and `wire_to_format`
-(`mapping.rs:51`), revertible in one line. The seam has always lived in the
-server crate; only the namespace and `j:slug` definitions it works against live
-in `common/src/atompub`.
+whole policy is the `format_wire` seam: two private pure functions in the
+host-owned AtomPub mapping, `format_to_wire` and `wire_to_format`. Only the
+namespace and `j:slug` definitions they consume move with the rest of AtomPub;
+the behavior remains one-line reversible.
 
 For `text/org` entries, AtomPub create and update use that same full-block
 metadata interpretation and canonical metadata-free body as every other Org
@@ -693,13 +679,10 @@ header can supply only its absence. The authoritative invariant is
 [server-side Org metadata block canonicalization](adr/0155-server-side-org-metadata-block.md).
 
 Two Jaunder wire extensions ride the namespace `https://jaunder.org/ns/atompub`
-(`J_NS`, `common/src/atompub/ns.rs:6`;
-[ADR-0023](adr/0023-atompub-jaunder-wire-extensions.md)): a read-only `j:slug`
-on every entry — drafts and scheduled included, incoming values ignored
-(`mapping.rs:123`) — and
-`<j:extension version="1" features="format-media-type slug"/>` in the service
-document (`common/src/atompub/service.rs:68-70`), so clients feature-detect once
-and degrade gracefully.
+([ADR-0023](adr/0023-atompub-jaunder-wire-extensions.md)): a read-only `j:slug`
+on every entry — drafts and scheduled included, incoming values ignored — and
+`<j:extension version="1" features="format-media-type slug"/>` in the Service
+Document, so clients feature-detect once and degrade gracefully.
 
 `CollectionDecl::accept` models Service Document discovery ranges with the
 closed `CollectionAccept` type, separately from concrete uploaded-media
@@ -711,32 +694,23 @@ can never enter media request parsing or storage.
 Atom document I/O is upstream's, not ours
 ([ADR-0089](adr/0089-upstream-atom-document-io.md)). `atom_syndication` 0.12.10
 made bare-`<entry>` I/O public, so the hand-rolled reader and writers are gone:
-parsing is `Entry::from_str` at the call site and serialization is
-`Entry::write_to` / `Feed::write_to` (`common/src/atompub/entry.rs:334`, `:406`,
-`:483`). Jaunder's own foreign markup stays Jaunder's — `app:control/app:draft`
-and `j:slug` live in the entry's extension map behind `is_draft`/`set_draft` and
-`j_slug`/`set_j_slug`, each helper owning its `xmlns:` prefix so an entry
-declares a namespace only when it actually carries the marker. `quick-xml`
-remains a direct dependency, but only for the non-Atom documents Jaunder still
-writes itself: the Service Document, RSD, and the shared XML helpers
-(`common/src/atompub/{service,rsd,xml}.rs`). Category discovery is inline: an
+parsing is `Entry::from_str` at the host call site and serialization is
+`Entry::write_to` / `Feed::write_to`. Jaunder's own foreign markup stays
+Jaunder's — `app:control/app:draft` and `j:slug` live in the entry's extension
+map behind helpers that own each `xmlns:` prefix. `quick-xml` is a direct host
+dependency for the non-Atom documents Jaunder writes itself: the Service
+Document, RSD, and shared XML helpers. Category discovery is inline: an
 applicable Collection declares its open-set `app:categories` terms with
 `fixed="no"` in the Service Document. Jaunder does not advertise an
 `app:categories href` or serve an out-of-line Categories Document
 ([inline-only AtomPub category discovery decision](adr/0157-inline-only-atompub-category-discovery.md)).
 
-The crates come from the registry — `atom_syndication` 0.12.10 and `rss` 2.1
-(`common/Cargo.toml:25-27`). Earlier,
-[ADR-0043](adr/0043-quick-xml-fork-patch.md) (now **superseded**) had cleared
-two RUSTSEC advisories by forking both crates onto `quick-xml` 0.41 and wiring
-the forks in through `[patch.crates-io]`, flake inputs, and a crane vendor
-override. **That apparatus was deleted outright** — the only surviving
-`[patch.crates-io]` entry is an unrelated `lettre` fork (`Cargo.toml:134-135`),
-`flake.nix` has no syndication inputs and no vendor override, and `deny.toml`
-keeps `allow-git = []`. The advisories stay cleared by the same single mechanism
-as before: `quick-xml` ≥ 0.41.
-
-### WebSub publishing
+The crates come from the registry — `atom_syndication` 0.12.10 and `rss` 2.1.
+Earlier, [ADR-0043](adr/0043-quick-xml-fork-patch.md) (now **superseded**) had
+cleared two RUSTSEC advisories by forking both crates onto `quick-xml` 0.41 and
+wiring the forks in through `[patch.crates-io]`, flake inputs, and a crane
+vendor override. **That apparatus was deleted outright** — the only surviving
+requirement is that the registry releases resolve `quick-xml` ≥ 0.41, as before.
 
 **Accepted publisher target.** Publisher-side WebSub is to cover every Site,
 User, Site Tag, and User Tag Syndication Feed URL in RSS, Atom, and JSON. One
@@ -902,19 +876,20 @@ succeed. Outer router middleware appends the expiry header, preserving any
 
 ### Password hashing
 
-Passwords are hashed with **Argon2id** at the crate-default parameters (m=19456,
-t=2) via `common::password::Password::hash` (`common/src/password.rs`)
+Passwords are hashed and verified with **Argon2id** at the crate-default
+parameters (m=19456, t=2) by module-qualified `host::password` free functions
 ([ADR-0018](adr/0018-constant-time-authentication.md)). Test builds may enable
 the `cheap-kdf` feature, which swaps in `Params::MIN_M_COST` with t=1 so the
-suite is not dominated by KDF time; `verify()` derives cost from the stored PHC
-hash, so it needs no branch. The feature fails closed twice, at different times:
+suite is not dominated by KDF time; verification derives cost from the stored
+PHC hash, so it needs no branch. The feature fails closed twice, at different
+times:
 
 - **Compile time** —
   `#[cfg(all(feature = "cheap-kdf", not(debug_assertions)))] compile_error!`
-  (`common/src/lib.rs`). The guard keys on `debug_assertions`, so an _optimized_
+  (`host/src/lib.rs`). The guard keys on `debug_assertions`, so an _optimized_
   build carrying the feature fails to build rather than producing a weak-hashing
   artifact; ordinary test builds are unaffected.
-- **Startup** — `server/src/main.rs` reads `common::CHEAP_KDF_ENABLED` and, if
+- **Startup** — `server/src/main.rs` reads `host::CHEAP_KDF_ENABLED` and, if
   set, prints a `FATAL:` line and exits before CLI parsing. This catches the
   debug-build-in-production case the compile-time guard lets through.
 
@@ -930,14 +905,15 @@ split by the **entropy of the value being validated**:
   `UserStorage::authenticate` (`storage/src/users.rs:304`) performs an Argon2
   verification against a fixed dummy hash (`dummy_password_hash()`,
   `storage/src/helpers.rs:424` — computed once via `OnceLock` through the real
-  `Password::hash` path so it carries production parameters, with a hardcoded
-  valid-hash fallback so initialization is infallible) on the absent-user path
-  before returning `InvalidCredentials` (`storage/src/users.rs:350`), closing
-  the username-enumeration timing oracle. **Durable invariant: the absent-user
-  path MUST keep this equalizing verification** — do not remove it as a "fast
-  path" and preserve it through any refactor. The backend dedup is already done:
-  `authenticate` is a single generic `UserStore<DB: Backend>` impl
-  (`storage/src/users.rs:212`), so SQLite and Postgres cannot drift apart here
+  module-qualified `host::password` hash free function so it carries production
+  parameters, with a hardcoded valid-hash fallback so initialization is
+  infallible) before returning `InvalidCredentials`
+  (`storage/src/users.rs:350`), closing the username-enumeration timing oracle.
+  **Durable invariant: the absent-user path MUST keep this equalizing
+  verification** — do not remove it as a "fast path" and preserve it through any
+  refactor. The backend dedup is already done: `authenticate` is a single
+  generic `UserStore<DB: Backend>` impl (`storage/src/users.rs:212`), so SQLite
+  and Postgres cannot drift apart here
   ([ADR-0018](adr/0018-constant-time-authentication.md),
   [ADR-0114](adr/0114-absent-user-timing-equalization.md)). Verify cost is
   derived from the hash string's encoded params, so the dummy hash only
@@ -1649,11 +1625,11 @@ storage configuration ([ADR-0064](adr/0064-backup-target-auto-derivation.md),
 [ADR-0054](adr/0054-backup-test-homing-and-uniform-restore-failure.md)); and
 `site-config set/get/list/unset` reads and writes site settings.
 
-`site-config` is not a free-form door. Its `key` argument is the `SiteConfigKey`
-enum, so clap rejects an unknown key at parse time, and each key carries the
-validator that `set` runs before any row is written
+`site-config` is not a free-form door. Its `key` argument is host-owned
+`SiteConfigKey`, so clap rejects an unknown key at parse time, and each key
+carries the validator that `set` runs before any row is written
 ([ADR-0102](adr/0102-config-key-closed-registry.md); the registry macro is
-`common/src/config_key.rs:85,158`). `list` is the deliberate exception: it dumps
+`host/src/config_key.rs:58,139`). `list` is the deliberate exception: it dumps
 every stored row, flagging keys outside the registry as `UNKNOWN KEY` and
 recognised keys holding unparseable values as `INVALID`, so legacy rows stay
 visible.
@@ -1880,19 +1856,17 @@ the rule is the one per-type part. `Deref<Target = str>` is the single
 sanctioned use of deref polymorphism in the repo — it retires the `.as_str()`
 tax that made the pre-derive newtypes too thin to propagate. Attribute options
 select the profiles (`macros/src/str_newtype.rs:464-479`): `secret` tightens the
-surface to a redacting `Debug` plus `AsRef<str>` (`Password`,
-`common/src/password.rs:19`), `secret, serde` re-opens only the validating serde
-bridge for an inbound twin (`common/src/password.rs:64`,
-`common/src/invite.rs:26`), `secret, sqlx` re-adds storability
-(`host/src/invite.rs:27`), and `no_sqlx, no_ord` gives the bearer-token
-`RawToken` the full ergonomic trailer minus storability and ordering
-(`common/src/token.rs:109`). Numeric IDs take the fixed `IdNewtype` trailer
-(eight of them, `common/src/ids.rs:15-44`); bounded numeric values take the
-parameterized `NumNewtype` one, whose bound is declarative and re-run by
-`FromStr`, serde, and the column (`PageSize`, `PageOffset`, `RowLimit` —
-`common/src/pagination.rs:29,62,81`), with an opt-in `clamp` flag
-(`macros/src/num_newtype.rs:430`) for a public bound that should coerce rather
-than reject.
+surface to a redacting `Debug` plus `AsRef<str>` (`host::Password`), while
+`secret, serde` re-opens only the validating serde bridge for the dual-target
+inbound `common::ProfferedPassword`; `secret, sqlx` re-adds storability, and
+`no_sqlx, no_ord` gives the bearer-token `RawToken` the full ergonomic trailer
+minus storability and ordering (`common/src/token.rs:109`). Numeric IDs take the
+fixed `IdNewtype` trailer (eight of them, `common/src/ids.rs:15-44`); bounded
+numeric values take the parameterized `NumNewtype` one, whose bound is
+declarative and re-run by `FromStr`, serde, and the column (`PageSize`,
+`PageOffset`, `RowLimit` — `common/src/pagination.rs:29,62,81`), with an opt-in
+`clamp` flag (`macros/src/num_newtype.rs:430`) for a public bound that should
+coerce rather than reject.
 
 String-backed domain values use one validating generated trailer. The
 invariant-first question remains “is there a string this type should refuse?”,
@@ -1942,9 +1916,9 @@ the item's first attribute, since an attribute macro sees only what is written
 below it. Fourteen enums adopt it, eight of them with `sqlx`: `PostFormat`
 (`common/src/render.rs:26`), `TargetKind` and `DefaultAudience`
 (`common/src/visibility.rs:43,180`), `MediaSource` (`common/src/media.rs:601`),
-`SmtpTlsMode` (`common/src/smtp_tls_mode.rs:18`), the two config-key enums
-(`common/src/config_key.rs:103,221`), and `FeedEventStatus`
-(`common/src/feed/event_status.rs:17`).
+`SmtpTlsMode` (`common/src/smtp_tls_mode.rs:18`), the host-owned `UserConfigKey`
+and `SiteConfigKey` (`host/src/config_key.rs:206,91`), and host-owned
+`FeedEventStatus`.
 
 The attribute owns the _convention_; `strum` owns the _engine_ — token mapping,
 `Display`, `FromStr`, `VariantArray`, `EnumMessage`
@@ -2682,18 +2656,26 @@ virtual manifests would otherwise default to resolver 1
 ([ADR-0104](adr/0104-edition-2024-unsafe-env-and-precise-capturing.md)).
 
 **Workspace layering.** The root workspace's shared crates are target-scoped
-([ADR-0058](adr/0058-host-crate-layering.md)): `common` is target-agnostic
-(host + wasm, zero host-only cfg carve-outs); `host` holds strictly-host-focused
-shared code; and `client` is the wasm-only peer
-([ADR-0069](adr/0069-client-crate-wasm-only-home.md)). `host`'s load-bearing
-invariant is that it depends on no workspace crate _above_ it — `common` and the
-build-time `macros` are permitted — and it may take external infrastructure deps
-(`anyhow`, `base64`, `http`, `opentelemetry`, `rand`, `sha2`, `sqlx`, `tracing`)
-but never our domain or storage abstractions
-([ADR-0058](adr/0058-host-crate-layering.md)). The `macros` proc-macro crate is
-orthogonal to that runtime trio — build-time tooling compiled for the compiler
-host, home to all workspace proc-macros including the three newtype derives
-`StrNewtype`, `IdNewtype` and `NumNewtype`
+([ADR-0058](adr/0058-host-crate-layering.md),
+[common/host target-reachability closure](adr/drafts/common-host-target-closure.md)):
+[#847](https://github.com/jaunder-org/jaunder/issues/847) subsumes
+[#855](https://github.com/jaunder-org/jaunder/issues/855) at this target
+boundary. For items currently in `common`, `common` owns types and operations
+reached by CSR or another dual-target consumer, while `host` owns the unconsumed
+`common` machinery; this does not make all server- or storage-only code `host`
+code. `client` is the browser-infrastructure peer
+([ADR-0069](adr/0069-client-crate-wasm-only-home.md)). `host` has no runtime
+workspace dependency other than `common`; `macros` is its existing build-time
+exception. The optional `common/sqlx` bridge is instead the sole
+ownership-forced exception to `common`'s otherwise dual-target dependency
+purity, required by orphan-rule trait ownership. External dependencies remain
+allowed. A cargo-metadata gate enforces that host invariant and that the exact
+target/feature-resolved CSR closure excludes `host`, `storage`, `server`, and
+`common/sqlx`; the existing wasm build proves that closure compiles. The graph
+check cannot classify semantics, so review owns the host-only judgement. The
+`macros` proc-macro crate is orthogonal to that runtime trio — build-time
+tooling compiled for the compiler host, home to all workspace proc-macros
+including the three newtype derives `StrNewtype`, `IdNewtype` and `NumNewtype`
 ([ADR-0062](adr/0062-macros-crate-proc-macro-home.md),
 [ADR-0063](adr/0063-domain-value-newtype-convention.md)). `macros` is itself a
 workspace member, so the coverage source filter admits it and its expansion
@@ -2702,27 +2684,14 @@ correction itself (`:76-83`, #412).
 
 **Dependency patching.** The workspace carries one temporary git
 `[patch.crates-io]` entry: `lettre`, routed to a `jaunder-org` fork pinned by
-rev (`Cargo.toml:124-125`) until the mailbox-parsing fix lands upstream
-([ADR-0119](adr/0119-lettre-fork-pinned-by-rev.md)) — lettre's own RFC 2822
-mailbox grammar cannot re-parse addresses its `Address` type accepts, so
-`MessageBuilder::build` fails for a legal quoted local part or address literal
-(#297). It is pinned by rev rather than branch so a build input changes only
-when someone changes it here; moving it means pushing the fork, updating the
-rev, and `cargo update -p lettre`, since the lockfile pins the commit either
-way. It is paired with a `deny.toml` `[sources.allow-org]` entry for
-`jaunder-org` (`deny.toml:248-253`): `unknown-git` is only "warn", so that entry
-is not what makes the gate pass — it is what makes the exception deliberate, and
-its removal the signal the patch is gone. Drop both together.
-
-The repository formerly ran a much larger patching apparatus: `atom_syndication`
-and `rss` were routed to forks raising their `quick-xml` requirement, with the
-hermetic Nix build re-resolving the same revs through crane's vendor override
-([ADR-0043](adr/0043-quick-xml-fork-patch.md), now **superseded**). That era is
-over. Upstream releases of both crates now depend on `quick-xml` ≥ 0.41, so the
-fork bridge was retired and AtomPub Atom document I/O was delegated to
-`atom_syndication` ([ADR-0089](adr/0089-upstream-atom-document-io.md)). Nothing
-of the apparatus survives: no fork entries in `[patch.crates-io]`, no
-`flake = false` fork inputs, and no `overrideVendorGitCheckout` in `flake.nix`.
+rev until the mailbox-parsing fix lands upstream
+([ADR-0119](adr/0119-lettre-fork-pinned-by-rev.md)). `lettre`'s RFC 2822 mailbox
+grammar cannot re-parse addresses its `Address` type accepts, so
+`MessageBuilder::build` fails for a legal quoted local part or address literal.
+The earlier `atom_syndication`/`rss` fork apparatus was removed under
+[ADR-0089](adr/0089-upstream-atom-document-io.md): no fork entries in
+`[patch.crates-io]`, no `flake = false` fork inputs, and no
+`overrideVendorGitCheckout` in `flake.nix` remain.
 
 **A pinned formatter.** The devShell's `leptosfmt` is not a released version:
 the flake overrides `pkgs.leptosfmt` to a post-fix upstream rev

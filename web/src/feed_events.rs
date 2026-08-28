@@ -2,8 +2,8 @@
 
 use std::collections::BTreeSet;
 
-use common::feed::affected_feed_urls;
 use common::{tag::Tag, username::Username};
+use host::feed::affected_feed_urls;
 use storage::{FeedEventError, FeedEventStorage};
 
 #[cfg(test)]

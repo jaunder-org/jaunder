@@ -6,9 +6,9 @@
 mod identity;
 
 pub use identity::{
-    parse_audience_name, parse_bio, parse_display_name, parse_email, parse_password,
-    parse_raw_token, parse_session_label, parse_smtp_password, parse_smtp_username,
-    parse_token_hash, parse_username,
+    parse_audience_name, parse_bio, parse_display_name, parse_email, parse_raw_token,
+    parse_session_label, parse_smtp_password, parse_smtp_username, parse_token_hash,
+    parse_username,
 };
 
 mod content;
@@ -34,6 +34,6 @@ pub use urls_time::{
 mod numbers;
 
 pub use numbers::{
-    parse_destination_path, parse_feed_min_days, parse_feed_min_items, parse_invite_ttl_hours,
-    parse_page_offset, parse_page_size, parse_retention_count, parse_row_limit,
+    parse_destination_path, parse_invite_ttl_hours, parse_page_offset, parse_page_size,
+    parse_retention_count, parse_row_limit,
 };

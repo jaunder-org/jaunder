@@ -3,12 +3,10 @@
 use crate::backend::Backend;
 use async_trait::async_trait;
 use common::backup::{BackupConfig, BackupMode, BackupSchedule, DestinationPath, RetentionCount};
-use host::smtp_config::SmtpConfig;
-// The closed registry of site-config keys (#687) — re-exported so
-// `storage::SiteConfigKey` resolves for the call sites that name one.
-pub use common::config_key::SiteConfigKey;
-use common::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
 use common::media::{MaxFileSize, UserQuota};
+use host::config_key::SiteConfigKey;
+use host::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
+use host::smtp_config::SmtpConfig;
 // Re-exported so `storage::RegistrationPolicy` keeps resolving for call sites, and
 // used by `get_registration_policy` below (the typed config accessor, #607).
 pub use common::registration::RegistrationPolicy;
@@ -463,15 +461,16 @@ mod tests {
     use super::{SiteConfigKey, SmtpTlsMode};
     use crate::test_support::{Backend, backends, backends_matrix};
     use common::backup::{BackupConfig, BackupMode, RetentionCount};
-    use common::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
     use common::media::{MaxFileSize, UserQuota};
     use common::registration::RegistrationPolicy;
     use common::tagged_url::HubUrl;
     use common::test_support::{
-        parse_destination_path, parse_feed_min_days, parse_feed_min_items, parse_max_file_size,
-        parse_retention_count, parse_site_title, parse_smtp_username, parse_url, parse_user_quota,
+        parse_destination_path, parse_max_file_size, parse_retention_count, parse_site_title,
+        parse_smtp_username, parse_url, parse_user_quota,
     };
     use common::visibility::DefaultAudience;
+    use host::feed::{FeedMinDays, FeedMinItems, FeedsConfig};
+    use host::test_support::{parse_feed_min_days, parse_feed_min_items};
     use rstest::*;
     use rstest_reuse::*;
 

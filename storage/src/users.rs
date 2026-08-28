@@ -11,10 +11,10 @@ use common::bio::Bio;
 use common::display_name::DisplayName;
 use common::email::Email;
 use common::ids::UserId;
-use common::password::Password;
-use common::stored_password_hash::StoredPasswordHash;
 use common::time::UtcInstant;
 use common::username::Username;
+use host::password::Password;
+use host::stored_password_hash::StoredPasswordHash;
 
 use crate::helpers::{UserRow, user_record_from_row};
 
@@ -436,7 +436,7 @@ where
         username: &Username,
         password: &Password,
     ) -> Result<UserRecord, UserAuthError> {
-        self.authenticate_with(username, password, common::password::Password::verify)
+        self.authenticate_with(username, password, host::password::verify)
             .await
     }
 
@@ -512,9 +512,7 @@ where
 mod tests {
     use super::*;
     use crate::test_support::{Backend, SeedUser, backends};
-    use common::test_support::{
-        parse_bio, parse_display_name, parse_email, parse_password, parse_username,
-    };
+    use common::test_support::{parse_bio, parse_display_name, parse_email, parse_username};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -535,7 +533,7 @@ mod tests {
             .users
             .create_user(
                 &username,
-                &parse_password("password123"),
+                &host::test_support::parse_password("password123"),
                 Some(&display_name),
                 false,
             )
@@ -575,7 +573,12 @@ mod tests {
         let user_id = env
             .state
             .users
-            .create_user(&username, &parse_password("password123"), None, false)
+            .create_user(
+                &username,
+                &host::test_support::parse_password("password123"),
+                None,
+                false,
+            )
             .await
             .unwrap();
 
@@ -590,7 +593,7 @@ mod tests {
     async fn user_created_and_authenticated_instants_round_trip(#[case] backend: Backend) {
         let env = backend.setup().await;
         let username = parse_username("authenticated");
-        let password = parse_password("password123");
+        let password = host::test_support::parse_password("password123");
         let user_id = env
             .state
             .users
@@ -723,7 +726,10 @@ mod tests {
         let result = env
             .state
             .users
-            .authenticate(&parse_username("alice"), &parse_password("password123"))
+            .authenticate(
+                &parse_username("alice"),
+                &host::test_support::parse_password("password123"),
+            )
             .await;
         // §3.1a: the underlying sqlx::Error is preserved as a typed source
         // (not stringified), so the boundary can classify it.
@@ -750,7 +756,10 @@ mod tests {
         let result = env
             .state
             .users
-            .authenticate(&user.username, &parse_password("password123"))
+            .authenticate(
+                &user.username,
+                &host::test_support::parse_password("password123"),
+            )
             .await;
         assert!(matches!(result, Err(UserAuthError::Internal(_))));
     }
@@ -770,7 +779,10 @@ mod tests {
         let result = env
             .state
             .users
-            .authenticate(&user.username, &parse_password("password123"))
+            .authenticate(
+                &user.username,
+                &host::test_support::parse_password("password123"),
+            )
             .await;
         assert!(matches!(result, Err(UserAuthError::Internal(_))));
     }
@@ -795,7 +807,10 @@ mod tests {
         let result = env
             .state
             .users
-            .authenticate(&user.username, &parse_password("password123"))
+            .authenticate(
+                &user.username,
+                &host::test_support::parse_password("password123"),
+            )
             .await;
         assert!(matches!(result, Err(UserAuthError::Internal(_))));
     }
@@ -842,7 +857,10 @@ mod tests {
         let result = env
             .state
             .users
-            .authenticate(&user.username, &parse_password("password123"))
+            .authenticate(
+                &user.username,
+                &host::test_support::parse_password("password123"),
+            )
             .await;
         assert!(matches!(result, Err(UserAuthError::Internal(_))));
     }
@@ -856,7 +874,7 @@ mod tests {
             .users
             .create_user(
                 &parse_username("alice"),
-                &parse_password("force-hash-error-for-test-coverage"),
+                &host::test_support::parse_password("force-hash-error-for-test-coverage"),
                 None,
                 false,
             )
@@ -869,7 +887,7 @@ mod tests {
     async fn authentication_password_source_chain_is_preserved(#[case] backend: Backend) {
         let env = backend.setup().await;
         let username = parse_username("alice");
-        let password = parse_password("password123");
+        let password = host::test_support::parse_password("password123");
         env.state
             .users
             .create_user(&username, &password, None, false)
@@ -896,11 +914,11 @@ mod tests {
             .expect("UserAuthError retains io::Error");
         let password_error = io_error
             .get_ref()
-            .and_then(|source| source.downcast_ref::<common::password::PasswordError>())
+            .and_then(|source| source.downcast_ref::<host::password::PasswordError>())
             .expect("io::Error retains PasswordError");
         let (
-            common::password::PasswordError::VerificationFailed(actual),
-            common::password::PasswordError::VerificationFailed(expected),
+            host::password::PasswordError::VerificationFailed(actual),
+            host::password::PasswordError::VerificationFailed(expected),
         ) = (password_error, &expected)
         else {
             panic!("expected typed verification failures");
@@ -916,7 +934,7 @@ mod tests {
     ) {
         let env = backend.setup().await;
         let username = parse_username("absent");
-        let password = parse_password("password123");
+        let password = host::test_support::parse_password("password123");
         let operation = async {
             crate::with_closeable_pool!(env.base.pool(), pool, {
                 UserStore::new(pool.clone())

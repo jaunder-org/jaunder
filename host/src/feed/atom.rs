@@ -84,9 +84,11 @@ mod tests {
 
     use super::*;
     use crate::feed::metadata::{FeedItem, FeedMetadata};
-    use crate::ids::PostId;
-    use crate::render::RenderedHtml;
-    use crate::test_support::{parse_post_summary, parse_post_title, parse_url};
+    use common::{
+        ids::PostId,
+        render::RenderedHtml,
+        test_support::{parse_post_summary, parse_post_title, parse_url},
+    };
 
     fn meta(hub: Option<&str>, description: Option<&str>) -> FeedMetadata {
         FeedMetadata {
@@ -118,10 +120,10 @@ mod tests {
         let out = render_atom(&meta(None, Some("A site")), &[]);
         assert!(out.body().contains("<feed"));
         assert!(!out.body().contains("<entry>"));
-        assert_eq!(out.format(), crate::feed::FeedFormat::Atom);
+        assert_eq!(out.format(), common::feed::FeedFormat::Atom);
         assert_eq!(
             out.content_type(),
-            crate::feed::FeedFormat::Atom.content_type()
+            common::feed::FeedFormat::Atom.content_type()
         );
     }
     #[test]

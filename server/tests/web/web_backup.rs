@@ -1,7 +1,7 @@
 use axum::http::StatusCode;
 use common::backup::{BackupConfig, BackupMode};
+use host::config_key::SiteConfigKey;
 use server_fn::ServerFn;
-use storage::SiteConfigKey;
 
 use rstest::*;
 use rstest_reuse::*;

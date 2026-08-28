@@ -79,6 +79,11 @@ stays a **browser** concern (`js_sys::Date`), orthogonal to chrono; its RFC 3339
 output parses into `UtcInstant`. Migrating that helper to chrono is ADR-0056's
 separate scope.
 
+> **Annotation (2026-08-27).** As of #847, AtomPub call sites and serialization
+> machinery named in this decision had moved to `host`; the common `UtcInstant`
+> boundary type and timestamp contract remained unchanged. Current ownership:
+> [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 ## Consequences
 
 - Every timestamp on the web boundary is validated in one place (`UtcInstant`),

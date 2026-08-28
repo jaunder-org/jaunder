@@ -1,26 +1,28 @@
-//! The closed registries of site-wide and per-user configuration keys (#687).
+//! Closed site-wide and per-user configuration-key registries (#687).
 //!
-//! A key cannot exist here without a validator: both are columns of one table — one
-//! scannable block, so the key list and its validators cannot drift apart. See spec D1.
+//! A key cannot exist without a validator: each registry is one scannable table,
+//! so its key list and value contracts cannot drift apart.
 
 use std::str::FromStr;
 
 use thiserror::Error;
 
-use crate::backup::{BackupMode, BackupSchedule, DestinationPath, RetentionCount};
 use crate::feed::{FeedMinDays, FeedMinItems};
-use crate::media::{MaxFileSize, UserQuota};
-use crate::registration::RegistrationPolicy;
-use crate::render::PostFormat;
-use crate::site::SiteTitle;
-use crate::smtp_host::SmtpHost;
-use crate::smtp_password::SmtpPassword;
-use crate::smtp_port::SmtpPort;
-use crate::smtp_sender::SmtpSender;
-use crate::smtp_tls_mode::SmtpTlsMode;
-use crate::smtp_username::SmtpUsername;
-use crate::tagged_url::{BaseUrl, HubUrl};
-use crate::visibility::DefaultAudience;
+use common::{
+    backup::{BackupMode, BackupSchedule, DestinationPath, RetentionCount},
+    media::{MaxFileSize, UserQuota},
+    registration::RegistrationPolicy,
+    render::PostFormat,
+    site::SiteTitle,
+    smtp_host::SmtpHost,
+    smtp_password::SmtpPassword,
+    smtp_port::SmtpPort,
+    smtp_sender::SmtpSender,
+    smtp_tls_mode::SmtpTlsMode,
+    smtp_username::SmtpUsername,
+    tagged_url::{BaseUrl, HubUrl},
+    visibility::DefaultAudience,
+};
 
 /// Error returned when a stored or offered value does not parse as its key's type.
 ///
@@ -156,12 +158,11 @@ site_config_keys! {
     SmtpUsername           => "smtp.username"             : SmtpUsername,                 bad: "";
     SmtpPassword           => "smtp.password"             : SmtpPassword,                 bad: "";
 }
-
 /// Error returned when a stored or offered per-user value does not parse as its key's
 /// type.
 ///
-/// Separate from [`InvalidSiteConfigValue`] because the two registries are separate
-/// closed sets: a `user_config` failure can never name a site key, and the type says so.
+/// Separate from [`InvalidSiteConfigValue`] because the two registries are closed sets:
+/// a `user_config` failure can never name a site key.
 #[derive(Debug, Error)]
 #[error("{key}: {reason}")]
 pub struct InvalidUserConfigValue {
@@ -186,18 +187,16 @@ where
 
 /// Emits [`UserConfigKey`] and its per-key validator from one table.
 ///
-/// The same shape as [`site_config_keys!`], minus the `{ optional }` marker: no per-user
-/// key uses the empty-means-unset contract, and a marker no row spells is a branch no
-/// test could reach. Each row is `Variant => "dotted.key" : <value>, bad: "<example>";`.
+/// No per-user key uses the empty-means-unset contract. Each row is
+/// `Variant => "dotted.key" : <value>, bad: "<example>";`.
 macro_rules! user_config_keys {
     ($(
         $variant:ident => $lit:literal : $value:ident , bad: $bad:literal ;
     )+) => {
         /// A per-user configuration key — the only way to name one.
         ///
-        /// Closed by construction, exactly as [`SiteConfigKey`] is: `user_config` has no
-        /// CLI door, but the typed seam is what keeps a typo from writing a row nothing
-        /// will ever read back.
+        /// Closed construction keeps a typo from writing a `user_config` row
+        /// that no typed reader can reach.
         #[macros::text_enum(
             sqlx,
             error = UnknownUserConfigKey,
@@ -346,8 +345,7 @@ mod tests {
             assert!(key.validate(token).is_err(), "{token:?} must reject");
         }
     }
-
-    /// D8: the per-user registry is closed and validating in the same two ways.
+    /// The per-user registry is closed and validates through its declared value type.
     #[test]
     fn user_config_key_validates_its_value() {
         assert!(

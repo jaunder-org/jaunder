@@ -5,11 +5,7 @@ edition = "2024"
 license = "GPL-3.0-only"
 
 [dependencies]
-# `sanitize` gates `common::render::render()`, whose every caller lives in this
-# crate (`post_service`, plus the `test_support` fixtures) — so enabling it here is
-# what puts the sanitizer on the host build (and, via workspace feature
-# unification, in the host test/coverage run).
-common = { workspace = true, features = ["sqlx", "sanitize"] }
+common = { workspace = true, features = ["sqlx"] }
 host = { path = "../host" }
 anyhow.workspace = true
 async-trait.workspace = true
@@ -46,6 +42,7 @@ mockall = { workspace = true, optional = true }
 # its tests can use `common::test_support` (external test crates get it via the
 # `test-support` feature above).
 common = { workspace = true, features = ["test-support"] }
+host = { workspace = true, features = ["test-support", "test-utils"] }
 tempfile.workspace = true
 rstest.workspace = true
 rstest_reuse.workspace = true
@@ -59,12 +56,12 @@ mockall.workspace = true
 [features]
 default = ["sqlx"]
 sqlx = []
-test-utils = ["dep:mockall"]
+test-utils = ["dep:mockall", "host/test-utils"]
 # `seed-posts` gates only `seed_post_input` (the shared timeline-post recipe)
 # and pulls NO extra deps, so the `test-support` binary can link the recipe
 # without the heavy scaffolding. `test-support` implies it.
 seed-posts = []
-test-support = ["seed-posts", "dep:tempfile", "dep:rstest_reuse", "common/test-support"]
+test-support = ["seed-posts", "dep:tempfile", "dep:rstest_reuse", "common/test-support", "host/test-support"]
 
 [lints]
 workspace = true

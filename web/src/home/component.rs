@@ -7,9 +7,8 @@ use leptos::prelude::*;
 
 use crate::feed_discovery::FeedDiscovery;
 use crate::timeline::{TimelineGate, TimelineState, list_local_timeline, wire_timeline_resolve};
-use common::feed::FeedSurface;
-use common::pagination::PageSize;
 use common::seed::PageSeed;
+use common::{feed::FeedSurface, pagination::PageSize};
 
 #[component]
 pub fn HomePage() -> impl IntoView {
@@ -60,7 +59,6 @@ pub fn HomePage() -> impl IntoView {
 
     view! {
         <FeedDiscovery surface=&FeedSurface::Site />
-        // The masthead goes in the gate's `children` slot, which renders in the
         // loading and rows arms but not over an error — the error branch replaces
         // masthead + rows together. The gate keeps that subtree alive across
         // `Loading → Rows` rather than rebuilding it, which matters here because it

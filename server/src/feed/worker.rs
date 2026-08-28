@@ -6,10 +6,10 @@ use std::time::Duration;
 
 use crate::websub::WebSubClient;
 use chrono::Utc;
-use common::feed::{FeedPath, affected_feed_urls};
 use common::ids::FeedEventId;
 use common::tagged_url::{FeedUrl, HubUrl, compose};
 use common::time::UtcInstant;
+use host::feed::{FeedPath, affected_feed_urls};
 use storage::{
     FeedCacheStorage, FeedEventRecord, FeedEventStorage, PostStorage, SiteConfigStorage,
 };
@@ -486,7 +486,8 @@ mod tests {
     use super::*;
     use crate::websub::NoopWebSubClient;
     use common::site::SiteIdentity;
-    use storage::{FeedEventError, FeedEventRecord, FeedEventStatus};
+    use host::feed::FeedEventStatus;
+    use storage::{FeedEventError, FeedEventRecord};
 
     fn event(id: i64, feed_url: &str, attempts: i32) -> FeedEventRecord {
         let now = UtcInstant::now();
@@ -594,10 +595,10 @@ mod tests {
         }
     }
 
-    fn test_feeds_config() -> common::feed::FeedsConfig {
-        common::feed::FeedsConfig {
-            min_items: common::test_support::parse_feed_min_items("10"),
-            min_days: common::test_support::parse_feed_min_days("30"),
+    fn test_feeds_config() -> host::feed::FeedsConfig {
+        host::feed::FeedsConfig {
+            min_items: host::test_support::parse_feed_min_items("10"),
+            min_days: host::test_support::parse_feed_min_days("30"),
             websub_hub_url: None,
         }
     }
@@ -1126,9 +1127,9 @@ mod tests {
             .expect_get_feeds_config()
             .times(0..)
             .returning(|| {
-                Ok(common::feed::FeedsConfig {
-                    min_items: common::test_support::parse_feed_min_items("10"),
-                    min_days: common::test_support::parse_feed_min_days("30"),
+                Ok(host::feed::FeedsConfig {
+                    min_items: host::test_support::parse_feed_min_items("10"),
+                    min_days: host::test_support::parse_feed_min_days("30"),
                     websub_hub_url: None,
                 })
             });

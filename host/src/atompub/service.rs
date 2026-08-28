@@ -11,8 +11,8 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use super::title::{CollectionTitle, WorkspaceTitle};
 use super::xml::{write_empty_element, write_text_element};
 use super::{APP_NS, ATOM_NS, J_NS};
-use crate::tag::Tag;
-use crate::tagged_url::CollectionHrefUrl;
+use common::tag::Tag;
+use common::tagged_url::CollectionHrefUrl;
 
 /// Media range advertised for an `AtomPub` collection in a Service Document.
 ///
@@ -127,22 +127,22 @@ fn write_collection(writer: &mut Writer<Vec<u8>>, coll: &CollectionDecl) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::parse_url;
+    use common::test_support::parse_url;
 
     /// A representative two-collection service document used by the serializer tests.
     fn sample_doc() -> ServiceDocument {
         let username = "alice".parse().unwrap();
         ServiceDocument {
-            workspace_title: crate::atompub::WorkspaceTitle::for_user(&username),
+            workspace_title: WorkspaceTitle::for_user(&username),
             posts_collection: CollectionDecl {
                 href: parse_url("https://h/atompub/alice/posts"),
-                title: crate::atompub::CollectionTitle::posts(),
+                title: CollectionTitle::posts(),
                 accept: vec![CollectionAccept::AtomEntry],
                 categories: vec!["rust".parse().unwrap(), "leptos".parse().unwrap()],
             },
             media_collection: CollectionDecl {
                 href: parse_url("https://h/atompub/alice/media"),
-                title: crate::atompub::CollectionTitle::media(),
+                title: CollectionTitle::media(),
                 accept: vec![CollectionAccept::AnyMediaType],
                 categories: vec![],
             },

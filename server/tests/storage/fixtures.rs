@@ -1,10 +1,10 @@
 use common::ids::{ChannelId, SubscriptionId};
-use common::password::Password;
 use common::tag::Tag;
 use common::test_support::parse_row_limit;
 use common::time::UtcInstant;
 use common::username::Username;
 use common::visibility::ViewerIdentity;
+use host::password::Password;
 use sqlx::SqlitePool;
 use storage::{AppState, DbConnectOptions};
 use tempfile::TempDir;

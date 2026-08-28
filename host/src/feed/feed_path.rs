@@ -1,10 +1,13 @@
 use std::str::FromStr;
 
 use macros::StrNewtype;
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{media::ContentType, tag::Tag, username::Username};
+use common::{
+    feed::{FeedFormat, FeedSurface, canonicalize},
+    tag::Tag,
+    username::Username,
+};
 
 /// A validated, canonical feed identity path (e.g. `/feed.rss`,
 /// `/~alice/tags/rust/feed.atom`): the dedup/SQL key for `feed_cache` and
@@ -64,56 +67,6 @@ impl FromStr for FeedPath {
         // canonical spelling (idempotent — normalizes case in user/tag segments).
         let (surface, format) = parse(s).ok_or(InvalidFeedPath)?;
         Ok(Self::canonical(&surface, format))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum FeedFormat {
-    Rss,
-    Atom,
-    Json,
-}
-
-impl FeedFormat {
-    #[must_use]
-    pub fn ext(self) -> &'static str {
-        match self {
-            FeedFormat::Rss => "rss",
-            FeedFormat::Atom => "atom",
-            FeedFormat::Json => "json",
-        }
-    }
-    /// The media `Content-Type` served for this feed format. Minted via the trusted
-    /// [`ContentType::from_trusted`] door from a fixed, known-valid `&'static` literal
-    /// (like `detect_content_type`) — `format_content_types` pins that each literal is a
-    /// valid media type, so an edit to an invalid one fails the build, not production.
-    #[must_use]
-    pub fn content_type(self) -> ContentType {
-        let literal = match self {
-            FeedFormat::Rss => "application/rss+xml; charset=utf-8",
-            FeedFormat::Atom => "application/atom+xml; charset=utf-8",
-            FeedFormat::Json => "application/feed+json",
-        };
-        ContentType::from_trusted(literal)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum FeedSurface {
-    Site,
-    SiteTag { tag: Tag },
-    User { username: Username },
-    UserTag { username: Username, tag: Tag },
-}
-
-#[must_use]
-pub fn canonicalize(surface: &FeedSurface, format: FeedFormat) -> String {
-    let ext = format.ext();
-    match surface {
-        FeedSurface::Site => format!("/feed.{ext}"),
-        FeedSurface::SiteTag { tag } => format!("/tags/{tag}/feed.{ext}"),
-        FeedSurface::User { username } => format!("/~{username}/feed.{ext}"),
-        FeedSurface::UserTag { username, tag } => format!("/~{username}/tags/{tag}/feed.{ext}"),
     }
 }
 
@@ -308,23 +261,6 @@ mod tests {
         assert_eq!(
             parse("/tags/Rust/feed.atom"),
             Some((FeedSurface::SiteTag { tag: tag("rust") }, FeedFormat::Atom))
-        );
-    }
-
-    #[test]
-    fn format_content_types() {
-        use crate::test_support::parse_content_type;
-        assert_eq!(
-            FeedFormat::Rss.content_type(),
-            parse_content_type("application/rss+xml; charset=utf-8")
-        );
-        assert_eq!(
-            FeedFormat::Atom.content_type(),
-            parse_content_type("application/atom+xml; charset=utf-8")
-        );
-        assert_eq!(
-            FeedFormat::Json.content_type(),
-            parse_content_type("application/feed+json")
         );
     }
 

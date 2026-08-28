@@ -3,11 +3,8 @@ use axum::{
     http::{Request, StatusCode, header},
 };
 use chrono::{Timelike, Utc};
-use common::{
-    feed::{FeedFormat, SyndicationFeedRepresentation},
-    test_support::parse_etag,
-    time::UtcInstant,
-};
+use common::{feed::FeedFormat, test_support::parse_etag, time::UtcInstant};
+use host::feed::SyndicationFeedRepresentation;
 use tower::ServiceExt;
 
 use rstest::*;

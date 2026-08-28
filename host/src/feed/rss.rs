@@ -68,9 +68,11 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
-    use crate::ids::PostId;
-    use crate::render::RenderedHtml;
-    use crate::test_support::{parse_post_title, parse_url};
+    use common::{
+        ids::PostId,
+        render::RenderedHtml,
+        test_support::{parse_post_title, parse_url},
+    };
 
     fn meta(hub: Option<&str>, description: Option<&str>) -> FeedMetadata {
         FeedMetadata {
@@ -103,10 +105,10 @@ mod tests {
         assert!(out.body().contains("<rss"));
         assert!(out.body().contains("<title>Site</title>"));
         assert!(!out.body().contains("<item>"));
-        assert_eq!(out.format(), crate::feed::FeedFormat::Rss);
+        assert_eq!(out.format(), common::feed::FeedFormat::Rss);
         assert_eq!(
             out.content_type(),
-            crate::feed::FeedFormat::Rss.content_type()
+            common::feed::FeedFormat::Rss.content_type()
         );
     }
     #[test]

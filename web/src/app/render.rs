@@ -7,7 +7,7 @@
 //! SAME layout from the SAME data, so the projector's server-painted shell and
 //! the client's first paint coincide byte-for-byte (flash-free, #181 / ADR-0044).
 //! There is deliberately NO leptos reactivity here — plain string building only,
-//! like `common::feed` — so `reactive_graph` never sits on the public request
+//! like the discovery-link helpers — so `reactive_graph` never sits on the public request
 //! path (the #173 escape). See `docs/adr/0041` and `docs/inbound-data-handling.md`
 //! §4.
 //!
@@ -152,16 +152,9 @@ fn render_discovery(seed: &PageSeed) -> Markup {
             username: username.clone(),
             tag: tag.clone(),
         }),
-        // The reactive permalink page renders no discovery links.
         PageSeed::Permalink(_) => None,
     };
 
-    // NOTE: the marker attribute is spelled as a literal here, not interpolated from
-    // `DISCOVERY_MARKER_ATTR`. maud (like any compile-time markup macro) needs a
-    // literal attribute *name*, and the const is `pub` and consumed by
-    // `csr::mount` to build the removal selector — so
-    // `discovery_marker_attr_matches_the_literal_written_in_the_markup` below pins
-    // the two together and fails loudly if the const ever changes.
     Markup::new(html! {
         @if let Some(surface) = surface {
             @let label = feed_label(&surface);
@@ -175,9 +168,6 @@ fn render_discovery(seed: &PageSeed) -> Markup {
                     href=(canonicalize(&surface, format));
             }
         }
-
-        // Only the reactive user-profile page hoists the RSD link (the user-tag page
-        // does not), so mirror that exactly.
         @if let PageSeed::Profile { username, .. } = seed {
             link data-jaunder-discovery rel="EditURI" type="application/rsd+xml"
                 title="AtomPub (RSD)" href={ "/~" (username) "/rsd.xml" };
@@ -185,8 +175,6 @@ fn render_discovery(seed: &PageSeed) -> Markup {
     })
 }
 
-/// Human-readable feed title per surface — the pure mirror of the reactive
-/// `web::feed_discovery::labels::surface_label`.
 fn feed_label(surface: &common::feed::FeedSurface) -> String {
     use common::feed::FeedSurface;
     match surface {

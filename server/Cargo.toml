@@ -73,6 +73,7 @@ base64 = { workspace = true }
 # `test-support` is declared explicitly rather than inherited: it reached this
 # crate's tests only by feature unification through `storage`'s own `test-support`.
 common = { workspace = true, features = ["test-utils", "test-support"] }
+host = { workspace = true, features = ["test-support", "test-utils"] }
 storage = { workspace = true, features = ["test-utils", "test-support"] }
 maik = "0.2.0"
 nix = { version = "0.29", features = ["signal"] }

@@ -6,8 +6,7 @@ use async_trait::async_trait;
 use common::ids::UserId;
 use sqlx::{Database, Pool};
 
-// Re-exported so `storage::UserConfigKey` resolves for the call sites that name one.
-pub use common::config_key::UserConfigKey;
+use host::config_key::UserConfigKey;
 
 /// Async operations on the `user_config` key-value table.
 ///

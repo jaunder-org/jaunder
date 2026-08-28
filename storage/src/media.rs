@@ -476,8 +476,8 @@ where
     }
 }
 
-// The media site-config keys live in the closed registry
-// (`common::config_key::SiteConfigKey::{MediaMaxFileSizeBytes, MediaUserQuotaBytes}`, #687).
+// The media site-config keys live in the closed host registry
+// (`host::config_key::SiteConfigKey::{MediaMaxFileSizeBytes, MediaUserQuotaBytes}`, #687).
 // The defaults (50 MiB / 1 GiB) live on the `common::media::MaxFileSize` /
 // `UserQuota` newtypes' `#[num_newtype(default = …)]`, applied by the
 // `SiteConfigStorage::get_media_*` getters.

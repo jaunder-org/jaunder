@@ -46,6 +46,15 @@ _(Clarified 2026-07-09 by #334, whose error-carrier tenant is the first to take
 external infra deps — `sqlx`/`chrono`/`http` — while still depending on no
 workspace crate but `common`.)_
 
+> **Annotation (2026-08-27).** As of #847, `common`'s dual-target charter was
+> stated by target reachability for items then in `common`: it retained types
+> and operations reached by CSR or another dual-target consumer, while its
+> unconsumed machinery moved to `host`. A cargo-metadata check now enforces that
+> `host` has no runtime workspace dependency other than `common`, with `macros`
+> the existing build-time exception. The optional `common/sqlx` bridge is
+> instead the sole orphan-rule exception to `common`'s dual-target dependency
+> purity. Current ownership: [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 The intended trio, by compilation target:
 
 - **`common`** — shared code that compiles to _both_ host and wasm

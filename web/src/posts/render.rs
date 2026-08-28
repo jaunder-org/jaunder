@@ -6,7 +6,7 @@
 //! function on the SAME data, so the projector's server-painted post markup and
 //! the client's reactive first paint coincide byte-for-byte (flash-free, #181 /
 //! ADR-0044). There is deliberately NO leptos reactivity here — plain string
-//! building only, like `common::feed`.
+//! building only, like the discovery-link helpers.
 //!
 //! This leaf is ungated and host-compiled (an "extra leaf" beside
 //! `mod`/`api`/`server`/`component`, ADR-0070), so the twins stay host-tested and

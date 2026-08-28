@@ -149,6 +149,11 @@ not anticipate carry it:
 - **Four is a lower bound.** Each adjacent URL pair added later is a hazard the
   scheme has already prevented.
 
+> **Annotation (2026-08-27).** As of #847, the concrete AtomPub and Syndication
+> Feed call sites and metadata named here had moved to `host`; the common
+> `TaggedUrl` normalization and role-typing contract remained unchanged. Current
+> ownership: [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 ## Consequences
 
 - **A sixteenth role costs two lines** — a marker struct and a type alias. That

@@ -141,6 +141,11 @@ function, and is never supplied by a caller.**
    This follows the same move ADR-0021 made for feed-event claiming, where a
    single `UPDATE … RETURNING` replaced a transaction.
 
+> **Annotation (2026-08-27).** As of #847, `RenderOutput`, rendering, and media
+> reference extraction had moved to module-qualified host operations. The
+> unforgeable paired-output invariant and stored-reference behavior remained
+> unchanged. Current ownership: [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 ## Consequences
 
 - The relation is authoritative only for posts written or edited after it lands.

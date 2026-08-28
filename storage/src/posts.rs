@@ -8,8 +8,9 @@ use sqlx::{Database, Pool, QueryBuilder, Row};
 use thiserror::Error;
 
 use crate::InstanceId;
-use common::etag::{ETag, post_content_etag};
-use common::feed::FeedPath;
+use crate::backend::Backend;
+use crate::helpers::parse_post_tags_json;
+use common::etag::ETag;
 use common::idempotency_key::IdempotencyKey;
 use common::ids::{AudienceId, ChannelId, PostId, RevisionId, TagId, UserId};
 use common::media::{MediaRef, MediaReference, MediaReferenceForm, MediaReferenceKind};
@@ -17,6 +18,7 @@ use common::pagination::RowLimit;
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
+pub use common::render::{InvalidPostFormat, PostFormat, RenderedHtml};
 use common::root_relative_url::RootRelativeUrl;
 use common::seed::PageCursor;
 use common::slug::Slug;
@@ -27,10 +29,9 @@ use common::visibility::{
     AudienceTarget, SubscriberRef, TargetKind, ViewerIdentity, local_subscriber_ref,
 };
 use host::error::{InternalError, InternalResult};
-
-use crate::backend::Backend;
-use crate::helpers::parse_post_tags_json;
-pub use common::render::{InvalidPostFormat, PostFormat, RenderOutput, RenderedHtml};
+use host::etag::post_content_etag;
+use host::feed::FeedPath;
+use host::render::{RenderOutput, extract_media_refs};
 
 /// The validated calendar date of a public permalink lookup key. Re-exported from
 /// `common::time` so storage callers and the trait method name the domain type
@@ -1152,7 +1153,7 @@ pub trait PostStorage: Send + Sync {
     ) -> sqlx::Result<Vec<TagRecord>>;
 
     /// Lists published posts matching `surface`, applying the
-    /// [`HybridWindow`](common::feed::HybridWindow) selection rule (union of
+    /// [`HybridWindow`](host::feed::HybridWindow) selection rule (union of
     /// "the most recent `min_items` items" and "all items published within the
     /// last `min_days`"). Results are ordered by `published_at DESC`.
     ///
@@ -1161,7 +1162,7 @@ pub trait PostStorage: Send + Sync {
     async fn list_published_in_window(
         &self,
         surface: &common::feed::FeedSurface,
-        window: &common::feed::HybridWindow,
+        window: &host::feed::HybridWindow,
         now: UtcInstant,
         viewer: &ViewerIdentity,
     ) -> sqlx::Result<Vec<PostRecord>>;
@@ -2499,7 +2500,7 @@ where
     async fn list_published_in_window(
         &self,
         surface: &common::feed::FeedSurface,
-        window: &common::feed::HybridWindow,
+        window: &host::feed::HybridWindow,
         now: UtcInstant,
         viewer: &ViewerIdentity,
     ) -> sqlx::Result<Vec<PostRecord>> {
@@ -3109,7 +3110,7 @@ where
     let candidates: Vec<PostMediaReferenceBackfill> = posts
         .into_iter()
         .map(|(post_id, rendered_html)| PostMediaReferenceBackfill {
-            references: common::render::extract_media_refs(rendered_html.as_ref()),
+            references: extract_media_refs(rendered_html.as_ref()),
             post_id,
             rendered_html: rendered_html.to_string(),
         })
@@ -3204,13 +3205,13 @@ async fn list_published_in_window_rows<DB>(
     surface: &common::feed::FeedSurface,
     now: UtcInstant,
     cutoff: UtcInstant,
-    min_items: common::feed::FeedMinItems,
+    min_items: host::feed::FeedMinItems,
     viewer: &ViewerIdentity,
 ) -> sqlx::Result<Vec<PostRecord>>
 where
     DB: PostDialect,
     PostRecord: for<'r> sqlx::FromRow<'r, DB::Row>,
-    for<'q> common::feed::FeedMinItems: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> host::feed::FeedMinItems: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> i64: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> &'q str: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
     for<'q> UtcInstant: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
@@ -3476,12 +3477,12 @@ mod tests {
         update_post_body_via_service,
     };
     use chrono::Utc;
-    use common::feed::SyndicationFeedRepresentation;
     use common::test_support::{
         parse_etag, parse_post_body, parse_post_summary, parse_post_title, parse_row_limit,
         parse_slug, parse_tag, parse_tag_label, parse_username, parse_utc_instant,
     };
     use common::time::UtcInstant;
+    use host::feed::SyndicationFeedRepresentation;
     use rstest::*;
     use rstest_reuse::*;
     use std::{sync::Arc, time::Duration};
@@ -5631,7 +5632,7 @@ mod tests {
                 slug: parse_slug("no-title"),
                 body: untitled_body.clone(),
                 format: PostFormat::Markdown,
-                rendered: RenderOutput::render(&untitled_body, &PostFormat::Markdown),
+                rendered: host::render::render_with_media(&untitled_body, &PostFormat::Markdown),
                 published_at: None,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],

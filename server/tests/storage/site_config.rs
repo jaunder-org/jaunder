@@ -1,4 +1,4 @@
-use common::config_key::SiteConfigKey;
+use host::config_key::SiteConfigKey;
 use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, TestEnv, backends};

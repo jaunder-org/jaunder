@@ -30,6 +30,7 @@ mod web_server_fns;
 mod steps {
     pub mod adr_check;
     pub mod build_csr;
+    pub mod common_host_target_closure;
     pub mod doc_links;
     pub mod doctest_fences;
     pub mod duration_budget;
@@ -624,6 +625,10 @@ const HOST_GATE_NON_TEST_STEPS: &[HostGateStep] = &[
     HostGateStep::ResultOnly {
         name: "target-arch-placement",
         run: steps::target_arch_placement_check::run,
+    },
+    HostGateStep::ResultOnly {
+        name: "common-host-target-closure",
+        run: steps::common_host_target_closure::run,
     },
     HostGateStep::ResultOnly {
         name: "lint-suppression",
@@ -1331,6 +1336,7 @@ mod cli_tests {
     #[test]
     fn host_gate_order_prioritizes_cheap_actionable_feedback() {
         let names = host_gate_step_names_for_test(Mode::Check);
+        let target_closure = position(&names, "common-host-target-closure");
 
         let fmt = position(&names, "fmt");
         let flow_docs = position(&names, "flow-docs");
@@ -1340,6 +1346,10 @@ mod cli_tests {
         assert!(
             fmt < flow_docs,
             "source consistency runs before repo-shape checks"
+        );
+        assert!(
+            target_closure < clippy,
+            "target-resolved repository-shape checks run before compile checks"
         );
         assert!(
             flow_docs < clippy,

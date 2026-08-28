@@ -542,7 +542,6 @@ impl MediaManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::SiteConfigKey;
     use crate::test_support::{
         Backend, SeedUser, backends, create_post_via_service, media_row_exists,
     };
@@ -550,6 +549,7 @@ mod tests {
     use common::test_support::{
         parse_byte_size, parse_content_hash, parse_content_type, parse_filename, parse_post_body,
     };
+    use host::config_key::SiteConfigKey;
     use rstest::*;
     use rstest_reuse::*;
     use tempfile::TempDir;

@@ -43,9 +43,6 @@ use crate::timeline::{
     wire_timeline_resolve,
 };
 use crate::topbar::Topbar;
-use common::client_telemetry::ClientErrorContext;
-use common::feed::FeedSurface;
-use common::ids::PostId;
 use common::pagination::PageSize;
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
@@ -56,6 +53,7 @@ use common::slug::Slug;
 use common::tag::Tag;
 use common::username::Username;
 use common::visibility::{AudienceBase, AudienceSelection};
+use common::{client_telemetry::ClientErrorContext, feed::FeedSurface, ids::PostId};
 
 /// Register an `Effect` that runs `on_ok` with the resolved value each time `resolved`
 /// settles to a success.
@@ -1098,9 +1096,6 @@ pub fn UserTimelinePage() -> impl IntoView {
                     let surface = FeedSurface::User {
                         username: username.clone(),
                     };
-                    // Bound rather than passed as a temporary: the prop is a borrow, so
-                    // the surface must outlive the `view!` expansion. The view itself
-                    // captures no lifetime (`use<>`, ADR-0104), so a local suffices.
                     view! {
                         <FeedDiscovery surface=&surface />
                         <RsdDiscovery username=&username />

@@ -1,10 +1,11 @@
-use common::feed::{FeedFormat, FeedSurface, canonicalize};
-use common::username::Username;
+use common::{
+    feed::{FeedFormat, FeedSurface, canonicalize},
+    username::Username,
+};
 use leptos::prelude::*;
 use leptos_meta::Link;
 
 use super::labels::{rsd_href, surface_label};
-
 /// Renders feed auto-discovery link tags for RSS, Atom, and JSON Feed.
 /// The component itself is invisible; it hoists `<link>` tags into the document head.
 #[component]

@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 
-use common::feed::FeedEventClaimLimit;
 use common::ids::FeedEventId;
 use common::time::UtcInstant;
+use host::feed::FeedEventClaimLimit;
 use sqlx::{Pool, Postgres};
 
 use crate::feed_events::{
@@ -158,7 +158,7 @@ mod tests {
         let valid = vec![FeedEventRecord {
             id: FeedEventId::from(17),
             feed_path: "/feed.rss".parse().expect("valid feed path"),
-            status: common::feed::FeedEventStatus::Claimed,
+            status: host::feed::FeedEventStatus::Claimed,
             attempts: 0,
             last_error: None,
             next_attempt_at: now,

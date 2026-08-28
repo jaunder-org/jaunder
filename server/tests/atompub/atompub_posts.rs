@@ -161,7 +161,7 @@ async fn member_get_serializes_empty_and_genuine_titles(#[case] backend: Backend
     );
     assert!(untitled_body.contains("Untitled source"));
     let untitled_entry = untitled_body
-        .parse::<common::atompub::Entry>()
+        .parse::<host::atompub::Entry>()
         .expect("untitled Member response is an Atom Entry");
     assert_eq!(untitled_entry.title().as_str(), "");
 
@@ -177,7 +177,7 @@ async fn member_get_serializes_empty_and_genuine_titles(#[case] backend: Backend
     );
     assert!(titled_body.contains("Titled source"));
     let titled_entry = titled_body
-        .parse::<common::atompub::Entry>()
+        .parse::<host::atompub::Entry>()
         .expect("titled Member response is an Atom Entry");
     assert_eq!(titled_entry.title().as_str(), "Genuine title");
 }

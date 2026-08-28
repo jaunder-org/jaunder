@@ -165,12 +165,12 @@ mod tests {
     use common::bio::{Bio, MAX_BIO_CHARS};
     use common::display_name::DisplayName;
     use common::email::Email;
-    use common::password::Password;
     use common::post_summary::{MAX_POST_SUMMARY_CHARS, PostSummary};
     use common::slug::Slug;
     use common::tag::Tag;
     use common::test_support::parse_username;
     use common::username::Username;
+    use host::password::Password;
     use leptos::reactive::owner::Owner;
 
     #[test]

@@ -15,10 +15,11 @@ use common::ids::{PostId, UserId};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
-use common::render::{RenderOutput, derive_post_naming};
+use common::render::derive_post_naming;
 use common::slug::{InvalidSlug, Slug};
 use common::time::UtcInstant;
 use common::visibility::AudienceTarget;
+use host::render::render_with_media;
 
 // ---------------------------------------------------------------------------
 // Orchestration helpers
@@ -80,7 +81,7 @@ pub fn render_post_input(content: RenderedPostContent) -> CreatePostInput {
         idempotency_key,
         expectations,
     } = content;
-    let rendered = RenderOutput::render(&body, &format);
+    let rendered = render_with_media(&body, &format);
     CreatePostInput {
         user_id,
         title,
@@ -257,7 +258,7 @@ pub async fn perform_post_update(
         None => derived_slug,
     };
 
-    let rendered = RenderOutput::render(&body, &format);
+    let rendered = render_with_media(&body, &format);
     let input = UpdatePostInput {
         title,
         slug,
@@ -1109,8 +1110,6 @@ mod tests {
     async fn bookkeeping_update_id_and_etag_mismatches_leave_the_post_unchanged(
         #[case] backend: Backend,
     ) {
-        use common::etag::ETag;
-
         let env = backend.setup().await;
         let storage = &*env.state.posts;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
@@ -1181,7 +1180,7 @@ mod tests {
             perform_post_update(
                 storage,
                 update(PostBookkeepingExpectation {
-                    content_etag: Some(ETag::sha256_of(b"stale")),
+                    content_etag: Some(host::etag::sha256_of(b"stale")),
                     ..Default::default()
                 }),
             )

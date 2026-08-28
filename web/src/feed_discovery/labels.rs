@@ -1,15 +1,14 @@
-//! Pure URL/label helpers for the feed-discovery `<link>` tags. Host-tested;
-//! consumed by the wasm-only [`super::component`].
+//! Pure URL/label helpers for feed-discovery `<link>` tags. Host-tested; consumed by the
+//! wasm-only [`super::component`].
 
-use common::feed::FeedSurface;
-use common::username::Username;
+use common::{feed::FeedSurface, username::Username};
 
 /// Returns the `RSD` discovery URL for a user's page.
 pub(crate) fn rsd_href(username: &Username) -> String {
     format!("/~{username}/rsd.xml")
 }
 
-/// Generate a human-readable label for the feed based on the surface.
+/// Generates a human-readable label for the feed based on its surface.
 pub(crate) fn surface_label(surface: &FeedSurface) -> String {
     match surface {
         FeedSurface::Site => "Site feed".to_string(),
@@ -25,13 +24,13 @@ mod tests {
     use common::test_support::parse_username;
 
     #[test]
-    fn labels_site_surface() {
-        assert_eq!(surface_label(&FeedSurface::Site), "Site feed");
+    fn rsd_href_targets_user_discovery_doc() {
+        assert_eq!(rsd_href(&parse_username("alice")), "/~alice/rsd.xml");
     }
 
     #[test]
-    fn rsd_href_targets_user_discovery_doc() {
-        assert_eq!(rsd_href(&parse_username("alice")), "/~alice/rsd.xml");
+    fn labels_site_surface() {
+        assert_eq!(surface_label(&FeedSurface::Site), "Site feed");
     }
 
     #[test]

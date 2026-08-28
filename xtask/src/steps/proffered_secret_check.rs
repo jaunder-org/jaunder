@@ -41,7 +41,7 @@ const POLICED_TYPES: &[PolicedType] = &[
     },
     PolicedType {
         name: "ProfferedPassword",
-        owner_files: &["common/src/password.rs"],
+        owner_files: &["common/src/password.rs", "host/src/password.rs"],
     },
 ];
 

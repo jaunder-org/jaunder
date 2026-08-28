@@ -9,11 +9,11 @@ use crate::helpers::{
 use crate::{AtomicOps, ConfirmPasswordResetError, RegisterWithInviteError};
 use common::display_name::DisplayName;
 use common::ids::UserId;
-use common::password::Password;
 use common::time::UtcInstant;
 use common::token::RawToken;
 use common::username::Username;
 use host::invite::InviteCode;
+use host::password::Password;
 
 pub(crate) fn finish_password_reset_rejection(
     primary: Result<(), ConfirmPasswordResetError>,

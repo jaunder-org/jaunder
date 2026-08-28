@@ -1010,7 +1010,7 @@ async fn update_org_current_sync_succeeds_and_stale_sync_preserves_post(#[case] 
         .await
         .unwrap()
         .expect("created post exists");
-    let current_etag = common::etag::post_content_etag(
+    let current_etag = host::etag::post_content_etag(
         before.title.as_ref(),
         &before.body,
         &before.format,

@@ -28,6 +28,7 @@ use axum::extract::Request;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use common::etag::ETag;
+use host::etag::from_sha256;
 use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)] // cov:ignore
@@ -148,7 +149,7 @@ fn build_response(
     encoding: Encoding,
     if_none_match: Option<&str>,
 ) -> Response {
-    let etag = ETag::from_sha256(sha256);
+    let etag = from_sha256(sha256);
     let mut headers = HeaderMap::new();
     headers.insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
     insert_etag(&mut headers, etag.as_ref());
@@ -425,7 +426,7 @@ mod tests {
     #[tokio::test]
     async fn build_response_304_empty_body_when_if_none_match_matches() {
         let sha = [0xabu8; 32];
-        let etag = ETag::from_sha256(sha);
+        let etag = from_sha256(sha);
         let resp = build_response(
             "pkg/jaunder.wasm",
             Bytes::from_static(b"ignored"),

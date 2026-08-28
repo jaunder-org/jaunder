@@ -69,6 +69,11 @@ equalizing-dummy-hash rule to high-entropy-secret paths.
 - **A generic constant-time wrapper around `authenticate`** — overkill for a
   single hot path; the dummy-verify is the standard, well-understood mitigation.
 
+> **Annotation (2026-08-27).** As of #847, Password hashing and verification
+> were module-qualified `host::password` free functions rather than `Password`
+> inherent methods. The timing invariant and dummy-hash behavior remained
+> unchanged. Current ownership: [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 ## Consequences
 
 - Good: closes the enumeration oracle cheaply; the change is localized to the

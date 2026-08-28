@@ -72,6 +72,12 @@ Supporting choices:
 - **No sanitizing on read, and no backfill.** No deployed instance holds data,
   so there are no pre-fix rows to heal.
 
+> **Annotation (2026-08-27).** As of #847, host-owned module-qualified rendering
+> and sanitization free functions established the ammonia-backed invariant, then
+> used the existing gate-policed trusted reconstruction seam to mint the
+> common-owned `RenderedHtml`. The invariant and trusted-reconstruction gate
+> remained unchanged. Current ownership: [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 ## Consequences
 
 - **`RenderedHtml` means what its name says.** The provenance framing of #398's

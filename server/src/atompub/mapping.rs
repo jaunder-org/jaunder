@@ -6,9 +6,6 @@
 //! (collection member) operations.
 
 use chrono::Utc;
-use common::atompub::{
-    Category, Content, Entry, Link, Text, draft_marker, is_draft, set_draft, set_j_slug,
-};
 use common::org::{Presence, PublicationState};
 use common::post_body::{InvalidPostBody, PostBody};
 use common::post_summary::PostSummary;
@@ -16,6 +13,9 @@ use common::post_title::PostTitle;
 use common::tag::TagLabel;
 use common::tagged_url::{BaseUrl, EditUriUrl, Permalink, compose};
 use common::time::UtcInstant;
+use host::atompub::{
+    Category, Content, Entry, Link, Text, draft_marker, is_draft, set_draft, set_j_slug,
+};
 use storage::{PostFormat, PostRecord};
 
 /// The post-shaped data carried by an incoming `AtomPub` `Entry`.

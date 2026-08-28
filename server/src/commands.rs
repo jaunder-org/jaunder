@@ -12,17 +12,17 @@ use crate::cli::{AppTarget, BootstrapDb, Commands, SiteConfigAction, StorageArgs
 use crate::mailer::LettreMailSender;
 use crate::runtime_file;
 use common::backup::BackupMode;
-use common::config_key::SiteConfigKey;
 use common::display_name::DisplayName;
 use common::email::Email;
 use common::invite::InviteTtlHours;
 use common::mailer::{EmailMessage, MailSender};
-use common::password::Password;
 use common::pg_role_password::PgRolePassword;
 use common::session_label::SessionLabel;
 use common::tagged_url::{MailConfirmUrl, compose};
 use common::token::RawToken;
 use common::username::Username;
+use host::config_key::SiteConfigKey;
+use host::password::Password;
 use host::smtp_config::SmtpConfig;
 use storage::load_smtp_config;
 use storage::{
@@ -1136,8 +1136,7 @@ mod tests {
     use super::*;
     use common::smtp_tls_mode::SmtpTlsMode;
     use common::test_support::{
-        parse_email, parse_invite_ttl_hours, parse_password as test_password, parse_session_label,
-        parse_username,
+        parse_email, parse_invite_ttl_hours, parse_session_label, parse_username,
     };
     use rstest::*;
     use rstest_reuse::*;
@@ -1310,12 +1309,12 @@ mod tests {
     }
 
     fn typed_crypto_storage_error() -> sqlx::Error {
-        let password = test_password("password123");
-        let error = password
-            .verify(
-                "$argon2id$v=1$m=65536,t=2,p=1$c29tZXNhbHQ$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-            )
-            .unwrap_err();
+        let password = host::test_support::parse_password("password123");
+        let error = host::password::verify(
+            &password,
+            "$argon2id$v=1$m=65536,t=2,p=1$c29tZXNhbHQ$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        )
+        .unwrap_err();
         sqlx::Error::Io(io::Error::other(error))
     }
 
@@ -1697,7 +1696,7 @@ mod tests {
             ))
         });
         let username = parse_username("alice");
-        let password = test_password("password123");
+        let password = host::test_support::parse_password("password123");
 
         let error = create_command_user(&users, &username, &password, None, false)
             .await

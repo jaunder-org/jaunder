@@ -92,7 +92,7 @@ const GATE: Gate = Gate {
         subject: "an unescaped-HTML sink",
         verdict: "is not marked — whatever string reaches it is parsed as markup (XSS) (#333)",
         recovery: "  recovery: an unescaped sink is only safe when the string was built by our own \
-                   render layer — a `Markup`, or a `RenderedHtml` that `RenderedHtml::sanitize` \
+                   render layer — a `Markup`, or a `RenderedHtml` that `host::render::sanitize` \
                    scrubbed. If the value came from anywhere else, do not inject it: render it as \
                    text, where maud escapes it. If this is a genuine coincidence sink (the \
                    projector paints the same markup), say so in a \

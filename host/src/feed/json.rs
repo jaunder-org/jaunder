@@ -50,11 +50,13 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
-    use crate::ids::PostId;
-    use crate::post_summary::PostSummary;
-    use crate::post_title::PostTitle;
-    use crate::render::RenderedHtml;
-    use crate::test_support::{parse_post_summary, parse_post_title, parse_url};
+    use common::{
+        ids::PostId,
+        post_summary::PostSummary,
+        post_title::PostTitle,
+        render::RenderedHtml,
+        test_support::{parse_post_summary, parse_post_title, parse_url},
+    };
 
     fn meta(hub: Option<&str>, description: Option<&str>) -> FeedMetadata {
         FeedMetadata {
@@ -95,10 +97,10 @@ mod tests {
         let v: Value = serde_json::from_str(out.body()).unwrap();
         assert_eq!(v["version"], "https://jsonfeed.org/version/1.1");
         assert!(v["items"].as_array().unwrap().is_empty());
-        assert_eq!(out.format(), crate::feed::FeedFormat::Json);
+        assert_eq!(out.format(), common::feed::FeedFormat::Json);
         assert_eq!(
             out.content_type(),
-            crate::feed::FeedFormat::Json.content_type()
+            common::feed::FeedFormat::Json.content_type()
         );
     }
     #[test]

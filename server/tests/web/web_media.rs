@@ -11,6 +11,7 @@ use tower::ServiceExt;
 use web::media::{Item, MediaDeletion, UsageData};
 
 use common::time::UtcInstant;
+use host::config_key::SiteConfigKey;
 use rstest::*;
 use rstest_reuse::*;
 use storage::{
@@ -871,7 +872,7 @@ async fn upload_media_rejects_oversized_file(#[case] backend: Backend) {
     // exercising `map_media_error`'s PayloadTooLarge arm.
     state
         .site_config
-        .set(storage::SiteConfigKey::MediaMaxFileSizeBytes, "5")
+        .set(SiteConfigKey::MediaMaxFileSizeBytes, "5")
         .await
         .unwrap();
     let cookie = create_user_and_session(&state).await.cookie();
@@ -905,7 +906,7 @@ async fn upload_media_rejects_over_quota_file(#[case] backend: Backend) {
     // `map_media_error`'s InsufficientStorage arm.
     state
         .site_config
-        .set(storage::SiteConfigKey::MediaUserQuotaBytes, "5")
+        .set(SiteConfigKey::MediaUserQuotaBytes, "5")
         .await
         .unwrap();
     let cookie = create_user_and_session(&state).await.cookie();

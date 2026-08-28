@@ -3,14 +3,9 @@
 //! served by `GET /feed.{rss,atom,json}` and the other feed endpoints.
 
 use async_trait::async_trait;
-use common::{
-    etag::ETag,
-    feed::{
-        FeedFormat, FeedPath, MismatchedStoredSyndicationFeedMetadata,
-        SyndicationFeedRepresentation,
-    },
-    media::ContentType,
-    time::UtcInstant,
+use common::{etag::ETag, feed::FeedFormat, media::ContentType, time::UtcInstant};
+use host::feed::{
+    FeedPath, MismatchedStoredSyndicationFeedMetadata, SyndicationFeedRepresentation,
 };
 use sqlx::{Database, Pool};
 use thiserror::Error;
@@ -273,10 +268,8 @@ mod tests {
     use super::*;
     use crate::test_support::{Backend, backends, fp};
 
-    use common::{
-        feed::{FeedFormat, SyndicationFeedRepresentation},
-        test_support::parse_etag,
-    };
+    use common::{feed::FeedFormat, test_support::parse_etag};
+    use host::feed::SyndicationFeedRepresentation;
     use rstest::*;
     use rstest_reuse::*;
     fn sample(url: &str) -> FeedCacheRow {

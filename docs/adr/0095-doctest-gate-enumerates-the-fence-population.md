@@ -164,6 +164,11 @@ machinery for a case that does not exist, and it would have enshrined the
 circular claim rather than resolving it. If a genuinely non-discriminating proof
 ever appears, add the marker then, with a real case to justify it.
 
+> **Annotation (2026-08-27).** As of #847, doctest examples naming the prior
+> common-owned rendering and sanitization call shape were historical; the
+> compile-fail gate's enumeration policy remained unchanged. Current ownership:
+> [ARCHITECTURE.md](../ARCHITECTURE.md).
+
 ## Consequences
 
 **What this commits us to.** Every new `compile_fail` costs a positive companion
