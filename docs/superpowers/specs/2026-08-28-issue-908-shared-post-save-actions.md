@@ -37,7 +37,6 @@ behavior.
   retain their enabled/disabled behavior on both composers and the draft editor.
   Scheduled/live editors expose only the `true`-valued “Save” control; the
   `false` selector remains absent.
-- `cargo xtask validate` passes.
 
 ## Boundaries
 
