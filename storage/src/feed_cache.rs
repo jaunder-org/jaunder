@@ -3,7 +3,15 @@
 //! served by `GET /feed.{rss,atom,json}` and the other feed endpoints.
 
 use async_trait::async_trait;
-use common::{etag::ETag, feed::FeedPath, media::ContentType, time::UtcInstant};
+use common::{
+    etag::ETag,
+    feed::{
+        FeedFormat, FeedPath, MismatchedStoredSyndicationFeedMetadata,
+        SyndicationFeedRepresentation,
+    },
+    media::ContentType,
+    time::UtcInstant,
+};
 use sqlx::{Database, Pool};
 use thiserror::Error;
 
@@ -21,23 +29,94 @@ impl_role_instant!(FeedCacheUpdatedAt, UtcInstant);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
 struct FeedCacheGeneratedAt(UtcInstant);
 impl_role_instant!(FeedCacheGeneratedAt, UtcInstant);
-/// A single cached feed body.
+/// A cached rendered Syndication Feed whose path and representation formats agree.
+///
+/// The constructor couples the path's format with the closed representation (#697;
+/// ADR-0063), preventing the independently forgeable primitive fields this replaced.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeedCacheRow {
-    pub feed_path: FeedPath,
-    pub body: String,
+    feed_path: FeedPath,
+    representation: SyndicationFeedRepresentation,
     /// The stored strong `ETag`. Decodes through the `ETag` sqlx bridge (#438/#634), so a
     /// corrupt/migrated value is rejected as a `ColumnDecode` error on read-back.
     pub etag: ETag,
-    pub content_type: ContentType,
     pub updated_at: UtcInstant,
     pub generated_at: UtcInstant,
 }
 
+/// A feed-cache path whose format conflicts with its rendered representation.
+#[derive(Debug, Error)]
+#[error(
+    "feed cache path {feed_path} has format {path_format:?}, which conflicts with representation format {representation_format:?}"
+)]
+pub struct MismatchedFeedCacheRowFormat {
+    feed_path: FeedPath,
+    path_format: Option<FeedFormat>,
+    representation_format: FeedFormat,
+}
+
+impl FeedCacheRow {
+    /// Couples a cache key to a rendered Syndication Feed representation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MismatchedFeedCacheRowFormat`] when the path's requested format
+    /// differs from the representation's format.
+    pub fn new(
+        feed_path: FeedPath,
+        representation: SyndicationFeedRepresentation,
+        etag: ETag,
+        updated_at: UtcInstant,
+        generated_at: UtcInstant,
+    ) -> Result<Self, MismatchedFeedCacheRowFormat> {
+        let path_format = feed_path.parts().map(|(_, format)| format);
+        let representation_format = representation.format();
+        if path_format != Some(representation_format) {
+            return Err(MismatchedFeedCacheRowFormat {
+                feed_path,
+                path_format,
+                representation_format,
+            });
+        }
+        Ok(Self {
+            feed_path,
+            representation,
+            etag,
+            updated_at,
+            generated_at,
+        })
+    }
+
+    /// Returns the canonical path that keys this cache entry.
+    #[must_use]
+    pub fn feed_path(&self) -> &FeedPath {
+        &self.feed_path
+    }
+
+    /// Returns the closed rendered representation and its derived content type.
+    #[must_use]
+    pub fn representation(&self) -> &SyndicationFeedRepresentation {
+        &self.representation
+    }
+
+    /// Consumes the row while preserving its exact rendered representation.
+    #[must_use]
+    pub fn into_representation(self) -> SyndicationFeedRepresentation {
+        self.representation
+    }
+}
 #[derive(Debug, Error)]
 pub enum FeedCacheError {
     #[error("database error: {0}")]
     Db(#[from] sqlx::Error),
+    #[error("stored feed cache metadata conflicts for {feed_path}: {source}")]
+    MismatchedStoredMetadata {
+        feed_path: FeedPath,
+        #[source]
+        source: MismatchedStoredSyndicationFeedMetadata,
+    },
+    #[error("stored feed cache path {0} has no recoverable format")]
+    UnrecoverableStoredPath(FeedPath),
 }
 
 #[cfg_attr(feature = "test-utils", mockall::automock)]
@@ -67,12 +146,9 @@ struct FeedCacheRowParts {
     generated_at: FeedCacheGeneratedAt,
 }
 
-// Infallible: the `feed_url` and `content_type` columns decode straight into
-// `FeedPath` / `ContentType` via the sqlx bridge (#438), which validates through
-// `FromStr` at the query boundary — so a corrupt/migrated value is already rejected
-// as a `ColumnDecode` error before this mapper runs. The adjacent timestamp pair
-// decodes through distinct role wrappers (#751), so a swap at this seam fails to compile.
-fn row_from_record(row: FeedCacheRowRecord) -> FeedCacheRow {
+// `FeedPath` and `ContentType` decode through validating sqlx bridges (#438).
+// This mapper establishes the remaining semantic agreement before exposing a row.
+fn row_from_record(row: FeedCacheRowRecord) -> Result<FeedCacheRow, FeedCacheError> {
     let parts = FeedCacheRowParts {
         feed_path: row.feed_url,
         body: row.body,
@@ -81,14 +157,27 @@ fn row_from_record(row: FeedCacheRowRecord) -> FeedCacheRow {
         updated_at: row.updated_at,
         generated_at: row.generated_at,
     };
-    FeedCacheRow {
-        feed_path: parts.feed_path,
-        body: parts.body,
-        etag: parts.etag,
-        content_type: parts.content_type,
-        updated_at: parts.updated_at.value(),
-        generated_at: parts.generated_at.value(),
-    }
+    let format = parts
+        .feed_path
+        .parts()
+        .map(|(_, format)| format)
+        .ok_or_else(|| FeedCacheError::UnrecoverableStoredPath(parts.feed_path.clone()))?;
+    let representation =
+        SyndicationFeedRepresentation::try_from_stored(format, parts.content_type, parts.body)
+            .map_err(|source| FeedCacheError::MismatchedStoredMetadata {
+                feed_path: parts.feed_path.clone(),
+                source,
+            })?;
+    let Ok(row) = FeedCacheRow::new(
+        parts.feed_path,
+        representation,
+        parts.etag,
+        parts.updated_at.value(),
+        parts.generated_at.value(),
+    ) else {
+        unreachable!("stored representation and path share the decoded format")
+    };
+    Ok(row)
 }
 
 /// Generic [`FeedCacheStorage`] backed by any [`Backend`] database.
@@ -133,7 +222,7 @@ where
         .bind(feed_path)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(row_from_record))
+        row.map(row_from_record).transpose()
     }
 
     #[tracing::instrument(
@@ -152,11 +241,12 @@ where
                updated_at = excluded.updated_at, \
                generated_at = excluded.generated_at",
         )
-        .bind(&row.feed_path)
-        // sqlx-newtype-bind:allow permanent-primitive — cached rendered Syndication Feed body is an opaque representation.
-        .bind(row.body.as_str())
+        .bind(row.feed_path())
+        // The closed representation owns the exact opaque rendered bytes and
+        // derives the persisted content type from its format.
+        .bind(row.representation().body())
         .bind(&row.etag)
-        .bind(&row.content_type)
+        .bind(row.representation().content_type())
         .bind(row.updated_at)
         .bind(row.generated_at)
         .execute(&self.pool)
@@ -183,20 +273,29 @@ mod tests {
     use super::*;
     use crate::test_support::{Backend, backends, fp};
 
-    use common::test_support::{parse_content_type, parse_etag};
+    use common::{
+        feed::{FeedFormat, SyndicationFeedRepresentation},
+        test_support::parse_etag,
+    };
     use rstest::*;
     use rstest_reuse::*;
-
     fn sample(url: &str) -> FeedCacheRow {
+        let feed_path = fp(url);
+        let (_, format) = feed_path.parts().expect("valid feed path");
         let updated_at = UtcInstant::now();
-        FeedCacheRow {
-            feed_path: fp(url),
-            body: "<rss/>".into(),
-            etag: parse_etag("\"sha256-deadbeef\""),
-            content_type: parse_content_type("application/rss+xml"),
+        FeedCacheRow::new(
+            feed_path,
+            SyndicationFeedRepresentation::try_from_stored(
+                format,
+                format.content_type(),
+                "<rss/>".into(),
+            )
+            .expect("matching stored representation metadata"),
+            parse_etag("\"sha256-deadbeef\""),
             updated_at,
-            generated_at: UtcInstant::from(updated_at.value() + chrono::Duration::seconds(5)),
-        }
+            UtcInstant::from(updated_at.value() + chrono::Duration::seconds(5)),
+        )
+        .expect("matching cache row formats")
     }
 
     #[test]
@@ -211,24 +310,52 @@ mod tests {
         );
     }
 
+    #[test]
+    fn construction_rejects_representation_mismatching_feed_path() {
+        let representation = SyndicationFeedRepresentation::try_from_stored(
+            FeedFormat::Atom,
+            FeedFormat::Atom.content_type(),
+            "<feed/>".into(),
+        )
+        .expect("matching stored representation metadata");
+        let updated_at = UtcInstant::now();
+
+        let err = FeedCacheRow::new(
+            fp("/feed.rss"),
+            representation,
+            parse_etag("\"sha256-deadbeef\""),
+            updated_at,
+            UtcInstant::from(updated_at.value() + chrono::Duration::seconds(5)),
+        )
+        .expect_err("RSS path must reject Atom representation");
+
+        assert!(matches!(err, MismatchedFeedCacheRowFormat { .. }));
+    }
+
     #[apply(backends)]
     #[tokio::test]
     async fn upsert_then_get_roundtrips_adjacent_timestamp_roles_at_microsecond_precision(
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let row = FeedCacheRow {
-            feed_path: fp("/feed.rss"),
-            body: "<rss/>".into(),
-            etag: parse_etag("\"sha256-deadbeef\""),
-            content_type: parse_content_type("application/rss+xml"),
-            updated_at: "2026-08-25T01:02:03.123456Z"
+        let feed_path = fp("/feed.rss");
+        let row = FeedCacheRow::new(
+            feed_path.clone(),
+            SyndicationFeedRepresentation::try_from_stored(
+                FeedFormat::Rss,
+                FeedFormat::Rss.content_type(),
+                "<rss/>".into(),
+            )
+            .expect("matching stored representation metadata"),
+            parse_etag("\"sha256-deadbeef\""),
+            "2026-08-25T01:02:03.123456Z"
                 .parse()
                 .expect("valid UTC instant"),
-            generated_at: "2026-08-25T01:02:03.123457Z"
+            "2026-08-25T01:02:03.123457Z"
                 .parse()
                 .expect("valid UTC instant"),
-        };
+        )
+        .expect("matching cache row formats");
         env.state.feed_cache.upsert(row.clone()).await.unwrap();
         let got = env
             .state
@@ -240,18 +367,30 @@ mod tests {
         assert_eq!(got.updated_at, row.updated_at);
         assert_eq!(got.generated_at, row.generated_at);
         assert_ne!(got.updated_at, got.generated_at);
-        assert_eq!(got.feed_path, "/feed.rss");
-        assert_eq!(got.body, "<rss/>");
+        assert_eq!(got.feed_path(), "/feed.rss");
+        assert_eq!(got.representation().body(), "<rss/>");
     }
 
     #[apply(backends)]
     #[tokio::test]
     async fn second_upsert_updates_existing_body(#[case] backend: Backend) {
         let env = backend.setup().await;
-        let mut row = sample("/feed.rss");
+        let row = sample("/feed.rss");
         env.state.feed_cache.upsert(row.clone()).await.unwrap();
-        row.body = "<rss>updated</rss>".into();
-        env.state.feed_cache.upsert(row).await.unwrap();
+        let replacement = FeedCacheRow::new(
+            fp("/feed.rss"),
+            SyndicationFeedRepresentation::try_from_stored(
+                FeedFormat::Rss,
+                FeedFormat::Rss.content_type(),
+                "<rss>updated</rss>".into(),
+            )
+            .expect("matching stored representation metadata"),
+            row.etag.clone(),
+            row.updated_at,
+            row.generated_at,
+        )
+        .expect("matching cache row formats");
+        env.state.feed_cache.upsert(replacement).await.unwrap();
         let got = env
             .state
             .feed_cache
@@ -259,7 +398,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(got.body, "<rss>updated</rss>");
+        assert_eq!(got.representation().body(), "<rss>updated</rss>");
     }
 
     #[apply(backends)]
@@ -293,6 +432,37 @@ mod tests {
         assert!(
             matches!(err, FeedCacheError::Db(sqlx::Error::ColumnDecode { .. })),
             "expected a column-decode error, got: {err:?}"
+        );
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn get_rejects_directly_inserted_path_content_type_mismatch(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        env.state
+            .feed_cache
+            .upsert(sample("/feed.rss"))
+            .await
+            .unwrap();
+        env.base
+            .pool()
+            .execute(
+                "UPDATE feed_cache SET content_type = 'application/atom+xml; charset=utf-8' \
+                 WHERE feed_url = '/feed.rss'",
+            )
+            .await
+            .unwrap();
+
+        let err = env
+            .state
+            .feed_cache
+            .get(&fp("/feed.rss"))
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, FeedCacheError::MismatchedStoredMetadata { .. }),
+            "expected a stored-metadata mismatch, got: {err:?}"
         );
     }
 

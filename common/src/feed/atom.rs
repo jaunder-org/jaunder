@@ -1,9 +1,9 @@
 use atom_syndication::{Category, Content, Entry, Feed, Link, Text};
 
-use crate::feed::metadata::{FeedItem, FeedMetadata};
+use crate::feed::{FeedItem, FeedMetadata, SyndicationFeedRepresentation};
 
 #[must_use]
-pub fn render_atom(meta: &FeedMetadata, items: &[FeedItem]) -> String {
+pub fn render_atom(meta: &FeedMetadata, items: &[FeedItem]) -> SyndicationFeedRepresentation {
     let mut links = vec![
         Link {
             href: meta.canonical_url.to_string(),
@@ -75,7 +75,7 @@ pub fn render_atom(meta: &FeedMetadata, items: &[FeedItem]) -> String {
         ..Default::default()
     };
 
-    feed.to_string()
+    SyndicationFeedRepresentation::from_atom(feed.to_string())
 }
 
 #[cfg(test)]
@@ -116,25 +116,31 @@ mod tests {
     #[test]
     fn renders_empty_atom() {
         let out = render_atom(&meta(None, Some("A site")), &[]);
-        assert!(out.contains("<feed"));
-        assert!(!out.contains("<entry>"));
+        assert!(out.body().contains("<feed"));
+        assert!(!out.body().contains("<entry>"));
+        assert_eq!(out.format(), crate::feed::FeedFormat::Atom);
+        assert_eq!(
+            out.content_type(),
+            crate::feed::FeedFormat::Atom.content_type()
+        );
     }
     #[test]
     fn serializes_feed_title_and_description_presence() {
         let without = render_atom(&meta(None, None), &[]);
-        assert!(without.contains("<title>Site</title>"));
-        assert!(!without.contains("<subtitle"));
+        assert!(without.body().contains("<title>Site</title>"));
+        assert!(!without.body().contains("<subtitle"));
 
         let with = render_atom(&meta(None, Some("A site")), &[]);
-        assert!(with.contains("<subtitle>A site</subtitle>"));
+        assert!(with.body().contains("<subtitle>A site</subtitle>"));
     }
 
     #[test]
     fn renders_explicit_title_for_titled_post() {
         let out = render_atom(&meta(None, Some("A site")), &[item()]);
+        let body = out.body();
 
-        assert!(out.contains("<title>Hello</title>"), "out: {out}");
-        assert!(!out.contains("<title></title>"), "out: {out}");
+        assert!(body.contains("<title>Hello</title>"), "out: {body}");
+        assert!(!body.contains("<title></title>"), "out: {body}");
     }
 
     #[test]
@@ -143,16 +149,20 @@ mod tests {
         item.title = None;
 
         let out = render_atom(&meta(None, Some("A site")), &[item]);
+        let body = out.body();
 
-        assert_eq!(out.matches("<title></title>").count(), 1, "out: {out}");
-        assert!(!out.contains("<title>hi</title>"), "out: {out}");
+        assert_eq!(body.matches("<title></title>").count(), 1, "out: {body}");
+        assert!(!body.contains("<title>hi</title>"), "out: {body}");
     }
 
     #[test]
     fn emits_self_link() {
         let out = render_atom(&meta(None, Some("A site")), &[]);
-        assert!(out.contains("rel=\"self\""));
-        assert!(out.contains("href=\"https://example.com/feed.atom\""));
+        assert!(out.body().contains("rel=\"self\""));
+        assert!(
+            out.body()
+                .contains("href=\"https://example.com/feed.atom\"")
+        );
     }
 
     #[test]
@@ -161,20 +171,20 @@ mod tests {
             &meta(Some("https://hub.example.com/"), Some("A site")),
             &[item()],
         );
-        assert!(out.contains("rel=\"hub\""));
-        assert!(out.contains("https://hub.example.com/"));
+        assert!(out.body().contains("rel=\"hub\""));
+        assert!(out.body().contains("https://hub.example.com/"));
     }
 
     #[test]
     fn omits_hub_link_when_unset() {
         let out = render_atom(&meta(None, Some("A site")), &[item()]);
-        assert!(!out.contains("rel=\"hub\""));
+        assert!(!out.body().contains("rel=\"hub\""));
     }
 
     #[test]
     fn includes_tags_as_categories() {
         let out = render_atom(&meta(None, Some("A site")), &[item()]);
-        assert!(out.contains("term=\"rust\""));
+        assert!(out.body().contains("term=\"rust\""));
     }
 
     #[test]
@@ -183,13 +193,14 @@ mod tests {
         // *absolute* permalink — never a relative `/…` atom:id (RFC-4287 requires an
         // absolute IRI).
         let out = render_atom(&meta(None, Some("A site")), &[item()]);
+        let body = out.body();
         assert!(
-            out.contains("https://example.com/~alice/posts/1"),
-            "entry permalink should be absolute: {out}"
+            body.contains("https://example.com/~alice/posts/1"),
+            "entry permalink should be absolute: {body}"
         );
         assert!(
-            !out.contains("<id>/"),
-            "no entry/feed id should be root-relative: {out}"
+            !body.contains("<id>/"),
+            "no entry/feed id should be root-relative: {body}"
         );
     }
 }

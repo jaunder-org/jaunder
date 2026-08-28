@@ -110,13 +110,14 @@ pub async fn regenerate_feed(
     };
     let etag = feed_etag(&items, now.value());
 
-    let row = FeedCacheRow {
-        feed_path: feed_path.clone(),
+    let Ok(row) = FeedCacheRow::new(
+        feed_path.clone(),
         body,
         etag,
-        content_type: format.content_type(),
-        updated_at: UtcInstant::from(updated_at),
-        generated_at: now,
+        UtcInstant::from(updated_at),
+        now,
+    ) else {
+        unreachable!("renderer output and feed path share the parsed format")
     };
 
     feed_cache.upsert(row.clone()).await.map_err(storage_err)?;
@@ -219,7 +220,8 @@ mod tests {
         .await
         .expect("user-tag feed regenerates");
 
-        let body: serde_json::Value = serde_json::from_str(&row.body).expect("JSON Feed body");
+        let body: serde_json::Value =
+            serde_json::from_str(row.representation().body()).expect("JSON Feed body");
         assert_eq!(body["title"], "Jaunder — @alice #rust");
         assert_eq!(
             body["home_page_url"],

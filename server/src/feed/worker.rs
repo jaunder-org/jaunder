@@ -262,7 +262,7 @@ impl FeedWorker {
                         &error,
                     );
                 }
-                let item_bytes = row.body.len();
+                let item_bytes = row.representation().body().len();
                 let duration_ms = started.elapsed().as_millis();
                 tracing::info!(
                     feed_path = %feed_path,

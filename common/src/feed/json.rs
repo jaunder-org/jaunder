@@ -1,9 +1,9 @@
 use serde_json::{Value, json};
 
-use crate::feed::metadata::{FeedItem, FeedMetadata};
+use crate::feed::{FeedItem, FeedMetadata, SyndicationFeedRepresentation};
 
 #[must_use]
-pub fn render_json(meta: &FeedMetadata, items: &[FeedItem]) -> String {
+pub fn render_json(meta: &FeedMetadata, items: &[FeedItem]) -> SyndicationFeedRepresentation {
     let json_items: Vec<Value> = items
         .iter()
         .map(|i| {
@@ -42,7 +42,7 @@ pub fn render_json(meta: &FeedMetadata, items: &[FeedItem]) -> String {
     if let Some(hub) = &meta.hub_url {
         root["hubs"] = json!([{ "type": "WebSub", "url": hub.as_ref() }]);
     }
-    root.to_string()
+    SyndicationFeedRepresentation::from_json(root.to_string())
 }
 
 #[cfg(test)]
@@ -92,32 +92,38 @@ mod tests {
     #[test]
     fn renders_empty_jsonfeed() {
         let out = render_json(&meta(None, Some("A site")), &[]);
-        let v: Value = serde_json::from_str(&out).unwrap();
+        let v: Value = serde_json::from_str(out.body()).unwrap();
         assert_eq!(v["version"], "https://jsonfeed.org/version/1.1");
         assert!(v["items"].as_array().unwrap().is_empty());
+        assert_eq!(out.format(), crate::feed::FeedFormat::Json);
+        assert_eq!(
+            out.content_type(),
+            crate::feed::FeedFormat::Json.content_type()
+        );
     }
     #[test]
     fn serializes_feed_title_and_description_presence() {
-        let without: Value = serde_json::from_str(&render_json(&meta(None, None), &[])).unwrap();
+        let without: Value =
+            serde_json::from_str(render_json(&meta(None, None), &[]).body()).unwrap();
         assert_eq!(without["title"], "Site");
         assert!(without.get("description").is_none());
 
         let with: Value =
-            serde_json::from_str(&render_json(&meta(None, Some("A site")), &[])).unwrap();
+            serde_json::from_str(render_json(&meta(None, Some("A site")), &[]).body()).unwrap();
         assert_eq!(with["description"], "A site");
     }
 
     #[test]
     fn emits_feed_url_as_self() {
         let out = render_json(&meta(None, Some("A site")), &[]);
-        let v: Value = serde_json::from_str(&out).unwrap();
+        let v: Value = serde_json::from_str(out.body()).unwrap();
         assert_eq!(v["feed_url"], "https://example.com/feed.json");
     }
 
     #[test]
     fn includes_hub_when_set() {
         let out = render_json(&meta(Some("https://hub.example.com/"), Some("A site")), &[]);
-        let v: Value = serde_json::from_str(&out).unwrap();
+        let v: Value = serde_json::from_str(out.body()).unwrap();
         assert_eq!(v["hubs"][0]["type"], "WebSub");
         assert_eq!(v["hubs"][0]["url"], "https://hub.example.com/");
     }
@@ -125,7 +131,7 @@ mod tests {
     #[test]
     fn omits_title_for_titleless_post() {
         let out = render_json(&meta(None, Some("A site")), &[item(None, vec![])]);
-        let v: Value = serde_json::from_str(&out).unwrap();
+        let v: Value = serde_json::from_str(out.body()).unwrap();
         assert!(v["items"][0].get("title").is_none());
     }
 
@@ -139,7 +145,7 @@ mod tests {
                 Some(parse_post_summary("a summary")),
             )],
         );
-        let v: Value = serde_json::from_str(&out).unwrap();
+        let v: Value = serde_json::from_str(out.body()).unwrap();
         assert_eq!(v["items"][0]["summary"], "a summary");
     }
 
@@ -149,13 +155,13 @@ mod tests {
             &meta(None, Some("A site")),
             &[item(Some(parse_post_title("t")), vec!["rust"])],
         );
-        let v: Value = serde_json::from_str(&out).unwrap();
+        let v: Value = serde_json::from_str(out.body()).unwrap();
         assert_eq!(v["items"][0]["tags"][0], "rust");
         let out2 = render_json(
             &meta(None, Some("A site")),
             &[item(Some(parse_post_title("t")), vec![])],
         );
-        let v2: Value = serde_json::from_str(&out2).unwrap();
+        let v2: Value = serde_json::from_str(out2.body()).unwrap();
         assert!(v2["items"][0].get("tags").is_none());
     }
 }

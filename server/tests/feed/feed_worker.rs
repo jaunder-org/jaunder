@@ -3,9 +3,9 @@ use std::sync::Arc;
 use crate::helpers::{CapturingWebSubClient, setup_with_base_url};
 use chrono::Utc;
 use common::{
-    feed::FeedPath,
+    feed::{FeedFormat, FeedPath, SyndicationFeedRepresentation},
     ids::FeedEventId,
-    test_support::{parse_content_type, parse_etag},
+    test_support::parse_etag,
     time::UtcInstant,
 };
 use jaunder::feed::worker::FeedWorker;
@@ -70,7 +70,12 @@ async fn worker_regenerates_claimed_event_and_marks_done_when_no_hub(#[case] bac
         .await
         .expect("get cache")
         .expect("cache row should exist");
-    assert!(cache_row.body.contains(post.title.as_ref()));
+    assert!(
+        cache_row
+            .representation()
+            .body()
+            .contains(post.title.as_ref())
+    );
 
     let pending = state
         .feed_events
@@ -223,7 +228,12 @@ async fn worker_applies_backoff_on_ping_failure(#[case] backend: Backend) {
         .await
         .expect("get cache")
         .expect("cache row should exist even though ping failed");
-    assert!(cache_row.body.contains(post.title.as_ref()));
+    assert!(
+        cache_row
+            .representation()
+            .body()
+            .contains(post.title.as_ref())
+    );
 }
 
 /// Restart-straddle (the centerpiece): a future-dated post goes live while the
@@ -243,14 +253,21 @@ async fn startup_catchup_regenerates_feed_for_go_live_while_down(#[case] backend
     // A cached site feed generated at t0 (stale).
     state
         .feed_cache
-        .upsert(FeedCacheRow {
-            feed_path: fp("/feed.atom"),
-            body: "stale".to_string(),
-            etag: parse_etag("\"etag\""),
-            content_type: parse_content_type("application/atom+xml; charset=utf-8"),
-            updated_at: UtcInstant::from(t0),
-            generated_at: UtcInstant::from(t0),
-        })
+        .upsert(
+            FeedCacheRow::new(
+                fp("/feed.atom"),
+                SyndicationFeedRepresentation::try_from_stored(
+                    FeedFormat::Atom,
+                    FeedFormat::Atom.content_type(),
+                    "stale".to_string(),
+                )
+                .expect("matching stored representation metadata"),
+                parse_etag("\"etag\""),
+                UtcInstant::from(t0),
+                UtcInstant::from(t0),
+            )
+            .expect("matching cache row formats"),
+        )
         .await
         .expect("seed cached feed");
 

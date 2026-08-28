@@ -2,9 +2,7 @@ use chrono::{Datelike, Utc};
 use common::{
     ids::{PostId, UserId},
     tag::{Tag, TagLabel},
-    test_support::{
-        parse_content_type, parse_etag, parse_post_body, parse_row_limit, permalink_date,
-    },
+    test_support::{parse_etag, parse_post_body, parse_row_limit, permalink_date},
     time::UtcInstant,
     username::Username,
     visibility::{AudienceTarget, ViewerIdentity},
@@ -859,7 +857,7 @@ async fn list_posts_gone_live_between_returns_only_window_with_tags(#[case] back
 #[tokio::test]
 async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend) {
     use chrono::{Duration, TimeZone};
-    use common::feed::{FeedFormat, FeedPath, FeedSurface};
+    use common::feed::{FeedFormat, FeedPath, FeedSurface, SyndicationFeedRepresentation};
     let env = backend.setup().await;
     let state = &env.state;
     let now = Utc.with_ymd_and_hms(2026, 6, 26, 12, 0, 0).unwrap();
@@ -881,13 +879,20 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
         .await
         .unwrap();
 
-    let mk_row = |feed_url: &str, generated_at: UtcInstant| FeedCacheRow {
-        feed_path: fp(feed_url),
-        body: "cached".to_string(),
-        etag: parse_etag("\"etag\""),
-        content_type: parse_content_type("application/atom+xml; charset=utf-8"),
-        updated_at: generated_at,
-        generated_at,
+    let mk_row = |feed_url: &str, generated_at: UtcInstant| {
+        FeedCacheRow::new(
+            fp(feed_url),
+            SyndicationFeedRepresentation::try_from_stored(
+                FeedFormat::Atom,
+                FeedFormat::Atom.content_type(),
+                "cached".to_string(),
+            )
+            .expect("matching stored representation metadata"),
+            parse_etag("\"etag\""),
+            generated_at,
+            generated_at,
+        )
+        .expect("matching cache row formats")
     };
     // The exact feed-url keys for each surface, built the same way the worker
     // does, so the per-surface arms of `max_published_at_for_surface` are all
