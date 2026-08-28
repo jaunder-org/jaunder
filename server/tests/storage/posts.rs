@@ -877,7 +877,13 @@ async fn revision_detail_round_trips_complete_snapshot_and_rejects_invalid_media
         .get_post_revision_detail(owner, post_id, revision.revision_id)
         .await
         .expect_err("invalid persisted revision media form must fail decoding");
-    assert!(matches!(error, sqlx::Error::Decode(_)));
+    assert!(
+        matches!(
+            &error,
+            sqlx::Error::ColumnDecode { .. } | sqlx::Error::Decode(_)
+        ),
+        "expected typed persisted-media decode failure, got {error:?}"
+    );
 }
 
 #[apply(backends)]
