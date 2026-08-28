@@ -247,47 +247,85 @@ TABLE maps canonical URLs without fragments to mutable reference accumulators."
                     body (match-end 0))))
               (if close (match-end 0) (length body))))))))))
 
-(defun jaunder--pull-media-markdown-html-block-end (body position)
-  "Return the end of a raw Markdown HTML block at line POSITION, or nil."
+(defconst jaunder--pull-media-markdown-html-block-tags
+  '("address" "article" "aside" "base" "basefont" "blockquote" "body"
+    "caption" "center" "col" "colgroup" "dd" "details" "dialog" "dir"
+    "div" "dl" "dt" "fieldset" "figcaption" "figure" "footer" "form"
+    "frame" "frameset" "h1" "h2" "h3" "h4" "h5" "h6" "head"
+    "header" "hr" "html" "iframe" "legend" "li" "link" "main" "menu"
+    "menuitem" "nav" "noframes" "ol" "optgroup" "option" "p" "param"
+    "search" "section" "summary" "table" "tbody" "td" "tfoot" "th"
+    "thead" "title" "tr" "track" "ul")
+  "CommonMark block tags whose opener starts a raw HTML block.")
+
+(defun jaunder--pull-media-markdown-container-start (body position)
+  "Return content start after block-quote prefixes at line POSITION."
   (let ((cursor position)
-        (limit (length body))
-        (spaces 0))
+        (limit (length body)))
     (while (and (< cursor limit)
-                (= (aref body cursor) ?\s)
-                (< spaces 4))
-      (setq cursor (1+ cursor)
-            spaces (1+ spaces)))
-    (when (and (<= spaces 3)
-               (< cursor limit)
-               (= (aref body cursor) ?<))
+                (let ((probe cursor)
+                      (spaces 0))
+                  (while (and (< probe limit)
+                              (= (aref body probe) ?\s)
+                              (< spaces 4))
+                    (setq probe (1+ probe)
+                          spaces (1+ spaces)))
+                  (when (and (<= spaces 3)
+                             (< probe limit)
+                             (= (aref body probe) ?>))
+                    (setq cursor (1+ probe))
+                    (when (and (< cursor limit)
+                               (memq (aref body cursor) '(?\s ?\t)))
+                      (setq cursor (1+ cursor)))
+                    t))))
+    cursor))
+
+(defun jaunder--pull-media-markdown-html-block-end (body position)
+  "Return the end of a raw Markdown HTML block at content POSITION, or nil."
+  (let ((limit (length body)))
+    (when (and (< position limit)
+               (= (aref body position) ?<))
       (or
-       (jaunder--pull-media-markdown-raw-html-end body cursor)
+       (jaunder--pull-media-markdown-raw-html-end body position)
        (let ((case-fold-search t)
              end)
          (cond
-          ((and (<= (+ cursor 2) limit)
-                (equal (substring body cursor (+ cursor 2)) "<?"))
-           (setq end (string-search "?>" body (+ cursor 2)))
+          ((and (<= (+ position 2) limit)
+                (equal (substring body position (+ position 2)) "<?"))
+           (setq end (string-search "?>" body (+ position 2)))
            (if end (+ end 2) limit))
-          ((and (<= (+ cursor 9) limit)
-                (equal (substring body cursor (+ cursor 9)) "<![CDATA["))
-           (setq end (string-search "]]>" body (+ cursor 9)))
+          ((and (<= (+ position 9) limit)
+                (equal
+                 (substring body position (+ position 9))
+                 "<![CDATA["))
+           (setq end (string-search "]]>" body (+ position 9)))
            (if end (+ end 3) limit))
-          ((and (< (1+ cursor) limit)
-                (= (aref body (1+ cursor)) ?!))
-           (setq end (cl-position ?> body :start (+ cursor 2)))
+          ((and (< (1+ position) limit)
+                (= (aref body (1+ position)) ?!))
+           (setq end (cl-position ?> body :start (+ position 2)))
            (if end (1+ end) limit))
           ((and
             (string-match
-             "</?[[:alpha:]][[:alnum:]-]*\\(?:[ \t\r\n/>]\\)"
-             body cursor)
-            (= (match-beginning 0) cursor)
-            (let ((line-end
-                   (or (string-search "\n" body cursor) limit)))
-              (cl-position ?> body :start cursor :end line-end)))
-           (let ((blank
-                  (string-match "\n[ \t]*\n" body cursor)))
-             (if blank (match-end 0) limit)))))))))
+             "</?\\([[:alpha:]][[:alnum:]-]*\\)\\(?:[ \t\r\n/>]\\)"
+             body position)
+            (= (match-beginning 0) position))
+           (let* ((tag (downcase (match-string 1 body)))
+                  (line-end
+                   (or (string-search "\n" body position) limit))
+                  (tag-end
+                   (cl-position ?> body :start position :end line-end)))
+             (when
+                 (and tag-end
+                      (or
+                       (member
+                        tag
+                        jaunder--pull-media-markdown-html-block-tags)
+                       (string-match-p
+                        "\\`[ \t]*\\'"
+                        (substring body (1+ tag-end) line-end))))
+               (let ((blank
+                      (string-match "\n[ \t]*\n" body position)))
+                 (if blank (match-end 0) limit)))))))))))
 
 (defun jaunder--pull-media-markdown-destination (body position closing)
   "Return (START END AFTER) for a complete Markdown destination at POSITION.
@@ -392,14 +430,16 @@ CLOSING is the required closing delimiter.  Return nil for malformed text."
         (setq position (1+ position)
               line-start position))
        ((= position line-start)
-        (let ((html-end
-               (jaunder--pull-media-markdown-html-block-end
-                body position))
-              (opening
-               (jaunder--pull-media-markdown-fence body position)))
+        (let* ((content-start
+                (jaunder--pull-media-markdown-container-start
+                 body position))
+               (html-end
+                (jaunder--pull-media-markdown-html-block-end
+                 body content-start))
+               (opening
+                (jaunder--pull-media-markdown-fence
+                 body content-start)))
           (cond
-           (html-end
-            (setq position html-end))
            (fence
             (when (and opening
                        (nth 3 opening)
@@ -410,22 +450,25 @@ CLOSING is the required closing delimiter.  Return nil for malformed text."
                   (if opening
                       (1+ (nth 2 opening))
                     (or (string-search "\n" body position) limit))))
+           (html-end
+            (setq position html-end))
            (opening
             (setq fence opening
                   position (1+ (nth 2 opening))))
-           ((or (and (<= (+ position 4) limit)
+           ((or (and (<= (+ content-start 4) limit)
                      (equal
-                      (substring body position (+ position 4))
+                      (substring body content-start (+ content-start 4))
                       "    "))
-                (= (aref body position) ?\t))
+                (and (< content-start limit)
+                     (= (aref body content-start) ?\t)))
             (setq position
                   (or (string-search "\n" body position) limit)))
            (t
-            (let ((cursor position)
+            (let ((cursor content-start)
                   (definition-found nil))
               (while (and (< cursor limit)
                           (memq (aref body cursor) '(?\s ?\t))
-                          (< (- cursor position) 4))
+                          (< (- cursor content-start) 4))
                 (setq cursor (1+ cursor)))
               (when (and (< cursor limit)
                          (= (aref body cursor) ?\[))
@@ -449,8 +492,8 @@ CLOSING is the required closing delimiter.  Return nil for malformed text."
                          definitions)
                         (setq position (nth 2 destination)))))))
               (unless definition-found
-                ;; Revisit this first character through the ordinary scanner.
-                (setq line-start -1)))))))
+                (setq position content-start
+                      line-start -1)))))))
        (fence
         (setq position
               (or (string-search "\n" body position) limit)))
@@ -575,10 +618,16 @@ CLOSING is the required closing delimiter.  Return nil for malformed text."
                             (not (memq (aref body cursor)
                                        '(?\s ?\t ?\r ?\n ?/ ?>))))
                   (setq cursor (1+ cursor)))
-                (let ((tag (downcase (substring body name-start cursor)))
-                      (tag-end nil)
-                      (delimiter nil)
-                      (tag-scan cursor))
+                (let* ((tag
+                        (downcase
+                         (substring body name-start cursor)))
+                       (valid-tag
+                        (let ((case-fold-search nil))
+                          (string-match-p
+                           "\\`[A-Za-z][A-Za-z0-9:-]*\\'" tag)))
+                       (tag-end nil)
+                       (delimiter nil)
+                       (tag-scan cursor))
                   (while (and (< tag-scan limit) (not tag-end))
                     (let ((character (aref body tag-scan)))
                       (cond
@@ -596,7 +645,8 @@ CLOSING is the required closing delimiter.  Return nil for malformed text."
                     ;; Script contents and its executable `src' are excluded.
                     ;; Other raw/RCDATA opening tags may still carry ordinary
                     ;; supported attributes such as an iframe `src'.
-                    (unless (equal tag "script")
+                    (unless (or (not valid-tag)
+                                (equal tag "script"))
                       (let ((case-fold-search t)
                             (attribute-source
                              (substring body cursor tag-end))

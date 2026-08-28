@@ -154,12 +154,55 @@
       (regexp-quote (format "[real](%s)" target))
       out))))
 
+(ert-deftest jaunder-pull-media-markdown-distinguishes-html-and-container-fences ()
+  (let* ((url (jaunder-pull-media-test--url "safe.png"))
+         (target
+          (format "local-media/%s/safe.png"
+                  jaunder-pull-media-test--hash))
+         (inline-html
+          (format "<span>[inline](%s)</span>" url))
+         (fenced-html
+          (format
+           "```\n<pre>\n[x](%s)\n</pre>\n```\n[after](%s)"
+           url url))
+         (quoted-fence
+          (format
+           "> ```\n> [x](%s)\n> ```\n[after](%s)"
+           url url)))
+    (should
+     (equal
+      (jaunder-pull-media-test--rewrite "markdown" inline-html)
+      (format "<span>[inline](%s)</span>" target)))
+    (let ((out
+           (jaunder-pull-media-test--rewrite
+            "markdown" fenced-html)))
+      (should
+       (string-match-p
+        (regexp-quote (format "[x](%s)" url))
+        out))
+      (should
+       (string-match-p
+        (regexp-quote (format "[after](%s)" target))
+        out)))
+    (let ((out
+           (jaunder-pull-media-test--rewrite
+            "markdown" quoted-fence)))
+      (should
+       (string-match-p
+        (regexp-quote (format "> [x](%s)" url))
+        out))
+      (should
+       (string-match-p
+        (regexp-quote (format "[after](%s)" target))
+        out)))))
+
 (ert-deftest jaunder-pull-media-html-rejects-incomplete-and-raw-text-markup ()
   (let* ((url (jaunder-pull-media-test--url "safe.png"))
          (target
           (format "local-media/%s/safe.png"
                   jaunder-pull-media-test--hash))
          (incomplete (format "<img src=\"%s\"" url))
+         (malformed (format "<1 href=\"%s\">" url))
          (body
           (format
            (concat
@@ -174,6 +217,10 @@
      (equal
       (jaunder-pull-media-test--rewrite "html" incomplete)
       incomplete))
+    (should
+     (equal
+      (jaunder-pull-media-test--rewrite "html" malformed)
+      malformed))
     (should
      (string-match-p
       (regexp-quote
