@@ -23,6 +23,19 @@ type MediaRefRow = (
     common::media::MediaReferenceForm,
 );
 
+pub(crate) fn finish_lifecycle<T>(
+    primary: Result<T, sqlx::Error>,
+    rollback: Result<(), sqlx::Error>,
+) -> Result<T, sqlx::Error> {
+    match primary {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            rollback?;
+            Err(error)
+        }
+    }
+}
+
 pub(crate) fn finish_post_update(
     primary: Result<PostRecord, UpdatePostError>,
     rollback: Result<(), sqlx::Error>,
@@ -136,10 +149,13 @@ async fn lifecycle_post(
             sqlx::query("COMMIT").execute(&mut *conn).await?;
             Ok(row)
         }
-        Err(error) => {
-            sqlx::query("ROLLBACK").execute(&mut *conn).await?;
-            Err(error)
-        }
+        Err(error) => finish_lifecycle(
+            Err(error),
+            sqlx::query("ROLLBACK")
+                .execute(&mut *conn)
+                .await
+                .map(|_| ()),
+        ),
     }
 }
 

@@ -137,21 +137,11 @@ pub(super) fn validate_manifest(manifest: &BackupManifest) -> Result<(), BackupE
     Ok(())
 }
 
-/// Whether this backup is the immediately preceding, pre-identity schema.
-///
-/// The manifest's schema version distinguishes it from a malformed current
-/// backup: only migration 0026 backups may omit the 0027 singleton table.
-pub(crate) fn is_pre_identity_backup(manifest: &BackupManifest, target_version: i64) -> bool {
-    manifest.schema_version == 26 && target_version == 27
-}
-
 pub(crate) fn ensure_schema_version(
     manifest: &BackupManifest,
     target_version: i64,
 ) -> Result<(), BackupError> {
-    if manifest.schema_version != target_version
-        && !is_pre_identity_backup(manifest, target_version)
-    {
+    if manifest.schema_version != target_version {
         return Err(BackupError::SchemaVersionMismatch {
             backup_version: manifest.schema_version,
             target_version,
@@ -336,18 +326,24 @@ mod tests {
     }
 
     #[test]
-    fn ensure_schema_version_rejects_mismatch() {
+    fn ensure_schema_version_rejects_legacy_schema() {
         let manifest = BackupManifest {
             version: env!("CARGO_PKG_VERSION").to_owned(),
-            schema_version: 10,
+            schema_version: 26,
             schema_checksum: "checksum".to_owned(),
             timestamp: UtcInstant::now(),
             mode: BackupMode::Directory,
             tables: Vec::new(),
         };
 
-        let error = ensure_schema_version(&manifest, 11).expect_err("schema mismatch");
-        assert!(matches!(error, BackupError::SchemaVersionMismatch { .. }));
+        let error = ensure_schema_version(&manifest, 28).expect_err("schema mismatch");
+        assert!(matches!(
+            error,
+            BackupError::SchemaVersionMismatch {
+                backup_version: 26,
+                target_version: 28
+            }
+        ));
     }
 
     #[test]

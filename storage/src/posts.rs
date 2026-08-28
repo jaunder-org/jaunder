@@ -2184,14 +2184,12 @@ where
                 media: media
                     .into_iter()
                     .map(|(_, _, _, _, form)| {
-                        parse_media_url(form.as_ref()).ok_or_else(|| {
-                            sqlx::Error::Decode(Box::new(std::io::Error::new(
-                                std::io::ErrorKind::InvalidData,
-                                "stored revision media reference is not parseable",
-                            )))
-                        })
+                        let Some(reference) = parse_media_url(form.as_ref()) else {
+                            unreachable!("MediaReferenceForm decodes only exact parser output");
+                        };
+                        reference
                     })
-                    .collect::<sqlx::Result<Vec<_>>>()?,
+                    .collect(),
             },
         }))
     }
@@ -4902,11 +4900,12 @@ mod tests {
                 .collect::<Vec<_>>(),
             prior_audiences
                 .iter()
-                .map(|audience| match audience {
-                    AudienceTarget::Public => ("public".to_owned(), String::new()),
-                    AudienceTarget::Subscribers => ("subscribers".to_owned(), String::new()),
-                    AudienceTarget::Named(id) => ("named".to_owned(), i64::from(*id).to_string()),
-                    AudienceTarget::Private => unreachable!("private has no audience row"),
+                .filter_map(audience_target_row)
+                .map(|(kind, audience_id)| {
+                    (
+                        kind.as_ref().to_owned(),
+                        audience_id.map_or_else(String::new, |id| i64::from(id).to_string()),
+                    )
                 })
                 .collect::<Vec<_>>()
         );
@@ -5821,6 +5820,33 @@ mod tests {
             Backend::Postgres => "storage.postgres.post_tags.rollback_not_found",
         };
         crate::helpers::swallowed_test::assert_one_report(&trace, tags_context);
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn lifecycle_rollback_preserves_secondary_error_precedence(#[case] backend: Backend) {
+        let primary = match backend {
+            Backend::Sqlite => {
+                crate::sqlite::posts::finish_lifecycle::<()>(Err(sqlx::Error::RowNotFound), Ok(()))
+            }
+            Backend::Postgres => crate::postgres::posts::finish_lifecycle::<()>(
+                Err(sqlx::Error::RowNotFound),
+                Ok(()),
+            ),
+        };
+        assert!(matches!(primary, Err(sqlx::Error::RowNotFound)));
+
+        let rollback = match backend {
+            Backend::Sqlite => crate::sqlite::posts::finish_lifecycle::<()>(
+                Err(sqlx::Error::RowNotFound),
+                Err(sqlx::Error::PoolClosed),
+            ),
+            Backend::Postgres => crate::postgres::posts::finish_lifecycle::<()>(
+                Err(sqlx::Error::RowNotFound),
+                Err(sqlx::Error::PoolClosed),
+            ),
+        };
+        assert!(matches!(rollback, Err(sqlx::Error::PoolClosed)));
     }
 
     fn post_tag(slug: &str, display: &str) -> PostTag {

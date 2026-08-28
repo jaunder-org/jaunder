@@ -10,9 +10,8 @@ use sqlx::{PgConnection, PgPool, Row};
 
 use crate::backup::{
     BackupError, BackupManifest, BackupMode, ColumnInfo, RestoreValidationReport, backup_table_set,
-    build_manifest, ensure_schema_version, is_pre_identity_backup, json_value_as_restore_text,
-    order_by_clause, read_table_rows, restore_table_order, validate_instance_identity_backup,
-    validate_restore_row,
+    build_manifest, ensure_schema_version, json_value_as_restore_text, order_by_clause,
+    read_table_rows, restore_table_order, validate_instance_identity_backup, validate_restore_row,
 };
 use crate::sql::quote_identifier;
 
@@ -118,10 +117,7 @@ pub(crate) async fn restore_database(
     let mut connection = pool.acquire().await?;
     let schema_version = schema_version(&mut connection).await?;
     ensure_schema_version(manifest, schema_version)?;
-    let pre_identity = is_pre_identity_backup(manifest, schema_version);
-    if !pre_identity {
-        validate_instance_identity_backup(source_path, manifest)?;
-    }
+    validate_instance_identity_backup(source_path, manifest)?;
     sqlx::query("BEGIN")
         .execute(&mut *connection)
         .await
@@ -138,12 +134,6 @@ pub(crate) async fn restore_database(
         let mut validation_report = RestoreValidationReport::default();
         // Clear every table before loading any: `SET CONSTRAINTS` defers foreign-key
         // *checks*, not `ON DELETE CASCADE` *actions*
-        if pre_identity {
-            sqlx::query("DELETE FROM instance_identity")
-                .execute(&mut *connection)
-                .await
-                .map_err(map_restore_error)?;
-        }
         // (docs/adr/0115-clear-then-load-restore.md).
         for table in &manifest.tables {
             sqlx::query(&format!("DELETE FROM {}", quote_identifier(table)))
@@ -161,13 +151,6 @@ pub(crate) async fn restore_database(
                 &mut validation_report,
             )
             .await?;
-        }
-        if pre_identity {
-            sqlx::query("INSERT INTO instance_identity (singleton, instance_id) VALUES (1, $1)")
-                .bind(uuid::Uuid::new_v4().to_string())
-                .execute(&mut *connection)
-                .await
-                .map_err(map_restore_error)?;
         }
         repair_sequences(&mut connection).await?;
         Ok(validation_report)

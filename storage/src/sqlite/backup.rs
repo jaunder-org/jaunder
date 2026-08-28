@@ -10,8 +10,8 @@ use sqlx::{Row, SqliteConnection, SqlitePool, error::ErrorKind};
 
 use crate::backup::{
     BackupError, BackupManifest, BackupMode, ColumnInfo, RestoreValidationReport, backup_table_set,
-    build_manifest, ensure_schema_version, is_pre_identity_backup, order_by_clause,
-    read_table_rows, restore_table_order, validate_instance_identity_backup, validate_restore_row,
+    build_manifest, ensure_schema_version, order_by_clause, read_table_rows, restore_table_order,
+    validate_instance_identity_backup, validate_restore_row,
 };
 use crate::sql::{quote_identifier, quote_literal};
 
@@ -132,10 +132,7 @@ pub(crate) async fn restore_database(
     let mut connection = pool.acquire().await?;
     let schema_version = schema_version(&mut connection).await?;
     ensure_schema_version(manifest, schema_version)?;
-    let pre_identity = is_pre_identity_backup(manifest, schema_version);
-    if !pre_identity {
-        validate_instance_identity_backup(source_path, manifest)?;
-    }
+    validate_instance_identity_backup(source_path, manifest)?;
     // Disable FK enforcement for the bulk import so rows need not be inserted in
     // referential order; integrity is verified once at the end via
     // `foreign_key_check`. FKs are re-enabled on every exit path below, since the
@@ -150,12 +147,6 @@ pub(crate) async fn restore_database(
     let result = async {
         let mut validation_report = RestoreValidationReport::default();
         // Clear every table before loading any, keeping the two backends' restore
-        if pre_identity {
-            sqlx::query("DELETE FROM instance_identity")
-                .execute(&mut *connection)
-                .await
-                .map_err(map_restore_error)?;
-        }
         // shape identical (docs/adr/0115-clear-then-load-restore.md).
         for table in &manifest.tables {
             sqlx::query(&format!("DELETE FROM {}", quote_identifier(table)))
@@ -173,13 +164,6 @@ pub(crate) async fn restore_database(
                 &mut validation_report,
             )
             .await?;
-        }
-        if pre_identity {
-            sqlx::query("INSERT INTO instance_identity (singleton, instance_id) VALUES (1, $1)")
-                .bind(uuid::Uuid::new_v4().to_string())
-                .execute(&mut *connection)
-                .await
-                .map_err(map_restore_error)?;
         }
         // Validate FKs *before* committing so a violation rolls the whole restore
         // back rather than leaving invalid data committed. `foreign_key_check`

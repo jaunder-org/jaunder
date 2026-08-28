@@ -514,8 +514,8 @@ mod tests {
 
     use super::*;
     use common::test_support::{
-        parse_root_relative_url, parse_slug, parse_tag, parse_tag_label, parse_username,
-        parse_utc_instant,
+        parse_post_body, parse_root_relative_url, parse_slug, parse_tag, parse_tag_label,
+        parse_username, parse_utc_instant,
     };
     use common::time::UtcInstant;
 
@@ -929,6 +929,26 @@ mod tests {
             AuthenticatedHistoryState::Failed(WebError::validation("history"))
         );
     }
+    #[test]
+    fn history_ready_projection_preserves_all_non_ready_states() {
+        assert_eq!(
+            AuthenticatedHistoryState::<i32>::NotFound.map_ready(|value| value.to_string()),
+            AuthenticatedHistoryState::NotFound
+        );
+        assert_eq!(
+            AuthenticatedHistoryState::<i32>::AuthRequired.map_ready(|value| value.to_string()),
+            AuthenticatedHistoryState::AuthRequired
+        );
+        assert_eq!(
+            AuthenticatedHistoryState::Ready(7).map_ready(|value| value.to_string()),
+            AuthenticatedHistoryState::Ready("7".to_owned())
+        );
+        assert_eq!(
+            AuthenticatedHistoryState::<i32>::Failed(WebError::validation("history"))
+                .map_ready(|value| value.to_string()),
+            AuthenticatedHistoryState::Failed(WebError::validation("history"))
+        );
+    }
 
     #[test]
     fn revision_collections_project_populated_and_empty_snapshots_to_source_text() {
@@ -951,29 +971,243 @@ mod tests {
             &media,
         );
         assert_eq!(
-            populated
-                .iter()
-                .map(|collection| collection.value.as_str())
-                .collect::<Vec<_>>(),
-            [
-                "Rust (rust)",
-                "public\nnamed (11)",
-                "sha256:first\nhttps://media/second",
+            populated,
+            vec![
+                HistoryCollectionDisplay {
+                    heading: "Tags",
+                    heading_id: "revision-tags-heading",
+                    data_test: "history-tags",
+                    value: "Rust (rust)".to_owned(),
+                },
+                HistoryCollectionDisplay {
+                    heading: "Audiences",
+                    heading_id: "revision-audiences-heading",
+                    data_test: "history-audiences",
+                    value: "public\nnamed (11)".to_owned(),
+                },
+                HistoryCollectionDisplay {
+                    heading: "Media references",
+                    heading_id: "revision-media-heading",
+                    data_test: "history-media",
+                    value: "sha256:first\nhttps://media/second".to_owned(),
+                },
             ]
         );
 
         let empty = revision_collection_displays(Vec::new(), Vec::new(), &[]);
         assert_eq!(
-            empty
-                .iter()
-                .map(|collection| collection.value.as_str())
-                .collect::<Vec<_>>(),
-            [
-                "No tags in this snapshot.",
-                "No audiences in this snapshot.",
-                "No media references in this snapshot.",
+            empty,
+            vec![
+                HistoryCollectionDisplay {
+                    heading: "Tags",
+                    heading_id: "revision-tags-heading",
+                    data_test: "history-tags",
+                    value: "No tags in this snapshot.".to_owned(),
+                },
+                HistoryCollectionDisplay {
+                    heading: "Audiences",
+                    heading_id: "revision-audiences-heading",
+                    data_test: "history-audiences",
+                    value: "No audiences in this snapshot.".to_owned(),
+                },
+                HistoryCollectionDisplay {
+                    heading: "Media references",
+                    heading_id: "revision-media-heading",
+                    data_test: "history-media",
+                    value: "No media references in this snapshot.".to_owned(),
+                },
             ]
         );
+    }
+
+    #[test]
+    fn current_history_rows_project_labels_values_and_lifecycle_selector() {
+        let at = parse_utc_instant("2026-08-27T12:00:00Z");
+        for (lifecycle, label) in [
+            (RevisionLifecycle::Draft, "Draft"),
+            (RevisionLifecycle::Scheduled, "Scheduled"),
+            (RevisionLifecycle::Published, "Published"),
+            (RevisionLifecycle::Deleted, "Deleted"),
+        ] {
+            let rows = current_history_rows(CurrentPostHistory {
+                post_id: PostId::from(7),
+                title: None,
+                slug: parse_slug("history-post"),
+                format: common::render::PostFormat::Markdown,
+                created_at: at,
+                updated_at: at,
+                published_at: None,
+                deleted_at: None,
+                lifecycle,
+            });
+            assert_eq!(
+                rows,
+                vec![
+                    HistoryDisplayRow {
+                        label: "Post ID",
+                        value: "7".to_owned(),
+                        data_test: None
+                    },
+                    HistoryDisplayRow {
+                        label: "Title",
+                        value: "No title".to_owned(),
+                        data_test: None
+                    },
+                    HistoryDisplayRow {
+                        label: "Slug",
+                        value: "history-post".to_owned(),
+                        data_test: None
+                    },
+                    HistoryDisplayRow {
+                        label: "Format",
+                        value: "markdown".to_owned(),
+                        data_test: None
+                    },
+                    HistoryDisplayRow {
+                        label: "Lifecycle",
+                        value: label.to_owned(),
+                        data_test: Some("history-current-lifecycle")
+                    },
+                    HistoryDisplayRow {
+                        label: "Created",
+                        value: at.to_string(),
+                        data_test: None
+                    },
+                    HistoryDisplayRow {
+                        label: "Updated",
+                        value: at.to_string(),
+                        data_test: None
+                    },
+                    HistoryDisplayRow {
+                        label: "Published",
+                        value: "Not set".to_owned(),
+                        data_test: None
+                    },
+                    HistoryDisplayRow {
+                        label: "Deleted",
+                        value: "Not set".to_owned(),
+                        data_test: None
+                    },
+                ],
+                "the {label} projection stays a literal current-history contract"
+            );
+        }
+    }
+
+    #[test]
+    fn current_history_rows_preserve_present_title_and_timestamps() {
+        let at = parse_utc_instant("2026-08-27T12:00:00Z");
+        let rows = current_history_rows(CurrentPostHistory {
+            post_id: PostId::from(7),
+            title: Some(common::test_support::parse_post_title("Current title")),
+            slug: parse_slug("history-post"),
+            format: common::render::PostFormat::Org,
+            created_at: at,
+            updated_at: at,
+            published_at: Some(at),
+            deleted_at: Some(at),
+            lifecycle: RevisionLifecycle::Published,
+        });
+        assert_eq!(rows[1].value, "Current title");
+        assert_eq!(rows[3].value, "org");
+        assert_eq!(rows[7].value, at.to_string());
+        assert_eq!(rows[8].value, at.to_string());
+    }
+
+    #[test]
+    fn revision_history_rows_project_every_scalar_and_optional_value() {
+        let at = parse_utc_instant("2026-08-27T12:00:00Z");
+        let detail = RevisionHistoryDetail {
+            revision_id: common::ids::RevisionId::from(8),
+            post_id: PostId::from(7),
+            title: Some(common::test_support::parse_post_title("Snapshot title")),
+            slug: parse_slug("history-post"),
+            body: parse_post_body("body"),
+            format: common::render::PostFormat::Org,
+            rendered_html: common::render::RenderedHtml::from_trusted("<p>body</p>"),
+            summary: Some(common::test_support::parse_post_summary("Snapshot summary")),
+            created_at: at,
+            updated_at: at,
+            published_at: Some(at),
+            deleted_at: Some(at),
+            captured_at: at,
+            tags: Vec::new(),
+            audiences: Vec::new(),
+            media: Vec::new(),
+        };
+        assert_eq!(
+            revision_history_rows(&detail),
+            vec![
+                HistoryDisplayRow {
+                    label: "Revision ID",
+                    value: "8".to_owned(),
+                    data_test: None
+                },
+                HistoryDisplayRow {
+                    label: "Post ID",
+                    value: "7".to_owned(),
+                    data_test: None
+                },
+                HistoryDisplayRow {
+                    label: "Title",
+                    value: "Snapshot title".to_owned(),
+                    data_test: None
+                },
+                HistoryDisplayRow {
+                    label: "Slug",
+                    value: "history-post".to_owned(),
+                    data_test: None
+                },
+                HistoryDisplayRow {
+                    label: "Format",
+                    value: "org".to_owned(),
+                    data_test: None
+                },
+                HistoryDisplayRow {
+                    label: "Summary",
+                    value: "Snapshot summary".to_owned(),
+                    data_test: None
+                },
+                HistoryDisplayRow {
+                    label: "Created",
+                    value: at.to_string(),
+                    data_test: None
+                },
+                HistoryDisplayRow {
+                    label: "Updated",
+                    value: at.to_string(),
+                    data_test: None
+                },
+                HistoryDisplayRow {
+                    label: "Published",
+                    value: at.to_string(),
+                    data_test: None
+                },
+                HistoryDisplayRow {
+                    label: "Deleted",
+                    value: at.to_string(),
+                    data_test: None
+                },
+                HistoryDisplayRow {
+                    label: "Captured",
+                    value: at.to_string(),
+                    data_test: None
+                },
+            ]
+        );
+
+        let absent = RevisionHistoryDetail {
+            title: None,
+            summary: None,
+            published_at: None,
+            deleted_at: None,
+            ..detail
+        };
+        let rows = revision_history_rows(&absent);
+        assert_eq!(rows[2].value, "No title");
+        assert_eq!(rows[5].value, "Not set");
+        assert_eq!(rows[8].value, "Not set");
+        assert_eq!(rows[9].value, "Not set");
     }
 
     // --- parent-callback plumbing ---

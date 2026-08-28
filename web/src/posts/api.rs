@@ -1300,7 +1300,10 @@ mod server_tests {
     // allow-{unwrap,expect}-in-tests, so expect the test-scaffolding panics.
     // lint-suppression:allow approved in #294; existing expectation documents intentional test-scaffolding or naming exception
     #![expect(clippy::unwrap_used)]
-    use super::{PostInputs, create, list_drafts, publish, unpublish, update};
+    use super::{
+        PostInputs, create, get_post_history, get_revision_history_detail, list_drafts,
+        list_history, publish, unpublish, update,
+    };
     use crate::error::WebError;
     use crate::test_support::auth_parts;
     use common::ids::{PostId, UserId};
@@ -1313,8 +1316,9 @@ mod server_tests {
     use leptos::reactive::owner::Owner;
     use std::sync::Arc;
     use storage::{
-        AudienceStorage, FeedEventStorage, MockAudienceStorage, MockFeedEventStorage,
-        MockPostStorage, PostFormat, PostRecord, PostStorage, RenderedHtml, UpdatePostError,
+        AudienceStorage, CurrentPostRevisionSummary, FeedEventStorage, MockAudienceStorage,
+        MockFeedEventStorage, MockPostStorage, PostFormat, PostRecord, PostRevisionMetadata,
+        PostRevisionPage, PostStorage, RenderedHtml, UpdatePostError,
     };
 
     fn owned_post(user_id: UserId) -> PostRecord {
@@ -1357,6 +1361,183 @@ mod server_tests {
             post_id: PostId::from(post_id),
             ..owned_post(UserId::from(1))
         }
+    }
+
+    #[test]
+    fn revision_metadata_projector_preserves_every_field() {
+        use common::test_support::parse_post_title;
+        use storage::{PostLifecycle, PostRevisionMetadata};
+
+        let at = common::test_support::parse_utc_instant("2026-08-27T12:34:56Z");
+        let metadata = PostRevisionMetadata {
+            revision_id: common::ids::RevisionId::from(8),
+            post_id: PostId::from(7),
+            title: Some(parse_post_title("Snapshot title")),
+            slug: "snapshot".parse().expect("valid slug"),
+            captured_at: at,
+            snapshot_lifecycle: PostLifecycle::Published,
+            current_deleted: true,
+        };
+        assert_eq!(
+            super::revision_metadata(metadata),
+            super::RevisionHistoryMetadata {
+                revision_id: common::ids::RevisionId::from(8),
+                post_id: PostId::from(7),
+                title: Some(parse_post_title("Snapshot title")),
+                slug: "snapshot".parse().expect("valid slug"),
+                captured_at: at,
+                snapshot_lifecycle: super::RevisionLifecycle::Published,
+                current_deleted: true,
+            }
+        );
+    }
+
+    #[test]
+    fn revision_lifecycle_and_current_projectors_preserve_every_field() {
+        use storage::{CurrentPostRevisionSummary, PostLifecycle};
+
+        let at = common::test_support::parse_utc_instant("2026-08-27T12:34:56Z");
+
+        for (source, projected) in [
+            (PostLifecycle::Draft, super::RevisionLifecycle::Draft),
+            (
+                PostLifecycle::Scheduled,
+                super::RevisionLifecycle::Scheduled,
+            ),
+            (
+                PostLifecycle::Published,
+                super::RevisionLifecycle::Published,
+            ),
+            (PostLifecycle::Deleted, super::RevisionLifecycle::Deleted),
+        ] {
+            assert_eq!(super::revision_lifecycle(source), projected);
+        }
+
+        assert_eq!(
+            super::current_post_history(CurrentPostRevisionSummary {
+                post_id: PostId::from(7),
+                title: None,
+                slug: "current".parse().expect("valid slug"),
+                format: PostFormat::Org,
+                created_at: at,
+                updated_at: at,
+                published_at: Some(at),
+                deleted_at: Some(at),
+                lifecycle: PostLifecycle::Deleted,
+            }),
+            super::CurrentPostHistory {
+                post_id: PostId::from(7),
+                title: None,
+                slug: "current".parse().expect("valid slug"),
+                format: PostFormat::Org,
+                created_at: at,
+                updated_at: at,
+                published_at: Some(at),
+                deleted_at: Some(at),
+                lifecycle: super::RevisionLifecycle::Deleted,
+            }
+        );
+    }
+
+    #[test]
+    fn revision_detail_projector_preserves_every_field() {
+        use common::media::parse_media_url;
+        use common::test_support::{parse_post_summary, parse_post_title, parse_tag};
+        use common::visibility::AudienceTarget;
+        use storage::{PostRevisionDetail, PostRevisionRecord, PostRevisionTag};
+
+        let at = common::test_support::parse_utc_instant("2026-08-27T12:34:56Z");
+
+        let media = parse_media_url(
+            "/media/upload/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/photo.jpg",
+        )
+        .expect("valid media URL");
+        let detail = super::revision_detail(PostRevisionDetail {
+            revision: PostRevisionRecord {
+                revision_id: common::ids::RevisionId::from(8),
+                post_id: PostId::from(7),
+                user_id: UserId::from(1),
+                title: Some(parse_post_title("Snapshot title")),
+                slug: "snapshot".parse().expect("valid slug"),
+                body: parse_post_body("Snapshot body"),
+                format: PostFormat::Markdown,
+                rendered_html: RenderedHtml::from_trusted("<p>Snapshot body</p>"),
+                summary: Some(parse_post_summary("Snapshot summary")),
+                created_at: at,
+                updated_at: at,
+                published_at: Some(at),
+                deleted_at: Some(at),
+                captured_at: at,
+                tags: vec![PostRevisionTag {
+                    tag: parse_tag("rust"),
+                    display: parse_tag_label("Rust"),
+                }],
+                audiences: vec![
+                    AudienceTarget::Public,
+                    AudienceTarget::Private,
+                    AudienceTarget::Subscribers,
+                    AudienceTarget::Named(common::ids::AudienceId::from(9)),
+                ],
+                media: vec![media],
+            },
+        });
+        assert_eq!(detail.revision_id, common::ids::RevisionId::from(8));
+        assert_eq!(detail.post_id, PostId::from(7));
+        assert_eq!(detail.title, Some(parse_post_title("Snapshot title")));
+        assert_eq!(detail.slug, "snapshot".parse::<Slug>().expect("valid slug"));
+        assert_eq!(detail.body, parse_post_body("Snapshot body"));
+        assert_eq!(detail.format, PostFormat::Markdown);
+        assert_eq!(detail.rendered_html.as_ref(), "<p>Snapshot body</p>");
+        assert_eq!(detail.summary, Some(parse_post_summary("Snapshot summary")));
+        assert_eq!(
+            (
+                detail.created_at,
+                detail.updated_at,
+                detail.published_at,
+                detail.deleted_at,
+                detail.captured_at
+            ),
+            (at, at, Some(at), Some(at), at)
+        );
+        assert_eq!(
+            detail.tags,
+            vec![super::RevisionHistoryTag {
+                tag: parse_tag("rust"),
+                display: parse_tag_label("Rust")
+            }]
+        );
+        assert_eq!(
+            detail.audiences,
+            vec![
+                super::RevisionHistoryAudience {
+                    kind: "public".to_owned(),
+                    audience_id: None
+                },
+                super::RevisionHistoryAudience {
+                    kind: "private".to_owned(),
+                    audience_id: None
+                },
+                super::RevisionHistoryAudience {
+                    kind: "subscribers".to_owned(),
+                    audience_id: None
+                },
+                super::RevisionHistoryAudience {
+                    kind: "named".to_owned(),
+                    audience_id: Some(common::ids::AudienceId::from(9))
+                },
+            ]
+        );
+        assert_eq!(detail.media, vec!["/media/upload/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/photo.jpg".to_owned()]);
+    }
+
+    #[test]
+    fn revision_history_cursor_traces_its_immutable_id() {
+        use common::trace_field::TraceField;
+
+        let cursor = super::RevisionHistoryCursor {
+            revision_id: common::ids::RevisionId::from(8),
+        };
+        assert_eq!(cursor.trace_value(), common::ids::RevisionId::from(8));
     }
 
     #[test]
@@ -1488,13 +1669,192 @@ mod server_tests {
 
         let saved = unpublish(PostId::from(1)).await;
         drop(owner);
-        let saved = saved.expect("unpublish succeeds");
+        let Ok(saved) = saved else {
+            panic!("unpublish should succeed");
+        };
         assert_eq!(saved.post_id, PostId::from(1));
         assert_eq!(saved.published_at, None);
         assert_eq!(saved.permalink, expected_permalink);
     }
 
     // guard:no-backend — mock store
+    fn history_metadata(revision_id: i64) -> PostRevisionMetadata {
+        PostRevisionMetadata {
+            revision_id: common::ids::RevisionId::from(revision_id),
+            post_id: PostId::from(7),
+            title: None,
+            slug: common::test_support::parse_slug("history"),
+            captured_at: common::test_support::parse_utc_instant("2026-08-27T12:00:00Z"),
+            snapshot_lifecycle: storage::PostLifecycle::Draft,
+            current_deleted: false,
+        }
+    }
+
+    fn history_owner(posts: MockPostStorage) -> Owner {
+        let owner = Owner::new();
+        owner.set();
+        provide_context(auth_parts(UserId::from(1), "alice"));
+        provide_context(Arc::new(posts) as Arc<dyn PostStorage>);
+        owner
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn list_history_projects_storage_rows_and_cursor() {
+        let page_size = PageSize::clamped(5);
+        let mut posts = MockPostStorage::new();
+        posts
+            .expect_list_owned_revision_history()
+            .withf(move |user_id, cursor, limit| {
+                *user_id == UserId::from(1) && cursor.is_none() && *limit == page_size
+            })
+            .returning(|_, _, _| {
+                Ok(PostRevisionPage {
+                    revisions: vec![history_metadata(8)],
+                    next_cursor: Some(storage::PostRevisionCursor {
+                        revision_id: common::ids::RevisionId::from(7),
+                    }),
+                })
+            });
+        let owner = history_owner(posts);
+        let page = list_history(None, Some(page_size)).await;
+        drop(owner);
+
+        let page = page.expect("history list succeeds");
+        assert_eq!(page.revisions.len(), 1);
+        assert_eq!(
+            page.revisions[0].revision_id,
+            common::ids::RevisionId::from(8)
+        );
+        assert_eq!(
+            page.next_cursor,
+            Some(super::RevisionHistoryCursor {
+                revision_id: common::ids::RevisionId::from(7),
+            })
+        );
+        assert!(page.has_more);
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn post_history_projects_current_state_and_revision_page() {
+        let page_size = PageSize::clamped(5);
+        let captured_at = common::test_support::parse_utc_instant("2026-08-27T12:00:00Z");
+        let mut posts = MockPostStorage::new();
+        posts
+            .expect_get_current_revision_summary()
+            .returning(move |user_id, post_id, _| {
+                let summary = CurrentPostRevisionSummary {
+                    post_id,
+                    title: None,
+                    slug: common::test_support::parse_slug("history"),
+                    format: PostFormat::Markdown,
+                    created_at: captured_at,
+                    updated_at: captured_at,
+                    published_at: None,
+                    deleted_at: None,
+                    lifecycle: storage::PostLifecycle::Draft,
+                };
+                Ok((user_id == UserId::from(1)).then_some(summary))
+            });
+        posts
+            .expect_list_post_revision_history()
+            .withf(move |user_id, post_id, cursor, limit| {
+                *user_id == UserId::from(1)
+                    && *post_id == PostId::from(7)
+                    && cursor.is_none()
+                    && *limit == page_size
+            })
+            .returning(|_, _, _, _| {
+                Ok(Some(PostRevisionPage {
+                    revisions: vec![history_metadata(8)],
+                    next_cursor: Some(storage::PostRevisionCursor {
+                        revision_id: common::ids::RevisionId::from(7),
+                    }),
+                }))
+            });
+        let owner = history_owner(posts);
+        let history = get_post_history(PostId::from(7), None, Some(page_size)).await;
+        drop(owner);
+
+        let history = history.expect("post history succeeds");
+        assert_eq!(history.current.post_id, PostId::from(7));
+        assert_eq!(history.current.title, None);
+        assert_eq!(history.current.lifecycle, super::RevisionLifecycle::Draft);
+        assert_eq!(
+            history.revisions.revisions[0].revision_id,
+            common::ids::RevisionId::from(8)
+        );
+        assert_eq!(
+            history.revisions.next_cursor,
+            Some(super::RevisionHistoryCursor {
+                revision_id: common::ids::RevisionId::from(7),
+            })
+        );
+        assert!(history.revisions.has_more);
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn post_history_masks_missing_current_or_page_as_not_found() {
+        let mut missing_current = MockPostStorage::new();
+        missing_current
+            .expect_get_current_revision_summary()
+            .returning(|_, _, _| Ok(None));
+        let owner = history_owner(missing_current);
+        let current = get_post_history(PostId::from(7), None, None).await;
+        drop(owner);
+        assert!(matches!(current, Err(WebError::NotFound { .. })));
+
+        let captured_at = common::test_support::parse_utc_instant("2026-08-27T12:00:00Z");
+        let mut missing_page = MockPostStorage::new();
+        missing_page
+            .expect_get_current_revision_summary()
+            .returning(move |_, post_id, _| {
+                Ok(Some(CurrentPostRevisionSummary {
+                    post_id,
+                    title: None,
+                    slug: "history".parse().expect("valid slug"),
+                    format: PostFormat::Markdown,
+                    created_at: captured_at,
+                    updated_at: captured_at,
+                    published_at: None,
+                    deleted_at: None,
+                    lifecycle: storage::PostLifecycle::Draft,
+                }))
+            });
+        missing_page
+            .expect_list_post_revision_history()
+            .returning(|_, _, _, _| Ok(None));
+        let owner = history_owner(missing_page);
+        let page = get_post_history(PostId::from(7), None, None).await;
+        drop(owner);
+        assert!(matches!(page, Err(WebError::NotFound { .. })));
+    }
+
+    // guard:no-backend — mock store
+    #[tokio::test]
+    async fn revision_detail_masks_missing_and_projects_storage_failures() {
+        let mut missing = MockPostStorage::new();
+        missing
+            .expect_get_post_revision_detail()
+            .returning(|_, _, _| Ok(None));
+        let owner = history_owner(missing);
+        let result =
+            get_revision_history_detail(PostId::from(7), common::ids::RevisionId::from(8)).await;
+        drop(owner);
+        assert!(matches!(result, Err(WebError::NotFound { .. })));
+
+        let mut failed = MockPostStorage::new();
+        failed
+            .expect_get_post_revision_detail()
+            .returning(|_, _, _| Err(sqlx::Error::PoolClosed));
+        let owner = history_owner(failed);
+        let result =
+            get_revision_history_detail(PostId::from(7), common::ids::RevisionId::from(8)).await;
+        drop(owner);
+        assert!(matches!(result, Err(WebError::Storage { .. })));
+    }
     #[tokio::test]
     async fn unpublish_masks_storage_unauthorized_as_not_found() {
         let owner = Owner::new();

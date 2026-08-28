@@ -4,14 +4,16 @@ use common::post_title::PostTitle;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::test_support::{
-    parse_audience_name, parse_page_size, parse_post_body, parse_post_title, parse_row_limit,
-    parse_slug,
+    parse_audience_name, parse_page_size, parse_post_body, parse_post_summary, parse_post_title,
+    parse_row_limit, parse_slug,
 };
 use common::time::UtcInstant;
 use common::visibility::{AudienceTarget, ViewerIdentity};
 use rstest::*;
 use rstest_reuse::*;
-use storage::test_support::{Backend, SeedRawPost, SeedUser, TestEnv, UpdateRawPost, backends};
+use storage::test_support::{
+    Backend, SeedRawPost, SeedUser, TestEnv, UpdateRawPost, backends, media_url_for,
+};
 use storage::{
     CreatePostError, PostBookkeepingExpectation, PostFormat, PostLifecycle, PostUpdate,
     PublishUpdate, RenderedPostContent, UpdatePostError, create_rendered_post, perform_post_update,
@@ -773,6 +775,113 @@ async fn revision_history_keeps_deleted_owner_post_and_hides_foreign_details(
 
 #[apply(backends)]
 #[tokio::test]
+async fn revision_detail_round_trips_complete_snapshot_and_rejects_invalid_media_form(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let owner = SeedUser::new().seed(state).await.user_id;
+    let named = state
+        .audiences
+        .create_audience(owner, &parse_audience_name("Revision readers"))
+        .await
+        .unwrap();
+    let media_url = media_url_for("revision-detail.png");
+    let post_id = SeedRawPost::new(owner)
+        .slug("complete-revision")
+        .body(parse_post_body(&format!(
+            "before <img src=\"{media_url}\">"
+        )))
+        .summary(parse_post_summary("complete snapshot summary"))
+        .audiences(vec![AudienceTarget::Public, AudienceTarget::Named(named)])
+        .tags(["Rust", "Storage"])
+        .seed(state)
+        .await
+        .post_id;
+    let prior = state
+        .posts
+        .get_post_by_id(post_id, &ViewerIdentity::Local { user_id: owner })
+        .await
+        .unwrap()
+        .unwrap();
+
+    state
+        .posts
+        .update_post(
+            post_id,
+            owner,
+            &UpdateRawPost::new("complete-revision-updated")
+                .body(parse_post_body("after"))
+                .unpublish()
+                .build(),
+        )
+        .await
+        .unwrap();
+    let revision = state
+        .posts
+        .list_post_revision_history(owner, post_id, None, parse_page_size("10"))
+        .await
+        .unwrap()
+        .unwrap()
+        .revisions
+        .pop()
+        .unwrap();
+    let detail = state
+        .posts
+        .get_post_revision_detail(owner, post_id, revision.revision_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(detail.revision.post_id, prior.post_id);
+    assert_eq!(detail.revision.user_id, prior.user_id);
+    assert_eq!(detail.revision.title, prior.title);
+    assert_eq!(detail.revision.slug, prior.slug);
+    assert_eq!(detail.revision.body, prior.body);
+    assert_eq!(detail.revision.format, prior.format);
+    assert_eq!(detail.revision.rendered_html, prior.rendered_html);
+    assert_eq!(detail.revision.summary, prior.summary);
+    assert_eq!(detail.revision.created_at, prior.created_at);
+    assert_eq!(detail.revision.updated_at, prior.updated_at);
+    assert_eq!(detail.revision.published_at, prior.published_at);
+    assert_eq!(detail.revision.deleted_at, prior.deleted_at);
+    assert_eq!(
+        detail
+            .revision
+            .tags
+            .iter()
+            .map(|tag| (tag.tag.as_ref(), tag.display.as_ref()))
+            .collect::<Vec<_>>(),
+        vec![("rust", "Rust"), ("storage", "Storage")]
+    );
+    assert_eq!(
+        detail.revision.audiences,
+        vec![AudienceTarget::Named(named), AudienceTarget::Public]
+    );
+    assert_eq!(
+        detail.revision.media,
+        vec![common::media::parse_media_url(&media_url).unwrap()]
+    );
+
+    env.base
+        .pool()
+        .execute(&format!(
+            "UPDATE post_media SET reference_form = 'invalid media form'
+             WHERE post_id = {post_id} AND subject_kind = 'revision'
+               AND revision_id = {}",
+            revision.revision_id
+        ))
+        .await
+        .unwrap();
+    let error = state
+        .posts
+        .get_post_revision_detail(owner, post_id, revision.revision_id)
+        .await
+        .expect_err("invalid persisted revision media form must fail decoding");
+    assert!(matches!(error, sqlx::Error::Decode(_)));
+}
+
+#[apply(backends)]
+#[tokio::test]
 async fn current_revision_summary_derives_lifecycle_from_request_clock(#[case] backend: Backend) {
     let env = backend.setup().await;
     let state = &env.state;
@@ -803,6 +912,37 @@ async fn current_revision_summary_derives_lifecycle_from_request_clock(#[case] b
         .unwrap();
     assert_eq!(before.lifecycle, PostLifecycle::Scheduled);
     assert_eq!(after.lifecycle, PostLifecycle::Published);
+}
+#[apply(backends)]
+#[tokio::test]
+async fn current_revision_summary_reports_draft_and_deleted_states(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let owner = SeedUser::new().seed(state).await.user_id;
+    let draft_id = SeedRawPost::new(owner).draft().seed(state).await.post_id;
+    let deleted_id = SeedRawPost::new(owner).draft().seed(state).await.post_id;
+    state
+        .posts
+        .soft_delete_post(deleted_id, owner)
+        .await
+        .unwrap();
+
+    let draft = state
+        .posts
+        .get_current_revision_summary(owner, draft_id, UtcInstant::now())
+        .await
+        .unwrap()
+        .unwrap();
+    let deleted = state
+        .posts
+        .get_current_revision_summary(owner, deleted_id, UtcInstant::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(draft.lifecycle, PostLifecycle::Draft);
+    assert_eq!(deleted.lifecycle, PostLifecycle::Deleted);
+    assert_eq!(deleted.post_id, deleted_id);
+    assert!(deleted.deleted_at.is_some());
 }
 
 // =============================================================================
