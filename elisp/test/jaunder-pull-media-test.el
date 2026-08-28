@@ -60,6 +60,27 @@
     (should (string-match-p (regexp-quote (format "url(%s)" one)) out))
     (should (string-match-p (regexp-quote (format "const x='%s'" two)) out))))
 
+(ert-deftest jaunder-pull-media-html-scans-only-real-case-insensitive-attributes ()
+  ;; Attribute-looking samples, data-* names, comments, and raw text are opaque.
+  (let* ((url (jaunder-pull-media-test--url "safe.png"))
+         (body (format "<!-- <img SRC=%s> --><img DATA-src=\"%s\" SRC=\"%s\"><script><img href=\"%s\"></script>"
+                       url url url url))
+         (out (jaunder-pull-media-test--rewrite "html" body)))
+    (should (string-match-p (regexp-quote (format "SRC=\"local-media/%s/safe.png\""
+                                                  jaunder-pull-media-test--hash)) out))
+    (should (string-match-p (regexp-quote (format "DATA-src=\"%s\"" url)) out))
+    (should (string-match-p (regexp-quote (format "<!-- <img SRC=%s> -->" url)) out))
+    (should (string-match-p (regexp-quote (format "<script><img href=\"%s\"></script>" url)) out))))
+
+(ert-deftest jaunder-pull-media-markdown-rewrites-standard-destinations-only ()
+  (let* ((url (jaunder-pull-media-test--url "safe.png"))
+         (body (format "[angle](<%s> \"title\")\n[ref]: <%s> 'title'\n`[no](%s)`\n```\n[x](%s)\n```"
+                       url url url url))
+         (out (jaunder-pull-media-test--rewrite "markdown" body)))
+    (should (string-match-p (regexp-quote (format "[angle](<local-media/%s/safe.png> \"title\")"
+                                                  jaunder-pull-media-test--hash)) out))
+    (should (string-match-p (regexp-quote (format "`[no](%s)`" url)) out))))
+
 (ert-deftest jaunder-pull-media-rejects-every-non-candidate-class ()
   ;; Only canonical, same-origin public media destinations create a plan entry.
   (let* ((valid (jaunder-pull-media-test--url "ok.png"))
@@ -70,10 +91,7 @@
                    "https://user@jaunder.example/media/upload/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/ok.png"
                    "https://jaunder.example/media/upload/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/ok.png?x=1"
                    "https://jaunder.example/atompub/a/media/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/ok.png"
-                   "https://jaunder.example/media/upload/ff/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/ok.png"
-                   "https://jaunder.example/media/upload/e3/b0/E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855/ok.png"
-                   "data:image/png;base64,x"
-                   "https://jaunder.example/media/upload/e3/b0/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855/a%2Fb.png"))
+                   "data:image/png;base64,x"))
          (body (concat (format "![good](%s)" valid)
                        (mapconcat (lambda (url) (format " [bad](%s)" url)) invalid "")))
          (plan (jaunder--pull-media-plan "markdown" body jaunder-pull-media-test--origin)))
@@ -81,6 +99,18 @@
     (dolist (url invalid)
       (should (string-match-p (regexp-quote url)
                               (jaunder--pull-media-apply-plan plan))))))
+
+(ert-deftest jaunder-pull-media-rejects-malformed-same-origin-media-route ()
+  (dolist (url
+           (list
+            (format "https://jaunder.example/media/upload/ff/b0/%s/bad.png"
+                    jaunder-pull-media-test--hash)
+            (format "https://jaunder.example/media/upload/e3/b0/%s/a%%2Fb.png"
+                    jaunder-pull-media-test--hash)))
+    (should-error
+     (jaunder--pull-media-plan "markdown" (format "[bad](%s)" url)
+                               jaunder-pull-media-test--origin)
+     :type 'error)))
 
 (defun jaunder-pull-media-test--materialization-plan (hash leaf &optional references)
   "Return a one-object localization plan for HASH and decoded LEAF."
@@ -326,6 +356,64 @@
                                                     root jaunder-pull-media-test--instance
                                                     (jaunder-pull-media-test--materialization-plan hash "a.bin"))
                                                    (should (jaunder--pull-media-verified-file-p target hash)))))))
+
+(ert-deftest jaunder-pull-media-revalidates-parents-immediately-before-install ()
+  ;; A digest directory can be swapped after staging; the final mutation must
+  ;; fail before rename rather than following the new symlink.
+  (let* ((bytes (string-as-unibyte "swap"))
+         (hash (secure-hash 'sha256 bytes)))
+    (jaunder-pull-media-test--with-root root
+                                        (let ((outside (make-temp-file "jaunder-outside-" t))
+                                              (checks 0)
+                                              (real-target (symbol-function 'jaunder--pull-media-target-path)))
+                                          (unwind-protect
+                                              (cl-letf (((symbol-function 'jaunder--pull-media-get)
+                                                         (lambda (_url file)
+                                                           (jaunder-pull-media-test--write-bytes file bytes)
+                                                           (jaunder-pull-media-test--response
+                                                            jaunder-pull-media-test--instance hash)))
+                                                        ((symbol-function 'jaunder--pull-media-target-path)
+                                                         (lambda (configured-root planned-hash leaf)
+                                                           (setq checks (1+ checks))
+                                                           (when (= checks 2)
+                                                             (let ((digest (expand-file-name
+                                                                            (concat "local-media/" hash) root)))
+                                                               (delete-directory digest t)
+                                                               (make-symbolic-link outside digest)))
+                                                           (funcall real-target configured-root planned-hash leaf))))
+                                                       (should-error
+                                                        (jaunder--pull-media-materialize
+                                                         root jaunder-pull-media-test--instance
+                                                         (jaunder-pull-media-test--materialization-plan hash "a.bin"))))
+                                            (delete-directory outside t))))))
+
+(ert-deftest jaunder-pull-media-cleanup-warning-preserves-primary-acquisition-error ()
+  (let* ((hash (secure-hash 'sha256 (string-as-unibyte "cleanup")))
+         (cleanup nil)
+         warning
+         primary)
+    (jaunder-pull-media-test--with-root root
+                                        (let ((real-delete (symbol-function 'delete-file)))
+                                          (cl-letf (((symbol-function 'jaunder--pull-media-get)
+                                                     (lambda (_url temporary)
+                                                       (jaunder-pull-media-test--write-bytes temporary "partial")
+                                                       (setq cleanup t)
+                                                       (error "primary acquisition failure")))
+                                                    ((symbol-function 'delete-file)
+                                                     (lambda (path &optional trash)
+                                                       (if cleanup
+                                                           (error "cleanup race")
+                                                         (funcall real-delete path trash))))
+                                                    ((symbol-function 'jaunder--warn)
+                                                     (lambda (format-string &rest args)
+                                                       (setq warning (apply #'format format-string args)))))
+                                                   (condition-case err
+                                                       (jaunder--pull-media-materialize
+                                                        root jaunder-pull-media-test--instance
+                                                        (jaunder-pull-media-test--materialization-plan hash "a.bin"))
+                                                     (error (setq primary (error-message-string err))))
+                                                   (should (equal primary "primary acquisition failure"))
+                                                   (should (string-match-p "could not remove pulled-media temporary" warning)))))))
 
 (ert-deftest jaunder-pull-media-materialization-keeps-installed-copy-and-cleans-temporaries ()
   (let* ((bytes-a (string-as-unibyte "first"))

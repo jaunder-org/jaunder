@@ -318,10 +318,12 @@
           (list (cons (file-name-as-directory root)
                       '(:base-url "https://h" :username "alice"))))
          (materializations 0)
-         (attempt 0))
+         (attempt 0)
+         (member-gets 0))
     (unwind-protect
         (cl-letf (((symbol-function 'jaunder--http-request)
                    (lambda (&rest _)
+                     (setq member-gets (1+ member-gets))
                      (list :status 200
                            :headers '(("etag" . "\"sha256-test\"")
                                       ("x-jaunder-instance" . "12345678-1234-1234-1234-123456789abc"))
@@ -344,10 +346,47 @@
                               (jaunder--pull-member root (jaunder-pull-test--member)))
                              'pulled))
                  (should (= materializations 2))
+                 (should (= member-gets 2))
                  (should (string-suffix-p "\n\nLocalized"
                                           (with-temp-buffer
                                             (insert-file-contents path)
                                             (buffer-string)))))
+      (delete-directory root t))))
+
+(ert-deftest jaunder-pull-member-propagates-materializer-acquisition-error-exactly ()
+  ;; The real materializer owns acquisition: orchestration must not translate its
+  ;; trust/transport error or install a Post after the failure.
+  (let* ((root (make-temp-file "jaunder-pull-" t))
+         (path (expand-file-name "untitled-note.org" root))
+         (hash "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+         (url (format "https://h/media/upload/e3/b0/%s/a.bin" hash))
+         (plan (jaunder--make-pull-media-plan
+                :format "org" :body "" :references
+                (list (jaunder--make-pull-media-reference
+                       :url url :hash hash :leaf "a.bin" :target "" :replacements nil))))
+         (jaunder-blogs
+          (list (cons (file-name-as-directory root)
+                      '(:base-url "https://h" :username "alice"))))
+         (member-gets 0)
+         observed)
+    (unwind-protect
+        (cl-letf (((symbol-function 'jaunder--http-request)
+                   (lambda (&rest _)
+                     (setq member-gets (1+ member-gets))
+                     (list :status 200
+                           :headers '(("etag" . "\"sha256-test\"")
+                                      ("x-jaunder-instance" . "12345678-1234-1234-1234-123456789abc"))
+                           :body (jaunder-pull-test--response-entry))))
+                  ((symbol-function 'jaunder--pull-media-plan) (lambda (&rest _) plan))
+                  ((symbol-function 'jaunder--pull-media-get)
+                   (lambda (&rest _) (error "acquisition failed exactly"))))
+                 (condition-case err
+                     (jaunder--pull-member root (jaunder-pull-test--member))
+                   (error (setq observed (error-message-string err))))
+                 (should (equal observed "acquisition failed exactly"))
+                 (should (= member-gets 1))
+                 (should-not (file-exists-p path))
+                 (should-not (directory-files-recursively root "\\.jaunder-media-" nil)))
       (delete-directory root t))))
 
 (defun jaunder-pull-test--member (&optional id slug)

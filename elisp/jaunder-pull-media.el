@@ -14,7 +14,9 @@
 (require 'url-util)
 (require 'seq)
 (require 'plz)
-
+(require 'org)
+(require 'org-element)
+(require 'jaunder-warn)
 (cl-defstruct (jaunder-pull-media-reference
                (:constructor jaunder--make-pull-media-reference))
               "One immutable local-media acquisition and its native replacements."
@@ -79,28 +81,38 @@
 (defun jaunder--pull-media-url-parts (url origin)
   "Return (HASH LEAF) when URL is eligible canonical media at ORIGIN.
 Return nil for every non-candidate form."
-  (condition-case nil
-      (let ((candidate (url-generic-parse-url url))
-            (configured (url-generic-parse-url origin)))
-        (when (and (url-type candidate) (url-host candidate)
-                   (not (url-user candidate))
-                   (not (url-password candidate))
-                   (not (string-search "?" url))
-                   (jaunder--pull-media-same-origin-p candidate configured))
-          (let ((path (url-filename candidate)))
-            (when (string-match
-                   "\\`/media/\\(upload\\|cached\\)/\\([0-9a-f][0-9a-f]\\)/\\([0-9a-f][0-9a-f]\\)/\\([0-9a-f]\\{64\\}\\)/\\([^/?#]+\\)\\'"
-                   path)
-              (let ((p1 (match-string 2 path))
-                    (p2 (match-string 3 path))
-                    (hash (match-string 4 path))
-                    (filename (match-string 5 path)))
-                (when (and (equal p1 (substring hash 0 2))
-                           (equal p2 (substring hash 2 4)))
-                  (let ((leaf (jaunder--pull-media-decode-filename filename)))
-                    (when leaf
-                      (list hash leaf)))))))))
-    (error nil)))
+  (let ((candidate (condition-case nil
+                       (url-generic-parse-url url)
+                     (error nil)))
+        (configured (condition-case nil
+                        (url-generic-parse-url origin)
+                      (error nil))))
+    (when (and (url-type candidate) (url-host candidate)
+               (not (url-user candidate))
+               (not (url-password candidate))
+               (not (string-search "?" url))
+               (jaunder--pull-media-same-origin-p candidate configured))
+      (let ((path (url-filename candidate)))
+        (cond
+         ((string-match
+           "\\`/media/\\(upload\\|cached\\)/\\([0-9a-f][0-9a-f]\\)/\\([0-9a-f][0-9a-f]\\)/\\([0-9a-f]\\{64\\}\\)/\\([^/?#]+\\)\\'"
+           path)
+          (let ((p1 (match-string 2 path))
+                (p2 (match-string 3 path))
+                (hash (match-string 4 path))
+                (filename (match-string 5 path)))
+            (unless (and (equal p1 (substring hash 0 2))
+                         (equal p2 (substring hash 2 4)))
+              (error "jaunder pull media: malformed canonical media URL: %s" url))
+            (let ((leaf (jaunder--pull-media-decode-filename filename)))
+              (unless leaf
+                (error "jaunder pull media: malformed canonical media filename: %s" url))
+              (list hash leaf))))
+         ((string-match-p "\\`/media/\\(?:upload\\|cached\\)/" path)
+          ;; This resembles an authoritative media route.  Falling back to
+          ;; a remote link here would silently weaken the offline contract.
+          (error "jaunder pull media: malformed canonical media URL: %s" url))))))
+  )
 
 (defun jaunder--pull-media-target (format hash filename fragment)
   "Return FORMAT's native target for HASH/FILENAME plus original FRAGMENT."
@@ -132,65 +144,120 @@ TABLE maps canonical URLs without fragments to mutable reference accumulators."
               (cons (list start end fragment) (nth 3 reference)))))))
 
 (defun jaunder--pull-media-org-candidates (table format origin body)
-  "Collect Org link destination candidates from BODY into TABLE."
-  (let ((position 0) (regexp "\\[\\[\\([^]]+\\)\\]\\(?:\\[[^]]*\\]\\)?\\]"))
-    (while (string-match regexp body position)
-      (let ((destination-start (match-beginning 1))
-            (destination-end (match-end 1))
-            (next-position (match-end 0)))
-        (jaunder--pull-media-add-candidate table format origin body
-                                           destination-start destination-end)
-        (setq position next-position)))))
+  "Collect actual Org link destinations from BODY."
+  (with-temp-buffer
+    (insert body)
+    (org-mode)
+    (dolist (link (org-element-map (org-element-parse-buffer) 'link #'identity))
+      (let* ((raw-link (org-element-property :raw-link link))
+             (start (+ (org-element-property :begin link) 1)))
+        (jaunder--pull-media-add-candidate
+         table format origin body start (+ start (length raw-link)))))))
+
+(defun jaunder--pull-media-markdown-literal-p (body position line-start)
+  "Return non-nil when POSITION is literal Markdown after LINE-START in BODY."
+  (let* ((line-end (or (string-match "$" body position) (length body)))
+         (line (substring body line-start line-end))
+         (before (substring body line-start position)))
+    (or (string-match-p "\\`\\(?:    \\|\t\\)" line)
+        (string-match-p "\\\\\\(?:\\\\\\\\\\)*\\'" before)
+        (= 1 (% (cl-count ?` before) 2)))))
 
 (defun jaunder--pull-media-markdown-candidates (table format origin body)
-  "Collect Markdown link and image destination candidates from BODY into TABLE."
-  (let ((position 0) (regexp "!?\\[[^]]*\\](\\([^()[:space:]]+\\))"))
-    (while (string-match regexp body position)
-      (let ((destination-start (match-beginning 1))
-            (destination-end (match-end 1))
-            (next-position (match-end 0)))
-        (jaunder--pull-media-add-candidate table format origin body
-                                           destination-start destination-end)
-        (setq position next-position)))))
+  "Collect Markdown inline and reference-definition destinations from BODY."
+  (let ((position 0)
+        (fenced nil)
+        (inline "!?\\[[^]]*\\][ \t]*([ \t]*\\(?:<\\([^> \t\r\n]+\\)>\\|\\([^() \t\r\n]+\\)\\)")
+        (definition "^[ \t]*\\[[^]]+\\]:[ \t]+\\(?:<\\([^> \t\r\n]+\\)>\\|\\([^ \t\r\n]+\\)\\)"))
+    (while (and (<= position (length body))
+                (string-match "\\(?:^.*$\\)" body position))
+      (let ((line-start (match-beginning 0))
+            (line-end (match-end 0))
+            (line (match-string 0 body)))
+        (when (string-match-p "^[ \t]*\\(?:```\\|~~~\\)" line)
+          (setq fenced (not fenced)))
+        (unless fenced
+          (dolist (regexp (list inline definition))
+            (let ((scan line-start))
+              (while (and (< scan line-end) (string-match regexp body scan))
+                (let ((next-scan (match-end 0)))
+                  (if (> next-scan line-end)
+                      (setq scan line-end)
+                    (let ((start (or (match-beginning 1) (match-beginning 2)))
+                          (end (or (match-end 1) (match-end 2))))
+                      (unless (jaunder--pull-media-markdown-literal-p
+                               body start line-start)
+                        (jaunder--pull-media-add-candidate
+                         table format origin body start end))
+                      (setq scan next-scan))))))))
+        (setq position
+              (if (= line-end (length body)) (1+ line-end) line-end))))))
+
+(defun jaunder--pull-media-html-comment-position-p (body position)
+  "Return non-nil when POSITION occurs inside an HTML comment in BODY."
+  (let ((prefix (substring body 0 position))
+        (starts 0)
+        (ends 0)
+        (scan 0))
+    (while (string-match "<!--" prefix scan)
+      (setq starts (1+ starts) scan (match-end 0)))
+    (setq scan 0)
+    (while (string-match "-->" prefix scan)
+      (setq ends (1+ ends) scan (match-end 0)))
+    (> starts ends)))
+
+(defun jaunder--pull-media-html-attribute-spans (body)
+  "Return actual HTML attribute value spans in BODY.
+Comments and script/style raw-text content are skipped.  Names are ASCII
+case-insensitive and each result is (NAME START END), with NAME downcased."
+  (let ((position 0) spans)
+    (while (string-match "<\\([^!/?][^ \t\r\n/>]*\\)\\([^>]*\\)>" body position)
+      (let* ((tag (downcase (match-string 1 body)))
+             (attributes (match-string 2 body))
+             (base (match-beginning 2))
+             (next (match-end 0)))
+        (unless (or (member tag '("script" "style"))
+                    (save-match-data
+                      (jaunder--pull-media-html-comment-position-p body (match-beginning 0))))
+          (let ((attribute-position 0))
+            (while (string-match
+                    "\\(?:\\`\\|[ \t\r\n]\\)\\([[:alnum:]:-]+\\)[ \t\r\n]*=[ \t\r\n]*\\(?:\\(['\"]\\)\\([^'\"]*\\)\\2\\|\\([^'\" \t\r\n>]+\\)\\)"
+                    attributes attribute-position)
+              (let ((name (downcase (match-string 1 attributes)))
+                    (start (or (match-beginning 3) (match-beginning 4)))
+                    (end (or (match-end 3) (match-end 4))))
+                (push (list name (+ base start) (+ base end)) spans)
+                (setq attribute-position (match-end 0))))))
+        (setq position
+              (if (member tag '("script" "style"))
+                  (if (string-match (format "</[ \t\r\n]*%s[ \t\r\n]*>" tag) body next)
+                      (match-end 0)
+                    (length body))
+                next))))
+    (nreverse spans)))
 
 (defun jaunder--pull-media-html-attribute-candidates (table format origin body)
-  "Collect HTML media-link destination candidates into TABLE.
-Quoted and bare src, href, and poster attributes are eligible."
-  (dolist (spec
-           '(("\\(?:[ \t\r\n]\\)\\(?:src\\|href\\|poster\\)[ \t\r\n]*=[ \t\r\n]*\\(['\\\"]\\)\\([^'\\\"]*\\)\\1" 2)
-             ("\\(?:[ \t\r\n]\\)\\(?:src\\|href\\|poster\\)[ \t\r\n]*=[ \t\r\n]*\\([^'\"[:space:]>]+\\)" 1)))
-    (let ((position 0)
-          (regexp (nth 0 spec))
-          (group (nth 1 spec)))
-      (while (string-match regexp body position)
-        (let ((destination-start (match-beginning group))
-              (destination-end (match-end group))
-              (next-position (match-end 0)))
-          (jaunder--pull-media-add-candidate table format origin body
-                                             destination-start destination-end)
-          (setq position next-position))))))
+  "Collect supported HTML link attributes using actual attribute spans."
+  (dolist (span (jaunder--pull-media-html-attribute-spans body))
+    (when (member (car span) '("src" "href" "poster"))
+      (jaunder--pull-media-add-candidate table format origin body
+                                         (nth 1 span) (nth 2 span)))))
 
 (defun jaunder--pull-media-html-srcset-candidates (table format origin body)
-  "Collect each comma-delimited HTML srcset destination candidate from BODY."
-  (dolist (spec
-           '(("\\(?:[ \t\r\n]\\)srcset[ \t\r\n]*=[ \t\r\n]*\\(['\\\"]\\)\\([^'\\\"]*\\)\\1" 2)
-             ("\\(?:[ \t\r\n]\\)srcset[ \t\r\n]*=[ \t\r\n]*\\([^'\"[:space:]>]+\\)" 1)))
-    (let ((position 0)
-          (attribute (nth 0 spec))
-          (group (nth 1 spec)))
-      (while (string-match attribute body position)
-        (let ((value-start (match-beginning group))
-              (value (match-string group body))
-              (next-position (match-end 0))
-              (item-position 0))
-          (while (string-match "\\(?:\\`\\|,\\)[ \\t\\r\\n]*\\([^,[:space:]]+\\)" value item-position)
-            (let ((destination-start (+ value-start (match-beginning 1)))
-                  (destination-end (+ value-start (match-end 1)))
-                  (next-item-position (match-end 0)))
-              (jaunder--pull-media-add-candidate table format origin body
-                                                 destination-start destination-end)
-              (setq item-position next-item-position)))
-          (setq position next-position))))))
+  "Collect individual srcset destinations from actual HTML attribute spans."
+  (dolist (span (jaunder--pull-media-html-attribute-spans body))
+    (when (equal (car span) "srcset")
+      (let ((value-start (nth 1 span))
+            (value (substring body (nth 1 span) (nth 2 span)))
+            (item-position 0))
+        (while (string-match "\\(?:\\`\\|,\\)[ \t\r\n]*\\([^, \t\r\n]+\\)" value item-position)
+          (let ((start (match-beginning 1))
+                (end (match-end 1))
+                (next-position (match-end 0)))
+            (jaunder--pull-media-add-candidate
+             table format origin body
+             (+ value-start start) (+ value-start end))
+            (setq item-position next-position)))))))
 
 (defun jaunder--pull-media-plan (format body origin)
   "Return a pure localization plan for FORMAT BODY at configured ORIGIN."
@@ -218,7 +285,7 @@ Quoted and bare src, href, and poster attributes are eligible."
                                                           (jaunder-pull-media-reference-url b))))))))
 
 (defun jaunder--pull-media-apply-plan (plan)
-  "Apply PLAN's replacements to its native body without altering other bytes."
+  "Apply PLAN's replacements in one source-order pass without altering other bytes."
   (let ((replacements
          (sort (cl-mapcan
                 (lambda (reference)
@@ -228,12 +295,16 @@ Quoted and bare src, href, and poster attributes are eligible."
                                           (or (nth 2 replacement) ""))))
                           (jaunder-pull-media-reference-replacements reference)))
                 (jaunder-pull-media-plan-references plan))
-               (lambda (a b) (> (car a) (car b)))))
-        (body (jaunder-pull-media-plan-body plan)))
-    (dolist (replacement replacements body)
-      (setq body (concat (substring body 0 (nth 0 replacement))
-                         (nth 2 replacement)
-                         (substring body (nth 1 replacement)))))))
+               (lambda (a b) (< (car a) (car b)))))
+        (body (jaunder-pull-media-plan-body plan))
+        (position 0)
+        pieces)
+    (dolist (replacement replacements)
+      (push (substring body position (nth 0 replacement)) pieces)
+      (push (nth 2 replacement) pieces)
+      (setq position (nth 1 replacement)))
+    (push (substring body position) pieces)
+    (apply #'concat (nreverse pieces))))
 
 (defconst jaunder--pull-media-instance-id-regexp
   "\\`[0-9a-f]\\{8\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{12\\}\\'")
@@ -351,6 +422,15 @@ public media identity and URL hash are valid only for the direct response."
     (delete-file temporary)
     temporary))
 
+(defun jaunder--pull-media-clean-temporary (temporary)
+  "Attempt to remove TEMPORARY without obscuring the triggering failure."
+  (when (file-exists-p temporary)
+    (condition-case cleanup-error
+        (delete-file temporary)
+      (error
+       (jaunder--warn "could not remove pulled-media temporary %s: %s"
+                      temporary (error-message-string cleanup-error))))))
+
 (defun jaunder--pull-media-materialize (root instance-id plan)
   "Materialize PLAN's verified Local Media Copies under configured ROOT.
 Every distinct target is staged and verified before any installation.  Existing
@@ -380,13 +460,19 @@ may reuse only a byte-for-byte verified concurrent copy."
                                         (jaunder-pull-media-reference-url reference) temporary)))
                          (jaunder--pull-media-validate-response
                           response instance-id hash temporary)
-                         (push (list temporary target hash) staged))
+                         (push (list temporary target hash
+                                     (jaunder-pull-media-reference-leaf reference))
+                               staged))
                      (error
-                      (when (file-exists-p temporary) (delete-file temporary))
+                      (jaunder--pull-media-clean-temporary temporary)
                       (signal (car err) (cdr err))))))))
            targets)
           (dolist (copy (nreverse staged))
-            (pcase-let ((`(,temporary ,target ,hash) copy))
+            (pcase-let ((`(,temporary ,target ,hash ,leaf) copy))
+              ;; Re-check immediately before mutation: a parent safe during
+              ;; staging may have been replaced by a symlink meanwhile.
+              (unless (equal target (jaunder--pull-media-target-path root hash leaf))
+                (error "jaunder pull media: target changed during installation: %s" target))
               (condition-case err
                   (rename-file temporary target nil)
                 (file-already-exists
@@ -398,9 +484,7 @@ may reuse only a byte-for-byte verified concurrent copy."
                    (signal (car err) (cdr err)))))))
           nil)
       (dolist (copy staged)
-        (let ((temporary (car copy)))
-          (when (file-exists-p temporary)
-            (delete-file temporary)))))))
+        (jaunder--pull-media-clean-temporary (car copy))))))
 
 (provide 'jaunder-pull-media)
 ;;; jaunder-pull-media.el ends here

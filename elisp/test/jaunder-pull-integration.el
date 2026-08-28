@@ -237,6 +237,19 @@
                                                      (with-temp-buffer
                                                        (insert-file-contents-literally copy)
                                                        (buffer-string)))))
+                                    ;; Republish must store the authoritative server URL,
+                                    ;; never the durable local preview path, in Member body.
+                                    (let ((republished
+                                           (jaunder--http-request
+                                            "GET"
+                                            (jaunder-inventory-member-edit-uri first))))
+                                      (should (eq (plist-get republished :status) 200))
+                                      (should (string-match-p
+                                               (regexp-quote media-url)
+                                               (plist-get republished :body)))
+                                      (should-not (string-match-p
+                                                   "local-media/"
+                                                   (plist-get republished :body))))
                                     (let ((second
                                            (jaunder-pull-integration--create-server-only-member
                                             root (format "[[%s]]" media-url))))
@@ -245,6 +258,53 @@
                                                   'pulled))
                                       (should (= gets 1))))))))
        (delete-directory root t)))))
+
+(ert-deftest jaunder-pull-local-media-preview-survives-isolated-server-shutdown ()
+  "A pulled relative Local Media Copy resolves to exact bytes while offline."
+  (let ((state (jaunder-test--server-up))
+        (root (make-temp-file "jaunder-pull-offline-" t))
+        post-path native-link copy-path source-bytes)
+    (unwind-protect
+        (progn
+          (jaunder-test--bind-from state
+                                   (let* ((image (expand-file-name "offline source.png" root))
+                                          (source "OFFLINE-PULL-BYTES")
+                                          (jaunder-blogs
+                                           (list (cons (file-name-as-directory root)
+                                                       (list :base-url jaunder-test-base-url
+                                                             :username jaunder-test-username)))))
+                                     (with-temp-file image (insert source))
+                                     (jaunder--with-blog root
+                                                         (let* ((media-url (jaunder--upload-media image "image/png"))
+                                                                (member
+                                                                 (jaunder-pull-integration--create-server-only-member
+                                                                  root (format "[[%s]]" media-url)))
+                                                                (pulled (jaunder--pull-member root member)))
+                                                           (setq post-path (jaunder-pull-result-path pulled)
+                                                                 source-bytes source)
+                                                           (with-temp-buffer
+                                                             (insert-file-contents post-path)
+                                                             (setq default-directory
+                                                                   (file-name-directory post-path))
+                                                             (org-mode)
+                                                             (let ((link
+                                                                    (car (org-element-map
+                                                                          (org-element-parse-buffer)
+                                                                          'link #'identity))))
+                                                               (setq native-link
+                                                                     (org-element-property :raw-link link)
+                                                                     copy-path
+                                                                     (jaunder--org-link-file link))))))))
+          (jaunder-test--server-down state)
+          (setq state nil)
+          (should (string-prefix-p "file:local-media/" native-link))
+          (should (equal
+                   (with-temp-buffer
+                     (insert-file-contents-literally copy-path)
+                     (buffer-string))
+                   source-bytes)))
+      (when state (jaunder-test--server-down state))
+      (delete-directory root t))))
 
 (provide 'jaunder-pull-integration)
 ;;; jaunder-pull-integration.el ends here
