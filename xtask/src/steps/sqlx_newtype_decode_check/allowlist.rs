@@ -595,25 +595,6 @@ pub(super) const ALLOWLIST: &[Allowed] = &[
         category: Category::CountOrExists,
         reason: "database-exists probe in the Postgres test harness",
     },
-    // ---- surviving i64-family entries from #715 ----
-    Allowed {
-        file: "backup.rs",
-        function: "backup_covers_every_table_or_deliberately_excludes_it",
-        target: "i64",
-        what: "\"SELECTCOUNT(*)FROMsqlite_masterWHEREtype='table'ANDnameNOTLIKE'sqlite_%'\"",
-        count: 1,
-        category: Category::CountOrExists,
-        reason: "COUNT(*) of live SQLite tables, checked against the backup manifest",
-    },
-    Allowed {
-        file: "backup.rs",
-        function: "backup_covers_every_table_or_deliberately_excludes_it",
-        target: "i64",
-        what: "\"SELECTCOUNT(*)FROMinformation_schema.tables\\WHEREtable_schema='public'ANDtable_type='BASETABLE'\"",
-        count: 1,
-        category: Category::CountOrExists,
-        reason: "COUNT(*) of live Postgres tables, the dialect twin of the SQLite arm above",
-    },
     Allowed {
         file: "sqlite/open.rs",
         function: "database_is_empty",

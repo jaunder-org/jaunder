@@ -230,15 +230,16 @@ Operations that must span multiple traits atomically (`create_user_with_invite`,
 
 ### Backup and restore
 
-`storage::export_backup`/`restore_backup` (`storage/src/backup.rs`) implement a
-portable dump: a `manifest.json` plus one NDJSON file per table under `db/`,
-together with the media tree, written either as a directory or as a gzipped tar
-archive built in-process with the `tar` and `flate2` crates. The backed-up table
-set is auto-derived from the live schema — every table minus the explicit
+`storage::export_backup`/`restore_backup`
+(`storage/src/backup/orchestration.rs`) implement a portable dump: a
+`manifest.json` plus one NDJSON file per table under `db/`, together with the
+media tree, written either as a directory or as a gzipped tar archive built
+in-process with the `tar` and `flate2` crates. The backed-up table set is
+auto-derived from the live schema — every table minus the explicit
 `TABLES_EXCLUDED_FROM_BACKUP` denylist (`_sqlx_migrations`, `feed_cache`;
-`storage/src/backup.rs:26`) and SQLite-internal tables, sorted for a
+`storage/src/backup/format.rs`) and SQLite-internal tables, sorted for a
 reproducible manifest — so a migration that adds a table needs no backup code
-change; a golden guardrail test pins the exact set (`storage/src/backup.rs:677`)
+change; server contract tests pin the exact set
 ([ADR-0064](adr/0064-backup-target-auto-derivation.md)).
 
 Restore is authoritative and order-independent: both backends clear every target
@@ -2163,8 +2164,8 @@ here rather than in `storage`
 every timestamp is pinned at microsecond precision from the first store and both
 same-backend dump pairs are byte-comparable. A constraint-violating restore
 fails uniformly on both backends: `BackupError::ConstraintViolation` with the
-target unmodified (`storage/src/backup.rs:98`; Postgres maps its SQLSTATE class
-at `storage/src/postgres/backup.rs:28`).
+target unmodified (`storage/src/backup/error.rs`; Postgres maps its SQLSTATE
+class at `storage/src/postgres/backup.rs:28`).
 
 ### The e2e suite
 

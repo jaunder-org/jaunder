@@ -26,7 +26,7 @@ use host::feed::{FeedEventStatus, FeedPath};
 use host::invite::InviteCode;
 use host::stored_password_hash::StoredPasswordHash;
 
-use super::{BackupManifest, json_value_as_restore_text};
+use super::format::{BackupManifest, json_value_as_restore_text, read_table_rows};
 
 #[derive(Debug, Clone)]
 pub struct BackupRestoreOutcome {
@@ -133,7 +133,7 @@ pub(crate) fn validate_instance_identity_backup(
             "current-schema backup is missing instance_identity".to_owned(),
         ));
     }
-    let rows = super::read_table_rows(source_path, "instance_identity")?;
+    let rows = read_table_rows(source_path, "instance_identity")?;
     let [row] = rows.as_slice() else {
         return Err(crate::backup::BackupError::InvalidBackup(
             "instance_identity must contain exactly one row".to_owned(),
@@ -859,7 +859,7 @@ mod tests {
                 .fetch_all(pool)
                 .await
                 .expect("read current SQLite schema tables");
-        let tables = crate::backup::backup_table_set(names);
+        let tables = super::super::backup_table_set(names);
         let mut columns = BTreeSet::new();
         for table in tables {
             let pragma = format!(
