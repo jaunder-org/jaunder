@@ -241,10 +241,10 @@ auto-derived from the live schema — every table minus the explicit
 reproducible manifest — so a migration that adds a table needs no backup code
 change; server contract tests pin the exact set. Consequently the complete
 `post_revisions` scalar rows, their immutable
-`post_revision_tags`/`post_revision_audiences` children, and
-revision-qualified `post_media` rows travel with every whole-store backup,
-without a revision-specific export path; typed restore validation covers their
-domain fields ([ADR-0136](adr/0136-local-post-lifecycle.md),
+`post_revision_tags`/`post_revision_audiences` children, and revision-qualified
+`post_media` rows travel with every whole-store backup, without a
+revision-specific export path; typed restore validation covers their domain
+fields ([ADR-0136](adr/0136-local-post-lifecycle.md),
 [ADR-0064](adr/0064-backup-target-auto-derivation.md)).
 
 Restore is authoritative and order-independent: both backends clear every target

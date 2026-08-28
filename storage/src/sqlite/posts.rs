@@ -24,16 +24,11 @@ type MediaRefRow = (
 );
 
 pub(crate) fn finish_lifecycle<T>(
-    primary: Result<T, sqlx::Error>,
+    error: sqlx::Error,
     rollback: Result<(), sqlx::Error>,
 ) -> Result<T, sqlx::Error> {
-    match primary {
-        Ok(value) => Ok(value),
-        Err(error) => {
-            rollback?;
-            Err(error)
-        }
-    }
+    rollback?;
+    Err(error)
 }
 
 pub(crate) fn finish_post_update(
@@ -150,7 +145,7 @@ async fn lifecycle_post(
             Ok(row)
         }
         Err(error) => finish_lifecycle(
-            Err(error),
+            error,
             sqlx::query("ROLLBACK")
                 .execute(&mut *conn)
                 .await

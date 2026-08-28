@@ -25,16 +25,11 @@ type MediaRefRow = (
 );
 
 pub(crate) fn finish_lifecycle<T>(
-    primary: Result<T, sqlx::Error>,
+    error: sqlx::Error,
     rollback: Result<(), sqlx::Error>,
 ) -> Result<T, sqlx::Error> {
-    match primary {
-        Ok(value) => Ok(value),
-        Err(error) => {
-            rollback?;
-            Err(error)
-        }
-    }
+    rollback?;
+    Err(error)
 }
 
 pub(crate) fn finish_post_update_rejection(
@@ -199,7 +194,7 @@ async fn lifecycle_post(
             tx.commit().await?;
             Ok(row)
         }
-        Err(error) => finish_lifecycle(Err(error), tx.rollback().await),
+        Err(error) => finish_lifecycle(error, tx.rollback().await),
     }
 }
 

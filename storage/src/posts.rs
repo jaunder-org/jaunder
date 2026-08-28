@@ -5827,26 +5827,85 @@ mod tests {
     async fn lifecycle_rollback_preserves_secondary_error_precedence(#[case] backend: Backend) {
         let primary = match backend {
             Backend::Sqlite => {
-                crate::sqlite::posts::finish_lifecycle::<()>(Err(sqlx::Error::RowNotFound), Ok(()))
+                crate::sqlite::posts::finish_lifecycle::<()>(sqlx::Error::RowNotFound, Ok(()))
             }
-            Backend::Postgres => crate::postgres::posts::finish_lifecycle::<()>(
-                Err(sqlx::Error::RowNotFound),
-                Ok(()),
-            ),
+            Backend::Postgres => {
+                crate::postgres::posts::finish_lifecycle::<()>(sqlx::Error::RowNotFound, Ok(()))
+            }
         };
         assert!(matches!(primary, Err(sqlx::Error::RowNotFound)));
 
         let rollback = match backend {
             Backend::Sqlite => crate::sqlite::posts::finish_lifecycle::<()>(
-                Err(sqlx::Error::RowNotFound),
+                sqlx::Error::RowNotFound,
                 Err(sqlx::Error::PoolClosed),
             ),
             Backend::Postgres => crate::postgres::posts::finish_lifecycle::<()>(
-                Err(sqlx::Error::RowNotFound),
+                sqlx::Error::RowNotFound,
                 Err(sqlx::Error::PoolClosed),
             ),
         };
         assert!(matches!(rollback, Err(sqlx::Error::PoolClosed)));
+    }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn lifecycle_decode_failure_rolls_back_revision_and_state(#[case] backend: Backend) {
+        let env = backend.setup().await;
+        let owner = SeedUser::new().seed(&env.state).await.user_id;
+        let post_id = SeedRawPost::new(owner)
+            .draft()
+            .seed(&env.state)
+            .await
+            .post_id;
+        env.state
+            .posts
+            .set_post_tags(post_id, owner, &[parse_tag_label("Rust")])
+            .await
+            .expect("seed tag");
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query(
+                "UPDATE tags SET tag_slug = $1
+                 WHERE tag_id = (SELECT tag_id FROM post_tags WHERE post_id = $2)",
+            )
+            .bind("not a slug")
+            .bind(post_id)
+            .execute(pool)
+            .await
+            .expect("corrupt tag slug");
+        });
+
+        let error = env
+            .state
+            .posts
+            .publish_post(post_id, owner)
+            .await
+            .expect_err("malformed aggregate must reject publication");
+        assert!(
+            matches!(&error, UpdatePostError::Internal(sqlx::Error::Decode(_))),
+            "{error:?}"
+        );
+        assert_eq!(
+            env.base
+                .pool()
+                .scalar_i64(&format!(
+                    "SELECT COUNT(*) FROM posts
+                     WHERE post_id = {post_id} AND published_at IS NULL"
+                ))
+                .await
+                .expect("read publication state"),
+            1
+        );
+        assert_eq!(
+            env.base
+                .pool()
+                .scalar_i64(&format!(
+                    "SELECT COUNT(*) FROM post_revisions WHERE post_id = {post_id}"
+                ))
+                .await
+                .expect("count rolled-back revisions"),
+            1
+        );
     }
 
     fn post_tag(slug: &str, display: &str) -> PostTag {

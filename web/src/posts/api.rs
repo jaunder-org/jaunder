@@ -151,6 +151,20 @@ fn revision_metadata(metadata: PostRevisionMetadata) -> RevisionHistoryMetadata 
 }
 
 #[cfg(feature = "server")]
+fn storage_revision_cursor(cursor: &RevisionHistoryCursor) -> storage::PostRevisionCursor {
+    storage::PostRevisionCursor {
+        revision_id: cursor.revision_id,
+    }
+}
+
+#[cfg(feature = "server")]
+fn revision_history_cursor(cursor: storage::PostRevisionCursor) -> RevisionHistoryCursor {
+    RevisionHistoryCursor {
+        revision_id: cursor.revision_id,
+    }
+}
+
+#[cfg(feature = "server")]
 fn current_post_history(summary: CurrentPostRevisionSummary) -> CurrentPostHistory {
     CurrentPostHistory {
         post_id: summary.post_id,
@@ -403,18 +417,14 @@ pub async fn list_history(
     let page = expect_context::<Arc<dyn PostStorage>>()
         .list_owned_revision_history(
             auth.user_id,
-            cursor.map(|cursor| storage::PostRevisionCursor {
-                revision_id: cursor.revision_id,
-            }),
+            cursor.as_ref().map(storage_revision_cursor),
             limit.unwrap_or_default(),
         )
         .await?;
     let has_more = page.next_cursor.is_some();
     Ok(RevisionHistoryPage {
         revisions: page.revisions.into_iter().map(revision_metadata).collect(),
-        next_cursor: page.next_cursor.map(|cursor| RevisionHistoryCursor {
-            revision_id: cursor.revision_id,
-        }),
+        next_cursor: page.next_cursor.map(revision_history_cursor),
         has_more,
     })
 }
@@ -438,9 +448,7 @@ pub async fn get_post_history(
         .list_post_revision_history(
             auth.user_id,
             post_id,
-            cursor.map(|cursor| storage::PostRevisionCursor {
-                revision_id: cursor.revision_id,
-            }),
+            cursor.as_ref().map(storage_revision_cursor),
             limit.unwrap_or_default(),
         )
         .await?
@@ -450,9 +458,7 @@ pub async fn get_post_history(
         current: current_post_history(current),
         revisions: RevisionHistoryPage {
             revisions: page.revisions.into_iter().map(revision_metadata).collect(),
-            next_cursor: page.next_cursor.map(|cursor| RevisionHistoryCursor {
-                revision_id: cursor.revision_id,
-            }),
+            next_cursor: page.next_cursor.map(revision_history_cursor),
             has_more,
         },
     })
@@ -1538,6 +1544,9 @@ mod server_tests {
             revision_id: common::ids::RevisionId::from(8),
         };
         assert_eq!(cursor.trace_value(), common::ids::RevisionId::from(8));
+        let storage = super::storage_revision_cursor(&cursor);
+        assert_eq!(storage.revision_id, common::ids::RevisionId::from(8));
+        assert_eq!(super::revision_history_cursor(storage), cursor);
     }
 
     #[test]
@@ -1669,12 +1678,13 @@ mod server_tests {
 
         let saved = unpublish(PostId::from(1)).await;
         drop(owner);
-        let Ok(saved) = saved else {
-            panic!("unpublish should succeed");
-        };
-        assert_eq!(saved.post_id, PostId::from(1));
-        assert_eq!(saved.published_at, None);
-        assert_eq!(saved.permalink, expected_permalink);
+        assert!(matches!(
+            saved,
+            Ok(saved)
+                if saved.post_id == PostId::from(1)
+                    && saved.published_at.is_none()
+                    && saved.permalink == expected_permalink
+        ));
     }
 
     // guard:no-backend — mock store
