@@ -96,7 +96,8 @@ Out:
     contract; source/reference checks find no legacy ownership path; a final
     document review checks every named projection and annotation against the
     delivered ownership and call shapes; the focused proofs above remain green;
-    `cargo xtask validate` passes.
+    `cargo xtask validate --no-e2e` passes, and PR CI owns the unchanged e2e
+    matrix.
 
 ## Risk checks
 

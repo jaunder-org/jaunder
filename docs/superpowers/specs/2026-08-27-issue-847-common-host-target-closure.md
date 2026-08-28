@@ -111,8 +111,9 @@ surface's bytes, audience, nor behavior.
   and #847's subsumption of #855. Dated ownership/call-shape notes truthfully
   annotate ADR-0018, ADR-0023, ADR-0058, ADR-0063, ADR-0065, ADR-0072, ADR-0073,
   ADR-0079, ADR-0089, ADR-0090, ADR-0095, ADR-0102, and ADR-0112.
-- `cargo xtask validate` passes with the metadata gate and existing wasm
-  compilation proof enabled.
+- `cargo xtask validate --no-e2e` passes with the metadata gate, coverage,
+  doctest, and wasm compilation proofs enabled. PR CI owns the unchanged
+  `{sqlite,postgres} × {chromium,firefox}` e2e matrix.
 
 ## Boundaries
 
