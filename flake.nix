@@ -669,13 +669,17 @@
         # fail the check only after the copies are safe. On success the copies land
         # in $out; on failure they live in the --keep-failed build dir for xtask's
         # rescue_diagnostics to recover. Shared by both backends so they can't drift.
-        # Seed-span verification is VM-local test glue, not reusable application
-        # logic: it must run in the guest after the seed helper and before
-        # Playwright, with the collector stopped so short-lived seed-process spans
-        # are flushed into the JSONL file the VM owns. Keeping it beside the e2e
-        # script keeps the assertion, VM paths, and collector lifecycle in one
-        # place.
-        assertSeedStorageSpans = ''
+        # VM-local OTel test glue shared by both backends. A systemd unit becomes
+        # active when the collector process is spawned, before its receivers are
+        # necessarily listening (#1243), so every initial start and restart probes
+        # the actual endpoints before any exporter runs. Seed-span verification
+        # then stops the collector to flush short-lived process spans into the
+        # JSONL file the VM owns.
+        e2eOtelTestHelpers = ''
+          def wait_for_otel_receivers():
+            machine.wait_for_open_port(4317, timeout=30)
+            machine.wait_for_open_port(4318, timeout=30)
+
           def assert_seed_storage_spans():
             import json
             machine.succeed("systemctl stop otel-collector.service")
@@ -702,6 +706,7 @@
             assert not missing, "seed trace lacks storage spans for: %s" % ", ".join(missing)
             machine.succeed("systemctl start otel-collector.service")
             machine.wait_for_unit("otel-collector.service", timeout=60)
+            wait_for_otel_receivers()
             machine.succeed("systemctl start jaunder.service")
             machine.wait_for_unit("jaunder.service", timeout=60)
             machine.wait_for_open_port(3000, timeout=30)
@@ -838,6 +843,9 @@
 
                 services.jaunder.enable = true;
                 services.jaunder.bind = "127.0.0.1:3000";
+                # The test script starts Jaunder only after both collector receivers
+                # are ready; systemd ordering alone cannot express port readiness.
+                systemd.services.jaunder.wantedBy = lib.mkForce [ ];
                 systemd.services.jaunder.after = [ "otel-collector.service" ];
                 systemd.services.jaunder.requires = [ "otel-collector.service" ];
                 systemd.services.jaunder.environment = captureEnv // {
@@ -847,7 +855,7 @@
               };
 
             testScript = ''
-              ${assertSeedStorageSpans}
+              ${e2eOtelTestHelpers}
 
               def seed_db():
                 # Seed the fresh VM's already-migrated DB. This VM is single-use and
@@ -866,9 +874,10 @@
 
               machine.start()
               machine.wait_for_unit("otel-collector.service", timeout=60)
-              # `active` precedes the OTLP receiver bind; seeding immediately can
+              # `active` precedes the OTLP receiver binds; seeding immediately can
               # export into that gap and leave no trace population to verify.
-              machine.wait_for_open_port(4317, timeout=30)
+              wait_for_otel_receivers()
+              machine.succeed("systemctl start jaunder.service")
               machine.wait_for_unit("jaunder.service", timeout=60)
               machine.wait_for_open_port(3000, timeout=30)
 
@@ -973,11 +982,12 @@
               };
 
             testScript = ''
+              ${e2eOtelTestHelpers}
               machine.start()
               machine.wait_for_unit("otel-collector.service", timeout=60)
-              # `active` precedes the OTLP receiver bind; seeding immediately can
+              # `active` precedes the OTLP receiver binds; seeding immediately can
               # export into that gap and leave no trace population to verify.
-              machine.wait_for_open_port(4317, timeout=30)
+              wait_for_otel_receivers()
               machine.wait_for_unit("postgresql.service", timeout=60)
 
               machine.succeed(
@@ -993,7 +1003,6 @@
 
               machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
 
-              ${assertSeedStorageSpans}
 
               def seed_db():
                 # Seed the fresh VM's already-migrated DB. This VM is single-use;
