@@ -27,6 +27,7 @@ pub const ALL: &[&str] = &[
     "cargo-deny",
     "clippy",
     "web-server-clippy",
+    "web-no-server-clippy",
     "wasm-clippy",
     "tools-clippy",
     "ert",
@@ -244,6 +245,19 @@ fn spec(name: &str, fix: bool) -> Result<CheckSpec> {
                 "web",
                 "--features",
                 "server",
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings",
+            ],
+        ),
+        "web-no-server-clippy" => cargo_check(
+            CargoWorkspace::Product,
+            &[
+                "clippy",
+                "-p",
+                "web",
+                "--no-default-features",
                 "--all-targets",
                 "--",
                 "-D",
@@ -583,6 +597,28 @@ mod tests {
     }
 
     #[test]
+    fn web_no_server_clippy_lints_isolated_host_test_targets() {
+        let cmd = build_host("web-no-server-clippy", false);
+
+        assert_eq!(cmd.program, "cargo");
+        assert_eq!(
+            cmd.args,
+            vec![
+                "clippy",
+                "-p",
+                "web",
+                "--no-default-features",
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings",
+            ]
+        );
+        assert!(cmd.env.is_empty());
+        assert_eq!(build_host("web-no-server-clippy", true), cmd);
+    }
+
+    #[test]
     fn wasm_clippy_matches_existing_host_ladder_args() {
         let cmd = build_host("wasm-clippy", false);
 
@@ -749,6 +785,43 @@ mod tests {
                 .contains(&("CARGO_NET_OFFLINE", OsString::from("true")))
         );
     }
+    #[test]
+    fn sandbox_web_no_server_clippy_uses_product_offline_home_and_exact_args() {
+        let cmd = spec("web-no-server-clippy", false)
+            .unwrap()
+            .build_with_env(CargoMode::Sandbox, |name| match name {
+                "JAUNDER_DEVTOOL_PRODUCT_CARGO_HOME" => {
+                    Some("/nix/store/product-cargo-home".into())
+                }
+                "JAUNDER_DEVTOOL_TOOLS_CARGO_HOME" => Some("/nix/store/tools-cargo-home".into()),
+                _ => None,
+            })
+            .unwrap();
+
+        assert_eq!(cmd.program, "cargo");
+        assert_eq!(
+            cmd.args,
+            vec![
+                "--offline",
+                "clippy",
+                "-p",
+                "web",
+                "--no-default-features",
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings",
+            ]
+        );
+        assert!(cmd.env.contains(&(
+            "CARGO_HOME",
+            OsString::from("/nix/store/product-cargo-home")
+        )));
+        assert!(
+            cmd.env
+                .contains(&("CARGO_NET_OFFLINE", OsString::from("true")))
+        );
+    }
 
     #[test]
     fn sandbox_tools_clippy_uses_tools_offline_home() {
@@ -803,6 +876,29 @@ mod tests {
     #[test]
     fn unknown_check_errors() {
         assert!(spec("nope", false).is_err());
+    }
+
+    #[test]
+    fn inventory_includes_web_no_server_clippy_once_in_clippy_order() {
+        assert_eq!(
+            ALL.iter()
+                .filter(|name| **name == "web-no-server-clippy")
+                .count(),
+            1
+        );
+        let clippy_start = ALL
+            .iter()
+            .position(|name| *name == "clippy")
+            .expect("generic clippy present");
+        assert_eq!(
+            &ALL[clippy_start..=clippy_start + 3],
+            [
+                "clippy",
+                "web-server-clippy",
+                "web-no-server-clippy",
+                "wasm-clippy",
+            ]
+        );
     }
 
     #[test]

@@ -752,6 +752,7 @@ pub async fn unpublish(post_id: PostId) -> WebResult<SavedPost> {
 mod tests {
     use common::slug::Slug;
     use common::test_support::{parse_post_body, parse_username};
+    #[cfg(feature = "server")]
     use common::time::UtcInstant;
     use storage::candidate_slug;
 

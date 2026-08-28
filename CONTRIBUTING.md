@@ -474,12 +474,19 @@ job. Running every combo in parallel across runners cuts e2e wall-clock;
 - `elisp-fmt`, `ert`, and `byte-compile` run the elisp subproject's formatter,
   ERT suite, and warnings-as-errors byte-compilation under `emacs --batch` (see
   the Elisp subproject section below).
-- `clippy`, `web-server-clippy`, `wasm-clippy`, and `tools-clippy` run through
-  `devtool check <name>` from the host ladder. The commands still execute
-  host-local Cargo with the devshell toolchain and compile-cache environment,
-  while sharing their argument definitions with the Nix `static-checks`
-  derivation. `web-server-clippy` is the explicit host check for `web`'s
-  `feature = "server"` paths; workspace `--all-features` is not the gate policy.
+- `clippy`, `web-server-clippy`, `web-no-server-clippy`, `wasm-clippy`, and
+  `tools-clippy` run through `devtool check <name>` from the host ladder. The
+  commands still execute host-local Cargo with the devshell toolchain and
+  compile-cache environment, while sharing their argument definitions with the
+  Nix `static-checks` derivation. The product has three distinct clippy
+  surfaces: generic workspace `clippy --all-targets` provides broad,
+  feature-unified host coverage; `web-no-server-clippy` runs `web`'s
+  no-default-feature host tests in isolation, so workspace feature unification
+  cannot enable `web/server`; and `wasm-clippy` lints only wasm library targets.
+  `wasm-clippy` deliberately excludes `--all-targets`, because `web`'s
+  host-oriented test dependencies cannot compile for `wasm32-unknown-unknown`.
+  `web-server-clippy` remains the explicit host check for `web`'s
+  `feature = "server"` paths; workspace `--all-features` is not gate policy.
 - `cargo nextest run` runs the default Rust unit and integration test suite.
 - Whole-test budgets are **ambient** — an auto fixture gives every test a scaled
   `DEFAULT_TEST_BUDGET_MS`, which covers the entire suite (#270). Don't set one

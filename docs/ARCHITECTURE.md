@@ -2395,12 +2395,13 @@ itself is host-only; Nix never invokes it back
 
 In order, after the host `static-checks` step (`fmt`, `leptosfmt`, `prettier`,
 `tsc`, `elisp-fmt`, `ert`, `byte-compile`, `cargo-deny`, `clippy`,
-`wasm-clippy`, `tools-fmt`/`tools-clippy`, `xtask-fmt`/`xtask-clippy`), both
-rungs run the same host steps (`xtask/src/lib.rs:457`-`:479`):
+`web-server-clippy`, `web-no-server-clippy`, `wasm-clippy`,
+`tools-fmt`/`tools-clippy`, `xtask-fmt`/`xtask-clippy`), both rungs run the same
+host steps (`xtask/src/lib.rs:457`-`:479`):
 
 **Two different things are called `static-checks`, and conflating them is
-easy.** The host _step_ above runs fourteen sub-steps through host-local lanes.
-The Nix `static-checks` _derivation_ (`flake.nix:1276`) runs the shared
+easy.** The host _step_ above runs the listed sub-steps through host-local
+lanes. The Nix `static-checks` _derivation_ (`flake.nix:1276`) runs the shared
 `devtool check --all --sandbox-cargo` definitions hermetically with
 workspace-specific offline Cargo homes. `validate --no-e2e` builds it as
 `nix-static-checks` before the Nix test checks, so CI fails if the hermetic
@@ -2419,11 +2420,17 @@ The compiling project/tool static checks live behind `devtool check` as a shared
 command-definition surface, while keeping separate host and sandbox execution
 lanes
 ([devtool owns compiling static-check definitions across host and Nix](adr/0146-devtool-owns-compiling-static-check-definitions.md)).
-Host `xtask` lanes still execute host-local Cargo so target artifacts and
-sccache remain effective for day-to-day work; sandboxed Nix lanes execute the
-same definitions through `devtool check --all --sandbox-cargo` with
-workspace-specific offline Cargo homes. `xtask-fmt` and `xtask-clippy` remain
-native host checks because `xtask/` is excluded from the flake source.
+The product clippy commands deliberately cover three distinct surfaces: generic
+workspace clippy is broad, feature-unified host coverage; the isolated
+`web-no-server-clippy` checks `web`'s no-default-feature host test targets, so
+workspace feature unification cannot enable `web/server`; and `wasm-clippy`
+checks wasm library targets. The wasm step deliberately omits `--all-targets`,
+because `web` test dependencies are host-oriented and cannot compile for
+`wasm32-unknown-unknown`. Host `xtask` lanes still execute host-local Cargo so
+target artifacts and sccache remain effective for day-to-day work; sandboxed Nix
+lanes execute the same definitions through `devtool check --all --sandbox-cargo`
+with workspace-specific offline Cargo homes. `xtask-fmt` and `xtask-clippy`
+remain native host checks because `xtask/` is excluded from the flake source.
 
 | Step                                                       | Guards                                                                                                                                                           |
 | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -2649,10 +2656,11 @@ host-side subcommands are therefore chartered, not drift.
   reason ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)).
 - **`devtool check <name> | --all [--fix] [--sandbox-cargo]`** is the single
   command-definition surface for the migrated static checks (`fmt`, `leptosfmt`,
-  `prettier`, `tsc`, `elisp-fmt`, `ert`, `byte-compile`, `cargo-deny`, product
-  `clippy`, wasm-target `wasm-clippy`, `tools-fmt`, and tools workspace
-  `tools-clippy` — `tools/devtool/src/check.rs`). Both gates invoke the same
-  definitions: the host verify ladder runs
+  `prettier`, `tsc`, `elisp-fmt`, `ert`, `byte-compile`, `cargo-deny`, generic
+  product `clippy`, `web-server-clippy`, isolated host-test
+  `web-no-server-clippy`, wasm-target `wasm-clippy`, `tools-fmt`, and tools
+  workspace `tools-clippy` — `tools/devtool/src/check.rs`). Both gates invoke
+  the same definitions: the host verify ladder runs
   `cargo run -p devtool -- check <name>` per step
   (`xtask/src/steps/static_checks.rs`), preserving host-local Cargo artifacts
   and sccache for Rust-compiling checks; the Nix `static-checks` `runCommand`
