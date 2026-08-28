@@ -1167,7 +1167,7 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
         .expect("set_post_tags failed");
     state
         .posts
-        .set_post_tags(post2, user2, &["clojure".parse::<TagLabel>().unwrap()])
+        .set_post_tags(post2, user1, &["clojure".parse::<TagLabel>().unwrap()])
         .await
         .expect("set_post_tags failed");
     state
