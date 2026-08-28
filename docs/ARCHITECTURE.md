@@ -39,7 +39,7 @@ Shared code is split by compile target and target reachability, not convenience:
 sibling, and `client` is the browser-infrastructure peer. `host` never compiles
 to wasm, so it uses host facilities without the `#[cfg]` gating `common` would
 demand ([ADR-0058](adr/0058-host-crate-layering.md),
-[common/host target-reachability closure](adr/drafts/common-host-target-closure.md)).
+[common/host target-reachability closure](adr/0159-common-host-target-closure.md)).
 `client` holds raw browser glue (`web_sys`/`js_sys`/`wasm_bindgen` and wasm-side
 Leptos plumbing), plus two host-testable browser contracts; it contains no
 application domain types. `web` and `csr` depend on `client`, never the reverse
@@ -2657,7 +2657,7 @@ virtual manifests would otherwise default to resolver 1
 
 **Workspace layering.** The root workspace's shared crates are target-scoped
 ([ADR-0058](adr/0058-host-crate-layering.md),
-[common/host target-reachability closure](adr/drafts/common-host-target-closure.md)):
+[common/host target-reachability closure](adr/0159-common-host-target-closure.md)):
 [#847](https://github.com/jaunder-org/jaunder/issues/847) subsumes
 [#855](https://github.com/jaunder-org/jaunder/issues/855) at this target
 boundary. For items currently in `common`, `common` owns types and operations
