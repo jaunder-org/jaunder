@@ -280,7 +280,7 @@ pub(super) fn extract_media_refs_with(html: &str, pairs: &[(&str, &str)]) -> Vec
 /// ```compile_fail
 /// # use common::post_body::PostBody;
 /// # use common::render::PostFormat;
-/// # use host::render::{RenderOutput, render};
+/// # use host::render::{RenderOutput, render, render_with_media};
 /// # let body: PostBody = "hello".parse().unwrap();
 /// let html = render(&body, &PostFormat::Markdown);
 /// let _ = RenderOutput { html, media: vec![] }; // private field
