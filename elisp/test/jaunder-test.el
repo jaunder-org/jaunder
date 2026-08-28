@@ -795,11 +795,12 @@
 
 (ert-deftest jaunder-org-link-file-unescapes-local-target-once ()
   ;; Local Media Copies retain decoded leaves, while their native Org links use
-  ;; percent encoding.  Keep the raw spelling for rewriting and decode only the
-  ;; filesystem lookup (not `%2525' twice).
+  ;; percent encoding and may preserve a URL fragment. Keep raw spelling for
+  ;; rewriting; strip the fragment and decode exactly once for filesystem lookup
+  ;; (not `%2525' twice).
   (let* ((directory (make-temp-file "jt-org-link-" t))
          (names '("source image.png" "literal%25.png" "画像.png"))
-         (targets '("source%20image.png" "literal%2525.png"
+         (targets '("source%20image.png#view" "literal%2525.png"
                     "%E7%94%BB%E5%83%8F.png")))
     (unwind-protect
         (progn

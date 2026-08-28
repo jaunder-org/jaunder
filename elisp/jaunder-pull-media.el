@@ -150,9 +150,16 @@ TABLE maps canonical URLs without fragments to mutable reference accumulators."
     (org-mode)
     (dolist (link (org-element-map (org-element-parse-buffer) 'link #'identity))
       (let* ((raw-link (org-element-property :raw-link link))
-             (start (+ (org-element-property :begin link) 1)))
-        (jaunder--pull-media-add-candidate
-         table format origin body start (+ start (length raw-link)))))))
+             (element-start (1- (org-element-property :begin link)))
+             (element-end (1- (org-element-property :end link)))
+             (offset
+              (string-search
+               raw-link (substring body element-start element-end))))
+        (when offset
+          (let ((start (+ element-start offset)))
+            (jaunder--pull-media-add-candidate
+             table format origin body start (+ start (length raw-link))))))))
+  )
 
 (defun jaunder--pull-media-markdown-escaped-p (body position)
   "Return non-nil when the character before POSITION escapes it."
@@ -186,6 +193,59 @@ TABLE maps canonical URLs without fragments to mutable reference accumulators."
               (setq position run-end)))
         (setq position (1+ position))))
     end))
+
+(defun jaunder--pull-media-markdown-label-end (body position)
+  "Return BODY's balanced, unescaped label closer after POSITION, or nil."
+  (let ((cursor position)
+        (limit (length body))
+        (depth 1)
+        end)
+    (while (and (< cursor limit) (not end))
+      (let ((character (aref body cursor)))
+        (cond
+         ((and (= character ?\\) (< (1+ cursor) limit))
+          (setq cursor (+ cursor 2)))
+         ((= character ?`)
+          (let* ((run-end
+                  (jaunder--pull-media-markdown-run-end body cursor ?`))
+                 (close
+                  (jaunder--pull-media-markdown-code-end
+                   body run-end (- run-end cursor))))
+            (setq cursor (or close run-end))))
+         ((= character ?\[)
+          (setq depth (1+ depth)
+                cursor (1+ cursor)))
+         ((= character ?\])
+          (setq depth (1- depth))
+          (if (= depth 0)
+              (setq end cursor)
+            (setq cursor (1+ cursor))))
+         (t
+          (setq cursor (1+ cursor))))))
+    end))
+
+(defun jaunder--pull-media-markdown-raw-html-end (body position)
+  "Return the end of Markdown raw HTML at POSITION, or nil."
+  (cond
+   ((and (<= (+ position 4) (length body))
+         (equal (substring body position (+ position 4)) "<!--"))
+    (let ((end (string-search "-->" body (+ position 4))))
+      (and end (+ end 3))))
+   (t
+    (let ((case-fold-search t))
+      (when (and
+             (string-match
+              "<\\(script\\|style\\|pre\\|textarea\\|title\\|xmp\\|iframe\\|noembed\\|noframes\\|plaintext\\)\\(?:[ \t\r\n>]\\)"
+              body position)
+             (= (match-beginning 0) position))
+        (let ((tag (downcase (match-string 1 body))))
+          (if (equal tag "plaintext")
+              (length body)
+            (let ((close
+                   (string-match
+                    (format "</[ \t\r\n]*%s[ \t\r\n]*>" tag)
+                    body (match-end 0))))
+              (and close (match-end 0))))))))))
 
 (defun jaunder--pull-media-markdown-destination (body position closing)
   "Return (START END AFTER) for a complete Markdown destination at POSITION.
@@ -251,12 +311,16 @@ CLOSING is the required closing delimiter.  Return nil for malformed text."
           (while (and title-valid (< position limit)
                       (memq (aref body position) '(?\s ?\t)))
             (setq position (1+ position)))
-          (when (and title-valid (< position limit)
-                     (= (aref body position) closing))
-            (list start end (1+ position))))))))
+          (when (and
+                 title-valid
+                 (or (and (= position limit) (= closing ?\n))
+                     (and (< position limit)
+                          (= (aref body position) closing))))
+            (list start end
+                  (if (< position limit) (1+ position) position))))))))
 
 (defun jaunder--pull-media-markdown-fence (body position)
-  "Return (CHARACTER WIDTH END) for a fence opener at POSITION, or nil."
+  "Return (CHARACTER WIDTH END CLOSER-P) for a fence at POSITION, or nil."
   (let ((line-end (or (string-search "\n" body position) (length body)))
         (cursor position)
         (spaces 0))
@@ -267,32 +331,48 @@ CLOSING is the required closing delimiter.  Return nil for malformed text."
       (let* ((character (aref body cursor))
              (end (jaunder--pull-media-markdown-run-end body cursor character)))
         (when (>= (- end cursor) 3)
-          (list character (- end cursor) line-end))))))
+          (list character (- end cursor) line-end
+                (string-match-p
+                 "\\`[ \t]*\\'" (substring body end line-end)))))))
+  )
 
 (defun jaunder--pull-media-markdown-candidates (table format origin body)
   "Collect complete Markdown destinations from one lexical pass over BODY."
-  (let ((position 0) (limit (length body)) (line-start 0)
-        fence definitions uses)
+  (let ((position 0)
+        (limit (length body))
+        (line-start 0)
+        fence
+        definitions
+        uses)
     (while (< position limit)
       (cond
        ((= (aref body position) ?\n)
-        (setq position (1+ position) line-start position))
+        (setq position (1+ position)
+              line-start position))
        ((= position line-start)
-        (let ((opening (jaunder--pull-media-markdown-fence body position)))
+        (let ((opening
+               (jaunder--pull-media-markdown-fence body position)))
           (cond
            (fence
-            (when (and opening (= (nth 0 opening) (nth 0 fence))
+            (when (and opening
+                       (nth 3 opening)
+                       (= (nth 0 opening) (nth 0 fence))
                        (>= (nth 1 opening) (nth 1 fence)))
               (setq fence nil))
-            (setq position (if opening
-                               (1+ (nth 2 opening))
-                             (or (string-search "\n" body position) limit))))
+            (setq position
+                  (if opening
+                      (1+ (nth 2 opening))
+                    (or (string-search "\n" body position) limit))))
            (opening
-            (setq fence opening position (1+ (nth 2 opening))))
+            (setq fence opening
+                  position (1+ (nth 2 opening))))
            ((or (and (<= (+ position 4) limit)
-                     (equal (substring body position (+ position 4)) "    "))
-                (and (< position limit) (= (aref body position) ?\t)))
-            (setq position (or (string-search "\n" body position) limit)))
+                     (equal
+                      (substring body position (+ position 4))
+                      "    "))
+                (= (aref body position) ?\t))
+            (setq position
+                  (or (string-search "\n" body position) limit)))
            (t
             (let ((cursor position)
                   (definition-found nil))
@@ -300,11 +380,13 @@ CLOSING is the required closing delimiter.  Return nil for malformed text."
                           (memq (aref body cursor) '(?\s ?\t))
                           (< (- cursor position) 4))
                 (setq cursor (1+ cursor)))
-              (when (and (<= (+ cursor 3) limit)
+              (when (and (< cursor limit)
                          (= (aref body cursor) ?\[))
                 (let ((label-end
-                       (cl-position ?\] body :start (1+ cursor))))
-                  (when (and label-end (< (1+ label-end) limit)
+                       (jaunder--pull-media-markdown-label-end
+                        body (1+ cursor))))
+                  (when (and label-end
+                             (< (1+ label-end) limit)
                              (= (aref body (1+ label-end)) ?:))
                     (let ((destination
                            (jaunder--pull-media-markdown-destination
@@ -315,65 +397,101 @@ CLOSING is the required closing delimiter.  Return nil for malformed text."
                          (list
                           (jaunder--pull-media-markdown-label
                            body (1+ cursor) label-end)
-                          (car destination) (cadr destination))
+                          (car destination)
+                          (cadr destination))
                          definitions)
-                        ;; A definition is not its own shortcut reference.
-                        (setq position
-                              (or (string-search "\n" body position)
-                                  limit)))))))
+                        (setq position (nth 2 destination)))))))
               (unless definition-found
-                ;; Revisit this character through the ordinary link scanner
-                ;; after ruling out line-level literal/definition forms.
+                ;; Revisit this first character through the ordinary scanner.
                 (setq line-start -1)))))))
-       (fence (setq position (1+ position)))
+       (fence
+        (setq position
+              (or (string-search "\n" body position) limit)))
        ((= (aref body position) ?`)
-        (let* ((end (jaunder--pull-media-markdown-run-end body position ?`))
-               (close (jaunder--pull-media-markdown-code-end body end (- end position))))
+        (let* ((end
+                (jaunder--pull-media-markdown-run-end
+                 body position ?`))
+               (close
+                (jaunder--pull-media-markdown-code-end
+                 body end (- end position))))
           (setq position (or close end))))
-       ((and (= (aref body position) ?<) (not (jaunder--pull-media-markdown-escaped-p body position)))
+       ((and (= (aref body position) ?<)
+             (jaunder--pull-media-markdown-raw-html-end
+              body position))
+        (setq position
+              (jaunder--pull-media-markdown-raw-html-end
+               body position)))
+       ((and (= (aref body position) ?<)
+             (not
+              (jaunder--pull-media-markdown-escaped-p body position)))
         (let ((end (cl-position ?> body :start (1+ position))))
-          (if (and end (not (string-match-p "[ \t\r\n]" (substring body (1+ position) end))))
+          (if (and
+               end
+               (not
+                (string-match-p
+                 "[ \t\r\n]" (substring body (1+ position) end))))
               (progn
-                (jaunder--pull-media-add-candidate table format origin body (1+ position) end)
+                (jaunder--pull-media-add-candidate
+                 table format origin body (1+ position) end)
                 (setq position (1+ end)))
             (setq position (1+ position)))))
        ((and (= (aref body position) ?\[)
-             (not (jaunder--pull-media-markdown-escaped-p body position)))
-        (let ((cursor (1+ position)) (depth 1))
-          (while (and (< cursor limit) (> depth 0))
-            (cond ((jaunder--pull-media-markdown-escaped-p body cursor) (setq cursor (1+ cursor)))
-                  ((= (aref body cursor) ?\[) (setq depth (1+ depth)))
-                  ((= (aref body cursor) ?\]) (setq depth (1- depth))))
-            (setq cursor (1+ cursor)))
-          (if (> depth 0)
+             (not
+              (jaunder--pull-media-markdown-escaped-p body position)))
+        (let ((label-end
+               (jaunder--pull-media-markdown-label-end
+                body (1+ position))))
+          (if (not label-end)
               (setq position (1+ position))
-            (let ((label-end (1- cursor)))
+            (let ((cursor (1+ label-end)))
               (cond
-               ((and (< cursor limit) (= (aref body cursor) ?\())
-                (let ((destination (jaunder--pull-media-markdown-destination body (1+ cursor) ?\))))
+               ((and (< cursor limit)
+                     (= (aref body cursor) ?\())
+                (let ((destination
+                       (jaunder--pull-media-markdown-destination
+                        body (1+ cursor) ?\))))
                   (if destination
                       (progn
-                        (jaunder--pull-media-add-candidate table format origin body
-                                                           (car destination) (cadr destination))
+                        (jaunder--pull-media-add-candidate
+                         table format origin body
+                         (car destination) (cadr destination))
                         (setq position (nth 2 destination)))
                     (setq position cursor))))
-               ((and (< cursor limit) (= (aref body cursor) ?\[))
-                (let ((reference-end (cl-position ?\] body :start (1+ cursor))))
+               ((and (< cursor limit)
+                     (= (aref body cursor) ?\[))
+                (let ((reference-end
+                       (jaunder--pull-media-markdown-label-end
+                        body (1+ cursor))))
                   (if reference-end
                       (progn
-                        (push (jaunder--pull-media-markdown-label
-                               body (if (= reference-end (1+ cursor)) (1+ position) (1+ cursor))
-                               reference-end) uses)
+                        (push
+                         (jaunder--pull-media-markdown-label
+                          body
+                          (if (= reference-end (1+ cursor))
+                              (1+ position)
+                            (1+ cursor))
+                          reference-end)
+                         uses)
                         (setq position (1+ reference-end)))
                     (setq position cursor))))
                (t
-                (push (jaunder--pull-media-markdown-label body (1+ position) label-end) uses)
+                (push
+                 (jaunder--pull-media-markdown-label
+                  body (1+ position) label-end)
+                 uses)
                 (setq position cursor)))))))
-       (t (setq position (1+ position)))))
+       (t
+        (setq position (1+ position)))))
     (dolist (definition definitions)
       (when (member (car definition) uses)
-        (jaunder--pull-media-add-candidate table format origin body
-                                           (nth 1 definition) (nth 2 definition))))))
+        (jaunder--pull-media-add-candidate
+         table format origin body
+         (nth 1 definition) (nth 2 definition))))))
+
+(defconst jaunder--pull-media-html-raw-text-tags
+  '("script" "style" "textarea" "title" "pre" "xmp" "iframe"
+    "noembed" "noframes" "plaintext")
+  "HTML elements whose contents cannot contain active media attributes.")
 
 (defun jaunder--pull-media-html-attribute-spans (body)
   "Return actual HTML attribute spans in one forward lexical pass over BODY."
@@ -425,38 +543,47 @@ CLOSING is the required closing delimiter.  Return nil for malformed text."
                        ((= character ?>)
                         (setq tag-end (1+ tag-scan)))))
                     (setq tag-scan (1+ tag-scan)))
-                  (unless tag-end
-                    (setq tag-end limit))
-                  (unless (member tag '("script" "style"))
-                    (let ((case-fold-search t)
-                          (scan cursor))
-                      (while (and (< scan tag-end)
-                                  (string-match attribute-regexp body scan)
-                                  (< (match-beginning 0) tag-end)
-                                  (<= (match-end 0) tag-end))
-                        (let ((start
-                               (or (match-beginning 2)
-                                   (match-beginning 3)
-                                   (match-beginning 4)))
-                              (end
-                               (or (match-end 2)
-                                   (match-end 3)
-                                   (match-end 4)))
-                              (next-scan (match-end 0)))
-                          (push
-                           (list (downcase (match-string 1 body))
-                                 start end)
-                           spans)
-                          (setq scan next-scan)))))
-                  (setq position tag-end)
-                  (when (member tag '("script" "style"))
-                    (let ((case-fold-search t)
-                          (close
-                           (string-match
-                            (format "</[ \t\r\n]*%s[ \t\r\n]*>" tag)
-                            body position)))
-                      (setq position
-                            (if close (match-end 0) limit))))))))))))
+                  (if (not tag-end)
+                      ;; An incomplete start tag is literal source, not markup.
+                      (setq position limit)
+                    (unless
+                        (member tag jaunder--pull-media-html-raw-text-tags)
+                      (let ((case-fold-search t)
+                            (scan cursor))
+                        (while (and (< scan tag-end)
+                                    (string-match
+                                     attribute-regexp body scan)
+                                    (< (match-beginning 0) tag-end)
+                                    (<= (match-end 0) tag-end))
+                          (let ((start
+                                 (or (match-beginning 2)
+                                     (match-beginning 3)
+                                     (match-beginning 4)))
+                                (end
+                                 (or (match-end 2)
+                                     (match-end 3)
+                                     (match-end 4)))
+                                (next-scan (match-end 0)))
+                            (push
+                             (list (downcase (match-string 1 body))
+                                   start end)
+                             spans)
+                            (setq scan next-scan)))))
+                    (setq position tag-end)
+                    (when
+                        (member tag jaunder--pull-media-html-raw-text-tags)
+                      (if (equal tag "plaintext")
+                          (setq position limit)
+                        (let ((case-fold-search t)
+                              (close
+                               (string-match
+                                (format
+                                 "</[ \t\r\n]*%s[ \t\r\n]*>" tag)
+                                body position)))
+                          (setq position
+                                (if close
+                                    (match-end 0)
+                                  limit))))))))))))))
     (nreverse spans)))
 
 (defun jaunder--pull-media-html-candidates (table format origin body)

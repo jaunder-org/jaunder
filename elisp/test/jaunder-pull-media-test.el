@@ -94,6 +94,87 @@
     (should (string-match-p (regexp-quote (format "[x](%s)" url)) out))
     (should (string-match-p (regexp-quote (format "``[code](%s)``" url)) out))))
 
+(ert-deftest jaunder-pull-media-org-rewrites-bracket-plain-and-angle-links ()
+  (let* ((url (jaunder-pull-media-test--url "safe.png"))
+         (target
+          (format "file:local-media/%s/safe.png"
+                  jaunder-pull-media-test--hash))
+         (body (format "plain %s angle <%s> bracket [[%s]]"
+                       url url url)))
+    (should
+     (equal
+      (jaunder-pull-media-test--rewrite "org" body)
+      (format "plain %s angle <%s> bracket [[%s]]"
+              target target target)))))
+
+(ert-deftest jaunder-pull-media-markdown-handles-eof-labels-and-literal-contexts ()
+  (let* ((url (jaunder-pull-media-test--url "safe.png"))
+         (target
+          (format "local-media/%s/safe.png"
+                  jaunder-pull-media-test--hash))
+         (reference
+          (format "[use][asset\\]]\n[asset\\]]: <%s>" url))
+         (contexts
+          (format
+           (concat
+            "[label ``]`` kept](<%s>)\n"
+            "```\n```not-a-closer\n[x](%s)\n```\n"
+            "<!-- <%s> -->\n<script>[x](%s)</script>\n"
+            "[real](%s)")
+           url url url url url))
+         (out (jaunder-pull-media-test--rewrite "markdown" contexts)))
+    (should
+     (equal
+      (jaunder-pull-media-test--rewrite "markdown" reference)
+      (format "[use][asset\\]]\n[asset\\]]: <%s>" target)))
+    (should
+     (string-match-p
+      (regexp-quote (format "[label ``]`` kept](<%s>)" target))
+      out))
+    (should
+     (string-match-p (regexp-quote (format "[x](%s)" url)) out))
+    (should
+     (string-match-p (regexp-quote (format "<!-- <%s> -->" url)) out))
+    (should
+     (string-match-p
+      (regexp-quote (format "<script>[x](%s)</script>" url))
+      out))
+    (should
+     (string-match-p
+      (regexp-quote (format "[real](%s)" target))
+      out))))
+
+(ert-deftest jaunder-pull-media-html-rejects-incomplete-and-raw-text-markup ()
+  (let* ((url (jaunder-pull-media-test--url "safe.png"))
+         (target
+          (format "local-media/%s/safe.png"
+                  jaunder-pull-media-test--hash))
+         (incomplete (format "<img src=\"%s\"" url))
+         (body
+          (format
+           (concat
+            "<textarea><img src=\"%s\"></textarea>"
+            "<title><a href=\"%s\"></title>"
+            "<IMG SRC=\"%s\">")
+           url url url))
+         (out (jaunder-pull-media-test--rewrite "html" body)))
+    (should
+     (equal
+      (jaunder-pull-media-test--rewrite "html" incomplete)
+      incomplete))
+    (should
+     (string-match-p
+      (regexp-quote
+       (format "<textarea><img src=\"%s\"></textarea>" url))
+      out))
+    (should
+     (string-match-p
+      (regexp-quote
+       (format "<title><a href=\"%s\"></title>" url))
+      out))
+    (should
+     (string-suffix-p (format "<IMG SRC=\"%s\">" target) out))))
+
 (ert-deftest jaunder-pull-media-canonical-identifiers-are-case-sensitive ()
   (let* ((upper (upcase jaunder-pull-media-test--hash))
          (url

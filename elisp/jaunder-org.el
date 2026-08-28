@@ -184,8 +184,12 @@ A `file:' path resolves against `default-directory'; an `attachment:' path via
 `org-attach-expand' at the link's heading.  Org stores local path spelling
 percent-escaped, so unescape it once only for filesystem resolution; callers
 retain the raw path for source rewriting."
-  (let ((path (decode-coding-string
-               (url-unhex-string (org-element-property :path link)) 'utf-8)))
+  (let* ((raw-path (org-element-property :path link))
+         (fragment (string-search "#" raw-path))
+         (path (decode-coding-string
+                (url-unhex-string
+                 (if fragment (substring raw-path 0 fragment) raw-path))
+                'utf-8)))
     (if (string= (org-element-property :type link) "attachment")
         (save-excursion
           (goto-char (org-element-property :begin link))
