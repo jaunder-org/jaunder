@@ -83,6 +83,17 @@ Those boundaries are execution/ownership boundaries, not a claim that every
 [ADR-0031](adr/0031-elisp-separately-tested-subproject.md)) and `end2end/`
 (Playwright) are covered in their sections.
 
+**Package-metadata ownership is deliberately partial.** The root
+`[workspace.package]` owns the version, edition, and license inherited by its
+nine members (`client`, `common`, `csr`, `host`, `macros`, `server`, `storage`,
+`test-support`, and `web`). The independent `tools/` workspace owns its version,
+edition, and non-publish setting for its three members (`coverage`, `devtool`,
+and `doctests`), but has no workspace license. `xtask/` is a standalone
+single-package workspace, so its package metadata remains direct. Likewise,
+`test-support` keeps its release exception — direct `publish = false` — rather
+than inheriting the root's publish policy. These ownership points follow the
+three workspace roots; they are not one repository-wide metadata workspace.
+
 Across every one of those trees, a `mod.rs` states its module's surface and
 holds nothing else: `mod`/`pub mod` declarations, `use`/`pub use` re-exports,
 `//!` documentation, and attributes — never a `fn`, type, `impl`, `const`,
@@ -2719,8 +2730,8 @@ stock one by `--version`: only behaviour tells them apart, which is one more
 reason to invoke the devShell's binary rather than re-resolving one. Remove the
 override once a release later than 0.1.33 exists.
 
-**Rust edition and exception-free unsafe code.** All workspace crates are on
-edition 2024
+**Rust edition and exception-free unsafe code.** Every package in the root,
+`tools/`, and `xtask/` workspaces uses edition 2024
 ([ADR-0104](adr/0104-edition-2024-unsafe-env-and-precise-capturing.md)). Two
 consequences are load-bearing for tooling:
 
