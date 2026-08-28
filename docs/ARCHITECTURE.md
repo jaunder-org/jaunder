@@ -1830,14 +1830,41 @@ server side of that contract was decided in issue
 [#79](https://github.com/jaunder-org/jaunder/issues/79) as a follow-on to
 ADR-0047 — see the Storage section.
 
-### Committed direction
+### Pull, reconcile, and durable local media
 
-Unit D — the reverse atom→org mapping and per-directory reconcile — is designed
-around the same seams (the shared response harvester, the directory-keyed blog
-config) but unbuilt: `jaunder--atom->org` (`elisp/jaunder-publish.el:238`) is a
-stub that signals "not yet implemented"
-([ADR-0042](adr/0042-emacs-org-atom-mapping-struct-seam.md),
-[ADR-0047](adr/0047-emacs-publish-orchestration.md)).
+`jaunder--atom->org` (`elisp/jaunder-pull.el`) maps one authenticated AtomPub
+Member response to deterministic Org-file bytes: fixed metadata-header order,
+native source body, numeric Post ID, canonical slug, strong ETag sync marker,
+and one captured wall-clock/zone pair. `jaunder--pull-member` validates the
+inventory identity against the response, blocks an occupied root-level
+`<slug>.org` before network work, and installs through a same-directory
+temporary file without overwrite. Inventory exhausts Collection pagination and
+joins root-level Org files to Members by Post ID; `jaunder-reconcile` reports
+divergence without resolving it, previews only server-only pulls, and applies
+them after one confirmation. Remote deletion remains the separate explicit,
+ETag-guarded `jaunder-delete-post` command.
+
+#### Committed direction: Local Media Copies
+
+Pulled Org, Markdown, and HTML source localizes only format-aware link
+destinations that name canonical public media on the active Jaunder origin and
+contain no user information or query. Media GETs are anonymous and do not follow
+redirects. The authenticated Member response and every media response must carry
+exactly one canonical `X-Jaunder-Instance` UUID, and all values must match.
+Computed bytes, the strong response ETag, and the canonical URL hash must agree.
+External links and non-link URL text remain unchanged
+([Local Media Copies](adr/drafts/emacs-pulled-media-local-copies.md)).
+
+Verified bytes become durable **Local Media Copies** at
+`local-media/<sha256>/<decoded-filename>` under the configured root; native link
+targets use the canonical percent-encoded filename exactly once to resolve that
+leaf. Existing copies are hash-verified before reuse and never overwritten. A
+pull stages and verifies all distinct media, installs Local Media Copies,
+rewrites native links to relative local targets, and atomically installs the
+Post last. Failure leaves the Post server-only, so rerunning reconciliation
+retries it. Verified copies installed before an ordinary failure or crash remain
+safe to reuse. There is no rollback, cache eviction, matched-Post repair,
+arbitrary external download, or multi-file transaction promise.
 
 ## Domain types and invariants
 

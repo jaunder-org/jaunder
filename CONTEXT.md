@@ -99,6 +99,14 @@ owner-facing, but always confined to the protocol surface. _Avoid_: bare
 "client" for these — unqualified "client" is reserved for software running the
 planned `jaunder-client` runtime (see `docs/hub-architecture.md` §8).
 
+**Local Media Copy**: A durable media file downloaded by the Emacs Protocol
+Client into a configured root's `local-media/` directory so a pulled Post is
+previewable offline. It is verified against the serving Jaunder instance and
+content hash, may be reused across Posts, and must travel with the Post files
+during backup or synchronization. It is managed content, not an evictable cache.
+_Avoid_: cache, external media (the source is the configured Jaunder instance),
+temporary download.
+
 ## Relationships
 
 - A **User** _is_ the publication: there is deliberately no

@@ -221,6 +221,17 @@
                     "<content type=\"text/org\">Body</content>")))))
 
 
+(ert-deftest jaunder-parse-pulled-member-shares-native-body-with-exact-org-rendering ()
+  ;; The orchestrator obtains native format/body from the same validated parse
+  ;; that retains the established byte-identical `jaunder--atom->org' boundary.
+  (let* ((xml (jaunder-pull-test--response-entry))
+         (member (jaunder--parse-pulled-member
+                  xml "\"sha256-test\"" jaunder-pull-test--captured-at "UTC")))
+    (should (equal (jaunder-pulled-member-format member) "org"))
+    (should (equal (jaunder-pulled-member-body member) "Body"))
+    (should (equal (jaunder-pulled-member-org member)
+                   (jaunder-pull-test--org xml)))))
+
 (defun jaunder-pull-test--member (&optional id slug)
   "Return a D1 Member fixture with optional ID and SLUG."
   (jaunder--make-inventory-member

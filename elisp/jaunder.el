@@ -40,6 +40,7 @@
 (require 'jaunder-reconcile)
 (require 'jaunder-delete)
 (require 'jaunder-pull)
+(require 'jaunder-pull-media)
 
 (provide 'jaunder)
 ;;; jaunder.el ends here

@@ -163,11 +163,14 @@ KIND is `text' or `xhtml'."
     (mapcar (lambda (line) (format "#+%s: %s" name line))
             (split-string value "\n" nil))))
 
-(defun jaunder--atom->org (entry-xml etag captured-at zone)
-  "Map Member ENTRY-XML to exact Org bytes using ETAG, CAPTURED-AT, and ZONE.
-ETAG is stored verbatim.  CAPTURED-AT is an Emacs time value used both for
-status classification and the UTC sync stamp.  ZONE is recorded and used to
-render the local Org date.  This function performs no network or filesystem I/O."
+(cl-defstruct (jaunder-pulled-member (:constructor jaunder--make-pulled-member))
+              "Validated native Member data shared by rendering and pull localization."
+              org format body)
+
+(defun jaunder--parse-pulled-member (entry-xml etag captured-at zone)
+  "Parse Member ENTRY-XML once into exact Org bytes and native source fields.
+ETAG, CAPTURED-AT, and ZONE have the same validation and projection semantics
+as `jaunder--atom->org'.  This function performs no network or filesystem I/O."
   (unless (jaunder--strong-etag-p etag)
     (jaunder--pull-error "Member response must carry a strong quoted ETag"))
   (unless (and (stringp zone) (not (string-empty-p zone)))
@@ -226,7 +229,15 @@ render the local Org date.  This function performs no network or filesystem I/O.
                         (format "#+PROPERTY: JAUNDER_SYNCED_AT %s"
                                 (format-time-string "%Y-%m-%dT%H:%M:%SZ"
                                                     captured-at t))))))
-      (concat (mapconcat #'identity lines "\n") "\n\n" body))))
+      (jaunder--make-pulled-member
+       :org (concat (mapconcat #'identity lines "\n") "\n\n" body)
+       :format format
+       :body body))))
+
+(defun jaunder--atom->org (entry-xml etag captured-at zone)
+  "Map Member ENTRY-XML to exact Org bytes using ETAG, CAPTURED-AT, and ZONE."
+  (jaunder-pulled-member-org
+   (jaunder--parse-pulled-member entry-xml etag captured-at zone)))
 
 
 (cl-defstruct (jaunder-pull-result (:constructor jaunder--make-pull-result))
