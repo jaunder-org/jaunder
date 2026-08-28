@@ -47,7 +47,10 @@ wasmparser = "0.244"
 # Demangles Rust symbols so a function body's bytes can be charged to the crate
 # that emitted it.
 rustc-demangle = "0.1"
-
+processkit = "3.3.4"
+# `e2e-local` bridges processkit's async supervision into xtask's synchronous
+# command runner; a background worker keeps process I/O pumps live between calls.
+tokio = { version = "1", features = ["rt-multi-thread"] }
 [dev-dependencies]
 # Synthesizes the fixture modules the attribution tests parse, so no binary wasm
 # blob is checked into the tree.

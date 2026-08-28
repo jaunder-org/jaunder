@@ -1,0 +1,18 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: ${env:OTELCOL_GRPC_ENDPOINT}
+      http:
+        endpoint: ${env:OTELCOL_HTTP_ENDPOINT}
+processors:
+  batch: {}
+exporters:
+  file:
+    path: ${env:JAUNDER_CAPTURE_DIR}/otel-traces.jsonl
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [file]

@@ -19,6 +19,7 @@ pub enum Stream {
     Mail,
     WebSub,
     Diag,
+    Otel,
 }
 
 /// A directory supplied for capture output could not be made ready.
@@ -120,6 +121,7 @@ impl Stream {
             Stream::Mail => "mail.jsonl",
             Stream::WebSub => "websub.jsonl",
             Stream::Diag => "diag.log",
+            Stream::Otel => "otel-traces.jsonl",
         }
     }
 
@@ -131,6 +133,7 @@ impl Stream {
             "mail" => Some(Stream::Mail),
             "websub" => Some(Stream::WebSub),
             "diag" => Some(Stream::Diag),
+            "otel" => Some(Stream::Otel),
             _ => None,
         }
     }
@@ -206,6 +209,10 @@ mod tests {
         assert_eq!(capture.path(Stream::Mail), directory.join("mail.jsonl"));
         assert_eq!(capture.path(Stream::WebSub), directory.join("websub.jsonl"));
         assert_eq!(capture.path(Stream::Diag), directory.join("diag.log"));
+        assert_eq!(
+            capture.path(Stream::Otel),
+            directory.join("otel-traces.jsonl")
+        );
         assert!(
             !directory.exists(),
             "path() must not recreate the directory"
@@ -217,6 +224,7 @@ mod tests {
         assert_eq!(Stream::parse("mail"), Some(Stream::Mail));
         assert_eq!(Stream::parse("websub"), Some(Stream::WebSub));
         assert_eq!(Stream::parse("diag"), Some(Stream::Diag));
+        assert_eq!(Stream::parse("otel"), Some(Stream::Otel));
         assert_eq!(Stream::parse("bogus"), None);
         assert_eq!(Stream::parse(""), None);
     }
