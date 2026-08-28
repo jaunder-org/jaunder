@@ -69,21 +69,28 @@ async fn get_revision_detail(
 
 #[apply(backends)]
 #[tokio::test]
-async fn revision_history_endpoints_reject_anonymous(#[case] backend: Backend) {
+async fn revision_history_endpoints_hide_anonymous_access(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     let (status, body) = list_history(&state, None).await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("unauthorized"), "body: {body}");
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+    assert!(body.contains("Post not found"), "body: {body}");
+    let expected_body = body;
 
     let (status, body) = get_post_history(&state, PostId::from(1), None).await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("unauthorized"), "body: {body}");
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+    assert_eq!(
+        body, expected_body,
+        "anonymous history responses must not disclose scope"
+    );
 
     let (status, body) =
         get_revision_detail(&state, PostId::from(1), RevisionId::from(1), None).await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
-    assert!(body.contains("unauthorized"), "body: {body}");
+    assert_eq!(status, StatusCode::NOT_FOUND, "body: {body}");
+    assert_eq!(
+        body, expected_body,
+        "anonymous history responses must not disclose scope"
+    );
 }
 
 #[apply(backends)]

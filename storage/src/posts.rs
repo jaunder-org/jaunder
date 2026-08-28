@@ -5130,6 +5130,64 @@ mod tests {
         assert_eq!(slugs_of(&*env.state.posts, post).await, vec!["gamma"]);
     }
 
+    /// A tag mutation captures a complete revision, including current media. On
+    /// `PostgreSQL` copy must wait for the ordinary media lock rather than
+    /// racing a guarded delete or reclaim (ADR-0154).
+    // guard:low-level-db — exercises a held PostgreSQL advisory lock directly
+    #[tokio::test]
+    async fn postgres_tag_revision_capture_waits_for_current_media_lock() {
+        let env = Backend::Postgres.setup().await;
+        let user = SeedUser::new().seed(&env.state).await.user_id;
+        let media = media_ref_for("tag-revision-lock.jpg");
+        let post = create_post_via_service(
+            &env.state,
+            user,
+            parse_post_body(&format!(
+                "<img src=\"{}\">",
+                media_url_for("tag-revision-lock.jpg")
+            )),
+        )
+        .await;
+        let held = env
+            .base
+            .pool()
+            .lock_media_reference_for_write(&media)
+            .await
+            .expect("take the current media lock");
+        let posts = Arc::clone(&env.state.posts);
+        let mut tag_update = tokio::spawn(async move {
+            posts
+                .set_post_tags(post, user, &[parse_tag_label("locked")])
+                .await
+        });
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(300), &mut tag_update)
+                .await
+                .is_err(),
+            "tag revision capture completed while its current media lock was held"
+        );
+
+        held.rollback()
+            .await
+            .expect("release the current media lock");
+        tag_update
+            .await
+            .expect("tag update task panicked")
+            .expect("tag update failed after lock release");
+        assert_eq!(
+            env.base
+                .pool()
+                .scalar_i64(&format!(
+                    "SELECT COUNT(*) FROM post_revisions WHERE post_id = {post}"
+                ))
+                .await
+                .expect("count captured revisions"),
+            1,
+            "the deferred tag mutation captures exactly one prior-state revision"
+        );
+    }
+
     /// #883: the upsert returns the tag id on its **conflict** path, not just when
     /// it inserts. A `DO UPDATE` → `DO NOTHING` regression makes `RETURNING` emit
     /// no row, so `fetch_one` fails — and this is the test that says why.

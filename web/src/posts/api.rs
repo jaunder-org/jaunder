@@ -52,7 +52,7 @@ use common::visibility::{
 #[cfg(feature = "server")]
 use {
     super::server::{authored_post, not_found_error, private_post_not_found_error},
-    crate::auth::require_auth,
+    crate::auth::{optional_auth, require_auth},
     crate::error::InternalError,
     crate::feed_events::enqueue_feed_events,
     crate::viewer::viewer_identity,
@@ -118,6 +118,13 @@ async fn validate_org_audiences(
     storage::validate_named_audience_targets(audiences.as_ref(), author_user_id, targets)
         .await
         .map_err(InternalError::from)
+}
+
+/// Authenticates History reads without disclosing whether a session or resource
+/// exists. Explicit credential failures still retain their typed masked error.
+#[cfg(feature = "server")]
+async fn history_auth() -> Result<crate::auth::User, InternalError> {
+    optional_auth().await?.ok_or_else(not_found_error)
 }
 
 #[cfg(feature = "server")]
@@ -392,7 +399,7 @@ pub async fn list_history(
     cursor: Option<RevisionHistoryCursor>,
     limit: Option<PageSize>,
 ) -> WebResult<RevisionHistoryPage> {
-    let auth = require_auth().await?;
+    let auth = history_auth().await?;
     let page = expect_context::<Arc<dyn PostStorage>>()
         .list_owned_revision_history(
             auth.user_id,
@@ -420,7 +427,7 @@ pub async fn get_post_history(
     cursor: Option<RevisionHistoryCursor>,
     limit: Option<PageSize>,
 ) -> WebResult<PostRevisionHistory> {
-    let auth = require_auth().await?;
+    let auth = history_auth().await?;
     let posts = expect_context::<Arc<dyn PostStorage>>();
     let now = UtcInstant::now();
     let current = posts
@@ -458,7 +465,7 @@ pub async fn get_revision_history_detail(
     post_id: PostId,
     revision_id: RevisionId,
 ) -> WebResult<RevisionHistoryDetail> {
-    let auth = require_auth().await?;
+    let auth = history_auth().await?;
     let detail = expect_context::<Arc<dyn PostStorage>>()
         .get_post_revision_detail(auth.user_id, post_id, revision_id)
         .await?

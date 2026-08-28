@@ -70,14 +70,13 @@ pub(crate) fn finish_post_tags_not_found(
 /// Postgres-backed post storage.
 pub type PostgresPostStorage = PostStore<Postgres>;
 
-async fn apply_lifecycle_change(
+/// Loads the exact current-subject media identities whose revision copies must
+/// serialize with media deletion and reclamation (ADR-0154).
+async fn load_current_post_media_lock_set(
     tx: &mut sqlx::Transaction<'_, Postgres>,
     post_id: PostId,
-    publish: bool,
-    delete: bool,
-) -> sqlx::Result<()> {
-    let now = common::time::UtcInstant::now();
-    let media = sqlx::query_as::<
+) -> Result<std::collections::BTreeSet<common::media::MediaRef>, sqlx::Error> {
+    Ok(sqlx::query_as::<
         _,
         (
             common::media::MediaSource,
@@ -97,7 +96,17 @@ async fn apply_lifecycle_change(
         sha256,
         filename,
     })
-    .collect();
+    .collect())
+}
+
+async fn apply_lifecycle_change(
+    tx: &mut sqlx::Transaction<'_, Postgres>,
+    post_id: PostId,
+    publish: bool,
+    delete: bool,
+) -> sqlx::Result<()> {
+    let now = common::time::UtcInstant::now();
+    let media = load_current_post_media_lock_set(tx, post_id).await?;
     <Postgres as PostDialect>::lock_media_references(&mut **tx, &media).await?;
     capture_complete_post_revision::<Postgres>(tx, post_id, now).await?;
     if delete {
@@ -488,11 +497,15 @@ impl PostDialect for Postgres {
             .await?;
         let existing = post_tags_from_rows(rows);
         let diff = post_tag_diff(&existing, desired);
-
         if diff.to_add.is_empty() && diff.to_remove.is_empty() {
             tx.commit().await?;
             return Ok(());
         }
+
+        // A tag-only revision copies the current media rows too. Take their
+        // shared locks before the copy so media reclamation cannot interleave.
+        let media = load_current_post_media_lock_set(&mut tx, post_id).await?;
+        Self::lock_media_references(&mut *tx, &media).await?;
         capture_complete_post_revision::<Postgres>(
             &mut *tx,
             post_id,
