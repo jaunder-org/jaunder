@@ -443,7 +443,9 @@ async fn serve_returns_304_on_if_none_match(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
-async fn proxy_requires_auth(#[case] backend: Backend) {
+async fn proxy_rejects_unauthenticated_malformed_url_before_query_extraction(
+    #[case] backend: Backend,
+) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     let storage = TempDir::new().unwrap();
@@ -453,7 +455,7 @@ async fn proxy_requires_auth(#[case] backend: Backend) {
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/media/proxy?url=http%3A%2F%2Fexample.com%2Fimage.jpg&user_id=1")
+                .uri("/media/proxy?url=not-a-url&user_id=1")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -465,7 +467,7 @@ async fn proxy_requires_auth(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
-async fn proxy_redirects_authenticated(#[case] backend: Backend) {
+async fn proxy_redirects_authenticated_to_canonical_location(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
 
     let session = create_user_and_session(&state).await;
@@ -475,7 +477,7 @@ async fn proxy_redirects_authenticated(#[case] backend: Backend) {
     let app = make_app(&state, &storage);
 
     let url = format!(
-        "/media/proxy?url=http%3A%2F%2Fexample.com%2Fimage.jpg&user_id={}",
+        "/media/proxy?url=HTTP%3A%2F%2FEXAMPLE.COM%3A80&user_id={}",
         session.user_id
     );
 
@@ -491,14 +493,40 @@ async fn proxy_redirects_authenticated(#[case] backend: Backend) {
         .await
         .unwrap();
 
-    let status = response.status();
-    assert!(
-        status == StatusCode::TEMPORARY_REDIRECT
-            || status == StatusCode::FOUND
-            || status == StatusCode::MOVED_PERMANENTLY
-            || status == StatusCode::SEE_OTHER,
-        "expected a redirect, got {status}"
+    assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(
+        response.headers().get(header::LOCATION).unwrap(),
+        "http://example.com/"
     );
+}
+
+#[apply(backends_matrix)]
+#[case::malformed("not-a-url")]
+#[case::relative("%2Fimage.jpg")]
+#[case::empty_host("http%3A%2F%2F")]
+#[case::non_http("%66tp%3A%2F%2Fexample.com%2Fimage.jpg")]
+#[tokio::test]
+async fn proxy_rejects_authenticated_invalid_url(backend: Backend, #[case] encoded_url: &str) {
+    let TestEnv { state, base: _base } = backend.setup().await;
+    let session = create_user_and_session(&state).await;
+    let cookie = session.cookie();
+    let storage = TempDir::new().unwrap();
+    let app = make_app(&state, &storage);
+    let url = format!("/media/proxy?url={encoded_url}&user_id={}", session.user_id);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(&url)
+                .header(header::COOKIE, cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[apply(backends)]

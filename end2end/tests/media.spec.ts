@@ -3,6 +3,7 @@ import {
   BASE_URL,
   goto,
   signInAsNewUser,
+  signInAsNewUserRecord,
   click,
   waitForSelector,
   failServerFn,
@@ -72,6 +73,33 @@ test.describe("Media upload and serving", () => {
     const serveResponse = await page.request.get(BASE_URL + json.url);
     expect(serveResponse.status()).toBe(200);
     expect(await serveResponse.text()).toBe("spaced filename content");
+  });
+
+  test("proxy canonicalizes a media source URL without following its redirect", async ({
+    page,
+  }) => {
+    const { userId } = await signInAsNewUserRecord(page);
+    const proxyUrl = new URL("/media/proxy", BASE_URL);
+    proxyUrl.searchParams.set("url", "HTTP://EXAMPLE.COM:80");
+    proxyUrl.searchParams.set("user_id", String(userId));
+
+    // A zero redirect budget observes the server boundary and keeps this test
+    // from contacting the remote target.
+    const response = await page.request.get(proxyUrl.href, { maxRedirects: 0 });
+
+    expect(response.status()).toBe(307);
+    expect(response.headers()["location"]).toBe("http://example.com/");
+  });
+
+  test("proxy rejects an invalid media source URL", async ({ page }) => {
+    const { userId } = await signInAsNewUserRecord(page);
+    const proxyUrl = new URL("/media/proxy", BASE_URL);
+    proxyUrl.searchParams.set("url", "not-a-url");
+    proxyUrl.searchParams.set("user_id", String(userId));
+
+    const response = await page.request.get(proxyUrl.href, { maxRedirects: 0 });
+
+    expect(response.status()).toBe(400);
   });
 
   test("ordinary media delete confirms and removes unreferenced item", async ({

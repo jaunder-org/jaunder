@@ -17,6 +17,7 @@ use common::ids::UserId;
 use common::media::{
     ContentHash, ContentType, Filename, MediaSource, detect_content_type, media_path, should_inline,
 };
+use common::tagged_url::MediaSourceUrl;
 use host::etag::from_content_hash;
 use storage::{MediaError, MediaStorage};
 use web::auth;
@@ -237,9 +238,12 @@ async fn serve_response(
 // ---------------------------------------------------------------------------
 
 /// Query parameters for the proxy route.
+///
+/// The typed request boundary closes #697 under ADR-0063: extraction admits
+/// only a canonical media-source URL, so the handler never sees raw URL text.
 #[derive(Deserialize)]
 pub struct ProxyParams {
-    pub url: String,
+    pub url: MediaSourceUrl,
     pub user_id: UserId,
 }
 
@@ -258,8 +262,7 @@ pub async fn proxy_handler(
     if auth_user.user_id != params.user_id {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    // TODO(M9/M17): implement actual fetch, cache, and redirect to local URL
-    Ok(Redirect::temporary(&params.url))
+    Ok(Redirect::temporary(params.url.as_ref()))
 }
 
 // ---------------------------------------------------------------------------
