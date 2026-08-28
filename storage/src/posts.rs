@@ -6628,10 +6628,14 @@ mod tests {
             .await
             .expect("listing succeeds");
 
-        assert_eq!(found, vec![first, second], "own, non-deleted, ascending");
+        assert_eq!(
+            found,
+            vec![first, second, deleted],
+            "owner current and retained history references are ascending"
+        );
         assert!(
-            !found.contains(&deleted),
-            "a soft-deleted post does not block a delete"
+            found.contains(&deleted),
+            "a Deleted Post's retained current/revision state remains protected"
         );
         assert!(
             !found.contains(&foreign),

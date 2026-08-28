@@ -1629,7 +1629,8 @@ pub async fn media_row_exists(state: &Arc<AppState>, user_id: UserId, media: &Me
         .expect("media lookup should succeed")
         .is_some()
 }
-/// A post's `post_media` rows, ascending by media identity then origin.
+/// A Post's current-subject `post_media` rows, ascending by media identity then
+/// origin. Revision subjects are inspected separately by history tests.
 ///
 /// # Panics
 ///
@@ -1641,7 +1642,8 @@ pub async fn fetch_post_media(
     base.pool()
         .string_quintuples(&format!(
             "SELECT source, sha256, filename, reference_kind, reference_form FROM post_media \
-             WHERE post_id = {post_id} ORDER BY source, sha256, filename, reference_kind, reference_form"
+             WHERE post_id = {post_id} AND subject_kind = 'current' AND revision_id = 0 \
+             ORDER BY source, sha256, filename, reference_kind, reference_form"
         ))
         .await
         .expect("post_media query should succeed")
