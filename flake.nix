@@ -884,6 +884,9 @@
 
               machine.start()
               machine.wait_for_unit("otel-collector.service", timeout=60)
+              # `active` precedes the OTLP receiver bind; seeding immediately can
+              # export into that gap and leave no trace population to verify.
+              machine.wait_for_open_port(4317, timeout=30)
               machine.wait_for_unit("jaunder.service", timeout=60)
               machine.wait_for_open_port(3000, timeout=30)
 
@@ -989,6 +992,9 @@
             testScript = ''
               machine.start()
               machine.wait_for_unit("otel-collector.service", timeout=60)
+              # `active` precedes the OTLP receiver bind; seeding immediately can
+              # export into that gap and leave no trace population to verify.
+              machine.wait_for_open_port(4317, timeout=30)
               machine.wait_for_unit("postgresql.service", timeout=60)
 
               machine.succeed(
