@@ -10,12 +10,12 @@ use leptos::server_fn::codec::Json;
 use serde::{Deserialize, Serialize};
 
 use common::{
-    ids::PostId,
+    ids::{PostId, RevisionId},
     pagination::PageSize,
     post_body::PostBody,
     post_summary::PostSummary,
     post_title::PostTitle,
-    render::PostFormat,
+    render::{PostFormat, RenderedHtml},
     root_relative_url::RootRelativeUrl,
     slug::Slug,
     tag::TagLabel,
@@ -27,6 +27,16 @@ use common::{
 use common::seed::{AuthoredPost, Page, PageCursor};
 
 use crate::error::WebResult;
+use common::trace_field::TraceField;
+
+fn deserialize_revision_rendered_html<'de, D>(deserializer: D) -> Result<RenderedHtml, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize as _;
+    // rendered-html-from-trusted:allow revision wire content was serialized by this server (#1055)
+    String::deserialize(deserializer).map(RenderedHtml::from_trusted)
+}
 
 // The audience-picker DTO and its converters live in `common::visibility` (beside
 // `AudienceBase`/`AudienceTarget`); the server fn bodies below use these two to
@@ -56,8 +66,9 @@ use {
     leptos::prelude::*,
     std::{collections::BTreeSet, sync::Arc},
     storage::{
-        AudienceStorage, FeedEventStorage, PerformUpdateError, PostBookkeepingExpectation,
-        PostCreation, PostRecord, PostStorage, PostUpdate, PublishUpdate, SiteConfigStorage,
+        AudienceStorage, CurrentPostRevisionSummary, FeedEventStorage, PerformUpdateError,
+        PostBookkeepingExpectation, PostCreation, PostLifecycle, PostRecord, PostRevisionDetail,
+        PostRevisionMetadata, PostStorage, PostUpdate, PublishUpdate, SiteConfigStorage,
         fetch_post_record, keyset_cursor, perform_post_creation, perform_post_update,
         scheduled_keyset_cursor, to_post_cursor, to_scheduled_post_cursor, wire_cursor,
         wire_scheduled_cursor,
@@ -107,6 +118,99 @@ async fn validate_org_audiences(
     storage::validate_named_audience_targets(audiences.as_ref(), author_user_id, targets)
         .await
         .map_err(InternalError::from)
+}
+
+#[cfg(feature = "server")]
+fn revision_lifecycle(lifecycle: PostLifecycle) -> RevisionLifecycle {
+    match lifecycle {
+        PostLifecycle::Draft => RevisionLifecycle::Draft,
+        PostLifecycle::Scheduled => RevisionLifecycle::Scheduled,
+        PostLifecycle::Published => RevisionLifecycle::Published,
+        PostLifecycle::Deleted => RevisionLifecycle::Deleted,
+    }
+}
+
+#[cfg(feature = "server")]
+fn revision_metadata(metadata: PostRevisionMetadata) -> RevisionHistoryMetadata {
+    RevisionHistoryMetadata {
+        revision_id: metadata.revision_id,
+        post_id: metadata.post_id,
+        title: metadata.title,
+        slug: metadata.slug,
+        captured_at: metadata.captured_at,
+        snapshot_lifecycle: revision_lifecycle(metadata.snapshot_lifecycle),
+        current_deleted: metadata.current_deleted,
+    }
+}
+
+#[cfg(feature = "server")]
+fn current_post_history(summary: CurrentPostRevisionSummary) -> CurrentPostHistory {
+    CurrentPostHistory {
+        post_id: summary.post_id,
+        title: summary.title,
+        slug: summary.slug,
+        format: summary.format,
+        created_at: summary.created_at,
+        updated_at: summary.updated_at,
+        published_at: summary.published_at,
+        deleted_at: summary.deleted_at,
+        lifecycle: revision_lifecycle(summary.lifecycle),
+    }
+}
+
+#[cfg(feature = "server")]
+fn revision_detail(detail: PostRevisionDetail) -> RevisionHistoryDetail {
+    let revision = detail.revision;
+    RevisionHistoryDetail {
+        revision_id: revision.revision_id,
+        post_id: revision.post_id,
+        title: revision.title,
+        slug: revision.slug,
+        body: revision.body,
+        format: revision.format,
+        rendered_html: revision.rendered_html,
+        summary: revision.summary,
+        created_at: revision.created_at,
+        updated_at: revision.updated_at,
+        published_at: revision.published_at,
+        deleted_at: revision.deleted_at,
+        captured_at: revision.captured_at,
+        tags: revision
+            .tags
+            .into_iter()
+            .map(|tag| RevisionHistoryTag {
+                tag: tag.tag,
+                display: tag.display,
+            })
+            .collect(),
+        audiences: revision
+            .audiences
+            .into_iter()
+            .map(|target| match target {
+                AudienceTarget::Public => RevisionHistoryAudience {
+                    kind: "public".to_owned(),
+                    audience_id: None,
+                },
+                AudienceTarget::Private => RevisionHistoryAudience {
+                    kind: "private".to_owned(),
+                    audience_id: None,
+                },
+                AudienceTarget::Subscribers => RevisionHistoryAudience {
+                    kind: "subscribers".to_owned(),
+                    audience_id: None,
+                },
+                AudienceTarget::Named(audience_id) => RevisionHistoryAudience {
+                    kind: "named".to_owned(),
+                    audience_id: Some(audience_id),
+                },
+            })
+            .collect(),
+        media: revision
+            .media
+            .into_iter()
+            .map(|reference| reference.reference_form().as_ref().to_owned())
+            .collect(),
+    }
 }
 #[cfg(feature = "server")]
 fn unpublished_post_from_record(post: PostRecord) -> UnpublishedPost {
@@ -175,6 +279,191 @@ pub struct UnpublishedPost {
     pub title: Option<PostTitle>,
     pub summary_label: PostSummary,
     pub edit_url: RootRelativeUrl,
+}
+
+/// Opaque immutable-ID cursor for owner revision history. Unlike public-post
+/// cursors, history ordering is wholly by revision ID.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RevisionHistoryCursor {
+    pub revision_id: RevisionId,
+}
+
+impl TraceField for RevisionHistoryCursor {
+    type Value<'a> = RevisionId;
+
+    fn trace_value(&self) -> Self::Value<'_> {
+        self.revision_id
+    }
+}
+
+/// Stable lifecycle label for history surfaces.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RevisionLifecycle {
+    Draft,
+    Scheduled,
+    Published,
+    Deleted,
+}
+
+/// One compact immutable snapshot row returned by either history list.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RevisionHistoryMetadata {
+    pub revision_id: RevisionId,
+    pub post_id: PostId,
+    pub title: Option<PostTitle>,
+    pub slug: Slug,
+    pub captured_at: UtcInstant,
+    pub snapshot_lifecycle: RevisionLifecycle,
+    pub current_deleted: bool,
+}
+
+/// A cursor-paginated owner history list.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RevisionHistoryPage {
+    pub revisions: Vec<RevisionHistoryMetadata>,
+    pub next_cursor: Option<RevisionHistoryCursor>,
+    pub has_more: bool,
+}
+
+/// The current (not revision) heading for a Post history view.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CurrentPostHistory {
+    pub post_id: PostId,
+    pub title: Option<PostTitle>,
+    pub slug: Slug,
+    pub format: PostFormat,
+    pub created_at: UtcInstant,
+    pub updated_at: UtcInstant,
+
+    pub published_at: Option<UtcInstant>,
+    pub deleted_at: Option<UtcInstant>,
+    pub lifecycle: RevisionLifecycle,
+}
+/// One normalized tag captured with a revision.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RevisionHistoryTag {
+    pub tag: common::tag::Tag,
+    pub display: TagLabel,
+}
+
+/// One captured audience target; `audience_id` is present only for `named`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RevisionHistoryAudience {
+    pub kind: String,
+    pub audience_id: Option<common::ids::AudienceId>,
+}
+
+/// The complete immutable scalar snapshot. Child collections stay explicit so
+/// the client cannot mistake current tag/audience/media state for historical
+/// state.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RevisionHistoryDetail {
+    pub revision_id: RevisionId,
+    pub post_id: PostId,
+    pub title: Option<PostTitle>,
+    pub slug: Slug,
+    pub body: PostBody,
+    pub format: PostFormat,
+    #[serde(deserialize_with = "deserialize_revision_rendered_html")]
+    // rendered-html-from-trusted:allow revision DTO rebuilds HTML serialized by Jaunder's own server (#1055)
+    pub rendered_html: RenderedHtml,
+    pub summary: Option<PostSummary>,
+    pub created_at: UtcInstant,
+    pub updated_at: UtcInstant,
+    pub published_at: Option<UtcInstant>,
+    pub deleted_at: Option<UtcInstant>,
+    pub captured_at: UtcInstant,
+    pub tags: Vec<RevisionHistoryTag>,
+    pub audiences: Vec<RevisionHistoryAudience>,
+    pub media: Vec<String>,
+}
+
+/// The current heading and immutable list for one owner's Post.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PostRevisionHistory {
+    pub current: CurrentPostHistory,
+    pub revisions: RevisionHistoryPage,
+}
+
+/// Lists every immutable revision owned by the authenticated user.
+#[macros::server(input = Json)]
+pub async fn list_history(
+    cursor: Option<RevisionHistoryCursor>,
+    limit: Option<PageSize>,
+) -> WebResult<RevisionHistoryPage> {
+    let auth = require_auth().await?;
+    let page = expect_context::<Arc<dyn PostStorage>>()
+        .list_owned_revision_history(
+            auth.user_id,
+            cursor.map(|cursor| storage::PostRevisionCursor {
+                revision_id: cursor.revision_id,
+            }),
+            limit.unwrap_or_default(),
+        )
+        .await?;
+    let has_more = page.next_cursor.is_some();
+    Ok(RevisionHistoryPage {
+        revisions: page.revisions.into_iter().map(revision_metadata).collect(),
+        next_cursor: page.next_cursor.map(|cursor| RevisionHistoryCursor {
+            revision_id: cursor.revision_id,
+        }),
+        has_more,
+    })
+}
+
+/// Returns one owned Post's current state and its immutable history, including
+/// a Deleted Post. Foreign and absent Posts intentionally have the same error.
+#[macros::server(input = Json)]
+pub async fn get_post_history(
+    post_id: PostId,
+    cursor: Option<RevisionHistoryCursor>,
+    limit: Option<PageSize>,
+) -> WebResult<PostRevisionHistory> {
+    let auth = require_auth().await?;
+    let posts = expect_context::<Arc<dyn PostStorage>>();
+    let now = UtcInstant::now();
+    let current = posts
+        .get_current_revision_summary(auth.user_id, post_id, now)
+        .await?
+        .ok_or_else(not_found_error)?;
+    let page = posts
+        .list_post_revision_history(
+            auth.user_id,
+            post_id,
+            cursor.map(|cursor| storage::PostRevisionCursor {
+                revision_id: cursor.revision_id,
+            }),
+            limit.unwrap_or_default(),
+        )
+        .await?
+        .ok_or_else(not_found_error)?;
+    let has_more = page.next_cursor.is_some();
+    Ok(PostRevisionHistory {
+        current: current_post_history(current),
+        revisions: RevisionHistoryPage {
+            revisions: page.revisions.into_iter().map(revision_metadata).collect(),
+            next_cursor: page.next_cursor.map(|cursor| RevisionHistoryCursor {
+                revision_id: cursor.revision_id,
+            }),
+            has_more,
+        },
+    })
+}
+
+/// Returns one full immutable snapshot only when the authenticated user owns
+/// both its Post and the requested revision.
+#[macros::server(input = Json)]
+pub async fn get_revision_history_detail(
+    post_id: PostId,
+    revision_id: RevisionId,
+) -> WebResult<RevisionHistoryDetail> {
+    let auth = require_auth().await?;
+    let detail = expect_context::<Arc<dyn PostStorage>>()
+        .get_post_revision_detail(auth.user_id, post_id, revision_id)
+        .await?
+        .ok_or_else(not_found_error)?;
+    Ok(revision_detail(detail))
 }
 
 /// The author-supplied content of a post — the shared RPC input contract for

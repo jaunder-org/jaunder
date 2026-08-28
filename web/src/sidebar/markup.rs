@@ -17,7 +17,7 @@ pub(super) struct NavItem {
     pub(super) requires_operator: bool,
 }
 
-pub(super) static NAV_ITEMS: LazyLock<[NavItem; 13]> = LazyLock::new(|| {
+pub(super) static NAV_ITEMS: LazyLock<[NavItem; 14]> = LazyLock::new(|| {
     [
         NavItem {
             key: "home",
@@ -84,6 +84,14 @@ pub(super) static NAV_ITEMS: LazyLock<[NavItem; 13]> = LazyLock::new(|| {
             label: "Scheduled",
             icon_path: Icons::EDIT,
             href: Some(root_relative_url("/scheduled")),
+            requires_auth: true,
+            requires_operator: false,
+        },
+        NavItem {
+            key: "history",
+            label: "History",
+            icon_path: Icons::REFRESH,
+            href: Some(root_relative_url("/history")),
             requires_auth: true,
             requires_operator: false,
         },
@@ -231,6 +239,7 @@ mod tests {
         assert!(!html.contains(">Feed<"), "{html}");
         assert!(!html.contains(">Drafts<"), "{html}");
         assert!(!html.contains(">Scheduled<"), "{html}");
+        assert!(!html.contains(">History<"), "{html}");
         assert!(!html.contains(">Settings<"), "{html}");
         assert!(!html.contains(">Configure Backups<"), "{html}");
         assert!(!html.contains(">Site Settings<"), "{html}");
@@ -265,6 +274,7 @@ mod tests {
                 ("app", "/app"),
                 ("drafts", "/drafts"),
                 ("scheduled", "/scheduled"),
+                ("history", "/history"),
                 ("media", "/media"),
                 ("audiences", "/audiences"),
                 ("admin-backups", "/admin/backups"),

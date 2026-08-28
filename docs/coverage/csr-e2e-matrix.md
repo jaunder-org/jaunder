@@ -28,25 +28,25 @@ attribution from it.
 Paths grouped in one row are one stable user-visible flow; a route still appears
 only in that row.
 
-| Candidate                                               | Disposition                                                                         |
-| ------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `ParentRoute path=""`                                   | [Application shell and boot state](#application-shell-and-boot-state)               |
-| `/`                                                     | [Public reading](#public-reading)                                                   |
-| `/app`                                                  | [Authenticated cockpit](#authenticated-cockpit)                                     |
-| `/register`, `/login`, `/logout`                        | [Authentication](#authentication)                                                   |
-| `/register?invite_code=...`                             | [Invitation registration](#invitation-registration)                                 |
-| `/profile`, `/profile/email`, `/verify-email?token=...` | [Profile and email verification](#profile-and-email-verification)                   |
-| `/sessions`                                             | [App password management](#app-password-management)                                 |
-| `/audiences`                                            | [Audiences, subscriptions, and visibility](#audiences-subscriptions-and-visibility) |
-| `/invites`                                              | [Invitation registration](#invitation-registration)                                 |
-| `/admin/backups`, `/admin/site`                         | [Administration](#administration)                                                   |
-| `/posts/new`, `/drafts`, `/posts/:post_id/edit`         | [Post authoring lifecycle](#post-authoring-lifecycle)                               |
-| `/media`                                                | [Media management](#media-management)                                               |
-| `/forgot-password`, `/reset-password?token=...`         | [Password reset](#password-reset)                                                   |
-| `/tags/:tag`, `/:username/tags/:tag`                    | [Tag browsing](#tag-browsing) — canonical user path: `/~:username/tags/:tag`        |
-| `/:username`                                            | [Public reading](#public-reading) — canonical user path: `/~:username`              |
-| `/~:username/:year/:month/:day/:slug`                   | [Public reading](#public-reading)                                                   |
-| `Routes` fallback                                       | Out of scope: an error rendering, not a stable user capability.                     |
+| Candidate                                                                                                                      | Disposition                                                                         |
+| ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| `ParentRoute path=""`                                                                                                          | [Application shell and boot state](#application-shell-and-boot-state)               |
+| `/`                                                                                                                            | [Public reading](#public-reading)                                                   |
+| `/app`                                                                                                                         | [Authenticated cockpit](#authenticated-cockpit)                                     |
+| `/register`, `/login`, `/logout`                                                                                               | [Authentication](#authentication)                                                   |
+| `/register?invite_code=...`                                                                                                    | [Invitation registration](#invitation-registration)                                 |
+| `/profile`, `/profile/email`, `/verify-email?token=...`                                                                        | [Profile and email verification](#profile-and-email-verification)                   |
+| `/sessions`                                                                                                                    | [App password management](#app-password-management)                                 |
+| `/audiences`                                                                                                                   | [Audiences, subscriptions, and visibility](#audiences-subscriptions-and-visibility) |
+| `/invites`                                                                                                                     | [Invitation registration](#invitation-registration)                                 |
+| `/admin/backups`, `/admin/site`                                                                                                | [Administration](#administration)                                                   |
+| `/posts/new`, `/drafts`, `/posts/:post_id/edit`, `/history`, `/posts/:post_id/history`, `/posts/:post_id/history/:revision_id` | [Post authoring lifecycle](#post-authoring-lifecycle)                               |
+| `/media`                                                                                                                       | [Media management](#media-management)                                               |
+| `/forgot-password`, `/reset-password?token=...`                                                                                | [Password reset](#password-reset)                                                   |
+| `/tags/:tag`, `/:username/tags/:tag`                                                                                           | [Tag browsing](#tag-browsing) — canonical user path: `/~:username/tags/:tag`        |
+| `/:username`                                                                                                                   | [Public reading](#public-reading) — canonical user path: `/~:username`              |
+| `/~:username/:year/:month/:day/:slug`                                                                                          | [Public reading](#public-reading)                                                   |
+| `Routes` fallback                                                                                                              | Out of scope: an error rendering, not a stable user capability.                     |
 
 Stable navigation surfaces outside the route table are assigned to their
 containing flows: the shell navigation exposes the route rows above; post links,
@@ -156,12 +156,17 @@ backup schedule, mode, retention, destination, and save behavior.
 
 ### Post authoring lifecycle
 
-**Paths and entry points:** `/posts/new`, `/drafts`, and `/posts/:post_id/edit`;
-composer, draft-list, permalink, and editor controls.
+**Paths and entry points:** `/posts/new`, `/drafts`, `/posts/:post_id/edit`,
+`/history`, `/posts/:post_id/history`, and
+`/posts/:post_id/history/:revision_id`; composer, draft-list, permalink, editor,
+sidebar History, and active owner Post History controls.
 
 **Evidence:** [`end2end/tests/posts.spec.ts`](../../end2end/tests/posts.spec.ts)
 asserts draft creation, publish, edit, slug freeze, unpublish, deletion,
 scheduling, audience selection, and in-app transitions between each screen.
+[`end2end/tests/history.spec.ts`](../../end2end/tests/history.spec.ts) asserts
+sidebar and owner-Post entry points, Current state, complete immutable detail,
+cursor append, semantic no-op suppression, and Deleted Post owner access.
 
 ### Media management
 

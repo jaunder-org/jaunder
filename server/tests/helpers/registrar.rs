@@ -30,6 +30,9 @@ pub fn ensure_server_fns_registered() {
         server_fn::axum::register_explicit::<web::posts::ListDrafts>();
         server_fn::axum::register_explicit::<web::posts::ListScheduled>();
         server_fn::axum::register_explicit::<web::posts::Publish>();
+        server_fn::axum::register_explicit::<web::posts::ListHistory>();
+        server_fn::axum::register_explicit::<web::posts::GetPostHistory>();
+        server_fn::axum::register_explicit::<web::posts::GetRevisionHistoryDetail>();
         server_fn::axum::register_explicit::<web::timeline::ListByUser>();
         server_fn::axum::register_explicit::<web::timeline::ListLocalTimeline>();
         server_fn::axum::register_explicit::<web::timeline::ListHomeFeed>();
@@ -74,4 +77,4 @@ pub fn ensure_server_fns_registered() {
 /// fn in `web/src`; this constant tracks the list; and
 /// `server_fn_wire::every_server_fn_path_is_api_vertical_ident_and_distinct`
 /// checks itself against the constant. Each link is short enough to keep honest.
-pub const REGISTERED_SERVER_FN_COUNT: usize = 56;
+pub const REGISTERED_SERVER_FN_COUNT: usize = 59;

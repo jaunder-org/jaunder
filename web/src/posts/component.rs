@@ -319,6 +319,7 @@ pub fn PostCard<'a>(
     // unpublished post.
     let is_draft = post.is_draft();
     let edit_url = crate::posts::edit_post_url(post_id);
+    let history_url = format!("/posts/{}/history", i64::from(post_id));
     let delete_action = ServerAction::<Delete>::new();
     let unpublish_action = ServerAction::<Unpublish>::new();
     let publish_action = ServerAction::<Publish>::new();
@@ -368,6 +369,9 @@ pub fn PostCard<'a>(
             <div class="j-post-acts">
                 <a class="j-btn" href=String::from(edit_url)>
                     "Edit"
+                </a>
+                <a class="j-btn" data-test="post-history-link" href=history_url>
+                    "History"
                 </a>
                 {primary_action}
                 <button

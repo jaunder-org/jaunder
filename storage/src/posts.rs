@@ -13,8 +13,10 @@ use crate::helpers::parse_post_tags_json;
 use common::etag::ETag;
 use common::idempotency_key::IdempotencyKey;
 use common::ids::{AudienceId, ChannelId, PostId, RevisionId, TagId, UserId};
-use common::media::{MediaRef, MediaReference, MediaReferenceForm, MediaReferenceKind};
-use common::pagination::RowLimit;
+use common::media::{
+    MediaRef, MediaReference, MediaReferenceForm, MediaReferenceKind, parse_media_url,
+};
+use common::pagination::{PageSize, RowLimit};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
@@ -1090,6 +1092,45 @@ pub trait PostStorage: Send + Sync {
         viewer: &ViewerIdentity,
     ) -> sqlx::Result<Option<PostRecord>>;
 
+    /// Lists immutable owner history across every owned Post, newest revision ID
+    /// first. The owner bind is part of the storage query so this cannot become a
+    /// web-only authorization check.
+    async fn list_owned_revision_history(
+        &self,
+        user_id: UserId,
+        cursor: Option<PostRevisionCursor>,
+        page_size: PageSize,
+    ) -> sqlx::Result<PostRevisionPage>;
+
+    /// Lists immutable owner history for one Post, including a Deleted Post.
+    /// A missing or foreign Post returns `None`; callers deliberately map that
+    /// absence to the same public error as a missing revision.
+    async fn list_post_revision_history(
+        &self,
+        user_id: UserId,
+        post_id: PostId,
+        cursor: Option<PostRevisionCursor>,
+        page_size: PageSize,
+    ) -> sqlx::Result<Option<PostRevisionPage>>;
+
+    /// Returns the current owner-visible history heading, including a Deleted
+    /// Post. Lifecycle is derived against the supplied request clock.
+    async fn get_current_revision_summary(
+        &self,
+        user_id: UserId,
+        post_id: PostId,
+        now: UtcInstant,
+    ) -> sqlx::Result<Option<CurrentPostRevisionSummary>>;
+
+    /// Returns one complete immutable snapshot only when both the Post and
+    /// revision belong to `user_id`. The exact triple is bound in SQL.
+    async fn get_post_revision_detail(
+        &self,
+        user_id: UserId,
+        post_id: PostId,
+        revision_id: RevisionId,
+    ) -> sqlx::Result<Option<PostRevisionDetail>>;
+
     /// Fetches a post by its public permalink components, applying the
     /// viewer-resolution filter. See ADR-0020.
     ///
@@ -1650,6 +1691,107 @@ pub(crate) fn push_other_owner_media_reference_from_where<DB>(
         .push_bind(media.filename.clone());
 }
 
+/// The typed columns that make up one immutable revision snapshot.
+///
+/// This is decoded explicitly rather than through a positional `SQLx` tuple so
+/// persisted values always cross the storage boundary as domain types.
+struct RevisionDetailRow {
+    revision_id: RevisionId,
+    post_id: PostId,
+    user_id: UserId,
+    title: Option<PostTitle>,
+    slug: Slug,
+    body: PostBody,
+    format: PostFormat,
+    // rendered-html-from-trusted:allow revision SQL row carries render-sanitized HTML from storage (#1055)
+    rendered_html: RenderedHtml,
+    summary: Option<PostSummary>,
+    created_at: UtcInstant,
+    updated_at: UtcInstant,
+    published_at: Option<UtcInstant>,
+    deleted_at: Option<UtcInstant>,
+    captured_at: UtcInstant,
+}
+
+/// The typed columns required to render one immutable revision in a history list.
+struct RevisionMetadataRow {
+    revision_id: RevisionId,
+    post_id: PostId,
+    title: Option<PostTitle>,
+    slug: Slug,
+    captured_at: UtcInstant,
+    deleted_at: Option<UtcInstant>,
+    published_at: Option<UtcInstant>,
+    current_deleted_at: Option<UtcInstant>,
+}
+
+/// Decodes a raw SQL row into a storage-internal typed projection.
+trait DecodeRawRow<DB: Database>: Sized {
+    fn decode(row: DB::Row) -> sqlx::Result<Self>;
+}
+
+impl<DB> DecodeRawRow<DB> for RevisionDetailRow
+where
+    DB: Database,
+    for<'r> RevisionId: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> PostId: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> UserId: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> Option<PostTitle>: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> Slug: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> PostBody: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> PostFormat: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> RenderedHtml: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> Option<PostSummary>: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> UtcInstant: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> Option<UtcInstant>: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> &'r str: sqlx::ColumnIndex<DB::Row>,
+{
+    fn decode(row: DB::Row) -> sqlx::Result<Self> {
+        Ok(Self {
+            revision_id: row.try_get::<RevisionId, _>("revision_id")?,
+            post_id: row.try_get::<PostId, _>("post_id")?,
+            user_id: row.try_get::<UserId, _>("user_id")?,
+            title: row.try_get::<Option<PostTitle>, _>("title")?,
+            slug: row.try_get::<Slug, _>("slug")?,
+            body: row.try_get::<PostBody, _>("body")?,
+            format: row.try_get::<PostFormat, _>("format")?,
+            // rendered-html-from-trusted:allow revision decoder reads render-sanitized HTML from storage (#1055)
+            rendered_html: row.try_get::<RenderedHtml, _>("rendered_html")?,
+            summary: row.try_get::<Option<PostSummary>, _>("summary")?,
+            created_at: row.try_get::<UtcInstant, _>("created_at")?,
+            updated_at: row.try_get::<UtcInstant, _>("updated_at")?,
+            published_at: row.try_get::<Option<UtcInstant>, _>("published_at")?,
+            deleted_at: row.try_get::<Option<UtcInstant>, _>("deleted_at")?,
+            captured_at: row.try_get::<UtcInstant, _>("captured_at")?,
+        })
+    }
+}
+
+impl<DB> DecodeRawRow<DB> for RevisionMetadataRow
+where
+    DB: Database,
+    for<'r> RevisionId: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> PostId: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> Option<PostTitle>: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> Slug: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> UtcInstant: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> Option<UtcInstant>: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
+    for<'r> &'r str: sqlx::ColumnIndex<DB::Row>,
+{
+    fn decode(row: DB::Row) -> sqlx::Result<Self> {
+        Ok(Self {
+            revision_id: row.try_get::<RevisionId, _>("revision_id")?,
+            post_id: row.try_get::<PostId, _>("post_id")?,
+            title: row.try_get::<Option<PostTitle>, _>("title")?,
+            slug: row.try_get::<Slug, _>("slug")?,
+            captured_at: row.try_get::<UtcInstant, _>("captured_at")?,
+            deleted_at: row.try_get::<Option<UtcInstant>, _>("deleted_at")?,
+            published_at: row.try_get::<Option<UtcInstant>, _>("published_at")?,
+            current_deleted_at: row.try_get::<Option<UtcInstant>, _>("current_deleted_at")?,
+        })
+    }
+}
+
 /// Generic [`PostStorage`] backed by any [`PostDialect`] database.
 ///
 /// Every read and the non-transactional shared mutations live here, splicing
@@ -1678,6 +1820,26 @@ where
     TagListRow: for<'r> sqlx::FromRow<'r, DB::Row>,
     (TargetKind, Option<AudienceId>): for<'r> sqlx::FromRow<'r, DB::Row>,
     (UtcInstant,): for<'r> sqlx::FromRow<'r, DB::Row>,
+    RevisionDetailRow: DecodeRawRow<DB>,
+    (Tag, TagLabel): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (
+        common::media::MediaSource,
+        common::media::ContentHash,
+        common::media::Filename,
+        MediaReferenceKind,
+        MediaReferenceForm,
+    ): for<'r> sqlx::FromRow<'r, DB::Row>,
+    (
+        PostId,
+        Option<PostTitle>,
+        Slug,
+        PostFormat,
+        UtcInstant,
+        UtcInstant,
+        Option<UtcInstant>,
+        Option<UtcInstant>,
+    ): for<'r> sqlx::FromRow<'r, DB::Row>,
+    RevisionMetadataRow: DecodeRawRow<DB>,
     // `feed_urls_needing_catchup` reads `feed_cache` a row at a time (a bad `feed_url`
     // must not fail the scan), so it needs the column-decode bounds directly rather than
     // a `FromRow` tuple. `FeedPath` decodes as itself via the ADR-0071 bridge.
@@ -1839,6 +2001,199 @@ where
         );
         let query = sqlx::query_as::<_, PostRecord>(&sql).bind(post_id);
         Ok(binds.bind_onto(query).fetch_optional(&self.pool).await?)
+    }
+
+    #[tracing::instrument(name = "storage.posts.list_owned_revision_history", skip(self))]
+    async fn list_owned_revision_history(
+        &self,
+        user_id: UserId,
+        cursor: Option<PostRevisionCursor>,
+        page_size: PageSize,
+    ) -> sqlx::Result<PostRevisionPage> {
+        let rows =
+            revision_metadata_rows(&self.pool, user_id, None, cursor, page_size.fetch_limit())
+                .await?;
+        Ok(revision_page(rows, page_size))
+    }
+
+    #[tracing::instrument(name = "storage.posts.list_post_revision_history", skip(self))]
+    async fn list_post_revision_history(
+        &self,
+        user_id: UserId,
+        post_id: PostId,
+        cursor: Option<PostRevisionCursor>,
+        page_size: PageSize,
+    ) -> sqlx::Result<Option<PostRevisionPage>> {
+        let owned = sqlx::query_scalar::<_, PostId>(
+            "SELECT post_id FROM posts WHERE post_id = $1 AND user_id = $2",
+        )
+        .bind(post_id)
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(_) = owned else {
+            return Ok(None);
+        };
+        let rows = revision_metadata_rows(
+            &self.pool,
+            user_id,
+            Some(post_id),
+            cursor,
+            page_size.fetch_limit(),
+        )
+        .await?;
+        Ok(Some(revision_page(rows, page_size)))
+    }
+
+    #[tracing::instrument(name = "storage.posts.get_current_revision_summary", skip(self))]
+    async fn get_current_revision_summary(
+        &self,
+        user_id: UserId,
+        post_id: PostId,
+        now: UtcInstant,
+    ) -> sqlx::Result<Option<CurrentPostRevisionSummary>> {
+        let row: Option<(
+            PostId,
+            Option<PostTitle>,
+            Slug,
+            PostFormat,
+            UtcInstant,
+            UtcInstant,
+            Option<UtcInstant>,
+            Option<UtcInstant>,
+        )> = sqlx::query_as(
+            "SELECT post_id, title, slug, format, created_at, updated_at, published_at, deleted_at
+             FROM posts WHERE post_id = $1 AND user_id = $2",
+        )
+        .bind(post_id)
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(
+            |(post_id, title, slug, format, created_at, updated_at, published_at, deleted_at)| {
+                CurrentPostRevisionSummary {
+                    post_id,
+                    title,
+                    slug,
+                    format,
+                    created_at,
+                    updated_at,
+                    published_at,
+                    deleted_at,
+                    lifecycle: post_lifecycle(deleted_at, published_at, now),
+                }
+            },
+        ))
+    }
+
+    #[tracing::instrument(name = "storage.posts.get_post_revision_detail", skip(self))]
+    async fn get_post_revision_detail(
+        &self,
+        user_id: UserId,
+        post_id: PostId,
+        revision_id: RevisionId,
+    ) -> sqlx::Result<Option<PostRevisionDetail>> {
+        let row = sqlx::query(
+            "SELECT revision_id, post_id, user_id, title, slug, body, format, rendered_html,
+                    summary, created_at, updated_at, published_at, deleted_at, captured_at
+             FROM post_revisions
+             WHERE revision_id = $1 AND post_id = $2 AND user_id = $3",
+        )
+        .bind(revision_id)
+        .bind(post_id)
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .map(RevisionDetailRow::decode)
+        .transpose()?;
+        let Some(RevisionDetailRow {
+            revision_id,
+            post_id,
+            user_id,
+            title,
+            slug,
+            body,
+            format,
+            rendered_html,
+            summary,
+            created_at,
+            updated_at,
+            published_at,
+            deleted_at,
+            captured_at,
+        }) = row
+        else {
+            return Ok(None);
+        };
+
+        let tags: Vec<(Tag, TagLabel)> = sqlx::query_as(
+            "SELECT tag_slug, tag_display FROM post_revision_tags
+             WHERE revision_id = $1 ORDER BY tag_slug",
+        )
+        .bind(revision_id)
+        .fetch_all(&self.pool)
+        .await?;
+        let audiences: Vec<(TargetKind, Option<AudienceId>)> = sqlx::query_as(
+            "SELECT target_kind, audience_id FROM post_revision_audiences
+             WHERE revision_id = $1 ORDER BY target_kind, audience_id",
+        )
+        .bind(revision_id)
+        .fetch_all(&self.pool)
+        .await?;
+        let media: Vec<(
+            common::media::MediaSource,
+            common::media::ContentHash,
+            common::media::Filename,
+            MediaReferenceKind,
+            MediaReferenceForm,
+        )> = sqlx::query_as(
+            "SELECT source, sha256, filename, reference_kind, reference_form
+             FROM post_media
+             WHERE post_id = $1 AND subject_kind = 'revision' AND revision_id = $2
+             ORDER BY source, sha256, filename, reference_kind, reference_form",
+        )
+        .bind(post_id)
+        .bind(revision_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(Some(PostRevisionDetail {
+            revision: PostRevisionRecord {
+                revision_id,
+                post_id,
+                user_id,
+                title,
+                slug,
+                body,
+                format,
+                rendered_html,
+                summary,
+                created_at,
+                updated_at,
+                published_at,
+                deleted_at,
+                captured_at,
+                tags: tags
+                    .into_iter()
+                    .map(|(tag, display)| PostRevisionTag { tag, display })
+                    .collect(),
+                audiences: audiences
+                    .into_iter()
+                    .filter_map(|(kind, audience_id)| audience_target_from_row(kind, audience_id))
+                    .collect(),
+                media: media
+                    .into_iter()
+                    .map(|(_, _, _, _, form)| {
+                        parse_media_url(form.as_ref()).ok_or_else(|| {
+                            sqlx::Error::Decode(Box::new(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "stored revision media reference is not parseable",
+                            )))
+                        })
+                    })
+                    .collect::<sqlx::Result<Vec<_>>>()?,
+            },
+        }))
     }
 
     #[tracing::instrument(
@@ -2774,11 +3129,6 @@ where
             .collect())
     }
 
-    #[tracing::instrument(
-        name = "storage.posts.feed_urls_needing_catchup",
-        skip(self),
-        fields(db.system = DB::DB_SYSTEM)
-    )]
     async fn feed_urls_needing_catchup(&self, now: UtcInstant) -> sqlx::Result<Vec<FeedPath>> {
         // Cached feeds live in the same database, so they are enumerated here
         // and, for each, the newest live post on that surface is compared
@@ -2823,6 +3173,109 @@ where
         }
         Ok(needing)
     }
+}
+/// Derives the stable lifecycle label from a state snapshot and an explicit
+/// clock. Revision callers pass `captured_at`; current-summary callers pass
+/// their request clock.
+fn post_lifecycle(
+    deleted_at: Option<UtcInstant>,
+    published_at: Option<UtcInstant>,
+    now: UtcInstant,
+) -> PostLifecycle {
+    if deleted_at.is_some() {
+        PostLifecycle::Deleted
+    } else if published_at.is_none() {
+        PostLifecycle::Draft
+    } else if published_at.is_some_and(|published_at| published_at > now) {
+        PostLifecycle::Scheduled
+    } else {
+        PostLifecycle::Published
+    }
+}
+
+fn revision_page(
+    mut revisions: Vec<PostRevisionMetadata>,
+    page_size: PageSize,
+) -> PostRevisionPage {
+    let has_more = page_size.has_more(revisions.len());
+    revisions.truncate(page_size.page_len());
+    let next_cursor = has_more
+        .then(|| {
+            revisions.last().map(|revision| PostRevisionCursor {
+                revision_id: revision.revision_id,
+            })
+        })
+        .flatten();
+    PostRevisionPage {
+        revisions,
+        next_cursor,
+    }
+}
+
+async fn revision_metadata_rows<DB>(
+    pool: &Pool<DB>,
+    user_id: UserId,
+    post_id: Option<PostId>,
+    cursor: Option<PostRevisionCursor>,
+    limit: RowLimit,
+) -> sqlx::Result<Vec<PostRevisionMetadata>>
+where
+    DB: Database,
+    for<'c> &'c Pool<DB>: sqlx::Executor<'c, Database = DB>,
+    for<'q> UserId: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> PostId: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> RevisionId: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> RowLimit: sqlx::Encode<'q, DB> + sqlx::Type<DB>,
+    for<'q> DB::Arguments<'q>: sqlx::IntoArguments<'q, DB>,
+    RevisionMetadataRow: DecodeRawRow<DB>,
+{
+    let sql = if post_id.is_some() {
+        "SELECT r.revision_id, r.post_id, r.title, r.slug, r.captured_at,
+                r.deleted_at, r.published_at, p.deleted_at AS current_deleted_at
+         FROM post_revisions r
+         JOIN posts p ON p.post_id = r.post_id
+         WHERE r.user_id = $1 AND r.post_id = $2 AND r.revision_id < $3
+         ORDER BY r.revision_id DESC LIMIT $4"
+    } else {
+        "SELECT r.revision_id, r.post_id, r.title, r.slug, r.captured_at,
+                r.deleted_at, r.published_at, p.deleted_at AS current_deleted_at
+         FROM post_revisions r
+         JOIN posts p ON p.post_id = r.post_id
+         WHERE r.user_id = $1 AND r.revision_id < $2
+         ORDER BY r.revision_id DESC LIMIT $3"
+    };
+    let after = cursor.map_or(RevisionId::from(i64::MAX), |cursor| cursor.revision_id);
+    let rows = if let Some(post_id) = post_id {
+        sqlx::query(sql)
+            .bind(user_id)
+            .bind(post_id)
+            .bind(after)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+    } else {
+        sqlx::query(sql)
+            .bind(user_id)
+            .bind(after)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?
+    };
+    Ok(rows
+        .into_iter()
+        .map(RevisionMetadataRow::decode)
+        .collect::<sqlx::Result<Vec<_>>>()?
+        .into_iter()
+        .map(|row| PostRevisionMetadata {
+            revision_id: row.revision_id,
+            post_id: row.post_id,
+            title: row.title,
+            slug: row.slug,
+            captured_at: row.captured_at,
+            snapshot_lifecycle: post_lifecycle(row.deleted_at, row.published_at, row.captured_at),
+            current_deleted: row.current_deleted_at.is_some(),
+        })
+        .collect())
 }
 
 /// The viewer-resolution binds folded into a read query's `WHERE`, in the exact

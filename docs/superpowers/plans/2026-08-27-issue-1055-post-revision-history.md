@@ -88,7 +88,7 @@ AtomPub delete response or per-user Media Record materialization.
     nondisclosure, proven-foreign evidence, concurrent revision insertion, and
     explicit force.
 
-- [ ] **4. Add owner-only history storage and web surfaces.**
+- [x] **4. Add owner-only history storage and web surfaces.**
   - Add owner-bound global/per-Post list and exact detail storage reads,
     including Deleted Posts, with newest revision-ID cursor semantics and
     mismatched Post/revision rejection.

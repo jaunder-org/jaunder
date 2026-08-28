@@ -3,6 +3,7 @@
 mod audiences;
 mod create;
 mod fixtures;
+mod history;
 mod listing;
 mod read;
 mod update;

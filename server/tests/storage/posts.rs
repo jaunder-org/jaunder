@@ -4,7 +4,8 @@ use common::post_title::PostTitle;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::test_support::{
-    parse_audience_name, parse_post_body, parse_post_title, parse_row_limit, parse_slug,
+    parse_audience_name, parse_page_size, parse_post_body, parse_post_title, parse_row_limit,
+    parse_slug,
 };
 use common::time::UtcInstant;
 use common::visibility::{AudienceTarget, ViewerIdentity};
@@ -12,8 +13,8 @@ use rstest::*;
 use rstest_reuse::*;
 use storage::test_support::{Backend, SeedRawPost, SeedUser, TestEnv, UpdateRawPost, backends};
 use storage::{
-    CreatePostError, PostBookkeepingExpectation, PostFormat, PostUpdate, PublishUpdate,
-    RenderedPostContent, UpdatePostError, create_rendered_post, perform_post_update,
+    CreatePostError, PostBookkeepingExpectation, PostFormat, PostLifecycle, PostUpdate,
+    PublishUpdate, RenderedPostContent, UpdatePostError, create_rendered_post, perform_post_update,
 };
 
 use super::fixtures::{anon_by_tag, open_pool};
@@ -613,6 +614,195 @@ async fn post_revisions_created(#[case] backend: Backend) {
     assert_eq!(result.title.as_deref(), Some("Updated"));
     assert_eq!(result.body, "Updated content");
     assert!(result.published_at.is_some());
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn owner_revision_history_is_keyset_ordered_and_scoped(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let owner = SeedUser::new().seed(state).await.user_id;
+    let stranger = SeedUser::new().seed(state).await.user_id;
+    let first = SeedRawPost::new(owner).draft().seed(state).await.post_id;
+    let second = SeedRawPost::new(owner).draft().seed(state).await.post_id;
+    let foreign = SeedRawPost::new(stranger).draft().seed(state).await.post_id;
+
+    for (post_id, user_id, slug) in [
+        (first, owner, "history-first"),
+        (second, owner, "history-second"),
+        (foreign, stranger, "history-foreign"),
+    ] {
+        state
+            .posts
+            .update_post(
+                post_id,
+                user_id,
+                &UpdateRawPost::new(slug).unpublish().build(),
+            )
+            .await
+            .unwrap();
+    }
+    state
+        .posts
+        .update_post(
+            first,
+            owner,
+            &UpdateRawPost::new("history-first-again")
+                .unpublish()
+                .build(),
+        )
+        .await
+        .unwrap();
+
+    let first_page = state
+        .posts
+        .list_owned_revision_history(owner, None, parse_page_size("2"))
+        .await
+        .unwrap();
+    assert_eq!(first_page.revisions.len(), 2);
+    assert!(
+        first_page
+            .revisions
+            .iter()
+            .all(|revision| revision.post_id != foreign)
+    );
+    assert!(first_page.revisions[0].revision_id > first_page.revisions[1].revision_id);
+
+    let second_page = state
+        .posts
+        .list_owned_revision_history(owner, first_page.next_cursor, parse_page_size("2"))
+        .await
+        .unwrap();
+    let ids = first_page
+        .revisions
+        .iter()
+        .chain(&second_page.revisions)
+        .map(|revision| revision.revision_id)
+        .collect::<Vec<_>>();
+    assert_eq!(ids.len(), 3);
+    assert!(ids.windows(2).all(|ids| ids[0] > ids[1]));
+    assert_eq!(
+        ids.iter().collect::<std::collections::BTreeSet<_>>().len(),
+        ids.len()
+    );
+
+    let post_page = state
+        .posts
+        .list_post_revision_history(owner, first, None, parse_page_size("10"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(post_page.revisions.len(), 2);
+    assert!(
+        post_page
+            .revisions
+            .iter()
+            .all(|revision| revision.post_id == first)
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn revision_history_keeps_deleted_owner_post_and_hides_foreign_details(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let owner = SeedUser::new().seed(state).await.user_id;
+    let stranger = SeedUser::new().seed(state).await.user_id;
+    let post_id = SeedRawPost::new(owner).draft().seed(state).await.post_id;
+
+    state
+        .posts
+        .update_post(
+            post_id,
+            owner,
+            &UpdateRawPost::new("captured-state").unpublish().build(),
+        )
+        .await
+        .unwrap();
+    state.posts.soft_delete_post(post_id, owner).await.unwrap();
+
+    let page = state
+        .posts
+        .list_post_revision_history(owner, post_id, None, parse_page_size("10"))
+        .await
+        .unwrap()
+        .unwrap();
+    let revision = page.revisions.first().unwrap();
+    assert!(revision.current_deleted);
+    assert_eq!(revision.snapshot_lifecycle, PostLifecycle::Draft);
+
+    let detail = state
+        .posts
+        .get_post_revision_detail(owner, post_id, revision.revision_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(detail.revision.post_id, post_id);
+    assert_eq!(detail.revision.user_id, owner);
+    assert!(detail.revision.tags.is_empty());
+    assert_eq!(detail.revision.audiences, vec![AudienceTarget::Public]);
+    assert!(detail.revision.media.is_empty());
+
+    assert!(
+        state
+            .posts
+            .list_post_revision_history(stranger, post_id, None, parse_page_size("10"))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        state
+            .posts
+            .get_post_revision_detail(stranger, post_id, revision.revision_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        state
+            .posts
+            .get_post_revision_detail(owner, PostId::from(999_999), revision.revision_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn current_revision_summary_derives_lifecycle_from_request_clock(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let owner = SeedUser::new().seed(state).await.user_id;
+    let now = UtcInstant::now();
+    let scheduled_at = UtcInstant::from(now.value() + chrono::Duration::hours(1));
+    let post_id = SeedRawPost::new(owner)
+        .published_at(scheduled_at)
+        .seed(state)
+        .await
+        .post_id;
+
+    let before = state
+        .posts
+        .get_current_revision_summary(owner, post_id, now)
+        .await
+        .unwrap()
+        .unwrap();
+    let after = state
+        .posts
+        .get_current_revision_summary(
+            owner,
+            post_id,
+            UtcInstant::from(scheduled_at.value() + chrono::Duration::seconds(1)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(before.lifecycle, PostLifecycle::Scheduled);
+    assert_eq!(after.lifecycle, PostLifecycle::Published);
 }
 
 // =============================================================================

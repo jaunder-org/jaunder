@@ -16,7 +16,7 @@ pub trait TraceField {
 }
 
 use crate::backup::{BackupMode, BackupSchedule, DestinationPath, RetentionCount};
-use crate::ids::{AudienceId, PostId, SubscriptionId};
+use crate::ids::{AudienceId, PostId, RevisionId, SubscriptionId};
 use crate::invite::InviteTtlHours;
 use crate::media::{ContentHash, MediaSource};
 use crate::pagination::{PageOffset, PageSize};
@@ -83,6 +83,7 @@ macro_rules! impl_borrowed_trace_field {
 
 impl_borrowed_trace_field!(
     PostId,
+    RevisionId,
     AudienceId,
     SubscriptionId,
     ContentHash,
