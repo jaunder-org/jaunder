@@ -18,7 +18,6 @@ use crate::html::Markup;
 use crate::taglist::TagCtx;
 use crate::timeline::render::render_load_more;
 use crate::{avatar, taglist, topbar};
-#[cfg(any(feature = "server", feature = "csr"))]
 use common::ids::PostId;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
@@ -41,9 +40,8 @@ pub(crate) fn format_post_time(ts: UtcInstant) -> String {
 ///
 /// The literal route shape begins at the site root and `PostId`'s display form
 /// is a path-safe integer, so validation cannot fail.
-#[cfg(any(feature = "server", feature = "csr"))]
 #[must_use]
-pub(crate) fn edit_post_url(post_id: PostId) -> RootRelativeUrl {
+pub fn edit_post_url(post_id: PostId) -> RootRelativeUrl {
     let Ok(url) = RootRelativeUrl::try_from(format!("/posts/{post_id}/edit")) else {
         unreachable!("post edit route is root-relative by construction");
     };
@@ -340,7 +338,6 @@ mod tests {
         assert_eq!(format_post_time(ts), "2026-04-23 10:30");
     }
 
-    #[cfg(any(feature = "server", feature = "csr"))]
     #[test]
     fn edit_post_url_composes_known_route() {
         let edit_url = edit_post_url(PostId::from(7));

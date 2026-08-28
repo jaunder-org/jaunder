@@ -59,6 +59,10 @@ pub use edit_state::{
     loaded_publication,
 };
 
+// The typed edit-route constructor is pure and host-tested in `render`, but
+// public here so server and wasm consumers share one stable vertical seam.
+pub use render::edit_post_url;
+
 // The API surface — re-exported so external call sites and the server-fn
 // registrar keep the stable `crate::posts::…` paths despite living in `api.rs`.
 pub use api::{

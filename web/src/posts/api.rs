@@ -121,7 +121,7 @@ fn unpublished_post_from_record(post: PostRecord) -> UnpublishedPost {
         },
         title: post.title,
         summary_label,
-        edit_url: super::render::edit_post_url(post.post_id),
+        edit_url: crate::posts::edit_post_url(post.post_id),
     }
 }
 
@@ -752,8 +752,6 @@ pub async fn unpublish(post_id: PostId) -> WebResult<SavedPost> {
 mod tests {
     use common::slug::Slug;
     use common::test_support::{parse_post_body, parse_username};
-    #[cfg(feature = "server")]
-    use common::time::UtcInstant;
     use storage::candidate_slug;
 
     // A wire DTO's `rendered_html` survives a serde round-trip: `Serialize` writes
@@ -917,9 +915,9 @@ mod tests {
                 body: parse_post_body("Titleless note"),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>Titleless note</p>"),
-                created_at: UtcInstant::from(base_time),
-                updated_at: UtcInstant::from(base_time),
-                published_at: Some(UtcInstant::from(base_time)),
+                created_at: common::time::UtcInstant::from(base_time),
+                updated_at: common::time::UtcInstant::from(base_time),
+                published_at: Some(common::time::UtcInstant::from(base_time)),
                 deleted_at: None,
                 summary: None,
                 tags: vec![],
@@ -961,8 +959,8 @@ mod tests {
                 body: parse_post_body("body"),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
-                created_at: UtcInstant::from(base_time),
-                updated_at: UtcInstant::from(base_time),
+                created_at: common::time::UtcInstant::from(base_time),
+                updated_at: common::time::UtcInstant::from(base_time),
                 published_at: None,
                 deleted_at: None,
                 summary: None,
@@ -984,9 +982,9 @@ mod tests {
                 body: parse_post_body("body"),
                 format: PostFormat::Markdown,
                 rendered_html: RenderedHtml::from_trusted("<p>body</p>"),
-                created_at: UtcInstant::from(base_time),
-                updated_at: UtcInstant::from(base_time),
-                published_at: Some(UtcInstant::from(base_time)),
+                created_at: common::time::UtcInstant::from(base_time),
+                updated_at: common::time::UtcInstant::from(base_time),
+                published_at: Some(common::time::UtcInstant::from(base_time)),
                 deleted_at: None,
                 summary: None,
                 tags: vec![],

@@ -320,7 +320,7 @@ pub fn PostCard<'a>(
     // Unpublish (#23): an Unpublish column would be a no-op on an already-
     // unpublished post.
     let is_draft = post.is_draft();
-    let edit_url = crate::posts::render::edit_post_url(post_id);
+    let edit_url = crate::posts::edit_post_url(post_id);
     let delete_action = ServerAction::<Delete>::new();
     let unpublish_action = ServerAction::<Unpublish>::new();
     let publish_action = ServerAction::<Publish>::new();
