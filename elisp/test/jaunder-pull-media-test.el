@@ -81,18 +81,26 @@
                                                   jaunder-pull-media-test--hash)) out))
     (should (string-match-p (regexp-quote (format "`[no](%s)`" url)) out))))
 
-(ert-deftest jaunder-pull-media-markdown-ast-keeps-literals-and-used-references ()
+(ert-deftest jaunder-pull-media-markdown-ast-keeps-literal-contexts ()
   (let* ((url (jaunder-pull-media-test--url "safe.png"))
-         (body (format "[outer [label]](%s \"title\") [use][r]\n[r]: <%s> 'title'\n[unused]: %s\n~~~~\n[x](%s)\n~~~~\n``[code](%s)``"
-                       url url url url url))
+         (body
+          (format
+           "[outer [label]](%s \"title\")\n~~~~\n[x](%s)\n~~~~\n``[code](%s)``"
+           url url url))
          (out (jaunder-pull-media-test--rewrite "markdown" body)))
-    (should (string-match-p (regexp-quote (format "[outer [label]](local-media/%s/safe.png \"title\")"
-                                                  jaunder-pull-media-test--hash)) out))
-    (should (string-match-p (regexp-quote (format "[r]: <local-media/%s/safe.png> 'title'"
-                                                  jaunder-pull-media-test--hash)) out))
-    (should (string-match-p (regexp-quote (format "[unused]: %s" url)) out))
-    (should (string-match-p (regexp-quote (format "[x](%s)" url)) out))
-    (should (string-match-p (regexp-quote (format "``[code](%s)``" url)) out))))
+    (should
+     (string-match-p
+      (regexp-quote
+       (format
+        "[outer [label]](local-media/%s/safe.png \"title\")"
+        jaunder-pull-media-test--hash))
+      out))
+    (should
+     (string-match-p (regexp-quote (format "[x](%s)" url)) out))
+    (should
+     (string-match-p
+      (regexp-quote (format "``[code](%s)``" url))
+      out))))
 
 (ert-deftest jaunder-pull-media-org-rewrites-bracket-plain-and-angle-links ()
   (let* ((url (jaunder-pull-media-test--url "safe.png"))
@@ -113,7 +121,7 @@
           (format "local-media/%s/safe.png"
                   jaunder-pull-media-test--hash))
          (reference
-          (format "[use][asset\\]]\n[asset\\]]: <%s>" url))
+          (format "[use][asset\\]]\n\n[asset\\]]: <%s>" url))
          (contexts
           (format
            (concat
@@ -128,7 +136,7 @@
     (should
      (equal
       (jaunder-pull-media-test--rewrite "markdown" reference)
-      (format "[use][asset\\]]\n[asset\\]]: <%s>" target)))
+      (format "[use][asset\\]]\n\n[asset\\]]: <%s>" target)))
     (should
      (string-match-p
       (regexp-quote (format "[label ``]`` kept](<%s>)" target))
@@ -266,8 +274,8 @@
             "> ```\n> [ten](%s)\n> ```\n[eleven](%s)\n"
             "inline <pre>[twelve](%s)</pre> <span>[thirteen](%s)</span>\n"
             "<!-- [fourteen](%s) -->\n`[fifteen](%s)`\n"
-            "[used][asset] [plain] < %s > <%s>\n"
-            "[asset]: <%s>\n[other]: <%s>\n[bad](%s")
+            "[used](%s) [plain] < %s > <%s>\n"
+            "[other](%s)\n[bad](%s")
            url url url url url url url url url url url url url url url url url
            url url url))
          (out (jaunder-pull-media-test--rewrite "markdown" body)))
@@ -275,15 +283,83 @@
                            "fourteen" "fifteen"))
       (should (string-match-p
                (regexp-quote (format "[%s](%s)" literal url)) out)))
-    (dolist (rewritten (list "two" "four" "six" "seven" "nine" "eleven"
-                             "twelve" "thirteen"))
-      (should (string-match-p
-               (regexp-quote (format "[%s](%s)" rewritten target)) out)))
-    (should (string-match-p (regexp-quote (format "[asset]: <%s>" target))
-                            out))
-    (should (string-match-p (regexp-quote (format "[other]: <%s>" url)) out))
-    (should (string-match-p (regexp-quote (format "<%s>" target)) out))
+    (dolist
+        (rewritten
+         (list "two" "four" "six" "seven" "nine" "eleven"
+               "twelve" "thirteen" "used" "other"))
+      (should
+       (string-match-p
+        (regexp-quote (format "[%s](%s)" rewritten target))
+        out)))
+    (should
+     (string-match-p (regexp-quote (format "<%s>" target)) out))
     (should (string-suffix-p (format "[bad](%s" url) out))))
+
+(ert-deftest jaunder-pull-media-markdown-cmark-reference-source-selection ()
+  (let* ((first (jaunder-pull-media-test--url "first.png"))
+         (second (jaunder-pull-media-test--url "second.png"))
+         (target (format "local-media/%s/first.png"
+                         jaunder-pull-media-test--hash))
+         (body
+          (format
+           (concat
+            "[use][asset]\n\n"
+            "[asset]:\n  <%s>\n"
+            "[asset]: <%s>\n"
+            "[other](%s)")
+           first second first))
+         (out (jaunder-pull-media-test--rewrite "markdown" body)))
+    (should
+     (string-match-p
+      (regexp-quote (format "[asset]:\n  <%s>" target))
+      out))
+    (should
+     (string-match-p
+      (regexp-quote (format "[asset]: <%s>" second))
+      out))
+    (should
+     (string-match-p
+      (regexp-quote (format "[other](%s)" target))
+      out))))
+
+(ert-deftest jaunder-pull-media-markdown-cmark-container-reference ()
+  (let* ((url (jaunder-pull-media-test--url "safe.png"))
+         (target
+          (format "local-media/%s/safe.png"
+                  jaunder-pull-media-test--hash))
+         (body
+          (format
+           "> [quoted][quote]\n>\n> [quote]: <%s>\n"
+           url)))
+    (should
+     (equal
+      (jaunder-pull-media-test--rewrite "markdown" body)
+      (format
+       "> [quoted][quote]\n>\n> [quote]: <%s>\n"
+       target)))))
+
+(ert-deftest jaunder-pull-media-markdown-cmark-spnl-and-quoted-html ()
+  (let* ((url (jaunder-pull-media-test--url "safe.png"))
+         (target (format "local-media/%s/safe.png"
+                         jaunder-pull-media-test--hash))
+         (body (format "[x](\n <%s>\n \"title\") <span data-x=\"> [fake](%s)\"> [real](%s)"
+                       url url url))
+         (out (jaunder-pull-media-test--rewrite "markdown" body)))
+    (should (string-match-p (regexp-quote target) out))
+    (should (string-match-p (regexp-quote (format "[fake](%s)" url)) out))
+    (should (string-match-p (regexp-quote (format "[real](%s)" target)) out))))
+
+(ert-deftest jaunder-pull-media-markdown-cmark-exclusions-remain-isolated ()
+  (let* ((url (jaunder-pull-media-test--url "safe.png"))
+         (target (format "local-media/%s/safe.png"
+                         jaunder-pull-media-test--hash))
+         (body (concat (mapconcat (lambda (_) (format "```\n[x](%s)\n```\n" url))
+                                  (number-sequence 1 40) "")
+                       (format "[real](%s)" url))))
+    (should (equal (jaunder-pull-media-test--rewrite "markdown" body)
+                   (jaunder-pull-media-test--rewrite "markdown" body)))
+    (should (string-suffix-p (format "[real](%s)" target)
+                             (jaunder-pull-media-test--rewrite "markdown" body)))))
 
 (ert-deftest jaunder-pull-media-canonical-identifiers-are-case-sensitive ()
   (let* ((upper (upcase jaunder-pull-media-test--hash))

@@ -170,10 +170,16 @@ TABLE maps canonical URLs without fragments to mutable reference accumulators."
             cursor (1- cursor)))
     (= 1 (% slashes 2))))
 
-(defun jaunder--pull-media-markdown-label (body start end)
-  "Return BODY's normalized reference label between START and END."
-  (downcase (replace-regexp-in-string "[ \t\n\r]+" " "
-                                      (substring body start end))))
+(defun jaunder--pull-media-markdown-reference (parser body start end)
+  "Return cmark's normalized label and selected destination for BODY's label.
+
+The public AST deliberately discards reference-definition identity.  This is
+the one narrow cmark-el compatibility seam retained to map that parser-owned
+choice back to immutable source bytes."
+  (let* ((label (substring body start end))
+         (normalized (cmark--normalizeReference label))
+         (link (gethash normalized (cmark-Parser-refmap parser))))
+    (list normalized (and link (cmark--link-destination link)))))
 
 (defun jaunder--pull-media-markdown-run-end (body position character limit)
   "Return the first index after CHARACTER's run at POSITION before LIMIT."
@@ -225,11 +231,25 @@ TABLE maps canonical URLs without fragments to mutable reference accumulators."
           (setq cursor (1+ cursor))))))
     end))
 
+(defun jaunder--pull-media-markdown-spnl (body position limit)
+  "Consume cmark's spaces/tabs and at most one line ending from POSITION."
+  (while (and (< position limit) (memq (aref body position) '(?\s ?\t)))
+    (setq position (1+ position)))
+  (when (and (< position limit) (memq (aref body position) '(?\n ?\r)))
+    (setq position
+          (if (and (= (aref body position) ?\r)
+                   (< (1+ position) limit)
+                   (= (aref body (1+ position)) ?\n))
+              (+ position 2)
+            (1+ position)))
+    (while (and (< position limit) (memq (aref body position) '(?\s ?\t)))
+      (setq position (1+ position))))
+  position)
+
 (defun jaunder--pull-media-markdown-destination (body position closing limit)
   "Return (START END AFTER) for a complete Markdown destination before LIMIT.
 CLOSING is the required closing delimiter.  Return nil for malformed text."
-  (while (and (< position limit) (memq (aref body position) '(?\s ?\t)))
-    (setq position (1+ position)))
+  (setq position (jaunder--pull-media-markdown-spnl body position limit))
   (let ((start position)
         end)
     (if (and (< position limit) (= (aref body position) ?<))
@@ -262,8 +282,7 @@ CLOSING is the required closing delimiter.  Return nil for malformed text."
         (when (and (= depth 0) (> position start))
           (setq end position))))
     (when end
-      (while (and (< position limit) (memq (aref body position) '(?\s ?\t)))
-        (setq position (1+ position)))
+      (setq position (jaunder--pull-media-markdown-spnl body position limit))
       (let ((title-valid t))
         (when (and (< position limit)
                    (memq (aref body position) '(?\" ?' ?\()))
@@ -283,9 +302,13 @@ CLOSING is the required closing delimiter.  Return nil for malformed text."
                 (setq position (1+ position)))))
             (unless title-end
               (setq title-valid nil))))
-        (while (and title-valid (< position limit)
-                    (memq (aref body position) '(?\s ?\t)))
-          (setq position (1+ position)))
+        (if (= closing ?\n)
+            (while (and (< position limit)
+                        (memq (aref body position) '(?\s ?\t)))
+              (setq position (1+ position)))
+          (setq position
+                (jaunder--pull-media-markdown-spnl
+                 body position limit)))
         (when (and title-valid
                    (or (and (= position limit) (= closing ?\n))
                        (and (< position limit) (= (aref body position) closing))))
@@ -307,18 +330,45 @@ CLOSING is the required closing delimiter.  Return nil for malformed text."
          (column (cdr point)))
     (+ (aref starts (1- line)) (1- column))))
 
+(defun jaunder--pull-media-markdown-merge-ranges (ranges)
+  "Return sorted, coalesced half-open RANGES."
+  (let (merged)
+    (dolist (range (sort (copy-sequence ranges)
+                         (lambda (a b) (< (car a) (car b)))))
+      (if (and merged (<= (car range) (cadr (car merged))))
+          (setcar merged (list (caar merged)
+                               (max (cadr range) (cadr (car merged)))))
+        (push range merged)))
+    (nreverse merged)))
+
+(defun jaunder--pull-media-markdown-subtract-ranges (ranges excluded)
+  "Return RANGES with sorted, merged EXCLUDED ranges removed."
+  (let (result)
+    (dolist (range ranges)
+      (let ((position (car range)))
+        (dolist (blocked excluded)
+          (when (and (< position (cadr range)) (< (car blocked) (cadr range)))
+            (when (< position (car blocked))
+              (push (list position (min (car blocked) (cadr range))) result))
+            (setq position (max position (cadr blocked)))))
+        (when (< position (cadr range))
+          (push (list position (cadr range)) result))))
+    (nreverse result)))
+
 (defun jaunder--pull-media-markdown-ast (body)
-  "Return CommonMark destinations, eligible source ranges, and excluded ranges.
-The parser owns block and inline semantics; this adapter retains only source
-coordinates needed to replace destination bytes exactly."
-  (let ((destinations (make-hash-table :test #'equal))
-        eligible
-        excluded
-        (starts (jaunder--pull-media-markdown-line-starts body))
-        ;; cmark-el mutates parser input; isolate it from the immutable source
-        ;; body and from later pulls in the same Emacs process.
-        (walker (cmark-Node-walker (cmark-parse (copy-sequence body))))
-        event)
+  "Return cmark destinations, parser, eligible ranges, and excluded ranges.
+
+The parser instance retains the refmap that its public AST intentionally loses;
+only `jaunder--pull-media-markdown-reference' touches that compatibility seam."
+  (let* ((destinations (make-hash-table :test #'equal))
+         (eligible nil)
+         (excluded nil)
+         (starts (jaunder--pull-media-markdown-line-starts body))
+         ;; cmark-el mutates parser input; preserve repeat-parse isolation.
+         (parser (cmark-create-Parser))
+         (walker (cmark-Node-walker
+                  (cmark-Parser-parse parser (copy-sequence body))))
+         event)
     (while (setq event (cmark-NodeWalker-next walker))
       (when (cmark-event-entering event)
         (let* ((node (cmark-event-node event))
@@ -327,38 +377,24 @@ coordinates needed to replace destination bytes exactly."
            ((member type '("link" "image"))
             (puthash (cmark-Node-destination node) t destinations))
            ((member type '("paragraph" "heading" "code_block" "html_block"))
-            (let ((sourcepos (cmark-Node-sourcepos node)))
-              (when sourcepos
-                (let* ((raw-start
-                        (jaunder--pull-media-markdown-sourcepos-offset
-                         sourcepos starts nil))
-                       (raw-end
-                        (1+
-                         (jaunder--pull-media-markdown-sourcepos-offset
-                          sourcepos starts t)))
-                       (start (max 0 (min (length body) raw-start)))
-                       (range
-                        (list start
-                              (max start
-                                   (min (length body) raw-end)))))
-                  (if (member type '("paragraph" "heading"))
-                      (push range eligible)
-                    (push range excluded)))))))))
-      )
-    (list destinations (nreverse eligible) (nreverse excluded))))
-
-(defun jaunder--pull-media-markdown-range-contains-p (ranges position)
-  "Return non-nil when POSITION lies in one of RANGES."
-  (seq-some (lambda (range)
-              (and (<= (car range) position) (< position (cadr range))))
-            ranges))
-
-(defun jaunder--pull-media-markdown-range-at (ranges position)
-  "Return the RANGE containing POSITION, or nil."
-  (seq-find (lambda (range)
-              (and (<= (car range) position)
-                   (< position (cadr range))))
-            ranges))
+            (when-let ((sourcepos (cmark-Node-sourcepos node)))
+              (let* ((raw-start
+                      (jaunder--pull-media-markdown-sourcepos-offset
+                       sourcepos starts nil))
+                     (raw-end (1+
+                               (jaunder--pull-media-markdown-sourcepos-offset
+                                sourcepos starts t)))
+                     (start (max 0 (min (length body) raw-start)))
+                     (range (list start (max start
+                                             (min (length body) raw-end)))))
+                (if (member type '("paragraph" "heading"))
+                    (push range eligible)
+                  (push range excluded)))))))))
+    (setq excluded (jaunder--pull-media-markdown-merge-ranges excluded))
+    (list destinations parser
+          (jaunder--pull-media-markdown-subtract-ranges
+           (nreverse eligible) excluded)
+          excluded)))
 
 (defun jaunder--pull-media-markdown-add-candidate
     (table format origin body start end destinations)
@@ -367,43 +403,43 @@ coordinates needed to replace destination bytes exactly."
     (jaunder--pull-media-add-candidate table format origin body start end)))
 
 (defun jaunder--pull-media-markdown-inline-html-end (body position limit)
-  "Return the end of cmark-style inline HTML syntax at POSITION, or nil.
-This source-span adapter skips an already semantic HTML token; it does not
-classify Markdown blocks or decide whether surrounding text is a paragraph."
+  "Return the opaque inline HTML token end at POSITION, or nil.
+
+Quoted attribute values may contain `>'; only an unquoted delimiter ends a tag."
   (cond
    ((and (<= (+ position 4) limit)
          (equal (substring body position (+ position 4)) "<!--"))
     (let ((end (string-search "-->" body (+ position 4))))
       (if end (+ end 3) limit)))
-   ((and (<= (+ position 2) limit)
-         (member (substring body position (+ position 2)) '("<?" "<!")))
-    (let ((end (cl-position ?> body :start (+ position 2) :end limit)))
-      (if end (1+ end) limit)))
    ((and (< (1+ position) limit)
-         (or (and (= (aref body (1+ position)) ?/)
+         (or (member (substring body position (+ position 2)) '("<?" "<!"))
+             (memq (get-char-code-property (aref body (1+ position))
+                                           'general-category)
+                   '(Lu Ll))
+             (and (= (aref body (1+ position)) ?/)
                   (< (+ position 2) limit)
-                  (memq (get-char-code-property
-                         (aref body (+ position 2)) 'general-category)
-                        '(Lu Ll)))
-             (memq (get-char-code-property
-                    (aref body (1+ position)) 'general-category)
-                   '(Lu Ll))))
-    (let ((end (cl-position ?> body :start (+ position 1) :end limit)))
-      (if end (1+ end) limit)))))
+                  (memq (get-char-code-property (aref body (+ position 2))
+                                                'general-category)
+                        '(Lu Ll)))))
+    (let ((cursor (1+ position))
+          quote)
+      (while (and (< cursor limit)
+                  (or quote (/= (aref body cursor) ?>)))
+        (let ((character (aref body cursor)))
+          (cond
+           ((and quote (= character quote)) (setq quote nil))
+           ((and (not quote) (memq character '(?\" ?'))) (setq quote character))))
+        (setq cursor (1+ cursor)))
+      (if (< cursor limit) (1+ cursor) limit)))))
 
 (defun jaunder--pull-media-markdown-inline-candidates
-    (table format origin body range destinations excluded)
-  "Collect cmark-authorized inline destinations and labels in RANGE."
+    (table format origin body range destinations parser)
+  "Collect cmark-authorized inline destinations and reference labels in RANGE."
   (let ((position (car range))
         (limit (cadr range))
         uses)
     (while (< position limit)
       (cond
-       ((jaunder--pull-media-markdown-range-at excluded position)
-        (setq position
-              (cadr
-               (jaunder--pull-media-markdown-range-at
-                excluded position))))
        ((= (aref body position) ?`)
         (let* ((end (jaunder--pull-media-markdown-run-end
                      body position ?` limit))
@@ -411,20 +447,23 @@ classify Markdown blocks or decide whether surrounding text is a paragraph."
                        body end (- end position) limit)))
           (setq position (or close end))))
        ((and (= (aref body position) ?<)
-             (jaunder--pull-media-markdown-inline-html-end body position limit))
-        (setq position
-              (jaunder--pull-media-markdown-inline-html-end body position limit)))
-       ((and (= (aref body position) ?<)
              (not (jaunder--pull-media-markdown-escaped-p body position)))
-        (let ((end (cl-position ?> body :start (1+ position) :end limit)))
-          (if (and end
-                   (not (string-match-p
-                         "[ \t\r\n]" (substring body (1+ position) end))))
-              (progn
-                (jaunder--pull-media-markdown-add-candidate
-                 table format origin body (1+ position) end destinations)
-                (setq position (1+ end)))
-            (setq position (1+ position)))))
+        (let ((end (cl-position ?> body :start (1+ position) :end limit))
+              (html-end
+               (jaunder--pull-media-markdown-inline-html-end
+                body position limit)))
+          (cond
+           ((and end
+                 (not (string-match-p
+                       "[ \t\r\n]" (substring body (1+ position) end)))
+                 (gethash (substring body (1+ position) end) destinations))
+            (jaunder--pull-media-markdown-add-candidate
+             table format origin body (1+ position) end destinations)
+            (setq position (1+ end)))
+           (html-end
+            (setq position html-end))
+           (t
+            (setq position (1+ position))))))
        ((and (= (aref body position) ?\[)
              (not (jaunder--pull-media-markdown-escaped-p body position)))
         (let ((label-end
@@ -450,17 +489,19 @@ classify Markdown blocks or decide whether surrounding text is a paragraph."
                         body (1+ cursor) limit)))
                   (if reference-end
                       (progn
-                        (push (jaunder--pull-media-markdown-label
-                               body (if (= reference-end (1+ cursor))
-                                        (1+ position)
-                                      (1+ cursor))
-                               reference-end)
+                        (push (car
+                               (jaunder--pull-media-markdown-reference
+                                parser body
+                                (if (= reference-end (1+ cursor))
+                                    position
+                                  cursor)
+                                (1+ reference-end)))
                               uses)
                         (setq position (1+ reference-end)))
                     (setq position cursor))))
                (t
-                (push (jaunder--pull-media-markdown-label
-                       body (1+ position) label-end)
+                (push (car (jaunder--pull-media-markdown-reference
+                            parser body position (1+ label-end)))
                       uses)
                 (setq position cursor))))))
         )
@@ -468,74 +509,117 @@ classify Markdown blocks or decide whether surrounding text is a paragraph."
         (setq position (1+ position)))))
     uses))
 
-(defun jaunder--pull-media-markdown-definitions (body excluded)
-  "Return source-preserving candidate reference definitions outside EXCLUDED."
+(defun jaunder--pull-media-markdown-definitions (parser body excluded)
+  "Return source-order definition spans outside sorted EXCLUDED ranges."
   (let ((position 0)
         (limit (length body))
+        (blocked excluded)
         definitions)
     (while (< position limit)
-      (let ((line-end (or (string-search "\n" body position) limit)))
-        (unless (jaunder--pull-media-markdown-range-contains-p excluded position)
-          (let ((cursor position))
-            (while (and (< cursor line-end) (memq (aref body cursor) '(?\s ?\t))
-                        (< (- cursor position) 4))
-              (setq cursor (1+ cursor)))
-            (when (and (< cursor line-end) (= (aref body cursor) ?\[))
+      (while (and blocked
+                  (<= (cadr (car blocked)) position))
+        (setq blocked (cdr blocked)))
+      (let* ((line-end
+              (or (string-search "\n" body position) limit))
+             (next-line
+              (if (= line-end limit) limit (1+ line-end)))
+             (next-line-end
+              (if (= next-line limit)
+                  limit
+                (or (string-search "\n" body next-line) limit)))
+             (next-position next-line))
+        (unless
+            (and blocked
+                 (< (car (car blocked)) line-end)
+                 (< position (cadr (car blocked))))
+          (let ((cursor position)
+                (indent 0)
+                (scanning t))
+            (while (and (< cursor line-end)
+                        (= (aref body cursor) ?\s)
+                        (< indent 4))
+              (setq cursor (1+ cursor)
+                    indent (1+ indent)))
+            (while scanning
+              (cond
+               ((and (< cursor line-end)
+                     (= (aref body cursor) ?>))
+                (setq cursor (1+ cursor))
+                (when (and (< cursor line-end)
+                           (memq (aref body cursor) '(?\s ?\t)))
+                  (setq cursor (1+ cursor))))
+               ((and (< (1+ cursor) line-end)
+                     (memq (aref body cursor) '(?- ?+ ?*))
+                     (memq (aref body (1+ cursor)) '(?\s ?\t)))
+                (setq cursor (+ cursor 2)))
+               (t
+                (setq scanning nil))))
+            (when (and (< cursor line-end)
+                       (= (aref body cursor) ?\[))
               (let ((label-end
                      (jaunder--pull-media-markdown-label-end
                       body (1+ cursor) line-end)))
-                (when (and label-end (< (1+ label-end) line-end)
+                (when (and label-end
+                           (< (1+ label-end) line-end)
                            (= (aref body (1+ label-end)) ?:))
                   (let ((destination
                          (jaunder--pull-media-markdown-destination
-                          body (+ label-end 2) ?\n line-end)))
+                          body (+ label-end 2) ?\n next-line-end)))
                     (when destination
-                      (push
-                       (list
-                        (jaunder--pull-media-markdown-label
-                         body (1+ cursor) label-end)
-                        (car destination)
-                        (cadr destination)
-                        position
-                        (if (= line-end limit)
-                            limit
-                          (1+ line-end)))
-                       definitions))))))))
-        (setq position (if (= line-end limit) limit (1+ line-end)))))
-    definitions))
+                      (let ((reference
+                             (jaunder--pull-media-markdown-reference
+                              parser body cursor (1+ label-end))))
+                        (push
+                         (list
+                          (car reference)
+                          (car destination)
+                          (cadr destination)
+                          position
+                          (max next-line (nth 2 destination))
+                          (cadr reference))
+                         definitions)
+                        (setq next-position
+                              (max next-position
+                                   (nth 2 destination)))))))))))
+        (setq position next-position)))
+    (nreverse definitions)))
 
 (defun jaunder--pull-media-markdown-candidates (table format origin body)
-  "Collect destinations from cmark's CommonMark AST with exact source spans."
-  (pcase-let* ((`(,destinations ,eligible ,excluded)
+  "Map cmark-authorized Markdown destinations back to exact source spans."
+  (pcase-let* ((`(,destinations ,parser ,eligible ,excluded)
                 (jaunder--pull-media-markdown-ast body))
                (definitions
-                (jaunder--pull-media-markdown-definitions
-                 body excluded))
-               (scan-excluded
-                (append
-                 excluded
-                 (mapcar
-                  (lambda (definition)
-                    (list (nth 3 definition) (nth 4 definition)))
-                  definitions)))
+                (jaunder--pull-media-markdown-definitions parser body excluded))
+               (definition-ranges
+                (jaunder--pull-media-markdown-merge-ranges
+                 (mapcar (lambda (definition)
+                           (list (nth 3 definition) (nth 4 definition)))
+                         definitions)))
                (uses
-                (apply
-                 #'append
-                 (mapcar
-                  (lambda (range)
-                    (jaunder--pull-media-markdown-inline-candidates
-                     table format origin body range destinations
-                     scan-excluded))
-                  eligible))))
+                (apply #'append
+                       (mapcar
+                        (lambda (range)
+                          (jaunder--pull-media-markdown-inline-candidates
+                           table format origin body range destinations parser))
+                        (jaunder--pull-media-markdown-subtract-ranges
+                         eligible definition-ranges))))
+               (seen-definitions (make-hash-table :test #'equal)))
     (dolist (definition definitions)
-      (when (and
-             (member (car definition) uses)
-             (gethash
-              (substring body (nth 1 definition) (nth 2 definition))
-              destinations))
-        (jaunder--pull-media-add-candidate
-         table format origin body
-         (nth 1 definition) (nth 2 definition))))))
+      (let ((label (car definition)))
+        (unless (gethash label seen-definitions)
+          (puthash label t seen-definitions)
+          (let ((selected (nth 5 definition)))
+            (when
+                (and
+                 (member label uses)
+                 selected
+                 (equal
+                  selected
+                  (substring
+                   body (nth 1 definition) (nth 2 definition))))
+              (jaunder--pull-media-add-candidate
+               table format origin body
+               (nth 1 definition) (nth 2 definition)))))))))
 
 (defconst jaunder--pull-media-html-raw-text-tags
   '("script" "style" "textarea" "title" "xmp" "iframe"
