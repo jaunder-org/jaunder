@@ -1,4 +1,12 @@
-//! Dependency-structure collectors.
+//! Dependency-structure collectors over tracked source syntax.
+//!
+//! This module groups parsed Rust `use`, TypeScript import/export, and Elisp
+//! require/provide forms into structural dependency candidates. It neither
+//! resolves package graphs nor proves runtime dependency edges, so its evidence
+//! is deliberately limited to source syntax. Parse failures are failed cells and
+//! malformed Elisp remains explicit rather than clean; orchestration owns report
+//! ordering and command lifecycle.
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use oxc_allocator::Allocator;

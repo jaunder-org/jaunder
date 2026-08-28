@@ -1,5 +1,15 @@
 //! Language Server Protocol transport and response decoding.
+//!
+//! This module owns the live analyzer seam used by semantic census collection:
+//! it opens the command snapshot as documents, sends LSP requests, and decodes
+//! only repository-relative evidence. LSP answers are analyzer-provided semantic
+//! evidence, not a claim that every workspace configuration is complete. Missing,
+//! malformed, timed-out, or error responses remain explicit collector failures.
+//! The client owns its child for the entire session: stderr is drained from spawn
+//! without retaining unbounded output, and drop always terminates and reaps the
+//! server while preserving any primary collector failure.
 
+use super::process::{StderrDrain, terminate_and_reap};
 use super::{CollectorContext, Language};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};
@@ -17,40 +27,17 @@ pub(crate) fn analyzer_stdio_args(language: Language) -> &'static [&'static str]
 pub(crate) struct LspClient {
     child: std::process::Child,
     input: std::process::ChildStdin,
-    stderr: std::process::ChildStderr,
+    stderr: StderrDrain,
     responses: Receiver<Result<serde_json::Value, String>>,
     next_id: u64,
 }
 
 impl Drop for LspClient {
     fn drop(&mut self) {
-        match self.child.try_wait() {
-            Ok(Some(_)) => {}
-            Ok(None) => {
-                if let Err(error) = self.child.kill() {
-                    eprintln!("warning: stopping census LSP server failed: {error}");
-                }
-                if let Err(error) = self.child.wait() {
-                    eprintln!("warning: reaping census LSP server failed: {error}");
-                }
-            }
-            Err(error) => {
-                eprintln!("warning: checking census LSP server status failed: {error}");
-                if let Err(error) = self.child.wait() {
-                    eprintln!(
-                        "warning: reaping census LSP server after status failure failed: {error}"
-                    );
-                }
-            }
-        }
-        let mut stderr = String::new();
-        if let Err(error) = self.stderr.read_to_string(&mut stderr) {
-            eprintln!("warning: reading census LSP server stderr during cleanup failed: {error}");
-        } else if !stderr.trim().is_empty() {
-            eprintln!(
-                "warning: census LSP server stderr during cleanup: {}",
-                stderr.trim()
-            );
+        terminate_and_reap(&mut self.child, "LSP server");
+        let diagnostics = self.stderr.finish("LSP server");
+        if !diagnostics.is_empty() {
+            eprintln!("warning: census LSP server diagnostics: {diagnostics}");
         }
     }
 }
@@ -70,18 +57,27 @@ impl LspClient {
         let mut child = command
             .spawn()
             .map_err(|error| format!("starting `{analyzer}` LSP server: {error}"))?;
-        let input = child
-            .stdin
-            .take()
-            .ok_or_else(|| format!("`{analyzer}` did not provide LSP stdin"))?;
-        let output = child
-            .stdout
-            .take()
-            .ok_or_else(|| format!("`{analyzer}` did not provide LSP stdout"))?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| format!("`{analyzer}` did not provide LSP stderr"))?;
+        let input = match child.stdin.take() {
+            Some(input) => input,
+            None => {
+                terminate_and_reap(&mut child, "LSP server");
+                return Err(format!("`{analyzer}` did not provide LSP stdin"));
+            }
+        };
+        let output = match child.stdout.take() {
+            Some(output) => output,
+            None => {
+                terminate_and_reap(&mut child, "LSP server");
+                return Err(format!("`{analyzer}` did not provide LSP stdout"));
+            }
+        };
+        let stderr = match child.stderr.take() {
+            Some(stderr) => stderr,
+            None => {
+                terminate_and_reap(&mut child, "LSP server");
+                return Err(format!("`{analyzer}` did not provide LSP stderr"));
+            }
+        };
         let (sender, responses) = mpsc::sync_channel(16);
         std::thread::spawn(move || {
             let mut output = BufReader::new(output);
@@ -96,7 +92,7 @@ impl LspClient {
         let mut client = Self {
             child,
             input,
-            stderr,
+            stderr: StderrDrain::start(stderr),
             responses,
             next_id: 1,
         };
@@ -144,28 +140,30 @@ impl LspClient {
         self.next_id += 1;
         self.send(
             serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }),
-        )?;
+        )
+        .map_err(|error| self.with_diagnostics(error))?;
         loop {
-            let message = self.read()?;
+            let message = self.read().map_err(|error| self.with_diagnostics(error))?;
             if message.get("method").is_some() && message.get("id").is_some() {
-                self.send(serde_json::json!({ "jsonrpc": "2.0", "id": message["id"].clone(), "result": null }))?;
+                self.send(serde_json::json!({ "jsonrpc": "2.0", "id": message["id"].clone(), "result": null }))
+                    .map_err(|error| self.with_diagnostics(error))?;
                 continue;
             }
             if message.get("id").and_then(serde_json::Value::as_u64) != Some(id) {
                 continue;
             }
             if let Some(error) = message.get("error") {
-                return Err(format!("LSP `{method}` failed: {error}"));
+                return Err(self.with_diagnostics(format!("LSP `{method}` failed: {error}")));
             }
-            return message
-                .get("result")
-                .cloned()
-                .ok_or_else(|| format!("LSP `{method}` response omitted result"));
+            return message.get("result").cloned().ok_or_else(|| {
+                self.with_diagnostics(format!("LSP `{method}` response omitted result"))
+            });
         }
     }
 
     fn notify(&mut self, method: &str, params: serde_json::Value) -> Result<(), String> {
         self.send(serde_json::json!({ "jsonrpc": "2.0", "method": method, "params": params }))
+            .map_err(|error| self.with_diagnostics(error))
     }
 
     fn send(&mut self, message: serde_json::Value) -> Result<(), String> {
@@ -185,6 +183,15 @@ impl LspClient {
         self.responses
             .recv_timeout(Duration::from_secs(30))
             .map_err(|error| format!("waiting for LSP response: {error}"))?
+    }
+
+    fn with_diagnostics(&self, error: String) -> String {
+        let diagnostics = self.stderr.diagnostics();
+        if diagnostics.is_empty() {
+            error
+        } else {
+            format!("{error}; analyzer stderr: {diagnostics}")
+        }
     }
 }
 

@@ -1,9 +1,10 @@
 //! Git-history census collector for repository-wide churn and co-change.
 //!
-//! The collector attributes non-merge history, including renames, to approved
-//! current source paths from the snapshot. Its counts are heuristic maintenance
-//! signals only; Git failures remain explicit cell failures rather than clean
-//! history.
+//! The collector walks full non-merge history reachable from `HEAD`, attributes
+//! renames to approved current paths, and reports deterministic heuristic review
+//! candidates. Repository collection includes every approved HEAD-tracked path,
+//! not merely recognized language sources; optional language selection exists
+//! only for focused tests. Git failures stay visible as failed cells.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -81,7 +82,6 @@ fn history_facts(context: &CollectorContext, language: Language) -> Result<Histo
     .split('\0')
     .filter(|path| is_approved_path(path))
     .filter(|path| !path.is_empty())
-    .filter(|path| language_for_path(path).is_some())
     .filter(|path| belongs_to_language(path, language))
     .map(str::to_owned)
     .collect::<BTreeSet<_>>();
@@ -200,6 +200,7 @@ mod tests {
         CollectorContext {
             repo_root: root.to_path_buf(),
             snapshot: SourceSnapshot::from_tracked(root).expect("snapshot"),
+            semantic_reports: Default::default(),
         }
     }
 
@@ -288,11 +289,35 @@ mod tests {
     }
 
     #[test]
+    fn repository_history_includes_approved_non_language_paths() {
+        let temporary = tempfile::tempdir().expect("tempdir");
+        let root = temporary.path();
+        git(root, &["init"]);
+        git(root, &["config", "user.email", "census@example.test"]);
+        git(root, &["config", "user.name", "Census Fixture"]);
+        fs::create_dir_all(root.join("xtask")).expect("xtask dir");
+        let path = root.join("xtask/fixture.txt");
+        fs::write(&path, "<svg/>").expect("initial fixture");
+        commit(root, "initial fixture");
+        fs::write(&path, "<svg><!-- changed --></svg>").expect("changed fixture");
+        commit(root, "changed fixture");
+
+        let CellState::Candidates { candidates, .. } = repository(&context(root)).state else {
+            panic!("approved non-language history is included");
+        };
+        assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate.identity == "churn:xtask/fixture.txt")
+        );
+    }
+    #[test]
     fn reports_git_failures_explicitly() {
         let temporary = tempfile::tempdir().expect("tempdir");
         let report = rust(&CollectorContext {
             repo_root: temporary.path().to_path_buf(),
             snapshot: SourceSnapshot::default(),
+            semantic_reports: Default::default(),
         });
         assert!(matches!(report.state, CellState::Failed { .. }));
     }

@@ -81,5 +81,6 @@ pub(crate) fn context(files: &[(&str, &str)]) -> CollectorContext {
                 })
                 .collect(),
         },
+        semantic_reports: Default::default(),
     }
 }

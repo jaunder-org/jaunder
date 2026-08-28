@@ -15,6 +15,7 @@ pub(crate) mod history;
 mod lsp;
 pub(crate) mod model;
 mod orchestrate;
+mod process;
 mod registry;
 mod render;
 mod semantic;

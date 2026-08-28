@@ -100,6 +100,7 @@ mod tests {
                     },
                 ],
             },
+            semantic_reports: Default::default(),
         };
         let report = collect(&context);
         assert_eq!(report.collector.evidence_method, EvidenceMethod::Heuristic);
@@ -131,6 +132,7 @@ mod tests {
                     content: String::new(),
                 }],
             },
+            semantic_reports: Default::default(),
         });
 
         assert!(matches!(report.state, CellState::Clean));

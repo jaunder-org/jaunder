@@ -1,4 +1,13 @@
-//! Parsed clone and repeated-shape collectors.
+//! Parsed structural clone and repeated-shape collectors.
+//!
+//! This module selects parsed Rust and TypeScript functions and Emacs-read Elisp
+//! definitions/tests, then compares normalized syntax shapes across tracked
+//! files. Its candidates are structural prompts rather than proof of duplicated
+//! behavior. Parser and reader failures remain failed cells; a missing Emacs
+//! reader is unavailable. The owned Emacs process drains stderr at spawn and is
+//! always terminated and reaped on its error path, with cleanup warnings never
+//! replacing reader evidence.
+
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
@@ -14,6 +23,7 @@ use syn::visit::Visit;
 
 use super::common::{STRUCTURAL_VERSION, failed, files, structural};
 use super::model::{Candidate, CollectorMetadata};
+use super::process::{StderrDrain, terminate_and_reap};
 use super::{CellReport, CollectorContext, EvidenceMethod, Language, SignalFamily};
 
 pub(crate) fn rust_clones(context: &CollectorContext) -> CellReport {
@@ -191,10 +201,18 @@ struct EmacsElispReader;
 impl ElispReader for EmacsElispReader {
     fn function_shapes(&mut self, source: &str) -> Result<Vec<String>, CloneShapeError> {
         const READER: &str = r#"(progn
-(defun census-normalize (value)
+(defun census-syntax-head-p (value)
+  (memq value '(defun ert-deftest if while let let* lambda progn cond when unless
+                and or not setq setf quote function catch throw unwind-protect)))
+(defun census-normalize-tail (value)
   (cond ((consp value) (cons (census-normalize (car value))
-                              (census-normalize (cdr value))))
-        ((symbolp value) 'id)
+                              (census-normalize-tail (cdr value))))
+        ((null value) nil)
+        (t (census-normalize value))))
+(defun census-normalize (value &optional head)
+  (cond ((consp value) (cons (census-normalize (car value) t)
+                              (census-normalize-tail (cdr value))))
+        ((symbolp value) (if (and head (census-syntax-head-p value)) value 'id))
         ((numberp value) 'number)
         ((stringp value) 'string)
         (t 'literal)))
@@ -223,21 +241,37 @@ impl ElispReader for EmacsElispReader {
                     CloneShapeError::Failed(error.to_string())
                 }
             })?;
+        let stderr = match reader.stderr.take() {
+            Some(stderr) => stderr,
+            None => {
+                terminate_and_reap(&mut reader, "Emacs reader");
+                return Err(CloneShapeError::Failed(
+                    "Emacs reader stderr was not piped".into(),
+                ));
+            }
+        };
+        let mut stderr = StderrDrain::start(stderr);
         let write_result = match reader.stdin.take() {
             Some(mut stdin) => stdin.write_all(source.as_bytes()),
             None => Err(std::io::Error::other("Emacs reader stdin was not piped")),
         };
         if let Err(error) = write_result {
             cleanup_reader_after_stdin_failure(&mut reader);
-            return Err(CloneShapeError::Failed(error.to_string()));
+            let diagnostics = stderr.finish("Emacs reader");
+            return Err(CloneShapeError::Failed(with_diagnostics(
+                error.to_string(),
+                diagnostics,
+            )));
         }
         let output = reader
             .wait_with_output()
             .map_err(|error| CloneShapeError::Failed(error.to_string()))?;
+        let diagnostics = stderr.finish("Emacs reader");
         if !output.status.success() {
-            return Err(CloneShapeError::Failed(
+            return Err(CloneShapeError::Failed(with_diagnostics(
                 String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-            ));
+                diagnostics,
+            )));
         }
         Ok(String::from_utf8_lossy(&output.stdout)
             .lines()
@@ -248,22 +282,14 @@ impl ElispReader for EmacsElispReader {
 
 /// Preserve a stdin-write failure while ensuring its spawned reader cannot outlive it.
 fn cleanup_reader_after_stdin_failure(reader: &mut Child) {
-    match reader.try_wait() {
-        Ok(Some(_)) => {}
-        Ok(None) => {
-            if let Err(error) = reader.kill() {
-                eprintln!("warning: killing Emacs reader after stdin write failure: {error}");
-            }
-            if let Err(error) = reader.wait() {
-                eprintln!("warning: reaping Emacs reader after stdin write failure: {error}");
-            }
-        }
-        Err(error) => {
-            eprintln!("warning: checking Emacs reader after stdin write failure: {error}");
-            if let Err(error) = reader.wait() {
-                eprintln!("warning: reaping Emacs reader after stdin write failure: {error}");
-            }
-        }
+    terminate_and_reap(reader, "Emacs reader");
+}
+
+fn with_diagnostics(error: String, diagnostics: String) -> String {
+    if diagnostics.is_empty() {
+        error
+    } else {
+        format!("{error}; Emacs stderr: {diagnostics}")
     }
 }
 
@@ -316,7 +342,7 @@ fn normalize_shape(source: &str) -> String {
                 state = State::BlockComment(1);
             }
             State::Code if matches!(character, '"' | '\'' | '`') => {
-                normalize_token(&mut out, &mut token);
+                normalize_typescript_token(&mut out, &mut token);
                 out.push_str("str");
                 state = State::String(character);
             }
@@ -324,7 +350,7 @@ fn normalize_shape(source: &str) -> String {
                 token.push(character)
             }
             State::Code => {
-                normalize_token(&mut out, &mut token);
+                normalize_typescript_token(&mut out, &mut token);
                 if !character.is_whitespace() {
                     out.push(character);
                 }
@@ -344,26 +370,107 @@ fn normalize_shape(source: &str) -> String {
             _ => {}
         }
     }
-    normalize_token(&mut out, &mut token);
+    normalize_typescript_token(&mut out, &mut token);
     out
 }
 
-fn normalize_token(out: &mut String, token: &mut String) {
+fn normalize_typescript_token(out: &mut String, token: &mut String) {
     if token.is_empty() {
         return;
     }
-    out.push_str(
-        if token
-            .chars()
-            .next()
-            .is_some_and(|character| character.is_ascii_digit())
-        {
-            "#"
-        } else {
-            "id"
-        },
-    );
+    if token
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_digit())
+    {
+        out.push('#');
+    } else if typescript_syntax_word(token) {
+        out.push_str(token);
+    } else {
+        out.push_str("id");
+    }
     token.clear();
+}
+
+fn typescript_syntax_word(token: &str) -> bool {
+    matches!(
+        token,
+        "abstract"
+            | "any"
+            | "as"
+            | "asserts"
+            | "async"
+            | "await"
+            | "bigint"
+            | "boolean"
+            | "break"
+            | "case"
+            | "catch"
+            | "class"
+            | "const"
+            | "continue"
+            | "debugger"
+            | "declare"
+            | "default"
+            | "delete"
+            | "do"
+            | "else"
+            | "enum"
+            | "export"
+            | "extends"
+            | "false"
+            | "finally"
+            | "for"
+            | "from"
+            | "function"
+            | "get"
+            | "if"
+            | "implements"
+            | "import"
+            | "in"
+            | "infer"
+            | "instanceof"
+            | "interface"
+            | "is"
+            | "keyof"
+            | "let"
+            | "module"
+            | "namespace"
+            | "new"
+            | "never"
+            | "null"
+            | "number"
+            | "object"
+            | "of"
+            | "override"
+            | "package"
+            | "private"
+            | "protected"
+            | "public"
+            | "readonly"
+            | "return"
+            | "satisfies"
+            | "set"
+            | "static"
+            | "string"
+            | "super"
+            | "switch"
+            | "symbol"
+            | "this"
+            | "throw"
+            | "true"
+            | "try"
+            | "type"
+            | "typeof"
+            | "undefined"
+            | "unique"
+            | "unknown"
+            | "var"
+            | "void"
+            | "while"
+            | "with"
+            | "yield"
+    )
 }
 fn stable_hash(value: &str) -> u64 {
     value.bytes().fold(0xcbf29ce484222325, |hash, byte| {
@@ -392,6 +499,39 @@ mod tests {
                 ("a.rs", "fn a(){}"),
                 ("b.rs", "fn b(){let y=2;}")
             ]))
+            .state,
+            CellState::Clean
+        ));
+    }
+
+    #[test]
+    fn typescript_normalization_preserves_syntax_words_and_operators() {
+        assert_eq!(
+            normalize_shape("function alpha(x) { if (x) return 1; }"),
+            normalize_shape("function beta(y) { if (y) return 2; }")
+        );
+        assert_ne!(
+            normalize_shape("function alpha(x) { if (x) return 1; }"),
+            normalize_shape("function beta(y) { while (y) throw 2; }")
+        );
+    }
+
+    #[test]
+    fn elisp_fixture_shapes_keep_distinct_equal_arity_heads_clean() {
+        let mut reader = FixtureReader {
+            responses: VecDeque::from([
+                Ok(vec!["(defun id (id) (if id number number))".into()]),
+                Ok(vec!["(defun id (id) (while id number))".into()]),
+            ]),
+        };
+        assert!(matches!(
+            clones_with_elisp_reader(
+                &context(&[
+                    ("a.el", "(defun a (x) (if x 1 2))"),
+                    ("b.el", "(defun b (y) (while y 3))")
+                ]),
+                &mut reader,
+            )
             .state,
             CellState::Clean
         ));
@@ -425,6 +565,12 @@ mod tests {
 
         let malformed = typescript_clones(&context(&[("a.ts", "function broken( {")]));
         assert!(matches!(malformed.state, CellState::Failed { .. }));
+
+        let syntax_distinct = typescript_clones(&context(&[
+            ("a.ts", "function alpha(x) { if (x) return 1; }"),
+            ("b.ts", "function beta(y) { while (y) throw 2; }"),
+        ]));
+        assert!(matches!(syntax_distinct.state, CellState::Clean));
     }
 
     struct FixtureReader {

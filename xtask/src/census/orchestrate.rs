@@ -5,17 +5,24 @@
 //! preserves unavailable and failed states instead of treating absent evidence as
 //! clean.
 
+use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::Mutex;
 
 use anyhow::Result;
 use serde::Serialize;
 
 use super::{CellReport, CellSpec, CellState, Language, SignalFamily, SourceSnapshot};
 
-/// Immutable input shared by every collector for one command invocation.
+/// Command-scoped inputs and memoized semantic evidence shared by census collectors.
+///
+/// The snapshot and cache exist only for one `collect` call. Semantic collectors
+/// populate both projections for a language together, so exported-reference and
+/// unreferenced-symbol cells cannot independently start an analyzer session.
 pub struct CollectorContext {
     pub repo_root: std::path::PathBuf,
     pub snapshot: SourceSnapshot,
+    pub(crate) semantic_reports: Mutex<BTreeMap<Language, (CellReport, CellReport)>>,
 }
 
 impl CollectorContext {
@@ -23,6 +30,7 @@ impl CollectorContext {
         let mut context = Self {
             repo_root: repo_root.to_path_buf(),
             snapshot: SourceSnapshot::default(),
+            semantic_reports: Mutex::default(),
         };
         context.snapshot = SourceSnapshot::from_tracked(&context.repo_root)?;
         Ok(context)
