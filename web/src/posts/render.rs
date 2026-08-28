@@ -41,7 +41,7 @@ pub(crate) fn format_post_time(ts: UtcInstant) -> String {
 /// The literal route shape begins at the site root and `PostId`'s display form
 /// is a path-safe integer, so validation cannot fail.
 #[must_use]
-pub(crate) fn edit_post_url(post_id: PostId) -> RootRelativeUrl {
+pub fn edit_post_url(post_id: PostId) -> RootRelativeUrl {
     let Ok(url) = RootRelativeUrl::try_from(format!("/posts/{post_id}/edit")) else {
         unreachable!("post edit route is root-relative by construction");
     };

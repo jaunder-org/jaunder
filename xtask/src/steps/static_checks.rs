@@ -61,6 +61,7 @@ pub fn specs_for_phase(phase: Phase, mode: Mode) -> Vec<StepSpec> {
             devtool_check("cargo-deny", mode),
             devtool_compile_check("clippy", mode),
             devtool_compile_check("web-server-clippy", mode),
+            devtool_compile_check("web-no-server-clippy", mode),
             devtool_compile_check("wasm-clippy", mode),
             devtool_compile_check("tools-clippy", mode),
             cargo_compile_check(
@@ -248,6 +249,7 @@ mod tests {
             "cargo-deny",
             "clippy",
             "web-server-clippy",
+            "web-no-server-clippy",
             "wasm-clippy",
             "tools-clippy",
         ] {
@@ -272,6 +274,7 @@ mod tests {
         assert!(!find(&s, "cargo-deny").cache_rustc);
         assert!(find(&s, "clippy").cache_rustc);
         assert!(find(&s, "web-server-clippy").cache_rustc);
+        assert!(find(&s, "web-no-server-clippy").cache_rustc);
         assert!(find(&s, "wasm-clippy").cache_rustc);
         assert!(find(&s, "tools-clippy").cache_rustc);
         assert_eq!(find(&s, "xtask-clippy").program, "cargo");
@@ -292,6 +295,7 @@ mod tests {
             "cargo-deny",
             "clippy",
             "web-server-clippy",
+            "web-no-server-clippy",
             "wasm-clippy",
             "tools-clippy",
             "xtask-clippy",
@@ -327,7 +331,7 @@ mod tests {
             .collect();
         assert_eq!(compile_names.first(), Some(&"byte-compile"));
         assert!(compile_names.contains(&"clippy"));
-        assert!(compile_names.contains(&"xtask-clippy"));
+        assert!(compile_names.contains(&"web-no-server-clippy"));
         assert!(!compile_names.contains(&"ert"));
 
         let runtime_names: Vec<&str> = specs_for_phase(Phase::HostRuntime, Mode::Check)
