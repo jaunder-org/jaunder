@@ -107,7 +107,7 @@ AtomPub delete response or per-user Media Record materialization.
     anonymous/stranger generic not-found behavior, route registration, and
     rendering safety.
 
-- [ ] **5. Prove the full owner workflow and project implemented architecture.**
+- [x] **5. Prove the full owner workflow and project implemented architecture.**
   - Focused Playwright coverage exercises sidebar and per-Post entry points,
     complete detail, Load more, semantic no-op, and Deleted Post history.
   - Re-run focused mutation/media tests as one integrated contract and verify
@@ -118,12 +118,12 @@ AtomPub delete response or per-user Media Record materialization.
 
 ## Completion criteria
 
-- [ ] Every meaningful mutation has one atomic complete prior-state revision;
+- [x] Every meaningful mutation has one atomic complete prior-state revision;
       semantic no-ops have none and move no timestamps.
-- [ ] Revision reads are owner-only, complete, paginated, immutable, and
+- [x] Revision reads are owner-only, complete, paginated, immutable, and
       available for Deleted Posts through all three approved routes.
-- [ ] Current/Revision media references share one exact evidence/guard policy,
+- [x] Current/Revision media references share one exact evidence/guard policy,
       with deduplicated owner Post IDs and explicit force behavior.
-- [ ] Backup/restore, both backends, HTTP integration, and focused e2e prove the
+- [x] Backup/restore, both backends, HTTP integration, and focused e2e prove the
       complete observable contract; #755 can consume retained Revision
       references.
