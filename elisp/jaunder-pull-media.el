@@ -230,7 +230,7 @@ TABLE maps canonical URLs without fragments to mutable reference accumulators."
    ((and (<= (+ position 4) (length body))
          (equal (substring body position (+ position 4)) "<!--"))
     (let ((end (string-search "-->" body (+ position 4))))
-      (and end (+ end 3))))
+      (if end (+ end 3) (length body))))
    (t
     (let ((case-fold-search t))
       (when (and
@@ -245,7 +245,49 @@ TABLE maps canonical URLs without fragments to mutable reference accumulators."
                    (string-match
                     (format "</[ \t\r\n]*%s[ \t\r\n]*>" tag)
                     body (match-end 0))))
-              (and close (match-end 0))))))))))
+              (if close (match-end 0) (length body))))))))))
+
+(defun jaunder--pull-media-markdown-html-block-end (body position)
+  "Return the end of a raw Markdown HTML block at line POSITION, or nil."
+  (let ((cursor position)
+        (limit (length body))
+        (spaces 0))
+    (while (and (< cursor limit)
+                (= (aref body cursor) ?\s)
+                (< spaces 4))
+      (setq cursor (1+ cursor)
+            spaces (1+ spaces)))
+    (when (and (<= spaces 3)
+               (< cursor limit)
+               (= (aref body cursor) ?<))
+      (or
+       (jaunder--pull-media-markdown-raw-html-end body cursor)
+       (let ((case-fold-search t)
+             end)
+         (cond
+          ((and (<= (+ cursor 2) limit)
+                (equal (substring body cursor (+ cursor 2)) "<?"))
+           (setq end (string-search "?>" body (+ cursor 2)))
+           (if end (+ end 2) limit))
+          ((and (<= (+ cursor 9) limit)
+                (equal (substring body cursor (+ cursor 9)) "<![CDATA["))
+           (setq end (string-search "]]>" body (+ cursor 9)))
+           (if end (+ end 3) limit))
+          ((and (< (1+ cursor) limit)
+                (= (aref body (1+ cursor)) ?!))
+           (setq end (cl-position ?> body :start (+ cursor 2)))
+           (if end (1+ end) limit))
+          ((and
+            (string-match
+             "</?[[:alpha:]][[:alnum:]-]*\\(?:[ \t\r\n/>]\\)"
+             body cursor)
+            (= (match-beginning 0) cursor)
+            (let ((line-end
+                   (or (string-search "\n" body cursor) limit)))
+              (cl-position ?> body :start cursor :end line-end)))
+           (let ((blank
+                  (string-match "\n[ \t]*\n" body cursor)))
+             (if blank (match-end 0) limit)))))))))
 
 (defun jaunder--pull-media-markdown-destination (body position closing)
   "Return (START END AFTER) for a complete Markdown destination at POSITION.
@@ -350,9 +392,14 @@ CLOSING is the required closing delimiter.  Return nil for malformed text."
         (setq position (1+ position)
               line-start position))
        ((= position line-start)
-        (let ((opening
+        (let ((html-end
+               (jaunder--pull-media-markdown-html-block-end
+                body position))
+              (opening
                (jaunder--pull-media-markdown-fence body position)))
           (cond
+           (html-end
+            (setq position html-end))
            (fence
             (when (and opening
                        (nth 3 opening)
@@ -489,9 +536,9 @@ CLOSING is the required closing delimiter.  Return nil for malformed text."
          (nth 1 definition) (nth 2 definition))))))
 
 (defconst jaunder--pull-media-html-raw-text-tags
-  '("script" "style" "textarea" "title" "pre" "xmp" "iframe"
+  '("script" "style" "textarea" "title" "xmp" "iframe"
     "noembed" "noframes" "plaintext")
-  "HTML elements whose contents cannot contain active media attributes.")
+  "HTML elements whose contents cannot contain active child markup.")
 
 (defun jaunder--pull-media-html-attribute-spans (body)
   "Return actual HTML attribute spans in one forward lexical pass over BODY."
@@ -546,15 +593,17 @@ CLOSING is the required closing delimiter.  Return nil for malformed text."
                   (if (not tag-end)
                       ;; An incomplete start tag is literal source, not markup.
                       (setq position limit)
-                    (unless
-                        (member tag jaunder--pull-media-html-raw-text-tags)
+                    ;; Script contents and its executable `src' are excluded.
+                    ;; Other raw/RCDATA opening tags may still carry ordinary
+                    ;; supported attributes such as an iframe `src'.
+                    (unless (equal tag "script")
                       (let ((case-fold-search t)
-                            (scan cursor))
-                        (while (and (< scan tag-end)
-                                    (string-match
-                                     attribute-regexp body scan)
-                                    (< (match-beginning 0) tag-end)
-                                    (<= (match-end 0) tag-end))
+                            (attribute-source
+                             (substring body cursor tag-end))
+                            (scan 0))
+                        (while
+                            (string-match
+                             attribute-regexp attribute-source scan)
                           (let ((start
                                  (or (match-beginning 2)
                                      (match-beginning 3)
@@ -565,8 +614,11 @@ CLOSING is the required closing delimiter.  Return nil for malformed text."
                                      (match-end 4)))
                                 (next-scan (match-end 0)))
                             (push
-                             (list (downcase (match-string 1 body))
-                                   start end)
+                             (list
+                              (downcase
+                               (match-string 1 attribute-source))
+                              (+ cursor start)
+                              (+ cursor end))
                              spans)
                             (setq scan next-scan)))))
                     (setq position tag-end)

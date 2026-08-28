@@ -120,8 +120,10 @@
             "[label ``]`` kept](<%s>)\n"
             "```\n```not-a-closer\n[x](%s)\n```\n"
             "<!-- <%s> -->\n<script>[x](%s)</script>\n"
+            "<div>\n[x](%s)\n</div>\n\n"
             "[real](%s)")
-           url url url url url))
+           url url url url url url))
+         (unclosed (format "<script>\n[x](%s)" url))
          (out (jaunder-pull-media-test--rewrite "markdown" contexts)))
     (should
      (equal
@@ -141,6 +143,14 @@
       out))
     (should
      (string-match-p
+      (regexp-quote (format "<div>\n[x](%s)\n</div>" url))
+      out))
+    (should
+     (equal
+      (jaunder-pull-media-test--rewrite "markdown" unclosed)
+      unclosed))
+    (should
+     (string-match-p
       (regexp-quote (format "[real](%s)" target))
       out))))
 
@@ -155,8 +165,10 @@
            (concat
             "<textarea><img src=\"%s\"></textarea>"
             "<title><a href=\"%s\"></title>"
+            "<pre><img src=\"%s\"></pre>"
+            "<iframe src=\"%s\"></iframe>"
             "<IMG SRC=\"%s\">")
-           url url url))
+           url url url url url))
          (out (jaunder-pull-media-test--rewrite "html" body)))
     (should
      (equal
@@ -171,6 +183,16 @@
      (string-match-p
       (regexp-quote
        (format "<title><a href=\"%s\"></title>" url))
+      out))
+    (should
+     (string-match-p
+      (regexp-quote
+       (format "<pre><img src=\"%s\"></pre>" target))
+      out))
+    (should
+     (string-match-p
+      (regexp-quote
+       (format "<iframe src=\"%s\"></iframe>" target))
       out))
     (should
      (string-suffix-p (format "<IMG SRC=\"%s\">" target) out))))
