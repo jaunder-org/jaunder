@@ -61,6 +61,26 @@ pub(crate) struct BridgeSpec<'a> {
     pub(crate) pg_array: bool,
 }
 
+/// Merge the user's generics with the parameters and predicate required by one `SQLx` impl.
+///
+/// A lifetime is inserted before the user's parameters because Rust requires lifetimes
+/// to precede type parameters; `DB` is always appended after them.
+fn sqlx_impl_generics(
+    user: &syn::Generics,
+    leading_lifetime: Option<syn::LifetimeParam>,
+    predicate: syn::WherePredicate,
+) -> syn::Generics {
+    let mut merged = user.clone();
+    if let Some(lifetime) = leading_lifetime {
+        merged
+            .params
+            .insert(0, syn::GenericParam::Lifetime(lifetime));
+    }
+    merged.params.push(syn::parse_quote!(DB: ::sqlx::Database));
+    merged.make_where_clause().predicates.push(predicate);
+    merged
+}
+
 /// The sqlx bridge impls for `spec.name`: `Type`, `Encode`, `Decode`, and — when
 /// `spec.pg_array` is set — `PgHasArrayType`.
 pub(crate) fn bridge(spec: &BridgeSpec<'_>) -> TokenStream {
@@ -107,32 +127,25 @@ pub(crate) fn bridge(spec: &BridgeSpec<'_>) -> TokenStream {
         TokenStream::new()
     };
 
-    let mut type_g = (*generics).clone();
-    type_g.params.push(syn::parse_quote!(DB: ::sqlx::Database));
-    type_g
-        .make_where_clause()
-        .predicates
-        .push(syn::parse_quote!(#type_inner: ::sqlx::Type<DB>));
+    let type_g = sqlx_impl_generics(
+        generics,
+        None,
+        syn::parse_quote!(#type_inner: ::sqlx::Type<DB>),
+    );
     let (type_impl_generics, _, type_where) = type_g.split_for_impl();
 
-    let mut encode_g = crate::with_leading_param(generics, syn::parse_quote!('q));
-    encode_g
-        .params
-        .push(syn::parse_quote!(DB: ::sqlx::Database));
-    encode_g
-        .make_where_clause()
-        .predicates
-        .push(syn::parse_quote!(#encode_inner: ::sqlx::Encode<'q, DB>));
+    let encode_g = sqlx_impl_generics(
+        generics,
+        Some(syn::parse_quote!('q)),
+        syn::parse_quote!(#encode_inner: ::sqlx::Encode<'q, DB>),
+    );
     let (encode_impl_generics, _, encode_where) = encode_g.split_for_impl();
 
-    let mut decode_g = crate::with_leading_param(generics, syn::parse_quote!('r));
-    decode_g
-        .params
-        .push(syn::parse_quote!(DB: ::sqlx::Database));
-    decode_g
-        .make_where_clause()
-        .predicates
-        .push(syn::parse_quote!(#decode_inner: ::sqlx::Decode<'r, DB>));
+    let decode_g = sqlx_impl_generics(
+        generics,
+        Some(syn::parse_quote!('r)),
+        syn::parse_quote!(#decode_inner: ::sqlx::Decode<'r, DB>),
+    );
     let (decode_impl_generics, _, decode_where) = decode_g.split_for_impl();
 
     quote! {
