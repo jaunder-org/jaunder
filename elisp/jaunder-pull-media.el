@@ -247,6 +247,27 @@ TABLE maps canonical URLs without fragments to mutable reference accumulators."
                     body (match-end 0))))
               (if close (match-end 0) (length body))))))))))
 
+(defun jaunder--pull-media-markdown-inline-opaque-html-end (body position)
+  "Return end of inline HTML that cannot contain active Markdown, or nil."
+  (cond
+   ((and (<= (+ position 4) (length body))
+         (equal (substring body position (+ position 4)) "<!--"))
+    (let ((end (string-search "-->" body (+ position 4))))
+      (if end (+ end 3) (length body))))
+   (t
+    (let ((case-fold-search t))
+      (when (and
+             (string-match
+              "<\\(script\\|style\\)\\(?:[ \t\r\n>]\\)"
+              body position)
+             (= (match-beginning 0) position))
+        (let* ((tag (downcase (match-string 1 body)))
+               (close
+                (string-match
+                 (format "</[ \t\r\n]*%s[ \t\r\n]*>" tag)
+                 body (match-end 0))))
+          (if close (match-end 0) (length body))))))))
+
 (defconst jaunder--pull-media-markdown-html-block-tags
   '("address" "article" "aside" "base" "basefont" "blockquote" "body"
     "caption" "center" "col" "colgroup" "dd" "details" "dialog" "dir"
@@ -506,10 +527,10 @@ CLOSING is the required closing delimiter.  Return nil for malformed text."
                  body end (- end position))))
           (setq position (or close end))))
        ((and (= (aref body position) ?<)
-             (jaunder--pull-media-markdown-raw-html-end
+             (jaunder--pull-media-markdown-inline-opaque-html-end
               body position))
         (setq position
-              (jaunder--pull-media-markdown-raw-html-end
+              (jaunder--pull-media-markdown-inline-opaque-html-end
                body position)))
        ((and (= (aref body position) ?<)
              (not

@@ -161,6 +161,8 @@
                   jaunder-pull-media-test--hash))
          (inline-html
           (format "<span>[inline](%s)</span>" url))
+         (inline-pre
+          (format "prefix <pre>[inline](%s)</pre>" url))
          (fenced-html
           (format
            "```\n<pre>\n[x](%s)\n</pre>\n```\n[after](%s)"
@@ -173,6 +175,10 @@
      (equal
       (jaunder-pull-media-test--rewrite "markdown" inline-html)
       (format "<span>[inline](%s)</span>" target)))
+    (should
+     (equal
+      (jaunder-pull-media-test--rewrite "markdown" inline-pre)
+      (format "prefix <pre>[inline](%s)</pre>" target)))
     (let ((out
            (jaunder-pull-media-test--rewrite
             "markdown" fenced-html)))
