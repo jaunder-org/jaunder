@@ -15,6 +15,7 @@ use jaunder::commands::{
     ServeCapturePaths, app_password_create, cmd_app_password_create, cmd_backup, cmd_init,
     cmd_restore, cmd_serve, cmd_smtp_test, cmd_user_create, cmd_user_invite, prepare_server,
 };
+use sqlx::{postgres::PgPoolOptions, sqlite::SqlitePoolOptions};
 use storage::{
     BackupError, BackupManifest, BackupMode, OpenedDatabase, open_database, open_existing_database,
     open_existing_database_with_observer,
@@ -684,6 +685,38 @@ async fn cmd_backup_covers_every_table_or_deliberately_excludes_it(#[case] backe
             "users",
         ]
     );
+
+    let live_table_count: i64 = match &args.db {
+        storage::DbConnectOptions::Sqlite(options) => {
+            let pool = SqlitePoolOptions::new()
+                .connect_with(options.clone())
+                .await
+                .expect("connect SQLite");
+            sqlx::query_scalar(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("count SQLite tables")
+        }
+        storage::DbConnectOptions::Postgres { options, .. } => {
+            let pool = PgPoolOptions::new()
+                .connect_with(options.clone())
+                .await
+                .expect("connect Postgres");
+            sqlx::query_scalar(
+                "SELECT COUNT(*) FROM information_schema.tables \
+                 WHERE table_schema = 'public' AND table_type = 'BASE TABLE'",
+            )
+            .fetch_one(&pool)
+            .await
+            .expect("count Postgres tables")
+        }
+    };
+    assert_eq!(
+        live_table_count, 25,
+        "a table was added or removed — update the golden set and denylist deliberately"
+    );
 }
 
 // A pristine restore replaces the target's bootstrap identity with the identity
@@ -812,7 +845,89 @@ async fn cmd_restore_pre_identity_backup_bootstraps_new_identity(#[case] backend
     assert_ne!(restored_identity, bootstrap_identity);
 }
 
-// M6.3.2: backup command writes a directory-mode backup.
+// Backup/restore preserves the fixture's exact microsecond-precision timestamp
+// on both backends.
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_preserves_microsecond_fixture_timestamp(#[case] backend: Backend) {
+    let source_base = TempDir::new().expect("source temp dir");
+    let (source_args, _pg_source) = storage_args(backend, &source_base).await;
+    cmd_init(&source_args, false).await.expect("init source");
+    let ids = populate_backup_fixture(&source_args).await;
+    let backup_path = source_base.path().join("backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
+
+    let target_base = TempDir::new().expect("target temp dir");
+    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
+    cmd_init(&target_args, false).await.expect("init target");
+    cmd_restore(&target_args, &backup_path)
+        .await
+        .expect("restore");
+    assert_backup_fixture_restored(&target_args, &ids).await;
+}
+
+// A row with a missing column is a malformed backup, and restore must roll back
+// the rows loaded before it on both backends.
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_rejects_row_missing_a_column(#[case] backend: Backend) {
+    let source_base = TempDir::new().expect("source temp dir");
+    let (source_args, _pg_source) = storage_args(backend, &source_base).await;
+    cmd_init(&source_args, false).await.expect("init source");
+    populate_backup_fixture(&source_args).await;
+    let backup_path = source_base.path().join("backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
+
+    let users_ndjson = backup_path.join("db").join("users.ndjson");
+    let mut rows: Vec<serde_json::Map<String, serde_json::Value>> =
+        std::fs::read_to_string(&users_ndjson)
+            .expect("read users export")
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(serde_json::from_str)
+            .collect::<Result<_, _>>()
+            .expect("parse users rows");
+    let missing_column = rows[0]
+        .keys()
+        .next()
+        .expect("exported user has columns")
+        .clone();
+    rows.last_mut()
+        .expect("exported users")
+        .remove(&missing_column);
+    let contents = rows
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("serialize users rows")
+        .join("\n");
+    std::fs::write(&users_ndjson, format!("{contents}\n")).expect("write corrupt users export");
+
+    let target_base = TempDir::new().expect("target temp dir");
+    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
+    cmd_init(&target_args, false).await.expect("init target");
+    let error = cmd_restore(&target_args, &backup_path)
+        .await
+        .expect_err("restore rejects missing-column row");
+    assert!(matches!(
+        error.downcast_ref::<BackupError>(),
+        Some(BackupError::InvalidBackup(_))
+    ));
+    assert_target_unmodified(&target_args).await;
+}
+
 #[apply(backends)]
 #[tokio::test]
 async fn cmd_backup_writes_directory_backup(#[case] backend: Backend) {

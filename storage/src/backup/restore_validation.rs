@@ -26,7 +26,7 @@ use host::feed::{FeedEventStatus, FeedPath};
 use host::invite::InviteCode;
 use host::stored_password_hash::StoredPasswordHash;
 
-use super::{BackupManifest, json_value_as_restore_text, read_table_rows};
+use super::format::{BackupManifest, json_value_as_restore_text, read_table_rows};
 
 #[derive(Debug, Clone)]
 pub struct BackupRestoreOutcome {

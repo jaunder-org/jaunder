@@ -258,11 +258,6 @@ mod tests {
         );
     }
 
-    // Guardrail: a real export of a fresh database backs up exactly the expected
-    // set of tables, and every live table is either backed up or a deliberate
-    // exclusion. A migration that adds a table trips the golden assertion (if
-    // auto-included) or the count assertion (if denylisted), forcing the coverage
-    // decision to be made consciously rather than by omission.
     #[test]
     fn read_manifest_rejects_missing_manifest() -> Result<(), BackupError> {
         let temp = TempDir::new()?;
