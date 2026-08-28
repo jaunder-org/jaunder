@@ -1080,7 +1080,7 @@ mod tests {
 
     #[apply(backends)]
     #[tokio::test]
-    async fn delete_media_force_refuses_rowless_referenced_file(#[case] backend: Backend) {
+    async fn delete_media_force_can_break_owner_retained_history(#[case] backend: Backend) {
         let env = backend.setup().await;
         let user_id = SeedUser::new().seed(&env.state).await.user_id;
         let manager = MediaManager::new(
@@ -1118,10 +1118,13 @@ mod tests {
                 )
                 .await
                 .unwrap(),
-            TryDeleteOutcome::RefusedReferenced
+            TryDeleteOutcome::Deleted
         );
-        assert!(media_row_exists(&env.state, user_id, &media).await);
-        assert!(file_path.exists(), "refused delete leaves referenced bytes");
+        assert!(!media_row_exists(&env.state, user_id, &media).await);
+        assert!(
+            file_path.exists(),
+            "reclamation remains conservative while retained history names the bytes"
+        );
     }
 
     #[apply(backends)]
