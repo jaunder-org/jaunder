@@ -698,26 +698,11 @@ fn CompactComposer(
                 <div class="j-composer-toolbar">
                     <FormatToggle format=state.format />
                     <span class="j-spacer"></span>
-                    <button
-                        class="j-btn"
-                        type="button"
-                        name="publish"
-                        value="false"
+                    <PostSaveActions
+                        publication=LoadedPublication::Draft
                         disabled=submit_disabled
-                        on:click=move |_| dispatch.run(false)
-                    >
-                        "Save draft"
-                    </button>
-                    <button
-                        class="j-btn is-primary"
-                        type="button"
-                        name="publish"
-                        value="true"
-                        disabled=submit_disabled
-                        on:click=move |_| dispatch.run(true)
-                    >
-                        "Publish"
-                    </button>
+                        on_save=dispatch
+                    />
                 </div>
             </div>
         </div>
@@ -786,26 +771,11 @@ fn FullComposer(
                 />
                 <MediaSection />
                 <div style="margin-top:auto;display:flex;align-items:center;gap:8px">
-                    <button
-                        class="j-btn"
-                        type="button"
-                        name="publish"
-                        value="false"
-                        prop:disabled=submit_disabled
-                        on:click=move |_| dispatch.run(false)
-                    >
-                        "Save draft"
-                    </button>
-                    <button
-                        class="j-btn is-primary"
-                        type="button"
-                        name="publish"
-                        value="true"
-                        prop:disabled=submit_disabled
-                        on:click=move |_| dispatch.run(true)
-                    >
-                        "Publish"
-                    </button>
+                    <PostSaveActions
+                        publication=LoadedPublication::Draft
+                        disabled=submit_disabled
+                        on_save=dispatch
+                    />
                 </div>
             </aside>
         </div>
@@ -1293,7 +1263,7 @@ fn EditPostForm(
                 />
                 <MediaSection />
                 <div class="j-edit-form-actions">
-                    <EditSaveActions
+                    <PostSaveActions
                         publication=loaded_publication
                         disabled=save_disabled
                         on_save=dispatch_update
@@ -1304,20 +1274,19 @@ fn EditPostForm(
     }
 }
 
-/// The editor's save controls: "Save draft" + "Publish" for a loaded draft, and
-/// a lone "Save" for scheduled or live Posts.
+/// Shared creation and editor save controls: "Save draft" + "Publish" for a draft,
+/// and a lone "Save" for scheduled or live Posts.
 ///
-/// Split out of [`EditPostPage`] (#306) so that page's `view!` carries only the
-/// post-resolved and audience-seeding decisions; the publication branch lives here.
-/// `on_save` is a plain data callback (the `publish` flag), not a view closure —
-/// ADR-0083 §3 rules out passing markup as a prop.
+/// The callers retain their layout wrappers; this component owns only the stable
+/// publication branch and button contract. `on_save` is a plain data callback (the
+/// `publish` flag), not a view closure — ADR-0083 §3 rules out passing markup as a prop.
 #[component]
-fn EditSaveActions(
-    /// Publication state fixed when the editor response was assembled.
+fn PostSaveActions(
+    /// Publication state that selects the draft pair or the scheduled/live Save control.
     publication: LoadedPublication,
     /// Whether saving is currently blocked by invalid form state.
     disabled: Signal<bool>,
-    /// Dispatches the update; the argument is the draft editor's `publish` flag.
+    /// Dispatches the save; the argument is the requested `publish` flag.
     on_save: Callback<bool>,
 ) -> impl IntoView {
     view! {
