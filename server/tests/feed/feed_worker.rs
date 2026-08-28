@@ -2,12 +2,7 @@ use std::sync::Arc;
 
 use crate::helpers::{CapturingWebSubClient, setup_with_base_url};
 use chrono::Utc;
-use common::{
-    feed::FeedFormat,
-    ids::FeedEventId,
-    test_support::{parse_content_type, parse_etag},
-    time::UtcInstant,
-};
+use common::{feed::FeedFormat, ids::FeedEventId, test_support::parse_etag, time::UtcInstant};
 use host::{
     config_key::SiteConfigKey,
     feed::{FeedPath, SyndicationFeedRepresentation},

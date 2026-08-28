@@ -120,10 +120,10 @@ mod tests {
         let out = render_atom(&meta(None, Some("A site")), &[]);
         assert!(out.body().contains("<feed"));
         assert!(!out.body().contains("<entry>"));
-        assert_eq!(out.format(), crate::feed::FeedFormat::Atom);
+        assert_eq!(out.format(), common::feed::FeedFormat::Atom);
         assert_eq!(
             out.content_type(),
-            crate::feed::FeedFormat::Atom.content_type()
+            common::feed::FeedFormat::Atom.content_type()
         );
     }
     #[test]

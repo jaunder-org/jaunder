@@ -105,10 +105,10 @@ mod tests {
         assert!(out.body().contains("<rss"));
         assert!(out.body().contains("<title>Site</title>"));
         assert!(!out.body().contains("<item>"));
-        assert_eq!(out.format(), crate::feed::FeedFormat::Rss);
+        assert_eq!(out.format(), common::feed::FeedFormat::Rss);
         assert_eq!(
             out.content_type(),
-            crate::feed::FeedFormat::Rss.content_type()
+            common::feed::FeedFormat::Rss.content_type()
         );
     }
     #[test]

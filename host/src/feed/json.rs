@@ -97,10 +97,10 @@ mod tests {
         let v: Value = serde_json::from_str(out.body()).unwrap();
         assert_eq!(v["version"], "https://jsonfeed.org/version/1.1");
         assert!(v["items"].as_array().unwrap().is_empty());
-        assert_eq!(out.format(), crate::feed::FeedFormat::Json);
+        assert_eq!(out.format(), common::feed::FeedFormat::Json);
         assert_eq!(
             out.content_type(),
-            crate::feed::FeedFormat::Json.content_type()
+            common::feed::FeedFormat::Json.content_type()
         );
     }
     #[test]
