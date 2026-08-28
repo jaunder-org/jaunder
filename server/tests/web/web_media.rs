@@ -554,9 +554,7 @@ async fn delete_refusal_reports_the_reference_snapshot_despite_a_concurrent_post
 
 #[apply(backends)]
 #[tokio::test]
-async fn delete_nested_request_refuses_force_that_would_leave_rowless_reference(
-    #[case] backend: Backend,
-) {
+async fn delete_nested_request_force_can_break_owner_retained_history(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
     let session = create_user_and_session(&state).await;
     let user_id = session.user_id;
@@ -598,21 +596,18 @@ async fn delete_nested_request_refuses_force_that_would_leave_rowless_reference(
     let result: MediaDeletion =
         serde_json::from_str(&body_str).expect("response should be valid JSON");
     assert!(
-        !result.deleted,
-        "forced delete should refuse when it would leave referenced bytes unaccounted"
+        result.deleted,
+        "explicit force may knowingly break the owner's retained history"
     );
-    assert!(
-        !result.referenced_in_posts.is_empty(),
-        "refusal should still explain the referencing post"
-    );
+    assert!(result.referenced_in_posts.is_empty());
     assert!(
         state
             .media
             .get_media(user_id, &sha256, &filename, &MediaSource::Upload)
             .await
             .unwrap()
-            .is_some(),
-        "refused delete should leave the exact media identity"
+            .is_none(),
+        "forced deletion removes the owner's final media identity"
     );
 }
 
