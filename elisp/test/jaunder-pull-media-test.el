@@ -292,7 +292,9 @@
         (regexp-quote (format "[%s](%s)" rewritten target))
         out)))
     (should
-     (string-match-p (regexp-quote (format "<%s>" target)) out))
+     (string-match-p
+      (regexp-quote (format "[%s](%s)" url target))
+      out))
     (should (string-suffix-p (format "[bad](%s" url) out))))
 
 (ert-deftest jaunder-pull-media-markdown-cmark-reference-source-selection ()

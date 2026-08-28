@@ -120,9 +120,14 @@ Return nil for every non-candidate form."
     (concat (if (equal format "org") (concat "file:" path) path)
             (or fragment ""))))
 
-(defun jaunder--pull-media-add-candidate (table format origin source start end)
+(defun jaunder--pull-media-add-candidate
+    (table format origin source start end
+           &optional replacement-start replacement-end label)
   "Record SOURCE's URL slice START through END in TABLE when eligible.
-TABLE maps canonical URLs without fragments to mutable reference accumulators."
+
+TABLE maps canonical URLs without fragments to mutable reference accumulators.
+REPLACEMENT-START and REPLACEMENT-END may widen the replaced syntax around the
+URL.  LABEL requests an explicit Markdown link preserving that displayed text."
   (let* ((raw (substring source start end))
          (split (string-search "#" raw))
          (url (if split (substring raw 0 split) raw))
@@ -132,16 +137,27 @@ TABLE maps canonical URLs without fragments to mutable reference accumulators."
       (let* ((hash (nth 0 parts))
              (leaf (nth 1 parts))
              ;; Recover the canonical terminal segment without normalizing the URL.
-             (encoded (car (last (split-string (url-filename (url-generic-parse-url url)) "/" t))))
+             (encoded
+              (car
+               (last
+                (split-string
+                 (url-filename (url-generic-parse-url url)) "/" t))))
              (key url)
              (reference (gethash key table)))
         (unless reference
-          (setq reference (list hash leaf
-                                (jaunder--pull-media-target format hash encoded nil)
-                                nil))
+          (setq reference
+                (list hash leaf
+                      (jaunder--pull-media-target
+                       format hash encoded nil)
+                      nil))
           (puthash key reference table))
-        (setf (nth 3 reference)
-              (cons (list start end fragment) (nth 3 reference)))))))
+        (setf
+         (nth 3 reference)
+         (cons
+          (list (or replacement-start start)
+                (or replacement-end end)
+                fragment label)
+          (nth 3 reference)))))))
 
 (defun jaunder--pull-media-org-candidates (table format origin body)
   "Collect actual Org link destinations from BODY."
@@ -454,11 +470,14 @@ Quoted attribute values may contain `>'; only an unquoted delimiter ends a tag."
                 body position limit)))
           (cond
            ((and end
-                 (not (string-match-p
-                       "[ \t\r\n]" (substring body (1+ position) end)))
-                 (gethash (substring body (1+ position) end) destinations))
-            (jaunder--pull-media-markdown-add-candidate
-             table format origin body (1+ position) end destinations)
+                 (not
+                  (string-match-p
+                   "[ \t\r\n]" (substring body (1+ position) end)))
+                 (gethash
+                  (substring body (1+ position) end) destinations))
+            (jaunder--pull-media-add-candidate
+             table format origin body (1+ position) end
+             position (1+ end) (substring body (1+ position) end))
             (setq position (1+ end)))
            (html-end
             (setq position html-end))
@@ -778,11 +797,18 @@ Quoted attribute values may contain `>'; only an unquoted delimiter ends a tag."
   (let ((replacements
          (sort (cl-mapcan
                 (lambda (reference)
-                  (mapcar (lambda (replacement)
-                            (list (nth 0 replacement) (nth 1 replacement)
-                                  (concat (jaunder-pull-media-reference-target reference)
-                                          (or (nth 2 replacement) ""))))
-                          (jaunder-pull-media-reference-replacements reference)))
+                  (mapcar
+                   (lambda (replacement)
+                     (let ((target
+                            (concat
+                             (jaunder-pull-media-reference-target reference)
+                             (or (nth 2 replacement) ""))))
+                       (list
+                        (nth 0 replacement) (nth 1 replacement)
+                        (if-let ((label (nth 3 replacement)))
+                            (format "[%s](%s)" label target)
+                          target))))
+                   (jaunder-pull-media-reference-replacements reference)))
                 (jaunder-pull-media-plan-references plan))
                (lambda (a b) (< (car a) (car b)))))
         (body (jaunder-pull-media-plan-body plan))

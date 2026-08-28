@@ -14,10 +14,14 @@ those URLs, so a pulled Post is not previewable offline.
 
 [ADR-0024](../0024-server-side-org-canonicalization.md) requires previewable
 local links while keeping the server's Post body canonical and metadata-free.
-[ADR-0045](../0045-emacs-media-content-src.md) makes the server's binary URL
-authoritative, while [ADR-0140](../0140-strict-media-address-extraction.md) and
-[ADR-0084](../0084-media-filename-encoded-canonical.md) define the canonical
-public route and percent-encoded filename.
+[ADR-0045](../0045-emacs-media-content-src.md) keeps publishing authoritative by
+harvesting the server-assigned binary URL rather than reconstructing it. Pull
+localization intentionally amends that decision's “no second copy” consequence:
+the client recognizes the canonical public route defined by
+[ADR-0140](../0140-strict-media-address-extraction.md) and
+[ADR-0084](../0084-media-filename-encoded-canonical.md) so it can validate the
+hash and filename before creating a local path. Changes to that route therefore
+require a coordinated update to this one client-side matcher.
 [ADR-0154](../0154-media-reference-live-ownership.md) defines
 `X-Jaunder-Instance` as exactly one canonical UUID-valued response header.
 AtomPub Member requests require an App Password, but public media bytes do not.
@@ -33,9 +37,15 @@ Markdown, and HTML only when they identify canonical public media on the active
 Jaunder origin and contain neither user information nor a query. Other URLs and
 non-link text remain source-faithful. Markdown's CommonMark meaning is owned by
 the pinned upstream `cmark-el` parser: its AST admits only actual link, image,
-and autolink destinations and excludes code and raw HTML blocks. Jaunder owns
-only the bounded block-source-position adapter that maps those semantic
-destinations back to exact source byte spans.
+and autolink destinations and excludes code and raw HTML blocks. Because
+`cmark-el` exposes block source positions but not inline destination spans, a
+bounded lexical adapter maps parser-authorized destinations back to immutable
+source: it scans only AST-authorized ranges and emits only exact destination
+values present in the AST. This duplicates enough source syntax to locate bytes,
+not enough to authorize CommonMark meaning. Instrumenting or forking upstream
+would create a larger compatibility seam; the adapter and its narrow reference
+map access remain coupled to the pinned parser and are covered by CommonMark
+boundary tests.
 
 The authenticated Member response and every media response must carry exactly
 one canonical `X-Jaunder-Instance` UUID, and the values must match. Each media
