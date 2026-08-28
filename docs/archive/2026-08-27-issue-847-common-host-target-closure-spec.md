@@ -62,7 +62,7 @@ surface's bytes, audience, nor behavior.
   no external-package allowlist; the existing wasm build proves compilation.
 - No bundle-size benefit is claimed. This is enforceable target ownership and
   dependency boundaries, not an unmeasured output-size promise.
-- The ADR draft at `docs/adr/drafts/common-host-target-closure.md` records the
+- The ADR draft at `docs/adr/0159-common-host-target-closure.md` records the
   decision; the architecture view projects current state, while dated notes
   truthfully annotate prior ADR history.
 

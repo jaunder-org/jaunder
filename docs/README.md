@@ -184,6 +184,7 @@ convention). See the Status column below for each ADR's current status.
 | [0156](adr/0156-sink-specific-telemetry-interfaces.md)              | Sink-Specific Telemetry Interfaces                                                                           | accepted   |
 | [0157](adr/0157-inline-only-atompub-category-discovery.md)          | Keep AtomPub category discovery inline                                                                       | accepted   |
 | [0158](adr/0158-peripheral-process-configuration.md)                | Process environment is resolved at the periphery                                                             | accepted   |
+| [0159](adr/0159-common-host-target-closure.md)                      | Close `common` and `host` by target reachability                                                             | accepted   |
 
 <!-- adr-table:end -->
 

@@ -1,6 +1,6 @@
-# ADR-DRAFT: Close `common` and `host` by target reachability
+# ADR-0159: Close `common` and `host` by target reachability
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-27
 - Issue: [#847](https://github.com/jaunder-org/jaunder/issues/847) (subsumes
   [#855](https://github.com/jaunder-org/jaunder/issues/855))
@@ -12,14 +12,14 @@ only host consumers. That makes the crate boundary describe historical
 convenience rather than the target graph. CSR does reach the narrow Syndication
 Feed grammar — `FeedFormat`, `FeedSurface`, and `canonicalize` — but it reaches
 neither protocol's implementation surface. `host` already exists as the
-host-focused sibling under [ADR-0058](../0058-host-crate-layering.md), but its
+host-focused sibling under [ADR-0058](0058-host-crate-layering.md), but its
 ownership rule needs a mechanical dependency-floor check and a precise exception
 for the `sqlx` bridge.
 
 The move must not blur the two protocol surfaces: an authenticated AtomPub
 Collection serializes native source for editors, while a public Syndication Feed
 serializes rendered HTML for readers
-([ADR-0015](../0015-atompub-serialization-surfaces.md)). Their crate home may
+([ADR-0015](0015-atompub-serialization-surfaces.md)). Their crate home may
 change; their contracts and bytes may not.
 
 ## Decision
@@ -68,18 +68,18 @@ decision claims no bundle-size benefit.
   while `host` becomes the explicit home of host-only protocol and password
   machinery.
 - Existing crate-home and call-shape statements in
-  [ADR-0018](../0018-constant-time-authentication.md),
-  [ADR-0023](../0023-atompub-jaunder-wire-extensions.md),
-  [ADR-0058](../0058-host-crate-layering.md),
-  [ADR-0063](../0063-domain-value-newtype-convention.md),
-  [ADR-0065](../0065-client-side-domain-validation.md),
-  [ADR-0072](../0072-timestamps-cross-boundary-as-utcinstant.md),
-  [ADR-0073](../0073-url-crate-for-absolute-url-normalization.md),
-  [ADR-0079](../0079-rendered-html-sanitization.md),
-  [ADR-0089](../0089-upstream-atom-document-io.md),
-  [ADR-0090](../0090-media-references-extracted-at-render.md),
-  [ADR-0095](../0095-doctest-gate-enumerates-the-fence-population.md),
-  [ADR-0102](../0102-config-key-closed-registry.md), and
-  [ADR-0112](../0112-role-tagged-site-urls.md) remain historical records; their
+  [ADR-0018](0018-constant-time-authentication.md),
+  [ADR-0023](0023-atompub-jaunder-wire-extensions.md),
+  [ADR-0058](0058-host-crate-layering.md),
+  [ADR-0063](0063-domain-value-newtype-convention.md),
+  [ADR-0065](0065-client-side-domain-validation.md),
+  [ADR-0072](0072-timestamps-cross-boundary-as-utcinstant.md),
+  [ADR-0073](0073-url-crate-for-absolute-url-normalization.md),
+  [ADR-0079](0079-rendered-html-sanitization.md),
+  [ADR-0089](0089-upstream-atom-document-io.md),
+  [ADR-0090](0090-media-references-extracted-at-render.md),
+  [ADR-0095](0095-doctest-gate-enumerates-the-fence-population.md),
+  [ADR-0102](0102-config-key-closed-registry.md), and
+  [ADR-0112](0112-role-tagged-site-urls.md) remain historical records; their
   dated notes identify the current ownership. The current view is
-  [ARCHITECTURE.md](../../ARCHITECTURE.md).
+  [ARCHITECTURE.md](../ARCHITECTURE.md).
