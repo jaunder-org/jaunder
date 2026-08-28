@@ -672,6 +672,8 @@ async fn cmd_backup_covers_every_table_or_deliberately_excludes_it(#[case] backe
             "password_resets",
             "post_audiences",
             "post_media",
+            "post_revision_audiences",
+            "post_revision_tags",
             "post_revisions",
             "post_tags",
             "posts",
@@ -714,7 +716,7 @@ async fn cmd_backup_covers_every_table_or_deliberately_excludes_it(#[case] backe
         }
     };
     assert_eq!(
-        live_table_count, 25,
+        live_table_count, 27,
         "a table was added or removed — update the golden set and denylist deliberately"
     );
 }
