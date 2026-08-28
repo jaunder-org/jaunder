@@ -325,9 +325,21 @@ impl ElispReader for EmacsElispReader {
                               (census-normalize-tail (cdr value))))
         ((null value) nil)
         (t (census-normalize value))))
+(defun census-normalize-binding (binding)
+  (if (consp binding)
+      (cons 'id (mapcar #'census-normalize (cdr binding)))
+    'id))
 (defun census-normalize (value &optional head)
-  (cond ((consp value) (cons (census-normalize (car value) t)
-                              (census-normalize-tail (cdr value))))
+  (cond ((and (consp value) (memq (car value) '(let let*)))
+         (cons (car value)
+               (cons (mapcar #'census-normalize-binding (nth 1 value))
+                     (mapcar #'census-normalize (cddr value)))))
+        ((and (consp value) (eq (car value) 'lambda))
+         (cons 'lambda
+               (cons (mapcar (lambda (_argument) 'id) (nth 1 value))
+                     (mapcar #'census-normalize (cddr value)))))
+        ((consp value) (cons (census-normalize (car value) t)
+                             (census-normalize-tail (cdr value))))
         ((symbolp value) (if head value 'id))
         ((numberp value) 'number)
         ((stringp value) 'string)
@@ -573,6 +585,14 @@ mod tests {
             &mut reader,
         );
         assert!(matches!(clones.state, CellState::Candidates { .. }));
+        let binding_clones = clones_with_elisp_reader(
+            &context(&[
+                ("a.el", "(defun alpha () (let ((left 1)) left))"),
+                ("b.el", "(defun beta () (let ((right 2)) right))"),
+            ]),
+            &mut reader,
+        );
+        assert!(matches!(binding_clones.state, CellState::Candidates { .. }));
 
         let clean = clones_with_elisp_reader(
             &context(&[
