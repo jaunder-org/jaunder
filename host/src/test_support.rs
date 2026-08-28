@@ -41,3 +41,26 @@ pub fn parse_feed_min_days(s: &str) -> FeedMinDays {
         Err(error) => panic!("valid test feeds.min_days: {error}"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "valid test password")]
+    fn parse_password_rejects_an_invalid_fixture() {
+        let _ = parse_password("short");
+    }
+
+    #[test]
+    #[should_panic(expected = "valid test feeds.min_items")]
+    fn parse_feed_min_items_rejects_an_invalid_fixture() {
+        let _ = parse_feed_min_items("0");
+    }
+
+    #[test]
+    #[should_panic(expected = "valid test feeds.min_days")]
+    fn parse_feed_min_days_rejects_an_invalid_fixture() {
+        let _ = parse_feed_min_days("0");
+    }
+}
