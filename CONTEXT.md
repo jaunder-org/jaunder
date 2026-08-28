@@ -104,8 +104,11 @@ Client into a configured root's `local-media/` directory so a pulled Post is
 previewable offline. It is verified against the serving Jaunder instance and
 content hash, may be reused across Posts, and must travel with the Post files
 during backup or synchronization. It is managed content, not an evictable cache.
-_Avoid_: cache, external media (the source is the configured Jaunder instance),
-temporary download.
+The configured root is trusted, author-owned local state; symlinks are rejected
+during path creation and immediately before mutation, while replacement after
+that final check is outside Emacs Lisp's dirfd-free threat model. _Avoid_:
+cache, external media (the source is the configured Jaunder instance), temporary
+download.
 
 ## Relationships
 

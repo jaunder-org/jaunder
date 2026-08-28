@@ -1858,13 +1858,17 @@ URL hash must agree. External links and non-link URL text remain unchanged
 Verified bytes become durable **Local Media Copies** at
 `local-media/<sha256>/<decoded-filename>` under the configured root; native link
 targets use the canonical percent-encoded filename exactly once to resolve that
-leaf. Existing copies are hash-verified before reuse and never overwritten. A
-pull stages and verifies all distinct media, installs Local Media Copies,
-rewrites native links to relative local targets, and atomically installs the
-Post last. Failure leaves the Post server-only, so rerunning reconciliation
-retries it. Verified copies installed before an ordinary failure or crash remain
-safe to reuse. There is no rollback, cache eviction, matched-Post repair,
-arbitrary external download, or multi-file transaction promise.
+leaf. The root is trusted, author-owned local state. Path creation and immediate
+mutations reject symlinks and non-directory components, staging is exclusive,
+and copies are never overwritten. A malicious replacement after Emacs's final
+check remains out of scope because Emacs Lisp has no dirfd-anchored mutation.
+Existing copies are hash-verified before reuse. A pull stages and verifies all
+distinct media, installs Local Media Copies, rewrites native links to relative
+local targets, and atomically installs the Post last. Failure leaves the Post
+server-only, so rerunning reconciliation retries it. Verified copies installed
+before an ordinary failure or crash remain safe to reuse. There is no rollback,
+cache eviction, matched-Post repair, arbitrary external download, or multi-file
+transaction promise.
 
 ## Domain types and invariants
 

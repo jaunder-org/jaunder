@@ -156,12 +156,14 @@
                  (real-install (symbol-function 'jaunder--install-pulled-bytes))
                  (real-http (symbol-function 'jaunder--http-request))
                  (gets 0)
+                 counted-url
                  (media-upload-statuses nil)
                  (install-attempts 0))
              (cl-letf
               (((symbol-function 'jaunder--pull-media-get)
                 (lambda (&rest arguments)
-                  (setq gets (1+ gets))
+                  (when (equal (car arguments) counted-url)
+                    (setq gets (1+ gets)))
                   (apply real-get arguments)))
                ((symbol-function 'jaunder--install-pulled-bytes)
                 (lambda (path bytes)
@@ -182,7 +184,10 @@
                                             (match-string 1 media-url)))
                                          (copy (expand-file-name
                                                 (concat "local-media/" hash "/source image.png") root)))
-                                    (should-error (jaunder--pull-member root first))
+                                    (setq counted-url media-url)
+                                    (let ((failure (should-error (jaunder--pull-member root first))))
+                                      (should (equal (error-message-string failure)
+                                                     "injected final Post install failure")))
                                     (should-not
                                      (file-exists-p
                                       (expand-file-name
@@ -192,15 +197,18 @@
                                                      (buffer-string))
                                                    source-bytes))
                                     (should (= gets 1))
-                                    (let* ((pulled (jaunder--pull-member root first))
-                                           (path (jaunder-pull-result-path pulled))
+                                    (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t)))
+                                             (jaunder-reconcile root))
+                                    (let* ((path (expand-file-name
+                                                  (concat (jaunder-inventory-member-slug first) ".org")
+                                                  root))
                                            (before (with-temp-buffer
                                                      (insert-file-contents-literally copy)
                                                      (buffer-string)))
                                            (native-body
                                             (concat "[[file:local-media/" hash
                                                     "/source%20image.png]]")))
-                                      (should (eq (jaunder-pull-result-status pulled) 'pulled))
+                                      (should (file-exists-p path))
                                       (should (= gets 1))
                                       (should (equal
                                                (with-temp-buffer

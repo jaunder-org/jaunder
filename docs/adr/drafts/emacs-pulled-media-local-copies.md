@@ -47,9 +47,12 @@ Verified bytes become a **Local Media Copy** under the configured root at
 percent-encoded filename is decoded once and validated as a safe local leaf;
 native link targets retain that canonical encoding exactly once so they resolve
 to the decoded file. Local Media Copies are durable managed content with no
-eviction promise. Existing copies are reused only after their bytes hash to the
-expected digest; mismatches fail and are never overwritten. Path creation and
-installation reject symlink traversal and overwrite races.
+eviction promise. The configured root is trusted, author-owned local state: path
+creation and immediate mutations reject symlinks, non-directory components, and
+overwrites. The client cannot prevent malicious concurrent replacement after its
+final check because Emacs Lisp has no dirfd-anchored mutation; that race is
+explicitly out of scope. Existing copies are reused only after their bytes hash
+to the expected digest; mismatches fail and are never overwritten.
 
 A pull stages and verifies every distinct media object, installs Local Media
 Copies without overwrite, rewrites native-format link destinations to relative

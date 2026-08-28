@@ -49,9 +49,11 @@ pulled Post.
 - Duplicate references download once. Repeated Posts and retries reuse an
   existing local target only after hashing its bytes and confirming the same
   digest. A mismatching entry is corruption: fail loudly and never overwrite.
-- The client rejects symlink traversal and non-directory path components under
-  `local-media/`. New directories and media files are installed without
-  overwriting an existing filesystem entry.
+- The configured blog root is trusted, author-owned local state. Path creation
+  and each immediate mutation reject symlinks and non-directory components under
+  `local-media/`; staging files are created exclusively and files are never
+  overwritten. A malicious concurrent replacement after Emacs's final path check
+  is out of scope because Emacs Lisp has no dirfd-anchored mutation.
 - One Post pull is fail-closed. Download all candidate media to temporary files,
   validate every response and digest, install verified Local Media Copies, then
   atomically install the Post file last. Any failure leaves the Post destination

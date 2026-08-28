@@ -81,7 +81,8 @@
 (defun jaunder--pull-media-url-parts (url origin)
   "Return (HASH LEAF) when URL is eligible canonical media at ORIGIN.
 Return nil for every non-candidate form."
-  (let ((candidate (condition-case nil
+  (let ((case-fold-search nil)
+        (candidate (condition-case nil
                        (url-generic-parse-url url)
                      (error nil)))
         (configured (condition-case nil
@@ -111,8 +112,7 @@ Return nil for every non-candidate form."
          ((string-match-p "\\`/media/\\(?:upload\\|cached\\)/" path)
           ;; This resembles an authoritative media route.  Falling back to
           ;; a remote link here would silently weaken the offline contract.
-          (error "jaunder pull media: malformed canonical media URL: %s" url))))))
-  )
+          (error "jaunder pull media: malformed canonical media URL: %s" url)))))))
 
 (defun jaunder--pull-media-target (format hash filename fragment)
   "Return FORMAT's native target for HASH/FILENAME plus original FRAGMENT."
@@ -154,110 +154,328 @@ TABLE maps canonical URLs without fragments to mutable reference accumulators."
         (jaunder--pull-media-add-candidate
          table format origin body start (+ start (length raw-link)))))))
 
-(defun jaunder--pull-media-markdown-literal-p (body position line-start)
-  "Return non-nil when POSITION is literal Markdown after LINE-START in BODY."
-  (let* ((line-end (or (string-match "$" body position) (length body)))
-         (line (substring body line-start line-end))
-         (before (substring body line-start position)))
-    (or (string-match-p "\\`\\(?:    \\|\t\\)" line)
-        (string-match-p "\\\\\\(?:\\\\\\\\\\)*\\'" before)
-        (= 1 (% (cl-count ?` before) 2)))))
+(defun jaunder--pull-media-markdown-escaped-p (body position)
+  "Return non-nil when the character before POSITION escapes it."
+  (let ((cursor (1- position))
+        (slashes 0))
+    (while (and (>= cursor 0) (= (aref body cursor) ?\\))
+      (setq slashes (1+ slashes)
+            cursor (1- cursor)))
+    (= 1 (% slashes 2))))
+
+(defun jaunder--pull-media-markdown-label (body start end)
+  "Return BODY's normalized reference label between START and END."
+  (downcase (replace-regexp-in-string "[ \t\n\r]+" " "
+                                      (substring body start end))))
+
+(defun jaunder--pull-media-markdown-run-end (body position character)
+  "Return the first index after CHARACTER's run at POSITION in BODY."
+  (while (and (< position (length body)) (= (aref body position) character))
+    (setq position (1+ position)))
+  position)
+
+(defun jaunder--pull-media-markdown-code-end (body position width)
+  "Return the end of a WIDTH-backtick code span after POSITION, or nil."
+  (let ((limit (length body))
+        end)
+    (while (and (< position limit) (not end))
+      (if (= (aref body position) ?`)
+          (let ((run-end (jaunder--pull-media-markdown-run-end body position ?`)))
+            (if (= (- run-end position) width)
+                (setq end run-end)
+              (setq position run-end)))
+        (setq position (1+ position))))
+    end))
+
+(defun jaunder--pull-media-markdown-destination (body position closing)
+  "Return (START END AFTER) for a complete Markdown destination at POSITION.
+CLOSING is the required closing delimiter.  Return nil for malformed text."
+  (let ((limit (length body)))
+    (while (and (< position limit) (memq (aref body position) '(?\s ?\t)))
+      (setq position (1+ position)))
+    (let ((start position)
+          end)
+      (if (and (< position limit) (= (aref body position) ?<))
+          (progn
+            (setq start (1+ position)
+                  position start)
+            (while (and (< position limit)
+                        (/= (aref body position) ?>)
+                        (not (memq (aref body position) '(?\n ?\r))))
+              (setq position (1+ position)))
+            (when (and (< position limit) (> position start))
+              (setq end position
+                    position (1+ position))))
+        (let ((depth 0))
+          (while (and (< position limit)
+                      (or (> depth 0)
+                          (not (memq (aref body position)
+                                     (list ?\s ?\t ?\n ?\r closing)))))
+            (cond
+             ((and (= (aref body position) ?\\)
+                   (< (1+ position) limit))
+              (setq position (+ position 2)))
+             ((= (aref body position) ?\()
+              (setq depth (1+ depth)
+                    position (1+ position)))
+             ((= (aref body position) ?\))
+              (setq depth (1- depth)
+                    position (1+ position)))
+             (t
+              (setq position (1+ position)))))
+          (when (and (= depth 0) (> position start))
+            (setq end position))))
+      (when end
+        (while (and (< position limit) (memq (aref body position) '(?\s ?\t)))
+          (setq position (1+ position)))
+        (let ((title-valid t))
+          (when (and (< position limit)
+                     (memq (aref body position) '(?\" ?' ?\()))
+            (let* ((opener (aref body position))
+                   (title-close (if (= opener ?\() ?\) opener))
+                   (title-end nil))
+              (setq position (1+ position))
+              (while (and (< position limit) (not title-end)
+                          (not (memq (aref body position) '(?\n ?\r))))
+                (cond
+                 ((and (= (aref body position) ?\\)
+                       (< (1+ position) limit))
+                  (setq position (+ position 2)))
+                 ((= (aref body position) title-close)
+                  (setq title-end position
+                        position (1+ position)))
+                 (t
+                  (setq position (1+ position)))))
+              (unless title-end
+                (setq title-valid nil))))
+          (while (and title-valid (< position limit)
+                      (memq (aref body position) '(?\s ?\t)))
+            (setq position (1+ position)))
+          (when (and title-valid (< position limit)
+                     (= (aref body position) closing))
+            (list start end (1+ position))))))))
+
+(defun jaunder--pull-media-markdown-fence (body position)
+  "Return (CHARACTER WIDTH END) for a fence opener at POSITION, or nil."
+  (let ((line-end (or (string-search "\n" body position) (length body)))
+        (cursor position)
+        (spaces 0))
+    (while (and (< cursor line-end) (= (aref body cursor) ?\s) (< spaces 4))
+      (setq cursor (1+ cursor) spaces (1+ spaces)))
+    (when (and (<= spaces 3) (< cursor line-end)
+               (memq (aref body cursor) '(?` ?~)))
+      (let* ((character (aref body cursor))
+             (end (jaunder--pull-media-markdown-run-end body cursor character)))
+        (when (>= (- end cursor) 3)
+          (list character (- end cursor) line-end))))))
 
 (defun jaunder--pull-media-markdown-candidates (table format origin body)
-  "Collect Markdown inline and reference-definition destinations from BODY."
-  (let ((position 0)
-        (fenced nil)
-        (inline "!?\\[[^]]*\\][ \t]*([ \t]*\\(?:<\\([^> \t\r\n]+\\)>\\|\\([^() \t\r\n]+\\)\\)")
-        (definition "^[ \t]*\\[[^]]+\\]:[ \t]+\\(?:<\\([^> \t\r\n]+\\)>\\|\\([^ \t\r\n]+\\)\\)"))
-    (while (and (<= position (length body))
-                (string-match "\\(?:^.*$\\)" body position))
-      (let ((line-start (match-beginning 0))
-            (line-end (match-end 0))
-            (line (match-string 0 body)))
-        (when (string-match-p "^[ \t]*\\(?:```\\|~~~\\)" line)
-          (setq fenced (not fenced)))
-        (unless fenced
-          (dolist (regexp (list inline definition))
-            (let ((scan line-start))
-              (while (and (< scan line-end) (string-match regexp body scan))
-                (let ((next-scan (match-end 0)))
-                  (if (> next-scan line-end)
-                      (setq scan line-end)
-                    (let ((start (or (match-beginning 1) (match-beginning 2)))
-                          (end (or (match-end 1) (match-end 2))))
-                      (unless (jaunder--pull-media-markdown-literal-p
-                               body start line-start)
-                        (jaunder--pull-media-add-candidate
-                         table format origin body start end))
-                      (setq scan next-scan))))))))
-        (setq position
-              (if (= line-end (length body)) (1+ line-end) line-end))))))
-
-(defun jaunder--pull-media-html-comment-position-p (body position)
-  "Return non-nil when POSITION occurs inside an HTML comment in BODY."
-  (let ((prefix (substring body 0 position))
-        (starts 0)
-        (ends 0)
-        (scan 0))
-    (while (string-match "<!--" prefix scan)
-      (setq starts (1+ starts) scan (match-end 0)))
-    (setq scan 0)
-    (while (string-match "-->" prefix scan)
-      (setq ends (1+ ends) scan (match-end 0)))
-    (> starts ends)))
+  "Collect complete Markdown destinations from one lexical pass over BODY."
+  (let ((position 0) (limit (length body)) (line-start 0)
+        fence definitions uses)
+    (while (< position limit)
+      (cond
+       ((= (aref body position) ?\n)
+        (setq position (1+ position) line-start position))
+       ((= position line-start)
+        (let ((opening (jaunder--pull-media-markdown-fence body position)))
+          (cond
+           (fence
+            (when (and opening (= (nth 0 opening) (nth 0 fence))
+                       (>= (nth 1 opening) (nth 1 fence)))
+              (setq fence nil))
+            (setq position (if opening
+                               (1+ (nth 2 opening))
+                             (or (string-search "\n" body position) limit))))
+           (opening
+            (setq fence opening position (1+ (nth 2 opening))))
+           ((or (and (<= (+ position 4) limit)
+                     (equal (substring body position (+ position 4)) "    "))
+                (and (< position limit) (= (aref body position) ?\t)))
+            (setq position (or (string-search "\n" body position) limit)))
+           (t
+            (let ((cursor position)
+                  (definition-found nil))
+              (while (and (< cursor limit)
+                          (memq (aref body cursor) '(?\s ?\t))
+                          (< (- cursor position) 4))
+                (setq cursor (1+ cursor)))
+              (when (and (<= (+ cursor 3) limit)
+                         (= (aref body cursor) ?\[))
+                (let ((label-end
+                       (cl-position ?\] body :start (1+ cursor))))
+                  (when (and label-end (< (1+ label-end) limit)
+                             (= (aref body (1+ label-end)) ?:))
+                    (let ((destination
+                           (jaunder--pull-media-markdown-destination
+                            body (+ label-end 2) ?\n)))
+                      (when destination
+                        (setq definition-found t)
+                        (push
+                         (list
+                          (jaunder--pull-media-markdown-label
+                           body (1+ cursor) label-end)
+                          (car destination) (cadr destination))
+                         definitions)
+                        ;; A definition is not its own shortcut reference.
+                        (setq position
+                              (or (string-search "\n" body position)
+                                  limit)))))))
+              (unless definition-found
+                ;; Revisit this character through the ordinary link scanner
+                ;; after ruling out line-level literal/definition forms.
+                (setq line-start -1)))))))
+       (fence (setq position (1+ position)))
+       ((= (aref body position) ?`)
+        (let* ((end (jaunder--pull-media-markdown-run-end body position ?`))
+               (close (jaunder--pull-media-markdown-code-end body end (- end position))))
+          (setq position (or close end))))
+       ((and (= (aref body position) ?<) (not (jaunder--pull-media-markdown-escaped-p body position)))
+        (let ((end (cl-position ?> body :start (1+ position))))
+          (if (and end (not (string-match-p "[ \t\r\n]" (substring body (1+ position) end))))
+              (progn
+                (jaunder--pull-media-add-candidate table format origin body (1+ position) end)
+                (setq position (1+ end)))
+            (setq position (1+ position)))))
+       ((and (= (aref body position) ?\[)
+             (not (jaunder--pull-media-markdown-escaped-p body position)))
+        (let ((cursor (1+ position)) (depth 1))
+          (while (and (< cursor limit) (> depth 0))
+            (cond ((jaunder--pull-media-markdown-escaped-p body cursor) (setq cursor (1+ cursor)))
+                  ((= (aref body cursor) ?\[) (setq depth (1+ depth)))
+                  ((= (aref body cursor) ?\]) (setq depth (1- depth))))
+            (setq cursor (1+ cursor)))
+          (if (> depth 0)
+              (setq position (1+ position))
+            (let ((label-end (1- cursor)))
+              (cond
+               ((and (< cursor limit) (= (aref body cursor) ?\())
+                (let ((destination (jaunder--pull-media-markdown-destination body (1+ cursor) ?\))))
+                  (if destination
+                      (progn
+                        (jaunder--pull-media-add-candidate table format origin body
+                                                           (car destination) (cadr destination))
+                        (setq position (nth 2 destination)))
+                    (setq position cursor))))
+               ((and (< cursor limit) (= (aref body cursor) ?\[))
+                (let ((reference-end (cl-position ?\] body :start (1+ cursor))))
+                  (if reference-end
+                      (progn
+                        (push (jaunder--pull-media-markdown-label
+                               body (if (= reference-end (1+ cursor)) (1+ position) (1+ cursor))
+                               reference-end) uses)
+                        (setq position (1+ reference-end)))
+                    (setq position cursor))))
+               (t
+                (push (jaunder--pull-media-markdown-label body (1+ position) label-end) uses)
+                (setq position cursor)))))))
+       (t (setq position (1+ position)))))
+    (dolist (definition definitions)
+      (when (member (car definition) uses)
+        (jaunder--pull-media-add-candidate table format origin body
+                                           (nth 1 definition) (nth 2 definition))))))
 
 (defun jaunder--pull-media-html-attribute-spans (body)
-  "Return actual HTML attribute value spans in BODY.
-Comments and script/style raw-text content are skipped.  Names are ASCII
-case-insensitive and each result is (NAME START END), with NAME downcased."
-  (let ((position 0) spans)
-    (while (string-match "<\\([^!/?][^ \t\r\n/>]*\\)\\([^>]*\\)>" body position)
-      (let* ((tag (downcase (match-string 1 body)))
-             (attributes (match-string 2 body))
-             (base (match-beginning 2))
-             (next (match-end 0)))
-        (unless (or (member tag '("script" "style"))
-                    (save-match-data
-                      (jaunder--pull-media-html-comment-position-p body (match-beginning 0))))
-          (let ((attribute-position 0))
-            (while (string-match
-                    "\\(?:\\`\\|[ \t\r\n]\\)\\([[:alnum:]:-]+\\)[ \t\r\n]*=[ \t\r\n]*\\(?:\\(['\"]\\)\\([^'\"]*\\)\\2\\|\\([^'\" \t\r\n>]+\\)\\)"
-                    attributes attribute-position)
-              (let ((name (downcase (match-string 1 attributes)))
-                    (start (or (match-beginning 3) (match-beginning 4)))
-                    (end (or (match-end 3) (match-end 4))))
-                (push (list name (+ base start) (+ base end)) spans)
-                (setq attribute-position (match-end 0))))))
-        (setq position
-              (if (member tag '("script" "style"))
-                  (if (string-match (format "</[ \t\r\n]*%s[ \t\r\n]*>" tag) body next)
-                      (match-end 0)
-                    (length body))
-                next))))
+  "Return actual HTML attribute spans in one forward lexical pass over BODY."
+  (let ((position 0)
+        (limit (length body))
+        (attribute-regexp
+         (concat
+          "[ \t\r\n]+\\([[:alpha:]_:][[:alnum:]_.:-]*\\)"
+          "[ \t\r\n]*=[ \t\r\n]*"
+          "\\(?:\"\\([^\"]*\\)\"\\|'\\([^']*\\)'"
+          "\\|\\([^ \t\r\n>]+\\)\\)"))
+        spans)
+    (while (< position limit)
+      (let ((open (string-search "<" body position)))
+        (if (not open)
+            (setq position limit)
+          (setq position open)
+          (cond
+           ((and (<= (+ open 4) limit)
+                 (equal (substring body open (+ open 4)) "<!--"))
+            (let ((end (string-search "-->" body (+ open 4))))
+              (setq position (if end (+ end 3) limit))))
+           ((or (>= (1+ open) limit)
+                (memq (aref body (1+ open)) '(?! ?/ ??)))
+            (let ((end (cl-position ?> body :start (+ open 2))))
+              (setq position (if end (1+ end) limit))))
+           (t
+            (let ((cursor (1+ open)))
+              (while (and (< cursor limit)
+                          (memq (aref body cursor) '(?\s ?\t ?\r ?\n)))
+                (setq cursor (1+ cursor)))
+              (let ((name-start cursor))
+                (while (and (< cursor limit)
+                            (not (memq (aref body cursor)
+                                       '(?\s ?\t ?\r ?\n ?/ ?>))))
+                  (setq cursor (1+ cursor)))
+                (let ((tag (downcase (substring body name-start cursor)))
+                      (tag-end nil)
+                      (delimiter nil)
+                      (tag-scan cursor))
+                  (while (and (< tag-scan limit) (not tag-end))
+                    (let ((character (aref body tag-scan)))
+                      (cond
+                       (delimiter
+                        (when (= character delimiter)
+                          (setq delimiter nil)))
+                       ((memq character '(?\" ?\'))
+                        (setq delimiter character))
+                       ((= character ?>)
+                        (setq tag-end (1+ tag-scan)))))
+                    (setq tag-scan (1+ tag-scan)))
+                  (unless tag-end
+                    (setq tag-end limit))
+                  (unless (member tag '("script" "style"))
+                    (let ((case-fold-search t)
+                          (scan cursor))
+                      (while (and (< scan tag-end)
+                                  (string-match attribute-regexp body scan)
+                                  (< (match-beginning 0) tag-end)
+                                  (<= (match-end 0) tag-end))
+                        (let ((start
+                               (or (match-beginning 2)
+                                   (match-beginning 3)
+                                   (match-beginning 4)))
+                              (end
+                               (or (match-end 2)
+                                   (match-end 3)
+                                   (match-end 4)))
+                              (next-scan (match-end 0)))
+                          (push
+                           (list (downcase (match-string 1 body))
+                                 start end)
+                           spans)
+                          (setq scan next-scan)))))
+                  (setq position tag-end)
+                  (when (member tag '("script" "style"))
+                    (let ((case-fold-search t)
+                          (close
+                           (string-match
+                            (format "</[ \t\r\n]*%s[ \t\r\n]*>" tag)
+                            body position)))
+                      (setq position
+                            (if close (match-end 0) limit))))))))))))
     (nreverse spans)))
 
-(defun jaunder--pull-media-html-attribute-candidates (table format origin body)
-  "Collect supported HTML link attributes using actual attribute spans."
+(defun jaunder--pull-media-html-candidates (table format origin body)
+  "Collect supported HTML attributes and srcset items from shared spans."
   (dolist (span (jaunder--pull-media-html-attribute-spans body))
-    (when (member (car span) '("src" "href" "poster"))
-      (jaunder--pull-media-add-candidate table format origin body
-                                         (nth 1 span) (nth 2 span)))))
-
-(defun jaunder--pull-media-html-srcset-candidates (table format origin body)
-  "Collect individual srcset destinations from actual HTML attribute spans."
-  (dolist (span (jaunder--pull-media-html-attribute-spans body))
-    (when (equal (car span) "srcset")
-      (let ((value-start (nth 1 span))
-            (value (substring body (nth 1 span) (nth 2 span)))
-            (item-position 0))
-        (while (string-match "\\(?:\\`\\|,\\)[ \t\r\n]*\\([^, \t\r\n]+\\)" value item-position)
-          (let ((start (match-beginning 1))
-                (end (match-end 1))
-                (next-position (match-end 0)))
-            (jaunder--pull-media-add-candidate
-             table format origin body
-             (+ value-start start) (+ value-start end))
-            (setq item-position next-position)))))))
+    (pcase (car span)
+      ((or "src" "href" "poster")
+       (jaunder--pull-media-add-candidate table format origin body (nth 1 span) (nth 2 span)))
+      ("srcset"
+       (let ((value-start (nth 1 span)) (value (substring body (nth 1 span) (nth 2 span))) (cursor 0))
+         (while (and (< cursor (length value))
+                     (string-match "\\(?:\\`\\|,\\)[ \t\r\n]*\\([^, \t\r\n]+\\)" value cursor))
+           (let ((start (match-beginning 1))
+                 (end (match-end 1))
+                 (next-cursor (match-end 0)))
+             (jaunder--pull-media-add-candidate
+              table format origin body
+              (+ value-start start) (+ value-start end))
+             (setq cursor next-cursor))))))))
 
 (defun jaunder--pull-media-plan (format body origin)
   "Return a pure localization plan for FORMAT BODY at configured ORIGIN."
@@ -267,8 +485,7 @@ case-insensitive and each result is (NAME START END), with NAME downcased."
     (pcase format
       ("org" (jaunder--pull-media-org-candidates table format origin body))
       ("markdown" (jaunder--pull-media-markdown-candidates table format origin body))
-      ("html" (jaunder--pull-media-html-attribute-candidates table format origin body)
-       (jaunder--pull-media-html-srcset-candidates table format origin body)))
+      ("html" (jaunder--pull-media-html-candidates table format origin body)))
     (let (references)
       (maphash
        (lambda (url value)
@@ -329,8 +546,11 @@ The pinned plz 0.9.1 API cannot combine a file response with parsed headers, so
 this requests an un-decoded response and writes its body with no coding
 conversion.  Binding curl's default arguments removes its redirect option:
 public media identity and URL hash are valid only for the direct response."
-  (unless (and (stringp destination) (not (file-exists-p destination)))
-    (error "jaunder pull media: temporary destination already exists: %S" destination))
+  (unless (and (stringp destination)
+               (file-exists-p destination)
+               (not (file-symlink-p destination))
+               (file-regular-p destination))
+    (error "jaunder pull media: temporary destination is not a regular file: %S" destination))
   (let ((plz-curl-default-args
          (delete "--location" (copy-sequence plz-curl-default-args))))
     (condition-case err
@@ -366,8 +586,9 @@ public media identity and URL hash are valid only for the direct response."
   "Return ROOT's safe Local Media Copy path for HASH and decoded LEAF."
   (unless (and (stringp root) (file-name-absolute-p (expand-file-name root)))
     (error "jaunder pull media: configured root is invalid: %S" root))
-  (unless (string-match-p jaunder--pull-media-sha256-regexp hash)
-    (error "jaunder pull media: invalid planned hash: %S" hash))
+  (let ((case-fold-search nil))
+    (unless (string-match-p jaunder--pull-media-sha256-regexp hash)
+      (error "jaunder pull media: invalid planned hash: %S" hash)))
   (unless (jaunder--pull-media-safe-leaf-p leaf)
     (error "jaunder pull media: invalid decoded filename: %S" leaf))
   (let ((root (directory-file-name (expand-file-name root))))
@@ -401,7 +622,8 @@ public media identity and URL hash are valid only for the direct response."
   (unless (= (plist-get response :status) 200)
     (error "jaunder pull media: expected direct 200, got %S"
            (plist-get response :status)))
-  (let ((instances (jaunder--pull-media-header-values response "x-jaunder-instance"))
+  (let ((case-fold-search nil)
+        (instances (jaunder--pull-media-header-values response "x-jaunder-instance"))
         (etags (jaunder--pull-media-header-values response "etag")))
     (unless (and (= (length instances) 1)
                  (string-match-p jaunder--pull-media-instance-id-regexp (car instances))
@@ -416,11 +638,9 @@ public media identity and URL hash are valid only for the direct response."
     (error "jaunder pull media: downloaded bytes disagree with URL hash")))
 
 (defun jaunder--pull-media-temporary-path (target)
-  "Reserve a same-filesystem temporary name beside TARGET without retaining it."
-  (let ((temporary (make-temp-file
-                    (expand-file-name ".jaunder-media-" (file-name-directory target)))))
-    (delete-file temporary)
-    temporary))
+  "Create and retain an exclusive same-filesystem staging file beside TARGET."
+  (make-temp-file
+   (expand-file-name ".jaunder-media-" (file-name-directory target))))
 
 (defun jaunder--pull-media-clean-temporary (temporary)
   "Attempt to remove TEMPORARY without obscuring the triggering failure."
@@ -436,9 +656,10 @@ public media identity and URL hash are valid only for the direct response."
 Every distinct target is staged and verified before any installation.  Existing
 verified copies are reused without a request.  A no-overwrite installation race
 may reuse only a byte-for-byte verified concurrent copy."
-  (unless (and (stringp instance-id)
-               (string-match-p jaunder--pull-media-instance-id-regexp instance-id))
-    (error "jaunder pull media: Member instance identity is not canonical"))
+  (let ((case-fold-search nil))
+    (unless (and (stringp instance-id)
+                 (string-match-p jaunder--pull-media-instance-id-regexp instance-id))
+      (error "jaunder pull media: Member instance identity is not canonical")))
   (let ((targets (make-hash-table :test #'equal))
         staged)
     (dolist (reference (jaunder-pull-media-plan-references plan))

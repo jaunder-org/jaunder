@@ -45,7 +45,9 @@ Out:
     Member identity; computed SHA-256 must match the canonical URL hash and
     strong `"sha256-<hash>"` response ETag. Install at
     `local-media/<sha256>/<decoded-filename>` without symlink traversal or
-    overwrite; verify existing bytes before reuse.
+    overwrite; create staging files exclusively and verify existing bytes before
+    reuse. The root is trusted author-owned state: replacement after Emacs's
+    final check is out of scope without dirfd-anchored mutation.
   - Contract: stage all distinct downloads, retain verified copies after any
     late failure, and clean temporaries. Reuse remains internal; tests count
     calls at the binary-adapter seam without adding production-only evidence.
