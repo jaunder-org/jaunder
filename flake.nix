@@ -1515,6 +1515,11 @@
               pkgs.cargo-llvm-cov
               pkgs.cargo-nextest
               pkgs.curl
+              # The shell exports Nix OpenSSL through `LD_LIBRARY_PATH` for
+              # host-built Rust binaries. Use the matching Nix git too: a
+              # distro git would load that OpenSSL into its older host glibc
+              # process, which fails before Nix can fetch git inputs (#815).
+              pkgs.git
               # `devtool run -- <cmd>` for humans/agents, and the `shellHook`'s
               # `devtool provision-node-modules` (#229) — so it must be on PATH in the
               # CI shell too, not just the interactive one. Already built for the
