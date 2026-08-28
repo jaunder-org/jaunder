@@ -627,6 +627,42 @@ Optional filters:
 (`cargo xtask traces analyze` additionally accepts `--project NAME` to focus one
 browser/project when analyzing already-collected trace files directly.)
 
+### Backend axis: suite wall-clock versus server cost (#817)
+
+The preserved #792 corpus contains 24 gate-identical captures: six runs of each
+`{sqlite,postgres} × {chromium,firefox}` combination. It supports dropping the
+backend axis for **suite wall-clock** under the current gate composition, but
+not because the backends perform alike. The suite comparison below is the
+post-warmup arm-B median over three runs per combination:
+
+| browser  | SQLite median | PostgreSQL median | PostgreSQL Δ |
+| -------- | ------------- | ----------------- | ------------ |
+| Chromium | 174.0 s       | 171.5 s           | −1.4%        |
+| Firefox  | 256.0 s       | 257.8 s           | +0.7%        |
+
+The current-gate arm-B medians differ by no more than ±1.5%, in opposite
+directions across browsers. Individual-run noise can be wider. Server-side
+distributions are materially different:
+
+| combination         | `request` total | `storage.*` total | `storage.*` p50 | `request` p90 |
+| ------------------- | --------------- | ----------------- | --------------- | ------------- |
+| SQLite/Chromium     | 52.4 s          | 60.8 s            | 5.99 ms         | 52.3 ms       |
+| PostgreSQL/Chromium | 31.8 s          | 37.4 s            | 4.27 ms         | 32.3 ms       |
+| SQLite/Firefox      | 46.0 s          | 55.7 s            | 6.22 ms         | 44.3 ms       |
+| PostgreSQL/Firefox  | 29.7 s          | 36.5 s            | 4.17 ms         | 28.7 ms       |
+
+Operation counts differ by less than 1%, so SQLite costs roughly **1.4× per
+storage operation** and roughly **1.5× in aggregate server/storage time**. The
+suite cannot resolve that difference because server time is only about 18% of
+in-test span time. Under two workers, the roughly 20-second server delta becomes
+about 10 seconds of wall-clock inside a 174–258 second client-dominated suite.
+
+Therefore, suite-level performance investigations may decide on one backend
+while this composition holds. Storage- or request-span analysis must retain the
+backend axis. This conclusion has a shelf life: if client-side work such as #819
+reduces the dominant cost enough to increase the server share, re-establish
+suite-level backend independence before dropping the axis again.
+
 ## #818 — why firefox is slower: wasm compile (findings, 2026-08-05)
 
 **Verdict: actionable, and it is wasm compile+instantiate.** Firefox spends
@@ -2172,8 +2208,10 @@ from the traces entirely, which is its own argument for removing it.
 - **Firefox `e2e.context_mint` is ~5× chromium's** (p50 511–596 ms vs 96–115 ms;
   81–87 s vs 15–19 s per combo). After the warmup goes, this is the largest
   remaining envelope cost — see #819.
-- **sqlite ≈ postgres**, holding across all six runs (e.g. B3 chromium 172.0 vs
-  171.5 s). Evidence for #817.
+- **Current-gate arm-B suite medians differ by no more than ±1.5%** (Chromium
+  174.0 s SQLite vs 171.5 s PostgreSQL; Firefox 256.0 s vs 257.8 s). Individual
+  runs vary more. This does not imply server/storage equivalence; see #817 and
+  the backend-axis guidance.
 - **Firefox is ~1.47× chromium in both arms**, so the warmup is not what makes
   it slow — see #818.
 - The suite is **roughly twice as fast as #788 measured** (chromium 226.8 s vs
