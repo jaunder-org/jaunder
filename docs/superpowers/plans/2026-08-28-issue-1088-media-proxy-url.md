@@ -30,7 +30,7 @@ Out:
     valid `Location`, authenticated malformed/relative/non-HTTP(S)/empty-host
     400 responses, unauthenticated malformed 401 precedence, and mismatched-user
     401 behavior.
-- [ ] Task 2: Add browser-level proxy endpoint conformance
+- [x] Task 2: Add browser-level proxy endpoint conformance
   - Depends on: Task 1's status and `Location` contract.
   - Contract: add `signInAsNewUserRecord(page) -> SeedRecord` in the existing
     helper layer, built from `seedUserViaTool` plus `applySeededSession`; the

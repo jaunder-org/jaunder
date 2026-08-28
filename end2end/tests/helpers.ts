@@ -73,6 +73,7 @@ import {
   applySeededSession,
   createSessionViaTool,
   seedUserViaTool,
+  type SeedRecord,
 } from "./seed";
 import { SEL } from "./selectors";
 
@@ -240,14 +241,24 @@ export function generateUsername(prefix = "user"): string {
 
 /**
  * Seed a fresh account + session out-of-band and inject it into `page`'s
+ * context, returning the complete seed record. No UI flow and NO navigation
+ * (spec D5): the test's own first `goto` becomes the cold navigation, saving
+ * a whole page load on top of the form and submit.
+ */
+export async function signInAsNewUserRecord(page: Page): Promise<SeedRecord> {
+  const record = await seedUserViaTool(generateUsername(), TEST_PASSWORD);
+  await applySeededSession(page.context(), record);
+  return record;
+}
+
+/**
+ * Seed a fresh account + session out-of-band and inject it into `page`'s
  * context, returning the generated username. No UI flow and NO navigation
  * (spec D5): the test's own first `goto` becomes the cold navigation, saving
  * a whole page load on top of the form and submit.
  */
 export async function signInAsNewUser(page: Page): Promise<string> {
-  const record = await seedUserViaTool(generateUsername(), TEST_PASSWORD);
-  await applySeededSession(page.context(), record);
-  return record.username;
+  return (await signInAsNewUserRecord(page)).username;
 }
 
 /**
