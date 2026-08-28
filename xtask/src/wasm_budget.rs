@@ -9,34 +9,34 @@
 
 use serde::Serialize;
 
-/// Raw bytes of `pkg/jaunder.wasm` achieved by #836, via `wasm-opt -Oz`.
-/// Down from 5 350 591 before the optimisation pass existed.
+/// Raw bytes of `pkg/jaunder.wasm` achieved after the owner Post Revision
+/// history UI landed (#1055), still using `wasm-opt -Oz`.
 ///
 /// `validate` reports observed size as a drift against this. **A drift of a few
 /// bytes is build noise, not erosion**: the artifact is not bit-reproducible
 /// across builds — a docs-only commit was observed to move it by 13 bytes. Read
 /// the drift for its order of magnitude, not its sign; kilobytes mean something
-/// changed, single bytes do not.
-pub const WASM_RAW_ACHIEVED_BYTES: u64 = 2_267_063;
+/// changed.
+pub const WASM_RAW_ACHIEVED_BYTES: u64 = 2_446_641;
 
 /// The ceiling `cargo xtask validate` enforces.
 ///
-/// Headroom is **3.2%** over [`WASM_RAW_ACHIEVED_BYTES`], chosen to sit in a
-/// specific gap rather than picked for roundness:
+/// Headroom is **3.2%** over [`WASM_RAW_ACHIEVED_BYTES`]. The three optimisation
+/// levels were re-measured on the history-enabled bundle:
 ///
 /// | build                      | raw bytes |
 /// | -------------------------- | --------- |
-/// | `-Oz` (achieved)           | 2 267 063 |
-/// | **ceiling**                | **2 340 000** |
-/// | `-Os`                      | 2 357 119 |
-/// | `-O2`                      | 2 390 164 |
+/// | `-Oz` (achieved)           | 2 446 641 |
+/// | **ceiling**                | **2 525 000** |
+/// | `-Os`                      | 2 535 744 |
+/// | `-O2`                      | 2 571 353 |
 ///
-/// So it absorbs an innocent dependency bump, but a silent downgrade of the
-/// optimisation level — the most likely way this win gets lost — lands *above*
-/// the ceiling and fails the gate.
+/// The ceiling leaves ordinary headroom but remains below both weaker
+/// optimisation levels, so losing `-Oz` still fails rather than being hidden by
+/// the feature-driven recalibration.
 ///
 /// Lower it deliberately, in the same commit as the win that earned it.
-pub const WASM_RAW_CEILING_BYTES: u64 = 2_340_000;
+pub const WASM_RAW_CEILING_BYTES: u64 = 2_525_000;
 
 #[derive(Debug, Serialize)]
 pub struct BudgetVerdict {
@@ -109,8 +109,8 @@ mod tests {
     /// The committed ceiling is positioned against these, so they are the fixture
     /// the next three tests run the real predicate over.
     const NO_WASM_OPT_BYTES: u64 = 5_350_591;
-    const O2_LEVEL_BYTES: u64 = 2_390_164;
-    const OS_LEVEL_BYTES: u64 = 2_357_119;
+    const O2_LEVEL_BYTES: u64 = 2_571_353;
+    const OS_LEVEL_BYTES: u64 = 2_535_744;
 
     #[test]
     fn the_achieved_size_passes_its_own_budget() {
