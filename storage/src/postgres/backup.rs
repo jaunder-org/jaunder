@@ -122,6 +122,10 @@ pub(crate) async fn restore_database(
     if !pre_identity {
         validate_instance_identity_backup(source_path, manifest)?;
     }
+    sqlx::query("BEGIN")
+        .execute(&mut *connection)
+        .await
+        .map_err(map_restore_error)?;
     // Defer foreign keys until COMMIT while preserving a parent-first import
     // order for constraints that cannot be deferred, such as revision-media
     // subject triggers. Every FK is still checked once, at COMMIT — a
