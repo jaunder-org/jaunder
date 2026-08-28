@@ -16,7 +16,7 @@ use jaunder::commands::{
     cmd_restore, cmd_serve, cmd_smtp_test, cmd_user_create, cmd_user_invite, prepare_server,
 };
 use storage::{
-    BackupError, BackupMode, OpenedDatabase, open_database, open_existing_database,
+    BackupError, BackupManifest, BackupMode, OpenedDatabase, open_database, open_existing_database,
     open_existing_database_with_observer,
 };
 use tempfile::TempDir;
@@ -635,6 +635,182 @@ async fn cmd_user_invite_default_expires_in(#[case] backend: Backend) {
 // `FromStr` parse, upstream of `cmd_user_invite`, and is covered by the newtype's
 // unit test. A valid explicit TTL is covered by
 // `cmd_user_invite_creates_retrievable_invite`.
+
+// ADR-0064: every live table is included unless the format denylist deliberately
+// excludes it. This exercises the public command seam on both backends.
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_backup_covers_every_table_or_deliberately_excludes_it(#[case] backend: Backend) {
+    let base = TempDir::new().expect("temp dir");
+    let (args, _pg) = storage_args(backend, &base).await;
+    cmd_init(&args, false).await.expect("init");
+
+    let backup_path = base.path().join("backup");
+    cmd_backup(&args, BackupMode::Directory, Some(backup_path.clone()))
+        .await
+        .expect("backup");
+
+    let mut tables = serde_json::from_str::<BackupManifest>(
+        &std::fs::read_to_string(backup_path.join("manifest.json")).expect("read manifest"),
+    )
+    .expect("parse manifest")
+    .tables;
+    tables.sort();
+    assert_eq!(
+        tables,
+        [
+            "audience_members",
+            "audiences",
+            "channels",
+            "email_verifications",
+            "feed_events",
+            "idempotency_keys",
+            "instance_identity",
+            "invites",
+            "media",
+            "password_resets",
+            "post_audiences",
+            "post_media",
+            "post_revisions",
+            "post_tags",
+            "posts",
+            "sessions",
+            "site_config",
+            "subscription_statuses",
+            "subscriptions",
+            "tags",
+            "target_kinds",
+            "user_config",
+            "users",
+        ]
+    );
+}
+
+// A pristine restore replaces the target's bootstrap identity with the identity
+// from the source backup on both supported storage backends.
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_adopts_backup_instance_identity(#[case] backend: Backend) {
+    let source_base = TempDir::new().expect("source temp dir");
+    let (source_args, _pg_source) = storage_args(backend, &source_base).await;
+    cmd_init(&source_args, false).await.expect("init source");
+    let source_identity = open_existing_database_with_observer(
+        &source_args.db,
+        &storage::StorageRuntimeConfig::default(),
+    )
+    .await
+    .expect("open source")
+    .instance_id;
+    let backup_path = source_base.path().join("backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
+
+    let target_base = TempDir::new().expect("target temp dir");
+    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
+    cmd_init(&target_args, false).await.expect("init target");
+    let bootstrap_identity = open_existing_database_with_observer(
+        &target_args.db,
+        &storage::StorageRuntimeConfig::default(),
+    )
+    .await
+    .expect("open target")
+    .instance_id;
+    assert_ne!(source_identity, bootstrap_identity);
+
+    cmd_restore(&target_args, &backup_path)
+        .await
+        .expect("restore");
+    let restored_identity = open_existing_database_with_observer(
+        &target_args.db,
+        &storage::StorageRuntimeConfig::default(),
+    )
+    .await
+    .expect("reopen target")
+    .instance_id;
+    assert_eq!(restored_identity, source_identity);
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_backup_propagates_media_mirror_failure(#[case] backend: Backend) {
+    let base = TempDir::new().expect("temp dir");
+    let (args, _pg) = storage_args(backend, &base).await;
+    cmd_init(&args, false).await.expect("init");
+    let media_path = args.storage_path.join("media");
+    std::fs::remove_dir_all(&media_path).expect("remove media directory");
+    std::fs::write(&media_path, "not a directory").expect("replace media with file");
+
+    let error = cmd_backup(
+        &args,
+        BackupMode::Directory,
+        Some(base.path().join("backup")),
+    )
+    .await
+    .expect_err("backup propagates media traversal failure");
+    assert!(matches!(
+        error.downcast_ref::<BackupError>(),
+        Some(BackupError::Io(_))
+    ));
+}
+
+// Migration 0026 archives predate instance_identity. They restore successfully
+// by bootstrapping a new identity instead of copying a missing row.
+#[apply(backends)]
+#[tokio::test]
+async fn cmd_restore_pre_identity_backup_bootstraps_new_identity(#[case] backend: Backend) {
+    let source_base = TempDir::new().expect("source temp dir");
+    let (source_args, _pg_source) = storage_args(backend, &source_base).await;
+    cmd_init(&source_args, false).await.expect("init source");
+    let backup_path = source_base.path().join("backup");
+    cmd_backup(
+        &source_args,
+        BackupMode::Directory,
+        Some(backup_path.clone()),
+    )
+    .await
+    .expect("backup");
+
+    let manifest_path = backup_path.join("manifest.json");
+    let mut manifest: BackupManifest =
+        serde_json::from_str(&std::fs::read_to_string(&manifest_path).expect("read manifest"))
+            .expect("parse manifest");
+    manifest.schema_version = 26;
+    manifest.tables.retain(|table| table != "instance_identity");
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).expect("serialize manifest"),
+    )
+    .expect("write manifest");
+    std::fs::remove_file(backup_path.join("db").join("instance_identity.ndjson"))
+        .expect("remove instance identity export");
+
+    let target_base = TempDir::new().expect("target temp dir");
+    let (target_args, _pg_target) = storage_args(backend, &target_base).await;
+    cmd_init(&target_args, false).await.expect("init target");
+    let bootstrap_identity = open_existing_database_with_observer(
+        &target_args.db,
+        &storage::StorageRuntimeConfig::default(),
+    )
+    .await
+    .expect("open target")
+    .instance_id;
+    cmd_restore(&target_args, &backup_path)
+        .await
+        .expect("restore pre-identity backup");
+    let restored_identity = open_existing_database_with_observer(
+        &target_args.db,
+        &storage::StorageRuntimeConfig::default(),
+    )
+    .await
+    .expect("reopen target")
+    .instance_id;
+    assert_ne!(restored_identity, bootstrap_identity);
+}
 
 // M6.3.2: backup command writes a directory-mode backup.
 #[apply(backends)]
