@@ -36,7 +36,7 @@ Out:
     formats; `srcset`; encoded spaces/percent/non-ASCII; duplicates; and every
     unchanged URL class.
 
-- [ ] Task 2: Materialize verified Local Media Copies without credentials or
+- [x] Task 2: Materialize verified Local Media Copies without credentials or
       overwrite
   - Contract: add a pull-media binary adapter that never calls the authenticated
     AtomPub transport, sends no App Password, follows no redirect, accepts only

@@ -1,17 +1,19 @@
-;;; jaunder-pull-media.el --- Pure pulled-media localization -*- lexical-binding: t; -*-
+;;; jaunder-pull-media.el --- Pulled-media localization and verified copies -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Jaunder contributors
 
 ;;; Commentary:
-;; Plan and apply native-source media localization without touching transport or
-;; the filesystem.  The server URL is the authority for its content hash and
-;; canonical filename; this module only admits that already-canonical spelling.
+;; Plan native-source media localization, then fetch and materialize verified
+;; Local Media Copies.  The server URL is the authority for content hash and
+;; canonical filename; public-media requests are anonymous and direct.
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'url-parse)
 (require 'url-util)
+(require 'seq)
+(require 'plz)
 
 (cl-defstruct (jaunder-pull-media-reference
                (:constructor jaunder--make-pull-media-reference))
@@ -232,6 +234,173 @@ Quoted and bare src, href, and poster attributes are eligible."
       (setq body (concat (substring body 0 (nth 0 replacement))
                          (nth 2 replacement)
                          (substring body (nth 1 replacement)))))))
+
+(defconst jaunder--pull-media-instance-id-regexp
+  "\\`[0-9a-f]\\{8\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{4\\}-[0-9a-f]\\{12\\}\\'")
+
+(defconst jaunder--pull-media-sha256-regexp "\\`[0-9a-f]\\{64\\}\\'")
+
+(defun jaunder--pull-media-header-values (response name)
+  "Return all RESPONSE header values named NAME, case-insensitively."
+  (let ((downcased (downcase name)))
+    (cl-loop for (key . value) in (plist-get response :headers)
+             when (equal (downcase (format "%s" key)) downcased)
+             collect value)))
+
+(defun jaunder--pull-media-write-bytes (bytes destination)
+  "Write un-decoded response BYTES to DESTINATION exactly once."
+  (let ((coding-system-for-write 'no-conversion))
+    (write-region bytes nil destination nil 'silent)))
+
+(defun jaunder--pull-media-get (url destination)
+  "Fetch public media URL anonymously into DESTINATION and return its metadata.
+The pinned plz 0.9.1 API cannot combine a file response with parsed headers, so
+this requests an un-decoded response and writes its body with no coding
+conversion.  Binding curl's default arguments removes its redirect option:
+public media identity and URL hash are valid only for the direct response."
+  (unless (and (stringp destination) (not (file-exists-p destination)))
+    (error "jaunder pull media: temporary destination already exists: %S" destination))
+  (let ((plz-curl-default-args
+         (delete "--location" (copy-sequence plz-curl-default-args))))
+    (condition-case err
+        (let ((response (plz 'get url :as 'response :decode nil)))
+          (jaunder--pull-media-write-bytes (plz-response-body response) destination)
+          (list :status (plz-response-status response)
+                :headers (plz-response-headers response)))
+      (plz-error
+       (let* ((plz-error (seq-find #'plz-error-p (cdr err)))
+              (response (and plz-error (plz-error-response plz-error))))
+         (if response
+             (progn
+               (jaunder--pull-media-write-bytes (plz-response-body response) destination)
+               (list :status (plz-response-status response)
+                     :headers (plz-response-headers response)))
+           (signal (car err) (cdr err))))))))
+
+(defun jaunder--pull-media-ensure-directory (directory)
+  "Return DIRECTORY after refusing symlinks and non-directory components."
+  (cond
+   ((file-symlink-p directory)
+    (error "jaunder pull media: refusing symlink directory: %s" directory))
+   ((file-exists-p directory)
+    (unless (file-directory-p directory)
+      (error "jaunder pull media: non-directory path component: %s" directory)))
+   (t
+    (make-directory directory)))
+  (unless (file-writable-p directory)
+    (error "jaunder pull media: unwritable directory: %s" directory))
+  directory)
+
+(defun jaunder--pull-media-target-path (root hash leaf)
+  "Return ROOT's safe Local Media Copy path for HASH and decoded LEAF."
+  (unless (and (stringp root) (file-name-absolute-p (expand-file-name root)))
+    (error "jaunder pull media: configured root is invalid: %S" root))
+  (unless (string-match-p jaunder--pull-media-sha256-regexp hash)
+    (error "jaunder pull media: invalid planned hash: %S" hash))
+  (unless (jaunder--pull-media-safe-leaf-p leaf)
+    (error "jaunder pull media: invalid decoded filename: %S" leaf))
+  (let ((root (directory-file-name (expand-file-name root))))
+    (jaunder--pull-media-ensure-directory root)
+    (let ((media (expand-file-name "local-media" root)))
+      (jaunder--pull-media-ensure-directory media)
+      (let ((digest (expand-file-name hash media)))
+        (jaunder--pull-media-ensure-directory digest)
+        (expand-file-name leaf digest)))))
+
+(defun jaunder--pull-media-file-sha256 (path)
+  "Return SHA-256 of PATH's literal bytes without decoding its contents."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally path)
+    (secure-hash 'sha256 (current-buffer))))
+
+(defun jaunder--pull-media-verified-file-p (path hash)
+  "Return non-nil when PATH is a regular file with SHA-256 HASH."
+  (and (not (file-symlink-p path))
+       (file-regular-p path)
+       (equal (jaunder--pull-media-file-sha256 path) hash)))
+
+(defun jaunder--pull-media-require-existing-copy (path hash)
+  "Verify existing PATH has HASH, rejecting every unsafe or corrupt reuse."
+  (unless (jaunder--pull-media-verified-file-p path hash)
+    (error "jaunder pull media: existing copy is unsafe or corrupt: %s" path)))
+
+(defun jaunder--pull-media-validate-response (response instance-id hash temporary)
+  "Validate RESPONSE and TEMPORARY against INSTANCE-ID and planned HASH."
+  (unless (= (plist-get response :status) 200)
+    (error "jaunder pull media: expected direct 200, got %S"
+           (plist-get response :status)))
+  (let ((instances (jaunder--pull-media-header-values response "x-jaunder-instance"))
+        (etags (jaunder--pull-media-header-values response "etag")))
+    (unless (and (= (length instances) 1)
+                 (string-match-p jaunder--pull-media-instance-id-regexp (car instances))
+                 (equal (car instances) instance-id))
+      (error "jaunder pull media: media response has invalid instance identity"))
+    (unless (and (= (length etags) 1)
+                 (string-match
+                  (concat "\\`\"" "\\([0-9a-f]\\{64\\}\\)" "\"\\'") (car etags))
+                 (equal (match-string 1 (car etags)) hash))
+      (error "jaunder pull media: media response ETag disagrees with URL hash")))
+  (unless (equal (jaunder--pull-media-file-sha256 temporary) hash)
+    (error "jaunder pull media: downloaded bytes disagree with URL hash")))
+
+(defun jaunder--pull-media-temporary-path (target)
+  "Reserve a same-filesystem temporary name beside TARGET without retaining it."
+  (let ((temporary (make-temp-file
+                    (expand-file-name ".jaunder-media-" (file-name-directory target)))))
+    (delete-file temporary)
+    temporary))
+
+(defun jaunder--pull-media-materialize (root instance-id plan)
+  "Materialize PLAN's verified Local Media Copies under configured ROOT.
+Every distinct target is staged and verified before any installation.  Existing
+verified copies are reused without a request.  A no-overwrite installation race
+may reuse only a byte-for-byte verified concurrent copy."
+  (unless (and (stringp instance-id)
+               (string-match-p jaunder--pull-media-instance-id-regexp instance-id))
+    (error "jaunder pull media: Member instance identity is not canonical"))
+  (let ((targets (make-hash-table :test #'equal))
+        staged)
+    (dolist (reference (jaunder-pull-media-plan-references plan))
+      (let* ((hash (jaunder-pull-media-reference-hash reference))
+             (leaf (jaunder-pull-media-reference-leaf reference))
+             (target (jaunder--pull-media-target-path root hash leaf)))
+        (unless (gethash target targets)
+          (puthash target reference targets))))
+    (unwind-protect
+        (progn
+          (maphash
+           (lambda (target reference)
+             (let ((hash (jaunder-pull-media-reference-hash reference)))
+               (if (or (file-exists-p target) (file-symlink-p target))
+                   (jaunder--pull-media-require-existing-copy target hash)
+                 (let ((temporary (jaunder--pull-media-temporary-path target)))
+                   (condition-case err
+                       (let ((response (jaunder--pull-media-get
+                                        (jaunder-pull-media-reference-url reference) temporary)))
+                         (jaunder--pull-media-validate-response
+                          response instance-id hash temporary)
+                         (push (list temporary target hash) staged))
+                     (error
+                      (when (file-exists-p temporary) (delete-file temporary))
+                      (signal (car err) (cdr err))))))))
+           targets)
+          (dolist (copy (nreverse staged))
+            (pcase-let ((`(,temporary ,target ,hash) copy))
+              (condition-case err
+                  (rename-file temporary target nil)
+                (file-already-exists
+                 (jaunder--pull-media-require-existing-copy target hash))
+                (file-error
+                 ;; A concurrent creator may win after the failed no-overwrite rename.
+                 (if (or (file-exists-p target) (file-symlink-p target))
+                     (jaunder--pull-media-require-existing-copy target hash)
+                   (signal (car err) (cdr err)))))))
+          nil)
+      (dolist (copy staged)
+        (let ((temporary (car copy)))
+          (when (file-exists-p temporary)
+            (delete-file temporary)))))))
 
 (provide 'jaunder-pull-media)
 ;;; jaunder-pull-media.el ends here
