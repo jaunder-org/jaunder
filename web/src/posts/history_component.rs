@@ -9,13 +9,13 @@ use leptos_router::hooks::use_params_map;
 
 use common::ids::{PostId, RevisionId};
 use common::pagination::PageSize;
-use common::time::UtcInstant;
 
 use super::{
-    AuthenticatedHistoryState, CurrentPostHistory, HistoryListState, PostRevisionHistory,
-    RevisionHistoryCursor, RevisionHistoryDetail, RevisionHistoryMetadata, RevisionHistoryPage,
-    RevisionLifecycle, authenticated_history_state, get_post_history, get_revision_history_detail,
-    list_history, load_authenticated_history,
+    AuthenticatedHistoryState, CurrentPostHistory, HistoryCollectionDisplay, HistoryDisplayRow,
+    HistoryListState, PostRevisionHistory, RevisionHistoryCursor, RevisionHistoryDetail,
+    RevisionHistoryMetadata, RevisionHistoryPage, RevisionLifecycle, authenticated_history_state,
+    current_history_rows, get_post_history, get_revision_history_detail, list_history,
+    load_authenticated_history, revision_collection_displays, revision_history_rows,
 };
 use crate::topbar::Topbar;
 
@@ -50,10 +50,6 @@ fn lifecycle_label(lifecycle: &RevisionLifecycle) -> &'static str {
     }
 }
 
-fn optional_instant(value: Option<UtcInstant>) -> String {
-    value.map_or_else(|| "Not set".to_owned(), |value| value.to_string())
-}
-
 fn optional_title<T: ToString>(value: Option<T>) -> String {
     value.map_or_else(|| "No title".to_owned(), |value| value.to_string())
 }
@@ -68,6 +64,17 @@ fn history_auth_required() -> impl IntoView {
                 </a>
             </p>
         </div>
+    }
+}
+
+fn history_state_view(state: AuthenticatedHistoryState<AnyView>) -> AnyView {
+    match state {
+        AuthenticatedHistoryState::Ready(view) => view,
+        AuthenticatedHistoryState::NotFound => "Page not found.".into_any(),
+        AuthenticatedHistoryState::AuthRequired => history_auth_required().into_any(),
+        AuthenticatedHistoryState::Failed(error) => {
+            view! { <p class="error">{error.to_string()}</p> }.into_any()
+        }
     }
 }
 
@@ -95,16 +102,16 @@ pub fn HistoryPage() -> impl IntoView {
                     view! { <p class="j-loading">"Loading\u{2026}"</p> }
                 }>
                     {move || Suspend::new(async move {
-                        match initial.await {
+                        let state = match initial.await {
                             Ok(Some(page)) => {
-                                view! { <HistoryList initial=page scope=HistoryScope::Global /> }
-                                    .into_any()
+                                AuthenticatedHistoryState::Ready(
+                                    history_list(page, HistoryScope::Global).into_any(),
+                                )
                             }
-                            Ok(None) => history_auth_required().into_any(),
-                            Err(error) => {
-                                view! { <p class="error">{error.to_string()}</p> }.into_any()
-                            }
-                        }
+                            Ok(None) => AuthenticatedHistoryState::AuthRequired,
+                            Err(error) => AuthenticatedHistoryState::Failed(error),
+                        };
+                        history_state_view(state)
                     })}
                 </Suspense>
             </div>
@@ -140,18 +147,9 @@ pub fn PostHistoryPage() -> impl IntoView {
                     view! { <p class="j-loading">"Loading\u{2026}"</p> }
                 }>
                     {move || Suspend::new(async move {
-                        match authenticated_history_state(post_id().is_some(), initial.await) {
-                            AuthenticatedHistoryState::Ready(history) => {
-                                post_history_view(history).into_any()
-                            }
-                            AuthenticatedHistoryState::NotFound => "Page not found.".into_any(),
-                            AuthenticatedHistoryState::AuthRequired => {
-                                history_auth_required().into_any()
-                            }
-                            AuthenticatedHistoryState::Failed(error) => {
-                                view! { <p class="error">{error.to_string()}</p> }.into_any()
-                            }
-                        }
+                        let state = authenticated_history_state(post_id().is_some(), initial.await)
+                            .map_ready(|history| post_history_view(history).into_any());
+                        history_state_view(state)
                     })}
                 </Suspense>
             </div>
@@ -162,26 +160,15 @@ pub fn PostHistoryPage() -> impl IntoView {
 fn post_history_view(history: PostRevisionHistory) -> impl IntoView {
     let post_id = history.current.post_id;
     view! {
-        <CurrentPostSummary current=history.current />
+        {current_post_summary(history.current)}
         <section aria-labelledby="post-revisions-heading">
             <h2 id="post-revisions-heading">"Post Revisions"</h2>
-            <HistoryList initial=history.revisions scope=HistoryScope::Post(post_id) />
+            {history_list(history.revisions, HistoryScope::Post(post_id))}
         </section>
     }
 }
 
-#[component]
-fn CurrentPostSummary(current: CurrentPostHistory) -> impl IntoView {
-    let title = optional_title(current.title);
-    let post_id = i64::from(current.post_id).to_string();
-    let slug = current.slug.to_string();
-    let format = current.format.to_string();
-    let created_at = current.created_at.to_string();
-    let updated_at = current.updated_at.to_string();
-    let published_at = optional_instant(current.published_at);
-    let deleted_at = optional_instant(current.deleted_at);
-    let lifecycle = lifecycle_label(&current.lifecycle);
-
+fn current_post_summary(current: CurrentPostHistory) -> impl IntoView {
     view! {
         <section
             class="j-card j-history-summary"
@@ -194,48 +181,25 @@ fn CurrentPostSummary(current: CurrentPostHistory) -> impl IntoView {
                     <div class="j-sub">"Live server state, not a revision snapshot."</div>
                 </div>
             </div>
-            <div class="j-field-row">
-                <div class="j-field-label">"Post ID"</div>
-                <div>{post_id}</div>
-            </div>
-            <div class="j-field-row">
-                <div class="j-field-label">"Title"</div>
-                <div>{title}</div>
-            </div>
-            <div class="j-field-row">
-                <div class="j-field-label">"Slug"</div>
-                <div>{slug}</div>
-            </div>
-            <div class="j-field-row">
-                <div class="j-field-label">"Format"</div>
-                <div>{format}</div>
-            </div>
-            <div class="j-field-row">
-                <div class="j-field-label">"Lifecycle"</div>
-                <div data-test="history-current-lifecycle">{lifecycle}</div>
-            </div>
-            <div class="j-field-row">
-                <div class="j-field-label">"Created"</div>
-                <div>{created_at}</div>
-            </div>
-            <div class="j-field-row">
-                <div class="j-field-label">"Updated"</div>
-                <div>{updated_at}</div>
-            </div>
-            <div class="j-field-row">
-                <div class="j-field-label">"Published"</div>
-                <div>{published_at}</div>
-            </div>
-            <div class="j-field-row">
-                <div class="j-field-label">"Deleted"</div>
-                <div>{deleted_at}</div>
-            </div>
+            {history_fields(current_history_rows(current))}
         </section>
     }
 }
 
-#[component]
-fn HistoryList(initial: RevisionHistoryPage, scope: HistoryScope) -> impl IntoView {
+fn history_fields(rows: Vec<HistoryDisplayRow>) -> impl IntoView {
+    rows.into_iter()
+        .map(|row| {
+            view! {
+                <div class="j-field-row">
+                    <div class="j-field-label">{row.label}</div>
+                    <div data-test=row.data_test>{row.value}</div>
+                </div>
+            }
+        })
+        .collect::<Vec<_>>()
+}
+
+fn history_list(initial: RevisionHistoryPage, scope: HistoryScope) -> impl IntoView {
     let state = HistoryListState::new(initial);
 
     let load_more = move |_| {
@@ -383,18 +347,9 @@ pub fn RevisionHistoryDetailPage() -> impl IntoView {
                     view! { <p class="j-loading">"Loading\u{2026}"</p> }
                 }>
                     {move || Suspend::new(async move {
-                        match authenticated_history_state(route_ids().is_some(), detail.await) {
-                            AuthenticatedHistoryState::Ready(detail) => {
-                                revision_detail_view(detail).into_any()
-                            }
-                            AuthenticatedHistoryState::NotFound => "Page not found.".into_any(),
-                            AuthenticatedHistoryState::AuthRequired => {
-                                history_auth_required().into_any()
-                            }
-                            AuthenticatedHistoryState::Failed(error) => {
-                                view! { <p class="error">{error.to_string()}</p> }.into_any()
-                            }
-                        }
+                        let state = authenticated_history_state(route_ids().is_some(), detail.await)
+                            .map_ready(|detail| revision_detail_view(detail).into_any());
+                        history_state_view(state)
                     })}
                 </Suspense>
             </div>
@@ -403,27 +358,12 @@ pub fn RevisionHistoryDetailPage() -> impl IntoView {
 }
 
 fn revision_detail_view(detail: RevisionHistoryDetail) -> impl IntoView {
-    let revision_id = i64::from(detail.revision_id).to_string();
     let post_id_number = i64::from(detail.post_id);
-    let post_id = post_id_number.to_string();
-    let title = optional_title(detail.title);
-    let slug = detail.slug.to_string();
-    let body = detail.body.to_string();
-    let format = detail.format.to_string();
-    let summary = detail
-        .summary
-        .map_or_else(|| "Not set".to_owned(), |value| value.to_string());
-    let created_at = detail.created_at.to_string();
-    let updated_at = detail.updated_at.to_string();
-    let published_at = optional_instant(detail.published_at);
-    let deleted_at = optional_instant(detail.deleted_at);
-    let captured_at = detail.captured_at.to_string();
-    let tags = detail.tags;
-    let audiences = detail.audiences;
-    let media = detail.media;
-    let rendered_html =
-        crate::html::Markup::from_rendered_html(&detail.rendered_html).into_string();
     let post_history_href = format!("/posts/{post_id_number}/history");
+    let metadata = revision_history_rows(&detail);
+    let body = detail.body.to_string();
+    let rendered_html = detail.rendered_html.to_string();
+    let collections = revision_collection_displays(detail.tags, detail.audiences, &detail.media);
 
     view! {
         <p>
@@ -433,181 +373,42 @@ fn revision_detail_view(detail: RevisionHistoryDetail) -> impl IntoView {
             <div class="j-card-head">
                 <h2 id="revision-snapshot-heading">"Snapshot metadata"</h2>
             </div>
-            <div class="j-field-row">
-                <div class="j-field-label">"Revision ID"</div>
-                <div>{revision_id}</div>
-            </div>
-            <div class="j-field-row">
-                <div class="j-field-label">"Post ID"</div>
-                <div>{post_id}</div>
-            </div>
-            <div class="j-field-row">
-                <div class="j-field-label">"Title"</div>
-                <div>{title}</div>
-            </div>
-            <div class="j-field-row">
-                <div class="j-field-label">"Slug"</div>
-                <div>{slug}</div>
-            </div>
-            <div class="j-field-row">
-                <div class="j-field-label">"Format"</div>
-                <div>{format}</div>
-            </div>
-            <div class="j-field-row">
-                <div class="j-field-label">"Summary"</div>
-                <div>{summary}</div>
-            </div>
-            <div class="j-field-row">
-                <div class="j-field-label">"Created"</div>
-                <div>{created_at}</div>
-            </div>
-            <div class="j-field-row">
-                <div class="j-field-label">"Updated"</div>
-                <div>{updated_at}</div>
-            </div>
-            <div class="j-field-row">
-                <div class="j-field-label">"Published"</div>
-                <div>{published_at}</div>
-            </div>
-            <div class="j-field-row">
-                <div class="j-field-label">"Deleted"</div>
-                <div>{deleted_at}</div>
-            </div>
-            <div class="j-field-row">
-                <div class="j-field-label">"Captured"</div>
-                <div>{captured_at}</div>
-            </div>
+            {history_fields(metadata)}
         </section>
         <section class="j-card" aria-labelledby="revision-source-heading">
             <div class="j-card-head">
                 <h2 id="revision-source-heading">"Authored source"</h2>
             </div>
-            <pre class="j-code j-history-source" data-test="history-source">
-                <code>{body}</code>
+            <pre class="j-code" data-test="history-source">
+                {body}
             </pre>
         </section>
         <section class="j-card" aria-labelledby="revision-rendered-heading">
             <div class="j-card-head">
                 <h2 id="revision-rendered-heading">"Rendered representation"</h2>
             </div>
-            <article
-                class="j-post-body j-history-rendered"
-                data-test="history-rendered"
-                // html-sink:allow html::Markup::from_rendered_html output — trusted immutable revision rendering (#1055)
-                inner_html=rendered_html
-            ></article>
+            <pre class="j-code" data-test="history-rendered">
+                {rendered_html}
+            </pre>
         </section>
-        <RevisionCollections tags=tags audiences=audiences media=media />
+        {revision_collections(collections)}
     }
 }
 
-#[component]
-fn RevisionCollections(
-    tags: Vec<super::RevisionHistoryTag>,
-    audiences: Vec<super::RevisionHistoryAudience>,
-    media: Vec<String>,
-) -> impl IntoView {
-    view! {
-        <RevisionTags tags=tags />
-        <RevisionAudiences audiences=audiences />
-        <RevisionMedia media=media />
-    }
-}
-
-#[component]
-fn RevisionTags(tags: Vec<super::RevisionHistoryTag>) -> impl IntoView {
-    view! {
-        <section class="j-card" aria-labelledby="revision-tags-heading">
-            <div class="j-card-head">
-                <h2 id="revision-tags-heading">"Tags"</h2>
-            </div>
-            <div class="j-history-collection" data-test="history-tags">
-                {if tags.is_empty() {
-                    view! { <p>"No tags in this snapshot."</p> }.into_any()
-                } else {
-                    view! {
-                        <ul>
-                            {tags
-                                .into_iter()
-                                .map(|tag| {
-                                    view! {
-                                        <li>
-                                            {tag.display.to_string()} " (" {tag.tag.to_string()} ")"
-                                        </li>
-                                    }
-                                })
-                                .collect::<Vec<_>>()}
-                        </ul>
-                    }
-                        .into_any()
-                }}
-            </div>
-        </section>
-    }
-}
-
-#[component]
-fn RevisionAudiences(audiences: Vec<super::RevisionHistoryAudience>) -> impl IntoView {
-    view! {
-        <section class="j-card" aria-labelledby="revision-audiences-heading">
-            <div class="j-card-head">
-                <h2 id="revision-audiences-heading">"Audiences"</h2>
-            </div>
-            <div class="j-history-collection" data-test="history-audiences">
-                {if audiences.is_empty() {
-                    view! { <p>"No audiences in this snapshot."</p> }.into_any()
-                } else {
-                    view! {
-                        <ul>
-                            {audiences
-                                .into_iter()
-                                .map(|audience| {
-                                    let label = audience
-                                        .audience_id
-                                        .map_or(
-                                            audience.kind,
-                                            |id| format!("named ({})", i64::from(id)),
-                                        );
-                                    view! { <li>{label}</li> }
-                                })
-                                .collect::<Vec<_>>()}
-                        </ul>
-                    }
-                        .into_any()
-                }}
-            </div>
-        </section>
-    }
-}
-
-#[component]
-fn RevisionMedia(media: Vec<String>) -> impl IntoView {
-    view! {
-        <section class="j-card" aria-labelledby="revision-media-heading">
-            <div class="j-card-head">
-                <h2 id="revision-media-heading">"Media references"</h2>
-            </div>
-            <div class="j-history-collection" data-test="history-media">
-                {if media.is_empty() {
-                    view! { <p>"No media references in this snapshot."</p> }.into_any()
-                } else {
-                    view! {
-                        <ul>
-                            {media
-                                .into_iter()
-                                .map(|reference| {
-                                    view! {
-                                        <li>
-                                            <code>{reference}</code>
-                                        </li>
-                                    }
-                                })
-                                .collect::<Vec<_>>()}
-                        </ul>
-                    }
-                        .into_any()
-                }}
-            </div>
-        </section>
-    }
+fn revision_collections(collections: Vec<HistoryCollectionDisplay>) -> impl IntoView {
+    collections
+        .into_iter()
+        .map(|collection| {
+            view! {
+                <section class="j-card" aria-labelledby=collection.heading_id>
+                    <div class="j-card-head">
+                        <h2 id=collection.heading_id>{collection.heading}</h2>
+                    </div>
+                    <pre class="j-code" data-test=collection.data_test>
+                        {collection.value}
+                    </pre>
+                </section>
+            }
+        })
+        .collect::<Vec<_>>()
 }

@@ -102,8 +102,8 @@ test("owner inspects paginated immutable history and a Deleted Post", async ({
   await expect(page.locator('[data-test="history-source"]')).toContainText(
     "Immutable body 50",
   );
-  await expect(page.locator('[data-test="history-rendered"] h1')).toHaveText(
-    "Revision source 50",
+  await expect(page.locator('[data-test="history-rendered"]')).toContainText(
+    "<h1>Revision source 50</h1>",
   );
   await expect(page.locator('[data-test="history-tags"]')).toContainText(
     "No tags in this snapshot.",

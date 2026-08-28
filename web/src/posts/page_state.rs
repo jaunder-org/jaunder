@@ -39,7 +39,8 @@ use common::visibility::AudienceSelection;
 use crate::audiences;
 use crate::error::{WebError, WebResult};
 use crate::posts::{
-    RevisionHistoryCursor, RevisionHistoryMetadata, RevisionHistoryPage, SavedPost,
+    CurrentPostHistory, RevisionHistoryAudience, RevisionHistoryCursor, RevisionHistoryDetail,
+    RevisionHistoryMetadata, RevisionHistoryPage, RevisionHistoryTag, RevisionLifecycle, SavedPost,
 };
 
 /// Resolution state for the named audiences offered by the post editor.
@@ -226,6 +227,154 @@ where
     }
 }
 
+/// One scalar value shown in a history metadata card.
+#[derive(Debug, PartialEq, Eq)]
+pub struct HistoryDisplayRow {
+    /// Human-readable field name.
+    pub label: &'static str,
+    /// Already-formatted immutable field value.
+    pub value: String,
+    /// Stable selector attached to the value, when the field has one.
+    pub data_test: Option<&'static str>,
+}
+
+/// One child collection shown in an immutable revision snapshot.
+#[derive(Debug, PartialEq, Eq)]
+pub struct HistoryCollectionDisplay {
+    /// Human-readable section heading.
+    pub heading: &'static str,
+    /// Heading ID used by the section's accessible name.
+    pub heading_id: &'static str,
+    /// Stable end-to-end selector.
+    pub data_test: &'static str,
+    /// Preformatted collection source, or the collection's useful empty message.
+    pub value: String,
+}
+
+fn display_row(label: &'static str, value: String) -> HistoryDisplayRow {
+    HistoryDisplayRow {
+        label,
+        value,
+        data_test: None,
+    }
+}
+
+fn optional_display(value: Option<impl ToString>, absent: &'static str) -> String {
+    value.map_or_else(|| absent.to_owned(), |value| value.to_string())
+}
+
+fn lifecycle_label(lifecycle: &RevisionLifecycle) -> &'static str {
+    match lifecycle {
+        RevisionLifecycle::Draft => "Draft",
+        RevisionLifecycle::Scheduled => "Scheduled",
+        RevisionLifecycle::Published => "Published",
+        RevisionLifecycle::Deleted => "Deleted",
+    }
+}
+
+/// Flatten the current Post state into the single metadata-row shape the UI paints.
+#[must_use]
+pub fn current_history_rows(current: CurrentPostHistory) -> Vec<HistoryDisplayRow> {
+    vec![
+        display_row("Post ID", i64::from(current.post_id).to_string()),
+        display_row("Title", optional_display(current.title, "No title")),
+        display_row("Slug", current.slug.to_string()),
+        display_row("Format", current.format.to_string()),
+        HistoryDisplayRow {
+            label: "Lifecycle",
+            value: lifecycle_label(&current.lifecycle).to_owned(),
+            data_test: Some("history-current-lifecycle"),
+        },
+        display_row("Created", current.created_at.to_string()),
+        display_row("Updated", current.updated_at.to_string()),
+        display_row(
+            "Published",
+            optional_display(current.published_at, "Not set"),
+        ),
+        display_row("Deleted", optional_display(current.deleted_at, "Not set")),
+    ]
+}
+
+/// Flatten immutable revision scalars into the same metadata-row shape as current state.
+#[must_use]
+pub fn revision_history_rows(detail: &RevisionHistoryDetail) -> Vec<HistoryDisplayRow> {
+    vec![
+        display_row("Revision ID", i64::from(detail.revision_id).to_string()),
+        display_row("Post ID", i64::from(detail.post_id).to_string()),
+        display_row("Title", optional_display(detail.title.as_ref(), "No title")),
+        display_row("Slug", detail.slug.to_string()),
+        display_row("Format", detail.format.to_string()),
+        display_row(
+            "Summary",
+            optional_display(detail.summary.as_ref(), "Not set"),
+        ),
+        display_row("Created", detail.created_at.to_string()),
+        display_row("Updated", detail.updated_at.to_string()),
+        display_row(
+            "Published",
+            optional_display(detail.published_at, "Not set"),
+        ),
+        display_row("Deleted", optional_display(detail.deleted_at, "Not set")),
+        display_row("Captured", detail.captured_at.to_string()),
+    ]
+}
+
+/// Project revision child DTOs to immutable source text before the wasm view is built.
+#[must_use]
+pub fn revision_collection_displays(
+    tags: Vec<RevisionHistoryTag>,
+    audiences: Vec<RevisionHistoryAudience>,
+    media: &[String],
+) -> Vec<HistoryCollectionDisplay> {
+    let tags = if tags.is_empty() {
+        "No tags in this snapshot.".to_owned()
+    } else {
+        tags.into_iter()
+            .map(|tag| format!("{} ({})", tag.display, tag.tag))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let audiences = if audiences.is_empty() {
+        "No audiences in this snapshot.".to_owned()
+    } else {
+        audiences
+            .into_iter()
+            .map(|audience| {
+                audience
+                    .audience_id
+                    .map_or(audience.kind, |id| format!("named ({})", i64::from(id)))
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let media = if media.is_empty() {
+        "No media references in this snapshot.".to_owned()
+    } else {
+        media.join("\n")
+    };
+
+    vec![
+        HistoryCollectionDisplay {
+            heading: "Tags",
+            heading_id: "revision-tags-heading",
+            data_test: "history-tags",
+            value: tags,
+        },
+        HistoryCollectionDisplay {
+            heading: "Audiences",
+            heading_id: "revision-audiences-heading",
+            data_test: "history-audiences",
+            value: audiences,
+        },
+        HistoryCollectionDisplay {
+            heading: "Media references",
+            heading_id: "revision-media-heading",
+            data_test: "history-media",
+            value: media,
+        },
+    ]
+}
+
 /// Paint state for an authenticated history route after its serializable resource
 /// result resolves.
 #[derive(Debug, PartialEq, Eq)]
@@ -239,6 +388,18 @@ pub enum AuthenticatedHistoryState<T> {
     Ready(T),
     /// Session reconciliation or the route fetch failed.
     Failed(WebError),
+}
+
+impl<T> AuthenticatedHistoryState<T> {
+    /// Project only the successful payload while preserving every non-ready state.
+    pub fn map_ready<U>(self, project: impl FnOnce(T) -> U) -> AuthenticatedHistoryState<U> {
+        match self {
+            Self::NotFound => AuthenticatedHistoryState::NotFound,
+            Self::AuthRequired => AuthenticatedHistoryState::AuthRequired,
+            Self::Ready(value) => AuthenticatedHistoryState::Ready(project(value)),
+            Self::Failed(error) => AuthenticatedHistoryState::Failed(error),
+        }
+    }
 }
 
 /// Resolve one authenticated history resource without putting a UI-only state enum
@@ -353,7 +514,8 @@ mod tests {
 
     use super::*;
     use common::test_support::{
-        parse_root_relative_url, parse_slug, parse_tag, parse_username, parse_utc_instant,
+        parse_root_relative_url, parse_slug, parse_tag, parse_tag_label, parse_username,
+        parse_utc_instant,
     };
     use common::time::UtcInstant;
 
@@ -765,6 +927,52 @@ mod tests {
         assert_eq!(
             authenticated_history_state::<i32>(true, Err(WebError::validation("history"))),
             AuthenticatedHistoryState::Failed(WebError::validation("history"))
+        );
+    }
+
+    #[test]
+    fn revision_collections_project_populated_and_empty_snapshots_to_source_text() {
+        let media = vec!["sha256:first".to_owned(), "https://media/second".to_owned()];
+        let populated = revision_collection_displays(
+            vec![RevisionHistoryTag {
+                tag: parse_tag("rust"),
+                display: parse_tag_label("Rust"),
+            }],
+            vec![
+                RevisionHistoryAudience {
+                    kind: "public".to_owned(),
+                    audience_id: None,
+                },
+                RevisionHistoryAudience {
+                    kind: "named".to_owned(),
+                    audience_id: Some(common::ids::AudienceId::from(11)),
+                },
+            ],
+            &media,
+        );
+        assert_eq!(
+            populated
+                .iter()
+                .map(|collection| collection.value.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "Rust (rust)",
+                "public\nnamed (11)",
+                "sha256:first\nhttps://media/second",
+            ]
+        );
+
+        let empty = revision_collection_displays(Vec::new(), Vec::new(), &[]);
+        assert_eq!(
+            empty
+                .iter()
+                .map(|collection| collection.value.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "No tags in this snapshot.",
+                "No audiences in this snapshot.",
+                "No media references in this snapshot.",
+            ]
         );
     }
 

@@ -1253,33 +1253,6 @@
     margin: 16px 0 0;
 }
 
-.j-history-source {
-    margin: 0;
-    overflow-x: auto;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-}
-
-.j-history-rendered,
-.j-history-collection {
-    padding: 16px 18px;
-}
-
-.j-history-rendered > :first-child,
-.j-history-collection > :first-child {
-    margin-top: 0;
-}
-
-.j-history-rendered > :last-child,
-.j-history-collection > :last-child {
-    margin-bottom: 0;
-}
-
-.j-history-rendered img {
-    max-width: 100%;
-    height: auto;
-}
-
 @media (max-width: 720px) {
     .j-history-summary .j-field-row {
         grid-template-columns: 1fr;
