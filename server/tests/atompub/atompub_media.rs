@@ -299,7 +299,7 @@ async fn delete_media_member_returns_204_then_404(#[case] backend: Backend) {
 
 #[apply(backends)]
 #[tokio::test]
-async fn delete_media_member_refuses_rowless_referenced_file(#[case] backend: Backend) {
+async fn delete_media_member_force_bypasses_owner_retained_file(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
@@ -329,12 +329,14 @@ async fn delete_media_member_refuses_rowless_referenced_file(#[case] backend: Ba
         .await
         .unwrap();
 
-    assert_eq!(del_resp.status(), StatusCode::CONFLICT);
+    assert_eq!(del_resp.status(), StatusCode::NO_CONTENT);
 }
 
 #[apply(backends)]
 #[tokio::test]
-async fn delete_media_member_uses_live_ownership_evidence(#[case] backend: Backend) {
+async fn delete_media_member_force_bypasses_owner_reference_ownership_evidence(
+    #[case] backend: Backend,
+) {
     let TestEnv { state, base: _base } = setup_with_base_url(backend).await;
     let session = create_user_and_session(&state).await;
     let storage = TempDir::new().unwrap();
@@ -370,8 +372,8 @@ async fn delete_media_member_uses_live_ownership_evidence(#[case] backend: Backe
         .unwrap();
     assert_eq!(
         exact_delete.status(),
-        StatusCode::CONFLICT,
-        "exact configured-origin reference refuses deletion"
+        StatusCode::NO_CONTENT,
+        "AtomPub's existing force carve-out bypasses an exact owner reference"
     );
 
     let foreign_member_url = upload_and_member_url(&app, &session, "foreign-origin.png").await;
@@ -440,8 +442,8 @@ async fn delete_media_member_uses_live_ownership_evidence(#[case] backend: Backe
         .unwrap();
     assert_eq!(
         unknown_delete.status(),
-        StatusCode::CONFLICT,
-        "unproven foreign ownership fails closed"
+        StatusCode::NO_CONTENT,
+        "AtomPub's existing force carve-out bypasses an unknown owner reference"
     );
 }
 

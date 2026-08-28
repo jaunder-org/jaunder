@@ -38,7 +38,10 @@ use common::visibility::AudienceSelection;
 
 use crate::audiences;
 use crate::error::{WebError, WebResult};
-use crate::posts::SavedPost;
+use crate::posts::{
+    CurrentPostHistory, RevisionHistoryAudience, RevisionHistoryCursor, RevisionHistoryDetail,
+    RevisionHistoryMetadata, RevisionHistoryPage, RevisionHistoryTag, RevisionLifecycle, SavedPost,
+};
 
 /// Resolution state for the named audiences offered by the post editor.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -224,13 +227,296 @@ where
     }
 }
 
+/// One scalar value shown in a history metadata card.
+#[derive(Debug, PartialEq, Eq)]
+pub struct HistoryDisplayRow {
+    /// Human-readable field name.
+    pub label: &'static str,
+    /// Already-formatted immutable field value.
+    pub value: String,
+    /// Stable selector attached to the value, when the field has one.
+    pub data_test: Option<&'static str>,
+}
+
+/// One child collection shown in an immutable revision snapshot.
+#[derive(Debug, PartialEq, Eq)]
+pub struct HistoryCollectionDisplay {
+    /// Human-readable section heading.
+    pub heading: &'static str,
+    /// Heading ID used by the section's accessible name.
+    pub heading_id: &'static str,
+    /// Stable end-to-end selector.
+    pub data_test: &'static str,
+    /// Preformatted collection source, or the collection's useful empty message.
+    pub value: String,
+}
+
+fn display_row(label: &'static str, value: String) -> HistoryDisplayRow {
+    HistoryDisplayRow {
+        label,
+        value,
+        data_test: None,
+    }
+}
+
+fn optional_display(value: Option<impl ToString>, absent: &'static str) -> String {
+    value.map_or_else(|| absent.to_owned(), |value| value.to_string())
+}
+
+fn lifecycle_label(lifecycle: &RevisionLifecycle) -> &'static str {
+    match lifecycle {
+        RevisionLifecycle::Draft => "Draft",
+        RevisionLifecycle::Scheduled => "Scheduled",
+        RevisionLifecycle::Published => "Published",
+        RevisionLifecycle::Deleted => "Deleted",
+    }
+}
+
+/// Flatten the current Post state into the single metadata-row shape the UI paints.
+#[must_use]
+pub fn current_history_rows(current: CurrentPostHistory) -> Vec<HistoryDisplayRow> {
+    vec![
+        display_row("Post ID", i64::from(current.post_id).to_string()),
+        display_row("Title", optional_display(current.title, "No title")),
+        display_row("Slug", current.slug.to_string()),
+        display_row("Format", current.format.to_string()),
+        HistoryDisplayRow {
+            label: "Lifecycle",
+            value: lifecycle_label(&current.lifecycle).to_owned(),
+            data_test: Some("history-current-lifecycle"),
+        },
+        display_row("Created", current.created_at.to_string()),
+        display_row("Updated", current.updated_at.to_string()),
+        display_row(
+            "Published",
+            optional_display(current.published_at, "Not set"),
+        ),
+        display_row("Deleted", optional_display(current.deleted_at, "Not set")),
+    ]
+}
+
+/// Flatten immutable revision scalars into the same metadata-row shape as current state.
+#[must_use]
+pub fn revision_history_rows(detail: &RevisionHistoryDetail) -> Vec<HistoryDisplayRow> {
+    vec![
+        display_row("Revision ID", i64::from(detail.revision_id).to_string()),
+        display_row("Post ID", i64::from(detail.post_id).to_string()),
+        display_row("Title", optional_display(detail.title.as_ref(), "No title")),
+        display_row("Slug", detail.slug.to_string()),
+        display_row("Format", detail.format.to_string()),
+        display_row(
+            "Summary",
+            optional_display(detail.summary.as_ref(), "Not set"),
+        ),
+        display_row("Created", detail.created_at.to_string()),
+        display_row("Updated", detail.updated_at.to_string()),
+        display_row(
+            "Published",
+            optional_display(detail.published_at, "Not set"),
+        ),
+        display_row("Deleted", optional_display(detail.deleted_at, "Not set")),
+        display_row("Captured", detail.captured_at.to_string()),
+    ]
+}
+
+/// Project revision child DTOs to immutable source text before the wasm view is built.
+#[must_use]
+pub fn revision_collection_displays(
+    tags: Vec<RevisionHistoryTag>,
+    audiences: Vec<RevisionHistoryAudience>,
+    media: &[String],
+) -> Vec<HistoryCollectionDisplay> {
+    let tags = if tags.is_empty() {
+        "No tags in this snapshot.".to_owned()
+    } else {
+        tags.into_iter()
+            .map(|tag| format!("{} ({})", tag.display, tag.tag))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let audiences = if audiences.is_empty() {
+        "No audiences in this snapshot.".to_owned()
+    } else {
+        audiences
+            .into_iter()
+            .map(|audience| {
+                audience
+                    .audience_id
+                    .map_or(audience.kind, |id| format!("named ({})", i64::from(id)))
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let media = if media.is_empty() {
+        "No media references in this snapshot.".to_owned()
+    } else {
+        media.join("\n")
+    };
+
+    vec![
+        HistoryCollectionDisplay {
+            heading: "Tags",
+            heading_id: "revision-tags-heading",
+            data_test: "history-tags",
+            value: tags,
+        },
+        HistoryCollectionDisplay {
+            heading: "Audiences",
+            heading_id: "revision-audiences-heading",
+            data_test: "history-audiences",
+            value: audiences,
+        },
+        HistoryCollectionDisplay {
+            heading: "Media references",
+            heading_id: "revision-media-heading",
+            data_test: "history-media",
+            value: media,
+        },
+    ]
+}
+
+/// Paint state for an authenticated history route after its serializable resource
+/// result resolves.
+#[derive(Debug, PartialEq, Eq)]
+pub enum AuthenticatedHistoryState<T> {
+    /// The route parameters were absent or invalid.
+    NotFound,
+    /// Reconciliation confirmed there is no authenticated viewer.
+    AuthRequired,
+    /// The authenticated route fetch completed successfully.
+    // rendered-html-from-trusted:allow history paint state may carry server-sanitized revision DTO HTML (#1055)
+    Ready(T),
+    /// Session reconciliation or the route fetch failed.
+    Failed(WebError),
+}
+
+impl<T> AuthenticatedHistoryState<T> {
+    /// Project only the successful payload while preserving every non-ready state.
+    pub fn map_ready<U>(self, project: impl FnOnce(T) -> U) -> AuthenticatedHistoryState<U> {
+        match self {
+            Self::NotFound => AuthenticatedHistoryState::NotFound,
+            Self::AuthRequired => AuthenticatedHistoryState::AuthRequired,
+            Self::Ready(value) => AuthenticatedHistoryState::Ready(project(value)),
+            Self::Failed(error) => AuthenticatedHistoryState::Failed(error),
+        }
+    }
+}
+
+/// Resolve one authenticated history resource without putting a UI-only state enum
+/// into Leptos's serializable [`Resource`] payload.
+///
+/// `reconcile` is lazy so an invalid route remains a client-side not-found and does
+/// not issue even the session request. `fetch` is likewise called only after the
+/// session confirms an authenticated viewer.
+///
+/// # Errors
+///
+/// Propagates the reconcile error unchanged, or the route fetch error after
+/// authentication succeeds.
+pub async fn load_authenticated_history<R, U, T, RF, RFut, F, Fut>(
+    route: Option<R>,
+    reconcile: RF,
+    fetch: F,
+) -> WebResult<Option<T>>
+where
+    RF: FnOnce() -> RFut,
+    RFut: Future<Output = WebResult<Option<U>>>,
+    F: FnOnce(R) -> Fut,
+    Fut: Future<Output = WebResult<T>>,
+{
+    let Some(route) = route else {
+        return Ok(None);
+    };
+    let Some(_) = reconcile().await? else {
+        return Ok(None);
+    };
+    fetch(route).await.map(Some)
+}
+
+/// Project a serializable history resource result into the page's four paint states.
+///
+/// The loader returns `Ok(None)` for both an invalid route and an anonymous session
+/// so its payload stays the existing serde-friendly `WebResult<Option<T>>`; the
+/// already-parsed route presence disambiguates those states after resolution.
+pub fn authenticated_history_state<T>(
+    route_present: bool,
+    result: WebResult<Option<T>>,
+) -> AuthenticatedHistoryState<T> {
+    match result {
+        Err(error) => AuthenticatedHistoryState::Failed(error),
+        Ok(Some(value)) => AuthenticatedHistoryState::Ready(value),
+        Ok(None) if route_present => AuthenticatedHistoryState::AuthRequired,
+        Ok(None) => AuthenticatedHistoryState::NotFound,
+    }
+}
+
+/// Reactive state and transition logic for a cursor-paginated history list.
+#[derive(Clone, Copy)]
+pub struct HistoryListState {
+    /// All revision rows loaded so far.
+    pub rows: RwSignal<Vec<RevisionHistoryMetadata>>,
+    /// Cursor to request next, when the server exposed another page.
+    pub cursor: RwSignal<Option<RevisionHistoryCursor>>,
+    /// Whether the current page advertises another page.
+    pub has_more: RwSignal<bool>,
+    /// Whether a next-page request is in flight.
+    pub loading_more: RwSignal<bool>,
+    /// User-visible next-page failure, cleared before retrying.
+    pub load_error: RwSignal<Option<String>>,
+}
+
+impl HistoryListState {
+    /// Adopt the server-provided first page into reactive list state.
+    #[must_use]
+    pub fn new(initial: RevisionHistoryPage) -> Self {
+        Self {
+            rows: RwSignal::new(initial.revisions),
+            cursor: RwSignal::new(initial.next_cursor),
+            has_more: RwSignal::new(initial.has_more),
+            loading_more: RwSignal::new(false),
+            load_error: RwSignal::new(None),
+        }
+    }
+
+    /// Start a next-page request when one is available and no request is in flight.
+    ///
+    /// Returning the cursor makes request dispatch conditional without duplicating
+    /// the loading/cursor guards in the wasm-only component.
+    #[must_use]
+    pub fn begin_load_more(self) -> Option<RevisionHistoryCursor> {
+        if self.loading_more.get_untracked() {
+            return None;
+        }
+        let cursor = self.cursor.get_untracked()?;
+        self.loading_more.set(true);
+        self.load_error.set(None);
+        Some(cursor)
+    }
+
+    /// Fold a completed next-page request into the rows and paging indicators.
+    pub fn finish_load_more(self, result: WebResult<RevisionHistoryPage>) {
+        match result {
+            Ok(page) => {
+                self.rows.update(|rows| rows.extend(page.revisions));
+                self.cursor.set(page.next_cursor);
+                self.has_more.set(page.has_more);
+            }
+            Err(error) => self.load_error.set(Some(error.to_string())),
+        }
+        self.loading_more.set(false);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
     use std::future::{Ready, ready};
 
     use super::*;
-    use common::test_support::{parse_root_relative_url, parse_slug, parse_tag, parse_username};
+    use common::test_support::{
+        parse_post_body, parse_root_relative_url, parse_slug, parse_tag, parse_tag_label,
+        parse_username, parse_utc_instant,
+    };
     use common::time::UtcInstant;
 
     fn page(has_more: bool) -> Page<RenderedPost> {
@@ -532,6 +818,398 @@ mod tests {
         assert_eq!(fetched, Err(WebError::validation("boom")));
     }
 
+    fn history_reconcile(
+        seen: &Cell<bool>,
+        result: WebResult<Option<()>>,
+    ) -> impl FnOnce() -> Ready<WebResult<Option<()>>> + '_ {
+        move || {
+            seen.set(true);
+            ready(result)
+        }
+    }
+
+    fn history_fetch(
+        seen: &Cell<Option<PostId>>,
+        result: WebResult<PostId>,
+    ) -> impl FnOnce(PostId) -> Ready<WebResult<PostId>> + '_ {
+        move |post_id| {
+            seen.set(Some(post_id));
+            ready(result)
+        }
+    }
+
+    #[tokio::test]
+    async fn authenticated_history_fetches_the_resolved_route() {
+        let reconciled = Cell::new(false);
+        let fetched = Cell::new(None);
+        let result = load_authenticated_history(
+            Some(PostId::from(7)),
+            history_reconcile(&reconciled, Ok(Some(()))),
+            history_fetch(&fetched, Ok(PostId::from(7))),
+        )
+        .await;
+
+        assert_eq!(result, Ok(Some(PostId::from(7))));
+        assert!(reconciled.get());
+        assert_eq!(fetched.get(), Some(PostId::from(7)));
+    }
+
+    #[tokio::test]
+    async fn invalid_history_route_short_circuits_session_and_fetch() {
+        let reconciled = Cell::new(false);
+        let fetched = Cell::new(None);
+        let result = load_authenticated_history(
+            None::<PostId>,
+            history_reconcile(&reconciled, Ok(Some(()))),
+            history_fetch(&fetched, Ok(PostId::from(7))),
+        )
+        .await;
+
+        assert_eq!(result, Ok(None));
+        assert!(!reconciled.get());
+        assert_eq!(fetched.get(), None);
+    }
+
+    #[tokio::test]
+    async fn anonymous_history_route_requires_auth_without_fetching() {
+        let reconciled = Cell::new(false);
+        let fetched = Cell::new(None);
+        let result = load_authenticated_history(
+            Some(PostId::from(7)),
+            history_reconcile(&reconciled, Ok(None)),
+            history_fetch(&fetched, Ok(PostId::from(7))),
+        )
+        .await;
+
+        assert_eq!(result, Ok(None));
+        assert!(reconciled.get());
+        assert_eq!(fetched.get(), None);
+    }
+
+    #[tokio::test]
+    async fn history_resolution_propagates_reconcile_and_fetch_errors() {
+        let reconciled = Cell::new(false);
+        let fetched = Cell::new(None);
+        let reconcile_error = load_authenticated_history(
+            Some(PostId::from(7)),
+            history_reconcile(&reconciled, Err(WebError::validation("session"))),
+            history_fetch(&fetched, Ok(PostId::from(7))),
+        )
+        .await;
+        assert_eq!(reconcile_error, Err(WebError::validation("session")));
+        assert!(reconciled.get());
+        assert_eq!(fetched.get(), None);
+
+        let fetch_error = load_authenticated_history(
+            Some(PostId::from(7)),
+            history_reconcile(&reconciled, Ok(Some(()))),
+            history_fetch(&fetched, Err(WebError::validation("history"))),
+        )
+        .await;
+        assert_eq!(fetch_error, Err(WebError::validation("history")));
+        assert_eq!(fetched.get(), Some(PostId::from(7)));
+    }
+
+    #[test]
+    fn serializable_history_result_projects_to_each_paint_state() {
+        assert_eq!(
+            authenticated_history_state(false, Ok::<Option<i32>, WebError>(None)),
+            AuthenticatedHistoryState::NotFound
+        );
+        assert_eq!(
+            authenticated_history_state(true, Ok::<Option<i32>, WebError>(None)),
+            AuthenticatedHistoryState::AuthRequired
+        );
+        assert_eq!(
+            authenticated_history_state(true, Ok::<_, WebError>(Some(7))),
+            AuthenticatedHistoryState::Ready(7)
+        );
+        assert_eq!(
+            authenticated_history_state::<i32>(true, Err(WebError::validation("history"))),
+            AuthenticatedHistoryState::Failed(WebError::validation("history"))
+        );
+    }
+    #[test]
+    fn history_ready_projection_preserves_all_non_ready_states() {
+        assert_eq!(
+            AuthenticatedHistoryState::<i32>::NotFound.map_ready(|value| value.to_string()),
+            AuthenticatedHistoryState::NotFound
+        );
+        assert_eq!(
+            AuthenticatedHistoryState::<i32>::AuthRequired.map_ready(|value| value.to_string()),
+            AuthenticatedHistoryState::AuthRequired
+        );
+        assert_eq!(
+            AuthenticatedHistoryState::Ready(7).map_ready(|value| value.to_string()),
+            AuthenticatedHistoryState::Ready("7".to_owned())
+        );
+        assert_eq!(
+            AuthenticatedHistoryState::<i32>::Failed(WebError::validation("history"))
+                .map_ready(|value| value.to_string()),
+            AuthenticatedHistoryState::Failed(WebError::validation("history"))
+        );
+    }
+
+    #[test]
+    fn revision_collections_project_populated_and_empty_snapshots_to_source_text() {
+        let media = vec!["sha256:first".to_owned(), "https://media/second".to_owned()];
+        let populated = revision_collection_displays(
+            vec![RevisionHistoryTag {
+                tag: parse_tag("rust"),
+                display: parse_tag_label("Rust"),
+            }],
+            vec![
+                RevisionHistoryAudience {
+                    kind: "public".to_owned(),
+                    audience_id: None,
+                },
+                RevisionHistoryAudience {
+                    kind: "named".to_owned(),
+                    audience_id: Some(common::ids::AudienceId::from(11)),
+                },
+            ],
+            &media,
+        );
+        assert_eq!(
+            populated,
+            vec![
+                HistoryCollectionDisplay {
+                    heading: "Tags",
+                    heading_id: "revision-tags-heading",
+                    data_test: "history-tags",
+                    value: "Rust (rust)".to_owned(),
+                },
+                HistoryCollectionDisplay {
+                    heading: "Audiences",
+                    heading_id: "revision-audiences-heading",
+                    data_test: "history-audiences",
+                    value: "public\nnamed (11)".to_owned(),
+                },
+                HistoryCollectionDisplay {
+                    heading: "Media references",
+                    heading_id: "revision-media-heading",
+                    data_test: "history-media",
+                    value: "sha256:first\nhttps://media/second".to_owned(),
+                },
+            ]
+        );
+
+        let empty = revision_collection_displays(Vec::new(), Vec::new(), &[]);
+        assert_eq!(
+            empty,
+            vec![
+                HistoryCollectionDisplay {
+                    heading: "Tags",
+                    heading_id: "revision-tags-heading",
+                    data_test: "history-tags",
+                    value: "No tags in this snapshot.".to_owned(),
+                },
+                HistoryCollectionDisplay {
+                    heading: "Audiences",
+                    heading_id: "revision-audiences-heading",
+                    data_test: "history-audiences",
+                    value: "No audiences in this snapshot.".to_owned(),
+                },
+                HistoryCollectionDisplay {
+                    heading: "Media references",
+                    heading_id: "revision-media-heading",
+                    data_test: "history-media",
+                    value: "No media references in this snapshot.".to_owned(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn current_history_rows_project_labels_values_and_lifecycle_selector() {
+        let at = parse_utc_instant("2026-08-27T12:00:00Z");
+        for (lifecycle, label) in [
+            (RevisionLifecycle::Draft, "Draft"),
+            (RevisionLifecycle::Scheduled, "Scheduled"),
+            (RevisionLifecycle::Published, "Published"),
+            (RevisionLifecycle::Deleted, "Deleted"),
+        ] {
+            let rows = current_history_rows(CurrentPostHistory {
+                post_id: PostId::from(7),
+                title: None,
+                slug: parse_slug("history-post"),
+                format: common::render::PostFormat::Markdown,
+                created_at: at,
+                updated_at: at,
+                published_at: None,
+                deleted_at: None,
+                lifecycle,
+            });
+            assert_eq!(
+                rows,
+                vec![
+                    HistoryDisplayRow {
+                        label: "Post ID",
+                        value: "7".to_owned(),
+                        data_test: None
+                    },
+                    HistoryDisplayRow {
+                        label: "Title",
+                        value: "No title".to_owned(),
+                        data_test: None
+                    },
+                    HistoryDisplayRow {
+                        label: "Slug",
+                        value: "history-post".to_owned(),
+                        data_test: None
+                    },
+                    HistoryDisplayRow {
+                        label: "Format",
+                        value: "markdown".to_owned(),
+                        data_test: None
+                    },
+                    HistoryDisplayRow {
+                        label: "Lifecycle",
+                        value: label.to_owned(),
+                        data_test: Some("history-current-lifecycle")
+                    },
+                    HistoryDisplayRow {
+                        label: "Created",
+                        value: at.to_string(),
+                        data_test: None
+                    },
+                    HistoryDisplayRow {
+                        label: "Updated",
+                        value: at.to_string(),
+                        data_test: None
+                    },
+                    HistoryDisplayRow {
+                        label: "Published",
+                        value: "Not set".to_owned(),
+                        data_test: None
+                    },
+                    HistoryDisplayRow {
+                        label: "Deleted",
+                        value: "Not set".to_owned(),
+                        data_test: None
+                    },
+                ],
+                "the {label} projection stays a literal current-history contract"
+            );
+        }
+    }
+
+    #[test]
+    fn current_history_rows_preserve_present_title_and_timestamps() {
+        let at = parse_utc_instant("2026-08-27T12:00:00Z");
+        let rows = current_history_rows(CurrentPostHistory {
+            post_id: PostId::from(7),
+            title: Some(common::test_support::parse_post_title("Current title")),
+            slug: parse_slug("history-post"),
+            format: common::render::PostFormat::Org,
+            created_at: at,
+            updated_at: at,
+            published_at: Some(at),
+            deleted_at: Some(at),
+            lifecycle: RevisionLifecycle::Published,
+        });
+        assert_eq!(rows[1].value, "Current title");
+        assert_eq!(rows[3].value, "org");
+        assert_eq!(rows[7].value, at.to_string());
+        assert_eq!(rows[8].value, at.to_string());
+    }
+
+    #[test]
+    fn revision_history_rows_project_every_scalar_and_optional_value() {
+        let at = parse_utc_instant("2026-08-27T12:00:00Z");
+        let detail = RevisionHistoryDetail {
+            revision_id: common::ids::RevisionId::from(8),
+            post_id: PostId::from(7),
+            title: Some(common::test_support::parse_post_title("Snapshot title")),
+            slug: parse_slug("history-post"),
+            body: parse_post_body("body"),
+            format: common::render::PostFormat::Org,
+            rendered_html: common::render::RenderedHtml::from_trusted("<p>body</p>"),
+            summary: Some(common::test_support::parse_post_summary("Snapshot summary")),
+            created_at: at,
+            updated_at: at,
+            published_at: Some(at),
+            deleted_at: Some(at),
+            captured_at: at,
+            tags: Vec::new(),
+            audiences: Vec::new(),
+            media: Vec::new(),
+        };
+        assert_eq!(
+            revision_history_rows(&detail),
+            vec![
+                HistoryDisplayRow {
+                    label: "Revision ID",
+                    value: "8".to_owned(),
+                    data_test: None
+                },
+                HistoryDisplayRow {
+                    label: "Post ID",
+                    value: "7".to_owned(),
+                    data_test: None
+                },
+                HistoryDisplayRow {
+                    label: "Title",
+                    value: "Snapshot title".to_owned(),
+                    data_test: None
+                },
+                HistoryDisplayRow {
+                    label: "Slug",
+                    value: "history-post".to_owned(),
+                    data_test: None
+                },
+                HistoryDisplayRow {
+                    label: "Format",
+                    value: "org".to_owned(),
+                    data_test: None
+                },
+                HistoryDisplayRow {
+                    label: "Summary",
+                    value: "Snapshot summary".to_owned(),
+                    data_test: None
+                },
+                HistoryDisplayRow {
+                    label: "Created",
+                    value: at.to_string(),
+                    data_test: None
+                },
+                HistoryDisplayRow {
+                    label: "Updated",
+                    value: at.to_string(),
+                    data_test: None
+                },
+                HistoryDisplayRow {
+                    label: "Published",
+                    value: at.to_string(),
+                    data_test: None
+                },
+                HistoryDisplayRow {
+                    label: "Deleted",
+                    value: at.to_string(),
+                    data_test: None
+                },
+                HistoryDisplayRow {
+                    label: "Captured",
+                    value: at.to_string(),
+                    data_test: None
+                },
+            ]
+        );
+
+        let absent = RevisionHistoryDetail {
+            title: None,
+            summary: None,
+            published_at: None,
+            deleted_at: None,
+            ..detail
+        };
+        let rows = revision_history_rows(&absent);
+        assert_eq!(rows[2].value, "No title");
+        assert_eq!(rows[5].value, "Not set");
+        assert_eq!(rows[8].value, "Not set");
+        assert_eq!(rows[9].value, "Not set");
+    }
+
     // --- parent-callback plumbing ---
 
     /// Run `body` under a fresh reactive `Owner` (the `media::upload_state` /
@@ -542,6 +1220,79 @@ mod tests {
         owner.set();
         body();
         drop(owner);
+    }
+
+    fn history_page(
+        revisions: Vec<RevisionHistoryMetadata>,
+        next_cursor: Option<RevisionHistoryCursor>,
+        has_more: bool,
+    ) -> RevisionHistoryPage {
+        RevisionHistoryPage {
+            revisions,
+            next_cursor,
+            has_more,
+        }
+    }
+
+    fn history_row(revision_id: i64) -> RevisionHistoryMetadata {
+        RevisionHistoryMetadata {
+            revision_id: common::ids::RevisionId::from(revision_id),
+            post_id: PostId::from(7),
+            title: None,
+            slug: parse_slug("history-post"),
+            captured_at: parse_utc_instant("2026-08-27T12:00:00Z"),
+            snapshot_lifecycle: crate::posts::RevisionLifecycle::Draft,
+            current_deleted: false,
+        }
+    }
+
+    #[test]
+    fn history_list_load_transition_appends_rows_and_adopts_paging_state() {
+        with_owner(|| {
+            let cursor = RevisionHistoryCursor {
+                revision_id: common::ids::RevisionId::from(9),
+            };
+            let state = HistoryListState::new(history_page(Vec::new(), Some(cursor.clone()), true));
+            state.load_error.set(Some("old failure".to_owned()));
+
+            assert_eq!(state.begin_load_more(), Some(cursor));
+            assert!(state.loading_more.get());
+            assert_eq!(state.load_error.get(), None);
+            assert_eq!(
+                state.begin_load_more(),
+                None,
+                "a request is already in flight"
+            );
+
+            state.finish_load_more(Ok(history_page(vec![history_row(10)], None, false)));
+            assert_eq!(state.rows.get().len(), 1);
+            assert_eq!(state.cursor.get(), None);
+            assert!(!state.has_more.get());
+            assert!(!state.loading_more.get());
+            assert_eq!(state.begin_load_more(), None, "there is no next cursor");
+        });
+    }
+
+    #[test]
+    fn history_list_failure_is_visible_and_reenables_retry() {
+        with_owner(|| {
+            let cursor = RevisionHistoryCursor {
+                revision_id: common::ids::RevisionId::from(9),
+            };
+            let state = HistoryListState::new(history_page(Vec::new(), Some(cursor), true));
+            assert!(state.begin_load_more().is_some());
+
+            let error = WebError::validation("history unavailable");
+            let message = error.to_string();
+            state.finish_load_more(Err(error));
+
+            assert_eq!(state.load_error.get(), Some(message));
+            assert!(!state.loading_more.get());
+            assert!(
+                state.begin_load_more().is_some(),
+                "the same cursor is retryable"
+            );
+        });
     }
 
     /// A real `Callback` that records having run into `fired`.

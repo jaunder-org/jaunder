@@ -26,6 +26,31 @@ pub(crate) fn backup_table_set(live: impl IntoIterator<Item = String>) -> Vec<St
     tables
 }
 
+/// Orders manifest tables for import where SQL constraints cannot be deferred.
+///
+/// The manifest remains alphabetical and reproducible; restore derives this
+/// dependency order so revision-media triggers only observe a completed
+/// `Post → Revision → child` chain. Unlisted tables retain manifest order.
+pub(crate) fn restore_table_order(tables: &[String]) -> Vec<&str> {
+    let mut ordered = tables.iter().map(String::as_str).collect::<Vec<_>>();
+    ordered.sort_by_key(|table| match *table {
+        "users" | "channels" | "subscription_statuses" | "target_kinds" => 1,
+        "audiences" | "subscriptions" | "media" | "posts" | "user_config" => 2,
+        "audience_members"
+        | "email_verifications"
+        | "idempotency_keys"
+        | "password_resets"
+        | "post_audiences"
+        | "post_tags"
+        | "sessions"
+        | "post_revisions" => 3,
+        "post_revision_audiences" | "post_revision_tags" => 4,
+        "post_media" => 5,
+        _ => 0,
+    });
+    ordered
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupManifest {
     pub version: String,
@@ -112,21 +137,11 @@ pub(super) fn validate_manifest(manifest: &BackupManifest) -> Result<(), BackupE
     Ok(())
 }
 
-/// Whether this backup is the immediately preceding, pre-identity schema.
-///
-/// The manifest's schema version distinguishes it from a malformed current
-/// backup: only migration 0026 backups may omit the 0027 singleton table.
-pub(crate) fn is_pre_identity_backup(manifest: &BackupManifest, target_version: i64) -> bool {
-    manifest.schema_version == 26 && target_version == 27
-}
-
 pub(crate) fn ensure_schema_version(
     manifest: &BackupManifest,
     target_version: i64,
 ) -> Result<(), BackupError> {
-    if manifest.schema_version != target_version
-        && !is_pre_identity_backup(manifest, target_version)
-    {
+    if manifest.schema_version != target_version {
         return Err(BackupError::SchemaVersionMismatch {
             backup_version: manifest.schema_version,
             target_version,
@@ -236,6 +251,34 @@ mod tests {
     }
 
     #[test]
+    fn restore_table_order_loads_revision_subject_parents_before_media() {
+        let tables = [
+            "post_media",
+            "post_revision_tags",
+            "post_revisions",
+            "posts",
+            "users",
+            "post_revision_audiences",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+        let ordered = restore_table_order(&tables);
+        let position = |table| {
+            ordered
+                .iter()
+                .position(|candidate| *candidate == table)
+                .expect("table remains in restore order")
+        };
+        assert!(position("users") < position("posts"));
+        assert!(position("posts") < position("post_revisions"));
+        assert!(position("post_revisions") < position("post_revision_tags"));
+        assert!(position("post_revisions") < position("post_revision_audiences"));
+        assert!(position("post_revision_tags") < position("post_media"));
+        assert!(position("post_revision_audiences") < position("post_media"));
+    }
+
+    #[test]
     fn backup_manifest_timestamp_retains_rfc3339_serde_form() {
         let manifest = BackupManifest {
             version: "0.1.0".to_owned(),
@@ -283,18 +326,24 @@ mod tests {
     }
 
     #[test]
-    fn ensure_schema_version_rejects_mismatch() {
+    fn ensure_schema_version_rejects_legacy_schema() {
         let manifest = BackupManifest {
             version: env!("CARGO_PKG_VERSION").to_owned(),
-            schema_version: 10,
+            schema_version: 26,
             schema_checksum: "checksum".to_owned(),
             timestamp: UtcInstant::now(),
             mode: BackupMode::Directory,
             tables: Vec::new(),
         };
 
-        let error = ensure_schema_version(&manifest, 11).expect_err("schema mismatch");
-        assert!(matches!(error, BackupError::SchemaVersionMismatch { .. }));
+        let error = ensure_schema_version(&manifest, 28).expect_err("schema mismatch");
+        assert!(matches!(
+            error,
+            BackupError::SchemaVersionMismatch {
+                backup_version: 26,
+                target_version: 28
+            }
+        ));
     }
 
     #[test]

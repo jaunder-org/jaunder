@@ -25,15 +25,14 @@ const OUT_JS: &str = "jaunder.js";
 const OUT_WASM: &str = "jaunder.wasm";
 const EXPERIMENT_SHAPE_SECTION_NAME: &str = "jaunder.shape";
 
-/// The `wasm-opt` optimisation level, pinned by measurement on the real bundle
-/// (#836) — raw bytes of the shipped `pkg/jaunder.wasm`:
+/// The `wasm-opt` optimisation level, pinned by measurement on the current
+/// history-enabled bundle (#836, #1055):
 ///
-/// | level        | raw bytes | vs none |
-/// | ------------ | --------- | ------- |
-/// | none         | 5 350 591 | —       |
-/// | `-O2`        | 2 390 164 | −55.3%  |
-/// | `-Os`        | 2 357 119 | −55.9%  |
-/// | **`-Oz`**    | **2 267 063** | **−57.6%** |
+/// | level        | raw bytes |
+/// | ------------ | --------- |
+/// | `-O2`        | 2 571 353 |
+/// | `-Os`        | 2 535 744 |
+/// | **`-Oz`**    | **2 446 641** |
 ///
 /// Size is the objective, not speed: firefox spends ~88 ms compiling each MiB of
 /// this file (#818), while the Rust-side mount path it produces measures

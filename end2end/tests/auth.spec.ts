@@ -313,9 +313,11 @@ test("sidebar footer shows Sign out link when logged in", async ({
   // no Suspense swap).
   await waitForSelector(page, ".j-nav a[href='/drafts']");
   await waitForSelector(page, ".j-nav a[href='/scheduled']");
-  // Home, Feed (/app cockpit, #181), Drafts, Scheduled, Media, and Audiences have hrefs.
+  // Home, Feed (/app cockpit, #181), Drafts, Scheduled, Media, Audiences, and
+  // History have hrefs.
   await waitForSelector(page, ".j-nav a[href='/audiences']");
-  await expect(page.locator(".j-nav a")).toHaveCount(6);
+  await waitForSelector(page, ".j-nav a[href='/history']");
+  await expect(page.locator(".j-nav a")).toHaveCount(7);
   // The reactive app does not pass an active key, and unlinked catalog entries stay hidden.
   await expect(page.locator(".j-nav .is-active")).toHaveCount(0);
   await expect(page.locator(".j-nav div.j-nav-item")).toHaveCount(0);

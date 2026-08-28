@@ -91,6 +91,7 @@ async fn seed_post_published_at(
             published_at: Some(published_at),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            tags: vec![],
             idempotency_key: None,
             expectations: PostBookkeepingExpectation::default(),
         },
@@ -316,12 +317,12 @@ async fn list_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backend) {
     .await;
     state
         .posts
-        .set_post_tags(live, &["scheduling".parse::<TagLabel>().unwrap()])
+        .set_post_tags(live, user_id, &["scheduling".parse::<TagLabel>().unwrap()])
         .await
         .unwrap();
     state
         .posts
-        .set_post_tags(sched, &["scheduling".parse::<TagLabel>().unwrap()])
+        .set_post_tags(sched, user_id, &["scheduling".parse::<TagLabel>().unwrap()])
         .await
         .unwrap();
     let tag_slug: Tag = "scheduling".parse().unwrap();
@@ -386,12 +387,12 @@ async fn list_user_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backe
     .await;
     state
         .posts
-        .set_post_tags(live, &["scheduling".parse::<TagLabel>().unwrap()])
+        .set_post_tags(live, user_id, &["scheduling".parse::<TagLabel>().unwrap()])
         .await
         .unwrap();
     state
         .posts
-        .set_post_tags(sched, &["scheduling".parse::<TagLabel>().unwrap()])
+        .set_post_tags(sched, user_id, &["scheduling".parse::<TagLabel>().unwrap()])
         .await
         .unwrap();
     let tag_slug: Tag = "scheduling".parse().unwrap();
@@ -446,7 +447,11 @@ async fn soft_delete_excludes_post_from_lists(#[case] backend: Backend) {
     let published = anon_published(state, "10").await;
     assert!(published.iter().any(|p| p.post_id == post_id));
 
-    state.posts.soft_delete_post(post_id).await.unwrap();
+    state
+        .posts
+        .soft_delete_post(post_id, user_id)
+        .await
+        .unwrap();
 
     let published = anon_published(state, "10").await;
     assert!(!published.iter().any(|p| p.post_id == post_id));
@@ -585,6 +590,7 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
         .posts
         .set_post_tags(
             alice_recent_1.post_id,
+            alice_id,
             &["rust".parse::<TagLabel>().unwrap()],
         )
         .await
@@ -793,7 +799,11 @@ async fn list_posts_gone_live_between_returns_only_window_with_tags(#[case] back
     .await;
     state
         .posts
-        .set_post_tags(inside, &["scheduling".parse::<TagLabel>().unwrap()])
+        .set_post_tags(
+            inside,
+            alice.user_id,
+            &["scheduling".parse::<TagLabel>().unwrap()],
+        )
         .await
         .unwrap();
     // Exactly at the inclusive upper bound: must be returned (untagged).
@@ -879,7 +889,7 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
     .await;
     state
         .posts
-        .set_post_tags(post, &["rust".parse::<TagLabel>().unwrap()])
+        .set_post_tags(post, alice.user_id, &["rust".parse::<TagLabel>().unwrap()])
         .await
         .unwrap();
 
@@ -975,7 +985,11 @@ async fn tag_list_pagination(#[case] backend: Backend) {
 
         state
             .posts
-            .set_post_tags(post_id, &["pagination-test".parse::<TagLabel>().unwrap()])
+            .set_post_tags(
+                post_id,
+                user,
+                &["pagination-test".parse::<TagLabel>().unwrap()],
+            )
             .await
             .expect("set_post_tags failed");
     }
@@ -1011,12 +1025,12 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
 
     state
         .posts
-        .set_post_tags(post1, &["shared-tag".parse::<TagLabel>().unwrap()])
+        .set_post_tags(post1, user1, &["shared-tag".parse::<TagLabel>().unwrap()])
         .await
         .expect("tag post1 failed");
     state
         .posts
-        .set_post_tags(post2, &["shared-tag".parse::<TagLabel>().unwrap()])
+        .set_post_tags(post2, user2, &["shared-tag".parse::<TagLabel>().unwrap()])
         .await
         .expect("tag post2 failed");
 
@@ -1106,12 +1120,12 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
 
     state
         .posts
-        .set_post_tags(post1, &["javascript".parse::<TagLabel>().unwrap()])
+        .set_post_tags(post1, user1, &["javascript".parse::<TagLabel>().unwrap()])
         .await
         .expect("set_post_tags failed");
     state
         .posts
-        .set_post_tags(post2, &["javascript".parse::<TagLabel>().unwrap()])
+        .set_post_tags(post2, user2, &["javascript".parse::<TagLabel>().unwrap()])
         .await
         .expect("set_post_tags failed");
 
@@ -1148,17 +1162,17 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
 
     state
         .posts
-        .set_post_tags(post1, &["clojure".parse::<TagLabel>().unwrap()])
+        .set_post_tags(post1, user1, &["clojure".parse::<TagLabel>().unwrap()])
         .await
         .expect("set_post_tags failed");
     state
         .posts
-        .set_post_tags(post2, &["clojure".parse::<TagLabel>().unwrap()])
+        .set_post_tags(post2, user1, &["clojure".parse::<TagLabel>().unwrap()])
         .await
         .expect("set_post_tags failed");
     state
         .posts
-        .set_post_tags(post3, &["clojure".parse::<TagLabel>().unwrap()])
+        .set_post_tags(post3, user2, &["clojure".parse::<TagLabel>().unwrap()])
         .await
         .expect("set_post_tags failed");
 
@@ -1209,18 +1223,18 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
 
     state
         .posts
-        .set_post_tags(post1, &["haskell".parse::<TagLabel>().unwrap()])
+        .set_post_tags(post1, user, &["haskell".parse::<TagLabel>().unwrap()])
         .await
         .expect("set_post_tags failed");
     state
         .posts
-        .set_post_tags(post2, &["haskell".parse::<TagLabel>().unwrap()])
+        .set_post_tags(post2, user, &["haskell".parse::<TagLabel>().unwrap()])
         .await
         .expect("set_post_tags failed");
 
     state
         .posts
-        .soft_delete_post(post1)
+        .soft_delete_post(post1, user)
         .await
         .expect("soft_delete_post failed");
 
@@ -1252,12 +1266,12 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
 
     state
         .posts
-        .set_post_tags(post1, &["kotlin".parse::<TagLabel>().unwrap()])
+        .set_post_tags(post1, user, &["kotlin".parse::<TagLabel>().unwrap()])
         .await
         .expect("set_post_tags failed");
     state
         .posts
-        .set_post_tags(post2, &["kotlin".parse::<TagLabel>().unwrap()])
+        .set_post_tags(post2, user, &["kotlin".parse::<TagLabel>().unwrap()])
         .await
         .expect("set_post_tags failed");
 
@@ -1356,7 +1370,7 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
 
         state
             .posts
-            .set_post_tags(post_id, &["cursor-tag".parse::<TagLabel>().unwrap()])
+            .set_post_tags(post_id, user, &["cursor-tag".parse::<TagLabel>().unwrap()])
             .await
             .expect("set_post_tags failed");
     }
@@ -1402,7 +1416,7 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
 
         state
             .posts
-            .set_post_tags(post_id, &["global-tag".parse::<TagLabel>().unwrap()])
+            .set_post_tags(post_id, user, &["global-tag".parse::<TagLabel>().unwrap()])
             .await
             .expect("set_post_tags failed");
     }
@@ -1494,7 +1508,7 @@ async fn get_by_permalink_soft_deleted(#[case] backend: Backend) {
 
     state
         .posts
-        .soft_delete_post(seeded.post_id)
+        .soft_delete_post(seeded.post_id, user.user_id)
         .await
         .expect("soft_delete_post failed");
 

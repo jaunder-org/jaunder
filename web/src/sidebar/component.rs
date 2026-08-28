@@ -8,6 +8,7 @@ use leptos::prelude::*;
 /// A single nav item in the sidebar.
 #[component]
 fn SidebarNavItem(
+    test_key: &'static str,
     label: &'static str,
     icon_path: &'static str,
     active: bool,
@@ -18,13 +19,14 @@ fn SidebarNavItem(
     } else {
         "j-nav-item"
     };
+    let test_selector = (test_key == "history").then_some("history-nav-link");
     let inner = view! {
         <Icon path=icon_path size=16 />
         <span>{label}</span>
     };
     match href {
         Some(href) => view! {
-            <a class=class href=href.to_string()>
+            <a class=class href=href.to_string() data-test=test_selector>
                 {inner}
             </a>
         }
@@ -103,6 +105,7 @@ fn authed_sidebar(active_key: &str, username: &Username, is_operator: bool) -> i
                         let is_active = item.key == active_key.as_str();
                         view! {
                             <SidebarNavItem
+                                test_key=item.key
                                 label=item.label
                                 icon_path=item.icon_path
                                 active=is_active

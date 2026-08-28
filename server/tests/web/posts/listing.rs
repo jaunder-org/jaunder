@@ -209,7 +209,11 @@ async fn list_scheduled_returns_current_user_future_posts_ordered_by_schedule(
         .seed(&state)
         .await
         .post_id;
-    state.posts.soft_delete_post(deleted_id).await.unwrap();
+    state
+        .posts
+        .soft_delete_post(deleted_id, author.user_id)
+        .await
+        .unwrap();
     let other_id = SeedRawPost::new(stranger.user_id)
         .published_at(common::time::UtcInstant::from(
             now + chrono::Duration::days(1),
@@ -518,7 +522,11 @@ async fn list_local_timeline_returns_published_posts_with_cursor_pagination(
         create_post_json(&state, "gone", "markdown", None, true, Some(&author_cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let deleted: SavedPost = serde_json::from_str(&body).unwrap();
-    state.posts.soft_delete_post(deleted.post_id).await.unwrap();
+    state
+        .posts
+        .soft_delete_post(deleted.post_id, author.user_id)
+        .await
+        .unwrap();
 
     let (status, body) = list_local_timeline(&state, None, 50, None).await;
     assert_eq!(status, StatusCode::OK, "body: {body}");
@@ -654,6 +662,7 @@ async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
         .posts
         .set_post_tags(
             created.post_id,
+            session.user_id,
             &[
                 "web".parse::<TagLabel>().unwrap(),
                 "Rust".parse::<TagLabel>().unwrap(),

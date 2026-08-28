@@ -239,14 +239,19 @@ async fn update_post_returns_not_found_for_missing_post(#[case] backend: Backend
 #[tokio::test]
 async fn update_post_returns_not_found_for_deleted_post(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let session = create_user_and_session(&state).await;
+    let cookie = session.cookie();
 
     let (status, body) =
         create_post_json(&state, "body", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: SavedPost = serde_json::from_str(&body).unwrap();
 
-    state.posts.soft_delete_post(created.post_id).await.unwrap();
+    state
+        .posts
+        .soft_delete_post(created.post_id, session.user_id)
+        .await
+        .unwrap();
 
     let (status, body) = update_post_json(
         &state,
@@ -326,7 +331,8 @@ async fn publish_post_rejects_non_author(#[case] backend: Backend) {
 #[tokio::test]
 async fn publish_post_returns_not_found_for_missing_or_deleted_posts(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let cookie = create_user_and_session(&state).await.cookie();
+    let session = create_user_and_session(&state).await;
+    let cookie = session.cookie();
 
     let (status, body) = publish_post_form(&state, PostId::from(999_999), Some(&cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");
@@ -336,7 +342,11 @@ async fn publish_post_returns_not_found_for_missing_or_deleted_posts(#[case] bac
         create_post_json(&state, "body", "markdown", None, false, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: SavedPost = serde_json::from_str(&body).unwrap();
-    state.posts.soft_delete_post(created.post_id).await.unwrap();
+    state
+        .posts
+        .soft_delete_post(created.post_id, session.user_id)
+        .await
+        .unwrap();
 
     let (status, body) = publish_post_form(&state, created.post_id, Some(&cookie)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body: {body}");

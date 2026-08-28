@@ -1238,6 +1238,28 @@
     font-size: 12.5px;
 }
 
+/* ─── Post Revision history ─── */
+.j-history-table-wrap {
+    overflow-x: auto;
+    border: 1px var(--border-style) var(--line);
+    border-radius: var(--radius);
+}
+
+.j-history-table-wrap .j-table {
+    min-width: 720px;
+}
+
+.j-history-load-more {
+    margin: 16px 0 0;
+}
+
+@media (max-width: 720px) {
+    .j-history-summary .j-field-row {
+        grid-template-columns: 1fr;
+        gap: 4px;
+    }
+}
+
 /* ─── utilities ─── */
 .j-spacer {
     flex: 1;

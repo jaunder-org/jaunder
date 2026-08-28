@@ -46,6 +46,7 @@ async fn multiple_tags_on_single_post(#[case] backend: Backend) {
         .posts
         .set_post_tags(
             post_id,
+            user,
             &[
                 "rust".parse::<TagLabel>().unwrap(),
                 "performance".parse::<TagLabel>().unwrap(),
@@ -100,12 +101,20 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
     // Tag with different casings but same canonical form - should map to same slug
     state
         .posts
-        .set_post_tags(post1, &["Web-Development".parse::<TagLabel>().unwrap()])
+        .set_post_tags(
+            post1,
+            user,
+            &["Web-Development".parse::<TagLabel>().unwrap()],
+        )
         .await
         .expect("set_post_tags post1 failed");
     state
         .posts
-        .set_post_tags(post2, &["WEB-DEVELOPMENT".parse::<TagLabel>().unwrap()])
+        .set_post_tags(
+            post2,
+            user,
+            &["WEB-DEVELOPMENT".parse::<TagLabel>().unwrap()],
+        )
         .await
         .expect("set_post_tags post2 failed");
 
@@ -140,6 +149,7 @@ async fn restating_the_set_without_one_tag_drops_only_that_tag(#[case] backend: 
         .posts
         .set_post_tags(
             post_id,
+            user,
             &[
                 "tag-a".parse::<TagLabel>().unwrap(),
                 "tag-b".parse::<TagLabel>().unwrap(),
@@ -157,6 +167,7 @@ async fn restating_the_set_without_one_tag_drops_only_that_tag(#[case] backend: 
         .posts
         .set_post_tags(
             post_id,
+            user,
             &[
                 "tag-a".parse::<TagLabel>().unwrap(),
                 "tag-c".parse::<TagLabel>().unwrap(),
@@ -190,6 +201,7 @@ async fn numeric_tag(#[case] backend: Backend) {
         .posts
         .set_post_tags(
             post_id,
+            user,
             &[
                 "python3".parse::<TagLabel>().unwrap(),
                 "rust-2024".parse::<TagLabel>().unwrap(),
@@ -232,7 +244,7 @@ async fn many_tags_many_posts(#[case] backend: Backend) {
 
         state
             .posts
-            .set_post_tags(post_id, &labels)
+            .set_post_tags(post_id, user, &labels)
             .await
             .expect("set_post_tags failed");
     }
@@ -266,6 +278,7 @@ async fn tag_all_numeric(#[case] backend: Backend) {
         .posts
         .set_post_tags(
             post_id,
+            user,
             &[
                 "2024".parse::<TagLabel>().unwrap(),
                 "42".parse::<TagLabel>().unwrap(),
@@ -300,6 +313,7 @@ async fn tag_hyphen_boundaries(#[case] backend: Backend) {
         .posts
         .set_post_tags(
             post_id,
+            user,
             &[
                 "web-development".parse::<TagLabel>().unwrap(),
                 "a-b-c".parse::<TagLabel>().unwrap(),
@@ -335,7 +349,7 @@ async fn tag_with_long_display(#[case] backend: Backend) {
     let long_display = "very-long-technical-term-with-many-hyphens-and-lowercase-letters";
     state
         .posts
-        .set_post_tags(post_id, &[long_display.parse::<TagLabel>().unwrap()])
+        .set_post_tags(post_id, user, &[long_display.parse::<TagLabel>().unwrap()])
         .await
         .expect("set_post_tags failed");
 
@@ -365,6 +379,7 @@ async fn tag_list_ordering(#[case] backend: Backend) {
         .posts
         .set_post_tags(
             post1,
+            user,
             &[
                 "zebra".parse::<TagLabel>().unwrap(),
                 "apple".parse::<TagLabel>().unwrap(),
@@ -376,7 +391,7 @@ async fn tag_list_ordering(#[case] backend: Backend) {
 
     state
         .posts
-        .set_post_tags(post2, &["mango".parse::<TagLabel>().unwrap()])
+        .set_post_tags(post2, user, &["mango".parse::<TagLabel>().unwrap()])
         .await
         .expect("set_post_tags failed");
 
@@ -411,7 +426,7 @@ async fn tags_for_multiple_posts(#[case] backend: Backend) {
     // Only post2 is tagged; post1 stays untagged to assert the empty case.
     state
         .posts
-        .set_post_tags(post2, &["featured".parse::<TagLabel>().unwrap()])
+        .set_post_tags(post2, user, &["featured".parse::<TagLabel>().unwrap()])
         .await
         .expect("set_post_tags failed");
 
@@ -439,6 +454,7 @@ async fn tag_mixed_alphanumeric(#[case] backend: Backend) {
         .posts
         .set_post_tags(
             post_id,
+            user,
             &[
                 "version-2-0-1".parse::<TagLabel>().unwrap(),
                 "HTTP2".parse::<TagLabel>().unwrap(),
@@ -471,7 +487,7 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
 
     state
         .posts
-        .set_post_tags(post_id, &["test".parse::<TagLabel>().unwrap()])
+        .set_post_tags(post_id, user, &["test".parse::<TagLabel>().unwrap()])
         .await
         .expect("set_post_tags failed");
 
@@ -486,7 +502,7 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
     // An empty desired set clears the post's tags (D11).
     state
         .posts
-        .set_post_tags(post_id, &[])
+        .set_post_tags(post_id, user, &[])
         .await
         .expect("set_post_tags failed");
 
@@ -513,7 +529,7 @@ async fn tag_creation_and_retrieval(#[case] backend: Backend) {
 
     state
         .posts
-        .set_post_tags(post_id, &["rust".parse::<TagLabel>().unwrap()])
+        .set_post_tags(post_id, user, &["rust".parse::<TagLabel>().unwrap()])
         .await
         .expect("set_post_tags failed");
 
@@ -539,7 +555,7 @@ async fn tag_normalization(#[case] backend: Backend) {
 
     state
         .posts
-        .set_post_tags(post_id, &["Rust-Web".parse::<TagLabel>().unwrap()])
+        .set_post_tags(post_id, user, &["Rust-Web".parse::<TagLabel>().unwrap()])
         .await
         .expect("set_post_tags failed");
 
@@ -563,6 +579,7 @@ async fn tag_edge_case_formats(#[case] backend: Backend) {
         .posts
         .set_post_tags(
             post_id,
+            user,
             &[
                 "123".parse::<TagLabel>().unwrap(),
                 "my-tag-here".parse::<TagLabel>().unwrap(),
@@ -588,7 +605,11 @@ async fn tag_display_preservation(#[case] backend: Backend) {
 
     state
         .posts
-        .set_post_tags(post_id, &["MySpecialTag".parse::<TagLabel>().unwrap()])
+        .set_post_tags(
+            post_id,
+            user,
+            &["MySpecialTag".parse::<TagLabel>().unwrap()],
+        )
         .await
         .expect("set_post_tags failed");
 
@@ -612,6 +633,7 @@ async fn reconciling_to_a_smaller_set_preserves_the_surviving_tags(#[case] backe
         .posts
         .set_post_tags(
             post_id,
+            user,
             &[
                 "tag1".parse::<TagLabel>().unwrap(),
                 "tag2".parse::<TagLabel>().unwrap(),
@@ -629,6 +651,7 @@ async fn reconciling_to_a_smaller_set_preserves_the_surviving_tags(#[case] backe
         .posts
         .set_post_tags(
             post_id,
+            user,
             &[
                 "tag1".parse::<TagLabel>().unwrap(),
                 "tag3".parse::<TagLabel>().unwrap(),
@@ -662,7 +685,11 @@ async fn list_tags_returns_alphabetical_with_prefix(#[case] backend: Backend) {
         .iter()
         .map(|display| display.parse::<TagLabel>().unwrap())
         .collect();
-    state.posts.set_post_tags(post, &labels).await.unwrap();
+    state
+        .posts
+        .set_post_tags(post, user, &labels)
+        .await
+        .unwrap();
 
     // No prefix → all tags, alphabetical by slug.
     let all = state
@@ -744,6 +771,7 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
         .posts
         .set_post_tags(
             p1,
+            user,
             &[
                 "web".parse::<TagLabel>().unwrap(),
                 "Rust".parse::<TagLabel>().unwrap(),
@@ -753,7 +781,7 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
         .unwrap();
     state
         .posts
-        .set_post_tags(p2, &["performance".parse::<TagLabel>().unwrap()])
+        .set_post_tags(p2, user, &["performance".parse::<TagLabel>().unwrap()])
         .await
         .unwrap();
 

@@ -342,15 +342,6 @@ pub(super) const ALLOWLIST: &[Allowed] = &[
         reason: "Postgres existence probe for intentionally invalid backup filename fixture",
     },
     Allowed {
-        file: "sqlite/posts.rs",
-        function: "set_post_tags",
-        target: "bool",
-        what: "\"SELECTCOUNT(*)>0FROMpostsWHEREpost_id=$1\"",
-        count: 1,
-        category: Category::CountOrExists,
-        reason: "post-exists check before the batched tag write; Postgres uses a FOR UPDATE probe instead",
-    },
-    Allowed {
         file: "posts.rs",
         function: "physical_row_ids",
         target: "String",

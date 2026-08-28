@@ -250,8 +250,13 @@ auto-derived from the live schema — every table minus the explicit
 `TABLES_EXCLUDED_FROM_BACKUP` denylist (`_sqlx_migrations`, `feed_cache`;
 `storage/src/backup/format.rs`) and SQLite-internal tables, sorted for a
 reproducible manifest — so a migration that adds a table needs no backup code
-change; server contract tests pin the exact set
-([ADR-0064](adr/0064-backup-target-auto-derivation.md)).
+change; server contract tests pin the exact set. Consequently the complete
+`post_revisions` scalar rows, their immutable
+`post_revision_tags`/`post_revision_audiences` children, and revision-qualified
+`post_media` rows travel with every whole-store backup, without a
+revision-specific export path; typed restore validation covers their domain
+fields ([ADR-0136](adr/0136-local-post-lifecycle.md),
+[ADR-0064](adr/0064-backup-target-auto-derivation.md)).
 
 Restore is authoritative and order-independent: both backends clear every target
 table in a first pass, then load all rows in a second, with FK enforcement
@@ -428,13 +433,25 @@ resolution, socket pinning, or redirect implementation. Every response
 identifies its persistent database instance through `X-Jaunder-Instance`; a
 matching identity is owned, a completed response with a different or absent
 identity is foreign, and request failure or an ambiguous header is unknown and
-fails closed. A future disallowed-address product rule belongs at authoring
-validation, not this deletion-time check. Exact proven-foreign row evidence
-feeds reporting, reclamation, and one atomic conditional delete, so concurrent
-or unprobed rows still refuse. `CreatePostInput`/`UpdatePostInput` carry the
-render output in place of bare HTML, and the rows land in the Post's own
-transaction. Publication has its own storage operation that sets the publication
-timestamp and touches nothing else, which lets rendering stay the sole
+fails closed.
+
+Persisted `post_media` rows use an exact subject key: `Current(post_id)` or
+`Revision(post_id, revision_id)`. A meaningful Post mutation copies its exact
+current rows to the newly captured immutable Revision subject before replacing
+the current subject; the schemas enforce that a Revision subject names that
+Post's Revision. The ownership evidence, locked conditional delete, reclaim
+predicate, and owner reporting all carry that full subject key, so a current-row
+proof cannot authorize removal across an unseen historical snapshot. The
+ordinary guard protects references from active Posts, Deleted Posts, and
+Revisions; owner reporting deduplicates their Post IDs. A web force delete may
+override the caller's own-reference refusal, but still refuses a delete that
+would leave referenced bytes with no media-row accounting; it deliberately may
+break archival reconstruction ([ADR-0136](adr/0136-local-post-lifecycle.md),
+[the live media-reference ownership decision](adr/0154-media-reference-live-ownership.md)).
+
+`CreatePostInput`/`UpdatePostInput` carry the render output in place of bare
+HTML, and the rows land in the Post's own transaction. Publication uses the same
+atomic revision/mutation discipline; rendering remains the sole reference
 constructor.
 
 **Media is content-addressed, and the layout is spelled once.** `media_path`
@@ -511,30 +528,35 @@ instance-wide Default Audience is separately the closed
 per-author `Named` target and widens to `AudienceTarget` only at the web and
 AtomPub per-Post boundaries.
 
-**Accepted local lifecycle target.** A local Post is durable canonical identity
-and latest state. Before every meaningful content, tag, audience, media,
-publication, or deletion change, storage is to append a full prior-state **Post
-Revision**, including immutable creation/prior modification and
-publication/deletion timestamps; no-op writes create none. Revisions are
-immutable through the storage API, owner-readable (including after deletion),
-and not revert operations. Soft deletion is to retain the Post and its history
-indefinitely while removing it from active web, Syndication Feed, and AtomPub
-Collection surfaces. Permalink and syndicated-item identity is active-only, so a
-later Post may reuse the URL and feed readers may conflate the two. Media
-referenced by a retained current Post or revision is to participate in the
-ordinary reference guard; explicit forced deletion remains an administrative
-override. A future purge remains deliberately undecided and requires its own
-decision ([local Post lifecycle decision](adr/0136-local-post-lifecycle.md)).
+**Local Post lifecycle.** A Post row is durable canonical identity and latest
+state. Storage treats every meaningful top-level content, tag, audience, media,
+publication, unpublication, and soft-delete mutation as one atomic operation: it
+locks and canonically compares the complete desired state, then captures exactly
+one immutable full prior-state **Post Revision** and its tag, audience, and
+media children before applying the change. Scalar snapshots contain authored
+source and format, rendered HTML, title, slug, summary, immutable creation time,
+prior modification time, and publication/deletion timestamps; child values are
+copied rather than linked to mutable tag or audience lookup rows. A semantic
+no-op writes neither a Revision nor an updated timestamp. Creation is
+revision-free because it has no prior state
+([ADR-0136](adr/0136-local-post-lifecycle.md)).
 
-**Current lifecycle behavior.** Updates snapshot only title, slug, body, format,
-and rendered HTML; no-op updates still snapshot; dedicated state changes create
-no revision; history has no read surface; and deleted Posts/revisions release
-media protection.
-[Revision/history/media corrections](https://github.com/jaunder-org/jaunder/issues/1055)
-and [Deleted Post replay](https://github.com/jaunder-org/jaunder/issues/1056)
-remain implementation debt, not alternate lifecycle policy.
-[ADR-0009](adr/0009-edit-delete-policy.md) governs consumed content and does not
-reach these local rows.
+Revision records have no product mutators: only top-level Post mutation and
+whole-store backup/restore write them. Authenticated owners can list global
+history and a Post's history, including a Deleted Post, and inspect an exact
+complete snapshot; unauthenticated callers are rejected at the authentication
+boundary and non-owner requests are masked as absent. Both lists use
+newest-first immutable Revision-ID keyset pagination with bounded overfetch and
+opaque cursors. History is not a revert mechanism.
+
+Soft deletion stamps and retains the Post, all revisions, idempotency records,
+and child relationships indefinitely while excluding the current Post from
+active web reads, Syndication Feeds, and AtomPub Collections. Active permalink
+and syndicated-item identity can be reused by a later Post, with accepted
+feed-reader conflation; restore is not promised. There is no product purge. A
+future purge must decide the combined Post, Revision, media, idempotency, and
+child erasure policy ([ADR-0136](adr/0136-local-post-lifecycle.md)). ADR-0009
+continues to govern consumed content rather than these local rows.
 
 Cross-cutting values are validated newtypes whose `FromStr` is the single
 chokepoint: `Username`, `Slug`, and `Tag` live in `common`; `Password` lives in
@@ -1154,6 +1176,20 @@ constructor exist — components call `Resource::new` directly (13 files across
 `web/src`), and no clippy `disallowed-methods` entry bans it — `clippy.toml` has
 no `disallowed-methods` entry at all; it only _relaxes_ `unwrap`/`expect` for
 tests, which the workspace otherwise denies (`Cargo.toml:141`).
+
+**Revision History is an owner-only web surface.** The `posts` vertical exposes
+authenticated `list_history`, `get_post_history`, and
+`get_revision_history_detail` server functions for `/history`,
+`/posts/{post_id}/history`, and `/posts/{post_id}/history/{revision_id}`
+respectively. Storage binds the owner in every global, per-Post, and
+exact-detail query; unauthenticated callers are rejected at the authentication
+boundary, while absent Posts, foreign Posts, and mismatched Revision/Post pairs
+share the same masked result rather than relying on public visibility checks.
+The sidebar History entry and each active Post's History action lead to the
+cursor-paginated global/per-Post lists; the per-Post screen shows current state
+alongside immutable snapshots, and the detail renders its stored rendered HTML
+only through the existing trusted sink. Deleted Posts remain reachable only
+through these owner checks ([ADR-0136](adr/0136-local-post-lifecycle.md)).
 
 `web/` is a **thin shell**
 ([ADR-0059](adr/0059-thin-web-shell-error-layering.md)): it keeps only the

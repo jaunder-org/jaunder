@@ -17,6 +17,9 @@ mod server;
 #[cfg(target_arch = "wasm32")]
 mod component;
 
+#[cfg(target_arch = "wasm32")]
+mod history_component;
+
 // The pure post-render twins (host-compiled leaf, ADR-0070): plain-string HTML
 // builders shared by the projector (`crate::app::render`) and the reactive
 // `PostDisplay`, reachable crate-wide as `crate::posts::render::…`.
@@ -47,8 +50,11 @@ pub use parse::{DraftRowDisplay, PermalinkRoute, draft_row_display, parse_permal
 // Same reason as `parse` above: `page_state`'s only caller is the wasm-only
 // `component`, so without these the host build sees every one of them as `dead_code`.
 pub use page_state::{
-    ListingRoute, NamedAudienceState, notify, notify_with_fallback, publish_redirect, seeded_page,
-    tag_query, user_query, user_tag_query, with_post_id,
+    AuthenticatedHistoryState, HistoryCollectionDisplay, HistoryDisplayRow, HistoryListState,
+    ListingRoute, NamedAudienceState, authenticated_history_state, current_history_rows,
+    load_authenticated_history, notify, notify_with_fallback, publish_redirect,
+    revision_collection_displays, revision_history_rows, seeded_page, tag_query, user_query,
+    user_tag_query, with_post_id,
 };
 
 // Same reason again: the composer and editor state seams are consumed by the
@@ -66,11 +72,14 @@ pub use render::edit_post_url;
 // The API surface — re-exported so external call sites and the server-fn
 // registrar keep the stable `crate::posts::…` paths despite living in `api.rs`.
 pub use api::{
-    Create, Delete, EditPostPreview, Get, GetAudienceSelection, GetDefaultAudienceSelection,
-    GetPreview, ListDrafts, ListScheduled, PostInputs, Publish, SavedPost, Unpublish,
-    UnpublishedPost, Update, create, delete, get, get_audience_selection,
-    get_default_audience_selection, get_preview, list_drafts, list_scheduled, publish, unpublish,
-    update,
+    Create, CurrentPostHistory, Delete, EditPostPreview, Get, GetAudienceSelection,
+    GetDefaultAudienceSelection, GetPostHistory, GetPreview, GetRevisionHistoryDetail, ListDrafts,
+    ListHistory, ListScheduled, PostInputs, PostRevisionHistory, Publish, RevisionHistoryAudience,
+    RevisionHistoryCursor, RevisionHistoryDetail, RevisionHistoryMetadata, RevisionHistoryPage,
+    RevisionHistoryTag, RevisionLifecycle, SavedPost, Unpublish, UnpublishedPost, Update, create,
+    delete, get, get_audience_selection, get_default_audience_selection, get_post_history,
+    get_preview, get_revision_history_detail, list_drafts, list_history, list_scheduled, publish,
+    unpublish, update,
 };
 
 // Re-exported for the `server` crate's public projector, which maps the fetched
@@ -92,3 +101,5 @@ pub use component::{
     PostCard, PostCreateForm, PostDisplay, PostPage, ScheduledPage, SiteTagPage, UserTagPage,
     UserTimelinePage,
 };
+#[cfg(target_arch = "wasm32")]
+pub use history_component::{HistoryPage, PostHistoryPage, RevisionHistoryDetailPage};

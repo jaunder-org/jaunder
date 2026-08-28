@@ -672,6 +672,8 @@ async fn cmd_backup_covers_every_table_or_deliberately_excludes_it(#[case] backe
             "password_resets",
             "post_audiences",
             "post_media",
+            "post_revision_audiences",
+            "post_revision_tags",
             "post_revisions",
             "post_tags",
             "posts",
@@ -714,7 +716,7 @@ async fn cmd_backup_covers_every_table_or_deliberately_excludes_it(#[case] backe
         }
     };
     assert_eq!(
-        live_table_count, 25,
+        live_table_count, 27,
         "a table was added or removed — update the golden set and denylist deliberately"
     );
 }
@@ -791,11 +793,11 @@ async fn cmd_backup_propagates_media_mirror_failure(#[case] backend: Backend) {
     ));
 }
 
-// Migration 0026 archives predate instance_identity. They restore successfully
-// by bootstrapping a new identity instead of copying a missing row.
+// Backups from migration 0026 omit both instance identity and later Post
+// revision tables. Restore rejects that incompatible schema before mutation.
 #[apply(backends)]
 #[tokio::test]
-async fn cmd_restore_pre_identity_backup_bootstraps_new_identity(#[case] backend: Backend) {
+async fn cmd_restore_rejects_pre_identity_backup(#[case] backend: Backend) {
     let source_base = TempDir::new().expect("source temp dir");
     let (source_args, _pg_source) = storage_args(backend, &source_base).await;
     cmd_init(&source_args, false).await.expect("init source");
@@ -825,24 +827,16 @@ async fn cmd_restore_pre_identity_backup_bootstraps_new_identity(#[case] backend
     let target_base = TempDir::new().expect("target temp dir");
     let (target_args, _pg_target) = storage_args(backend, &target_base).await;
     cmd_init(&target_args, false).await.expect("init target");
-    let bootstrap_identity = open_existing_database_with_observer(
-        &target_args.db,
-        &storage::StorageRuntimeConfig::default(),
-    )
-    .await
-    .expect("open target")
-    .instance_id;
-    cmd_restore(&target_args, &backup_path)
+    let error = cmd_restore(&target_args, &backup_path)
         .await
-        .expect("restore pre-identity backup");
-    let restored_identity = open_existing_database_with_observer(
-        &target_args.db,
-        &storage::StorageRuntimeConfig::default(),
-    )
-    .await
-    .expect("reopen target")
-    .instance_id;
-    assert_ne!(restored_identity, bootstrap_identity);
+        .expect_err("legacy schema must be rejected");
+    assert!(matches!(
+        error.downcast_ref::<BackupError>(),
+        Some(BackupError::SchemaVersionMismatch {
+            backup_version: 26,
+            target_version: 28
+        })
+    ));
 }
 
 // Backup/restore preserves the fixture's exact microsecond-precision timestamp

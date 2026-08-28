@@ -1,4 +1,4 @@
-use common::ids::PostId;
+use common::ids::{PostId, UserId};
 use common::seed::TagSummary;
 use common::tag::TagLabel;
 use server_fn::ServerFn;
@@ -16,14 +16,15 @@ async fn seed_user_and_tagged_post(
     state: &Arc<storage::AppState>,
     slug: &str,
     tags: &[&str],
-) -> PostId {
+) -> (PostId, UserId) {
     let user_id = SeedUser::new().seed(state).await.user_id;
-    SeedRawPost::new(user_id)
+    let post_id = SeedRawPost::new(user_id)
         .slug(slug)
         .tags(tags.iter().copied())
         .seed(state)
         .await
-        .post_id
+        .post_id;
+    (post_id, user_id)
 }
 
 #[apply(backends)]
@@ -127,11 +128,15 @@ async fn list_tags_rejects_out_of_range_limit(#[case] backend: Backend) {
 #[tokio::test]
 async fn list_tags_uses_default_limit_when_unspecified(#[case] backend: Backend) {
     let TestEnv { state, base: _base } = backend.setup().await;
-    let post = seed_user_and_tagged_post(&state, "post-4", &[]).await;
+    let (post, user_id) = seed_user_and_tagged_post(&state, "post-4", &[]).await;
     let labels: Vec<TagLabel> = (0..20)
         .map(|n| format!("tag{n:02}").parse().expect("valid tag label"))
         .collect();
-    state.posts.set_post_tags(post, &labels).await.unwrap();
+    state
+        .posts
+        .set_post_tags(post, user_id, &labels)
+        .await
+        .unwrap();
 
     let (status, body) = post_json(
         &state,

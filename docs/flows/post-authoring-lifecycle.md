@@ -9,6 +9,9 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#post-authoring-lifecycle`
 - `route:/scheduled`
 - `route:/posts/:post_id/edit`
 - `route:/~:username/:year/:month/:day/:slug`
+- `route:/history`
+- `route:/posts/:post_id/history`
+- `route:/posts/:post_id/history/:revision_id`
 
 ## Endpoints
 
@@ -22,6 +25,9 @@ Matrix: `matrix:docs/coverage/csr-e2e-matrix.md#post-authoring-lifecycle`
 - `endpoint:/api/posts/publish`
 - `endpoint:/api/posts/delete`
 - `endpoint:/api/posts/unpublish`
+- `endpoint:/api/posts/list_history`
+- `endpoint:/api/posts/get_post_history`
+- `endpoint:/api/posts/get_revision_history_detail`
 
 `/posts/new` waits for the shared session reconcile before it paints the full
 composer. The page seeds its audience picker from the site default, lets the
@@ -42,6 +48,15 @@ the save controls branch-specific: drafts can stay drafts or publish, while live
 and scheduled posts only offer save. Publishing redirects to the canonical
 permalink. Unpublishing from a permalink page returns to `/drafts`. Deleting
 soft-deletes the post and leaves the success message in place.
+
+`/history` is the owner-only entry point across active and Deleted Posts. It
+lists immutable snapshots newest-first and appends cursor pages through **Load
+more**. `/posts/:post_id/history` pairs the server-derived Current state with
+that Post's snapshots; `/posts/:post_id/history/:revision_id` renders the exact
+authored source, trusted rendered representation, scalar metadata, tags,
+audiences, and media references captured in that revision. The sidebar reaches
+the global route, while each active owner Post exposes its own History action.
+Deleted Posts remain discoverable and inspectable from the global list.
 
 Every create, update, publish, unpublish, and published delete also enqueues
 feed/tag regeneration work after storage commits, so the visible authoring route
@@ -87,4 +102,11 @@ sequenceDiagram
     Browser->>Posts: publish / unpublish / delete
     Posts->>Store: mutate publication state or soft-delete
     Posts->>Feed: enqueue affected feed/tag rebuilds
+
+    Browser->>Posts: list_history(cursor)
+    Posts->>Store: list all owned revisions, including Deleted Posts
+    Browser->>Posts: get_post_history(post_id, cursor)
+    Posts->>Store: load Current state + owned revision page
+    Browser->>Posts: get_revision_history_detail(post_id, revision_id)
+    Posts->>Store: load exact immutable owned snapshot
 ```

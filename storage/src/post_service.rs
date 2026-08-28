@@ -45,6 +45,8 @@ pub struct RenderedPostContent {
     pub summary: Option<PostSummary>,
     /// Audience targeting for the new post.
     pub audiences: Vec<AudienceTarget>,
+    /// Tags for the new post, persisted in the same creation transaction.
+    pub tags: Vec<common::tag::TagLabel>,
     /// Owned idempotency key to register with the post, or `None`.
     pub idempotency_key: Option<IdempotencyKey>,
     /// Non-authoritative Org bookkeeping expected to match the final stored row.
@@ -78,6 +80,7 @@ pub fn render_post_input(content: RenderedPostContent) -> CreatePostInput {
         published_at,
         summary,
         audiences,
+        tags,
         idempotency_key,
         expectations,
     } = content;
@@ -92,6 +95,7 @@ pub fn render_post_input(content: RenderedPostContent) -> CreatePostInput {
         published_at,
         summary,
         audiences,
+        tags,
         expectations,
         idempotency_key,
     }
@@ -124,6 +128,7 @@ pub fn seed_post_input(
         published_at: published.then(UtcInstant::now),
         summary: None,
         audiences: vec![AudienceTarget::Public],
+        tags: Vec::new(),
         idempotency_key: None,
         expectations: PostBookkeepingExpectation::default(),
     })
@@ -210,6 +215,8 @@ pub struct PostUpdate<'a> {
     /// Audience targeting for the post (replaces its existing rows). An empty
     /// vec (or `[Private]`) makes the post author-only.
     pub audiences: Vec<AudienceTarget>,
+    /// Tags replacing the current set within the update transaction.
+    pub tags: Vec<common::tag::TagLabel>,
     /// The request clock reused if this update publishes a draft without a date.
     pub request_clock: UtcInstant,
     /// Non-authoritative Org bookkeeping expected to match the locked row.
@@ -239,6 +246,7 @@ pub async fn perform_post_update(
         publish,
         summary,
         audiences,
+        tags,
         request_clock,
         expectations,
     } = input;
@@ -268,6 +276,7 @@ pub async fn perform_post_update(
         publish,
         summary,
         audiences,
+        tags,
         request_clock,
         expectations,
     };
@@ -381,6 +390,8 @@ pub struct PostCreation<'a> {
     /// Audience targeting for the new post. An empty vec (or `[Private]`) makes
     /// the post author-only.
     pub audiences: Vec<AudienceTarget>,
+    /// Tags for the new post.
+    pub tags: Vec<common::tag::TagLabel>,
     /// Client-supplied idempotency key (already trimmed / non-empty), or `None`
     /// to create without deduplication.
     pub idempotency_key: Option<&'a IdempotencyKey>,
@@ -409,6 +420,7 @@ pub async fn perform_post_creation(
         max_attempts,
         summary,
         audiences,
+        tags,
         idempotency_key,
         expectations,
     } = input;
@@ -448,6 +460,7 @@ pub async fn perform_post_creation(
                 summary: summary.clone(),
                 audiences: audiences.clone(),
                 idempotency_key: idempotency_key.cloned(),
+                tags: tags.clone(),
                 expectations: expectations.clone(),
             },
         )
@@ -523,6 +536,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
                 idempotency_key: None,
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -561,6 +575,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![],
+                tags: Vec::new(),
                 idempotency_key: None,
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -606,6 +621,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
                 idempotency_key: None,
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -639,6 +655,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
                 idempotency_key: None,
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -674,6 +691,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
                 idempotency_key: None,
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -704,6 +722,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
                 idempotency_key: None,
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -734,6 +753,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
                 idempotency_key: None,
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -788,6 +808,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
                 idempotency_key: None,
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -807,6 +828,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
                 idempotency_key: None,
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -826,6 +848,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
                 idempotency_key: None,
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -857,6 +880,7 @@ mod tests {
             max_attempts: 10,
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            tags: Vec::new(),
             idempotency_key: None,
             expectations,
         };
@@ -976,6 +1000,7 @@ mod tests {
             max_attempts: 10,
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            tags: Vec::new(),
             idempotency_key: None,
             expectations,
         };
@@ -1051,6 +1076,7 @@ mod tests {
             publish: PublishUpdate::Publish { at: None },
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            tags: Vec::new(),
             request_clock: UtcInstant::now(),
             expectations: PostBookkeepingExpectation {
                 slug: Some(expected_slug),
@@ -1096,6 +1122,7 @@ mod tests {
                 publish: PublishUpdate::Publish { at: None },
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
                 request_clock: clock,
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -1139,6 +1166,7 @@ mod tests {
             publish: PublishUpdate::Unpublish,
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            tags: Vec::new(),
             request_clock: UtcInstant::now(),
             expectations,
         };
@@ -1221,6 +1249,7 @@ mod tests {
                 max_attempts: 2,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
                 idempotency_key: None,
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -1240,6 +1269,7 @@ mod tests {
                 max_attempts: 2,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
                 idempotency_key: None,
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -1262,6 +1292,7 @@ mod tests {
                 max_attempts: 2,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
                 idempotency_key: None,
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -1292,6 +1323,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
                 idempotency_key: None,
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -1329,6 +1361,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
                 idempotency_key: None,
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -1348,6 +1381,7 @@ mod tests {
                 publish: PublishUpdate::Publish { at: None },
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
                 request_clock: UtcInstant::now(),
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -1388,6 +1422,7 @@ mod tests {
             max_attempts: 100,
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            tags: Vec::new(),
             idempotency_key: None,
             expectations: PostBookkeepingExpectation::default(),
         };
@@ -1425,6 +1460,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
                 idempotency_key: None,
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -1444,6 +1480,7 @@ mod tests {
                 publish: PublishUpdate::Publish { at: None },
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
                 request_clock: UtcInstant::now(),
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -1474,6 +1511,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
                 idempotency_key: None,
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -1505,6 +1543,7 @@ mod tests {
                 max_attempts: 100,
                 summary: None,
                 audiences: vec![AudienceTarget::Public],
+                tags: Vec::new(),
                 idempotency_key: None,
                 expectations: PostBookkeepingExpectation::default(),
             },
@@ -1543,6 +1582,7 @@ mod tests {
             max_attempts: 100,
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            tags: Vec::new(),
             idempotency_key: key,
             expectations: PostBookkeepingExpectation::default(),
         }

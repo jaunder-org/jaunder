@@ -4,16 +4,19 @@ use common::post_title::PostTitle;
 use common::slug::Slug;
 use common::tag::{Tag, TagLabel};
 use common::test_support::{
-    parse_audience_name, parse_post_body, parse_post_title, parse_row_limit, parse_slug,
+    parse_audience_name, parse_page_size, parse_post_body, parse_post_summary, parse_post_title,
+    parse_row_limit, parse_slug,
 };
 use common::time::UtcInstant;
 use common::visibility::{AudienceTarget, ViewerIdentity};
 use rstest::*;
 use rstest_reuse::*;
-use storage::test_support::{Backend, SeedRawPost, SeedUser, TestEnv, UpdateRawPost, backends};
+use storage::test_support::{
+    Backend, SeedRawPost, SeedUser, TestEnv, UpdateRawPost, backends, media_url_for,
+};
 use storage::{
-    CreatePostError, PostBookkeepingExpectation, PostFormat, PostUpdate, PublishUpdate,
-    RenderedPostContent, UpdatePostError, create_rendered_post, perform_post_update,
+    CreatePostError, PostBookkeepingExpectation, PostFormat, PostLifecycle, PostUpdate,
+    PublishUpdate, RenderedPostContent, UpdatePostError, create_rendered_post, perform_post_update,
 };
 
 use super::fixtures::{anon_by_tag, open_pool};
@@ -155,6 +158,7 @@ fn update_input<'a>(
         publish,
         summary: None,
         audiences: vec![AudienceTarget::Public],
+        tags: vec![],
         request_clock: common::time::UtcInstant::now(),
         expectations: PostBookkeepingExpectation::default(),
     }
@@ -511,13 +515,13 @@ async fn soft_delete_then_operations(#[case] backend: Backend) {
 
     state
         .posts
-        .set_post_tags(post_id, &["delete-tag".parse::<TagLabel>().unwrap()])
+        .set_post_tags(post_id, user, &["delete-tag".parse::<TagLabel>().unwrap()])
         .await
         .expect("set_post_tags failed");
 
     state
         .posts
-        .soft_delete_post(post_id)
+        .soft_delete_post(post_id, user)
         .await
         .expect("soft_delete_post failed");
 
@@ -545,7 +549,7 @@ async fn update_soft_deleted_post(#[case] backend: Backend) {
 
     state
         .posts
-        .soft_delete_post(post_id)
+        .soft_delete_post(post_id, user)
         .await
         .expect("soft_delete_post failed");
 
@@ -614,6 +618,339 @@ async fn post_revisions_created(#[case] backend: Backend) {
     assert!(result.published_at.is_some());
 }
 
+#[apply(backends)]
+#[tokio::test]
+async fn owner_revision_history_is_keyset_ordered_and_scoped(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let owner = SeedUser::new().seed(state).await.user_id;
+    let stranger = SeedUser::new().seed(state).await.user_id;
+    let first = SeedRawPost::new(owner).draft().seed(state).await.post_id;
+    let second = SeedRawPost::new(owner).draft().seed(state).await.post_id;
+    let foreign = SeedRawPost::new(stranger).draft().seed(state).await.post_id;
+
+    for (post_id, user_id, slug) in [
+        (first, owner, "history-first"),
+        (second, owner, "history-second"),
+        (foreign, stranger, "history-foreign"),
+    ] {
+        state
+            .posts
+            .update_post(
+                post_id,
+                user_id,
+                &UpdateRawPost::new(slug).unpublish().build(),
+            )
+            .await
+            .unwrap();
+    }
+    state
+        .posts
+        .update_post(
+            first,
+            owner,
+            &UpdateRawPost::new("history-first-again")
+                .unpublish()
+                .build(),
+        )
+        .await
+        .unwrap();
+
+    let first_page = state
+        .posts
+        .list_owned_revision_history(owner, None, parse_page_size("2"))
+        .await
+        .unwrap();
+    assert_eq!(first_page.revisions.len(), 2);
+    assert!(
+        first_page
+            .revisions
+            .iter()
+            .all(|revision| revision.post_id != foreign)
+    );
+    assert!(first_page.revisions[0].revision_id > first_page.revisions[1].revision_id);
+
+    let second_page = state
+        .posts
+        .list_owned_revision_history(owner, first_page.next_cursor, parse_page_size("2"))
+        .await
+        .unwrap();
+    let ids = first_page
+        .revisions
+        .iter()
+        .chain(&second_page.revisions)
+        .map(|revision| revision.revision_id)
+        .collect::<Vec<_>>();
+    assert_eq!(ids.len(), 3);
+    assert!(ids.windows(2).all(|ids| ids[0] > ids[1]));
+    assert_eq!(
+        ids.iter().collect::<std::collections::BTreeSet<_>>().len(),
+        ids.len()
+    );
+
+    let post_page = state
+        .posts
+        .list_post_revision_history(owner, first, None, parse_page_size("10"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(post_page.revisions.len(), 2);
+    assert!(
+        post_page
+            .revisions
+            .iter()
+            .all(|revision| revision.post_id == first)
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn revision_history_keeps_deleted_owner_post_and_hides_foreign_details(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let owner = SeedUser::new().seed(state).await.user_id;
+    let stranger = SeedUser::new().seed(state).await.user_id;
+    let post_id = SeedRawPost::new(owner).draft().seed(state).await.post_id;
+
+    state
+        .posts
+        .update_post(
+            post_id,
+            owner,
+            &UpdateRawPost::new("captured-state").unpublish().build(),
+        )
+        .await
+        .unwrap();
+    state.posts.soft_delete_post(post_id, owner).await.unwrap();
+
+    let page = state
+        .posts
+        .list_post_revision_history(owner, post_id, None, parse_page_size("10"))
+        .await
+        .unwrap()
+        .unwrap();
+    let revision = page.revisions.first().unwrap();
+    assert!(revision.current_deleted);
+    assert_eq!(revision.snapshot_lifecycle, PostLifecycle::Draft);
+
+    let detail = state
+        .posts
+        .get_post_revision_detail(owner, post_id, revision.revision_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(detail.revision.post_id, post_id);
+    assert_eq!(detail.revision.user_id, owner);
+    assert!(detail.revision.tags.is_empty());
+    assert_eq!(detail.revision.audiences, vec![AudienceTarget::Public]);
+    assert!(detail.revision.media.is_empty());
+
+    assert!(
+        state
+            .posts
+            .list_post_revision_history(stranger, post_id, None, parse_page_size("10"))
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        state
+            .posts
+            .get_post_revision_detail(stranger, post_id, revision.revision_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        state
+            .posts
+            .get_post_revision_detail(owner, PostId::from(999_999), revision.revision_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn revision_detail_round_trips_complete_snapshot_and_rejects_invalid_media_form(
+    #[case] backend: Backend,
+) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let owner = SeedUser::new().seed(state).await.user_id;
+    let named = state
+        .audiences
+        .create_audience(owner, &parse_audience_name("Revision readers"))
+        .await
+        .unwrap();
+    let media_url = media_url_for("revision-detail.png");
+    let post_id = SeedRawPost::new(owner)
+        .slug("complete-revision")
+        .body(parse_post_body(&format!(
+            "before <img src=\"{media_url}\">"
+        )))
+        .summary(parse_post_summary("complete snapshot summary"))
+        .audiences(vec![AudienceTarget::Public, AudienceTarget::Named(named)])
+        .tags(["Rust", "Storage"])
+        .seed(state)
+        .await
+        .post_id;
+    let prior = state
+        .posts
+        .get_post_by_id(post_id, &ViewerIdentity::Local { user_id: owner })
+        .await
+        .unwrap()
+        .unwrap();
+
+    state
+        .posts
+        .update_post(
+            post_id,
+            owner,
+            &UpdateRawPost::new("complete-revision-updated")
+                .body(parse_post_body("after"))
+                .unpublish()
+                .build(),
+        )
+        .await
+        .unwrap();
+    let revision = state
+        .posts
+        .list_post_revision_history(owner, post_id, None, parse_page_size("10"))
+        .await
+        .unwrap()
+        .unwrap()
+        .revisions
+        .pop()
+        .unwrap();
+    let detail = state
+        .posts
+        .get_post_revision_detail(owner, post_id, revision.revision_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(detail.revision.post_id, prior.post_id);
+    assert_eq!(detail.revision.user_id, prior.user_id);
+    assert_eq!(detail.revision.title, prior.title);
+    assert_eq!(detail.revision.slug, prior.slug);
+    assert_eq!(detail.revision.body, prior.body);
+    assert_eq!(detail.revision.format, prior.format);
+    assert_eq!(detail.revision.rendered_html, prior.rendered_html);
+    assert_eq!(detail.revision.summary, prior.summary);
+    assert_eq!(detail.revision.created_at, prior.created_at);
+    assert_eq!(detail.revision.updated_at, prior.updated_at);
+    assert_eq!(detail.revision.published_at, prior.published_at);
+    assert_eq!(detail.revision.deleted_at, prior.deleted_at);
+    assert_eq!(
+        detail
+            .revision
+            .tags
+            .iter()
+            .map(|tag| (tag.tag.as_ref(), tag.display.as_ref()))
+            .collect::<Vec<_>>(),
+        vec![("rust", "Rust"), ("storage", "Storage")]
+    );
+    assert_eq!(
+        detail.revision.audiences,
+        vec![AudienceTarget::Named(named), AudienceTarget::Public]
+    );
+    assert_eq!(
+        detail.revision.media,
+        vec![common::media::parse_media_url(&media_url).unwrap()]
+    );
+
+    env.base
+        .pool()
+        .execute(&format!(
+            "UPDATE post_media SET reference_form = 'invalid media form'
+             WHERE post_id = {post_id} AND subject_kind = 'revision'
+               AND revision_id = {}",
+            revision.revision_id
+        ))
+        .await
+        .unwrap();
+    let error = state
+        .posts
+        .get_post_revision_detail(owner, post_id, revision.revision_id)
+        .await
+        .expect_err("invalid persisted revision media form must fail decoding");
+    assert!(
+        matches!(
+            &error,
+            sqlx::Error::ColumnDecode { .. } | sqlx::Error::Decode(_)
+        ),
+        "expected typed persisted-media decode failure, got {error:?}"
+    );
+}
+
+#[apply(backends)]
+#[tokio::test]
+async fn current_revision_summary_derives_lifecycle_from_request_clock(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let owner = SeedUser::new().seed(state).await.user_id;
+    let now = UtcInstant::now();
+    let scheduled_at = UtcInstant::from(now.value() + chrono::Duration::hours(1));
+    let post_id = SeedRawPost::new(owner)
+        .published_at(scheduled_at)
+        .seed(state)
+        .await
+        .post_id;
+
+    let before = state
+        .posts
+        .get_current_revision_summary(owner, post_id, now)
+        .await
+        .unwrap()
+        .unwrap();
+    let after = state
+        .posts
+        .get_current_revision_summary(
+            owner,
+            post_id,
+            UtcInstant::from(scheduled_at.value() + chrono::Duration::seconds(1)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(before.lifecycle, PostLifecycle::Scheduled);
+    assert_eq!(after.lifecycle, PostLifecycle::Published);
+}
+#[apply(backends)]
+#[tokio::test]
+async fn current_revision_summary_reports_draft_and_deleted_states(#[case] backend: Backend) {
+    let env = backend.setup().await;
+    let state = &env.state;
+    let owner = SeedUser::new().seed(state).await.user_id;
+    let draft_id = SeedRawPost::new(owner).draft().seed(state).await.post_id;
+    let deleted_id = SeedRawPost::new(owner).draft().seed(state).await.post_id;
+    state
+        .posts
+        .soft_delete_post(deleted_id, owner)
+        .await
+        .unwrap();
+
+    let draft = state
+        .posts
+        .get_current_revision_summary(owner, draft_id, UtcInstant::now())
+        .await
+        .unwrap()
+        .unwrap();
+    let deleted = state
+        .posts
+        .get_current_revision_summary(owner, deleted_id, UtcInstant::now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(draft.lifecycle, PostLifecycle::Draft);
+    assert_eq!(deleted.lifecycle, PostLifecycle::Deleted);
+    assert_eq!(deleted.post_id, deleted_id);
+    assert!(deleted.deleted_at.is_some());
+}
+
 // =============================================================================
 // create_rendered_post / perform_post_update integration tests
 // =============================================================================
@@ -636,6 +973,7 @@ async fn create_rendered_post_markdown_renders_and_stores(#[case] backend: Backe
             published_at: None,
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            tags: vec![],
             idempotency_key: None,
             expectations: PostBookkeepingExpectation::default(),
         },
@@ -678,6 +1016,7 @@ async fn create_rendered_post_org_renders_and_stores(#[case] backend: Backend) {
             published_at: None,
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            tags: vec![],
             idempotency_key: None,
             expectations: PostBookkeepingExpectation::default(),
         },
@@ -728,6 +1067,7 @@ async fn create_rendered_post_slug_conflict_returns_storage_error(#[case] backen
             published_at: Some(now),
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            tags: vec![],
             idempotency_key: None,
             expectations: PostBookkeepingExpectation::default(),
         },
@@ -859,6 +1199,7 @@ async fn perform_post_update_markdown_renders_and_updates(#[case] backend: Backe
             publish: PublishUpdate::Unpublish,
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            tags: vec![],
             request_clock: common::time::UtcInstant::now(),
             expectations: PostBookkeepingExpectation::default(),
         },
@@ -901,6 +1242,7 @@ async fn perform_post_update_org_renders_and_updates(#[case] backend: Backend) {
             publish: PublishUpdate::Unpublish,
             summary: None,
             audiences: vec![AudienceTarget::Public],
+            tags: vec![],
             request_clock: common::time::UtcInstant::now(),
             expectations: PostBookkeepingExpectation::default(),
         },
