@@ -261,6 +261,34 @@ mod tests {
     }
 
     #[test]
+    fn restore_table_order_loads_revision_subject_parents_before_media() {
+        let tables = [
+            "post_media",
+            "post_revision_tags",
+            "post_revisions",
+            "posts",
+            "users",
+            "post_revision_audiences",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+        let ordered = restore_table_order(&tables);
+        let position = |table| {
+            ordered
+                .iter()
+                .position(|candidate| *candidate == table)
+                .expect("table remains in restore order")
+        };
+        assert!(position("users") < position("posts"));
+        assert!(position("posts") < position("post_revisions"));
+        assert!(position("post_revisions") < position("post_revision_tags"));
+        assert!(position("post_revisions") < position("post_revision_audiences"));
+        assert!(position("post_revision_tags") < position("post_media"));
+        assert!(position("post_revision_audiences") < position("post_media"));
+    }
+
+    #[test]
     fn backup_manifest_timestamp_retains_rfc3339_serde_form() {
         let manifest = BackupManifest {
             version: "0.1.0".to_owned(),
