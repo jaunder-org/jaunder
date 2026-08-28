@@ -86,11 +86,11 @@ anything converts between them. This ADR exists largely so the #747 analysis
 does not have to be redone — that issue was rewritten to its storage-layer work
 once the evidence was in.
 
-**The `SavedPost` ↔ `UnpublishedPost` overlap is deliberate, not an
-oversight.** Four fields are declared in two places. A future reader who spots
-that and files it as duplication should read rule 3 first: the absence of any
-conversion between them is the reason, and it is recorded here so the finding
-does not recur.
+**The `SavedPost` ↔ `UnpublishedPost` overlap is deliberate, not an oversight.**
+Four fields are declared in two places. A future reader who spots that and files
+it as duplication should read rule 3 first: the absence of any conversion
+between them is the reason, and it is recorded here so the finding does not
+recur.
 
 **This does not reach beyond the posts family.** `common::media::UploadedMedia`,
 `web::auth::SessionUser`, and `web::media::MediaDeletion` are vertical-specific

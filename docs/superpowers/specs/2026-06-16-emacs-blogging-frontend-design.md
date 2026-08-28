@@ -625,9 +625,9 @@ passwords (follow-on).
 
 Reconcile a blog directory against the server collection: pull posts that exist
 on the server but not locally, and report (not auto-resolve) divergence. Per
-blog (one directory ↔ one collection). Reconcile **never pushes** —
-local→server is always the explicit `jaunder-publish` action (see unit C), so
-private local-only drafts are never surfaced as remote posts.
+blog (one directory ↔ one collection). Reconcile **never pushes** — local→server
+is always the explicit `jaunder-publish` action (see unit C), so private
+local-only drafts are never surfaced as remote posts.
 
 ### Design
 
@@ -788,14 +788,14 @@ large for one review and become **parent issues with review-sized sub-issues**.
 **Build order:** A → B → (Slug ∥) → Infra → (C, D). Slug is independent and can
 land in parallel; Infra gates C and D; A and B gate C and D.
 
-| Issue            | Unit                                                                                                                                                                                                             | Depends on    |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
-| **#70**          | A — Scheduled publishing (storage + web + AtomPub; restart-durable go-live)                                                                                                                                      | —             |
-| **#71**          | B — Format media types + `j:slug` + server-side org canonicalization                                                                                                                                             | —             |
-| **#72**          | Slug — Unicode-robust, never-fail slug generation                                                                                                                                                                | —             |
-| **#73**          | Infra — elisp package skeleton + ERT harness + flake/CI wiring                                                                                                                                                   | —             |
+| Issue            | Unit                                                                                                                                                                                                            | Depends on    |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| **#70**          | A — Scheduled publishing (storage + web + AtomPub; restart-durable go-live)                                                                                                                                     | —             |
+| **#71**          | B — Format media types + `j:slug` + server-side org canonicalization                                                                                                                                            | —             |
+| **#72**          | Slug — Unicode-robust, never-fail slug generation                                                                                                                                                               | —             |
+| **#73**          | Infra — elisp package skeleton + ERT harness + flake/CI wiring                                                                                                                                                  | —             |
 | **#74** (parent) | C — Emacs authoring / publish — sub-issues (created at C's cycle): ① HTTP/auth client core · ② org↔atom mapping + canonical-body strip · ③ publish flow + write-back/rename · ④ media upload + sha-link mapping | #70, #71, #73 |
-| **#75** (parent) | D — Emacs reconcile — sub-issues (created at D's cycle): ① enumerate/join both sides · ② pull (reconstruct `.org`) · ③ divergence reporting (2×2) · ④ explicit delete                                            | #70, #71, #73 |
+| **#75** (parent) | D — Emacs reconcile — sub-issues (created at D's cycle): ① enumerate/join both sides · ② pull (reconstruct `.org`) · ③ divergence reporting (2×2) · ④ explicit delete                                           | #70, #71, #73 |
 
 **Follow-on issues (file alongside, not in this milestone's v1 critical path):**
 
