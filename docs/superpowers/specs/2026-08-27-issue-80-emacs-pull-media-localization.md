@@ -22,6 +22,11 @@ pulled Post.
 - Bare URL text, CSS URLs, scripts, embedded data, malformed links, and non-link
   occurrences are never rewritten. Link labels, descriptions, alt text,
   ordering, and URL fragments are preserved.
+- Markdown semantics are determined only by the pinned upstream `cmark-el`
+  CommonMark AST. It admits actual link, image, and autolink destinations and
+  excludes code/code-block and raw HTML-block text. Jaunder maps bounded block
+  source positions to exact destination spans; it does not implement fences,
+  containers, raw-block classes, or paragraph interruption rules.
 - A candidate must be an absolute HTTP(S) URL on the configured Jaunder origin,
   contain no user information or query, and match Jaunder's canonical public
   media route. External origins, scheme-relative URLs, AtomPub Member URLs,
@@ -103,8 +108,13 @@ pulled Post.
 - Pure ERT covers candidate extraction, format-preserving substitution, URL and
   path validation, identity-header cardinality and syntax, deduplication, digest
   verification, install ordering, retained verified entries, and every failure
-  branch. Live ERT covers anonymous download, offline preview, retry, reuse, Org
-  republish deduplication, and no-clobber behavior.
+  branch. Markdown pure ERT additionally covers parser-authoritative CommonMark
+  boundaries: type-1 close tags, type-6 blank-line termination (including block
+  quotes), type-7 paragraph interruption, list and blockquote fences, inline
+  `pre`/`span`, comments/raw blocks/code, reference definitions, autolinks,
+  malformed links, and byte-for-byte preservation outside rewrites. Live ERT
+  covers anonymous download, offline preview, retry, reuse, Org republish
+  deduplication, and no-clobber behavior.
 
 ## Boundaries
 

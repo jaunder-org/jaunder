@@ -81,7 +81,7 @@
                                                   jaunder-pull-media-test--hash)) out))
     (should (string-match-p (regexp-quote (format "`[no](%s)`" url)) out))))
 
-(ert-deftest jaunder-pull-media-markdown-scanner-keeps-literals-and-used-references ()
+(ert-deftest jaunder-pull-media-markdown-ast-keeps-literals-and-used-references ()
   (let* ((url (jaunder-pull-media-test--url "safe.png"))
          (body (format "[outer [label]](%s \"title\") [use][r]\n[r]: <%s> 'title'\n[unused]: %s\n~~~~\n[x](%s)\n~~~~\n``[code](%s)``"
                        url url url url url))
@@ -154,7 +154,7 @@
       (regexp-quote (format "[real](%s)" target))
       out))))
 
-(ert-deftest jaunder-pull-media-markdown-distinguishes-html-and-container-fences ()
+(ert-deftest jaunder-pull-media-markdown-ast-handles-html-and-quoted-code-blocks ()
   (let* ((url (jaunder-pull-media-test--url "safe.png"))
          (target
           (format "local-media/%s/safe.png"
@@ -249,6 +249,41 @@
       out))
     (should
      (string-suffix-p (format "<IMG SRC=\"%s\">" target) out))))
+
+(ert-deftest jaunder-pull-media-markdown-delegates-block-semantics-to-cmark ()
+  ;; The source adapter may locate bytes, but cmark alone decides their meaning.
+  (let* ((url (jaunder-pull-media-test--url "safe.png"))
+         (target (format "local-media/%s/safe.png"
+                         jaunder-pull-media-test--hash))
+         (body
+          (format
+           (concat
+            "<script>\n[one](%s)\n</script>\n[two](%s)\n"
+            "<table>\n[three](%s)\n\n[four](%s)\n"
+            "> <table>\n> [five](%s)\n>\n[six](%s)\n"
+            "paragraph\n<custom>\n[seven](%s)\n"
+            "- ```\n  [eight](%s)\n  ```\n[nine](%s)\n"
+            "> ```\n> [ten](%s)\n> ```\n[eleven](%s)\n"
+            "inline <pre>[twelve](%s)</pre> <span>[thirteen](%s)</span>\n"
+            "<!-- [fourteen](%s) -->\n`[fifteen](%s)`\n"
+            "[used][asset] [plain] < %s > <%s>\n"
+            "[asset]: <%s>\n[other]: <%s>\n[bad](%s")
+           url url url url url url url url url url url url url url url url url
+           url url url))
+         (out (jaunder-pull-media-test--rewrite "markdown" body)))
+    (dolist (literal (list "one" "three" "five" "eight" "ten"
+                           "fourteen" "fifteen"))
+      (should (string-match-p
+               (regexp-quote (format "[%s](%s)" literal url)) out)))
+    (dolist (rewritten (list "two" "four" "six" "seven" "nine" "eleven"
+                             "twelve" "thirteen"))
+      (should (string-match-p
+               (regexp-quote (format "[%s](%s)" rewritten target)) out)))
+    (should (string-match-p (regexp-quote (format "[asset]: <%s>" target))
+                            out))
+    (should (string-match-p (regexp-quote (format "[other]: <%s>" url)) out))
+    (should (string-match-p (regexp-quote (format "<%s>" target)) out))
+    (should (string-suffix-p (format "[bad](%s" url) out))))
 
 (ert-deftest jaunder-pull-media-canonical-identifiers-are-case-sensitive ()
   (let* ((upper (upcase jaunder-pull-media-test--hash))

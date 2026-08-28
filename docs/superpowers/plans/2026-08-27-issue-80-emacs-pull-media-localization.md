@@ -35,6 +35,11 @@ Out:
   - Verification: pure ERT pins byte parity for the existing mapper; all three
     formats; `srcset`; encoded spaces/percent/non-ASCII; duplicates; and every
     unchanged URL class.
+  - Contract: Markdown delegates all CommonMark semantics to `cmark-el`; the
+    local adapter converts only AST block source positions into exact source
+    spans and admits candidates by AST destination membership. Retain the
+    used-reference definition index, excluding parser-reported code and HTML
+    blocks. Do not retain a custom fence/container/raw-block grammar.
 
 - [x] Task 2: Materialize verified Local Media Copies without credentials or
       overwrite
@@ -77,7 +82,9 @@ Out:
   - Docs: keep the proposed ADR, `CONTEXT.md`, and `docs/ARCHITECTURE.md`
     projection with the feature; document `local-media/` durability, backup, and
     retry behavior in the Emacs user guide. Do not edit `docs/README.md` or
-    promote the draft.
+    promote the draft. Record `cmark-el` as a fixed upstream source dependency
+    (with its preserved upstream license notices, absent from Nixpkgs/MELPA) and
+    its deliberately bounded adapter boundary.
 
 ## Risk checks
 

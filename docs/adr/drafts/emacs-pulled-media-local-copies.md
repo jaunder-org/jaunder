@@ -28,12 +28,14 @@ would break local links because reconciliation does not repair media for matched
 Posts. Installing the Post before all media succeeds would expose a partially
 offline result that retry cannot classify as server-only.
 
-## Decision
-
 For a server-only pull, the Emacs client localizes link destinations in Org,
 Markdown, and HTML only when they identify canonical public media on the active
 Jaunder origin and contain neither user information nor a query. Other URLs and
-non-link text remain source-faithful.
+non-link text remain source-faithful. Markdown's CommonMark meaning is owned by
+the pinned upstream `cmark-el` parser: its AST admits only actual link, image,
+and autolink destinations and excludes code and raw HTML blocks. Jaunder owns
+only the bounded block-source-position adapter that maps those semantic
+destinations back to exact source byte spans.
 
 The authenticated Member response and every media response must carry exactly
 one canonical `X-Jaunder-Instance` UUID, and the values must match. Each media
@@ -69,12 +71,19 @@ republishes through the existing local media upload path, which server-side
 content hashing deduplicates. Markdown and HTML republish remain the existing
 Org-only publish path's limitation and are not expanded by this decision. The
 three pull formats need separate syntax-aware candidate and substitution logic
-behind one pull-localization policy.
+behind one pull-localization policy. For Markdown, Jaunder must not reimplement
+CommonMark fences, containers, raw blocks, or paragraph rules.
 
 The active Jaunder origin, public media route, canonical instance identity,
 strong hash ETag, and canonical filename become the trust chain for Local Media
 Copies. A proxy that strips, duplicates, malforms, or changes those signals
 makes pull fail closed.
+
+`cmark-el` is intentionally pinned from upstream source because it is absent
+from Nixpkgs and MELPA. Its fetched mixed-license source remains distinct from
+Jaunder's GPL-3.0-or-later code; this stale-pinned dependency is an explicit
+maintenance cost in exchange for parser authority without vendoring or a second
+CommonMark implementation.
 
 `local-media/` is user-visible durable state inside each configured root.
 Backup, synchronization, and manual directory moves must carry Local Media

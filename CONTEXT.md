@@ -110,6 +110,12 @@ that final check is outside Emacs Lisp's dirfd-free threat model. _Avoid_:
 cache, external media (the source is the configured Jaunder instance), temporary
 download.
 
+**Markdown Pull Semantics**: The Emacs Protocol Client uses pinned upstream
+`cmark-el` as the authority for CommonMark link, image, autolink, code, raw
+block, container, fence, and paragraph semantics. Jaunder maps only bounded
+block source positions back to exact destination spans; it does not maintain a
+second CommonMark parser.
+
 ## Relationships
 
 - A **User** _is_ the publication: there is deliberately no

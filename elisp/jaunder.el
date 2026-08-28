@@ -4,7 +4,7 @@
 
 ;; Author: Jaunder contributors
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "29.1"))
+;; Package-Requires: ((emacs "29.1") (cmark "0.29.3") (plz "0.9.1"))
 ;; Keywords: hypermedia, comm, outlines
 ;; URL: https://jaunder.org
 
