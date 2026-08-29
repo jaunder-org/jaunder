@@ -134,8 +134,9 @@ pub enum Command {
     /// in `validate --no-e2e` and CI.
     Prepush,
     /// Full gate (never mutates the tree): static + clippy + the host xtask unit
-    /// suite (verify-only) + the Nix coverage check + the e2e VMs. `--no-e2e` skips
-    /// the e2e VMs. Refuses a dirty working tree unless `--allow-dirty`.
+    /// suite (verify-only) + Nix coverage + the e2e VMs and authoritative
+    /// server-function coverage verification. `--no-e2e` skips the e2e VMs.
+    /// Refuses a dirty working tree unless `--allow-dirty`.
     Validate {
         /// Skip the e2e VM checks — static + clippy + xtask tests + coverage only.
         #[arg(long)]
@@ -806,8 +807,14 @@ pub fn run(cli: Cli) -> anyhow::Result<CommandResult> {
             if !no_e2e {
                 // Each browser/backend combo is realized, lifted, and reconciled
                 // separately; their same-named per-backend inputs cannot safely
-                // survive the aggregate `e2e-checks` symlink join.
-                steps::nix::e2e(&mut result);
+                // survive the aggregate `e2e-checks` symlink join. The coverage
+                // verifier therefore resolves the already-realized authoritative
+                // combo's individual output rather than reading the join.
+                let e2e = steps::nix::e2e(&mut result);
+                steps::server_fn_coverage_check::verify_after_validate(
+                    &mut result,
+                    e2e.combinations_ok,
+                );
             }
             finalize(&mut result, start);
             Ok(result)
