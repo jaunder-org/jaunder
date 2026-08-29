@@ -1,6 +1,6 @@
-# ADR-DRAFT: Emacs pull stores durable local media copies
+# ADR-0160: Emacs pull stores durable local media copies
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-08-27
 - Issue: [#80](https://github.com/jaunder-org/jaunder/issues/80)
 
@@ -12,19 +12,19 @@ substitutes that URL only in the AtomPub Entry. The inverse pull path therefore
 receives native Post source containing server media URLs. It currently preserves
 those URLs, so a pulled Post is not previewable offline.
 
-[ADR-0024](../0024-server-side-org-canonicalization.md) requires previewable
-local links while keeping the server's Post body canonical and metadata-free.
-[ADR-0045](../0045-emacs-media-content-src.md) keeps publishing authoritative by
+[ADR-0024](0024-server-side-org-canonicalization.md) requires previewable local
+links while keeping the server's Post body canonical and metadata-free.
+[ADR-0045](0045-emacs-media-content-src.md) keeps publishing authoritative by
 harvesting the server-assigned binary URL rather than reconstructing it. Pull
 localization intentionally amends that decision's “no second copy” consequence:
 the client recognizes the canonical public route defined by
-[ADR-0140](../0140-strict-media-address-extraction.md) and
-[ADR-0084](../0084-media-filename-encoded-canonical.md) so it can validate the
-hash and filename before creating a local path. Changes to that route therefore
+[ADR-0140](0140-strict-media-address-extraction.md) and
+[ADR-0084](0084-media-filename-encoded-canonical.md) so it can validate the hash
+and filename before creating a local path. Changes to that route therefore
 require a coordinated update to this one client-side matcher.
-[ADR-0154](../0154-media-reference-live-ownership.md) defines
-`X-Jaunder-Instance` as exactly one canonical UUID-valued response header.
-AtomPub Member requests require an App Password, but public media bytes do not.
+[ADR-0154](0154-media-reference-live-ownership.md) defines `X-Jaunder-Instance`
+as exactly one canonical UUID-valued response header. AtomPub Member requests
+require an App Password, but public media bytes do not.
 
 Downloading arbitrary author URLs would turn pull into a general network fetcher
 and could leak credentials. Treating downloaded bytes as an evictable cache
