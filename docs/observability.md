@@ -2235,6 +2235,116 @@ navigation figures come from each `e2e.test` span's `e2e.navigation_top_json`
 attribute. `cargo xtask traces analyze` computes neither medians nor
 percentiles, so these were aggregated directly over the JSONL.
 
+## #819 — Firefox context-mint preference experiment (2026-08-29)
+
+**Verdict: keep all five Firefox preferences and close #819.** None of the four
+tested one-preference omissions reduced Firefox context-mint sum or SQLite suite
+wall clock beyond the registered floors. Context reuse was excluded before
+capture and remains excluded.
+
+### Protocol and population
+
+The deciding corpus uses the post-#815 Playwright/browser set (1.61.1), SQLite
+gate settings (workers=2, 2 vCPU, 3 GB), and a reserved host. Five arms changed
+one Firefox preference at a time:
+
+| arm | Firefox preference omitted                     |
+| --- | ---------------------------------------------- |
+| A   | none — baseline                                |
+| B   | `fission.autostart = false`                    |
+| C   | `dom.ipc.processCount = 1`                     |
+| D   | `browser.sessionhistory.max_total_viewers = 0` |
+| E   | `browser.cache.memory.capacity = 51200`        |
+
+Each arm has five complete SQLite runs per browser: **25 adjacent browser pairs,
+50 combo runs**. Arm order was the preregistered Latin square `ABCDE`, `BCDEA`,
+`CDEAB`, `DEABC`, `EABCD`; browser order was Firefox→Chromium in rounds 1/3/5
+and Chromium→Firefox in rounds 2/4. Every retained pair passed two one-minute
+load-average samples ≤1.0, 60 seconds apart. That numeric rule is the deciding
+quiescence evidence.
+
+The preserved harness also delayed on the QEMU, `nix build|develop`, and
+Playwright patterns it recognized, but its process scan was not an exhaustive
+standalone-browser or agent-command census. A post-capture conformance review
+identified the overclaim, and the user explicitly approved the load-based rule
+as a second protocol amendment; no broader process-absence claim is made.
+
+Four records are explicitly outside the final population: two waits cancelled
+before any browser started, plus completed pairs A2 and B1. Those pairs used a
+temporary, stricter five-minute quiescence rule; when the user restored the
+one-minute rule, they were excluded before their metrics were interpreted and
+replaced by A3/B2 under new salts. A post-capture conformance review identified
+that this conflicted with the original no-replacement clause, and the user
+explicitly approved the amendment. It is the sole replacement exception. The
+retained population has no flaky/unexpected attempts, no vetoes, and an
+identical census in every combo: 222 tests/attempts and `e2e.test` spans, 222
+context-mint spans, 22 secondary page spans, 218 default-page navigations, 26
+secondary-page navigations, and no dropped navigation records.
+
+Corpus: `~/measurements/jaunder/issue-819-context-mint/`. `manifest.json`
+records every salt, store path, load sample, report, trace, census, and
+discarded attempt; `analysis.json` carries the run-level arithmetic.
+
+### Arm results
+
+Means over five runs. Context p50/p90 are pooled over the 1,110 individual
+context-mint spans per arm/browser.
+
+| arm | browser  | suite (s) | context sum (s) | p50 / p90 (ms) |
+| --- | -------- | --------- | --------------- | -------------- |
+| A   | Firefox  | 409.6     | 142.4           | 564 / 718      |
+| A   | Chromium | 231.5     | 30.8            | 120 / 187      |
+| B   | Firefox  | 411.7     | 142.5           | 569 / 711      |
+| B   | Chromium | 231.8     | 31.0            | 121 / 189      |
+| C   | Firefox  | 416.6     | 143.1           | 567 / 718      |
+| C   | Chromium | 232.8     | 31.3            | 123 / 185      |
+| D   | Firefox  | 411.4     | 142.1           | 561 / 725      |
+| D   | Chromium | 231.3     | 30.7            | 120 / 185      |
+| E   | Firefox  | 409.6     | 142.3           | 568 / 709      |
+| E   | Chromium | 231.7     | 31.1            | 122 / 190      |
+
+Lifecycle sums are overlapping work totals, not suite wall-clock components:
+
+| arm | browser  | `e2e.test` (s) | teardown (s) | residual lifecycle (s) |
+| --- | -------- | -------------- | ------------ | ---------------------- |
+| A   | Firefox  | 538.4          | 19.5         | 24.0                   |
+| A   | Chromium | 348.4          | 18.7         | 12.1                   |
+| B   | Firefox  | 543.2          | 19.5         | 23.6                   |
+| B   | Chromium | 348.5          | 18.6         | 12.5                   |
+| C   | Firefox  | 550.9          | 20.0         | 24.0                   |
+| C   | Chromium | 349.8          | 18.8         | 12.3                   |
+| D   | Firefox  | 541.6          | 19.4         | 23.5                   |
+| D   | Chromium | 348.0          | 18.7         | 12.1                   |
+| E   | Firefox  | 539.9          | 19.6         | 23.8                   |
+| E   | Chromium | 348.0          | 18.8         | 12.4                   |
+
+### Registered decision
+
+Positive delta means faster than baseline. The Firefox suite floor is the larger
+of 3× unpaired run-level SE and 5.0 s; the context floor is the larger of 3×SE
+and 10% of baseline context sum (**14.24 s**).
+
+| arm | Firefox suite delta / floor | Firefox context delta / floor | result |
+| --- | --------------------------- | ----------------------------- | ------ |
+| B   | −2.12 s / 6.99 s            | −0.13 s / 14.24 s             | fail   |
+| C   | −6.99 s / 8.02 s            | −0.76 s / 14.24 s             | fail   |
+| D   | −1.76 s / 6.59 s            | +0.22 s / 14.24 s             | fail   |
+| E   | +0.04 s / 5.00 s            | +0.05 s / 14.24 s             | fail   |
+
+All Chromium suite/context changes remained inside their separate 3×SE veto
+floors, but no arm cleared either Firefox deciding floor. B and C moved in the
+wrong direction; D and E were effectively zero. Temporary arm/salt machinery was
+removed, so the shipped Firefox configuration remains unchanged.
+
+### Relationship to #792
+
+#792's post-warmup arm measured ~130 contexts/combo and Firefox p50 511–596 ms.
+The current corpus has 222 contexts/combo and p50 564 ms, so its larger 142 s
+sum is primarily a larger test population; the old raw sum is not a baseline for
+this suite. The stable ~5× Firefox/Chromium per-mint ratio remains. What #819
+adds is the causal negative result: none of the four tested launch-preference
+omissions explains or removes it while fresh-context isolation is preserved.
+
 ## #155 — post-CSR Firefox e2e tax (findings, 2026-07-02)
 
 Re-measurement of the #152 Firefox-vs-Chromium tax on the **leptos-CSR** build
