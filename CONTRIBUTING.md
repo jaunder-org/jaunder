@@ -407,14 +407,14 @@ proof that the regression moved from red to green. Escalate only at boundaries:
 through the push hook, and CI/`validate --no-e2e` when hermetic confidence is
 the question. Focused `test-local` is an accelerator, not a certification gate.
 
-| Command                         | Runs                                                                                                                                                            | Formatting    |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
-| `cargo xtask check --no-test`   | host static checks + clippy + repo-shape/type-safety gates + host tests — the precommit host surface                                                            | auto-fixes    |
-| `cargo xtask check`             | + `test-local` for root-workspace Rust tests, plus the Nix `wasm-tests` and `doctests`/`doctests-gate` checks                                                   | auto-fixes    |
-| `cargo xtask precommit`         | host surface from `cargo xtask check --no-test`, then safe-staging reconciliation — the `.githooks/pre-commit` hook runs this path                              | auto-fixes    |
-| `cargo xtask prepush`           | verify-only host surface + `test-local`, with clean-tree refusal — the `.githooks/pre-push` hook runs this path                                                 | never mutates |
-| `cargo xtask validate --no-e2e` | static + clippy + host tests + the Nix `wasm-tests`, `coverage`/`coverage-gate`, and `doctests`/`doctests-gate` checks — the hermetic CI/static confidence gate | never mutates |
-| `cargo xtask validate`          | + e2e (all four `{sqlite,postgres}×{chromium,firefox}` combinations and the live elisp integration suite) — the full local gate                                 | never mutates |
+| Command                         | Runs                                                                                                                                                                                                | Formatting    |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| `cargo xtask check --no-test`   | host static checks + clippy + repo-shape/type-safety gates + host tests — the precommit host surface                                                                                                | auto-fixes    |
+| `cargo xtask check`             | + `test-local` for root-workspace Rust tests, plus the Nix `wasm-tests` and `doctests`/`doctests-gate` checks                                                                                       | auto-fixes    |
+| `cargo xtask precommit`         | host surface from `cargo xtask check --no-test`, then safe-staging reconciliation — the `.githooks/pre-commit` hook runs this path                                                                  | auto-fixes    |
+| `cargo xtask prepush`           | verify-only host surface + `test-local`, with clean-tree refusal — the `.githooks/pre-push` hook runs this path                                                                                     | never mutates |
+| `cargo xtask validate --no-e2e` | static + clippy + host tests + the Nix `wasm-tests`, `coverage`/`coverage-gate`, and `doctests`/`doctests-gate` checks — the hermetic CI/static confidence gate                                     | never mutates |
+| `cargo xtask validate`          | + all four `{sqlite,postgres}×{chromium,firefox}` E2E combinations, authoritative SQLite/Chromium server-function coverage verification, and the live elisp integration suite — the full local gate | never mutates |
 
 `cargo xtask check` is the normal agent/developer feedback command. Its product
 Rust test portion is implemented through the same host-native lane exposed as

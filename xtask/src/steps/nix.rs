@@ -34,6 +34,24 @@ const E2E_COMBOS: [(&str, &str); 4] = [
     ("postgres", "firefox"),
 ];
 
+/// Whether every result appended by the browser/backend E2E combinations passed.
+///
+/// This deliberately excludes prior validate steps and the separately dispatched
+/// Elisp integration check, so callers can decide whether combination artifacts
+/// are trustworthy without masking an unrelated primary failure.
+#[derive(Clone, Copy, Debug)]
+pub struct E2eOutcome {
+    pub combinations_ok: bool,
+}
+
+impl E2eOutcome {
+    fn from_combo_steps(steps: &[StepResult]) -> Self {
+        Self {
+            combinations_ok: steps.iter().all(|step| step.ok),
+        }
+    }
+}
+
 impl TestCheck {
     const fn name(self) -> &'static str {
         match self {
@@ -267,8 +285,10 @@ fn sentinel_detail(status: &coverage::status::CoverageStatus) -> String {
 ///
 /// `postgres-integration` is deliberately not dispatched — its tests already run
 /// under the coverage check. The separate Elisp integration check remains part
-/// of the full `validate` route.
-pub fn e2e(result: &mut CommandResult) {
+/// of the full `validate` route, but is not evidence that combination outputs
+/// are trustworthy.
+pub fn e2e(result: &mut CommandResult) -> E2eOutcome {
+    let combo_start = result.steps.len();
     let builds = build_e2e_combos(E2E_COMBOS, |backend, browser| {
         let check = format!("e2e-{backend}-{browser}");
         build_check(&format!("nix-{check}"), &check)
@@ -287,7 +307,9 @@ pub fn e2e(result: &mut CommandResult) {
             || crate::steps::duration_budget::validate_lifted_combo(backend, browser),
         );
     }
+    let outcome = E2eOutcome::from_combo_steps(&result.steps[combo_start..]);
     elisp_integration(result);
+    outcome
 }
 
 /// Start all independent E2E realizations before waiting for any of them. The
@@ -854,7 +876,7 @@ fn nix_eval_raw(dir: Option<&Path>, installable: &str) -> Result<String> {
     Ok(path)
 }
 
-fn eval_out_path(check: &str) -> Result<String> {
+pub(crate) fn eval_out_path(check: &str) -> Result<String> {
     nix_eval_raw(None, &format!(".#checks.{SYSTEM}.{check}.outPath"))
 }
 
@@ -926,11 +948,11 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        CommandResult, E2E_COMBOS, FailedBuildDiagnostics, StepResult, build_e2e_combos,
-        check_supporting_test_check_names, doctest_sentinel_detail, drain_build_stderr,
-        failed_build_after_diagnostics_with, failed_status_step, finish_e2e_combo,
-        prepare_build_dirs_with, report_build_diagnostic_failure, sentinel_detail,
-        test_check_names, validate_check_names,
+        CommandResult, E2E_COMBOS, E2eOutcome, FailedBuildDiagnostics, StepResult,
+        build_e2e_combos, check_supporting_test_check_names, doctest_sentinel_detail,
+        drain_build_stderr, failed_build_after_diagnostics_with, failed_status_step,
+        finish_e2e_combo, prepare_build_dirs_with, report_build_diagnostic_failure,
+        sentinel_detail, test_check_names, validate_check_names,
     };
     use coverage::status::{CoverageStatus, StatusCategory};
     use doctests::check::{Kind, Violation};
@@ -1598,6 +1620,93 @@ error: Cannot build '/nix/store/xxx-fail-probe-0.1.0.drv'.
                 .map(|(combo, _)| combo)
                 .collect::<Vec<_>>(),
             E2E_COMBOS.to_vec()
+        );
+    }
+
+    #[test]
+    fn e2e_outcome_is_ok_when_every_combo_build_and_duration_check_passes() {
+        let mut result = CommandResult::new("validate");
+        let combo_start = result.steps.len();
+        for (backend, browser) in E2E_COMBOS {
+            result.push(StepResult::ok(&format!("nix-e2e-{backend}-{browser}")));
+            result.push(StepResult::ok(&format!(
+                "e2e-duration-budget-{backend}-{browser}"
+            )));
+        }
+
+        assert!(E2eOutcome::from_combo_steps(&result.steps[combo_start..]).combinations_ok);
+    }
+
+    #[test]
+    fn e2e_outcome_rejects_a_failed_combo_build() {
+        let steps = [
+            StepResult::ok("nix-e2e-sqlite-chromium"),
+            StepResult::fail("nix-e2e-sqlite-firefox"),
+        ];
+
+        assert!(!E2eOutcome::from_combo_steps(&steps).combinations_ok);
+    }
+
+    #[test]
+    fn e2e_outcome_rejects_a_failed_post_build_duration_check() {
+        let steps = [
+            StepResult::ok("nix-e2e-sqlite-chromium"),
+            StepResult::fail("e2e-duration-budget-sqlite-chromium"),
+        ];
+
+        assert!(!E2eOutcome::from_combo_steps(&steps).combinations_ok);
+    }
+
+    #[test]
+    fn e2e_outcome_ignores_an_earlier_global_failure() {
+        let mut result = CommandResult::new("validate");
+        result.push(StepResult::fail("nix-static-checks"));
+        let combo_start = result.steps.len();
+        result.push(StepResult::ok("nix-e2e-sqlite-chromium"));
+        result.push(StepResult::ok("e2e-duration-budget-sqlite-chromium"));
+
+        assert!(!result.ok);
+        assert!(E2eOutcome::from_combo_steps(&result.steps[combo_start..]).combinations_ok);
+    }
+
+    #[test]
+    fn e2e_outcome_ignores_the_trailing_elisp_integration_result() {
+        let mut result = CommandResult::new("validate");
+        result.push(StepResult::ok("nix-e2e-sqlite-chromium"));
+        result.push(StepResult::ok("e2e-duration-budget-sqlite-chromium"));
+        let outcome = E2eOutcome::from_combo_steps(&result.steps);
+        result.push(StepResult::fail("nix-elisp-integration"));
+
+        assert!(!result.ok);
+        assert!(outcome.combinations_ok);
+    }
+
+    #[test]
+    fn e2e_combo_output_follows_catalog_order() {
+        let mut result = CommandResult::new("validate");
+        for (backend, browser) in E2E_COMBOS {
+            result.push(StepResult::ok(&format!("nix-e2e-{backend}-{browser}")));
+            result.push(StepResult::ok(&format!(
+                "e2e-duration-budget-{backend}-{browser}"
+            )));
+        }
+
+        assert_eq!(
+            result
+                .steps
+                .iter()
+                .map(|step| step.name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "nix-e2e-sqlite-chromium",
+                "e2e-duration-budget-sqlite-chromium",
+                "nix-e2e-sqlite-firefox",
+                "e2e-duration-budget-sqlite-firefox",
+                "nix-e2e-postgres-chromium",
+                "e2e-duration-budget-postgres-chromium",
+                "nix-e2e-postgres-firefox",
+                "e2e-duration-budget-postgres-firefox",
+            ]
         );
     }
 

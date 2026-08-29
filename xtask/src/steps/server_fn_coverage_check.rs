@@ -5,14 +5,14 @@
 //! no e2e run — so adding a `#[server]` fn with no browser flow reddens the
 //! build immediately, without waiting for the e2e matrix.
 //!
-//! **The e2e lane** ([`from_capture`], [`verify_after_combo`]) is the half that
-//! keeps the snapshot honest: only a real run produces traces, so only there can
-//! the gate notice that the committed snapshot no longer matches what the suite
-//! exercises. `regenerate` rewrites it from a capture; `verify` fails on any
-//! difference. Per the spec's D8 that runs on the per-combo
-//! `cargo xtask e2e sqlite chromium` path **only**, never from the aggregate
-//! `checks.e2e` join, where both sqlite combos emit a `capture-sqlite.tar.gz` and
-//! collide unpredictably.
+//! **The e2e lane** ([`from_capture`], [`verify_from_capture`],
+//! [`verify_after_combo`]) is the half that keeps the snapshot honest: only a real
+//! run produces traces, so only there can the gate notice that the committed
+//! snapshot no longer matches what the suite exercises. `regenerate` rewrites it
+//! from the standalone command's diagnostics capture; `verify` fails on any
+//! difference. The per-combo command reads its uncollided diagnostics capture,
+//! while aggregate callers pass an explicit uncollided individual-output capture
+//! rather than reading the colliding `checks.e2e` join.
 //!
 //! Neither half is sufficient alone: traces exist only in the e2e lane, and fast
 //! feedback only in the static one.
@@ -163,6 +163,32 @@ pub fn from_capture(capture: &Path, regenerate: bool) -> Result<StepResult> {
     )
 }
 
+/// Verify a caller-owned, uncollided E2E capture and append the usual e2e-lane
+/// result. Capture, extraction, inventory, rendering, and byte-comparison policy
+/// remain shared with the standalone command through [`from_capture`].
+///
+/// This turns every capture-plumbing failure into the named fail-closed result so
+/// aggregate callers can retain it alongside their other gate steps.
+pub fn verify_from_capture(result: &mut CommandResult, capture: &Path) {
+    let step = from_capture(capture, false)
+        .unwrap_or_else(|e| StepResult::fail(VERIFY_STEP).detail(format!("{e:#}")));
+    result.push(step);
+}
+
+/// The explicit-path form of [`verify_from_capture`] for focused behavior tests.
+/// Production callers always use the repository's source and snapshot paths.
+#[cfg(test)]
+fn verify_from_capture_at(
+    result: &mut CommandResult,
+    web_src: &Path,
+    capture: &Path,
+    snapshot_path: &Path,
+) {
+    let step = regenerate_or_verify(web_src, capture, snapshot_path, false)
+        .unwrap_or_else(|e| StepResult::fail(VERIFY_STEP).detail(format!("{e:#}")));
+    result.push(step);
+}
+
 /// After the authoritative combo, confirm the committed snapshot still matches
 /// what the suite exercised. A no-op for every other combo (D8/D6).
 ///
@@ -178,9 +204,47 @@ pub fn verify_after_combo(result: &mut CommandResult, backend: &str, browser: &s
         result.push(StepResult::skip(VERIFY_STEP).detail("combo failed — no trustworthy capture"));
         return;
     }
-    let step = from_capture(Path::new(CAPTURE_PATH), false)
-        .unwrap_or_else(|e| StepResult::fail(VERIFY_STEP).detail(format!("{e:#}")));
-    result.push(step);
+    verify_from_capture(result, Path::new(CAPTURE_PATH));
+}
+
+/// After validate's four-combination E2E portion, verify the authoritative
+/// individual derivation output without realizing another VM.
+pub fn verify_after_validate(result: &mut CommandResult, combinations_ok: bool) {
+    verify_after_validate_with(
+        result,
+        combinations_ok,
+        || crate::steps::nix::eval_out_path("e2e-sqlite-chromium"),
+        verify_from_capture,
+    );
+}
+
+fn verify_after_validate_with(
+    result: &mut CommandResult,
+    combinations_ok: bool,
+    resolve_out_path: impl FnOnce() -> Result<String>,
+    verify: impl FnOnce(&mut CommandResult, &Path),
+) {
+    if !combinations_ok {
+        result.push(
+            StepResult::skip(VERIFY_STEP)
+                .detail("E2E combinations failed — no trustworthy authoritative capture"),
+        );
+        return;
+    }
+
+    let out_path = match resolve_out_path() {
+        Ok(path) => path,
+        Err(error) => {
+            result.push(StepResult::fail(VERIFY_STEP).detail(format!(
+                "cannot resolve authoritative E2E outPath: {error:#}"
+            )));
+            return;
+        }
+    };
+    let capture_name = Path::new(CAPTURE_PATH)
+        .file_name()
+        .expect("authoritative diagnostics capture has a filename");
+    verify(result, &Path::new(&out_path).join(capture_name));
 }
 
 #[cfg(test)]
@@ -410,6 +474,129 @@ mod tests {
         )
         .expect("compares");
         assert!(!step.ok, "reformatted-but-equal must still be drift");
+    }
+
+    fn write_sample_capture(path: &Path) {
+        let file = std::fs::File::create(path).expect("create capture");
+        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        let mut archive = tar::Builder::new(encoder);
+        let jsonl = include_str!("../server_fn_coverage/testdata/coverage-sample.jsonl");
+        let mut header = tar::Header::new_gnu();
+        header.set_size(jsonl.len().try_into().expect("fixture length fits"));
+        header.set_mode(0o644);
+        header.set_cksum();
+        archive
+            .append_data(&mut header, "capture/otel-traces.jsonl", jsonl.as_bytes())
+            .expect("add trace");
+        archive
+            .into_inner()
+            .expect("finish archive")
+            .finish()
+            .expect("finish compression");
+    }
+
+    fn write_sample_inventory(dir: &Path) {
+        for (vertical, idents) in [
+            ("posts", &["create_post", "update_post", "get_post"][..]),
+            ("tags", &["list_tags"][..]),
+            ("registration", &["register"][..]),
+        ] {
+            let vertical_dir = dir.join(vertical);
+            std::fs::create_dir_all(&vertical_dir).expect("create vertical dir");
+            let source: String = idents
+                .iter()
+                .map(|ident| format!("#[macros::server]\npub async fn {ident}() {{}}\n"))
+                .collect();
+            std::fs::write(vertical_dir.join("api.rs"), source).expect("write source");
+        }
+    }
+
+    fn write_empty_capture(path: &Path) {
+        let file = std::fs::File::create(path).expect("create capture");
+        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        tar::Builder::new(encoder)
+            .into_inner()
+            .expect("finish archive")
+            .finish()
+            .expect("finish compression");
+    }
+
+    fn current_snapshot_for(capture: &Path, web_src: &Path, snapshot: &Path) {
+        let inventory = inventory(web_src).expect("inventory");
+        let derived = coverage_from_capture(capture, &inventory)
+            .expect("fixture capture derives coverage")
+            .into_snapshot();
+        write_snapshot(snapshot, &derived).expect("write matching snapshot");
+    }
+
+    #[test]
+    fn an_explicit_capture_with_a_matching_snapshot_verifies_cleanly() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let capture = tmp.path().join("capture-sqlite.tar.gz");
+        let snapshot = tmp.path().join("server-fns.json");
+        write_sample_inventory(tmp.path());
+        write_sample_capture(&capture);
+        current_snapshot_for(&capture, tmp.path(), &snapshot);
+
+        let mut result = CommandResult::new("validate");
+        verify_from_capture_at(&mut result, tmp.path(), &capture, &snapshot);
+
+        assert_eq!(result.steps.len(), 1);
+        let step = &result.steps[0];
+        assert_eq!(step.name, VERIFY_STEP);
+        assert!(step.ok, "{:?}", step.detail);
+    }
+
+    #[test]
+    fn an_explicit_capture_rejects_a_stale_snapshot() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let capture = tmp.path().join("capture-sqlite.tar.gz");
+        let snapshot = tmp.path().join("server-fns.json");
+        write_sample_inventory(tmp.path());
+        write_sample_capture(&capture);
+        write_json(&snapshot, "stale\n");
+
+        let mut result = CommandResult::new("validate");
+        verify_from_capture_at(&mut result, tmp.path(), &capture, &snapshot);
+
+        let step = result.steps.last().expect("verification step");
+        assert_eq!(step.name, VERIFY_STEP);
+        assert!(!step.ok);
+        let detail = step.detail.as_deref().unwrap_or_default();
+        assert!(detail.contains("server-fns.json"), "{detail}");
+        assert!(detail.contains(REGENERATE_CMD), "{detail}");
+    }
+
+    #[test]
+    fn explicit_capture_failures_are_named_fail_closed_results() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let empty = tmp.path().join("empty.tar.gz");
+        let malformed = tmp.path().join("malformed.tar.gz");
+        let directory = tmp.path().join("not-a-tarball");
+        write_sample_inventory(tmp.path());
+        write_empty_capture(&empty);
+        write_json(&malformed, "not a gzip archive");
+        std::fs::create_dir(&directory).expect("create directory");
+
+        for capture in [
+            tmp.path().join("missing.tar.gz"),
+            empty,
+            malformed,
+            directory,
+        ] {
+            let mut result = CommandResult::new("validate");
+            verify_from_capture_at(
+                &mut result,
+                tmp.path(),
+                &capture,
+                &tmp.path().join("server-fns.json"),
+            );
+
+            let step = result.steps.last().expect("verification step");
+            assert_eq!(step.name, VERIFY_STEP, "{}", capture.display());
+            assert!(!step.ok, "{}: {:?}", capture.display(), step.detail);
+            assert!(!step.skipped, "{} must fail, not skip", capture.display());
+        }
     }
 
     #[test]
@@ -815,5 +1002,62 @@ mod tests {
         )
         .expect("write source");
         assert!(inventory(tmp.path()).expect("inventory scans").is_empty());
+    }
+    #[test]
+    fn validate_skips_coverage_without_trustworthy_combinations() {
+        let mut result = CommandResult::new("validate");
+        verify_after_validate_with(
+            &mut result,
+            false,
+            || panic!("failed combinations must not resolve an outPath"),
+            |_, _| panic!("failed combinations must not verify a capture"),
+        );
+
+        let step = result.steps.last().expect("coverage skip");
+        assert_eq!(step.name, VERIFY_STEP);
+        assert!(step.skipped);
+        assert!(step.detail.as_deref().unwrap().contains("no trustworthy"));
+    }
+
+    #[test]
+    fn validate_fails_closed_when_the_authoritative_out_path_cannot_resolve() {
+        let mut result = CommandResult::new("validate");
+        verify_after_validate_with(
+            &mut result,
+            true,
+            || anyhow::bail!("eval failed"),
+            |_, _| panic!("an unresolved outPath has no capture"),
+        );
+
+        let step = result.steps.last().expect("coverage failure");
+        assert_eq!(step.name, VERIFY_STEP);
+        assert!(!step.ok);
+        assert!(step.detail.as_deref().unwrap().contains("eval failed"));
+    }
+
+    #[test]
+    fn validate_uses_the_individual_out_path_despite_an_earlier_failure() {
+        let mut result = CommandResult::new("validate");
+        result.push(StepResult::fail("earlier-static-check"));
+        let expected = Path::new("/nix/store/authoritative").join(
+            Path::new(CAPTURE_PATH)
+                .file_name()
+                .expect("capture filename"),
+        );
+        let observed = std::cell::RefCell::new(None);
+
+        verify_after_validate_with(
+            &mut result,
+            true,
+            || Ok("/nix/store/authoritative".to_owned()),
+            |result, capture| {
+                observed.replace(Some(capture.to_owned()));
+                result.push(StepResult::ok(VERIFY_STEP));
+            },
+        );
+
+        assert_eq!(observed.into_inner().as_deref(), Some(expected.as_path()));
+        assert!(!result.ok, "the earlier failure remains authoritative");
+        assert!(result.steps.last().expect("coverage result").ok);
     }
 }
