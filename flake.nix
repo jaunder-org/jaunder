@@ -604,8 +604,33 @@
         # pkgs.emacs) is the extension point for units C/D to add elisp packages
         # via nix. `plz` is the AtomPub client's HTTP transport (ADR-0037) — it
         # drives the `curl` binary, so anything running plz also needs `curl` on
-        # PATH (the e2e VM and the ci dev shell, below).
-        emacsForCi = pkgs.emacs.pkgs.withPackages (epkgs: [ epkgs.plz ]);
+        # PATH (the e2e VM and the ci dev shell, below). cmark-el is fetched at
+        # a fixed upstream revision because it is neither packaged by Nixpkgs nor
+        # MELPA; fetched source preserves the upstream license notices.
+        emacsForCi = pkgs.emacs.pkgs.withPackages (
+          epkgs:
+          let
+            cmarkEl = epkgs.trivialBuild {
+              pname = "cmark";
+              version = "0.29.3";
+              src = pkgs.fetchFromGitHub {
+                owner = "taku0";
+                repo = "cmark-el";
+                rev = "86fe43daeea967f00992936b0917272e89a0967b";
+                hash = "sha256-SKO7GB4m9Qojv3GWwkmmDXCdE+JREIk3EzgZ8imUI7o=";
+              };
+              preInstall = ''
+                mkdir -p "$out/share/emacs/site-lisp/maps"
+                cp "$src"/maps/*.json "$out/share/emacs/site-lisp/maps/"
+                cp "$src/LICENSE" "$out/share/emacs/site-lisp/"
+              '';
+            };
+          in
+          [
+            epkgs.plz
+            cmarkEl
+          ]
+        );
 
         interactiveTestingVmRunner = pkgs.writeShellApplication {
           name = "interactive-testing-vm";

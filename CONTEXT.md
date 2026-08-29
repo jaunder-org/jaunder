@@ -99,6 +99,23 @@ owner-facing, but always confined to the protocol surface. _Avoid_: bare
 "client" for these — unqualified "client" is reserved for software running the
 planned `jaunder-client` runtime (see `docs/hub-architecture.md` §8).
 
+**Local Media Copy**: A durable media file downloaded by the Emacs Protocol
+Client into a configured root's `local-media/` directory so a pulled Post is
+previewable offline. It is verified against the serving Jaunder instance and
+content hash, may be reused across Posts, and must travel with the Post files
+during backup or synchronization. It is managed content, not an evictable cache.
+The configured root is trusted, author-owned local state; symlinks are rejected
+during path creation and immediately before mutation, while replacement after
+that final check is outside Emacs Lisp's dirfd-free threat model. _Avoid_:
+cache, external media (the source is the configured Jaunder instance), temporary
+download.
+
+**Markdown Pull Semantics**: The Emacs Protocol Client uses pinned upstream
+`cmark-el` as the authority for CommonMark link, image, autolink, code, raw
+block, container, fence, and paragraph semantics. Jaunder maps only bounded
+block source positions back to exact destination spans; it does not maintain a
+second CommonMark parser.
+
 ## Relationships
 
 - A **User** _is_ the publication: there is deliberately no

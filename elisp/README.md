@@ -56,3 +56,24 @@ under `cargo xtask validate` (not the fast `check --no-test` loop). See
 elisp is interim-exempt from the Rust coverage gate (follow-on #82); write an
 ERT test for every pure mapping/transform function. See
 [`docs/adr/0031-elisp-separately-tested-subproject.md`](../docs/adr/0031-elisp-separately-tested-subproject.md).
+
+## Pulled media
+
+When a server-only Post is pulled, eligible same-instance media links are
+rewritten to relative files under `local-media/<sha256>/` and their verified
+bytes are retained there. These **Local Media Copies** are durable blog content,
+not a cache: include `local-media/` in backups and do not expect automatic
+eviction or repair. The configured root is trusted, author-owned local state;
+the client rejects symlinks during creation and immediately before mutation, but
+cannot defend a malicious replacement after its final check without dirfd APIs.
+
+Markdown pull localization uses the pinned upstream `cmark-el` CommonMark
+parser. It rewrites only AST-recognized link, image, and autolink destinations;
+code, raw blocks, malformed link text, and other source remain unchanged. The
+client maps parser block source positions back to exact source spans, so bytes
+outside localized destinations are preserved. The dependency is fetched with its
+upstream license notices because it is not packaged by Nixpkgs or MELPA.
+
+The Post file is installed only after its media verifies. If a pull fails, its
+Post remains server-only while already verified Local Media Copies remain safe;
+rerun `jaunder-reconcile` to retry and reuse those copies.
