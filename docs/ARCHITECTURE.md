@@ -1889,7 +1889,7 @@ redirects. The authenticated Member response and every media response must carry
 exactly one canonical `X-Jaunder-Instance` UUID, and all values must match.
 Computed bytes, the strong `"sha256-<hash>"` response ETag, and the canonical
 URL hash must agree. External links and non-link URL text remain unchanged
-([Local Media Copies](adr/drafts/emacs-pulled-media-local-copies.md)). Markdown
+([Local Media Copies](adr/0160-emacs-pulled-media-local-copies.md)). Markdown
 localization delegates CommonMark meaning to the pinned upstream `cmark-el` AST.
 Because the parser exposes block positions but not inline destination spans,
 `jaunder-pull-media.el` retains a bounded lexical source adapter: it scans only
@@ -1898,7 +1898,7 @@ The adapter locates bytes but cannot authorize link semantics; it does not
 implement block classification such as fences, containers, raw HTML blocks, or
 paragraph interruption. Its source-syntax and reference-map compatibility seam
 is pinned to the packaged cmark-el revision
-([Local Media Copies](adr/drafts/emacs-pulled-media-local-copies.md)).
+([Local Media Copies](adr/0160-emacs-pulled-media-local-copies.md)).
 
 Verified bytes become durable **Local Media Copies** at
 `local-media/<sha256>/<decoded-filename>` under the configured root; native link
