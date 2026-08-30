@@ -47,7 +47,7 @@ Out:
     counts equal occurrence counts, every occurrence has one group, per-query
     totals reconcile, and overlaps are explicit.
 
-- [ ] Task 3: Complete behavioral-slice review and proposed dispositions.
+- [x] Task 3: Complete behavioral-slice review and proposed dispositions.
   - Contract: candidate groups are independent review packets. Each packet names
     paths/symbols, definitions/references, callers, representations, errors,
     tests, relevant history and ADRs, backend comparison where applicable,
