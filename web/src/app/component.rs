@@ -5,7 +5,6 @@
 
 /// The default theme, shared with the pure projector so the server-painted shell
 /// and this reactive `AppShell` agree on the initial `data-theme`.
-use super::DEFAULT_THEME;
 use client::telemetry;
 use common::client_telemetry::ClientErrorContext;
 
@@ -39,7 +38,7 @@ fn report_storage_error(context: ClientErrorContext, error: client::storage::Sto
     telemetry::report_swallowed(telemetry::error_kind(source_kind), context, source_kind);
 }
 fn provide_theme_context() {
-    let resolution = super::theme::resolve_theme(super::theme_storage::get(), DEFAULT_THEME);
+    let resolution = super::theme::resolve_theme(super::theme_storage::get(), super::DEFAULT_THEME);
     if let Some(error) = resolution.error {
         report_storage_error(ClientErrorContext::ThemeStorageRead, error);
     }
@@ -60,7 +59,7 @@ fn AppShell() -> impl IntoView {
     crate::auth::provide_session_context();
 
     let theme = use_context::<RwSignal<String>>()
-        .unwrap_or_else(|| RwSignal::new(DEFAULT_THEME.to_string()));
+        .unwrap_or_else(|| RwSignal::new(super::DEFAULT_THEME.to_string()));
     // `data-theme` must be a plain dynamic attribute, NOT `attr:data-theme`: the
     // Leptos `attr:` directive prefix is only for spreading onto a component; on a
     // plain element it leaks a literal `attr:data-theme` attribute into the mounted

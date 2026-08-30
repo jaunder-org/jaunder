@@ -4,7 +4,7 @@ use axum::{
 };
 use common::seed::{Page, PageSeed, RenderedPost};
 use host::etag;
-use web::app::{self, GLUE_URL, MODULE_BEFORE_INIT_MARK, PREPAINT_SCRIPT, WASM_URL};
+use web::app;
 use web::error::{self, SwallowedSource};
 use web::posts;
 
@@ -30,12 +30,12 @@ pub fn document(seed: &PageSeed) -> String {
             "<script type=\"module\">import {{initMeasured}} from \"{glue_url}\"; performance.mark(\"{module_before_init_mark}\"); initMeasured(window.__jaunderWasmFetch ?? \"{wasm_url}\");</script>",
             "</body></html>",
         ),
-        prepaint = PREPAINT_SCRIPT,
+        prepaint = app::PREPAINT_SCRIPT,
         head = head,
         body = body,
-        glue_url = GLUE_URL,
-        module_before_init_mark = MODULE_BEFORE_INIT_MARK,
-        wasm_url = WASM_URL,
+        glue_url = app::GLUE_URL,
+        module_before_init_mark = app::MODULE_BEFORE_INIT_MARK,
+        wasm_url = app::WASM_URL,
         // A verbatim `</script` inside the JSON would close the blob script
         // early; `<\/` is an equivalent JSON escape the parser reads back as
         // `</`. This is the only HTML-in-JSON breakout to neutralize.

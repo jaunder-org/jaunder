@@ -17,7 +17,7 @@ use common::seed::{Page, PageCursor, RenderedPost};
 use super::state::{NoIdentity, TimelinePaint, TimelineState};
 use crate::error::WebResult;
 use crate::posts::PostCard;
-use crate::taglist::TagCtx as TagContext;
+use crate::taglist::TagCtx;
 
 /// wasm-only load-more: fetch the next page with the current cursor and append
 /// it. `fetch` is the page's list fn (`list_local_timeline` / `list_home_feed`).
@@ -67,8 +67,8 @@ pub fn TimelineGate(
     /// Row context for each `PostCard`'s tag chips, and the page's route-derived
     /// identity in one: `None` means the URL segment has not resolved to a user, so
     /// no rows are painted. Defaults to site-wide, which four of five pages want.
-    #[prop(default = Signal::derive(|| Some(TagContext::SiteWide)))]
-    tag_context: Signal<Option<TagContext>>,
+    #[prop(default = Signal::derive(|| Some(TagCtx::SiteWide)))]
+    tag_context: Signal<Option<TagCtx>>,
     /// Empty-state message when there are no rows. Defaults to the generic
     /// "No posts yet."; the tag pages pass "No posts with this tag yet.".
     #[prop(default = "No posts yet.")]
@@ -136,8 +136,8 @@ pub fn TimelineRows(
     /// Tag-chip linking context for each row's `PostCard`. Defaults to
     /// `SiteWide` (the site/cockpit timelines); the user timeline passes
     /// `ForUser` so chips also render the "· here" per-author link.
-    #[prop(default = TagContext::SiteWide)]
-    tag_context: TagContext,
+    #[prop(default = TagCtx::SiteWide)]
+    tag_context: TagCtx,
     /// Empty-state message when there are no rows. Defaults to the generic
     /// "No posts yet."; the tag pages pass "No posts with this tag yet.".
     #[prop(default = "No posts yet.")]

@@ -4,7 +4,7 @@
 //! and constructing the [`AppState`] with all storage implementations.
 
 use std::io;
-use std::io::Write as _;
+use std::io::Write;
 use std::path::Path;
 use std::{fmt, str::FromStr, sync::Arc};
 

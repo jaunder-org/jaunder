@@ -1,4 +1,4 @@
-use super::markup::{self, SIDEBAR_SOURCES};
+use super::markup;
 use crate::auth;
 use crate::avatar::Avatar;
 use crate::icon::{Icon, Icons};
@@ -122,7 +122,7 @@ fn authed_sidebar(active_key: &str, username: &Username, is_operator: bool) -> i
                     <span>"Sources"</span>
                     <span class="j-sb-add">"+"</span>
                 </div>
-                {SIDEBAR_SOURCES
+                {markup::SIDEBAR_SOURCES
                     .iter()
                     .map(|&(proto, name, sub)| {
                         view! { <SidebarSource proto=proto name=name sub=sub /> }

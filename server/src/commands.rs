@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::Context as _;
+use anyhow::Context;
 
 use crate::cli::{AppTarget, BootstrapDb, Commands, SiteConfigAction, StorageArgs};
 use crate::mailer::LettreMailSender;
@@ -1113,7 +1113,7 @@ async fn cmd_site_config_unset(storage: &StorageArgs, key: SiteConfigKey) -> any
 /// An empty value on an optional key is *not* invalid: empty means unset (spec
 /// D1b), which `SiteConfigKey::validate` already honours.
 fn format_entries(entries: &[(String, String)]) -> String {
-    use std::fmt::Write as _;
+    use std::fmt::Write;
     entries.iter().fold(String::new(), |mut out, (k, v)| {
         // writeln! to a String is infallible; the newline gives one entry per line.
         let _ = match k.parse::<SiteConfigKey>() {

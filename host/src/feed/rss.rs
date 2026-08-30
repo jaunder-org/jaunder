@@ -1,4 +1,4 @@
-use atom_syndication::Link as AtomLink;
+use atom_syndication::Link;
 use rss::extension::atom::AtomExtension;
 use rss::{ChannelBuilder, GuidBuilder, ItemBuilder};
 
@@ -32,14 +32,14 @@ pub fn render_rss(meta: &FeedMetadata, items: &[FeedItem]) -> SyndicationFeedRep
         })
         .collect();
 
-    let mut atom_links = vec![AtomLink {
+    let mut atom_links = vec![Link {
         href: meta.self_url.to_string(),
         rel: "self".into(),
         mime_type: Some("application/rss+xml".into()),
         ..Default::default()
     }];
     if let Some(hub) = &meta.hub_url {
-        atom_links.push(AtomLink {
+        atom_links.push(Link {
             href: hub.to_string(),
             rel: "hub".into(),
             ..Default::default()

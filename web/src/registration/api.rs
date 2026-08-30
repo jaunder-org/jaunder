@@ -35,10 +35,7 @@ use {
     common::ids::UserId,
     common::session_label::SessionLabel,
     host::invite::InviteCode,
-    host::metrics::{
-        self, InviteEvent, RegistrationPolicy as MetricsRegistrationPolicy, RegistrationResult,
-        RegistrationSource,
-    },
+    host::metrics::{self, InviteEvent, RegistrationResult, RegistrationSource},
     host::password,
     leptos::prelude::*,
     std::sync::Arc,
@@ -97,9 +94,9 @@ pub async fn register(request: RegistrationRequest) -> WebResult<()> {
     span.record("registration.policy", policy.as_ref());
 
     let metric_policy = match &policy {
-        RegistrationPolicy::Open => MetricsRegistrationPolicy::Open,
-        RegistrationPolicy::InviteOnly => MetricsRegistrationPolicy::InviteOnly,
-        RegistrationPolicy::Closed => MetricsRegistrationPolicy::Closed,
+        RegistrationPolicy::Open => host::metrics::RegistrationPolicy::Open,
+        RegistrationPolicy::InviteOnly => host::metrics::RegistrationPolicy::InviteOnly,
+        RegistrationPolicy::Closed => host::metrics::RegistrationPolicy::Closed,
     };
     let user_id_result: Result<UserId, InternalError> = match policy {
         RegistrationPolicy::Open => {

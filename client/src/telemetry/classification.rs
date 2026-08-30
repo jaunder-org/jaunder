@@ -3,8 +3,7 @@
 use std::fmt;
 
 use common::client_telemetry::{
-    CLIENT_TELEMETRY_VERSION, ClientErrorContext, ClientErrorKind, ClientSourceKind,
-    ClientTelemetryEvent,
+    self, ClientErrorContext, ClientErrorKind, ClientSourceKind, ClientTelemetryEvent,
 };
 
 /// Why a `localStorage` operation could not complete.
@@ -131,7 +130,7 @@ pub const fn event(
     source_kind: ClientSourceKind,
 ) -> ClientTelemetryEvent {
     ClientTelemetryEvent {
-        version: CLIENT_TELEMETRY_VERSION,
+        version: client_telemetry::CLIENT_TELEMETRY_VERSION,
         kind: error_kind(source_kind),
         context,
         source_kind,

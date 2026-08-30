@@ -7,7 +7,7 @@ use super::{
     RenameAudienceRequest,
 };
 use crate::error::WebResult;
-use crate::forms::{self, Field as ValidatedField, ValidatedBareInput};
+use crate::forms::{self, ValidatedBareInput};
 use crate::icon::Icons;
 use crate::reactive::{Invalidator, invalidator_scope};
 use crate::topbar::Topbar;
@@ -152,7 +152,7 @@ fn CreateAudienceForm() -> impl IntoView {
     // the typed `#[server]` arg decodes through gates submit (disable-until-valid), so a valid
     // name is a precondition of dispatch and the empty-name rejection never round-trips for a
     // real client. `required` is dropped — the newtype rule is the single source of truth.
-    let name = ValidatedField::<AudienceName>::new();
+    let name = forms::Field::<AudienceName>::new();
 
     view! {
         <section class="j-card">
@@ -222,7 +222,7 @@ fn AudienceHeader(audience_id: AudienceId, name: AudienceName) -> impl IntoView 
     // Client-side pre-validation (ADR-0065), seeded from the existing name so a pristine
     // row is already valid (submit enabled); clearing it disables Rename and — once
     // touched — shows the newtype's own message inline.
-    let name = ValidatedField::<AudienceName>::prefilled(&name);
+    let name = forms::Field::<AudienceName>::prefilled(&name);
     let (rename_disabled, submit_rename) = forms::server_action_submit(rename_action, move || {
         name.parsed().map(|name| Rename {
             request: RenameAudienceRequest { audience_id, name },

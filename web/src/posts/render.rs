@@ -16,7 +16,6 @@
 use crate::home::render;
 use crate::html::Markup;
 use crate::taglist::TagCtx;
-use crate::timeline::render as timeline_render;
 use crate::{avatar, taglist, topbar};
 use common::ids::PostId;
 use common::post_summary::PostSummary;
@@ -253,7 +252,7 @@ fn render_timeline_page(
                 p { (empty_text) }
             } @else {
                 (render_posts(posts, tag_ctx))
-                (timeline_render::render_load_more(has_more))
+                (crate::timeline::render::render_load_more(has_more))
             }
         }
     })

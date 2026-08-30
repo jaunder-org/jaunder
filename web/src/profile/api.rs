@@ -18,11 +18,7 @@ use {
     crate::error::InternalError,
     leptos::prelude::*,
     std::sync::Arc,
-    storage::{
-        ProfileUpdate, UserConfigStorage, UserStorage,
-        get_default_post_format as storage_get_default_post_format,
-        set_default_post_format as storage_set_default_post_format,
-    },
+    storage::{ProfileUpdate, UserConfigStorage, UserStorage},
 };
 
 /// Profile data returned by [`get`].
@@ -80,7 +76,7 @@ pub async fn update(display_name: Option<DisplayName>, bio: Option<Bio>) -> WebR
 pub async fn get_default_post_format() -> WebResult<PostFormat> {
     let auth = auth::require_auth().await?;
     let config = expect_context::<Arc<dyn UserConfigStorage>>();
-    let format = storage_get_default_post_format(config.as_ref(), auth.user_id).await?;
+    let format = storage::get_default_post_format(config.as_ref(), auth.user_id).await?;
     Ok(format)
 }
 
@@ -89,7 +85,7 @@ pub async fn get_default_post_format() -> WebResult<PostFormat> {
 pub async fn set_default_post_format(format: PostFormat) -> WebResult<()> {
     let auth = auth::require_auth().await?;
     let config = expect_context::<Arc<dyn UserConfigStorage>>();
-    storage_set_default_post_format(config.as_ref(), auth.user_id, format).await?;
+    storage::set_default_post_format(config.as_ref(), auth.user_id, format).await?;
     Ok(())
 }
 

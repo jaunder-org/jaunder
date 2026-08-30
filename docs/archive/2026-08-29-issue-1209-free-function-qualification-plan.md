@@ -8,9 +8,9 @@
 
 In:
 
-- Direct nonlocal free-function imports and repeated long free-function paths in
-  `client/src`, `common/src`, `csr/src`, `host/src`, `macros/src`, `server/src`,
-  `storage/src`, and `web/src`.
+- Direct nonlocal free-function and constant imports, repeated long free-function
+  paths, and production import aliases in `client/src`, `common/src`, `csr/src`,
+  `host/src`, `macros/src`, `server/src`, `storage/src`, and `web/src`.
 - Review evidence that proves the complete candidate population was
   dispositioned.
 
@@ -31,22 +31,22 @@ Out:
     revision, and each candidate names one owning source-root slice.
 - [x] Task 2: Normalize foundational and target-gated runtime crates
   - Contract: Own only `client/src`, `common/src`, `csr/src`, `host/src`, and
-    `macros/src`. Direct nonlocal free functions use an imported owner module or
-    `super::function()`; collision-required item aliases remain unchanged. Two
-    or more long calls from one owner module in a file use a module import.
+    `macros/src`. Nonlocal free functions and constants use an imported owner
+    module or `super`; production imports use no aliases. Two or more long calls
+    from one owner module in a file use a module import.
   - Verification: Controller syntax-aware diff inspection confirms every changed
     call resolves to the same free function and only path/import shape changed.
 - [x] Task 3: Normalize server free-function ownership
   - Contract: Own only `server/src`. Preserve AtomPub/feed vertical façades and
-    generated server-function names while qualifying their free-function calls;
-    two or more long calls from one owner module in a file use a module import.
+    generated server-function names while owner-qualifying free functions and
+    constants, removing production aliases, and shortening repeated owner paths.
   - Verification: Controller syntax-aware diff inspection confirms every changed
     callee resolves to the same function and no protocol/runtime behavior
     changed.
 - [x] Task 4: Normalize storage and web free-function ownership
   - Contract: Own only `storage/src` and `web/src`. Preserve backend symmetry,
-    Leptos generated names, documented collision aliases, and target gates;
-    apply the same direct-import and repeated-long-path rules as Tasks 2 and 3.
+    Leptos generated names, public re-exports, and target gates while applying
+    the same free-function, constant, repeated-path, and no-alias rules.
   - Verification: Controller syntax-aware diff inspection confirms backend
     symmetry, web vertical ownership, identical callees, and unchanged behavior.
 - [x] Task 5: Prove integrated conformance and repair residual candidates
@@ -68,7 +68,8 @@ Out:
 - A path-only rewrite must resolve to the identical function and preserve
   generic arguments, target gates, visibility, and evaluation order.
 - Associated functions, methods, enum variants, macros, types, traits, generated
-  names, and collision-required aliases never enter the free-function set.
+  names, and public re-exports keep their semantics; production imports use no
+  aliases.
 - `super::function()` preserves a deliberate parent façade; it does not flatten
   or bypass module ownership.
 - Repetition is measured within one source file and one owner module, not across

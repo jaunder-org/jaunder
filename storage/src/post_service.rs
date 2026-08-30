@@ -15,11 +15,9 @@ use common::ids::{PostId, UserId};
 use common::post_body::PostBody;
 use common::post_summary::PostSummary;
 use common::post_title::PostTitle;
-use common::render as common_render;
 use common::slug::{InvalidSlug, Slug};
 use common::time::UtcInstant;
 use common::visibility::AudienceTarget;
-use host::render as host_render;
 
 // ---------------------------------------------------------------------------
 // Orchestration helpers
@@ -84,7 +82,7 @@ pub fn render_post_input(content: RenderedPostContent) -> CreatePostInput {
         idempotency_key,
         expectations,
     } = content;
-    let rendered = host_render::render_with_media(&body, &format);
+    let rendered = host::render::render_with_media(&body, &format);
     CreatePostInput {
         user_id,
         title,
@@ -250,13 +248,13 @@ pub async fn perform_post_update(
         request_clock,
         expectations,
     } = input;
-    let (title, derived_slug) = common_render::derive_post_naming(title, &body, &format);
+    let (title, derived_slug) = common::render::derive_post_naming(title, &body, &format);
 
     // Derive the naming from the *original* body above, then canonicalize what gets
     // stored. Web and AtomPub thus converge on one stored body. A title-only Org post
     // canonicalizes to nothing, which names no body (#811): there is nothing left to
     // store, so it earns the same rejection as an empty post.
-    let body = common_render::canonicalize_body(&body, &format)
+    let body = common::render::canonicalize_body(&body, &format)
         .map_err(|_| PerformUpdateError::EmptyPost)?;
 
     let slug = match slug_override {
@@ -266,7 +264,7 @@ pub async fn perform_post_update(
         None => derived_slug,
     };
 
-    let rendered = host_render::render_with_media(&body, &format);
+    let rendered = host::render::render_with_media(&body, &format);
     let input = UpdatePostInput {
         title,
         slug,
@@ -424,13 +422,13 @@ pub async fn perform_post_creation(
         idempotency_key,
         expectations,
     } = input;
-    let (title, derived_slug) = common_render::derive_post_naming(title, &body, &format);
+    let (title, derived_slug) = common::render::derive_post_naming(title, &body, &format);
 
     // Derive the naming from the *original* body above, then canonicalize what gets
     // stored. Web and AtomPub thus converge on one stored body. A title-only Org post
     // canonicalizes to nothing, which names no body (#811): there is nothing left to
     // store, so it earns the same rejection as an empty post.
-    let body = common_render::canonicalize_body(&body, &format)
+    let body = common::render::canonicalize_body(&body, &format)
         .map_err(|_| PerformCreationError::EmptyPost)?;
 
     let slug_seed: Slug = match slug_override {

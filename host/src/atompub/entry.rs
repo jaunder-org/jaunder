@@ -27,8 +27,9 @@ use std::collections::BTreeMap;
 use atom_syndication::extension::Extension;
 use atom_syndication::{Content, Entry, Feed, Link, Text};
 
-use super::title::CollectionFeedTitle;
-use super::{APP_NS, AtomPubError, J_NS};
+use super::AtomPubError;
+use super::CollectionFeedTitle;
+use super::ns;
 use common::media::{ContentType, Filename};
 use common::tagged_url::{
     ContentSrcUrl, EditMediaUriUrl, EditUriUrl, EntryIdUrl, FeedUrl, PaginationUrl, TaggedUrl,
@@ -167,7 +168,7 @@ fn prune_empty_extensions(entry: &mut Entry) {
 /// `yes` wins.
 #[must_use]
 pub fn draft_marker(entry: &Entry) -> Option<bool> {
-    markers_in(entry, APP_NS, "control")
+    markers_in(entry, ns::APP_NS, "control")
         .filter_map(|(_, control)| control_draft_marker(&entry.namespaces, control))
         .reduce(|draft, marker| draft || marker)
 }
@@ -186,7 +187,7 @@ fn control_draft_marker(
     let mut found = false;
     let mut is_draft = false;
     for draft in drafts {
-        if child_in_namespace(namespaces, &control.attrs, draft, APP_NS) {
+        if child_in_namespace(namespaces, &control.attrs, draft, ns::APP_NS) {
             found = true;
             is_draft |= draft
                 .value
@@ -209,7 +210,7 @@ pub fn set_draft(entry: &mut Entry, draft: bool) {
     // control — RFC 5023 §B gives an entry one `app:control`, not one per prefix.
     // Chosen *before* the removal, which prunes a binding once nothing is left under
     // it — including the one naming that spelling.
-    let prefix = draft.then(|| marker_prefix(entry, APP_NS, "control", "app"));
+    let prefix = draft.then(|| marker_prefix(entry, ns::APP_NS, "control", "app"));
     remove_draft_marker(entry);
 
     if let Some(prefix) = prefix {
@@ -230,7 +231,7 @@ pub fn set_draft(entry: &mut Entry, draft: bool) {
                 // a plain attribute rather than an `xmlns:`, which is worse than none.
                 control
                     .attrs
-                    .retain(|key, value| key != &prefix || value != APP_NS);
+                    .retain(|key, value| key != &prefix || value != ns::APP_NS);
             }
             None => controls.push(Extension {
                 name: format!("{prefix}:control"),
@@ -239,7 +240,7 @@ pub fn set_draft(entry: &mut Entry, draft: bool) {
             }),
         }
         by_local.insert("control".to_string(), controls);
-        entry.namespaces.insert(prefix, APP_NS.to_string());
+        entry.namespaces.insert(prefix, ns::APP_NS.to_string());
     }
 }
 
@@ -253,12 +254,12 @@ fn remove_draft_marker(entry: &mut Entry) {
             continue;
         };
         controls.retain_mut(|control| {
-            if resolve(&[&control.attrs, namespaces], declared) != Some(APP_NS) {
+            if resolve(&[&control.attrs, namespaces], declared) != Some(ns::APP_NS) {
                 return true;
             }
             let parent_attrs = &control.attrs;
             if let Some(drafts) = control.children.get_mut("draft") {
-                drafts.retain(|d| !child_in_namespace(namespaces, parent_attrs, d, APP_NS));
+                drafts.retain(|d| !child_in_namespace(namespaces, parent_attrs, d, ns::APP_NS));
             }
             control.children.retain(|_, children| !children.is_empty());
             // A control element that carried nothing but the draft flag has said all
@@ -269,12 +270,12 @@ fn remove_draft_marker(entry: &mut Entry) {
                 || control
                     .attrs
                     .iter()
-                    .any(|(key, value)| key != declared || value != APP_NS)
+                    .any(|(key, value)| key != declared || value != ns::APP_NS)
         });
         by_local.retain(|_, exts| !exts.is_empty());
     }
     prune_empty_extensions(entry);
-    prune_bindings(entry, APP_NS);
+    prune_bindings(entry, ns::APP_NS);
 }
 
 // ---------------------------------------------------------------------------
@@ -284,7 +285,7 @@ fn remove_draft_marker(entry: &mut Entry) {
 /// Read the read-only server slug from a `j:slug` extension, if present.
 #[must_use]
 pub fn j_slug(entry: &Entry) -> Option<String> {
-    markers_in(entry, J_NS, "slug").find_map(|(_, ext)| ext.value.clone())
+    markers_in(entry, ns::J_NS, "slug").find_map(|(_, ext)| ext.value.clone())
 }
 
 /// Set (idempotently replace) the `j:slug` extension. Emitted on every outgoing
@@ -292,7 +293,7 @@ pub fn j_slug(entry: &Entry) -> Option<String> {
 pub fn set_j_slug(entry: &mut Entry, slug: &str) {
     // As in `set_draft`: the prefix is chosen before the removal that may prune the
     // binding naming the document's own spelling of the namespace.
-    let prefix = marker_prefix(entry, J_NS, "slug", "j");
+    let prefix = marker_prefix(entry, ns::J_NS, "slug", "j");
 
     // Idempotent replace: drop any slug already in our namespace, then re-add one —
     // so re-setting never leaves a stale or duplicate marker behind. A `slug` in
@@ -300,12 +301,12 @@ pub fn set_j_slug(entry: &mut Entry, slug: &str) {
     let namespaces = &entry.namespaces;
     for (declared, by_local) in &mut entry.extensions {
         if let Some(slugs) = by_local.get_mut("slug") {
-            slugs.retain(|ext| resolve(&[&ext.attrs, namespaces], declared) != Some(J_NS));
+            slugs.retain(|ext| resolve(&[&ext.attrs, namespaces], declared) != Some(ns::J_NS));
         }
         by_local.retain(|_, exts| !exts.is_empty());
     }
     prune_empty_extensions(entry);
-    prune_bindings(entry, J_NS);
+    prune_bindings(entry, ns::J_NS);
 
     let ext = Extension {
         name: format!("{prefix}:slug"),
@@ -323,7 +324,7 @@ pub fn set_j_slug(entry: &mut Entry, slug: &str) {
         .push(ext);
     // As with `set_draft`, this helper owns its prefix's `xmlns:j` declaration.
     // There is no clearing counterpart: a slug is set on every outgoing entry.
-    entry.namespaces.insert(prefix, J_NS.to_string());
+    entry.namespaces.insert(prefix, ns::J_NS.to_string());
 }
 
 // ---------------------------------------------------------------------------
@@ -417,8 +418,8 @@ pub fn render_feed(meta: &FeedMeta, entries: &[Entry]) -> Result<String, AtomPub
         links,
         entries: entries.to_vec(),
         namespaces: BTreeMap::from([
-            ("app".to_string(), APP_NS.to_string()),
-            ("j".to_string(), J_NS.to_string()),
+            ("app".to_string(), ns::APP_NS.to_string()),
+            ("j".to_string(), ns::J_NS.to_string()),
         ]),
         ..Default::default()
     };

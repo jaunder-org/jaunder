@@ -35,7 +35,7 @@ use crate::posts::{
     Publish, SavedPost, ScheduledEditState, Unpublish, UnpublishedPost,
 };
 use crate::subscriptions::SubscribeButton;
-use crate::taglist::TagCtx as TagContext;
+use crate::taglist::TagCtx;
 use crate::tags::TagInput;
 use crate::timeline::{self, TimelineGate, TimelineState};
 use crate::topbar::Topbar;
@@ -161,8 +161,8 @@ pub fn PostDisplay<'a>(
     banner: Option<&'a str>,
     /// Linking context for the tag chips in the footer; defaults to
     /// site-wide.
-    #[prop(default = &TagContext::SiteWide)]
-    tag_context: &'a TagContext,
+    #[prop(default = &TagCtx::SiteWide)]
+    tag_context: &'a TagCtx,
     #[prop(optional)] children: Option<Children>,
 ) -> impl IntoView + use<> {
     let time_label = render::format_post_time(post.display_time());
@@ -288,8 +288,8 @@ pub fn PostCard<'a>(
     post: &'a RenderedPost,
     banner: Option<&'a str>,
     /// Linking context for the footer tag chips; defaults to site-wide.
-    #[prop(default = &TagContext::SiteWide)]
-    tag_context: &'a TagContext,
+    #[prop(default = &TagCtx::SiteWide)]
+    tag_context: &'a TagCtx,
     #[prop(optional)] on_mutate: Option<Callback<()>>,
     #[prop(optional)] on_unpublish: Option<Callback<()>>,
     /// Fired only after a successful *publish* (distinct from `on_mutate`, which delete
@@ -1010,9 +1010,7 @@ pub fn PostPage() -> impl IntoView {
                                     .post
                                     .is_draft()
                                     .then_some("Draft - visible only to you".to_string());
-                                let tag_context = TagContext::ForUser(
-                                    fetched.post.username.clone(),
-                                );
+                                let tag_context = TagCtx::ForUser(fetched.post.username.clone());
                                 // Both bound before the `view!`: the props are borrows
                                 // now, so an inline temporary would be dropped inside
                                 // the macro expansion (E0716).
@@ -1109,7 +1107,7 @@ pub fn UserTimelinePage() -> impl IntoView {
             state=state
             on_mutate=on_mutate
             on_load_more=on_load_more
-            tag_context=Signal::derive(move || username.get().map(TagContext::ForUser))
+            tag_context=Signal::derive(move || username.get().map(TagCtx::ForUser))
         />
     }
 }
@@ -1930,7 +1928,7 @@ pub fn UserTagPage() -> impl IntoView {
             state=state
             on_mutate=on_mutate
             on_load_more=on_load_more
-            tag_context=Signal::derive(move || username.get().map(TagContext::ForUser))
+            tag_context=Signal::derive(move || username.get().map(TagCtx::ForUser))
             empty_text="No posts with this tag yet."
         />
     }

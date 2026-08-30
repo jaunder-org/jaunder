@@ -17,7 +17,7 @@ use common::visibility::{
     self, InvalidSubscriberRef, SubscriberIdentity, SubscriberRef, SubscriptionPolicy,
     SubscriptionStatus, ViewerIdentity,
 };
-use host::error::{self as host_error, InternalResult};
+use host::error::InternalResult;
 use sqlx::{Database, Pool, Row};
 
 use crate::error::RequireRow;
@@ -309,7 +309,7 @@ where
                 Ok(subscriber_ref) => subscriber_ref,
                 Err(error) if invalid_subscriber_ref_decode(&error) => {
                     if !decode_reported {
-                        host_error::report_swallowed(
+                        host::error::report_swallowed(
                             host::error::ErrorKind::Storage,
                             host::error::ErrorClass::Bug,
                             "storage.subscriptions.decode_subscriber_ref",
@@ -351,7 +351,7 @@ where
                 Ok(subscriber_ref) => subscriber_ref,
                 Err(error) if invalid_subscriber_ref_decode(&error) => {
                     if !decode_reported {
-                        host_error::report_swallowed(
+                        host::error::report_swallowed(
                             host::error::ErrorKind::Storage,
                             host::error::ErrorClass::Bug,
                             "storage.subscriptions.decode_summary_subscriber_ref",

@@ -3,8 +3,8 @@ use sqlx::{Pool, QueryBuilder, Sqlite};
 
 use crate::helpers;
 use crate::posts::{
-    self, DELETE_POST_TAG_BY_SLUG, INSERT_POST_TAG, MediaReferenceEvidence, PostBookkeepingRow,
-    PostMediaReferenceBackfill, PostTagDiff, PostTagRow, SELECT_POST_TAGS, UPSERT_TAG_RETURNING_ID,
+    self, MediaReferenceEvidence, PostBookkeepingRow, PostMediaReferenceBackfill, PostTagDiff,
+    PostTagRow,
 };
 use crate::{
     InstanceId, PostDialect, PostRecord, PostStore, PublishUpdate, RenderedHtml, TaggingError,
@@ -200,11 +200,11 @@ async fn apply_post_update(
     .fetch_one(&mut **conn).await?;
     posts::replace_post_audiences::<Sqlite>(&mut **conn, post_id, &input.audiences).await?;
     for label in tag_diff.to_add {
-        let tag_id = sqlx::query_scalar::<_, TagId>(UPSERT_TAG_RETURNING_ID)
+        let tag_id = sqlx::query_scalar::<_, TagId>(posts::UPSERT_TAG_RETURNING_ID)
             .bind(label.slug())
             .fetch_one(&mut **conn)
             .await?;
-        sqlx::query(INSERT_POST_TAG)
+        sqlx::query(posts::INSERT_POST_TAG)
             .bind(post_id)
             .bind(tag_id)
             .bind(label)
@@ -212,7 +212,7 @@ async fn apply_post_update(
             .await?;
     }
     for slug in tag_diff.to_remove {
-        sqlx::query(DELETE_POST_TAG_BY_SLUG)
+        sqlx::query(posts::DELETE_POST_TAG_BY_SLUG)
             .bind(post_id)
             .bind(slug)
             .execute(&mut **conn)
@@ -292,7 +292,7 @@ impl PostDialect for Sqlite {
             if let Some(error) = posts::update_expectation_error(post_id, &existing, &tags, input) {
                 return Err(error);
             }
-            let tag_rows = sqlx::query_as::<_, PostTagRow>(SELECT_POST_TAGS)
+            let tag_rows = sqlx::query_as::<_, PostTagRow>(posts::SELECT_POST_TAGS)
                 .bind(post_id)
                 .fetch_all(&mut *conn)
                 .await?;
@@ -409,7 +409,7 @@ impl PostDialect for Sqlite {
                 Some((owner, None)) if owner != user_id => return Err(TaggingError::Unauthorized),
                 Some(_) => {}
             }
-            let rows = sqlx::query_as::<_, PostTagRow>(SELECT_POST_TAGS)
+            let rows = sqlx::query_as::<_, PostTagRow>(posts::SELECT_POST_TAGS)
                 .bind(post_id)
                 .fetch_all(&mut *conn)
                 .await?;
@@ -430,11 +430,11 @@ impl PostDialect for Sqlite {
                 // `fetch_one`, not a read-back: the upsert's no-op `DO UPDATE`
                 // returns the id on the conflict path too, so a no-row result
                 // cannot occur (#883).
-                let tag_id = sqlx::query_scalar::<_, TagId>(UPSERT_TAG_RETURNING_ID)
+                let tag_id = sqlx::query_scalar::<_, TagId>(posts::UPSERT_TAG_RETURNING_ID)
                     .bind(&slug)
                     .fetch_one(&mut *conn)
                     .await?;
-                sqlx::query(INSERT_POST_TAG)
+                sqlx::query(posts::INSERT_POST_TAG)
                     .bind(post_id)
                     .bind(tag_id)
                     .bind(label)
@@ -446,7 +446,7 @@ impl PostDialect for Sqlite {
                 // rows_affected is deliberately not checked: the slug came from
                 // `existing`, read in this same transaction, so "no row deleted"
                 // is not an error condition.
-                sqlx::query(DELETE_POST_TAG_BY_SLUG)
+                sqlx::query(posts::DELETE_POST_TAG_BY_SLUG)
                     .bind(post_id)
                     .bind(slug)
                     .execute(&mut *conn)

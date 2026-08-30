@@ -208,7 +208,7 @@ impl<'a> DiagPanicRecord<'a> {
 type WritePanicDiagOperation = fn(&mut std::fs::File, &[u8]) -> std::io::Result<()>;
 
 fn write_panic_diag(file: &mut std::fs::File, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write as _;
+    use std::io::Write;
     file.write_all(bytes)
 }
 fn install_diag_panic_hook_with(

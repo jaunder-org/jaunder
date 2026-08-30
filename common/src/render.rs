@@ -192,8 +192,9 @@ pub(crate) fn deserialize_rendered_html<'de, D>(deserializer: D) -> Result<Rende
 where
     D: serde::Deserializer<'de>,
 {
-    use serde::Deserialize as _;
-    String::deserialize(deserializer).map(RenderedHtml)
+    use serde::Deserialize;
+    // rendered-html-from-trusted:allow rebuilds RenderedHtml from a wire DTO field our own server serialized (#445)
+    String::deserialize(deserializer).map(RenderedHtml::from_trusted)
 }
 // The rest of the StrNewtype read-out trailer (#502), hand-written to preserve the
 // carve-outs: `Borrow`/`PartialEq` are read-only, and `From<Self> for String` moves the

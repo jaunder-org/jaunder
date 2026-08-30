@@ -285,7 +285,7 @@ fn resolve_media_path(
 /// The decoded filename is only for this display header; its canonical spelling remains on
 /// the storage and URL paths. `inline` vs `attachment` follows [`should_inline`].
 fn content_disposition(content_type: &ContentType, filename: &Filename) -> String {
-    use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+    use percent_encoding::utf8_percent_encode;
 
     let disposition = if media::should_inline(content_type.as_ref()) {
         "inline"
@@ -305,7 +305,7 @@ fn content_disposition(content_type: &ContentType, filename: &Filename) -> Strin
         fallback.push(c);
     }
 
-    let encoded = utf8_percent_encode(&decoded, NON_ALPHANUMERIC);
+    let encoded = utf8_percent_encode(&decoded, percent_encoding::NON_ALPHANUMERIC);
     format!("{disposition}; filename=\"{fallback}\"; filename*=UTF-8''{encoded}")
 }
 

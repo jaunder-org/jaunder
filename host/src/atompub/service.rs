@@ -8,9 +8,9 @@
 use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 
+use super::ns;
 use super::title::{CollectionTitle, WorkspaceTitle};
 use super::xml;
-use super::{APP_NS, ATOM_NS, J_NS};
 use common::tag::Tag;
 use common::tagged_url::CollectionHrefUrl;
 
@@ -72,11 +72,11 @@ pub fn render_service_document(doc: &ServiceDocument) -> String {
     let _ = writer.write_event(Event::Decl(BytesDecl::new("1.0", Some("utf-8"), None)));
 
     let mut root = BytesStart::new("app:service");
-    root.push_attribute(("xmlns", ATOM_NS));
-    root.push_attribute(("xmlns:app", APP_NS));
+    root.push_attribute(("xmlns", ns::ATOM_NS));
+    root.push_attribute(("xmlns:app", ns::APP_NS));
     // Declare the Jaunder foreign-markup namespace so the `j:extension`
     // capability marker below is well-formed (ADR-0023).
-    root.push_attribute(("xmlns:j", J_NS));
+    root.push_attribute(("xmlns:j", ns::J_NS));
     let _ = writer.write_event(Event::Start(root));
 
     let _ = writer.write_event(Event::Start(BytesStart::new("app:workspace")));
