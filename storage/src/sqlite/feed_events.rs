@@ -6,7 +6,8 @@ use host::feed::FeedEventClaimLimit;
 use sqlx::{Pool, Sqlite};
 
 use crate::feed_events::{
-    self, ClaimedRow, FeedEventDialect, FeedEventError, FeedEventRecord, FeedEventStore,
+    self, ClaimedFeedEventRow, ClaimedRow, FeedEventDialect, FeedEventError, FeedEventRecord,
+    FeedEventStore,
 };
 
 use crate::sql::RowCount;
@@ -51,7 +52,7 @@ impl FeedEventDialect for Sqlite {
         // Single autocommit statement: SQLite takes the write lock immediately,
         // so there is no deferred read-then-write lock upgrade (ADR-0021) and the
         // 5s busy_timeout applies cleanly. Mirrors the Postgres CTE claim.
-        let rows = sqlx::query_as::<_, ClaimedRow>(
+        let rows = sqlx::query_as::<_, ClaimedFeedEventRow>(
             "UPDATE feed_events SET status = 'claimed', claimed_at = $1 \
              WHERE id IN ( \
                  SELECT id FROM feed_events \
@@ -68,7 +69,10 @@ impl FeedEventDialect for Sqlite {
         .bind(lease_cutoff)
         .bind(limit)
         .fetch_all(pool)
-        .await?;
+        .await?
+        .into_iter()
+        .map(ClaimedRow::from)
+        .collect();
 
         let (records, corrupt) = feed_events::partition_claimed(rows);
         let purge = purge_corrupt(pool, &corrupt).await;

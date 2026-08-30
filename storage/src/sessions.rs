@@ -322,6 +322,32 @@ mod tests {
             "expected a column-decode error, got: {err:?}"
         );
     }
+
+    #[apply(backends)]
+    #[tokio::test]
+    async fn list_sessions_repairs_an_invalid_stored_label_without_rejecting_the_row(
+        #[case] backend: Backend,
+    ) {
+        let env = backend.setup().await;
+        let user_id = SeedUser::new().seed(&env.state).await.user_id;
+        env.state
+            .sessions
+            .create_session(user_id, &parse_session_label("Test Device"))
+            .await
+            .unwrap();
+        let stored = "x".repeat(1_000);
+        crate::with_closeable_pool!(env.base.pool(), pool, {
+            sqlx::query("UPDATE sessions SET label = $1")
+                .bind(&stored)
+                .execute(pool)
+                .await
+                .unwrap();
+        });
+
+        let sessions = env.state.sessions.list_sessions(user_id).await.unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].label, SessionLabel::from_lossy(&stored));
+    }
     #[apply(backends)]
     #[tokio::test]
     async fn session_rows_preserve_created_and_last_used_roles(#[case] backend: Backend) {

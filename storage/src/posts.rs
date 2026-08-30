@@ -8,6 +8,7 @@ use sqlx::{Database, Pool, QueryBuilder, Row};
 use thiserror::Error;
 
 use crate::backend::Backend;
+use crate::helpers::SerializedPostTags;
 use crate::sql::Exists;
 use crate::{InstanceId, helpers};
 use common::etag::ETag;
@@ -138,7 +139,7 @@ where
     RenderedHtml: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
     UtcInstant: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
     PostSummary: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
-    String: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
+    SerializedPostTags: sqlx::Decode<'r, R::Database> + sqlx::Type<R::Database>,
 {
     fn from_row(row: &'r R) -> sqlx::Result<Self> {
         let post_id = row.try_get::<PostId, _>("post_id")?;
@@ -154,8 +155,8 @@ where
         let published_at = row.try_get::<Option<UtcInstant>, _>("published_at")?;
         let deleted_at = row.try_get::<Option<UtcInstant>, _>("deleted_at")?;
         let summary = row.try_get::<Option<PostSummary>, _>("summary")?;
-        let tags_json = row.try_get::<String, _>("tags")?;
-        let tags = helpers::parse_post_tags_json(&tags_json, post_id)?;
+        let tags_json = row.try_get::<SerializedPostTags, _>("tags")?;
+        let tags = tags_json.into_tags(post_id);
 
         Ok(Self {
             post_id,
@@ -4265,6 +4266,7 @@ where
 mod tests {
     use super::*;
     use crate::feed_cache::FeedCacheRow;
+    use crate::post_test_types::PhysicalPostTagRowId;
     use crate::test_support::{
         Backend, CloseablePool, MEDIA_TEST_SHA256, SeedRawPost, SeedUser, TestEnv, UpdateRawPost,
         backends, create_draft_via_service, create_post_via_service, fetch_post_media, fp,
@@ -4667,7 +4669,7 @@ mod tests {
     async fn physical_row_ids(env: &TestEnv, post_id: PostId) -> Vec<String> {
         match env.base.pool() {
             CloseablePool::Postgres(pool) => {
-                sqlx::query_scalar::<_, String>(
+                sqlx::query_scalar::<_, PhysicalPostTagRowId>(
                     "SELECT ctid::text FROM post_tags WHERE post_id = $1 ORDER BY tag_id",
                 )
                 .bind(post_id)
@@ -4675,7 +4677,7 @@ mod tests {
                 .await
             }
             CloseablePool::Sqlite(pool) => {
-                sqlx::query_scalar::<_, String>(
+                sqlx::query_scalar::<_, PhysicalPostTagRowId>(
                     "SELECT CAST(rowid AS TEXT) FROM post_tags WHERE post_id = $1 ORDER BY tag_id",
                 )
                 .bind(post_id)
@@ -4684,6 +4686,9 @@ mod tests {
             }
         }
         .expect("read physical row ids")
+        .into_iter()
+        .map(PhysicalPostTagRowId::into_inner)
+        .collect()
     }
 
     /// The post's tag slugs, slug-ordered, read through the normal post read path.
@@ -5865,7 +5870,10 @@ mod tests {
             .await
             .expect_err("malformed aggregate must reject publication");
         assert!(
-            matches!(&error, UpdatePostError::Internal(sqlx::Error::Decode(_))),
+            matches!(
+                &error,
+                UpdatePostError::Internal(sqlx::Error::ColumnDecode { index, .. }) if index == "\"tags\""
+            ),
             "{error:?}"
         );
         assert_eq!(
@@ -7355,8 +7363,8 @@ mod tests {
             .await
             .expect_err("malformed aggregated tag must fail the read");
         assert!(
-            matches!(err, sqlx::Error::Decode(_)),
-            "expected an aggregate decode error, got: {err:?}"
+            matches!(&err, sqlx::Error::ColumnDecode { index, .. } if index == "\"tags\""),
+            "expected a tags column-decode error, got: {err:?}"
         );
     }
 

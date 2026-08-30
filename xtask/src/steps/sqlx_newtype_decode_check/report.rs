@@ -348,8 +348,11 @@ mod tests {
     fn a_stale_entry_with_no_matching_site_is_reported() {
         // An allowlist that stops tracking the tree has quietly become a region
         // exemption, so a vanished site is a failure too, not a free pass.
-        let detail = problems_of(&[("storage/src/users.rs".to_string(), String::new())])
-            .expect("every entry is now stale");
+        let detail = problems_of_with_allowlist(
+            &[("storage/src/users.rs".to_string(), String::new())],
+            &[backup_count_entry()],
+        )
+        .expect("the synthetic entry is stale");
         assert!(
             detail.contains("The decode is gone — delete the entry."),
             "{detail}"

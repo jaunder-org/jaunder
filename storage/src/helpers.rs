@@ -1,8 +1,8 @@
 //! Helper functions for row type conversions and cryptographic operations.
 
-use std::io;
+use std::{fmt, io, str::FromStr};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::role_instant::impl_role_instant;
 use crate::{InviteRecord, MediaRecord, PostTag, SessionRecord, UserRecord};
@@ -44,6 +44,35 @@ impl_role_instant!(InviteCreatedAt, UtcInstant);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
 struct InviteExpiresAt(UtcInstant);
 impl_role_instant!(InviteExpiresAt, UtcInstant);
+/// The email-verification bit decoded from a user row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
+pub(crate) struct EmailVerified(bool);
+
+impl EmailVerified {
+    pub(crate) const fn value(self) -> bool {
+        self.0
+    }
+}
+
+/// The operator-status bit decoded from a user row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, macros::SqlxBridge)]
+pub(crate) struct OperatorStatus(bool);
+
+impl OperatorStatus {
+    pub(crate) const fn value(self) -> bool {
+        self.0
+    }
+}
+
+/// A session label retained exactly until the repair-on-read display policy.
+#[derive(Debug, macros::SqlxBridge)]
+struct StoredSessionLabel(String);
+
+impl StoredSessionLabel {
+    fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// Preserves an already-selected primary result while reporting a failed
 /// secondary operation exactly once. Owning modules wrap this with private,
@@ -197,10 +226,48 @@ fn build_invite_record(
         used_by,
     }
 }
-
 // ---------------------------------------------------------------------------
 // Post tag JSON helper
 // ---------------------------------------------------------------------------
+
+/// One validated JSON aggregate of tags before it is attached to a post identity.
+#[derive(Debug, macros::SqlxBridge)]
+#[sqlx_bridge(text)]
+pub(crate) struct SerializedPostTags(ParsedPostTags);
+
+/// Parsed aggregate payload retained once from the `SQLx` decode boundary.
+#[derive(Debug)]
+struct ParsedPostTags(Vec<PostTagJson>);
+
+impl fmt::Display for ParsedPostTags {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let json = serde_json::to_string(&self.0).map_err(|_| fmt::Error)?;
+        formatter.write_str(&json)
+    }
+}
+
+impl FromStr for SerializedPostTags {
+    type Err = serde_json::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Ok(Self(ParsedPostTags(serde_json::from_str(value)?)))
+    }
+}
+
+impl SerializedPostTags {
+    pub(crate) fn into_tags(self, post_id: PostId) -> Vec<PostTag> {
+        self.0
+            .0
+            .into_iter()
+            .map(|r| PostTag {
+                post_id,
+                tag_id: r.tag_id,
+                tag_slug: r.tag_slug,
+                tag_display: r.tag_display,
+            })
+            .collect()
+    }
+}
 
 /// Row shape for the JSON-aggregated tags column. Field names match the SQL
 /// `json_object` keys verbatim, hence the matching `tag_` prefixes.
@@ -208,27 +275,11 @@ fn build_invite_record(
 // this struct deserializes; renaming would need per-field `#[serde(rename)]` for no gain.
 // lint-suppression:allow approved in #294; existing expectation documents intentional test-scaffolding or naming exception
 #[expect(clippy::struct_field_names)]
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct PostTagJson {
     tag_id: TagId,
     tag_slug: Tag,
     tag_display: TagLabel,
-}
-
-pub(crate) fn parse_post_tags_json(json: &str, post_id: PostId) -> sqlx::Result<Vec<PostTag>> {
-    // `Tag`/`TagLabel` validate on deserialize (the serde bridge), so an invalid stored
-    // slug or label surfaces as a decode error from `from_str` above.
-    let raw: Vec<PostTagJson> =
-        serde_json::from_str(json).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-    Ok(raw
-        .into_iter()
-        .map(|r| PostTag {
-            post_id,
-            tag_id: r.tag_id,
-            tag_slug: r.tag_slug,
-            tag_display: r.tag_display,
-        })
-        .collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -243,8 +294,8 @@ pub(crate) type UserRow = (
     UtcInstant,
     Option<UtcInstant>,
     Option<Email>,
-    bool,
-    bool,
+    EmailVerified,
+    OperatorStatus,
 );
 
 /// The single positional→named boundary for a decoded user row.
@@ -274,8 +325,8 @@ pub(crate) fn user_record_from_row(row: UserRow) -> UserRecord {
         created_at,
         last_authenticated_at,
         email,
-        email_verified,
-        is_operator,
+        email_verified: email_verified.value(),
+        is_operator: is_operator.value(),
     })
 }
 
@@ -284,7 +335,7 @@ pub struct SessionRow {
     token_hash: TokenHash,
     user_id: UserId,
     username: Username,
-    label: String,
+    label: StoredSessionLabel,
     created_at: SessionCreatedAt,
     last_used_at: SessionLastUsedAt,
 }
@@ -296,7 +347,7 @@ impl SessionRow {
 }
 
 pub(crate) fn session_record_from_row(row: SessionRow) -> SessionRecord {
-    // The `label` column decodes as a plain `String` and is sanitized into a
+    // The `label` column decodes into a lossless storage role and is sanitized into a
     // `SessionLabel` via the lossy constructor rather than a validating decode: a
     // label is a best-effort *display* value, so a pre-existing out-of-range row
     // (empty, over-long) is repaired on read instead of failing the whole
@@ -305,7 +356,7 @@ pub(crate) fn session_record_from_row(row: SessionRow) -> SessionRecord {
         token_hash: row.token_hash,
         user_id: row.user_id,
         username: row.username,
-        label: SessionLabel::from_lossy(&row.label),
+        label: SessionLabel::from_lossy(row.label.as_str()),
         created_at: row.created_at,
         last_used_at: row.last_used_at,
     })
@@ -751,15 +802,19 @@ mod tests {
     }
 
     #[test]
-    fn parse_post_tags_json_accepts_empty_tags() {
-        let tags = parse_post_tags_json("[]", PostId::from(10)).unwrap();
+    fn serialized_post_tags_accept_empty_tags() {
+        let tags = SerializedPostTags::from_str("[]")
+            .unwrap()
+            .into_tags(PostId::from(10));
         assert!(tags.is_empty());
     }
 
     #[test]
-    fn parse_post_tags_json_parses_tags() {
+    fn serialized_post_tags_attach_post_identity_after_parsing() {
         let tags_json = r#"[{"tag_id": 1, "tag_slug": "rust", "tag_display": "Rust"}]"#;
-        let tags = parse_post_tags_json(tags_json, PostId::from(10)).unwrap();
+        let tags = SerializedPostTags::from_str(tags_json)
+            .unwrap()
+            .into_tags(PostId::from(10));
 
         assert_eq!(tags.len(), 1);
         assert_eq!(tags[0].post_id, PostId::from(10));
@@ -769,16 +824,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_post_tags_json_rejects_invalid_json() {
-        let err = parse_post_tags_json("not-json", PostId::from(10)).unwrap_err();
-        assert!(matches!(err, sqlx::Error::Decode(_)));
+    fn serialized_post_tags_reject_invalid_json() {
+        assert!(SerializedPostTags::from_str("not-json").is_err());
     }
 
     #[test]
-    fn parse_post_tags_json_rejects_invalid_tag_slug() {
+    fn serialized_post_tags_reject_invalid_tag_slug() {
         let tags_json = r#"[{"tag_id": 1, "tag_slug": "Not A Slug", "tag_display": "Bad"}]"#;
-        let err = parse_post_tags_json(tags_json, PostId::from(10)).unwrap_err();
-        assert!(matches!(err, sqlx::Error::Decode(_)));
+        assert!(SerializedPostTags::from_str(tags_json).is_err());
     }
 
     // guard:no-backend — password hashing/verification; no database
@@ -920,7 +973,7 @@ mod tests {
             token_hash: parse_token_hash("tokenhash"),
             user_id: UserId::from(1),
             username: parse_username("alice"),
-            label: "label".to_string(),
+            label: StoredSessionLabel("label".to_owned()),
             created_at: now.into(),
             last_used_at: last_used_at.into(),
         };
@@ -954,8 +1007,8 @@ mod tests {
             now,
             None,
             None,
-            false,
-            false,
+            EmailVerified(false),
+            OperatorStatus(false),
         );
         let record = user_record_from_row(row);
         assert_eq!(record.user_id, UserId::from(1));
@@ -1116,8 +1169,8 @@ mod tests {
             now,
             Some(now),
             Some(parse_email("alice@example.com")),
-            true,
-            false,
+            EmailVerified(true),
+            OperatorStatus(false),
         );
         let record = user_record_from_row(row);
         assert_eq!(record.user_id, UserId::from(1));

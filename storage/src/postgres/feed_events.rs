@@ -6,7 +6,8 @@ use host::feed::FeedEventClaimLimit;
 use sqlx::{Pool, Postgres};
 
 use crate::feed_events::{
-    self, ClaimedRow, FeedEventDialect, FeedEventError, FeedEventRecord, FeedEventStore,
+    self, ClaimedFeedEventRow, ClaimedRow, FeedEventDialect, FeedEventError, FeedEventRecord,
+    FeedEventStore,
 };
 use crate::sql::RowCount;
 
@@ -43,7 +44,7 @@ impl FeedEventDialect for Postgres {
     ) -> Result<Vec<FeedEventRecord>, FeedEventError> {
         // Postgres can express the whole claim atomically with FOR UPDATE
         // SKIP LOCKED + UPDATE … RETURNING in a single statement.
-        let rows = sqlx::query_as::<_, ClaimedRow>(
+        let rows = sqlx::query_as::<_, ClaimedFeedEventRow>(
             "WITH eligible AS ( \
                 SELECT id FROM feed_events \
                 WHERE (status = 'pending' AND next_attempt_at <= $1) \
@@ -61,7 +62,10 @@ impl FeedEventDialect for Postgres {
         .bind(lease_cutoff)
         .bind(limit)
         .fetch_all(pool)
-        .await?;
+        .await?
+        .into_iter()
+        .map(ClaimedRow::from)
+        .collect();
 
         let (records, corrupt) = feed_events::partition_claimed(rows);
         let purge = purge_corrupt(pool, &corrupt).await;

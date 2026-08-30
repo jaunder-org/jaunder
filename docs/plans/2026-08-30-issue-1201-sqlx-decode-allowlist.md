@@ -46,7 +46,7 @@ Out:
     config and feed-cache tests prove unknown-key export and deletion,
     opaque-value fidelity, and structured-payload rejection.
 
-- [ ] Task 3: Type production row state and isolate custom row policy
+- [x] Task 3: Type production row state and isolate custom row policy
   - Contract: feed attempts use a nonnegative checked type; email verification
     and operator status use distinct bool wrappers; serialized post tags use a
     validating role type. Stored session labels and physical row identities use

@@ -16,7 +16,7 @@ use common::username::Username;
 use host::password::Password;
 use host::stored_password_hash::StoredPasswordHash;
 
-use crate::helpers::{self, UserRow};
+use crate::helpers::{self, EmailVerified, OperatorStatus, UserRow};
 
 /// A user account record returned by [`UserStorage`] queries.
 ///
@@ -225,8 +225,8 @@ impl<DB: Database> UserStore<DB> {
             Option<UtcInstant>,
             StoredPasswordHash,
             Option<Email>,
-            bool,
-            bool,
+            EmailVerified,
+            OperatorStatus,
         ): for<'r> sqlx::FromRow<'r, DB::Row>,
         for<'r> UserId: sqlx::Decode<'r, DB> + sqlx::Type<DB>,
         usize: sqlx::ColumnIndex<DB::Row>,
@@ -248,8 +248,8 @@ impl<DB: Database> UserStore<DB> {
                 Option<UtcInstant>,
                 StoredPasswordHash,
                 Option<Email>,
-                bool,
-                bool,
+                EmailVerified,
+                OperatorStatus,
             ),
         >(
             "SELECT user_id, username, display_name, bio, created_at, last_authenticated_at,
@@ -331,8 +331,8 @@ impl<DB: Database> UserStore<DB> {
             created_at,
             last_authenticated_at: Some(now),
             email,
-            email_verified,
-            is_operator,
+            email_verified: email_verified.value(),
+            is_operator: is_operator.value(),
         }))
     }
 }
@@ -351,8 +351,8 @@ where
         Option<UtcInstant>,
         StoredPasswordHash,
         Option<Email>,
-        bool,
-        bool,
+        EmailVerified,
+        OperatorStatus,
     ): for<'r> sqlx::FromRow<'r, DB::Row>,
     // `create_user`'s `RETURNING user_id` decodes straight into `UserId` via the
     // ADR-0071 bridge (#686), so the id never exists as a bare `i64` here (#715).
@@ -526,15 +526,11 @@ mod tests {
         // back into its newtype — exercising both bridge directions.
         let username: Username = parse_username("alice");
         let display_name = parse_display_name("Alice Example");
+        let password = host::test_support::parse_password("password123");
         let user_id = env
             .state
             .users
-            .create_user(
-                &username,
-                &host::test_support::parse_password("password123"),
-                Some(&display_name),
-                false,
-            )
+            .create_user(&username, &password, Some(&display_name), true)
             .await
             .unwrap();
 
@@ -549,6 +545,8 @@ mod tests {
         assert_eq!(record.username, username);
         assert_eq!(record.display_name, Some(display_name));
         assert_eq!(record.email, Some(email));
+        assert!(record.email_verified);
+        assert!(record.is_operator);
 
         // `get_user_by_username` binds the `Username` and decodes the same columns
         // via a second query.
@@ -560,6 +558,17 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(by_name.username, username);
+        assert!(by_name.email_verified);
+        assert!(by_name.is_operator);
+
+        let authenticated = env
+            .state
+            .users
+            .authenticate(&username, &password)
+            .await
+            .unwrap();
+        assert!(authenticated.email_verified);
+        assert!(authenticated.is_operator);
     }
 
     #[apply(backends)]
