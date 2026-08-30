@@ -24,10 +24,9 @@
 //!
 //! **Unreadable classes, stated rather than solved:**
 //!
-//! 1. Matching is per line (as in [`super::no_full_reload_check`]), so a call split
-//!    across lines by the formatter would evade it. Prettier keeps `page.goto(` on
-//!    one line, and this is a guardrail against accidental reintroduction, not
-//!    against a determined adversary.
+//! 1. Matching is per line, so a call split across lines by the formatter could evade it.
+//!    Prettier keeps `page.goto(` on one line, and this is a guardrail against accidental
+//!    reintroduction, not against a determined adversary.
 //! 2. Only the receiver spelled `page` is policed. A second `Page` handle bound to
 //!    another name (`popup.goto(…)`) is invisible — there is no type information here.
 //! 3. String literals are **not** tracked, so a `page.goto(` inside a string would be

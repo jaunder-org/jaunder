@@ -22,6 +22,8 @@ pub const ALL: &[&str] = &[
     "prettier",
     "elisp-fmt",
     "tools-fmt",
+    "ast-grep-tests",
+    "no-full-reload",
     "byte-compile",
     "tsc",
     "cargo-deny",
@@ -159,8 +161,7 @@ impl CheckSpec {
 
 /// Pure: the command spec for `name` in the given mode. `fix` makes the five
 /// formatters (`fmt`, `leptosfmt`, `prettier`, `elisp-fmt`, `tools-fmt`) mutate in place;
-/// `ert`/`tsc`/`byte-compile` have no autofix and ignore it. Args are verbatim from the
-/// `xtask::steps::static_checks::specs` — this is now their single source of truth.
+/// `ert`/`tsc`/`byte-compile`/`ast-grep-tests`/`no-full-reload` have no autofix and ignore it.
 fn spec(name: &str, fix: bool) -> Result<CheckSpec> {
     let owned = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     let cargo_check = |workspace, args: &[&str]| {
@@ -227,6 +228,22 @@ fn spec(name: &str, fix: bool) -> Result<CheckSpec> {
         "byte-compile" => CheckSpec::External {
             program: "emacs",
             args: owned(&["--batch", "-Q", "-l", "elisp/scripts/byte-compile.el"]),
+        },
+        "ast-grep-tests" => CheckSpec::External {
+            program: "ast-grep",
+            args: owned(&["test", "--config", "sgconfig.yml"]),
+        },
+        "no-full-reload" => CheckSpec::External {
+            program: "ast-grep",
+            args: owned(&[
+                "scan",
+                "--config",
+                "sgconfig.yml",
+                "--filter",
+                "^no-full-reload$",
+                "web/src",
+                "client/src",
+            ]),
         },
         "cargo-deny" => CheckSpec::Cargo(CargoCheck {
             workspace: CargoWorkspace::Product,
@@ -874,6 +891,42 @@ mod tests {
     }
 
     #[test]
+    fn no_full_reload_runs_root_ast_grep_policy_over_browser_roots() {
+        assert_eq!(
+            build_host("no-full-reload", false),
+            BuiltCommand {
+                program: "ast-grep",
+                args: vec![
+                    "scan".into(),
+                    "--config".into(),
+                    "sgconfig.yml".into(),
+                    "--filter".into(),
+                    "^no-full-reload$".into(),
+                    "web/src".into(),
+                    "client/src".into(),
+                ],
+                env: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn ast_grep_tests_run_committed_rule_fixtures() {
+        assert_eq!(
+            build_host("ast-grep-tests", false),
+            BuiltCommand {
+                program: "ast-grep",
+                args: vec!["test".into(), "--config".into(), "sgconfig.yml".into()],
+                env: vec![],
+            }
+        );
+        assert_eq!(
+            build_host("ast-grep-tests", true),
+            build_host("ast-grep-tests", false)
+        );
+    }
+
+    #[test]
     fn unknown_check_errors() {
         assert!(spec("nope", false).is_err());
     }
@@ -899,6 +952,27 @@ mod tests {
                 "wasm-clippy",
             ]
         );
+    }
+
+    #[test]
+    fn inventory_includes_no_full_reload_once() {
+        assert_eq!(
+            ALL.iter().filter(|name| **name == "no-full-reload").count(),
+            1
+        );
+    }
+
+    #[test]
+    fn inventory_includes_ast_grep_tests_once_before_repository_scan() {
+        let ast_grep_tests = ALL
+            .iter()
+            .position(|name| *name == "ast-grep-tests")
+            .expect("ast-grep tests present");
+        assert_eq!(
+            ALL.iter().filter(|name| **name == "ast-grep-tests").count(),
+            1
+        );
+        assert_eq!(ALL[ast_grep_tests + 1], "no-full-reload");
     }
 
     #[test]

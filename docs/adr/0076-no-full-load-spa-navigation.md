@@ -4,6 +4,11 @@
 - Date: 2026-07-23
 - Issue: [#592](https://github.com/jaunder-org/jaunder/issues/592)
 
+> **Amended 2026-08-29 (#893).** The navigation policy and scope below remained
+> unchanged; the proposed
+> [devtool ast-grep enforcement decision](drafts/devtool-owns-ast-grep-enforcement.md)
+> replaced the xtask line scanner with shared syntax-aware host/Nix enforcement.
+
 ## Context
 
 The app is a pure-CSR `leptos_router` SPA (SSR was removed — ADR-0044 lineage,

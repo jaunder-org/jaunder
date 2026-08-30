@@ -1,0 +1,48 @@
+id: no-full-reload
+snapshots:
+  ? |-
+    window()
+      .location()
+      .replace("/posts")
+  : labels:
+    - source: |-
+        window()
+          .location()
+          .replace("/posts")
+      style: primary
+      start: 0
+      end: 43
+  ? |-
+    window().location()
+      .assign("/posts")
+  : labels:
+    - source: |-
+        window().location()
+          .assign("/posts")
+      style: primary
+      start: 0
+      end: 39
+  window().location().assign("/posts"):
+    labels:
+    - source: window().location().assign("/posts")
+      style: primary
+      start: 0
+      end: 36
+  window().location().reload():
+    labels:
+    - source: window().location().reload()
+      style: primary
+      start: 0
+      end: 28
+  window().location().replace("/posts"):
+    labels:
+    - source: window().location().replace("/posts")
+      style: primary
+      start: 0
+      end: 37
+  window().location().set_href("/posts"):
+    labels:
+    - source: window().location().set_href("/posts")
+      style: primary
+      start: 0
+      end: 38

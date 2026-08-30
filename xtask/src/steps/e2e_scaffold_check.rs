@@ -12,10 +12,10 @@
 //! point of the salt. (`flake.nix` excludes `/xtask/` from its source filter, so a
 //! derivation could not invoke this even by accident.)
 //!
-//! Accepted limitation (as in [`super::no_full_reload_check`]): matching is per-line, so
-//! a reformatting that splits a literal across lines would evade it. A guardrail against
-//! accidental reintroduction, not a determined adversary — but note the missing-literal
-//! case below fails loudly rather than silently passing.
+//! Accepted limitation: matching is per-line, so a reformatting that splits a literal across
+//! lines would evade it. A guardrail against accidental reintroduction, not a determined
+//! adversary — but note the missing-literal case below fails loudly rather than silently
+//! passing.
 
 use crate::result::{CommandResult, StepResult};
 
@@ -33,9 +33,8 @@ const SALT_DECL: &str = "e2eSalt =";
 /// The failure detail when the measurement salt is left set, or `None` when it is at its
 /// committed default. Pure given `flake.nix`'s source, so it is unit-tested directly.
 ///
-/// A literal that is **missing entirely** is a failure, not a pass: renaming or deleting
-/// it must not quietly disable the guard (same reasoning as
-/// [`super::no_full_reload_check`]'s missing-root hard failure).
+/// A literal that is **missing entirely** is a failure, not a pass: renaming or deleting it
+/// must not quietly disable the guard.
 pub fn problems(source: &str) -> Option<String> {
     let mut lines = Vec::new();
     let mut saw_salt = false;

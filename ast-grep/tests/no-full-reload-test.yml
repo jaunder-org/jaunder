@@ -1,0 +1,18 @@
+id: no-full-reload
+valid:
+  - use_location().set_href("/posts")
+  - text.replace("draft", "published")
+  - let href = window().location().href()
+  - let pathname = window().location().pathname()
+invalid:
+  - window().location().replace("/posts")
+  - window().location().assign("/posts")
+  - window().location().reload()
+  - window().location().set_href("/posts")
+  - |-
+    window()
+      .location()
+      .replace("/posts")
+  - |-
+    window().location()
+      .assign("/posts")
