@@ -1071,6 +1071,31 @@ and `server` (the server-side data-API build; renamed from `ssr`)
 ([ADR-0041](adr/0041-public-projector-and-csr-client.md)) — declared at
 `web/Cargo.toml:50-64`. The `csr` crate is the wasm entry point and owns its own
 `mount()`/`main()` (`csr/src/lib.rs:34,54`); there is no `web::mount_csr`.
+
+Cargo features select capabilities; target `cfg`s select platform code. Features
+unify within one resolved Cargo graph, so a downstream or dev dependency may
+activate a capability for every copy of that crate in that build. The production
+boundary is therefore the resolved target graph, not one manifest viewed alone.
+
+| Capability                                     | Enabled by                                                                                           | Build where it belongs        | Purpose                                                                                 | Enforcement                                                                                                             |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `web/csr` → `client/csr`                       | `csr`                                                                                                | wasm                          | Browser UI and Leptos client plumbing.                                                  | CSR build, wasm clippy/tests, size gate.                                                                                |
+| `web/server`                                   | `server`                                                                                             | host                          | Server-function bodies and their Axum/storage dependencies; this is not SSR.            | Host clippy/tests and server-function gates.                                                                            |
+| `common/sanitize`                              | `host`                                                                                               | host production               | Adds `ammonia`; establishes the `RenderedHtml` invariant.                               | CSR resolved graph plus wasm build/budget; `rendered-html-compiler-boundary` checks the production constructor surface. |
+| `common/sqlx`                                  | `storage`                                                                                            | host production               | Adds common-owned `SQLx` bridges required by trait ownership.                           | `common-host-target-closure` rejects it in CSR.                                                                         |
+| `host/sqlx`, `storage/sqlx`                    | Their default features                                                                               | host production               | Enable derive-generated bridge impls; their `SQLx` dependencies are already host-owned. | Host clippy and dual-backend tests.                                                                                     |
+| `common/{test-support,test-utils}`             | Downstream dev-dependencies                                                                          | tests only                    | Expose shared fixtures and cross-crate test hooks.                                      | Consumer test builds; compiler boundary keeps fixtures out of default production dependencies.                          |
+| `host/{test-support,test-utils,cheap-kdf}`     | `storage`, `web`, and `server` dev-dependencies                                                      | tests only                    | Forward common fixtures and enable host test hooks or cheap password hashing.           | Host and consumer test builds; optimized-build `cheap-kdf` compile guard.                                               |
+| `storage/{test-support,test-utils,seed-posts}` | Integration-test dev-dependencies; the `test-support` binary enables only `seed-posts` in production | host tests or the seed binary | Provide the dual-backend harness, mocks/hooks, and the lightweight post-seeding recipe. | `test-local`, backend-pattern gate, and seed-binary smoke tests.                                                        |
+
+`test-support` is overloaded only lexically: the workspace **crate** is the
+out-of-process seed/capture executable, while each crate's `test-support`
+**feature** exposes that crate's in-process fixtures to downstream tests.
+`cfg(test)` exposes fixtures to a crate's own tests; the feature is needed
+across a crate boundary. `common-host-target-closure`, the host/wasm compile
+lanes, and the isolated `rendered-html-compiler-boundary` check the load-bearing
+production boundaries; test gates exercise the explicitly enabled test surfaces.
+
 `cargo xtask build-csr` compiles `csr` to wasm and hands the artifact to
 `devtool csr-bundle` (wasm-bindgen + `wasm-opt -Oz`), landing
 `jaunder.{js,wasm}` in `target/site/pkg/`
@@ -2775,13 +2800,15 @@ reached by CSR or another dual-target consumer, while `host` owns the unconsumed
 code. `client` is the browser-infrastructure peer
 ([ADR-0069](adr/0069-client-crate-wasm-only-home.md)). `host` has no runtime
 workspace dependency other than `common`; `macros` is its existing build-time
-exception. The optional `common/sqlx` bridge is instead the sole
-ownership-forced exception to `common`'s otherwise dual-target dependency
-purity, required by orphan-rule trait ownership. External dependencies remain
-allowed. A cargo-metadata gate enforces that host invariant and that the exact
-target/feature-resolved CSR closure excludes `host`, `storage`, `server`, and
-`common/sqlx`; the existing wasm build proves that closure compiles. The graph
-check cannot classify semantics, so review owns the host-only judgement. The
+exception. Two optional `common` capabilities are deliberate host-only
+exceptions to its otherwise dual-target dependency purity: `common/sqlx`,
+required by orphan-rule trait ownership, and `common/sanitize`, which keeps
+`ammonia` behind the host rendering path. External dependencies remain allowed.
+A cargo-metadata gate enforces the host invariant and rejects `common/sqlx` in
+the exact target/feature-resolved CSR closure. That closure is also expected to
+omit `common/sanitize` and `ammonia`; the wasm build and size gate exercise the
+resulting browser artifact. The graph gate cannot classify an external
+dependency's semantics, so review owns keeping sanitization host-only. The
 `macros` proc-macro crate is orthogonal to that runtime trio — build-time
 tooling compiled for the compiler host, home to all workspace proc-macros
 including the three newtype derives `StrNewtype`, `IdNewtype` and `NumNewtype`
