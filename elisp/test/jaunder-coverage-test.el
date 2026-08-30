@@ -41,19 +41,19 @@
                     (list (expand-file-name "jaunder-alpha.el" root)
                           (expand-file-name "jaunder-beta.el" root)))))))
 
-(ert-deftest jaunder-coverage-census-keeps-macro-struct-and-declaration-forms ()
+(ert-deftest jaunder-coverage-census-keeps-function-struct-and-declaration-forms ()
   "Every top-level form remains visible even when Edebug yields no stop points."
   (jaunder-coverage-test--with-tree
    '(("jaunder-fixture.el" .
-      "(defmacro jaunder--with-blog (file &rest body)\n  (declare (indent 1) (debug t))\n  `(progn ,file ,@body))\n\n(cl-defstruct fixture value)\n(declare-function fixture-call \"fixture\")\n(provide 'jaunder-fixture)\n"))
+      "(defun jaunder--call-with-blog (file thunk)\n  (let ((active file))\n    (funcall thunk)))\n\n(cl-defstruct fixture value)\n(declare-function fixture-call \"fixture\")\n(provide 'jaunder-fixture)\n"))
    (lambda (root)
      (let* ((file (expand-file-name "jaunder-fixture.el" root))
             (forms (jaunder-coverage--read-forms file))
             (census (jaunder-coverage--census-file file)))
        (should (equal (mapcar (lambda (form) (plist-get form :kind)) forms)
-                      '("defmacro" "cl-defstruct" "declare-function" "provide")))
+                      '("defun" "cl-defstruct" "declare-function" "provide")))
        (should (equal (mapcar (lambda (form) (alist-get 'kind form)) census)
-                      '("defmacro" "cl-defstruct" "declare-function" "provide")))
+                      '("defun" "cl-defstruct" "declare-function" "provide")))
        (mapc (lambda (form)
                (should (equal (alist-get 'points form)
                               (vector `((line . ,(alist-get 'start_line form))

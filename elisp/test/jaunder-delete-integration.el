@@ -17,19 +17,21 @@
 
 (defun jaunder-delete-integration--delete-member-for-cleanup (root id)
   "Conditionally delete active Member ID under ROOT during test cleanup."
-  (jaunder--with-blog root
-                      (let* ((url (jaunder--member-url id))
-                             (member (jaunder--http-request "GET" url)))
-                        (when (eq (plist-get member :status) 200)
-                          (let ((etag (jaunder--response-header member "ETag")))
-                            (unless etag
-                              (error "Live cleanup: Member %s has no ETag" id))
-                            (let ((deleted
-                                   (jaunder--http-request
-                                    "DELETE" url nil nil (list (cons "If-Match" etag)))))
-                              (unless (eq (plist-get deleted :status) 204)
-                                (error "Live cleanup: DELETE Member %s returned %s"
-                                       id (plist-get deleted :status)))))))))
+  (jaunder--call-with-blog
+   root
+   (lambda ()
+     (let* ((url (jaunder--member-url id))
+            (member (jaunder--http-request "GET" url)))
+       (when (eq (plist-get member :status) 200)
+         (let ((etag (jaunder--response-header member "ETag")))
+           (unless etag
+             (error "Live cleanup: Member %s has no ETag" id))
+           (let ((deleted
+                  (jaunder--http-request
+                   "DELETE" url nil nil (list (cons "If-Match" etag)))))
+             (unless (eq (plist-get deleted :status) 204)
+               (error "Live cleanup: DELETE Member %s returned %s"
+                      id (plist-get deleted :status))))))))))
 
 (defmacro jaunder-delete-integration--with-published-post (&rest body)
   "Create a real Post in a visited buffer, then run BODY with `root', `buf', and `id'."
@@ -55,8 +57,9 @@
                 (jaunder-publish)
                 (setq id (jaunder--buffer-property "JAUNDER_ID"))
                 (should id)
-                (jaunder--with-blog (buffer-file-name)
-                                    ,@body))
+                (jaunder--call-with-blog
+                 (buffer-file-name)
+                 (lambda () ,@body)))
             (setq completed t))
         ;; Preserve the original assertion/error.  A passing test makes cleanup
         ;; failures loud, while a failing one still tears down its real Member.

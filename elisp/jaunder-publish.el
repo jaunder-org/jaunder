@@ -191,48 +191,50 @@ file pristine."
   (interactive)
   (let ((file (or (buffer-file-name)
                   (error "jaunder: buffer is not visiting a file"))))
-    (jaunder--with-blog file
-                        (let* ((status (jaunder--buffer-property "JAUNDER_STATUS"))
-                               (date-raw (jaunder--buffer-keyword "DATE"))
-                               (tz (jaunder--buffer-property "JAUNDER_DATE_TZ"))
-                               (id (jaunder--buffer-property "JAUNDER_ID"))
-                               (synced (jaunder--buffer-property "JAUNDER_SYNCED"))
-                               (entry (jaunder--org->atom)))
-                          (when force-draft (jaunder--force-draft entry))
-                          ;; Validate BEFORE any buffer write, so a rejected publish leaves the
-                          ;; on-disk file pristine.
-                          (jaunder--validate-publish entry status date-raw tz)
-                          ;; Record the machine zone (idempotent) so #+DATE: is interpreted in a
-                          ;; recorded zone on later machines.  A first-publish's org->atom above
-                          ;; already used the local zone, which equals the captured name.
-                          (jaunder--ensure-date-tz)
-                          ;; Authoring-hygiene warning: `tz' is the zone recorded
-                          ;; *before* the capture above, so a difference means the
-                          ;; author moved machines since recording it.
-                          (jaunder--warn-zone-mismatch tz)
-                          ;; Warn (once per session per blog) if the server won't
-                          ;; honour the per-entry text/org content type.
-                          (jaunder--warn-missing-format-media-type
-                           (jaunder--active-base-url))
-                          (setf (jaunder-entry-body entry)
-                                (jaunder--localize-media (jaunder-entry-body entry)))
-                          (let* ((xml (jaunder--atom-entry->xml entry))
-                                 (resp (if id
-                                           (jaunder--http-request
-                                            "PUT"
-                                            (jaunder--member-url id)
-                                            xml jaunder--entry-content-type
-                                            (when synced (list (cons "If-Match" synced))))
-                                         (jaunder--create-with-retry
-                                          (jaunder--build-url (jaunder--active-base-url) "atompub"
-                                                              (jaunder--active-username) "posts")
-                                          xml)))
-                                 (code (plist-get resp :status)))
-                            (unless (memq code '(200 201))
-                              (error "jaunder: publish failed (HTTP %s)" code))
-                            (let ((slug (jaunder--write-back resp (null id))))
-                              (when slug (jaunder--rename-to-slug slug))
-                              (message "jaunder: published %s" (or slug ""))))))))
+    (jaunder--call-with-blog
+     file
+     (lambda ()
+       (let* ((status (jaunder--buffer-property "JAUNDER_STATUS"))
+              (date-raw (jaunder--buffer-keyword "DATE"))
+              (tz (jaunder--buffer-property "JAUNDER_DATE_TZ"))
+              (id (jaunder--buffer-property "JAUNDER_ID"))
+              (synced (jaunder--buffer-property "JAUNDER_SYNCED"))
+              (entry (jaunder--org->atom)))
+         (when force-draft (jaunder--force-draft entry))
+         ;; Validate BEFORE any buffer write, so a rejected publish leaves the
+         ;; on-disk file pristine.
+         (jaunder--validate-publish entry status date-raw tz)
+         ;; Record the machine zone (idempotent) so #+DATE: is interpreted in a
+         ;; recorded zone on later machines.  A first-publish's org->atom above
+         ;; already used the local zone, which equals the captured name.
+         (jaunder--ensure-date-tz)
+         ;; Authoring-hygiene warning: `tz' is the zone recorded
+         ;; *before* the capture above, so a difference means the
+         ;; author moved machines since recording it.
+         (jaunder--warn-zone-mismatch tz)
+         ;; Warn (once per session per blog) if the server won't
+         ;; honour the per-entry text/org content type.
+         (jaunder--warn-missing-format-media-type
+          (jaunder--active-base-url))
+         (setf (jaunder-entry-body entry)
+               (jaunder--localize-media (jaunder-entry-body entry)))
+         (let* ((xml (jaunder--atom-entry->xml entry))
+                (resp (if id
+                          (jaunder--http-request
+                           "PUT"
+                           (jaunder--member-url id)
+                           xml jaunder--entry-content-type
+                           (when synced (list (cons "If-Match" synced))))
+                        (jaunder--create-with-retry
+                         (jaunder--build-url (jaunder--active-base-url) "atompub"
+                                             (jaunder--active-username) "posts")
+                         xml)))
+                (code (plist-get resp :status)))
+           (unless (memq code '(200 201))
+             (error "jaunder: publish failed (HTTP %s)" code))
+           (let ((slug (jaunder--write-back resp (null id))))
+             (when slug (jaunder--rename-to-slug slug))
+             (message "jaunder: published %s" (or slug "")))))))))
 
 (defun jaunder-save-draft ()
   "Publish the current buffer as a server-side draft (forces `app:draft')."

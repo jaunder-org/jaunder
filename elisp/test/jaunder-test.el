@@ -355,15 +355,44 @@
     (should (equal (plist-get (jaunder--resolve-blog "/home/me/blog/post.org") :base-url)
                    "https://a"))))
 
-(ert-deftest jaunder-with-blog-binds-active-blog ()
+(ert-deftest jaunder-call-with-blog-binds-active-blog-dynamically ()
+  (let ((jaunder-blogs '(("/home/me/blog/" :base-url "https://a" :username "a")))
+        (jaunder--active-blog '(:base-url "https://outer" :username "outer")))
+    (jaunder--call-with-blog
+     "/home/me/blog/post.org"
+     (lambda ()
+       (should (equal (jaunder--active-base-url) "https://a"))
+       (should (equal (jaunder--active-username) "a"))))
+    (should (equal (jaunder--active-base-url) "https://outer"))))
+
+(ert-deftest jaunder-call-with-blog-returns-thunk-result ()
   (let ((jaunder-blogs '(("/home/me/blog/" :base-url "https://a" :username "a"))))
-    (jaunder--with-blog "/home/me/blog/post.org"
-                        (should (equal (jaunder--active-base-url) "https://a"))
-                        (should (equal (jaunder--active-username) "a")))))
+    (should (eq (jaunder--call-with-blog "/home/me/blog/post.org"
+                                         (lambda () 'result))
+                'result))))
+
+(ert-deftest jaunder-call-with-blog-propagates-thunk-errors ()
+  (let ((jaunder-blogs '(("/home/me/blog/" :base-url "https://a" :username "a")))
+        (jaunder--active-blog '(:base-url "https://outer" :username "outer")))
+    (should-error
+     (jaunder--call-with-blog "/home/me/blog/post.org"
+                              (lambda () (error "injected thunk failure"))))
+    (should (equal (jaunder--active-base-url) "https://outer"))))
+
+(ert-deftest jaunder-call-with-blog-resolves-file-once ()
+  (let ((calls 0))
+    (cl-letf (((symbol-function 'jaunder--resolve-blog)
+               (lambda (_file)
+                 (setq calls (1+ calls))
+                 '(:base-url "https://a" :username "a"))))
+             (should (eq (jaunder--call-with-blog "/home/me/blog/post.org"
+                                                  (lambda () 'result))
+                         'result))
+             (should (= calls 1)))))
 
 (ert-deftest jaunder-active-accessors-error-without-active-blog ()
-  ;; Outside `jaunder--with-blog' the accessors must signal, so a transport call
-  ;; that forgot to establish request context fails loudly instead of using nil.
+  ;; Outside `jaunder--call-with-blog' the accessors must signal, so a transport
+  ;; call that forgot to establish request context fails loudly instead of using nil.
   (let ((jaunder--active-blog nil))
     (should-error (jaunder--active-base-url))
     (should-error (jaunder--active-username))))

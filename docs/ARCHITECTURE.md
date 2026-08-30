@@ -1848,8 +1848,8 @@ host, non-empty username, unmatched directory errors, trailing slashes stripped
 ([ADR-0047](adr/0047-emacs-publish-orchestration.md)). Alongside it sit three
 `jaunder-warn-*` toggles for the soft authoring-hygiene warnings (zone mismatch,
 untracked media, missing `format-media-type`), none of which ever block a
-publish. Commands bind the private `jaunder--active-blog` special via the
-`jaunder--with-blog` macro; the transport reads it only through
+publish. Commands bind the private `jaunder--active-blog` special through
+`jaunder--call-with-blog`; the transport reads it only through
 `jaunder--active-base-url` / `jaunder--active-username`, which error when no
 blog is active ([ADR-0047](adr/0047-emacs-publish-orchestration.md)).
 

@@ -841,13 +841,15 @@
 
 
 (ert-deftest jaunder-pull-media-markdown-scanner-covers-delimiter-edge-cases ()
-  "Escapes, uneven code delimiters, titles, and source references stay byte-local."
+  "Scanner branches preserve literal Markdown and HTML boundaries byte-for-byte."
   (should (= (jaunder--pull-media-effective-port
               (url-generic-parse-url "https://jaunder.example/media"))
              443))
   (should (= (jaunder--pull-media-effective-port
               (url-generic-parse-url "http://jaunder.example/media"))
              80))
+  (should (= (jaunder--pull-media-markdown-code-end "`code`x" 1 1 7) 6))
+  (should-not (jaunder--pull-media-markdown-code-end "`code" 1 1 5))
   (should (= (jaunder--pull-media-markdown-code-end "`x``y`" 1 1 6) 6))
   (should (= (jaunder--pull-media-markdown-label-end "[`unclosed]" 1 11) 10))
   (should (equal (jaunder--pull-media-markdown-destination
@@ -856,12 +858,22 @@
   (should (equal (jaunder--pull-media-markdown-destination
                   "https://h \"a\\\"b\"   \n" 0 ?\n 20)
                  '(0 9 20)))
-  (should (= (jaunder--pull-media-markdown-inline-html-end
-              "<!--x-->" 0 8)
-             8))
-  (should (= (jaunder--pull-media-markdown-inline-html-end
-              "<a title='>'>" 0 13)
-             13))
+  (let ((comment "<!--x-->tail"))
+    (should (= (jaunder--pull-media-markdown-inline-html-end
+                comment 0 (length comment))
+               8)))
+  (let ((comment "<!--x"))
+    (should (= (jaunder--pull-media-markdown-inline-html-end
+                comment 0 (length comment))
+               (length comment))))
+  (let ((tag "<a title='>'>tail"))
+    (should (= (jaunder--pull-media-markdown-inline-html-end
+                tag 0 (length tag))
+               13)))
+  (let ((tag "<a title='unterminated"))
+    (should (= (jaunder--pull-media-markdown-inline-html-end
+                tag 0 (length tag))
+               (length tag))))
   (let ((table (make-hash-table :test #'equal))
         (destinations (make-hash-table :test #'equal)))
     (should-not
@@ -881,6 +893,15 @@
                     "markdown" (format "[`unclosed](%s)" url))
                    (format "[`unclosed](local-media/%s/safe.png)"
                            jaunder-pull-media-test--hash))))
+  (let ((url (jaunder-pull-media-test--url "safe.png")))
+    (should (equal (jaunder-pull-media-test--rewrite
+                    "markdown" (format "`code` [ok](%s)" url))
+                   (format "`code` [ok](local-media/%s/safe.png)"
+                           jaunder-pull-media-test--hash)))
+    (should (equal (jaunder-pull-media-test--rewrite
+                    "markdown" (format "`code [ok](%s)" url))
+                   (format "`code [ok](local-media/%s/safe.png)"
+                           jaunder-pull-media-test--hash))))
   (should (equal (jaunder-pull-media-test--rewrite "markdown" "[unclosed")
                  "[unclosed"))
   (let* ((url (jaunder-pull-media-test--url "safe.png"))
@@ -889,12 +910,15 @@
                    body))))
 
 (ert-deftest jaunder-pull-media-html-scanner-covers-lexical-boundaries ()
-  "The HTML lexer handles incomplete comments, literal tags, attributes, and raw text."
+  "The HTML lexer distinguishes terminated and unterminated lexical tokens."
   (should-not (jaunder--pull-media-html-attribute-spans "plain text"))
   (should-not (jaunder--pull-media-html-attribute-spans "<!-- unfinished"))
   (should-not (jaunder--pull-media-html-attribute-spans "<1 ignored>"))
-  (should-not (jaunder--pull-media-html-attribute-spans "<!ignored>"))
-  (should-not (jaunder--pull-media-html-attribute-spans "</ignored>"))
+  (should (equal (jaunder--pull-media-html-attribute-spans
+                  "<!ignored><img src=x>")
+                 '(("src" 19 20))))
+  (should-not (jaunder--pull-media-html-attribute-spans
+               "<!ignored <img src=x"))
   (should (equal (jaunder--pull-media-html-attribute-spans "<  img src=x>")
                  '(("src" 11 12))))
   (should (equal (jaunder--pull-media-html-attribute-spans

@@ -570,5 +570,26 @@
                  (should (= renders 2)))
       (delete-directory root t))))
 
+
+(ert-deftest jaunder-reconcile-interactive-uses-default-directory ()
+  "Interactive reconciliation resolves and returns the default root's report."
+  (let* ((root (file-name-as-directory (make-temp-file "jaunder-reconcile-" t)))
+         (default-directory root)
+         (inventory (jaunder--make-inventory))
+         (report (jaunder--make-reconcile-report :root root :rows nil))
+         (jaunder-blogs
+          (list (cons root '(:base-url "https://h" :username "alice")))))
+    (unwind-protect
+        (cl-letf (((symbol-function 'jaunder--inventory-for-root)
+                   (lambda (configured-root)
+                     (should (equal configured-root root))
+                     inventory))
+                  ((symbol-function 'jaunder--reconcile-build-report)
+                   (lambda (&rest _) report))
+                  ((symbol-function 'jaunder--render-reconcile-report)
+                   (lambda (_) (get-buffer-create " *jr-interactive*")))
+                  ((symbol-function 'display-buffer) (lambda (&rest _) nil)))
+                 (should (eq (call-interactively #'jaunder-reconcile) report)))
+      (delete-directory root t))))
 (provide 'jaunder-reconcile-test)
 ;;; jaunder-reconcile-test.el ends here
