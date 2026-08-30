@@ -4,8 +4,9 @@
 
 Production Rust call sites consistently expose the module that owns every
 nonlocal free function or constant. Confirmed candidates use one meaningful
-owner qualifier without import aliases and without changing behavior, public
-APIs, or generated code.
+owner qualifier without import aliases and without changing behavior or generated
+code. The sole reviewed public API rename changes the former AtomPub error path
+to `host::atompub::Error`, with no compatibility alias.
 
 ## Load-bearing decisions
 
@@ -21,7 +22,8 @@ APIs, or generated code.
   they are not flattened or called unqualified.
 - Production imports use no aliases, including `as _`. Name collisions are
   resolved with owner-qualified paths, direct unaliased trait imports, or UFCS.
-  Public re-exports remain when they define an existing API.
+  Public re-exports remain when they define an existing API, except that the
+  reviewed AtomPub error path is renamed to `host::atompub::Error`.
 - A long crate-rooted path is repeated when the same source file calls free
   functions from that owner module at least twice. Import that owner module and
   use one qualifier. A single already-qualified call may retain its longer path
@@ -41,8 +43,8 @@ APIs, or generated code.
   confirmed set.
 - This is a complete production cleanup, not a per-crate partial migration.
   Every confirmed production candidate is migrated in the same change.
-- No new lint, compatibility alias, re-export, or enforcement gate is added.
-  Conformance is proved by retained review evidence plus the existing checks.
+- No new lint, compatibility alias, or enforcement gate is added. Conformance is
+  proved by retained review evidence plus the existing checks.
 
 ## Acceptance
 
@@ -69,7 +71,9 @@ APIs, or generated code.
 
 ## Boundaries
 
-- No runtime behavior, public API, module ownership, or visibility change.
+- No runtime behavior, module ownership, or visibility change. The sole reviewed
+  public API change renames the former AtomPub error path to
+  `host::atompub::Error`, with no compatibility alias.
 - No test or test-support style sweep.
 - No generated-file edits or blind textual rewrite.
 - No new lint policy, allowlist, compatibility layer, or import cleanup outside

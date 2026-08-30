@@ -85,11 +85,11 @@ impl From<StatusCode> for HandlerError {
     }
 }
 
-impl From<host::atompub::AtomError> for HandlerError {
+impl From<host::atompub::Error> for HandlerError {
     /// A document the client sent that `atom_syndication` will not parse is a `400`.
     /// This is the whole read-side mapping: handlers call `body.parse::<Entry>()?`
     /// and land here.
-    fn from(_: host::atompub::AtomError) -> Self {
+    fn from(_: host::atompub::Error) -> Self {
         HandlerError::BadRequest
     }
 }
@@ -198,7 +198,7 @@ mod tests {
 
     #[test]
     fn an_unparseable_document_is_a_bad_request() {
-        let err = host::atompub::AtomError::InvalidStartTag;
+        let err = host::atompub::Error::InvalidStartTag;
         assert_eq!(status(err.into()), StatusCode::BAD_REQUEST);
     }
 
@@ -246,7 +246,7 @@ mod tests {
             StatusCode::INTERNAL_SERVER_ERROR
         );
         assert_eq!(
-            status(host::atompub::AtomError::InvalidStartTag.into()),
+            status(host::atompub::Error::InvalidStartTag.into()),
             StatusCode::BAD_REQUEST
         );
         assert_eq!(
