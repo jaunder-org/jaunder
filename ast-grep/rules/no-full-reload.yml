@@ -1,0 +1,10 @@
+id: no-full-reload
+language: Rust
+severity: error
+message: "Do not navigate with window.location; use leptos_router's use_navigate() instead (see #592)."
+rule:
+  any:
+    - pattern: $LOCATION.location().replace($$$ARGS)
+    - pattern: $LOCATION.location().assign($$$ARGS)
+    - pattern: $LOCATION.location().reload($$$ARGS)
+    - pattern: $LOCATION.location().set_href($$$ARGS)

@@ -1333,6 +1333,7 @@
                     devtoolBin
                     toolchain
                     pkgs.cargo-deny
+                    pkgs.ast-grep
                     leptosfmt
                     pkgs.prettier
                     pkgs.nodejs
@@ -1532,6 +1533,7 @@
             # shell shares those store paths rather than adding cost.
             ciInputs = [
               toolchain
+              pkgs.ast-grep
               pkgs.cachix
               cargo-crap
               pkgs.cargo-deny

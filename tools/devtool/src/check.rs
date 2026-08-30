@@ -22,6 +22,7 @@ pub const ALL: &[&str] = &[
     "prettier",
     "elisp-fmt",
     "tools-fmt",
+    "no-full-reload",
     "byte-compile",
     "tsc",
     "cargo-deny",
@@ -159,8 +160,7 @@ impl CheckSpec {
 
 /// Pure: the command spec for `name` in the given mode. `fix` makes the five
 /// formatters (`fmt`, `leptosfmt`, `prettier`, `elisp-fmt`, `tools-fmt`) mutate in place;
-/// `ert`/`tsc`/`byte-compile` have no autofix and ignore it. Args are verbatim from the
-/// `xtask::steps::static_checks::specs` — this is now their single source of truth.
+/// `ert`/`tsc`/`byte-compile`/`no-full-reload` have no autofix and ignore it.
 fn spec(name: &str, fix: bool) -> Result<CheckSpec> {
     let owned = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     let cargo_check = |workspace, args: &[&str]| {
@@ -227,6 +227,18 @@ fn spec(name: &str, fix: bool) -> Result<CheckSpec> {
         "byte-compile" => CheckSpec::External {
             program: "emacs",
             args: owned(&["--batch", "-Q", "-l", "elisp/scripts/byte-compile.el"]),
+        },
+        "no-full-reload" => CheckSpec::External {
+            program: "ast-grep",
+            args: owned(&[
+                "scan",
+                "--config",
+                "sgconfig.yml",
+                "--filter",
+                "^no-full-reload$",
+                "web/src",
+                "client/src",
+            ]),
         },
         "cargo-deny" => CheckSpec::Cargo(CargoCheck {
             workspace: CargoWorkspace::Product,
@@ -874,6 +886,26 @@ mod tests {
     }
 
     #[test]
+    fn no_full_reload_runs_root_ast_grep_policy_over_browser_roots() {
+        assert_eq!(
+            build_host("no-full-reload", false),
+            BuiltCommand {
+                program: "ast-grep",
+                args: vec![
+                    "scan".into(),
+                    "--config".into(),
+                    "sgconfig.yml".into(),
+                    "--filter".into(),
+                    "^no-full-reload$".into(),
+                    "web/src".into(),
+                    "client/src".into(),
+                ],
+                env: vec![],
+            }
+        );
+    }
+
+    #[test]
     fn unknown_check_errors() {
         assert!(spec("nope", false).is_err());
     }
@@ -898,6 +930,14 @@ mod tests {
                 "web-no-server-clippy",
                 "wasm-clippy",
             ]
+        );
+    }
+
+    #[test]
+    fn inventory_includes_no_full_reload_once() {
+        assert_eq!(
+            ALL.iter().filter(|name| **name == "no-full-reload").count(),
+            1
         );
     }
 

@@ -22,10 +22,9 @@
 //! and the `test` re-exported from `./fixtures`, which opens the `e2e.test` span.
 //! `fixtures.ts` is exempt because it *is* both of them.
 //!
-//! Accepted limitation (as in [`super::no_full_reload_check`]): matching is
-//! per-line, so a call — or an import clause — split across lines by the formatter
-//! could evade it. A guardrail against accidental reintroduction, not a determined
-//! adversary.
+//! Accepted limitation: matching is per-line, so a call — or an import clause — split across
+//! lines by the formatter could evade it. A guardrail against accidental reintroduction, not
+//! against a determined adversary.
 
 use std::path::Path;
 
