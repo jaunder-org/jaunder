@@ -8,7 +8,7 @@ use crate::posts::{
 };
 use crate::{
     InstanceId, PostDialect, PostRecord, PostStore, PublishUpdate, RenderedHtml, TaggingError,
-    UpdatePostError, UpdatePostInput,
+    UpdatePostError, UpdatePostInput, WriteTransaction, sqlite_connection,
 };
 use common::ids::{PostId, TagId, UserId};
 use common::tag::TagLabel;
@@ -38,19 +38,6 @@ pub(crate) fn finish_post_update(
         host::error::ErrorKind::Storage,
         host::error::ErrorClass::Transient,
         "storage.sqlite.post_update.rollback",
-    )
-}
-
-pub(crate) fn finish_post_tags(
-    primary: Result<(), TaggingError>,
-    rollback: Result<(), sqlx::Error>,
-) -> Result<(), TaggingError> {
-    helpers::preserve_after_secondary(
-        primary,
-        rollback,
-        host::error::ErrorKind::Storage,
-        host::error::ErrorClass::Transient,
-        "storage.sqlite.post_tags.rollback",
     )
 }
 
@@ -386,89 +373,58 @@ impl PostDialect for Sqlite {
     }
 
     async fn set_post_tags(
-        pool: &Pool<Sqlite>,
+        transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
         desired: &[TagLabel],
     ) -> Result<(), TaggingError> {
-        // ADR-0021: BEGIN IMMEDIATE takes the write lock up front, so the read
-        // below is not a shared->reserved upgrade — and the whole read-diff-write
-        // is serialized under one acquisition.
-        let mut conn = pool.acquire().await?;
-        sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
-
-        let result: Result<(), TaggingError> = async {
-            let post = sqlx::query_as::<_, (UserId, Option<common::time::UtcInstant>)>(
-                "SELECT user_id, deleted_at FROM posts WHERE post_id = $1",
-            )
+        let connection = sqlite_connection(transaction)?;
+        let post = sqlx::query_as::<_, (UserId, Option<common::time::UtcInstant>)>(
+            "SELECT user_id, deleted_at FROM posts WHERE post_id = $1",
+        )
+        .bind(post_id)
+        .fetch_optional(&mut *connection)
+        .await?;
+        match post {
+            None | Some((_, Some(_))) => return Err(TaggingError::PostNotFound),
+            Some((owner, None)) if owner != user_id => return Err(TaggingError::Unauthorized),
+            Some(_) => {}
+        }
+        let rows = sqlx::query_as::<_, PostTagRow>(posts::SELECT_POST_TAGS)
             .bind(post_id)
-            .fetch_optional(&mut *conn)
+            .fetch_all(&mut *connection)
             .await?;
-            match post {
-                None | Some((_, Some(_))) => return Err(TaggingError::PostNotFound),
-                Some((owner, None)) if owner != user_id => return Err(TaggingError::Unauthorized),
-                Some(_) => {}
-            }
-            let rows = sqlx::query_as::<_, PostTagRow>(posts::SELECT_POST_TAGS)
-                .bind(post_id)
-                .fetch_all(&mut *conn)
+        let existing = posts::post_tags_from_rows(rows);
+        let diff = posts::post_tag_diff(&existing, desired);
+        if diff.to_add.is_empty() && diff.to_remove.is_empty() {
+            return Ok(());
+        }
+        posts::capture_complete_post_revision::<Sqlite>(
+            &mut *connection,
+            post_id,
+            common::time::UtcInstant::now(),
+        )
+        .await?;
+        for label in diff.to_add {
+            let tag_id = sqlx::query_scalar::<_, TagId>(posts::UPSERT_TAG_RETURNING_ID)
+                .bind(label.slug())
+                .fetch_one(&mut *connection)
                 .await?;
-            let existing = posts::post_tags_from_rows(rows);
-            let diff = posts::post_tag_diff(&existing, desired);
-
-            if diff.to_add.is_empty() && diff.to_remove.is_empty() {
-                return Ok(());
-            }
-            posts::capture_complete_post_revision::<Sqlite>(
-                &mut conn,
-                post_id,
-                common::time::UtcInstant::now(),
-            )
-            .await?;
-            for label in diff.to_add {
-                let slug = label.slug();
-                // `fetch_one`, not a read-back: the upsert's no-op `DO UPDATE`
-                // returns the id on the conflict path too, so a no-row result
-                // cannot occur (#883).
-                let tag_id = sqlx::query_scalar::<_, TagId>(posts::UPSERT_TAG_RETURNING_ID)
-                    .bind(&slug)
-                    .fetch_one(&mut *conn)
-                    .await?;
-                sqlx::query(posts::INSERT_POST_TAG)
-                    .bind(post_id)
-                    .bind(tag_id)
-                    .bind(label)
-                    .execute(&mut *conn)
-                    .await?;
-            }
-
-            for slug in diff.to_remove {
-                // rows_affected is deliberately not checked: the slug came from
-                // `existing`, read in this same transaction, so "no row deleted"
-                // is not an error condition.
-                sqlx::query(posts::DELETE_POST_TAG_BY_SLUG)
-                    .bind(post_id)
-                    .bind(slug)
-                    .execute(&mut *conn)
-                    .await?;
-            }
-            Ok(())
+            sqlx::query(posts::INSERT_POST_TAG)
+                .bind(post_id)
+                .bind(tag_id)
+                .bind(label)
+                .execute(&mut *connection)
+                .await?;
         }
-        .await;
-
-        match result {
-            Ok(()) => {
-                sqlx::query("COMMIT").execute(&mut *conn).await?;
-                Ok(())
-            }
-            Err(error) => finish_post_tags(
-                Err(error),
-                sqlx::query("ROLLBACK")
-                    .execute(&mut *conn)
-                    .await
-                    .map(|_| ()),
-            ),
+        for slug in diff.to_remove {
+            sqlx::query(posts::DELETE_POST_TAG_BY_SLUG)
+                .bind(post_id)
+                .bind(slug)
+                .execute(&mut *connection)
+                .await?;
         }
+        Ok(())
     }
 
     async fn apply_post_media_reference_backfill(
@@ -576,33 +532,6 @@ mod tests {
     use crate::test_support::{Backend, CloseablePool, SeedRawPost, SeedUser, sqlite_only};
     use rstest::*;
     use rstest_reuse::*;
-
-    #[test]
-    fn continuation_reporting_rollback_failures_preserve_post_domain_errors_and_report_once() {
-        let (update, trace) = crate::helpers::swallowed_test::capture(|| {
-            finish_post_update(
-                Err(UpdatePostError::Unauthorized),
-                Err(sqlx::Error::PoolClosed),
-            )
-        });
-        assert!(matches!(update, Err(UpdatePostError::Unauthorized)));
-        crate::helpers::swallowed_test::assert_one_report(
-            &trace,
-            "storage.sqlite.post_update.rollback",
-        );
-
-        let (tagging, trace) = crate::helpers::swallowed_test::capture(|| {
-            finish_post_tags(
-                Err(TaggingError::PostNotFound),
-                Err(sqlx::Error::PoolClosed),
-            )
-        });
-        assert!(matches!(tagging, Err(TaggingError::PostNotFound)));
-        crate::helpers::swallowed_test::assert_one_report(
-            &trace,
-            "storage.sqlite.post_tags.rollback",
-        );
-    }
 
     // reason: SQLite's immediate writer transaction is the dialect-specific snapshot guard.
     #[apply(sqlite_only)]

@@ -513,11 +513,15 @@ async fn soft_delete_then_operations(#[case] backend: Backend) {
 
     let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
-    state
-        .posts
-        .set_post_tags(post_id, user, &["delete-tag".parse::<TagLabel>().unwrap()])
-        .await
-        .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post_id,
+        user,
+        &["delete-tag".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .expect("set_post_tags failed");
 
     state
         .posts

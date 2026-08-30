@@ -440,6 +440,44 @@ pub struct TestEnv {
     pub state: Arc<AppState>,
     pub base: TestBase,
 }
+/// Reconciles post tags through a scope and requires a confirmed setup write.
+///
+/// Fixture setup needs a durable row before its assertions run, so an
+/// unacknowledged commit is not usable as a successful setup result.
+///
+/// # Errors
+///
+/// Returns the scope's begin or tagging error when the setup write fails before
+/// commit.
+///
+/// # Panics
+///
+/// Panics when commit acknowledgement is indeterminate because fixture setup
+/// requires a confirmed durable write.
+pub async fn set_post_tags_confirmed(
+    write_scope: &crate::WriteScope,
+    posts: Arc<dyn crate::PostStorage>,
+    post_id: PostId,
+    user_id: UserId,
+    desired: &[TagLabel],
+) -> Result<(), crate::WriteScopeError<crate::TaggingError>> {
+    let desired = desired.to_vec();
+    let outcome = write_scope
+        .run(|transaction| {
+            Box::pin(async move {
+                posts
+                    .set_post_tags(transaction, post_id, user_id, &desired)
+                    .await
+            })
+        })
+        .await?;
+    match outcome {
+        crate::MutationOutcome::Confirmed(()) => Ok(()),
+        crate::MutationOutcome::CommitIndeterminate(()) => {
+            panic!("tag fixture setup requires a confirmed commit")
+        }
+    }
+}
 
 /// Owns a test's temp dir and, on Postgres, a [`PostgresDbGuard`] that drops the
 /// per-test database on teardown so the ephemeral cluster's data dir does not

@@ -335,6 +335,20 @@ Details in the testing section.
   exists in `storage`, and every non-serve CLI command still constructs the full
   `AppState` via `open_existing_database` (`server/src/commands.rs`).
 
+- **Structural write scopes and mutation outcomes.** The approved direction is a
+  factory-minted, backend-erased `WriteScope`, injected separately beside the
+  exact storage traits. Its explicit `run` boundary supplies a sealed mutable
+  write capability rather than storage lookup or arbitrary SQL; audited
+  application mutations will require that capability. Callback failure is
+  rollback-confirmed, whereas an unsuccessful commit acknowledgement is
+  commit-indeterminate. Typed `MutationOutcome<T>` will preserve that
+  distinction through server responses and client revalidation, and the owning
+  scope span will record the bounded outcome. SQLite scopes will retain
+  `BEGIN IMMEDIATE`, PostgreSQL operations their required row locks, and both
+  backends their rollback-on-drop behaviour. The post-tag proving slice is the
+  first implementation; the remaining mutation cutovers are not yet built
+  ([structural write scopes and mutation outcomes](adr/drafts/structural-write-scopes-and-mutation-outcomes.md)).
+
 ## Content model
 
 A post stores its **source**: a `PostBody` in an author-chosen `PostFormat`

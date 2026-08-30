@@ -41,6 +41,7 @@ mod sqlite;
 mod subscriptions;
 mod user_config;
 mod users;
+mod write_scope;
 
 // Both-backend test harness (ADR-0033): available to `storage`'s own tests via
 // `cfg(test)` and to external test crates (`server`) via the `test-support`
@@ -90,3 +91,4 @@ pub use sqlite::{
 pub use subscriptions::*;
 pub use user_config::*;
 pub use users::*;
+pub use write_scope::*;

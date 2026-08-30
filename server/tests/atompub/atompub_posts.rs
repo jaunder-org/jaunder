@@ -724,15 +724,15 @@ async fn update_removes_categories_not_in_new_entry(#[case] backend: Backend) {
 
     let post = session.seed_post().seed(&state).await;
 
-    state
-        .posts
-        .set_post_tags(
-            post.post_id,
-            session.user_id,
-            &["original-tag".parse::<TagLabel>().unwrap()],
-        )
-        .await
-        .unwrap();
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post.post_id,
+        session.user_id,
+        &["original-tag".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .unwrap();
 
     let app = make_app(&state, &base);
 
@@ -1489,15 +1489,15 @@ async fn update_with_over_cap_categories_is_rejected(#[case] backend: Backend) {
     let session = create_user_and_session(&state).await;
     let post = session.seed_post().seed(&state).await;
 
-    state
-        .posts
-        .set_post_tags(
-            post.post_id,
-            session.user_id,
-            &["original-tag".parse::<TagLabel>().unwrap()],
-        )
-        .await
-        .unwrap();
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post.post_id,
+        session.user_id,
+        &["original-tag".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .unwrap();
 
     let app = make_app(&state, &base);
 

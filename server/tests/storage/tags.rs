@@ -42,19 +42,19 @@ async fn multiple_tags_on_single_post(#[case] backend: Backend) {
 
     let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
-    state
-        .posts
-        .set_post_tags(
-            post_id,
-            user,
-            &[
-                "rust".parse::<TagLabel>().unwrap(),
-                "performance".parse::<TagLabel>().unwrap(),
-                "systems-programming".parse::<TagLabel>().unwrap(),
-            ],
-        )
-        .await
-        .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post_id,
+        user,
+        &[
+            "rust".parse::<TagLabel>().unwrap(),
+            "performance".parse::<TagLabel>().unwrap(),
+            "systems-programming".parse::<TagLabel>().unwrap(),
+        ],
+    )
+    .await
+    .expect("set_post_tags failed");
 
     let tags = tags_of(state, post_id).await;
 
@@ -99,24 +99,24 @@ async fn tag_case_preservation_variants(#[case] backend: Backend) {
     let post2 = SeedRawPost::new(user).seed(state).await.post_id;
 
     // Tag with different casings but same canonical form - should map to same slug
-    state
-        .posts
-        .set_post_tags(
-            post1,
-            user,
-            &["Web-Development".parse::<TagLabel>().unwrap()],
-        )
-        .await
-        .expect("set_post_tags post1 failed");
-    state
-        .posts
-        .set_post_tags(
-            post2,
-            user,
-            &["WEB-DEVELOPMENT".parse::<TagLabel>().unwrap()],
-        )
-        .await
-        .expect("set_post_tags post2 failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post1,
+        user,
+        &["Web-Development".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .expect("set_post_tags post1 failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post2,
+        user,
+        &["WEB-DEVELOPMENT".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .expect("set_post_tags post2 failed");
 
     let tags1 = tags_of(state, post1).await;
     let tags2 = tags_of(state, post2).await;
@@ -145,36 +145,36 @@ async fn restating_the_set_without_one_tag_drops_only_that_tag(#[case] backend: 
 
     let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
-    state
-        .posts
-        .set_post_tags(
-            post_id,
-            user,
-            &[
-                "tag-a".parse::<TagLabel>().unwrap(),
-                "tag-b".parse::<TagLabel>().unwrap(),
-                "tag-c".parse::<TagLabel>().unwrap(),
-            ],
-        )
-        .await
-        .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post_id,
+        user,
+        &[
+            "tag-a".parse::<TagLabel>().unwrap(),
+            "tag-b".parse::<TagLabel>().unwrap(),
+            "tag-c".parse::<TagLabel>().unwrap(),
+        ],
+    )
+    .await
+    .expect("set_post_tags failed");
 
     let tags = tags_of(state, post_id).await;
     assert_eq!(tags.len(), 3);
 
     // Dropping one tag is expressed by restating the desired set without it.
-    state
-        .posts
-        .set_post_tags(
-            post_id,
-            user,
-            &[
-                "tag-a".parse::<TagLabel>().unwrap(),
-                "tag-c".parse::<TagLabel>().unwrap(),
-            ],
-        )
-        .await
-        .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post_id,
+        user,
+        &[
+            "tag-a".parse::<TagLabel>().unwrap(),
+            "tag-c".parse::<TagLabel>().unwrap(),
+        ],
+    )
+    .await
+    .expect("set_post_tags failed");
 
     let tags = tags_of(state, post_id).await;
     assert_eq!(tags.len(), 2);
@@ -197,19 +197,19 @@ async fn numeric_tag(#[case] backend: Backend) {
 
     let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
-    state
-        .posts
-        .set_post_tags(
-            post_id,
-            user,
-            &[
-                "python3".parse::<TagLabel>().unwrap(),
-                "rust-2024".parse::<TagLabel>().unwrap(),
-                "0day".parse::<TagLabel>().unwrap(),
-            ],
-        )
-        .await
-        .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post_id,
+        user,
+        &[
+            "python3".parse::<TagLabel>().unwrap(),
+            "rust-2024".parse::<TagLabel>().unwrap(),
+            "0day".parse::<TagLabel>().unwrap(),
+        ],
+    )
+    .await
+    .expect("set_post_tags failed");
 
     let tags = tags_of(state, post_id).await;
 
@@ -242,11 +242,15 @@ async fn many_tags_many_posts(#[case] backend: Backend) {
         let post_id = SeedRawPost::new(user).seed(state).await.post_id;
         post_ids.push(post_id);
 
-        state
-            .posts
-            .set_post_tags(post_id, user, &labels)
-            .await
-            .expect("set_post_tags failed");
+        storage::test_support::set_post_tags_confirmed(
+            &state.write_scope,
+            std::sync::Arc::clone(&state.posts),
+            post_id,
+            user,
+            &labels,
+        )
+        .await
+        .expect("set_post_tags failed");
     }
 
     for post_id in &post_ids {
@@ -274,18 +278,18 @@ async fn tag_all_numeric(#[case] backend: Backend) {
 
     let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
-    state
-        .posts
-        .set_post_tags(
-            post_id,
-            user,
-            &[
-                "2024".parse::<TagLabel>().unwrap(),
-                "42".parse::<TagLabel>().unwrap(),
-            ],
-        )
-        .await
-        .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post_id,
+        user,
+        &[
+            "2024".parse::<TagLabel>().unwrap(),
+            "42".parse::<TagLabel>().unwrap(),
+        ],
+    )
+    .await
+    .expect("set_post_tags failed");
 
     let tags = tags_of(state, post_id).await;
 
@@ -309,19 +313,19 @@ async fn tag_hyphen_boundaries(#[case] backend: Backend) {
     let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
     // Valid: hyphens in the middle and at end
-    state
-        .posts
-        .set_post_tags(
-            post_id,
-            user,
-            &[
-                "web-development".parse::<TagLabel>().unwrap(),
-                "a-b-c".parse::<TagLabel>().unwrap(),
-                "end-".parse::<TagLabel>().unwrap(),
-            ],
-        )
-        .await
-        .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post_id,
+        user,
+        &[
+            "web-development".parse::<TagLabel>().unwrap(),
+            "a-b-c".parse::<TagLabel>().unwrap(),
+            "end-".parse::<TagLabel>().unwrap(),
+        ],
+    )
+    .await
+    .expect("set_post_tags failed");
 
     let tags = tags_of(state, post_id).await;
 
@@ -347,11 +351,15 @@ async fn tag_with_long_display(#[case] backend: Backend) {
     let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
     let long_display = "very-long-technical-term-with-many-hyphens-and-lowercase-letters";
-    state
-        .posts
-        .set_post_tags(post_id, user, &[long_display.parse::<TagLabel>().unwrap()])
-        .await
-        .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post_id,
+        user,
+        &[long_display.parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .expect("set_post_tags failed");
 
     let tags = tags_of(state, post_id).await;
 
@@ -375,25 +383,29 @@ async fn tag_list_ordering(#[case] backend: Backend) {
     let post2 = SeedRawPost::new(user).seed(state).await.post_id;
 
     // Tag in an order that is not the expected slug order.
-    state
-        .posts
-        .set_post_tags(
-            post1,
-            user,
-            &[
-                "zebra".parse::<TagLabel>().unwrap(),
-                "apple".parse::<TagLabel>().unwrap(),
-                "mango".parse::<TagLabel>().unwrap(),
-            ],
-        )
-        .await
-        .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post1,
+        user,
+        &[
+            "zebra".parse::<TagLabel>().unwrap(),
+            "apple".parse::<TagLabel>().unwrap(),
+            "mango".parse::<TagLabel>().unwrap(),
+        ],
+    )
+    .await
+    .expect("set_post_tags failed");
 
-    state
-        .posts
-        .set_post_tags(post2, user, &["mango".parse::<TagLabel>().unwrap()])
-        .await
-        .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post2,
+        user,
+        &["mango".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .expect("set_post_tags failed");
 
     let tags1 = tags_of(state, post1).await;
 
@@ -424,11 +436,15 @@ async fn tags_for_multiple_posts(#[case] backend: Backend) {
     let post2 = SeedRawPost::new(user).seed(state).await.post_id;
 
     // Only post2 is tagged; post1 stays untagged to assert the empty case.
-    state
-        .posts
-        .set_post_tags(post2, user, &["featured".parse::<TagLabel>().unwrap()])
-        .await
-        .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post2,
+        user,
+        &["featured".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .expect("set_post_tags failed");
 
     let tags1 = tags_of(state, post1).await;
     assert_eq!(tags1.len(), 0);
@@ -450,19 +466,19 @@ async fn tag_mixed_alphanumeric(#[case] backend: Backend) {
 
     let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
-    state
-        .posts
-        .set_post_tags(
-            post_id,
-            user,
-            &[
-                "version-2-0-1".parse::<TagLabel>().unwrap(),
-                "HTTP2".parse::<TagLabel>().unwrap(),
-                "3D-Graphics".parse::<TagLabel>().unwrap(),
-            ],
-        )
-        .await
-        .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post_id,
+        user,
+        &[
+            "version-2-0-1".parse::<TagLabel>().unwrap(),
+            "HTTP2".parse::<TagLabel>().unwrap(),
+            "3D-Graphics".parse::<TagLabel>().unwrap(),
+        ],
+    )
+    .await
+    .expect("set_post_tags failed");
 
     let tags = tags_of(state, post_id).await;
 
@@ -485,11 +501,15 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
 
     let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
-    state
-        .posts
-        .set_post_tags(post_id, user, &["test".parse::<TagLabel>().unwrap()])
-        .await
-        .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post_id,
+        user,
+        &["test".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .expect("set_post_tags failed");
 
     let tags_before = tags_of(state, post_id).await;
     assert_eq!(tags_before.len(), 1);
@@ -500,11 +520,15 @@ async fn simple_tag_lifecycle(#[case] backend: Backend) {
     assert_eq!(posts_before.len(), 1);
 
     // An empty desired set clears the post's tags (D11).
-    state
-        .posts
-        .set_post_tags(post_id, user, &[])
-        .await
-        .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post_id,
+        user,
+        &[],
+    )
+    .await
+    .expect("set_post_tags failed");
 
     let tags_after = tags_of(state, post_id).await;
     assert_eq!(tags_after.len(), 0);
@@ -527,11 +551,15 @@ async fn tag_creation_and_retrieval(#[case] backend: Backend) {
 
     let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
-    state
-        .posts
-        .set_post_tags(post_id, user, &["rust".parse::<TagLabel>().unwrap()])
-        .await
-        .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post_id,
+        user,
+        &["rust".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .expect("set_post_tags failed");
 
     let tags = tags_of(state, post_id).await;
 
@@ -553,11 +581,15 @@ async fn tag_normalization(#[case] backend: Backend) {
 
     let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
-    state
-        .posts
-        .set_post_tags(post_id, user, &["Rust-Web".parse::<TagLabel>().unwrap()])
-        .await
-        .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post_id,
+        user,
+        &["Rust-Web".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .expect("set_post_tags failed");
 
     let tags = tags_of(state, post_id).await;
 
@@ -575,19 +607,19 @@ async fn tag_edge_case_formats(#[case] backend: Backend) {
 
     let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
-    state
-        .posts
-        .set_post_tags(
-            post_id,
-            user,
-            &[
-                "123".parse::<TagLabel>().unwrap(),
-                "my-tag-here".parse::<TagLabel>().unwrap(),
-                "MyTag".parse::<TagLabel>().unwrap(),
-            ],
-        )
-        .await
-        .expect("numeric, hyphenated and mixed-case tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post_id,
+        user,
+        &[
+            "123".parse::<TagLabel>().unwrap(),
+            "my-tag-here".parse::<TagLabel>().unwrap(),
+            "MyTag".parse::<TagLabel>().unwrap(),
+        ],
+    )
+    .await
+    .expect("numeric, hyphenated and mixed-case tags failed");
 
     let tags = tags_of(state, post_id).await;
 
@@ -603,15 +635,15 @@ async fn tag_display_preservation(#[case] backend: Backend) {
 
     let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
-    state
-        .posts
-        .set_post_tags(
-            post_id,
-            user,
-            &["MySpecialTag".parse::<TagLabel>().unwrap()],
-        )
-        .await
-        .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post_id,
+        user,
+        &["MySpecialTag".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .expect("set_post_tags failed");
 
     let tags = tags_of(state, post_id).await;
 
@@ -629,36 +661,36 @@ async fn reconciling_to_a_smaller_set_preserves_the_surviving_tags(#[case] backe
 
     let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
-    state
-        .posts
-        .set_post_tags(
-            post_id,
-            user,
-            &[
-                "tag1".parse::<TagLabel>().unwrap(),
-                "tag2".parse::<TagLabel>().unwrap(),
-                "tag3".parse::<TagLabel>().unwrap(),
-            ],
-        )
-        .await
-        .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post_id,
+        user,
+        &[
+            "tag1".parse::<TagLabel>().unwrap(),
+            "tag2".parse::<TagLabel>().unwrap(),
+            "tag3".parse::<TagLabel>().unwrap(),
+        ],
+    )
+    .await
+    .expect("set_post_tags failed");
 
     let tags = tags_of(state, post_id).await;
     assert_eq!(tags.len(), 3);
 
     // Restating the set without tag2 drops it and leaves the others in place.
-    state
-        .posts
-        .set_post_tags(
-            post_id,
-            user,
-            &[
-                "tag1".parse::<TagLabel>().unwrap(),
-                "tag3".parse::<TagLabel>().unwrap(),
-            ],
-        )
-        .await
-        .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post_id,
+        user,
+        &[
+            "tag1".parse::<TagLabel>().unwrap(),
+            "tag3".parse::<TagLabel>().unwrap(),
+        ],
+    )
+    .await
+    .expect("set_post_tags failed");
 
     let tags = tags_of(state, post_id).await;
     assert_eq!(tags.len(), 2);
@@ -685,11 +717,15 @@ async fn list_tags_returns_alphabetical_with_prefix(#[case] backend: Backend) {
         .iter()
         .map(|display| display.parse::<TagLabel>().unwrap())
         .collect();
-    state
-        .posts
-        .set_post_tags(post, user, &labels)
-        .await
-        .unwrap();
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post,
+        user,
+        &labels,
+    )
+    .await
+    .unwrap();
 
     // No prefix → all tags, alphabetical by slug.
     let all = state
@@ -767,23 +803,27 @@ async fn post_record_carries_tags(#[case] backend: Backend) {
     // p1: two tags, applied in reverse-slug order so the assertion below tests
     // ordering rather than coinciding with insertion order (#772);
     // p2: one tag; p3: none.
-    state
-        .posts
-        .set_post_tags(
-            p1,
-            user,
-            &[
-                "web".parse::<TagLabel>().unwrap(),
-                "Rust".parse::<TagLabel>().unwrap(),
-            ],
-        )
-        .await
-        .unwrap();
-    state
-        .posts
-        .set_post_tags(p2, user, &["performance".parse::<TagLabel>().unwrap()])
-        .await
-        .unwrap();
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        p1,
+        user,
+        &[
+            "web".parse::<TagLabel>().unwrap(),
+            "Rust".parse::<TagLabel>().unwrap(),
+        ],
+    )
+    .await
+    .unwrap();
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        p2,
+        user,
+        &["performance".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .unwrap();
 
     // Each loaded post carries its own tags from the same query that loaded
     // the rest of the row — no separate batch call.

@@ -14,7 +14,7 @@ use super::{
 };
 use crate::backup::CatalogTableName;
 use crate::sql::Exists;
-use crate::{instance_identity, posts};
+use crate::{WriteScope, instance_identity, posts};
 
 fn make_postgres_app_state(pool: PgPool) -> Arc<crate::AppState> {
     Arc::new(crate::AppState {
@@ -34,7 +34,8 @@ fn make_postgres_app_state(pool: PgPool) -> Arc<crate::AppState> {
         media: Arc::new(PostgresMediaStorage::new(pool.clone())),
         user_config: Arc::new(PostgresUserConfigStorage::new(pool.clone())),
         feed_cache: Arc::new(PostgresFeedCacheStorage::new(pool.clone())),
-        feed_events: Arc::new(PostgresFeedEventStorage::new(pool)),
+        feed_events: Arc::new(PostgresFeedEventStorage::new(pool.clone())),
+        write_scope: WriteScope::postgres(pool),
     })
 }
 

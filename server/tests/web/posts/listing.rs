@@ -658,18 +658,18 @@ async fn list_user_posts_carries_tags_per_post(#[case] backend: Backend) {
     // through).
     // Applied in reverse-slug order so the slug assertion below tests ordering
     // (#772) rather than coinciding with insertion order.
-    state
-        .posts
-        .set_post_tags(
-            created.post_id,
-            session.user_id,
-            &[
-                "web".parse::<TagLabel>().unwrap(),
-                "Rust".parse::<TagLabel>().unwrap(),
-            ],
-        )
-        .await
-        .unwrap();
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        created.post_id,
+        session.user_id,
+        &[
+            "web".parse::<TagLabel>().unwrap(),
+            "Rust".parse::<TagLabel>().unwrap(),
+        ],
+    )
+    .await
+    .unwrap();
 
     let (status, body) = list_user_posts(&state, &session.username, None, 50, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK, "list body: {body}");

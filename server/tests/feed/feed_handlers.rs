@@ -58,6 +58,7 @@ fn with_feed_cache(
         user_config: state.user_config.clone(),
         feed_cache,
         feed_events: state.feed_events.clone(),
+        write_scope: state.write_scope.clone(),
     })
 }
 

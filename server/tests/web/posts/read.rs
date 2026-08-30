@@ -115,15 +115,15 @@ async fn get_post_carries_tags(#[case] backend: Backend) {
     assert_eq!(status, StatusCode::OK, "create body: {body}");
     let created: SavedPost = serde_json::from_str(&body).unwrap();
 
-    state
-        .posts
-        .set_post_tags(
-            created.post_id,
-            session.user_id,
-            &["Performance".parse::<TagLabel>().unwrap()],
-        )
-        .await
-        .unwrap();
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        created.post_id,
+        session.user_id,
+        &["Performance".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .unwrap();
 
     let published_at = state
         .posts

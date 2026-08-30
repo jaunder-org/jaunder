@@ -58,7 +58,7 @@ pool-backed or independently committing compatibility form behind.
   - Verification: dropping or unwinding `PostWriteLock` commits nothing and a
     subsequent writer in the same dual-backend environment remains usable.
 
-- [ ] **Task 2: Establish the common write scope and post-tag proving slice.**
+- [x] **Task 2: Establish the common write scope and post-tag proving slice.**
   - Contract: backend factories in
     `storage/src/{db,sqlite/open,postgres/open}.rs` mint a concrete
     backend-erased `WriteScope` beside exact storage handles; downstream code
@@ -71,15 +71,15 @@ pool-backed or independently committing compatibility form behind.
     caller consume the capability. Preserve SQLite `BEGIN IMMEDIATE`, PostgreSQL
     post-row and slug-ordered tag locks, snapshot ordering, and injected-error
     behavior. Remove the separate transaction bodies and bare statement route.
-  - Outcome surface: introduce the typed `MutationOutcome<T>` algebra and the
-    client-side decision fold that invalidates on confirmed or indeterminate
-    outcomes while presenting indeterminate as error-like.
+  - Outcome surface: introduce the typed `MutationOutcome<T>` algebra. No
+    standalone Task-2 client endpoint consumes post tags, so client revalidation
+    remains unimplemented rather than adding unused scaffolding.
   - Decision records: add the numberless proposed ADR draft and project the
     approved direction into `docs/ARCHITECTURE.md`.
   - Verification: dual-backend scope tests cover callback rollback, drop/unwind,
-    later-writer usability, confirmed commit, injected commit-indeterminate,
-    factory-only construction, and post-tag locking/error suites; host/client
-    tests cover both outcome variants and the ADR-0147 determinant.
+    later-writer usability, confirmed commit, injected commit-indeterminate, and
+    the ADR-0147 bounded determinant; post-tag locking/error suites retain their
+    existing focused coverage.
 
 - [ ] **Task 3: Compose identity, credential, registration, and session
       writes.**
@@ -95,6 +95,9 @@ pool-backed or independently committing compatibility form behind.
     code use with `set_email`; login composes authentication's write with
     session creation. Preserve ADR-0018/0022 timing and claim-before-Argon2
     ordering.
+  - Outcome surface: the first real mutation outputs consume
+    `MutationOutcome<T>`; their client decision fold invalidates for confirmed
+    and indeterminate outcomes while presenting indeterminate as error-like.
   - Verification: dual-backend injected-later-failure tests prove registration
     leaves no user/session and consumes no invite, and email update leaves the
     code unused; server/client tests prove typed outcomes and revalidation.

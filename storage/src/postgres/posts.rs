@@ -8,7 +8,7 @@ use crate::posts::{
 };
 use crate::{
     InstanceId, PostDialect, PostRecord, PostStore, PublishUpdate, RenderedHtml, TaggingError,
-    UpdatePostError, UpdatePostInput,
+    UpdatePostError, UpdatePostInput, WriteTransaction, postgres_connection,
 };
 use common::ids::{PostId, TagId, UserId};
 use common::tag::TagLabel;
@@ -60,26 +60,13 @@ async fn locked_update_expectation_error(
     ))
 }
 
-pub(crate) fn finish_post_tags_not_found(
-    primary: Result<(), TaggingError>,
-    rollback: Result<(), sqlx::Error>,
-) -> Result<(), TaggingError> {
-    helpers::preserve_after_secondary(
-        primary,
-        rollback,
-        host::error::ErrorKind::Storage,
-        host::error::ErrorClass::Transient,
-        "storage.postgres.post_tags.rollback_not_found",
-    )
-}
-
 /// Postgres-backed post storage.
 pub type PostgresPostStorage = PostStore<Postgres>;
 
 /// Loads the exact current-subject media identities whose revision copies must
 /// serialize with media deletion and reclamation (ADR-0154).
 async fn load_current_post_media_lock_set(
-    tx: &mut sqlx::Transaction<'_, Postgres>,
+    connection: &mut sqlx::PgConnection,
     post_id: PostId,
 ) -> Result<std::collections::BTreeSet<common::media::MediaRef>, sqlx::Error> {
     Ok(sqlx::query_as::<
@@ -94,7 +81,7 @@ async fn load_current_post_media_lock_set(
          WHERE post_id = $1 AND subject_kind = 'current' AND revision_id = 0",
     )
     .bind(post_id)
-    .fetch_all(&mut **tx)
+    .fetch_all(connection)
     .await?
     .into_iter()
     .map(|(source, sha256, filename)| common::media::MediaRef {
@@ -112,7 +99,7 @@ async fn apply_lifecycle_change(
     delete: bool,
 ) -> sqlx::Result<()> {
     let now = common::time::UtcInstant::now();
-    let media = load_current_post_media_lock_set(tx, post_id).await?;
+    let media = load_current_post_media_lock_set(&mut *tx, post_id).await?;
     <Postgres as PostDialect>::lock_media_references(&mut **tx, &media).await?;
     posts::capture_complete_post_revision::<Postgres>(tx, post_id, now).await?;
     if delete {
@@ -467,83 +454,59 @@ impl PostDialect for Postgres {
     }
 
     async fn set_post_tags(
-        pool: &Pool<Self>,
+        transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
         desired: &[TagLabel],
     ) -> Result<(), TaggingError> {
-        let mut tx = pool.begin().await?;
+        let connection = postgres_connection(transaction)?;
         let post = sqlx::query_as::<_, (UserId, Option<common::time::UtcInstant>)>(
             "SELECT user_id, deleted_at FROM posts WHERE post_id = $1 FOR UPDATE",
         )
         .bind(post_id)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut *connection)
         .await?;
         match post {
-            None | Some((_, Some(_))) => {
-                return finish_post_tags_not_found(
-                    Err(TaggingError::PostNotFound),
-                    tx.rollback().await,
-                );
-            }
-            Some((owner, None)) if owner != user_id => {
-                return finish_post_tags_not_found(
-                    Err(TaggingError::Unauthorized),
-                    tx.rollback().await,
-                );
-            }
+            None | Some((_, Some(_))) => return Err(TaggingError::PostNotFound),
+            Some((owner, None)) if owner != user_id => return Err(TaggingError::Unauthorized),
             Some(_) => {}
         }
         let rows = sqlx::query_as::<_, PostTagRow>(posts::SELECT_POST_TAGS)
             .bind(post_id)
-            .fetch_all(&mut *tx)
+            .fetch_all(&mut *connection)
             .await?;
         let existing = posts::post_tags_from_rows(rows);
         let diff = posts::post_tag_diff(&existing, desired);
         if diff.to_add.is_empty() && diff.to_remove.is_empty() {
-            tx.commit().await?;
             return Ok(());
         }
-
-        // A tag-only revision copies the current media rows too. Take their
-        // shared locks before the copy so media reclamation cannot interleave.
-        let media = load_current_post_media_lock_set(&mut tx, post_id).await?;
-        Self::lock_media_references(&mut *tx, &media).await?;
+        let media = load_current_post_media_lock_set(&mut *connection, post_id).await?;
+        <Postgres as PostDialect>::lock_media_references(&mut *connection, &media).await?;
         posts::capture_complete_post_revision::<Postgres>(
-            &mut *tx,
+            &mut *connection,
             post_id,
             common::time::UtcInstant::now(),
         )
         .await?;
         for label in diff.to_add {
-            let slug = label.slug();
-            // `fetch_one`, not a read-back: the upsert's no-op `DO UPDATE`
-            // returns the id on the conflict path too, so a no-row result
-            // cannot occur (#883).
             let tag_id = sqlx::query_scalar::<_, TagId>(posts::UPSERT_TAG_RETURNING_ID)
-                .bind(&slug)
-                .fetch_one(&mut *tx)
+                .bind(label.slug())
+                .fetch_one(&mut *connection)
                 .await?;
             sqlx::query(posts::INSERT_POST_TAG)
                 .bind(post_id)
                 .bind(tag_id)
                 .bind(label)
-                .execute(&mut *tx)
+                .execute(&mut *connection)
                 .await?;
         }
-
         for slug in diff.to_remove {
-            // rows_affected is deliberately not checked: the slug came from
-            // `existing`, read in this same transaction, so "no row deleted" is
-            // not an error condition.
             sqlx::query(posts::DELETE_POST_TAG_BY_SLUG)
                 .bind(post_id)
                 .bind(slug)
-                .execute(&mut *tx)
+                .execute(&mut *connection)
                 .await?;
         }
-
-        tx.commit().await?;
         Ok(())
     }
 
@@ -672,17 +635,5 @@ mod tests {
                 "storage.postgres.post_update.rollback_domain_rejection",
             );
         }
-
-        let (result, trace) = crate::helpers::swallowed_test::capture(|| {
-            finish_post_tags_not_found(
-                Err(TaggingError::PostNotFound),
-                Err(sqlx::Error::PoolClosed),
-            )
-        });
-        assert!(matches!(result, Err(TaggingError::PostNotFound)));
-        crate::helpers::swallowed_test::assert_one_report(
-            &trace,
-            "storage.postgres.post_tags.rollback_not_found",
-        );
     }
 }

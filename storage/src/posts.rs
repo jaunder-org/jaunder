@@ -11,6 +11,7 @@ use crate::InstanceId;
 use crate::backend::Backend;
 use crate::helpers::SerializedPostTags;
 use crate::sql::Exists;
+use crate::write_scope::WriteTransaction;
 use common::etag::ETag;
 use common::idempotency_key::IdempotencyKey;
 use common::ids::{AudienceId, ChannelId, PostId, RevisionId, TagId, UserId};
@@ -1306,6 +1307,7 @@ pub trait PostStorage: Send + Sync {
     /// own it.
     async fn set_post_tags(
         &self,
+        transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
         desired: &[TagLabel],
@@ -1500,12 +1502,11 @@ pub trait PostDialect: Backend {
     /// (ADR-0019, ADR-0021). The statements it issues are shared, not
     /// per-dialect (#876).
     async fn set_post_tags(
-        pool: &Pool<Self>,
+        transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
         desired: &[TagLabel],
     ) -> Result<(), TaggingError>;
-
     /// Atomically installs references re-derived outside the writer lock.
     ///
     /// The backend rejects the batch if an authoritative HTML snapshot changed after
@@ -2797,16 +2798,17 @@ where
 
     #[tracing::instrument(
         name = "storage.posts.set_post_tags",
-        skip(self, desired),
+        skip(self, transaction, desired),
         fields(db.system = DB::DB_SYSTEM, tag_count = desired.len())
     )]
     async fn set_post_tags(
         &self,
+        transaction: &mut WriteTransaction,
         post_id: PostId,
         user_id: UserId,
         desired: &[TagLabel],
     ) -> Result<(), TaggingError> {
-        DB::set_post_tags(&self.pool, post_id, user_id, desired).await
+        DB::set_post_tags(transaction, post_id, user_id, desired).await
     }
 
     #[tracing::instrument(
@@ -4282,7 +4284,7 @@ mod tests {
         Backend, CloseablePool, MEDIA_TEST_SHA256, SeedRawPost, SeedUser, TestEnv, UpdateRawPost,
         backends, create_draft_via_service, create_post_via_service, fetch_post_media, fp,
         media_ref_for, media_row_exists, media_url_for, seed_media, seed_users,
-        update_post_body_via_service,
+        set_post_tags_confirmed, update_post_body_via_service,
     };
     use chrono::Utc;
     use common::test_support::{
@@ -4924,33 +4926,40 @@ mod tests {
         let post = SeedRawPost::new(user).seed(&env.state).await.post_id;
         let posts = &*env.state.posts;
 
-        posts
-            .set_post_tags(
-                post,
-                user,
-                &[parse_tag_label("rust"), parse_tag_label("web")],
-            )
-            .await
-            .expect("set initial tags");
+        set_post_tags_confirmed(
+            &env.state.write_scope,
+            Arc::clone(&env.state.posts),
+            post,
+            user,
+            &[parse_tag_label("rust"), parse_tag_label("web")],
+        )
+        .await
+        .expect("set initial tags");
         assert_eq!(slugs_of(posts, post).await, vec!["rust", "web"]);
 
         // Reconcile: "web" drops, "nix" arrives, "rust" stays.
-        posts
-            .set_post_tags(
-                post,
-                user,
-                &[parse_tag_label("rust"), parse_tag_label("nix")],
-            )
-            .await
-            .expect("reconcile tags");
+        set_post_tags_confirmed(
+            &env.state.write_scope,
+            Arc::clone(&env.state.posts),
+            post,
+            user,
+            &[parse_tag_label("rust"), parse_tag_label("nix")],
+        )
+        .await
+        .expect("reconcile tags");
         assert_eq!(slugs_of(posts, post).await, vec!["nix", "rust"]);
 
         // An empty desired set clears; it is deliberately NOT a no-op, unlike
         // `enqueue_many`'s empty-input early return (#771).
-        posts
-            .set_post_tags(post, user, &[])
-            .await
-            .expect("clear tags");
+        set_post_tags_confirmed(
+            &env.state.write_scope,
+            Arc::clone(&env.state.posts),
+            post,
+            user,
+            &[],
+        )
+        .await
+        .expect("clear tags");
         assert!(slugs_of(posts, post).await.is_empty());
     }
 
@@ -4962,16 +4971,26 @@ mod tests {
         let post = SeedRawPost::new(user).seed(&env.state).await.post_id;
         let posts = &*env.state.posts;
 
-        posts
-            .set_post_tags(post, user, &[parse_tag_label("Rust")])
-            .await
-            .expect("initial casing");
+        set_post_tags_confirmed(
+            &env.state.write_scope,
+            Arc::clone(&env.state.posts),
+            post,
+            user,
+            &[parse_tag_label("Rust")],
+        )
+        .await
+        .expect("initial casing");
         // Same slug, different casing: the stored row is left untouched, so the
         // original casing survives.
-        posts
-            .set_post_tags(post, user, &[parse_tag_label("rUsT")])
-            .await
-            .expect("re-apply with new casing");
+        set_post_tags_confirmed(
+            &env.state.write_scope,
+            Arc::clone(&env.state.posts),
+            post,
+            user,
+            &[parse_tag_label("rUsT")],
+        )
+        .await
+        .expect("re-apply with new casing");
 
         let record = posts
             .get_post_by_id(post, &ViewerIdentity::Anonymous)
@@ -4991,27 +5010,38 @@ mod tests {
         let posts = &*env.state.posts;
 
         let desired = [parse_tag_label("rust"), parse_tag_label("web")];
-        posts
-            .set_post_tags(post, user, &desired)
-            .await
-            .expect("first");
-        posts
-            .set_post_tags(post, user, &desired)
-            .await
-            .expect("second");
+        set_post_tags_confirmed(
+            &env.state.write_scope,
+            Arc::clone(&env.state.posts),
+            post,
+            user,
+            &desired,
+        )
+        .await
+        .expect("first");
+        set_post_tags_confirmed(
+            &env.state.write_scope,
+            Arc::clone(&env.state.posts),
+            post,
+            user,
+            &desired,
+        )
+        .await
+        .expect("second");
         assert_eq!(slugs_of(posts, post).await, vec!["rust", "web"]);
 
         // `post_tag_diff` does not dedupe its input, so two labels sharing a slug
         // both reach the insert; the conflict-tolerant insert absorbs the second
         // and the first occurrence's casing wins.
-        posts
-            .set_post_tags(
-                post,
-                user,
-                &[parse_tag_label("Nix"), parse_tag_label("nix")],
-            )
-            .await
-            .expect("duplicate slug in desired");
+        set_post_tags_confirmed(
+            &env.state.write_scope,
+            Arc::clone(&env.state.posts),
+            post,
+            user,
+            &[parse_tag_label("Nix"), parse_tag_label("nix")],
+        )
+        .await
+        .expect("duplicate slug in desired");
         let record = posts
             .get_post_by_id(post, &ViewerIdentity::Anonymous)
             .await
@@ -5030,27 +5060,51 @@ mod tests {
         let post = SeedRawPost::new(owner).seed(&env.state).await.post_id;
         let posts = &*env.state.posts;
 
-        let missing = posts
-            .set_post_tags(PostId::from(999_999), owner, &[parse_tag_label("rust")])
-            .await
-            .expect_err("missing post must be rejected");
-        assert!(matches!(missing, TaggingError::PostNotFound));
+        let missing = set_post_tags_confirmed(
+            &env.state.write_scope,
+            Arc::clone(&env.state.posts),
+            PostId::from(999_999),
+            owner,
+            &[parse_tag_label("rust")],
+        )
+        .await
+        .expect_err("missing post must be rejected");
+        assert!(matches!(
+            missing,
+            crate::WriteScopeError::Operation(TaggingError::PostNotFound)
+        ));
 
-        let unauthorized = posts
-            .set_post_tags(post, other, &[parse_tag_label("rust")])
-            .await
-            .expect_err("another owner must be rejected");
-        assert!(matches!(unauthorized, TaggingError::Unauthorized));
+        let unauthorized = set_post_tags_confirmed(
+            &env.state.write_scope,
+            Arc::clone(&env.state.posts),
+            post,
+            other,
+            &[parse_tag_label("rust")],
+        )
+        .await
+        .expect_err("another owner must be rejected");
+        assert!(matches!(
+            unauthorized,
+            crate::WriteScopeError::Operation(TaggingError::Unauthorized)
+        ));
 
         posts
             .soft_delete_post(post, owner)
             .await
             .expect("soft delete");
-        let deleted = posts
-            .set_post_tags(post, owner, &[parse_tag_label("rust")])
-            .await
-            .expect_err("deleted post must be masked as absent");
-        assert!(matches!(deleted, TaggingError::PostNotFound));
+        let deleted = set_post_tags_confirmed(
+            &env.state.write_scope,
+            Arc::clone(&env.state.posts),
+            post,
+            owner,
+            &[parse_tag_label("rust")],
+        )
+        .await
+        .expect_err("deleted post must be masked as absent");
+        assert!(matches!(
+            deleted,
+            crate::WriteScopeError::Operation(TaggingError::PostNotFound)
+        ));
     }
 
     /// #339: `set_post_tags` must take its write lock **before** snapshotting the
@@ -5067,11 +5121,15 @@ mod tests {
         let user = SeedUser::new().seed(&env.state).await.user_id;
         let post = SeedRawPost::new(user).seed(&env.state).await.post_id;
 
-        env.state
-            .posts
-            .set_post_tags(post, user, &[parse_tag_label("alpha")])
-            .await
-            .expect("seed tags");
+        set_post_tags_confirmed(
+            &env.state.write_scope,
+            Arc::clone(&env.state.posts),
+            post,
+            user,
+            &[parse_tag_label("alpha")],
+        )
+        .await
+        .expect("seed tags");
 
         // The rival writer: holds the post write lock and adds "beta", uncommitted.
         let mut rival = env
@@ -5093,9 +5151,9 @@ mod tests {
         // defaults to: sqlx-sqlite runs each connection on its own OS thread
         // (docs/adr/0126-sqlx-sqlite-busy-handler-threading.md).
         let posts = Arc::clone(&env.state.posts);
+        let write_scope = env.state.write_scope.clone();
         let mut racer = tokio::spawn(async move {
-            posts
-                .set_post_tags(post, user, &[parse_tag_label("gamma")])
+            set_post_tags_confirmed(&write_scope, posts, post, user, &[parse_tag_label("gamma")])
                 .await
         });
 
@@ -5157,11 +5215,15 @@ mod tests {
             Vec::<String>::new()
         );
 
-        env.state
-            .posts
-            .set_post_tags(post, user, &[parse_tag_label("committed")])
-            .await
-            .expect("subsequent writer succeeds");
+        set_post_tags_confirmed(
+            &env.state.write_scope,
+            Arc::clone(&env.state.posts),
+            post,
+            user,
+            &[parse_tag_label("committed")],
+        )
+        .await
+        .expect("subsequent writer succeeds");
         assert_eq!(slugs_of(&*env.state.posts, post).await, vec!["committed"]);
     }
 
@@ -5190,10 +5252,16 @@ mod tests {
             .await
             .expect("take the current media lock");
         let posts = Arc::clone(&env.state.posts);
+        let write_scope = env.state.write_scope.clone();
         let mut tag_update = tokio::spawn(async move {
-            posts
-                .set_post_tags(post, user, &[parse_tag_label("locked")])
-                .await
+            set_post_tags_confirmed(
+                &write_scope,
+                posts,
+                post,
+                user,
+                &[parse_tag_label("locked")],
+            )
+            .await
         });
 
         assert!(
@@ -5238,14 +5306,24 @@ mod tests {
         let second = SeedRawPost::new(user).seed(&env.state).await.post_id;
         let posts = &*env.state.posts;
 
-        posts
-            .set_post_tags(first, user, &[parse_tag_label("rust")])
-            .await
-            .expect("first post takes the insert path");
-        posts
-            .set_post_tags(second, user, &[parse_tag_label("rust")])
-            .await
-            .expect("second post takes the conflict path");
+        set_post_tags_confirmed(
+            &env.state.write_scope,
+            Arc::clone(&env.state.posts),
+            first,
+            user,
+            &[parse_tag_label("rust")],
+        )
+        .await
+        .expect("first post takes the insert path");
+        set_post_tags_confirmed(
+            &env.state.write_scope,
+            Arc::clone(&env.state.posts),
+            second,
+            user,
+            &[parse_tag_label("rust")],
+        )
+        .await
+        .expect("second post takes the conflict path");
 
         assert_eq!(slugs_of(posts, first).await, vec!["rust"]);
         assert_eq!(slugs_of(posts, second).await, vec!["rust"]);
@@ -5257,33 +5335,43 @@ mod tests {
         let env = backend.setup().await;
         let user = SeedUser::new().seed(&env.state).await.user_id;
         let post = SeedRawPost::new(user).seed(&env.state).await.post_id;
-        let posts = &*env.state.posts;
 
         let desired = [parse_tag_label("rust"), parse_tag_label("web")];
-        posts
-            .set_post_tags(post, user, &desired)
-            .await
-            .expect("seed tags");
+        set_post_tags_confirmed(
+            &env.state.write_scope,
+            Arc::clone(&env.state.posts),
+            post,
+            user,
+            &desired,
+        )
+        .await
+        .expect("seed tags");
 
         // Decoy: seeded second, so on SQLite its post_tags rows occupy HIGHER
         // rowids. Without it, `max(rowid)+1` would hand the target's rows their
         // original rowids back after a delete-and-reinsert and this test would
         // pass against the very implementation it exists to reject.
         let decoy = SeedRawPost::new(user).seed(&env.state).await.post_id;
-        posts
-            .set_post_tags(
-                decoy,
-                user,
-                &[parse_tag_label("decoy-a"), parse_tag_label("decoy-b")],
-            )
-            .await
-            .expect("seed decoy");
+        set_post_tags_confirmed(
+            &env.state.write_scope,
+            Arc::clone(&env.state.posts),
+            decoy,
+            user,
+            &[parse_tag_label("decoy-a"), parse_tag_label("decoy-b")],
+        )
+        .await
+        .expect("seed decoy");
 
         let before = physical_row_ids(&env, post).await;
-        posts
-            .set_post_tags(post, user, &desired)
-            .await
-            .expect("re-apply the identical set");
+        set_post_tags_confirmed(
+            &env.state.write_scope,
+            Arc::clone(&env.state.posts),
+            post,
+            user,
+            &desired,
+        )
+        .await
+        .expect("re-apply the identical set");
         let after = physical_row_ids(&env, post).await;
 
         assert_eq!(
@@ -5835,27 +5923,28 @@ mod tests {
         };
         crate::helpers::swallowed_test::assert_one_report(&trace, update_context);
 
-        let tags_primary = env
-            .state
-            .posts
-            .set_post_tags(missing_post, author, &[parse_tag_label("rust")])
+        let posts = Arc::clone(&env.state.posts);
+        let write_scope = env.state.write_scope.clone();
+        let tags_primary = write_scope
+            .run(|transaction| {
+                Box::pin(async move {
+                    posts
+                        .set_post_tags(
+                            transaction,
+                            missing_post,
+                            author,
+                            &[parse_tag_label("rust")],
+                        )
+                        .await
+                })
+            })
             .await;
-        assert!(matches!(&tags_primary, Err(TaggingError::PostNotFound)));
-        let (tags, trace) = crate::helpers::swallowed_test::capture(|| match backend {
-            Backend::Sqlite => {
-                crate::sqlite::posts::finish_post_tags(tags_primary, Err(sqlx::Error::PoolClosed))
-            }
-            Backend::Postgres => crate::postgres::posts::finish_post_tags_not_found(
-                tags_primary,
-                Err(sqlx::Error::PoolClosed),
-            ),
-        });
-        assert!(matches!(tags, Err(TaggingError::PostNotFound)));
-        let tags_context = match backend {
-            Backend::Sqlite => "storage.sqlite.post_tags.rollback",
-            Backend::Postgres => "storage.postgres.post_tags.rollback_not_found",
-        };
-        crate::helpers::swallowed_test::assert_one_report(&trace, tags_context);
+        assert!(matches!(
+            tags_primary,
+            Err(crate::WriteScopeError::Operation(
+                TaggingError::PostNotFound
+            ))
+        ));
     }
 
     #[apply(backends)]
@@ -5894,11 +5983,15 @@ mod tests {
             .seed(&env.state)
             .await
             .post_id;
-        env.state
-            .posts
-            .set_post_tags(post_id, owner, &[parse_tag_label("Rust")])
-            .await
-            .expect("seed tag");
+        set_post_tags_confirmed(
+            &env.state.write_scope,
+            Arc::clone(&env.state.posts),
+            post_id,
+            owner,
+            &[parse_tag_label("Rust")],
+        )
+        .await
+        .expect("seed tag");
         crate::with_closeable_pool!(env.base.pool(), pool, {
             sqlx::query(
                 "UPDATE tags SET tag_slug = $1
@@ -7066,12 +7159,18 @@ mod tests {
             .await
             .unwrap();
 
-        let result = env
-            .state
-            .posts
-            .set_post_tags(post_id, uid, &[parse_tag_label("rust")])
-            .await;
-        assert!(matches!(result, Err(TaggingError::Internal(_))));
+        let result = set_post_tags_confirmed(
+            &env.state.write_scope,
+            Arc::clone(&env.state.posts),
+            post_id,
+            uid,
+            &[parse_tag_label("rust")],
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(crate::WriteScopeError::Operation(TaggingError::Internal(_)))
+        ));
     }
 
     #[apply(backends)]
@@ -7290,10 +7389,15 @@ mod tests {
 
         // Tagging with a case-preserving label stores the canonical slug and the
         // author's casing; both read back intact on either backend.
-        posts
-            .set_post_tags(post_id, user_id, &[parse_tag_label("Rust")])
-            .await
-            .unwrap();
+        set_post_tags_confirmed(
+            &env.state.write_scope,
+            Arc::clone(&env.state.posts),
+            post_id,
+            user_id,
+            &[parse_tag_label("Rust")],
+        )
+        .await
+        .unwrap();
 
         let tags = posts
             .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
@@ -7327,10 +7431,15 @@ mod tests {
             .seed(&env.state)
             .await;
         let post_id = post.post_id;
-        posts
-            .set_post_tags(post_id, user_id, &[parse_tag_label("Rust")])
-            .await
-            .unwrap();
+        set_post_tags_confirmed(
+            &env.state.write_scope,
+            Arc::clone(&env.state.posts),
+            post_id,
+            user_id,
+            &[parse_tag_label("Rust")],
+        )
+        .await
+        .unwrap();
 
         let record = posts
             .get_post_by_id(post_id, &ViewerIdentity::Anonymous)
@@ -7386,10 +7495,15 @@ mod tests {
             .seed(&env.state)
             .await
             .post_id;
-        posts
-            .set_post_tags(post_id, user_id, &[parse_tag_label("Rust")])
-            .await
-            .expect("seed tag");
+        set_post_tags_confirmed(
+            &env.state.write_scope,
+            Arc::clone(&env.state.posts),
+            post_id,
+            user_id,
+            &[parse_tag_label("Rust")],
+        )
+        .await
+        .expect("seed tag");
 
         // The tags aggregate reads `tag_slug` from `tags`. Land a value the `Tag`
         // serde bridge rejects with a raw bind, because a typed bind cannot create it.

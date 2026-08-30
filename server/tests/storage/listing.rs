@@ -315,16 +315,24 @@ async fn list_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backend) {
         common::time::UtcInstant::from(now + Duration::hours(1)),
     )
     .await;
-    state
-        .posts
-        .set_post_tags(live, user_id, &["scheduling".parse::<TagLabel>().unwrap()])
-        .await
-        .unwrap();
-    state
-        .posts
-        .set_post_tags(sched, user_id, &["scheduling".parse::<TagLabel>().unwrap()])
-        .await
-        .unwrap();
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        live,
+        user_id,
+        &["scheduling".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .unwrap();
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        sched,
+        user_id,
+        &["scheduling".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .unwrap();
     let tag_slug: Tag = "scheduling".parse().unwrap();
 
     let at_now = state
@@ -385,16 +393,24 @@ async fn list_user_posts_by_tag_hides_scheduled_until_due(#[case] backend: Backe
         common::time::UtcInstant::from(now + Duration::hours(1)),
     )
     .await;
-    state
-        .posts
-        .set_post_tags(live, user_id, &["scheduling".parse::<TagLabel>().unwrap()])
-        .await
-        .unwrap();
-    state
-        .posts
-        .set_post_tags(sched, user_id, &["scheduling".parse::<TagLabel>().unwrap()])
-        .await
-        .unwrap();
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        live,
+        user_id,
+        &["scheduling".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .unwrap();
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        sched,
+        user_id,
+        &["scheduling".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .unwrap();
     let tag_slug: Tag = "scheduling".parse().unwrap();
 
     let at_now = state
@@ -586,15 +602,15 @@ async fn list_published_in_window_applies_hybrid_rule_across_surfaces(#[case] ba
     assert_eq!(bob_feed[0].user_id, bob_id);
 
     // Add a tag to alice-recent-1 and verify site-tag / user-tag feeds.
-    state
-        .posts
-        .set_post_tags(
-            alice_recent_1.post_id,
-            alice_id,
-            &["rust".parse::<TagLabel>().unwrap()],
-        )
-        .await
-        .unwrap();
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        alice_recent_1.post_id,
+        alice_id,
+        &["rust".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .unwrap();
 
     let tag_site = state
         .posts
@@ -797,15 +813,15 @@ async fn list_posts_gone_live_between_returns_only_window_with_tags(#[case] back
         common::time::UtcInstant::from(after + Duration::minutes(30)),
     )
     .await;
-    state
-        .posts
-        .set_post_tags(
-            inside,
-            alice.user_id,
-            &["scheduling".parse::<TagLabel>().unwrap()],
-        )
-        .await
-        .unwrap();
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        inside,
+        alice.user_id,
+        &["scheduling".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .unwrap();
     // Exactly at the inclusive upper bound: must be returned (untagged).
     seed_post_published_at(
         state,
@@ -887,11 +903,15 @@ async fn feed_urls_needing_catchup_returns_stale_feeds(#[case] backend: Backend)
         common::time::UtcInstant::from(now - Duration::hours(1)),
     )
     .await;
-    state
-        .posts
-        .set_post_tags(post, alice.user_id, &["rust".parse::<TagLabel>().unwrap()])
-        .await
-        .unwrap();
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post,
+        alice.user_id,
+        &["rust".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .unwrap();
 
     let mk_row = |feed_url: &str, generated_at: UtcInstant| {
         FeedCacheRow::new(
@@ -983,15 +1003,15 @@ async fn tag_list_pagination(#[case] backend: Backend) {
         let post_id = SeedRawPost::new(user).seed(state).await.post_id;
         post_ids.push(post_id);
 
-        state
-            .posts
-            .set_post_tags(
-                post_id,
-                user,
-                &["pagination-test".parse::<TagLabel>().unwrap()],
-            )
-            .await
-            .expect("set_post_tags failed");
+        storage::test_support::set_post_tags_confirmed(
+            &state.write_scope,
+            std::sync::Arc::clone(&state.posts),
+            post_id,
+            user,
+            &["pagination-test".parse::<TagLabel>().unwrap()],
+        )
+        .await
+        .expect("set_post_tags failed");
     }
 
     let tag_slug: Tag = "pagination-test".parse().unwrap();
@@ -1023,16 +1043,24 @@ async fn list_user_posts_by_tag_excludes_other_users(#[case] backend: Backend) {
 
     let post2 = SeedRawPost::new(user2).seed(state).await.post_id;
 
-    state
-        .posts
-        .set_post_tags(post1, user1, &["shared-tag".parse::<TagLabel>().unwrap()])
-        .await
-        .expect("tag post1 failed");
-    state
-        .posts
-        .set_post_tags(post2, user2, &["shared-tag".parse::<TagLabel>().unwrap()])
-        .await
-        .expect("tag post2 failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post1,
+        user1,
+        &["shared-tag".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .expect("tag post1 failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post2,
+        user2,
+        &["shared-tag".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .expect("tag post2 failed");
 
     let tag_slug: Tag = "shared-tag".parse().unwrap();
     let user1_posts = anon_user_by_tag(state, user1, &tag_slug, "50").await;
@@ -1118,16 +1146,24 @@ async fn list_posts_by_tag(#[case] backend: Backend) {
 
     let post2 = SeedRawPost::new(user2).seed(state).await.post_id;
 
-    state
-        .posts
-        .set_post_tags(post1, user1, &["javascript".parse::<TagLabel>().unwrap()])
-        .await
-        .expect("set_post_tags failed");
-    state
-        .posts
-        .set_post_tags(post2, user2, &["javascript".parse::<TagLabel>().unwrap()])
-        .await
-        .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post1,
+        user1,
+        &["javascript".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post2,
+        user2,
+        &["javascript".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .expect("set_post_tags failed");
 
     let tag_slug: Tag = "javascript".parse().unwrap();
     let posts = anon_by_tag(state, &tag_slug, "50").await;
@@ -1160,21 +1196,33 @@ async fn list_user_posts_by_tag(#[case] backend: Backend) {
 
     let post3 = SeedRawPost::new(user2).seed(state).await.post_id;
 
-    state
-        .posts
-        .set_post_tags(post1, user1, &["clojure".parse::<TagLabel>().unwrap()])
-        .await
-        .expect("set_post_tags failed");
-    state
-        .posts
-        .set_post_tags(post2, user1, &["clojure".parse::<TagLabel>().unwrap()])
-        .await
-        .expect("set_post_tags failed");
-    state
-        .posts
-        .set_post_tags(post3, user2, &["clojure".parse::<TagLabel>().unwrap()])
-        .await
-        .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post1,
+        user1,
+        &["clojure".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post2,
+        user1,
+        &["clojure".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post3,
+        user2,
+        &["clojure".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .expect("set_post_tags failed");
 
     let tag_slug: Tag = "clojure".parse().unwrap();
     let posts = anon_user_by_tag(state, user1, &tag_slug, "50").await;
@@ -1221,16 +1269,24 @@ async fn soft_deleted_posts_excluded_from_tag_list(#[case] backend: Backend) {
 
     let post2 = SeedRawPost::new(user).seed(state).await.post_id;
 
-    state
-        .posts
-        .set_post_tags(post1, user, &["haskell".parse::<TagLabel>().unwrap()])
-        .await
-        .expect("set_post_tags failed");
-    state
-        .posts
-        .set_post_tags(post2, user, &["haskell".parse::<TagLabel>().unwrap()])
-        .await
-        .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post1,
+        user,
+        &["haskell".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post2,
+        user,
+        &["haskell".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .expect("set_post_tags failed");
 
     state
         .posts
@@ -1264,16 +1320,24 @@ async fn draft_posts_excluded_from_tag_list(#[case] backend: Backend) {
 
     let post2 = SeedRawPost::new(user).seed(state).await.post_id;
 
-    state
-        .posts
-        .set_post_tags(post1, user, &["kotlin".parse::<TagLabel>().unwrap()])
-        .await
-        .expect("set_post_tags failed");
-    state
-        .posts
-        .set_post_tags(post2, user, &["kotlin".parse::<TagLabel>().unwrap()])
-        .await
-        .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post1,
+        user,
+        &["kotlin".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .expect("set_post_tags failed");
+    storage::test_support::set_post_tags_confirmed(
+        &state.write_scope,
+        std::sync::Arc::clone(&state.posts),
+        post2,
+        user,
+        &["kotlin".parse::<TagLabel>().unwrap()],
+    )
+    .await
+    .expect("set_post_tags failed");
 
     let tag_slug: Tag = "kotlin".parse().unwrap();
     let posts = anon_by_tag(state, &tag_slug, "50").await;
@@ -1368,11 +1432,15 @@ async fn list_user_posts_by_tag_cursor(#[case] backend: Backend) {
     for _ in 0..3 {
         let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
-        state
-            .posts
-            .set_post_tags(post_id, user, &["cursor-tag".parse::<TagLabel>().unwrap()])
-            .await
-            .expect("set_post_tags failed");
+        storage::test_support::set_post_tags_confirmed(
+            &state.write_scope,
+            std::sync::Arc::clone(&state.posts),
+            post_id,
+            user,
+            &["cursor-tag".parse::<TagLabel>().unwrap()],
+        )
+        .await
+        .expect("set_post_tags failed");
     }
 
     let tag: Tag = "cursor-tag".parse().unwrap();
@@ -1414,11 +1482,15 @@ async fn list_posts_by_tag_cursor(#[case] backend: Backend) {
     for _ in 0..3 {
         let post_id = SeedRawPost::new(user).seed(state).await.post_id;
 
-        state
-            .posts
-            .set_post_tags(post_id, user, &["global-tag".parse::<TagLabel>().unwrap()])
-            .await
-            .expect("set_post_tags failed");
+        storage::test_support::set_post_tags_confirmed(
+            &state.write_scope,
+            std::sync::Arc::clone(&state.posts),
+            post_id,
+            user,
+            &["global-tag".parse::<TagLabel>().unwrap()],
+        )
+        .await
+        .expect("set_post_tags failed");
     }
 
     let tag: Tag = "global-tag".parse().unwrap();

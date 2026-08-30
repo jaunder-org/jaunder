@@ -12,11 +12,10 @@ use super::{
     SqlitePostStorage, SqliteSessionStorage, SqliteSiteConfigStorage, SqliteSubscriptionStorage,
     SqliteUserConfigStorage, SqliteUserStorage,
 };
-use crate::AppState;
 use crate::backup::CatalogTableName;
 use crate::db::StorageRuntimeConfig;
 use crate::sql::Exists;
-use crate::{instance_identity, posts};
+use crate::{AppState, WriteScope, instance_identity, posts};
 
 fn make_sqlite_app_state(pool: SqlitePool) -> Arc<AppState> {
     Arc::new(AppState {
@@ -36,7 +35,8 @@ fn make_sqlite_app_state(pool: SqlitePool) -> Arc<AppState> {
         media: Arc::new(SqliteMediaStorage::new(pool.clone())),
         user_config: Arc::new(SqliteUserConfigStorage::new(pool.clone())),
         feed_cache: Arc::new(SqliteFeedCacheStorage::new(pool.clone())),
-        feed_events: Arc::new(SqliteFeedEventStorage::new(pool)),
+        feed_events: Arc::new(SqliteFeedEventStorage::new(pool.clone())),
+        write_scope: WriteScope::sqlite(pool),
     })
 }
 

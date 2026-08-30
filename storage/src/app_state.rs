@@ -5,7 +5,7 @@ use std::sync::Arc;
 use super::{
     AtomicOps, AudienceStorage, EmailVerificationStorage, FeedCacheStorage, FeedEventStorage,
     InviteStorage, MediaStorage, PasswordResetStorage, PostStorage, SessionStorage,
-    SiteConfigStorage, SubscriptionStorage, UserConfigStorage, UserStorage,
+    SiteConfigStorage, SubscriptionStorage, UserConfigStorage, UserStorage, WriteScope,
 };
 
 /// Bundle of every storage handle the application needs.
@@ -54,6 +54,8 @@ pub struct AppState {
     pub feed_cache: Arc<dyn FeedCacheStorage>,
     /// Queue of feed-regeneration events drained by the feed worker.
     pub feed_events: Arc<dyn FeedEventStorage>,
+    /// Factory-minted boundary for composing application storage writes.
+    pub write_scope: WriteScope,
 }
 
 impl AppState {

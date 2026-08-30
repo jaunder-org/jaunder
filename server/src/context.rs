@@ -17,12 +17,13 @@ use storage::{
     AppState, AtomicOps, AudienceStorage, EmailVerificationStorage, FeedEventStorage, InstanceId,
     InviteStorage, MediaReferenceOwnershipResolver, MediaStorage, PasswordResetStorage,
     PostStorage, SessionStorage, SiteConfigStorage, SubscriptionStorage, UserConfigStorage,
-    UserStorage,
+    UserStorage, WriteScope,
 };
 
-/// Place every storage handle in `state` into the current Leptos context as
-/// its trait-object form. Server functions fetch them with
-/// `expect_context::<Arc<dyn FooStorage>>()`.
+/// Place every storage handle and the factory-minted write scope in `state` into
+/// the current Leptos context. Server functions fetch exact trait dependencies
+/// with `expect_context::<Arc<dyn FooStorage>>()` and acquire mutations through
+/// `expect_context::<WriteScope>()`.
 pub fn provide_app_state_contexts(state: &Arc<AppState>) {
     provide_context::<Arc<dyn UserStorage>>(state.users.clone());
     provide_context::<Arc<dyn SessionStorage>>(state.sessions.clone());
@@ -31,6 +32,7 @@ pub fn provide_app_state_contexts(state: &Arc<AppState>) {
     provide_context::<Arc<dyn EmailVerificationStorage>>(state.email_verifications.clone());
     provide_context::<Arc<dyn PasswordResetStorage>>(state.password_resets.clone());
     provide_context::<Arc<dyn PostStorage>>(state.posts.clone());
+    provide_context::<WriteScope>(state.write_scope.clone());
     provide_context::<Arc<dyn SubscriptionStorage>>(state.subscriptions.clone());
     provide_context::<Arc<dyn AudienceStorage>>(state.audiences.clone());
     provide_context::<Arc<dyn MediaStorage>>(state.media.clone());
